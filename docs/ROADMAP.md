@@ -81,11 +81,11 @@ architected and a first-run setup flow in place.
 | --- | --- | --- |
 | 0 | Verified build and run baseline on VM and hardware | **Done** (VM) |
 | 1 | Application windows via `xdg-shell` | **Done** |
-| 2 | Window management — focus, move, resize, close, alt-tab | Next |
-| 3 | Shell chrome — taskbar and start button via `wlr-layer-shell` | |
-| 4 | Start menu and application launcher | |
-| 5 | A native first-party application | |
-| 6 | Idle CPU/RAM baseline established and enforced | |
+| 2 | Window management — focus, move, resize, close, alt-tab | **Done** |
+| 3 | Shell chrome — taskbar, drawn by the compositor itself | **Done** |
+| 4 | Apps menu and application launcher | **Done** |
+| 5 | A native first-party application — a terminal | Next |
+| 6 | Idle CPU/RAM baseline established and enforced | **Done** — 0.00% CPU, 17MB |
 | 7 | Skin system plumbing — chrome driven by data, not hardcoded | |
 | 8 | Minimal first-run setup flow | |
 
@@ -104,5 +104,9 @@ rewrite later.
 - There is no `assets/power.png`; the power button falls back to a flat colored
   square. The original asset was lost to a failed download.
 - The cursor is a plain red square rather than a real cursor theme.
-- Windows render but cannot yet be focused, moved, resized, or closed — that is
-  checkpoint 2.
+- Minimize is acknowledged but does nothing. Hiding a window needs the shell to
+  draw its own window frames first, so the taskbar can restore it.
+- Applications draw their own title bars, so every one looks like whatever
+  toolkit built it. The four-skin plan needs ReconOS to draw them instead.
+- On Hyper-V, a fragment sometimes persists near the pointer. Unconfirmed on
+  real hardware; the virtual display has no cursor plane to use.
