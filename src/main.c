@@ -381,6 +381,7 @@ void recon_toplevel_minimize(struct recon_toplevel *toplevel) {
     struct recon_server *server = toplevel->server;
     toplevel->minimized = true;
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+    wlr_log(WLR_INFO, "ReconOS: minimized '%s'", recon_toplevel_title(toplevel));
 
     /* Don't leave a grab pointing at a window that is no longer visible. */
     if (server->grabbed == toplevel) {
@@ -410,6 +411,7 @@ void recon_toplevel_restore(struct recon_toplevel *toplevel) {
     }
     toplevel->minimized = false;
     wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
+    wlr_log(WLR_INFO, "ReconOS: restored '%s'", recon_toplevel_title(toplevel));
     recon_focus_toplevel(toplevel);
     recon_damage_all(toplevel->server);
 }

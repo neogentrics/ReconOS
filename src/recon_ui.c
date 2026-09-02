@@ -231,27 +231,43 @@ struct recon_panel {
 };
 
 /* A wlr_buffer over the panel's pixels, handed to the scene graph. */
+/*
+ * A committed buffer owns its pixels outright rather than pointing back at the
+ * panel's.
+ *
+ * Sharing them looks tempting and is wrong twice over. The compositor may
+ * still be reading a previously committed buffer while the next frame is being
+ * drawn, so a shared block gets overwritten mid-read; and resizing the panel
+ * frees that block while those buffers still reference it. Both show up as
+ * torn or black rectangles, the second far more violently, because it is a use
+ * after free.
+ *
+ * The cost is a copy per commit, which is nothing next to how rarely a panel
+ * commits: only when its contents actually change.
+ */
 struct panel_buffer {
     struct wlr_buffer base;
-    struct recon_panel *panel;
+    uint32_t *pixels; /* owned by this buffer */
+    size_t stride;
 };
 
 static void panel_buffer_destroy(struct wlr_buffer *wlr_buffer) {
     struct panel_buffer *buf = wl_container_of(wlr_buffer, buf, base);
+    free(buf->pixels);
     free(buf);
 }
 
 static bool panel_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
         uint32_t flags, void **data, uint32_t *format, size_t *stride) {
     struct panel_buffer *buf = wl_container_of(wlr_buffer, buf, base);
-    *data = buf->panel->pixels;
+    *data = buf->pixels;
     *format = DRM_FORMAT_ARGB8888;
-    *stride = (size_t)buf->panel->width * 4;
+    *stride = buf->stride;
     return true;
 }
 
 static void panel_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
-    /* Pixels stay mapped for the panel's lifetime. */
+    /* The buffer owns these pixels; nothing else writes to them. */
 }
 
 static const struct wlr_buffer_impl panel_buffer_impl = {
@@ -314,6 +330,7 @@ bool recon_panel_resize(struct recon_panel *panel, int width, int height) {
         return false;
     }
 
+    /* Safe to free now: committed buffers hold their own copies. */
     free(panel->pixels);
     panel->pixels = pixels;
     panel->width = width;
@@ -330,7 +347,16 @@ void recon_panel_commit(struct recon_panel *panel) {
     if (buf == NULL) {
         return;
     }
-    buf->panel = panel;
+
+    size_t count = (size_t)panel->width * panel->height;
+    buf->pixels = malloc(count * sizeof(uint32_t));
+    if (buf->pixels == NULL) {
+        free(buf);
+        return;
+    }
+    memcpy(buf->pixels, panel->pixels, count * sizeof(uint32_t));
+    buf->stride = (size_t)panel->width * 4;
+
     wlr_buffer_init(&buf->base, &panel_buffer_impl, panel->width, panel->height);
 
     /* The scene takes its own reference; drop ours so the buffer is released

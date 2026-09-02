@@ -628,12 +628,16 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
     if (shell == NULL) {
         return false;
     }
+    int px, py;
+    if (shell->menu_open && shell->menu != NULL &&
+            point_in_panel(shell->menu, lx, ly, &px, &py)) {
+        return true;
+    }
     for (int i = 0; i < shell->app_count; i++) {
         if (recon_appwin_contains_point(shell->apps[i], lx, ly)) {
             return true;
         }
     }
-    int px, py;
     if (shell->security_open && shell->security != NULL &&
             point_in_panel(shell->security, lx, ly, &px, &py)) {
         return true;
@@ -678,14 +682,12 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         return true;
     }
 
-    /* Built-in windows float above the desktop and handle their own chrome. */
-    for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_handle_click(shell->apps[i], lx, ly, pressed)) {
-            recon_shell_refresh(shell);
-            return true;
-        }
-    }
-
+    /*
+     * Order here must match what is drawn on top of what. The apps menu is
+     * raised above every window, so it has to be offered the click before
+     * them: a maximized window covers the same pixels, and checking windows
+     * first let it swallow clicks meant for the menu.
+     */
     /* The menu sits above the bar, so it gets first refusal. */
     if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
@@ -712,6 +714,14 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         }
         recon_shell_close_menu(shell);
         return true;
+    }
+
+    /* Then built-in windows, which sit above the desktop but below the menu. */
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_handle_click(shell->apps[i], lx, ly, pressed)) {
+            recon_shell_refresh(shell);
+            return true;
+        }
     }
 
     if (shell->taskbar != NULL && point_in_panel(shell->taskbar, lx, ly, &px, &py)) {
