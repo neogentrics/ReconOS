@@ -33,6 +33,7 @@
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
@@ -84,6 +85,12 @@ struct recon_server {
 
     const char *socket_name;
 
+    /* Trust the driver to preserve buffer contents between frames, and redraw
+     * only what changed. Off by default; see output_frame(). */
+    bool partial_damage;
+    /* The wallpaper is sized to the first output, so it is set up lazily. */
+    bool background_ready;
+
     struct wl_listener new_output;
     struct wl_listener new_input;
     struct wl_listener cursor_motion;
@@ -121,13 +128,19 @@ struct recon_keyboard {
 struct recon_image_buffer {
     struct wlr_buffer base;
     unsigned char *data;
+    /* Pixels straight from stb must go back to stb; rescaled pixels are ours. */
+    bool data_from_stb;
     uint32_t format;
     size_t stride;
 };
 
 static void image_buffer_destroy(struct wlr_buffer *wlr_buffer) {
     struct recon_image_buffer *buf = wl_container_of(wlr_buffer, buf, base);
-    stbi_image_free(buf->data);
+    if (buf->data_from_stb) {
+        stbi_image_free(buf->data);
+    } else {
+        free(buf->data);
+    }
     free(buf);
 }
 
@@ -150,6 +163,60 @@ static const struct wlr_buffer_impl image_buffer_impl = {
     .end_data_ptr_access = image_buffer_end_data_ptr_access,
 };
 
+/*
+ * Shrink RGBA pixels by averaging each destination pixel over the source
+ * pixels it covers. Downscaling only -- enlarging would need interpolation.
+ *
+ * Doing this once at load means the compositor never rescales the image again:
+ * the buffer ends up the size it will be drawn at, so compositing is a copy
+ * rather than a resample. On a machine without a GPU that is the difference
+ * between a cheap frame and an expensive one.
+ */
+static unsigned char *downscale_rgba(const unsigned char *src, int src_w, int src_h,
+        int dst_w, int dst_h) {
+    unsigned char *dst = malloc((size_t)dst_w * dst_h * 4);
+    if (dst == NULL) {
+        return NULL;
+    }
+
+    for (int y = 0; y < dst_h; y++) {
+        int sy0 = (int)((int64_t)y * src_h / dst_h);
+        int sy1 = (int)((int64_t)(y + 1) * src_h / dst_h);
+        if (sy1 <= sy0) {
+            sy1 = sy0 + 1;
+        }
+
+        for (int x = 0; x < dst_w; x++) {
+            int sx0 = (int)((int64_t)x * src_w / dst_w);
+            int sx1 = (int)((int64_t)(x + 1) * src_w / dst_w);
+            if (sx1 <= sx0) {
+                sx1 = sx0 + 1;
+            }
+
+            uint32_t r = 0, g = 0, b = 0, a = 0, n = 0;
+            for (int sy = sy0; sy < sy1; sy++) {
+                const unsigned char *px = src + ((size_t)sy * src_w + sx0) * 4;
+                for (int sx = sx0; sx < sx1; sx++) {
+                    r += px[0];
+                    g += px[1];
+                    b += px[2];
+                    a += px[3];
+                    px += 4;
+                    n++;
+                }
+            }
+
+            unsigned char *out = dst + ((size_t)y * dst_w + x) * 4;
+            out[0] = (unsigned char)(r / n);
+            out[1] = (unsigned char)(g / n);
+            out[2] = (unsigned char)(b / n);
+            out[3] = (unsigned char)(a / n);
+        }
+    }
+
+    return dst;
+}
+
 /* Resolve an asset name against the asset directory. Caller frees. */
 static char *asset_path(const char *name) {
     const char *dir = getenv("RECONOS_ASSETS");
@@ -165,8 +232,13 @@ static char *asset_path(const char *name) {
     return path;
 }
 
-/* Decode an image asset into a wlr_buffer, or NULL if it can't be loaded. */
-static struct wlr_buffer *load_image(const char *name) {
+/*
+ * Decode an image asset into a wlr_buffer, or NULL if it can't be loaded.
+ *
+ * Pass a positive fit_w/fit_h to shrink an oversized image to those dimensions
+ * at load time; pass 0 to keep it at its natural size.
+ */
+static struct wlr_buffer *load_image(const char *name, int fit_w, int fit_h) {
     char *path = asset_path(name);
     if (path == NULL) {
         return NULL;
@@ -180,15 +252,35 @@ static struct wlr_buffer *load_image(const char *name) {
         return NULL;
     }
     wlr_log(WLR_INFO, "ReconOS: loaded '%s' (%dx%d)", path, width, height);
+
+    bool from_stb = true;
+    if (fit_w > 0 && fit_h > 0 && (width > fit_w || height > fit_h)) {
+        unsigned char *scaled = downscale_rgba(data, width, height, fit_w, fit_h);
+        if (scaled != NULL) {
+            wlr_log(WLR_INFO, "ReconOS: scaled '%s' to %dx%d", name, fit_w, fit_h);
+            stbi_image_free(data);
+            data = scaled;
+            width = fit_w;
+            height = fit_h;
+            from_stb = false;
+        } else {
+            wlr_log(WLR_ERROR, "ReconOS: could not scale '%s', using full size", name);
+        }
+    }
     free(path);
 
     struct recon_image_buffer *buf = calloc(1, sizeof(*buf));
     if (buf == NULL) {
-        stbi_image_free(data);
+        if (from_stb) {
+            stbi_image_free(data);
+        } else {
+            free(data);
+        }
         return NULL;
     }
 
     buf->data = data;
+    buf->data_from_stb = from_stb;
     /* stb gives us bytes in R,G,B,A order, which is DRM's ABGR8888. */
     buf->format = DRM_FORMAT_ABGR8888;
     buf->stride = (size_t)width * 4;
@@ -341,6 +433,42 @@ static void server_new_input(struct wl_listener *listener, void *data) {
     wlr_seat_set_capabilities(server->seat, caps);
 }
 
+/* --- DESKTOP BACKGROUND --- */
+
+/*
+ * Build the desktop background at the size it will actually be displayed.
+ *
+ * This runs once the first output is up, because only then is the screen size
+ * known. Nodes are added to the top of the scene, so the background is lowered
+ * beneath the chrome that main() already created.
+ */
+static void setup_background(struct recon_server *server, int width, int height) {
+    struct wlr_buffer *wallpaper = load_image("wallpaper.jpg", width, height);
+
+    struct wlr_scene_node *node;
+    if (wallpaper != NULL) {
+        server->background_buffer = wlr_scene_buffer_create(&server->scene->tree, wallpaper);
+        /* The scene holds its own reference now. */
+        wlr_buffer_drop(wallpaper);
+        if (server->background_buffer == NULL) {
+            return;
+        }
+        wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);
+        node = &server->background_buffer->node;
+    } else {
+        float color[4] = {0.1f, 0.1f, 0.3f, 1.0f};
+        server->background_rect =
+            wlr_scene_rect_create(&server->scene->tree, width, height, color);
+        if (server->background_rect == NULL) {
+            return;
+        }
+        node = &server->background_rect->node;
+    }
+
+    wlr_scene_node_set_position(node, 0, 0);
+    wlr_scene_node_lower_to_bottom(node);
+}
+
 /* --- SURFACES --- */
 
 static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
@@ -367,6 +495,26 @@ static void output_frame(struct wl_listener *listener, void *data) {
             output->warned_no_scene = true;
         }
         return;
+    }
+
+    /*
+     * Widen whatever changed to cover the whole screen.
+     *
+     * Partial redraws assume the driver hands back a buffer still holding the
+     * previous frame, so untouched regions can be left alone. Not all drivers
+     * do -- hyperv_drm notably does not -- and the result is a screen of
+     * correct strips separated by stale ones.
+     *
+     * Only existing damage is widened, never created. Marking the screen
+     * damaged unconditionally would make every frame commit, and each commit
+     * schedules the next frame, so the compositor would redraw forever at full
+     * speed. Widening only real damage keeps an idle desktop at zero frames.
+     *
+     * Set RECONOS_PARTIAL_DAMAGE=1 on hardware known to preserve buffers.
+     */
+    if (!output->server->partial_damage &&
+            pixman_region32_not_empty(&scene_output->damage_ring.current)) {
+        wlr_damage_ring_add_whole(&scene_output->damage_ring);
     }
 
     if (!wlr_scene_output_commit(scene_output, NULL)) {
@@ -444,13 +592,16 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     }
     wlr_scene_output_layout_add_output(server->scene_layout, layout_output, scene_output);
 
-    /* Stretch the desktop background to whatever this screen turned out to be. */
     int width, height;
     wlr_output_effective_resolution(wlr_output, &width, &height);
-    if (server->background_buffer != NULL) {
+
+    if (!server->background_ready) {
+        /* First screen decides the wallpaper's size. */
+        setup_background(server, width, height);
+        server->background_ready = true;
+    } else if (server->background_buffer != NULL) {
         wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);
-    }
-    if (server->background_rect != NULL) {
+    } else if (server->background_rect != NULL) {
         wlr_scene_rect_set_size(server->background_rect, width, height);
     }
 
@@ -471,6 +622,13 @@ int main(int argc, char **argv) {
     signal(SIGCHLD, SIG_IGN);
 
     struct recon_server server = {0};
+
+    const char *partial = getenv("RECONOS_PARTIAL_DAMAGE");
+    server.partial_damage = (partial != NULL && *partial == '1');
+    if (server.partial_damage) {
+        wlr_log(WLR_INFO, "ReconOS: partial damage enabled, expecting the driver "
+            "to preserve buffers between frames");
+    }
 
     server.wl_display = wl_display_create();
     server.backend = wlr_backend_autocreate(server.wl_display, NULL);
@@ -500,23 +658,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Desktop background: wallpaper if we have one, flat colour if not.
-     * Sized to 1x1 here; server_new_output resizes it to the real screen. */
-    struct wlr_buffer *wallpaper = load_image("wallpaper.jpg");
-    if (wallpaper != NULL) {
-        server.background_buffer = wlr_scene_buffer_create(&server.scene->tree, wallpaper);
-        /* The scene holds its own reference now. */
-        wlr_buffer_drop(wallpaper);
-        wlr_scene_node_set_position(&server.background_buffer->node, 0, 0);
-    } else {
-        float color[4] = {0.1f, 0.1f, 0.3f, 1.0f};
-        server.background_rect = wlr_scene_rect_create(&server.scene->tree, 1, 1, color);
-        wlr_scene_node_set_position(&server.background_rect->node, 0, 0);
-    }
+    /* The desktop background is created once the first output reports its size,
+     * so the wallpaper can be scaled to fit exactly. See setup_background(). */
 
     /* Power button: icon if present, otherwise a plain red square so the
      * clickable region is always visible. */
-    struct wlr_buffer *icon = load_image("power.png");
+    struct wlr_buffer *icon = load_image("power.png", BUTTON_SIZE, BUTTON_SIZE);
     if (icon != NULL) {
         struct wlr_scene_buffer *btn = wlr_scene_buffer_create(&server.scene->tree, icon);
         wlr_buffer_drop(icon);

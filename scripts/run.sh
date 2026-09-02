@@ -4,8 +4,12 @@
 # Run this from a bare TTY, not from inside an existing desktop session --
 # the compositor needs to own the display.
 #
-# WLR_RENDERER_ALLOW_SOFTWARE is set because machines without a DRM render
-# node (virtual machines especially) have no GPU acceleration available.
+# Any WLR_* variables set in the environment are forwarded through sudo, which
+# would otherwise strip them. That makes wlroots' debugging knobs usable:
+#
+#   WLR_SCENE_DEBUG_DAMAGE=rerender ./scripts/run.sh   full redraw every frame
+#   WLR_DRM_NO_ATOMIC=1 ./scripts/run.sh               legacy modesetting
+#   WLR_NO_HARDWARE_CURSORS=1 ./scripts/run.sh         software cursor
 #
 # Output is copied to a log file so a session can be examined after the
 # compositor has taken over and released the screen.
@@ -24,13 +28,29 @@ if [ ! -x "$REPO_DIR/build/ReconOS" ]; then
     exit 1
 fi
 
+# Collect WLR_* and RECONOS_* settings to hand to the privileged process.
+declare -a PASS_ENV=()
+while IFS= read -r assignment; do
+    case "$assignment" in
+        WLR_*|RECONOS_TERMINAL=*|RECONOS_ASSETS=*) PASS_ENV+=("$assignment") ;;
+    esac
+done < <(env)
+
+# Software rendering is required on machines with no DRM render node, but let
+# an explicit setting win.
+if [ -z "${WLR_RENDERER_ALLOW_SOFTWARE:-}" ]; then
+    PASS_ENV+=("WLR_RENDERER_ALLOW_SOFTWARE=1")
+fi
+
+if [ ${#PASS_ENV[@]} -gt 0 ]; then
+    printf 'Passing to compositor: %s\n' "${PASS_ENV[*]}"
+fi
+
 cd "$REPO_DIR"
 
-sudo WLR_RENDERER_ALLOW_SOFTWARE=1 XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+sudo "${PASS_ENV[@]}" XDG_RUNTIME_DIR="$RUNTIME_DIR" \
     ./build/ReconOS "$@" 2>&1 | tee "$LOG_FILE"
 
-# tee runs as the invoking user, but the log may end up root-owned on some
-# setups; make sure it stays readable.
 sudo chown "$(id -u):$(id -g)" "$LOG_FILE" 2>/dev/null || true
 
 echo

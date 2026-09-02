@@ -17,6 +17,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(WLR REQUIRED wlroots)
 pkg_check_modules(WAYLAND REQUIRED wayland-server)
 pkg_check_modules(XKB REQUIRED xkbcommon)
+# Used directly for damage region tests; wlroots exposes pixman in its API.
+pkg_check_modules(PIXMAN REQUIRED pixman-1)
 pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols)
 pkg_check_modules(WAYLAND_SCANNER REQUIRED wayland-scanner)
 
@@ -59,6 +61,7 @@ target_include_directories(ReconOS PRIVATE
     ${WLR_INCLUDE_DIRS}
     ${WAYLAND_INCLUDE_DIRS}
     ${XKB_INCLUDE_DIRS}
+    ${PIXMAN_INCLUDE_DIRS}
     "${CMAKE_CURRENT_BINARY_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
@@ -67,4 +70,5 @@ target_link_libraries(ReconOS PRIVATE
     ${WLR_LIBRARIES}
     ${WAYLAND_LIBRARIES}
     ${XKB_LIBRARIES}
+    ${PIXMAN_LIBRARIES}
     m)
