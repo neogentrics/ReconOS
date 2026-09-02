@@ -338,6 +338,40 @@ bool recon_panel_resize(struct recon_panel *panel, int width, int height) {
     return true;
 }
 
+/*
+ * Write a committed panel to a file when RECONOS_DEBUG_DUMP names a directory.
+ *
+ * This exists to answer one question that guesswork could not: whether pixels
+ * leaving a panel are already wrong, or only become wrong further down. PPM
+ * because it needs no encoder.
+ */
+static void dump_panel(struct recon_panel *panel, const uint32_t *pixels) {
+    const char *dir = getenv("RECONOS_DEBUG_DUMP");
+    if (dir == NULL || *dir == '\0') {
+        return;
+    }
+
+    static unsigned counter;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/panel-%04u-%dx%d.ppm",
+        dir, counter++, panel->width, panel->height);
+
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "P6\n%d %d\n255\n", panel->width, panel->height);
+    for (size_t i = 0; i < (size_t)panel->width * panel->height; i++) {
+        unsigned char rgb[3] = {
+            (unsigned char)((pixels[i] >> 16) & 0xFF),
+            (unsigned char)((pixels[i] >> 8) & 0xFF),
+            (unsigned char)(pixels[i] & 0xFF),
+        };
+        fwrite(rgb, 1, 3, f);
+    }
+    fclose(f);
+}
+
 void recon_panel_commit(struct recon_panel *panel) {
     if (panel == NULL || panel->scene_buffer == NULL) {
         return;
@@ -356,6 +390,8 @@ void recon_panel_commit(struct recon_panel *panel) {
     }
     memcpy(buf->pixels, panel->pixels, count * sizeof(uint32_t));
     buf->stride = (size_t)panel->width * 4;
+
+    dump_panel(panel, buf->pixels);
 
     wlr_buffer_init(&buf->base, &panel_buffer_impl, panel->width, panel->height);
 

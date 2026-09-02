@@ -486,6 +486,16 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     layout(shell);
     draw_taskbar(shell);
 
+    /* Debug aid: open and maximize a window at startup, so the state that
+     * shows the rendering fault can be reached without a person clicking. */
+    const char *autostart = getenv("RECONOS_DEBUG_AUTOSTART");
+    if (autostart != NULL && strcmp(autostart, "taskmgr-max") == 0 &&
+            shell->taskmgr != NULL) {
+        recon_appwin_show(shell->taskmgr);
+        recon_appwin_focus(shell->taskmgr);
+        recon_appwin_set_maximized(shell->taskmgr, true);
+    }
+
     wlr_log(WLR_INFO, "ReconOS: shell up, taskbar %dx%d",
         screen_width, TASKBAR_HEIGHT);
     return shell;

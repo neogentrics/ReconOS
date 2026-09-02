@@ -43,6 +43,7 @@
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
@@ -1337,6 +1338,12 @@ int main(int argc, char **argv) {
      *   wl_data_device   - clipboard and drag-and-drop
      * Without these a client cannot draw anything and will abort on startup. */
     wlr_compositor_create(server.wl_display, 5, server.renderer);
+    /*
+     * Screen capture. A desktop should be able to photograph itself, and it
+     * is the only way to see what was actually composited rather than what
+     * was meant to be.
+     */
+    wlr_screencopy_manager_v1_create(server.wl_display);
     wlr_subcompositor_create(server.wl_display);
     wlr_data_device_manager_create(server.wl_display);
 
