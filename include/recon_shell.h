@@ -61,6 +61,13 @@ bool recon_shell_security_open(struct recon_shell *shell);
 /* Open the task manager directly. */
 void recon_shell_open_taskmgr(struct recon_shell *shell);
 
+/* Open a built-in window by its registration index. */
+void recon_shell_open_app(struct recon_shell *shell, int index);
+
+/* Offer a key to whichever built-in window has focus. */
+bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
+    uint32_t modifiers);
+
 /* Report pointer motion, so a task manager drag can follow it. */
 void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly);
 

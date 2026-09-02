@@ -16,6 +16,8 @@
 
 #include "recon_server.h"
 #include "recon_shell.h"
+#include "recon_appwin.h"
+#include "recon_calc.h"
 #include "recon_taskmgr.h"
 #include "recon_ui.h"
 
@@ -70,6 +72,7 @@
 enum recon_app_action {
     RECON_APP_LAUNCH,
     RECON_APP_TASKMGR,
+    RECON_APP_CALC,
     RECON_APP_QUIT,
 };
 
@@ -86,6 +89,7 @@ struct recon_app_entry {
  */
 static const struct recon_app_entry APPS[] = {
     { "Terminal", NULL, RECON_APP_LAUNCH },
+    { "Calculator", NULL, RECON_APP_CALC },
     { "Task Manager", NULL, RECON_APP_TASKMGR },
     { "Shut Down", NULL, RECON_APP_QUIT },
 };
@@ -117,12 +121,17 @@ struct recon_shell {
     struct recon_panel *menu;
     bool menu_open;
 
+    /* Built-in windows. Listed on the taskbar beside client windows, and
+     * offered input in front-to-back order. */
+    struct recon_appwin *apps[8];
+    int app_count;
+
     struct recon_panel *security;
     /* Dims the desktop behind the security box, so it is obvious that the
      * question wants answering before anything else happens. */
     struct recon_panel *dim;
     bool security_open;
-    struct recon_taskmgr *taskmgr;
+    struct recon_appwin *taskmgr;
 
     int screen_width, screen_height;
 
@@ -131,7 +140,10 @@ struct recon_shell {
      * carries an index into this, so a click resolves to a window without
      * depending on focus order, which changes as soon as the click lands.
      */
-    struct recon_toplevel *buttons[32];
+    struct taskbar_button {
+        struct recon_toplevel *toplevel; /* one of these is set */
+        struct recon_appwin *appwin;
+    } buttons[32];
     int button_count;
 };
 
@@ -145,6 +157,23 @@ static int security_height(void) {
 }
 
 /* --- Drawing --- */
+
+/*
+ * One taskbar button. A minimized window is drawn recessed and its label
+ * dimmed, so the bar shows at a glance what is on screen and what is put away.
+ */
+static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
+        int x, int w, int baseline, const char *title, bool active, bool minimized) {
+    recon_color fill = active ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON;
+    if (minimized) {
+        fill = COLOR_BAR;
+    }
+
+    recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
+    recon_draw_bevel(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, active || minimized);
+    recon_draw_text(bar, shell->font, x + TEXT_INSET, baseline, w - TEXT_INSET * 2,
+        title, active ? COLOR_TEXT : COLOR_TEXT_DIM);
+}
 
 static void draw_taskbar(struct recon_shell *shell) {
     struct recon_panel *bar = shell->taskbar;
@@ -176,12 +205,20 @@ static void draw_taskbar(struct recon_shell *shell) {
     recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
 
-    /* One button per open window, sharing the remaining width. */
+    /* One button per window, client or built-in, sharing the remaining
+     * width. Both kinds appear here, because from the user's side there is no
+     * difference between them. */
     shell->button_count = 0;
     int x = TASKBAR_PADDING * 2 + APPS_BUTTON_WIDTH;
     int available = width - x - TASKBAR_PADDING;
 
     int window_count = wl_list_length(&shell->server->toplevels);
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_is_open(shell->apps[i])) {
+            window_count++;
+        }
+    }
+
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
         recon_panel_commit(bar);
         return;
@@ -195,36 +232,50 @@ static void draw_taskbar(struct recon_shell *shell) {
         button_width = TASK_BUTTON_MIN_WIDTH;
     }
 
-    /* The head of the list is the focused window. */
-    struct recon_toplevel *focused = NULL;
-    if (!wl_list_empty(&shell->server->toplevels)) {
-        focused = wl_container_of(shell->server->toplevels.next, focused, link);
+    int max_buttons = (int)(sizeof(shell->buttons) / sizeof(shell->buttons[0]));
+
+    /* Built-in windows first, so their position does not shift as client
+     * windows come and go. */
+    for (int i = 0; i < shell->app_count; i++) {
+        struct recon_appwin *win = shell->apps[i];
+        if (!recon_appwin_is_open(win) || shell->button_count >= max_buttons) {
+            continue;
+        }
+        if (x + button_width > width - TASKBAR_PADDING) {
+            break;
+        }
+
+        bool active = recon_appwin_is_focused(win);
+        draw_task_button(shell, bar, x, button_width, baseline,
+            recon_appwin_title(win), active, recon_appwin_is_minimized(win));
+
+        recon_hit_add(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
+            HIT_TASK_BASE + shell->button_count);
+        shell->buttons[shell->button_count].toplevel = NULL;
+        shell->buttons[shell->button_count].appwin = win;
+        shell->button_count++;
+        x += button_width + TASKBAR_PADDING;
     }
 
     struct recon_toplevel *toplevel;
     wl_list_for_each(toplevel, &shell->server->toplevels, link) {
-        if (shell->button_count >= (int)(sizeof(shell->buttons) / sizeof(shell->buttons[0]))) {
+        if (shell->button_count >= max_buttons) {
             break;
         }
         if (x + button_width > width - TASKBAR_PADDING) {
             break;
         }
 
-        bool active = (toplevel == focused);
-        recon_fill_rect(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
-            active ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
-        recon_draw_bevel(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT, active);
-
-        const char *title = toplevel->xdg_toplevel->title;
-        recon_draw_text(bar, shell->font, x + TEXT_INSET, baseline,
-            button_width - TEXT_INSET * 2,
-            title != NULL ? title : "Untitled",
-            active ? COLOR_TEXT : COLOR_TEXT_DIM);
+        draw_task_button(shell, bar, x, button_width, baseline,
+            recon_toplevel_title(toplevel),
+            recon_toplevel_is_focused(toplevel),
+            recon_toplevel_is_minimized(toplevel));
 
         recon_hit_add(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
             HIT_TASK_BASE + shell->button_count);
-        shell->buttons[shell->button_count++] = toplevel;
-
+        shell->buttons[shell->button_count].toplevel = toplevel;
+        shell->buttons[shell->button_count].appwin = NULL;
+        shell->button_count++;
         x += button_width + TASKBAR_PADDING;
     }
 
@@ -323,7 +374,10 @@ static void layout(struct recon_shell *shell) {
             (shell->screen_width - SEC_WIDTH) / 2,
             (shell->screen_height - security_height()) / 2);
     }
-    recon_taskmgr_center(shell->taskmgr, shell->screen_width, shell->screen_height);
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_screen_changed(shell->apps[i], shell->screen_width,
+            shell->screen_height, TASKBAR_HEIGHT);
+    }
 }
 
 /* --- Lifecycle --- */
@@ -371,6 +425,19 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
 
     shell->taskmgr = recon_taskmgr_create(server, shell->font);
+    if (shell->taskmgr != NULL) {
+        shell->apps[shell->app_count++] = shell->taskmgr;
+    }
+
+    struct recon_appwin *calc = recon_calc_create(server, shell->font);
+    if (calc != NULL) {
+        shell->apps[shell->app_count++] = calc;
+    }
+
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_screen_changed(shell->apps[i], screen_width, screen_height,
+            TASKBAR_HEIGHT);
+    }
 
     layout(shell);
     draw_taskbar(shell);
@@ -384,7 +451,9 @@ void recon_shell_destroy(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
     }
-    recon_taskmgr_destroy(shell->taskmgr);
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_destroy(shell->apps[i]);
+    }
     recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
@@ -425,7 +494,9 @@ void recon_shell_raise(struct recon_shell *shell) {
     /* The task manager and the security box sit above everything, including
      * the taskbar: they are how you regain control when something else has
      * taken over the screen. */
-    recon_taskmgr_raise(shell->taskmgr);
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_raise(shell->apps[i]);
+    }
     if (shell->security_open) {
         recon_panel_raise_to_top(shell->dim);
         recon_panel_raise_to_top(shell->security);
@@ -437,7 +508,32 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
         return;
     }
     recon_shell_close_menu(shell);
-    recon_taskmgr_show(shell->taskmgr);
+    recon_appwin_show(shell->taskmgr);
+    recon_appwin_focus(shell->taskmgr);
+    recon_shell_refresh(shell);
+}
+
+void recon_shell_open_app(struct recon_shell *shell, int index) {
+    if (shell == NULL || index < 0 || index >= shell->app_count) {
+        return;
+    }
+    recon_shell_close_menu(shell);
+    recon_appwin_show(shell->apps[index]);
+    recon_appwin_focus(shell->apps[index]);
+    recon_shell_refresh(shell);
+}
+
+bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
+        uint32_t modifiers) {
+    if (shell == NULL) {
+        return false;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_handle_key(shell->apps[i], sym, modifiers)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool recon_shell_security_open(struct recon_shell *shell) {
@@ -461,8 +557,11 @@ void recon_shell_toggle_security(struct recon_shell *shell) {
 }
 
 void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) {
-    if (shell != NULL) {
-        recon_taskmgr_handle_motion(shell->taskmgr, lx, ly);
+    if (shell == NULL) {
+        return;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_handle_motion(shell->apps[i], lx, ly);
     }
 }
 
@@ -471,9 +570,10 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
     if (shell == NULL) {
         return false;
     }
-    if (recon_taskmgr_contains_point(shell->taskmgr, lx, ly)) {
-        recon_taskmgr_handle_scroll(shell->taskmgr, delta);
-        return true;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_handle_scroll(shell->apps[i], lx, ly, delta)) {
+            return true;
+        }
     }
     return false;
 }
@@ -528,8 +628,10 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
     if (shell == NULL) {
         return false;
     }
-    if (recon_taskmgr_contains_point(shell->taskmgr, lx, ly)) {
-        return true;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_contains_point(shell->apps[i], lx, ly)) {
+            return true;
+        }
     }
     int px, py;
     if (shell->security_open && shell->security != NULL &&
@@ -563,7 +665,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                 int index = (int)(hit - HIT_SEC_BASE);
                 recon_shell_toggle_security(shell); /* closes it */
                 if (index == SEC_TASKMGR) {
-                    recon_taskmgr_show(shell->taskmgr);
+                    recon_shell_open_taskmgr(shell);
                 } else if (index == SEC_SHUTDOWN) {
                     recon_quit(shell->server);
                 }
@@ -576,9 +678,12 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         return true;
     }
 
-    /* The task manager floats above the desktop and handles its own chrome. */
-    if (recon_taskmgr_handle_click(shell->taskmgr, lx, ly, pressed)) {
-        return true;
+    /* Built-in windows float above the desktop and handle their own chrome. */
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_handle_click(shell->apps[i], lx, ly, pressed)) {
+            recon_shell_refresh(shell);
+            return true;
+        }
     }
 
     /* The menu sits above the bar, so it gets first refusal. */
@@ -596,7 +701,9 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                 if (APPS[index].action == RECON_APP_QUIT) {
                     recon_quit(shell->server);
                 } else if (APPS[index].action == RECON_APP_TASKMGR) {
-                    recon_taskmgr_show(shell->taskmgr);
+                    recon_shell_open_taskmgr(shell);
+                } else if (APPS[index].action == RECON_APP_CALC) {
+                    recon_shell_open_app(shell, 1);
                 } else {
                     recon_spawn(shell->server, APPS[index].command);
                 }
@@ -618,9 +725,34 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         } else if (hit >= HIT_TASK_BASE && hit < HIT_MENU_BASE) {
             int index = (int)(hit - HIT_TASK_BASE);
             if (index >= 0 && index < shell->button_count) {
-                recon_focus_toplevel(shell->buttons[index]);
+                struct taskbar_button *button = &shell->buttons[index];
+
+                /*
+                 * Clicking the focused window's button puts it away; clicking
+                 * any other brings it forward. That is the behaviour people
+                 * already expect from a taskbar.
+                 */
+                if (button->appwin != NULL) {
+                    if (recon_appwin_is_minimized(button->appwin)) {
+                        recon_appwin_restore(button->appwin);
+                        recon_appwin_focus(button->appwin);
+                    } else if (recon_appwin_is_focused(button->appwin)) {
+                        recon_appwin_minimize(button->appwin);
+                    } else {
+                        recon_appwin_focus(button->appwin);
+                    }
+                } else if (button->toplevel != NULL) {
+                    if (recon_toplevel_is_minimized(button->toplevel)) {
+                        recon_toplevel_restore(button->toplevel);
+                    } else if (recon_toplevel_is_focused(button->toplevel)) {
+                        recon_toplevel_minimize(button->toplevel);
+                    } else {
+                        recon_focus_toplevel(button->toplevel);
+                    }
+                }
             }
             recon_shell_close_menu(shell);
+            recon_shell_refresh(shell);
         } else {
             recon_shell_close_menu(shell);
         }

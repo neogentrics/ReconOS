@@ -303,6 +303,12 @@ void recon_focus_toplevel(struct recon_toplevel *toplevel) {
     if (toplevel == NULL) {
         return;
     }
+    /* Focusing a minimized window brings it back; there is no sense in
+     * focusing something invisible. */
+    if (toplevel->minimized) {
+        recon_toplevel_restore(toplevel);
+        return;
+    }
 
     struct recon_server *server = toplevel->server;
     struct wlr_seat *seat = server->seat;
@@ -341,6 +347,71 @@ void recon_focus_toplevel(struct recon_toplevel *toplevel) {
     /* The taskbar highlights the focused window. */
     recon_shell_refresh(server->shell);
     recon_damage_all(server);
+}
+
+bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel) {
+    return toplevel != NULL && toplevel->minimized;
+}
+
+const char *recon_toplevel_title(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL) {
+        return "";
+    }
+    const char *title = toplevel->xdg_toplevel->title;
+    return title != NULL ? title : "Untitled";
+}
+
+bool recon_toplevel_is_focused(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL || toplevel->minimized) {
+        return false;
+    }
+    struct wl_list *first = toplevel->server->toplevels.next;
+    return first == &toplevel->link;
+}
+
+/*
+ * Minimizing hides the window without closing it. The taskbar keeps listing
+ * it, which is the only way back.
+ */
+void recon_toplevel_minimize(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL || toplevel->minimized) {
+        return;
+    }
+
+    struct recon_server *server = toplevel->server;
+    toplevel->minimized = true;
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+
+    /* Don't leave a grab pointing at a window that is no longer visible. */
+    if (server->grabbed == toplevel) {
+        server->grabbed = NULL;
+        server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
+    }
+
+    /* Move it to the back so focus falls to something still on screen. */
+    wl_list_remove(&toplevel->link);
+    wl_list_insert(server->toplevels.prev, &toplevel->link);
+
+    struct recon_toplevel *next;
+    wl_list_for_each(next, &server->toplevels, link) {
+        if (!next->minimized) {
+            recon_focus_toplevel(next);
+            break;
+        }
+    }
+
+    recon_shell_refresh(server->shell);
+    recon_damage_all(server);
+}
+
+void recon_toplevel_restore(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL || !toplevel->minimized) {
+        return;
+    }
+    toplevel->minimized = false;
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
+    recon_focus_toplevel(toplevel);
+    recon_damage_all(toplevel->server);
 }
 
 /* The window under the given layout coordinates, if any. */
@@ -457,6 +528,13 @@ static void set_maximized(struct recon_toplevel *toplevel, bool maximized) {
 
     toplevel->maximized = maximized;
     wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, maximized);
+}
+
+void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel) {
+    if (toplevel != NULL) {
+        set_maximized(toplevel, !toplevel->maximized);
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    }
 }
 
 static void toplevel_request_maximize(struct wl_listener *listener, void *data) {
@@ -736,10 +814,24 @@ static void cycle_focus(struct recon_server *server) {
     if (wl_list_length(&server->toplevels) < 2) {
         return;
     }
+
+    /* Walk forward to the next window that is actually on screen. */
     struct recon_toplevel *current =
         wl_container_of(server->toplevels.next, current, link);
-    struct recon_toplevel *next = wl_container_of(current->link.next, next, link);
-    recon_focus_toplevel(next);
+    struct wl_list *node = current->link.next;
+
+    while (node != &current->link) {
+        if (node == &server->toplevels) {
+            node = node->next; /* skip the list head */
+            continue;
+        }
+        struct recon_toplevel *candidate = wl_container_of(node, candidate, link);
+        if (!candidate->minimized) {
+            recon_focus_toplevel(candidate);
+            return;
+        }
+        node = node->next;
+    }
 }
 
 /* Ask the focused window to close. The client decides how to comply. */
@@ -814,6 +906,16 @@ static void server_keyboard_key(struct wl_listener *listener, void *data) {
             if (handle_shortcut(server, modifiers, syms[i])) {
                 handled = true;
                 break;
+            }
+        }
+        /* A focused built-in window gets the keys the shell did not claim,
+         * which is how the calculator can be driven from the number pad. */
+        if (!handled) {
+            for (int i = 0; i < nsyms; i++) {
+                if (recon_shell_handle_key(server->shell, syms[i], modifiers)) {
+                    handled = true;
+                    break;
+                }
             }
         }
     }

@@ -126,6 +126,12 @@ struct recon_toplevel {
     /* Position and size to restore to when unmaximized. */
     bool maximized;
     struct wlr_box restore_geometry;
+
+    /*
+     * Hidden but still open, so the taskbar keeps listing it and can bring it
+     * back. A window with nowhere to return from would simply be lost.
+     */
+    bool minimized;
 };
 
 /* Implemented in main.c, used by the shell. */
@@ -143,5 +149,13 @@ void recon_quit(struct recon_server *server);
  * something changed, and not at all otherwise.
  */
 void recon_damage_all(struct recon_server *server);
+
+/* Window state for client windows. Built-in windows have their own. */
+void recon_toplevel_minimize(struct recon_toplevel *toplevel);
+void recon_toplevel_restore(struct recon_toplevel *toplevel);
+void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel);
+bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel);
+const char *recon_toplevel_title(struct recon_toplevel *toplevel);
+bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);
 
 #endif
