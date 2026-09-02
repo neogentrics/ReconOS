@@ -61,6 +61,13 @@ bool recon_shell_security_open(struct recon_shell *shell);
 /* Open the task manager directly. */
 void recon_shell_open_taskmgr(struct recon_shell *shell);
 
+/*
+ * The built-in windows, for anything that needs to enumerate open windows --
+ * the task manager's Applications view, for one.
+ */
+int recon_shell_app_count(struct recon_shell *shell);
+struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index);
+
 /* Open a built-in window by its registration index. */
 void recon_shell_open_app(struct recon_shell *shell, int index);
 

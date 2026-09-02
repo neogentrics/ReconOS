@@ -581,6 +581,17 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
     recon_shell_refresh(shell);
 }
 
+int recon_shell_app_count(struct recon_shell *shell) {
+    return shell != NULL ? shell->app_count : 0;
+}
+
+struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index) {
+    if (shell == NULL || index < 0 || index >= shell->app_count) {
+        return NULL;
+    }
+    return shell->apps[index];
+}
+
 void recon_shell_open_app(struct recon_shell *shell, int index) {
     if (shell == NULL || index < 0 || index >= shell->app_count) {
         return;

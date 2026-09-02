@@ -23,6 +23,7 @@
 #include "recon_appwin.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
+#include "recon_shell.h"
 #include "recon_taskmgr.h"
 #include "recon_ui.h"
 
@@ -88,9 +89,13 @@ enum open_menu {
 };
 
 /*
- * Applications are what ReconOS started; Processes is everything else running
- * in userspace. Kernel workers appear in neither: ReconOS did not start them
- * and cannot usefully act on them.
+ * Applications lists open windows; Processes lists running programs.
+ *
+ * These are genuinely different things, and listing windows is what makes the
+ * Applications view honest. The calculator and this task manager are built
+ * into ReconOS and share its process, so no process list could ever show them
+ * separately -- while sudo, which is a process, is not an application by any
+ * useful definition.
  */
 enum tab {
     TAB_APPLICATIONS,
@@ -117,6 +122,7 @@ struct recon_taskmgr {
     enum open_menu menu;
     int scroll;
     pid_t selected_pid; /* survives re-sorting, unlike a row index */
+    int selected_row;   /* Applications view; windows have no stable id here */
 
     /* Rows drawn last time, so scrolling knows its own limits. */
     int rows_visible;
@@ -173,21 +179,58 @@ static int on_timer(void *data) {
     return 0;
 }
 
-/*
- * Whether a process belongs in the current tab.
- *
- * ReconOS launches its clients as its own children, so anything sharing its
- * process group was started from the desktop. That is what Applications
- * means here; Processes widens it to all of userspace.
- */
+/* Kernel workers are not programs ReconOS started or can act on. */
 static bool in_current_tab(struct recon_taskmgr *tm, const struct recon_process *proc) {
-    if (proc->kernel_thread) {
-        return false;
+    (void)tm;
+    return !proc->kernel_thread;
+}
+
+/*
+ * One row of the Applications view: an open window, with where it came from.
+ */
+struct app_row {
+    const char *title;
+    const char *kind;
+    bool minimized;
+    pid_t pid;                    /* 0 for windows built into ReconOS */
+    struct recon_appwin *appwin;  /* NULL for client windows */
+};
+
+#define MAX_APP_ROWS 32
+
+/* Collect the open windows, built-in ones first so their order is stable. */
+static int collect_apps(struct recon_taskmgr *tm, struct app_row *rows, int max) {
+    int count = 0;
+    struct recon_shell *shell = tm->server->shell;
+
+    int builtin = recon_shell_app_count(shell);
+    for (int i = 0; i < builtin && count < max; i++) {
+        struct recon_appwin *win = recon_shell_app_at(shell, i);
+        if (!recon_appwin_is_open(win)) {
+            continue;
+        }
+        rows[count].title = recon_appwin_title(win);
+        rows[count].kind = "ReconOS";
+        rows[count].minimized = recon_appwin_is_minimized(win);
+        rows[count].pid = 0;
+        rows[count].appwin = win;
+        count++;
     }
-    if (tm->tab == TAB_PROCESSES) {
-        return true;
+
+    struct recon_toplevel *toplevel;
+    wl_list_for_each(toplevel, &tm->server->toplevels, link) {
+        if (count >= max) {
+            break;
+        }
+        rows[count].title = recon_toplevel_title(toplevel);
+        rows[count].kind = "Client";
+        rows[count].minimized = recon_toplevel_is_minimized(toplevel);
+        rows[count].pid = 0;
+        rows[count].appwin = NULL;
+        count++;
     }
-    return proc->session == tm->own_session;
+
+    return count;
 }
 
 /* --- Drawing --- */
@@ -248,6 +291,13 @@ static void draw_header(struct recon_taskmgr *tm, struct recon_panel *p,
 
     recon_fill_rect(p, x, y, w, HEADER_HEIGHT, COLOR_HEADER);
     recon_fill_rect(p, x, y + HEADER_HEIGHT - 1, w, 1, RECON_RGB(0x80, 0x80, 0x80));
+
+    if (tm->tab == TAB_APPLICATIONS) {
+        recon_draw_text(p, tm->font, x + COL_NAME, baseline, 200, "Task", COLOR_TEXT);
+        recon_draw_text(p, tm->font, x + COL_PID, baseline, 120, "Status", COLOR_TEXT);
+        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 120, "Type", COLOR_TEXT);
+        return;
+    }
 
     /* A marker shows which column the list is ordered by. */
     const char *name_label = tm->sort == SORT_NAME ? "Name  v" : "Name";
@@ -333,6 +383,39 @@ static void draw_rows(struct recon_taskmgr *tm, struct recon_panel *p,
     tm->rows_matching = total;
 }
 
+static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
+        int x, int y, int w, int rows) {
+    int ascent = recon_font_ascent(tm->font);
+    recon_fill_rect(p, x, y, w, rows * ROW_HEIGHT, COLOR_LIST_BG);
+
+    struct app_row list[MAX_APP_ROWS];
+    int count = collect_apps(tm, list, MAX_APP_ROWS);
+    tm->rows_matching = count;
+
+    for (int row = 0; row < rows && tm->scroll + row < count; row++) {
+        const struct app_row *entry = &list[tm->scroll + row];
+        int ry = y + row * ROW_HEIGHT;
+        int baseline = ry + (ROW_HEIGHT + ascent) / 2 - 2;
+        bool selected = (tm->selected_row == tm->scroll + row);
+
+        if (selected) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+        } else if (row % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color text = selected ? COLOR_ROW_SELECTED_TEXT : COLOR_TEXT;
+        recon_draw_text(p, tm->font, x + COL_NAME, baseline,
+            COL_PID - COL_NAME - 10, entry->title, text);
+        recon_draw_text(p, tm->font, x + COL_PID, baseline, 120,
+            entry->minimized ? "Minimized" : "Running", text);
+        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 120,
+            entry->kind, text);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
+    }
+}
+
 static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         int x, int y, int w) {
     int ascent = recon_font_ascent(tm->font);
@@ -394,7 +477,11 @@ static void taskmgr_draw(void *user, struct recon_panel *p, int x, int y, int w,
     draw_menubar(tm, p, x, menubar_y, w);
     draw_tabs(tm, p, x, tabs_y, w);
     draw_header(tm, p, x, header_y, w);
-    draw_rows(tm, p, x, rows_y, w, rows);
+    if (tm->tab == TAB_APPLICATIONS) {
+        draw_app_rows(tm, p, x, rows_y, w, rows);
+    } else {
+        draw_rows(tm, p, x, rows_y, w, rows);
+    }
     draw_footer(tm, p, x, y + h - FOOTER_HEIGHT, w);
 
     /* A sunken edge so the list reads as inset. */
@@ -428,6 +515,28 @@ static const struct recon_process *process_for_row(struct recon_taskmgr *tm, int
 /* --- Input --- */
 
 static void end_selected_task(struct recon_taskmgr *tm) {
+    if (tm->tab == TAB_APPLICATIONS) {
+        struct app_row list[MAX_APP_ROWS];
+        int count = collect_apps(tm, list, MAX_APP_ROWS);
+        if (tm->selected_row < 0 || tm->selected_row >= count) {
+            snprintf(tm->status, sizeof(tm->status), "Select a task first");
+            return;
+        }
+
+        const struct app_row *entry = &list[tm->selected_row];
+        if (entry->appwin != NULL) {
+            recon_appwin_hide(entry->appwin);
+            snprintf(tm->status, sizeof(tm->status), "Closed %s", entry->title);
+        } else {
+            /* Client windows are asked to close through the window itself, so
+             * the program can decline or save first. */
+            snprintf(tm->status, sizeof(tm->status),
+                "Close '%s' from its own window", entry->title);
+        }
+        tm->selected_row = -1;
+        return;
+    }
+
     if (tm->selected_pid <= 0) {
         snprintf(tm->status, sizeof(tm->status), "Select a process first");
         return;
@@ -512,7 +621,14 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
         if (index >= 0 && index < TAB_COUNT) {
             tm->tab = (enum tab)index;
             tm->scroll = 0;
+            tm->selected_row = -1;
+            tm->selected_pid = 0;
         }
+        return true;
+    }
+
+    if (hit_id >= HIT_ROW_BASE && tm->tab == TAB_APPLICATIONS) {
+        tm->selected_row = tm->scroll + (int)(hit_id - HIT_ROW_BASE);
         return true;
     }
 
@@ -594,6 +710,7 @@ struct recon_appwin *recon_taskmgr_create(struct recon_server *server,
     tm->font = font;
     tm->sort = SORT_CPU;
     tm->tab = TAB_APPLICATIONS;
+    tm->selected_row = -1;
     tm->own_session = (int)getsid(0);
     snprintf(tm->status, sizeof(tm->status), "Reading processes...");
 
