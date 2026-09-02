@@ -196,6 +196,21 @@ struct app_row {
     struct recon_appwin *appwin;  /* NULL for client windows */
 };
 
+/* Memory of the process behind a window, or 0 if it has none of its own. */
+static size_t memory_for_pid(struct recon_taskmgr *tm, pid_t pid) {
+    if (pid <= 0) {
+        return 0;
+    }
+    size_t count = recon_proc_count(tm->snapshot);
+    for (size_t i = 0; i < count; i++) {
+        const struct recon_process *proc = recon_proc_at(tm->snapshot, i);
+        if (proc != NULL && proc->pid == pid) {
+            return proc->memory_kb;
+        }
+    }
+    return 0;
+}
+
 #define MAX_APP_ROWS 32
 
 /* Collect the open windows, built-in ones first so their order is stable. */
@@ -225,7 +240,7 @@ static int collect_apps(struct recon_taskmgr *tm, struct app_row *rows, int max)
         rows[count].title = recon_toplevel_title(toplevel);
         rows[count].kind = "Client";
         rows[count].minimized = recon_toplevel_is_minimized(toplevel);
-        rows[count].pid = 0;
+        rows[count].pid = recon_toplevel_pid(toplevel);
         rows[count].appwin = NULL;
         count++;
     }
@@ -295,7 +310,8 @@ static void draw_header(struct recon_taskmgr *tm, struct recon_panel *p,
     if (tm->tab == TAB_APPLICATIONS) {
         recon_draw_text(p, tm->font, x + COL_NAME, baseline, 200, "Task", COLOR_TEXT);
         recon_draw_text(p, tm->font, x + COL_PID, baseline, 120, "Status", COLOR_TEXT);
-        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 120, "Type", COLOR_TEXT);
+        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 100, "Type", COLOR_TEXT);
+        recon_draw_text(p, tm->font, x + COL_MEM + 60, baseline, 100, "Memory", COLOR_TEXT);
         return;
     }
 
@@ -409,8 +425,23 @@ static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
             COL_PID - COL_NAME - 10, entry->title, text);
         recon_draw_text(p, tm->font, x + COL_PID, baseline, 120,
             entry->minimized ? "Minimized" : "Running", text);
-        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 120,
+        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 100,
             entry->kind, text);
+
+        /* Windows built into ReconOS share its process, so they have no
+         * memory figure of their own to report. */
+        char memory[32];
+        size_t kb = memory_for_pid(tm, entry->pid);
+        if (entry->appwin != NULL) {
+            snprintf(memory, sizeof(memory), "in ReconOS");
+        } else if (kb >= 1024) {
+            snprintf(memory, sizeof(memory), "%.1f MB", kb / 1024.0);
+        } else if (kb > 0) {
+            snprintf(memory, sizeof(memory), "%zu KB", kb);
+        } else {
+            snprintf(memory, sizeof(memory), "-");
+        }
+        recon_draw_text(p, tm->font, x + COL_MEM + 60, baseline, 100, memory, text);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
     }

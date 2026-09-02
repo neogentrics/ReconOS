@@ -157,5 +157,7 @@ void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel);
 const char *recon_toplevel_title(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);
+/* The process behind a client window, or 0 if it cannot be determined. */
+int recon_toplevel_pid(struct recon_toplevel *toplevel);
 
 #endif

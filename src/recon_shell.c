@@ -133,6 +133,13 @@ struct recon_shell {
      * underneath answers for the one on top of it.
      */
     int app_order[8];
+    /*
+     * Which built-in window holds focus, or -1 for none. Exactly one window
+     * may hold it, which is a fact about all of them and so cannot be left to
+     * each one separately: every window believing itself focused is how they
+     * all drew active title bars and all claimed the keyboard.
+     */
+    int focused_app;
 
     struct recon_panel *security;
     /* Dims the desktop behind the security box, so it is obvious that the
@@ -162,6 +169,18 @@ static int menu_height(void) {
 static int security_height(void) {
     return SEC_TITLE_HEIGHT + SEC_PADDING * 3 +
         SEC_COUNT * (SEC_BUTTON_HEIGHT + SEC_PADDING) + 20;
+}
+
+/*
+ * Give focus to one built-in window, taking it from every other.
+ *
+ * Pass -1 when focus goes elsewhere -- to a client window, or nowhere.
+ */
+static void set_focused_app(struct recon_shell *shell, int index) {
+    shell->focused_app = index;
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_set_focused(shell->apps[i], i == index);
+    }
 }
 
 /* Move a window to the front of the input order. */
@@ -444,6 +463,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
 
     shell->server = server;
+    shell->focused_app = -1;
     shell->screen_width = screen_width;
     shell->screen_height = screen_height;
 
@@ -584,6 +604,7 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
     }
     recon_shell_close_menu(shell);
     raise_app_order(shell, 0);
+    set_focused_app(shell, 0);
     recon_appwin_show(shell->taskmgr);
     recon_appwin_focus(shell->taskmgr);
     recon_shell_refresh(shell);
@@ -606,6 +627,7 @@ void recon_shell_open_app(struct recon_shell *shell, int index) {
     }
     recon_shell_close_menu(shell);
     raise_app_order(shell, index);
+    set_focused_app(shell, index);
     recon_appwin_show(shell->apps[index]);
     recon_appwin_focus(shell->apps[index]);
     recon_shell_refresh(shell);
@@ -613,15 +635,18 @@ void recon_shell_open_app(struct recon_shell *shell, int index) {
 
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
         uint32_t modifiers) {
-    if (shell == NULL) {
+    if (shell == NULL || shell->focused_app < 0) {
         return false;
     }
-    for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_handle_key(shell->apps[i], sym, modifiers)) {
-            return true;
-        }
+    /* Only the focused window, so a calculator sitting open in the background
+     * cannot swallow digits meant for the notepad. */
+    return recon_appwin_handle_key(shell->apps[shell->focused_app], sym, modifiers);
+}
+
+void recon_shell_clear_app_focus(struct recon_shell *shell) {
+    if (shell != NULL) {
+        set_focused_app(shell, -1);
     }
-    return false;
 }
 
 bool recon_shell_security_open(struct recon_shell *shell) {
@@ -830,6 +855,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         if (recon_appwin_handle_click(shell->apps[index], lx, ly, pressed)) {
             if (pressed) {
                 raise_app_order(shell, index);
+                set_focused_app(shell, index);
             }
             recon_shell_refresh(shell);
             return true;
@@ -868,13 +894,26 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                  * already expect from a taskbar.
                  */
                 if (button->appwin != NULL) {
+                    int app_index = -1;
+                    for (int a = 0; a < shell->app_count; a++) {
+                        if (shell->apps[a] == button->appwin) {
+                            app_index = a;
+                            break;
+                        }
+                    }
+
                     if (recon_appwin_is_minimized(button->appwin)) {
                         recon_appwin_restore(button->appwin);
                         recon_appwin_focus(button->appwin);
+                        set_focused_app(shell, app_index);
+                        raise_app_order(shell, app_index);
                     } else if (recon_appwin_is_focused(button->appwin)) {
                         recon_appwin_minimize(button->appwin);
+                        set_focused_app(shell, -1);
                     } else {
                         recon_appwin_focus(button->appwin);
+                        set_focused_app(shell, app_index);
+                        raise_app_order(shell, app_index);
                     }
                 } else if (button->toplevel != NULL) {
                     if (recon_toplevel_is_minimized(button->toplevel)) {

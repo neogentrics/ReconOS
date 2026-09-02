@@ -417,8 +417,16 @@ void recon_appwin_focus(struct recon_appwin *win) {
     if (win->minimized) {
         recon_appwin_restore(win);
     }
-    win->focused = true;
     recon_panel_raise_to_top(win->panel);
+    recon_appwin_refresh(win);
+}
+
+void recon_appwin_set_focused(struct recon_appwin *win, bool focused) {
+    if (win == NULL || win->focused == focused) {
+        return;
+    }
+    win->focused = focused;
+    /* The title bar shows focus, so it has to be repainted either way. */
     recon_appwin_refresh(win);
 }
 

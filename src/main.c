@@ -371,7 +371,9 @@ void recon_focus_toplevel(struct recon_toplevel *toplevel) {
             keyboard->num_keycodes, &keyboard->modifiers);
     }
 
-    /* The taskbar highlights the focused window. */
+    /* Focus is one thing, held by one window. A client window taking it means
+     * every built-in window loses it. */
+    recon_shell_clear_app_focus(server->shell);
     recon_shell_refresh(server->shell);
     recon_damage_all(server);
 }
@@ -386,6 +388,20 @@ const char *recon_toplevel_title(struct recon_toplevel *toplevel) {
     }
     const char *title = toplevel->xdg_toplevel->title;
     return title != NULL ? title : "Untitled";
+}
+
+/* Wayland tells us which process is on the other end of a client connection. */
+int recon_toplevel_pid(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL) {
+        return 0;
+    }
+    struct wl_client *client = wl_resource_get_client(toplevel->xdg_toplevel->resource);
+    if (client == NULL) {
+        return 0;
+    }
+    pid_t pid = 0;
+    wl_client_get_credentials(client, &pid, NULL, NULL);
+    return (int)pid;
 }
 
 bool recon_toplevel_is_focused(struct recon_toplevel *toplevel) {

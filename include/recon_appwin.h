@@ -81,9 +81,13 @@ bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
 
-/* Bring to the front and give it keyboard focus. */
+/*
+ * Raise to the front. Focus itself is not decided here: exactly one window may
+ * hold it, which is a question about all of them, so the shell sets it.
+ */
 void recon_appwin_focus(struct recon_appwin *win);
 bool recon_appwin_is_focused(struct recon_appwin *win);
+void recon_appwin_set_focused(struct recon_appwin *win, bool focused);
 
 void recon_appwin_raise(struct recon_appwin *win);
 
