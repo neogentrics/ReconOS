@@ -7,7 +7,9 @@
  *   Alt + Q      quit the compositor
  *   Alt + Enter  launch a terminal client
  *   Alt + Tab    cycle windows
+ *   Alt + T      open the task manager
  *   Alt + C      close the focused window
+ *   Ctrl + Alt + Del   the security box: task manager, or shut down
  */
 
 #define _POSIX_C_SOURCE 200112L
@@ -625,6 +627,8 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         /* Any drag or resize ends when the button comes up. */
         server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
         server->grabbed = NULL;
+        recon_shell_handle_click(server->shell, server->cursor->x, server->cursor->y,
+            false);
     } else if (event->button == BTN_LEFT) {
         double x = server->cursor->x;
         double y = server->cursor->y;
@@ -653,6 +657,7 @@ static void server_cursor_motion(struct wl_listener *listener, void *data) {
     struct wlr_pointer_motion_event *event = data;
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+    recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
     process_cursor_motion(server, event->time_msec);
     recon_damage_all(server);
 }
@@ -662,6 +667,7 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
     struct wlr_pointer_motion_absolute_event *event = data;
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+    recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
     process_cursor_motion(server, event->time_msec);
     recon_damage_all(server);
 }
@@ -669,6 +675,11 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
     struct recon_server *server = wl_container_of(listener, server, cursor_axis);
     struct wlr_pointer_axis_event *event = data;
+
+    if (recon_shell_handle_scroll(server->shell, server->cursor->x, server->cursor->y,
+            event->delta)) {
+        return;
+    }
 
     wlr_seat_pointer_notify_axis(server->seat, event->time_msec, event->orientation,
         event->delta, event->delta_discrete, event->source);
@@ -747,6 +758,14 @@ static void close_focused(struct recon_server *server) {
  */
 static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         xkb_keysym_t sym) {
+    /* Ctrl+Alt+Delete, kept because it is the gesture people already reach for
+     * when something has gone wrong. */
+    if ((modifiers & WLR_MODIFIER_CTRL) && (modifiers & WLR_MODIFIER_ALT) &&
+            (sym == XKB_KEY_Delete || sym == XKB_KEY_BackSpace)) {
+        recon_shell_toggle_security(server->shell);
+        return true;
+    }
+
     if (!(modifiers & WLR_MODIFIER_ALT)) {
         return false;
     }
@@ -763,6 +782,10 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
     case XKB_KEY_Tab:
     case XKB_KEY_ISO_Left_Tab:
         cycle_focus(server);
+        return true;
+    case XKB_KEY_t:
+    case XKB_KEY_T:
+        recon_shell_open_taskmgr(server->shell);
         return true;
     case XKB_KEY_c:
     case XKB_KEY_C:
@@ -1291,7 +1314,8 @@ int main(int argc, char **argv) {
     }
 
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
-    printf("ReconOS v0.7 - Alt+Enter for a terminal, Alt+Q to quit.\n");
+    printf("ReconOS v0.0.7 - Alt+Enter for a terminal, "
+        "Ctrl+Alt+Del for the task manager, Alt+Q to quit.\n");
     fflush(stdout);
 
     wl_display_run(server.wl_display);

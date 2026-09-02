@@ -16,6 +16,7 @@
 
 #include "recon_server.h"
 #include "recon_shell.h"
+#include "recon_taskmgr.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -34,6 +35,13 @@
 
 #define FONT_HEIGHT 14
 
+/* The Ctrl+Alt+Del box. */
+#define SEC_WIDTH 300
+#define SEC_TITLE_HEIGHT 24
+#define SEC_ITEM_HEIGHT 30
+#define SEC_PADDING 8
+#define SEC_BUTTON_HEIGHT 26
+
 /*
  * The one place the shell's colours are defined. A skin is a different set of
  * these, which is why nothing below uses a literal.
@@ -46,16 +54,20 @@
 #define COLOR_MENU RECON_RGB(0xC8, 0xC8, 0xC8)
 #define COLOR_MENU_BORDER RECON_RGB(0x30, 0x30, 0x30)
 #define COLOR_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
+#define COLOR_DIALOG_TITLE RECON_RGB(0x20, 0x2A, 0x44)
+#define COLOR_DIALOG_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
 
 /* Hit-region ids. Window buttons use TASK_BASE + index. */
 #define HIT_APPS_BUTTON 1
 #define HIT_TASK_BASE 100
 #define HIT_MENU_BASE 200
+#define HIT_SEC_BASE 300
 
 /* --- Apps menu contents --- */
 
 enum recon_app_action {
     RECON_APP_LAUNCH,
+    RECON_APP_TASKMGR,
     RECON_APP_QUIT,
 };
 
@@ -72,8 +84,24 @@ struct recon_app_entry {
  */
 static const struct recon_app_entry APPS[] = {
     { "Terminal", NULL, RECON_APP_LAUNCH },
+    { "Task Manager", NULL, RECON_APP_TASKMGR },
     { "Shut Down", NULL, RECON_APP_QUIT },
 };
+
+/* What the Ctrl+Alt+Del box offers, in the order it offers it. */
+enum sec_action {
+    SEC_TASKMGR,
+    SEC_SHUTDOWN,
+    SEC_CANCEL,
+};
+
+static const char *const SEC_ITEMS[] = {
+    "Task Manager",
+    "Shut Down",
+    "Cancel",
+};
+
+#define SEC_COUNT ((int)(sizeof(SEC_ITEMS) / sizeof(SEC_ITEMS[0])))
 
 #define APP_COUNT ((int)(sizeof(APPS) / sizeof(APPS[0])))
 
@@ -86,6 +114,10 @@ struct recon_shell {
     struct recon_panel *taskbar;
     struct recon_panel *menu;
     bool menu_open;
+
+    struct recon_panel *security;
+    bool security_open;
+    struct recon_taskmgr *taskmgr;
 
     int screen_width, screen_height;
 
@@ -100,6 +132,11 @@ struct recon_shell {
 
 static int menu_height(void) {
     return APP_COUNT * MENU_ITEM_HEIGHT + MENU_PADDING * 2;
+}
+
+static int security_height(void) {
+    return SEC_TITLE_HEIGHT + SEC_PADDING * 3 +
+        SEC_COUNT * (SEC_BUTTON_HEIGHT + SEC_PADDING) + 20;
 }
 
 /* --- Drawing --- */
@@ -218,6 +255,45 @@ static void draw_menu(struct recon_shell *shell) {
     recon_panel_commit(menu);
 }
 
+static void draw_security(struct recon_shell *shell) {
+    struct recon_panel *p = shell->security;
+    if (p == NULL) {
+        return;
+    }
+
+    int width = recon_panel_width(p);
+    int height = recon_panel_height(p);
+    int ascent = recon_font_ascent(shell->font);
+
+    recon_fill(p, COLOR_MENU);
+    recon_hit_clear(p);
+
+    recon_fill_rect(p, 0, 0, width, SEC_TITLE_HEIGHT, COLOR_DIALOG_TITLE);
+    recon_draw_text(p, shell->font, SEC_PADDING,
+        (SEC_TITLE_HEIGHT + ascent) / 2 - 1, width - SEC_PADDING * 2,
+        "ReconOS Security", COLOR_DIALOG_TITLE_TEXT);
+
+    recon_draw_text(p, shell->font, SEC_PADDING,
+        SEC_TITLE_HEIGHT + SEC_PADDING + ascent,
+        width - SEC_PADDING * 2, "What would you like to do?", COLOR_TEXT);
+
+    int y = SEC_TITLE_HEIGHT + SEC_PADDING * 2 + 20;
+    for (int i = 0; i < SEC_COUNT; i++) {
+        int bw = width - SEC_PADDING * 2;
+        recon_fill_rect(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, COLOR_BUTTON);
+        recon_draw_bevel(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, false);
+        recon_draw_text(p, shell->font, SEC_PADDING + 12,
+            y + (SEC_BUTTON_HEIGHT + ascent) / 2 - 2, bw - 24,
+            SEC_ITEMS[i], COLOR_TEXT);
+        recon_hit_add(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, HIT_SEC_BASE + i);
+        y += SEC_BUTTON_HEIGHT + SEC_PADDING;
+    }
+
+    recon_draw_bevel(p, 0, 0, width, height, false);
+    recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
+    recon_panel_commit(p);
+}
+
 /* --- Layout --- */
 
 static void layout(struct recon_shell *shell) {
@@ -230,6 +306,13 @@ static void layout(struct recon_shell *shell) {
         recon_panel_set_position(shell->menu, TASKBAR_PADDING,
             shell->screen_height - TASKBAR_HEIGHT - menu_height());
     }
+    if (shell->security != NULL) {
+        /* Centred: it is a question that interrupts, not a corner notice. */
+        recon_panel_set_position(shell->security,
+            (shell->screen_width - SEC_WIDTH) / 2,
+            (shell->screen_height - security_height()) / 2);
+    }
+    recon_taskmgr_center(shell->taskmgr, shell->screen_width, shell->screen_height);
 }
 
 /* --- Lifecycle --- */
@@ -263,6 +346,15 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         draw_menu(shell);
     }
 
+    shell->security = recon_panel_create(&server->scene->tree,
+        SEC_WIDTH, security_height());
+    if (shell->security != NULL) {
+        recon_panel_set_enabled(shell->security, false);
+        draw_security(shell);
+    }
+
+    shell->taskmgr = recon_taskmgr_create(server, shell->font);
+
     layout(shell);
     draw_taskbar(shell);
 
@@ -275,6 +367,8 @@ void recon_shell_destroy(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
     }
+    recon_taskmgr_destroy(shell->taskmgr);
+    recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->menu);
     recon_panel_destroy(shell->taskbar);
     recon_font_destroy(shell->font);
@@ -310,6 +404,56 @@ void recon_shell_raise(struct recon_shell *shell) {
     if (shell->menu_open) {
         recon_panel_raise_to_top(shell->menu);
     }
+    /* The task manager and the security box sit above everything, including
+     * the taskbar: they are how you regain control when something else has
+     * taken over the screen. */
+    recon_taskmgr_raise(shell->taskmgr);
+    if (shell->security_open) {
+        recon_panel_raise_to_top(shell->security);
+    }
+}
+
+void recon_shell_open_taskmgr(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+    recon_shell_close_menu(shell);
+    recon_taskmgr_show(shell->taskmgr);
+}
+
+bool recon_shell_security_open(struct recon_shell *shell) {
+    return shell != NULL && shell->security_open;
+}
+
+void recon_shell_toggle_security(struct recon_shell *shell) {
+    if (shell == NULL || shell->security == NULL) {
+        return;
+    }
+    shell->security_open = !shell->security_open;
+    recon_panel_set_enabled(shell->security, shell->security_open);
+    if (shell->security_open) {
+        recon_shell_close_menu(shell);
+        recon_panel_raise_to_top(shell->security);
+    }
+    recon_damage_all(shell->server);
+}
+
+void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) {
+    if (shell != NULL) {
+        recon_taskmgr_handle_motion(shell->taskmgr, lx, ly);
+    }
+}
+
+bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
+        double delta) {
+    if (shell == NULL) {
+        return false;
+    }
+    if (recon_taskmgr_contains_point(shell->taskmgr, lx, ly)) {
+        recon_taskmgr_handle_scroll(shell->taskmgr, delta);
+        return true;
+    }
+    return false;
 }
 
 void recon_shell_close_menu(struct recon_shell *shell) {
@@ -362,7 +506,14 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
     if (shell == NULL) {
         return false;
     }
+    if (recon_taskmgr_contains_point(shell->taskmgr, lx, ly)) {
+        return true;
+    }
     int px, py;
+    if (shell->security_open && shell->security != NULL &&
+            point_in_panel(shell->security, lx, ly, &px, &py)) {
+        return true;
+    }
     if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         return true;
@@ -378,6 +529,36 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
 
     int px, py;
 
+    /* The security box is modal in spirit: while it is up it takes the click,
+     * wherever the click landed. */
+    if (shell->security_open && shell->security != NULL) {
+        if (!pressed) {
+            return true;
+        }
+        if (point_in_panel(shell->security, lx, ly, &px, &py)) {
+            uint32_t hit = recon_hit_test(shell->security, px, py);
+            if (hit >= HIT_SEC_BASE) {
+                int index = (int)(hit - HIT_SEC_BASE);
+                recon_shell_toggle_security(shell); /* closes it */
+                if (index == SEC_TASKMGR) {
+                    recon_taskmgr_show(shell->taskmgr);
+                } else if (index == SEC_SHUTDOWN) {
+                    recon_quit(shell->server);
+                }
+                return true;
+            }
+        } else {
+            /* Clicking outside dismisses it, like Cancel. */
+            recon_shell_toggle_security(shell);
+        }
+        return true;
+    }
+
+    /* The task manager floats above the desktop and handles its own chrome. */
+    if (recon_taskmgr_handle_click(shell->taskmgr, lx, ly, pressed)) {
+        return true;
+    }
+
     /* The menu sits above the bar, so it gets first refusal. */
     if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
@@ -392,6 +573,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                 recon_shell_close_menu(shell);
                 if (APPS[index].action == RECON_APP_QUIT) {
                     recon_quit(shell->server);
+                } else if (APPS[index].action == RECON_APP_TASKMGR) {
+                    recon_taskmgr_show(shell->taskmgr);
                 } else {
                     recon_spawn(shell->server, APPS[index].command);
                 }

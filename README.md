@@ -8,8 +8,10 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.7 — pre-alpha.** It draws a desktop, hosts real application
-windows, and quits when you tell it to. It is not yet a usable desktop.
+**Status: v0.0.7 — pre-alpha.** It draws a desktop with a taskbar and an
+apps menu, hosts real application windows, and manages them. The version
+number tracks what works, not what is planned: v0.1.0 is the first milestone
+that counts as a usable desktop, and it is not reached yet.
 
 ## What works right now
 

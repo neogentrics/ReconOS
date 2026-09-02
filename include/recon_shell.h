@@ -48,6 +48,26 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
 /* Keep the shell above application windows. */
 void recon_shell_raise(struct recon_shell *shell);
 
+/*
+ * The Ctrl+Alt+Del dialog: a small box asking what the user wants to do.
+ *
+ * Kept because it is the gesture people already know for "something is wrong",
+ * and it should reach the task manager without going through a desktop that
+ * may be the thing misbehaving.
+ */
+void recon_shell_toggle_security(struct recon_shell *shell);
+bool recon_shell_security_open(struct recon_shell *shell);
+
+/* Open the task manager directly. */
+void recon_shell_open_taskmgr(struct recon_shell *shell);
+
+/* Report pointer motion, so a task manager drag can follow it. */
+void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly);
+
+/* Offer a scroll to the shell. Returns true if consumed. */
+bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
+    double delta);
+
 /* Close the apps menu if it is open. */
 void recon_shell_close_menu(struct recon_shell *shell);
 

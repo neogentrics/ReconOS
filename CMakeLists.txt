@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.7.0
+    VERSION 0.0.7
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -50,7 +50,9 @@ add_custom_command(
 
 add_executable(ReconOS
     src/main.c
+    src/recon_procinfo.c
     src/recon_shell.c
+    src/recon_taskmgr.c
     src/recon_ui.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
