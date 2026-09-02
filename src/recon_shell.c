@@ -494,9 +494,12 @@ void recon_shell_raise(struct recon_shell *shell) {
     /* The task manager and the security box sit above everything, including
      * the taskbar: they are how you regain control when something else has
      * taken over the screen. */
-    for (int i = 0; i < shell->app_count; i++) {
-        recon_appwin_raise(shell->apps[i]);
-    }
+    /*
+     * Built-in windows are deliberately not raised here. They are ordinary
+     * windows and should stack by use like any other; raising them whenever
+     * the shell was raised pinned them above everything, so a client window
+     * could never be brought in front of the task manager.
+     */
     if (shell->security_open) {
         recon_panel_raise_to_top(shell->dim);
         recon_panel_raise_to_top(shell->security);

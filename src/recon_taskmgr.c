@@ -13,6 +13,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -68,7 +69,11 @@
 #define HIT_MENU_FILE (RECON_APPWIN_HIT_USER + 5)
 #define HIT_MENU_VIEW (RECON_APPWIN_HIT_USER + 6)
 #define HIT_DROP_BASE (RECON_APPWIN_HIT_USER + 10)
+#define HIT_TAB_BASE (RECON_APPWIN_HIT_USER + 20)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
+
+#define TAB_HEIGHT 24
+#define TAB_WIDTH 110
 
 enum sort_mode {
     SORT_CPU,
@@ -81,6 +86,19 @@ enum open_menu {
     MENU_FILE,
     MENU_VIEW,
 };
+
+/*
+ * Applications are what ReconOS started; Processes is everything else running
+ * in userspace. Kernel workers appear in neither: ReconOS did not start them
+ * and cannot usefully act on them.
+ */
+enum tab {
+    TAB_APPLICATIONS,
+    TAB_PROCESSES,
+};
+
+static const char *const TAB_LABELS[] = { "Applications", "Processes" };
+#define TAB_COUNT ((int)(sizeof(TAB_LABELS) / sizeof(TAB_LABELS[0])))
 
 static const char *const FILE_ITEMS[] = { "New Task", "Exit" };
 static const char *const VIEW_ITEMS[] = { "Sort by Name", "Sort by CPU", "Sort by Memory" };
@@ -95,12 +113,18 @@ struct recon_taskmgr {
     struct recon_proc_snapshot *snapshot;
 
     enum sort_mode sort;
+    enum tab tab;
     enum open_menu menu;
     int scroll;
     pid_t selected_pid; /* survives re-sorting, unlike a row index */
 
     /* Rows drawn last time, so scrolling knows its own limits. */
     int rows_visible;
+    /* Rows the current tab actually has, for the same reason. */
+    int rows_matching;
+
+    /* The compositor's own session, so its children can be recognised. */
+    int own_session;
 
     struct wl_event_source *timer;
     char status[128];
@@ -134,8 +158,8 @@ static void sample(struct recon_taskmgr *tm) {
     apply_sort(tm);
 
     snprintf(tm->status, sizeof(tm->status),
-        "%zu processes   CPU %.0f%%   Memory %zu / %zu MB",
-        recon_proc_count(tm->snapshot),
+        "%d shown   CPU %.0f%%   Memory %zu / %zu MB",
+        tm->rows_matching,
         recon_proc_total_cpu_percent(tm->snapshot),
         recon_proc_used_memory_kb(tm->snapshot) / 1024,
         recon_proc_total_memory_kb(tm->snapshot) / 1024);
@@ -147,6 +171,23 @@ static int on_timer(void *data) {
     recon_appwin_refresh(tm->win);
     wl_event_source_timer_update(tm->timer, REFRESH_MS);
     return 0;
+}
+
+/*
+ * Whether a process belongs in the current tab.
+ *
+ * ReconOS launches its clients as its own children, so anything sharing its
+ * process group was started from the desktop. That is what Applications
+ * means here; Processes widens it to all of userspace.
+ */
+static bool in_current_tab(struct recon_taskmgr *tm, const struct recon_process *proc) {
+    if (proc->kernel_thread) {
+        return false;
+    }
+    if (tm->tab == TAB_PROCESSES) {
+        return true;
+    }
+    return proc->session == tm->own_session;
 }
 
 /* --- Drawing --- */
@@ -174,6 +215,30 @@ static void draw_menubar(struct recon_taskmgr *tm, struct recon_panel *p,
         recon_draw_text(p, tm->font, lx, baseline, lw, LABELS[i],
             open ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
         recon_hit_add(p, lx - 8, y, lw, MENUBAR_HEIGHT, IDS[i]);
+    }
+}
+
+static void draw_tabs(struct recon_taskmgr *tm, struct recon_panel *p,
+        int x, int y, int w) {
+    int ascent = recon_font_ascent(tm->font);
+
+    recon_fill_rect(p, x, y, w, TAB_HEIGHT, COLOR_FRAME);
+
+    for (int i = 0; i < TAB_COUNT; i++) {
+        int tx = x + PADDING + i * (TAB_WIDTH + 2);
+        bool active = (tm->tab == (enum tab)i);
+
+        /* The active tab is drawn a shade lighter and without a bottom edge,
+         * so it reads as continuous with the list below it. */
+        recon_fill_rect(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2,
+            active ? COLOR_LIST_BG : COLOR_BUTTON);
+        recon_draw_bevel(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2, false);
+
+        int label_w = recon_text_width(tm->font, TAB_LABELS[i]);
+        recon_draw_text(p, tm->font, tx + (TAB_WIDTH - label_w) / 2,
+            y + 2 + (TAB_HEIGHT - 2 + ascent) / 2 - 2, TAB_WIDTH - 8,
+            TAB_LABELS[i], COLOR_TEXT);
+        recon_hit_add(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2, HIT_TAB_BASE + i);
     }
 }
 
@@ -205,16 +270,19 @@ static void draw_rows(struct recon_taskmgr *tm, struct recon_panel *p,
     int ascent = recon_font_ascent(tm->font);
     recon_fill_rect(p, x, y, w, rows * ROW_HEIGHT, COLOR_LIST_BG);
 
+    /* Walk the snapshot, skipping what this tab does not show, and take the
+     * slice the scroll position asks for. */
     size_t count = recon_proc_count(tm->snapshot);
-    for (int row = 0; row < rows; row++) {
-        size_t index = (size_t)(tm->scroll + row);
-        if (index >= count) {
-            break;
-        }
+    int matching = 0;
+    int row = 0;
 
+    for (size_t index = 0; index < count && row < rows; index++) {
         const struct recon_process *proc = recon_proc_at(tm->snapshot, index);
-        if (proc == NULL) {
-            break;
+        if (proc == NULL || !in_current_tab(tm, proc)) {
+            continue;
+        }
+        if (matching++ < tm->scroll) {
+            continue;
         }
 
         int ry = y + row * ROW_HEIGHT;
@@ -251,7 +319,18 @@ static void draw_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         recon_draw_text(p, tm->font, x + COL_STATE, baseline, 30, buffer, text);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
+        row++;
     }
+
+    /* Total for this tab, so scrolling knows how far it may go. */
+    int total = 0;
+    for (size_t index = 0; index < count; index++) {
+        const struct recon_process *proc = recon_proc_at(tm->snapshot, index);
+        if (proc != NULL && in_current_tab(tm, proc)) {
+            total++;
+        }
+    }
+    tm->rows_matching = total;
 }
 
 static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
@@ -305,13 +384,15 @@ static void taskmgr_draw(void *user, struct recon_panel *p, int x, int y, int w,
     recon_fill_rect(p, x, y, w, h, COLOR_FRAME);
 
     int menubar_y = y;
-    int header_y = menubar_y + MENUBAR_HEIGHT;
+    int tabs_y = menubar_y + MENUBAR_HEIGHT;
+    int header_y = tabs_y + TAB_HEIGHT;
     int rows_y = header_y + HEADER_HEIGHT;
-    int rows_area = h - MENUBAR_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT;
+    int rows_area = h - MENUBAR_HEIGHT - TAB_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT;
     int rows = rows_area > 0 ? rows_area / ROW_HEIGHT : 0;
     tm->rows_visible = rows;
 
     draw_menubar(tm, p, x, menubar_y, w);
+    draw_tabs(tm, p, x, tabs_y, w);
     draw_header(tm, p, x, header_y, w);
     draw_rows(tm, p, x, rows_y, w, rows);
     draw_footer(tm, p, x, y + h - FOOTER_HEIGHT, w);
@@ -321,6 +402,27 @@ static void taskmgr_draw(void *user, struct recon_panel *p, int x, int y, int w,
         HEADER_HEIGHT + rows * ROW_HEIGHT + 2, RECON_RGB(0x80, 0x80, 0x80));
 
     draw_dropdown(tm, p, x, menubar_y);
+}
+
+/* The process shown on a given visible row, or NULL. */
+static const struct recon_process *process_for_row(struct recon_taskmgr *tm, int row) {
+    size_t count = recon_proc_count(tm->snapshot);
+    int matching = 0;
+    int current = 0;
+
+    for (size_t index = 0; index < count; index++) {
+        const struct recon_process *proc = recon_proc_at(tm->snapshot, index);
+        if (proc == NULL || !in_current_tab(tm, proc)) {
+            continue;
+        }
+        if (matching++ < tm->scroll) {
+            continue;
+        }
+        if (current++ == row) {
+            return proc;
+        }
+    }
+    return NULL;
 }
 
 /* --- Input --- */
@@ -405,9 +507,18 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
         break;
     }
 
+    if (hit_id >= HIT_TAB_BASE && hit_id < HIT_ROW_BASE) {
+        int index = (int)(hit_id - HIT_TAB_BASE);
+        if (index >= 0 && index < TAB_COUNT) {
+            tm->tab = (enum tab)index;
+            tm->scroll = 0;
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_ROW_BASE) {
-        size_t index = (size_t)(tm->scroll + (int)(hit_id - HIT_ROW_BASE));
-        const struct recon_process *proc = recon_proc_at(tm->snapshot, index);
+        const struct recon_process *proc =
+            process_for_row(tm, (int)(hit_id - HIT_ROW_BASE));
         /* Remember the pid, not the row: the list re-sorts underneath it. */
         tm->selected_pid = proc != NULL ? proc->pid : 0;
         return true;
@@ -418,7 +529,7 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
 
 static void taskmgr_scroll(void *user, double delta) {
     struct recon_taskmgr *tm = user;
-    int count = (int)recon_proc_count(tm->snapshot);
+    int count = tm->rows_matching;
     int max_scroll = count > tm->rows_visible ? count - tm->rows_visible : 0;
 
     tm->scroll += (delta > 0) ? 3 : -3;
@@ -482,6 +593,8 @@ struct recon_appwin *recon_taskmgr_create(struct recon_server *server,
     tm->server = server;
     tm->font = font;
     tm->sort = SORT_CPU;
+    tm->tab = TAB_APPLICATIONS;
+    tm->own_session = (int)getsid(0);
     snprintf(tm->status, sizeof(tm->status), "Reading processes...");
 
     tm->snapshot = recon_proc_snapshot_create();

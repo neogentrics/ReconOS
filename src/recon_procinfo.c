@@ -122,19 +122,36 @@ static bool read_process(struct recon_proc_snapshot *snapshot, pid_t pid,
     /* Fields from 3 onwards: state, ppid, pgrp, session, tty, tpgid, flags,
      * minflt, cminflt, majflt, cmajflt, utime, stime, ... */
     char state = '?';
+    int session = 0;
     unsigned long long utime = 0, stime = 0;
     long rss_pages = 0;
 
+    /* Fields after the name: state, ppid, pgrp, session, tty, tpgid, ... */
     int matched = sscanf(name_end + 2,
-        "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu "
+        "%c %*d %*d %d %*d %*d %*u %*u %*u %*u %*u %llu %llu "
         "%*d %*d %*d %*d %*d %*d %*u %*u %ld",
-        &state, &utime, &stime, &rss_pages);
-    if (matched < 3) {
+        &state, &session, &utime, &stime, &rss_pages);
+    if (matched < 4) {
         return false;
+    }
+
+    /*
+     * Kernel threads have an empty command line. They are the kernel's own
+     * workers, not anything ReconOS started or can meaningfully act on, so
+     * they are recorded but flagged for the task manager to hide.
+     */
+    snprintf(path, sizeof(path), "/proc/%d/cmdline", (int)pid);
+    out->kernel_thread = true;
+    FILE *cmd = fopen(path, "r");
+    if (cmd != NULL) {
+        int first = fgetc(cmd);
+        out->kernel_thread = (first == EOF);
+        fclose(cmd);
     }
 
     out->pid = pid;
     out->state = state;
+    out->session = session;
     out->cpu_ticks = utime + stime;
     out->memory_kb = rss_pages > 0
         ? (size_t)rss_pages * (size_t)snapshot->page_size_kb : 0;

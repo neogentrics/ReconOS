@@ -20,6 +20,17 @@ struct recon_process {
     char name[RECON_PROC_NAME_MAX];
     char state; /* R running, S sleeping, D uninterruptible, Z zombie, T stopped */
 
+    /*
+     * A kernel worker rather than a program. ReconOS neither started these nor
+     * can do anything useful with them, so the task manager hides them by
+     * default.
+     */
+    bool kernel_thread;
+
+    /* Session id. Clients ReconOS launched inherit its session, which is how
+     * "started from this desktop" is told apart from the rest of the system. */
+    int session;
+
     size_t memory_kb; /* resident set size */
 
     /* Share of one CPU since the previous sample, 0-100 per core. Zero on the
