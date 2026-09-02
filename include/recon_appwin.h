@@ -87,6 +87,16 @@ bool recon_appwin_is_focused(struct recon_appwin *win);
 
 void recon_appwin_raise(struct recon_appwin *win);
 
+/*
+ * The scene node this window draws into.
+ *
+ * Lets the shell ask the scene graph which window is genuinely on top at a
+ * point, rather than assuming. Testing only whether a point falls inside a
+ * window is not enough: a maximized window contains every point on screen and
+ * would claim clicks meant for windows stacked above it.
+ */
+struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win);
+
 /* Repaint. Call after changing anything the window displays. */
 void recon_appwin_refresh(struct recon_appwin *win);
 

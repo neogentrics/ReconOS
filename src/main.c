@@ -18,6 +18,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include <dirent.h>
 #include <drm_fourcc.h>
 #include <linux/input-event-codes.h>
 #include <signal.h>
@@ -115,6 +116,30 @@ void recon_damage_all(struct recon_server *server) {
         output->needs_full_redraw = true;
         wlr_output_schedule_frame(output->wlr_output);
     }
+}
+
+/*
+ * Whether the machine offers a GPU render node.
+ *
+ * Its absence means all rendering is done on the CPU, which changes which
+ * renderer is appropriate.
+ */
+static bool has_render_node(void) {
+    DIR *dir = opendir("/dev/dri");
+    if (dir == NULL) {
+        return false;
+    }
+
+    bool found = false;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "renderD", 7) == 0) {
+            found = true;
+            break;
+        }
+    }
+    closedir(dir);
+    return found;
 }
 
 /* --- ASSET LOADING --- */
@@ -1327,6 +1352,21 @@ int main(int argc, char **argv) {
     if (server.backend == NULL) {
         wlr_log(WLR_ERROR, "ReconOS: failed to create backend");
         return 1;
+    }
+
+    /*
+     * With no GPU, the OpenGL path renders through a software implementation
+     * and then copies the finished frame back out for the display to scan.
+     * That copy corrupts frames on some drivers -- it is what caused black
+     * rectangles to flicker across the screen here. Pixman rasterizes straight
+     * into the display's buffer, so the copy does not happen at all, and on a
+     * machine without a GPU it is the better choice regardless.
+     *
+     * An explicit WLR_RENDERER still wins; this only supplies a default.
+     */
+    if (getenv("WLR_RENDERER") == NULL && !has_render_node()) {
+        wlr_log(WLR_INFO, "ReconOS: no GPU render node, using the pixman renderer");
+        setenv("WLR_RENDERER", "pixman", 1);
     }
 
     server.renderer = wlr_renderer_autocreate(server.backend);

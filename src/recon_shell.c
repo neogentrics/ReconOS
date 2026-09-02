@@ -181,21 +181,31 @@ static void raise_app_order(struct recon_shell *shell, int index) {
 }
 
 /*
- * Whether a client window is the topmost thing at this point.
+ * The topmost scene node at this point.
  *
- * The scene graph knows what is actually drawn on top; the shell does not.
- * Without asking it, a built-in window answers for clicks landing on a client
- * window stacked above it.
+ * The scene graph is the only thing that knows what is actually drawn on top.
+ * Asking whether a point falls inside a window is not the same question: a
+ * maximized window contains every point on screen, so it would claim clicks
+ * meant for windows stacked above it.
  */
-static bool client_on_top(struct recon_shell *shell, double lx, double ly) {
+static struct wlr_scene_node *topmost_node(struct recon_shell *shell,
+        double lx, double ly) {
     double sx, sy;
-    struct wlr_scene_node *node =
-        wlr_scene_node_at(&shell->server->scene->tree.node, lx, ly, &sx, &sy);
-    if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER) {
-        return false;
+    return wlr_scene_node_at(&shell->server->scene->tree.node, lx, ly, &sx, &sy);
+}
+
+/* The built-in window that owns a node, if any. */
+static int appwin_index_for_node(struct recon_shell *shell,
+        struct wlr_scene_node *node) {
+    if (node == NULL) {
+        return -1;
     }
-    struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
-    return wlr_scene_surface_try_from_buffer(buffer) != NULL;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_node(shell->apps[i]) == node) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 /* --- Drawing --- */
@@ -692,12 +702,8 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         return true;
     }
-    if (!client_on_top(shell, lx, ly)) {
-        for (int i = 0; i < shell->app_count; i++) {
-            if (recon_appwin_contains_point(shell->apps[i], lx, ly)) {
-                return true;
-            }
-        }
+    if (appwin_index_for_node(shell, topmost_node(shell, lx, ly)) >= 0) {
+        return true;
     }
     if (shell->security_open && shell->security != NULL &&
             point_in_panel(shell->security, lx, ly, &px, &py)) {
@@ -778,17 +784,27 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     }
 
     /*
-     * Then built-in windows, front-most first, and only if no client window is
-     * stacked above this point.
+     * Then whichever built-in window the scene graph says is actually on top
+     * here -- not merely one whose rectangle covers the point.
      */
-    if (!client_on_top(shell, lx, ly)) {
+    struct wlr_scene_node *node = topmost_node(shell, lx, ly);
+    int index = appwin_index_for_node(shell, node);
+    if (index >= 0) {
+        if (recon_appwin_handle_click(shell->apps[index], lx, ly, pressed)) {
+            if (pressed) {
+                raise_app_order(shell, index);
+            }
+            recon_shell_refresh(shell);
+            return true;
+        }
+    }
+
+    /* A release still has to reach a window mid-drag, whose pointer may have
+     * left it. */
+    if (!pressed) {
         for (int i = 0; i < shell->app_count; i++) {
-            int index = shell->app_order[i];
-            if (recon_appwin_handle_click(shell->apps[index], lx, ly, pressed)) {
-                if (pressed) {
-                    raise_app_order(shell, index);
-                }
-                recon_shell_refresh(shell);
+            if (recon_appwin_handle_click(shell->apps[shell->app_order[i]],
+                    lx, ly, false)) {
                 return true;
             }
         }

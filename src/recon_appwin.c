@@ -410,6 +410,10 @@ void recon_appwin_focus(struct recon_appwin *win) {
     recon_appwin_refresh(win);
 }
 
+struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win) {
+    return win != NULL ? recon_panel_node(win->panel) : NULL;
+}
+
 void recon_appwin_raise(struct recon_appwin *win) {
     if (win != NULL && win->open && !win->minimized) {
         recon_panel_raise_to_top(win->panel);
