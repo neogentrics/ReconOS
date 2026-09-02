@@ -1,0 +1,18 @@
+# Normalize to LF in the repository. ReconOS builds on Linux; CRLF in sources
+# or scripts breaks tooling there.
+* text=auto eol=lf
+
+# Sources and docs
+*.c    text eol=lf
+*.h    text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+*.sh   text eol=lf
+CMakeLists.txt text eol=lf
+
+# Binary assets
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.ico binary

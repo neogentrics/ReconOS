@@ -1,0 +1,32 @@
+# Build output
+build/
+out/
+*.o
+*.a
+*.so
+ReconOS
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.cmake/
+
+# Generated Wayland protocol code
+xdg-shell-protocol.c
+xdg-shell-protocol.h
+
+# Editors and IDEs
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
