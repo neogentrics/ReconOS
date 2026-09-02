@@ -1,0 +1,131 @@
+/*
+ * ReconOS UI layer.
+ *
+ * The drawing foundation the shell is built on: panels, text, and click
+ * targets. Everything the desktop draws itself -- the taskbar, menus, window
+ * frames -- is built from these, so all of it can be restyled in one place.
+ *
+ * A panel is a block of pixels ReconOS renders into directly and hands to the
+ * scene graph as a buffer. Widgets are drawn into that buffer, not created as
+ * scene nodes, so a whole panel costs the compositor a single texture no
+ * matter how many things are on it.
+ */
+
+#ifndef RECON_UI_H
+#define RECON_UI_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+struct wlr_scene_tree;
+struct wlr_scene_buffer;
+
+/* --- Colors --- */
+
+/*
+ * Packed 0xAARRGGBB. Named rather than numeric at the call site so a skin can
+ * be swapped by changing a palette instead of hunting for literals.
+ */
+typedef uint32_t recon_color;
+
+#define RECON_RGB(r, g, b)     ((recon_color)(0xFF000000u | ((r) << 16) | ((g) << 8) | (b)))
+#define RECON_RGBA(r, g, b, a) ((recon_color)(((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
+
+/* --- Text --- */
+
+struct recon_font;
+
+/*
+ * Load a font for rendering at the given pixel height.
+ *
+ * Pass NULL for path to search the usual system font locations. Returns NULL
+ * if no usable font was found; callers must cope, because a desktop that
+ * refuses to start over a missing font is worse than one without labels.
+ */
+struct recon_font *recon_font_load(const char *path, int pixel_height);
+void recon_font_destroy(struct recon_font *font);
+
+/* Width in pixels the string would occupy. */
+int recon_text_width(struct recon_font *font, const char *text);
+
+/* Distance from the top of a line to the baseline. */
+int recon_font_ascent(struct recon_font *font);
+
+/* Line height, including the gap between lines. */
+int recon_font_line_height(struct recon_font *font);
+
+/* --- Panels --- */
+
+/*
+ * A rectangle of pixels ReconOS draws into and shows via the scene graph.
+ *
+ * Drawing calls only touch the pixel buffer; nothing reaches the screen until
+ * recon_panel_commit(), so a redraw can be assembled without the display
+ * showing it half-finished.
+ */
+struct recon_panel;
+
+struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
+    int width, int height);
+void recon_panel_destroy(struct recon_panel *panel);
+
+/* Resize the panel's pixel buffer. Contents are discarded. */
+bool recon_panel_resize(struct recon_panel *panel, int width, int height);
+
+/* Publish whatever has been drawn. */
+void recon_panel_commit(struct recon_panel *panel);
+
+void recon_panel_set_position(struct recon_panel *panel, int x, int y);
+void recon_panel_raise_to_top(struct recon_panel *panel);
+void recon_panel_set_enabled(struct recon_panel *panel, bool enabled);
+
+int recon_panel_width(const struct recon_panel *panel);
+int recon_panel_height(const struct recon_panel *panel);
+
+/* The panel's node, for scene ordering and hit-test identification. */
+struct wlr_scene_node *recon_panel_node(struct recon_panel *panel);
+
+/* --- Drawing --- */
+
+void recon_fill(struct recon_panel *panel, recon_color color);
+void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
+    recon_color color);
+
+/* A one-pixel outline just inside the given rectangle. */
+void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
+    recon_color color);
+
+/*
+ * A raised or sunken bevel, the Windows 95 look: light on the top and left,
+ * dark on the bottom and right, or the reverse when pressed.
+ */
+void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
+    bool pressed);
+
+/*
+ * Draw text with its left edge at x and its baseline at y.
+ *
+ * Clipped to max_width, with a trailing ellipsis when it doesn't fit, so long
+ * window titles truncate instead of overrunning their button.
+ */
+void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
+    int x, int y, int max_width, const char *text, recon_color color);
+
+/* --- Click targets --- */
+
+/*
+ * Panels are opaque to the compositor, so it cannot tell which part of one was
+ * clicked. Each panel keeps a list of regions with an id attached; a click is
+ * resolved to an id and the owner decides what it means.
+ */
+#define RECON_HIT_NONE 0
+
+void recon_hit_clear(struct recon_panel *panel);
+bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
+    uint32_t id);
+
+/* The id of the topmost region containing the point, or RECON_HIT_NONE. */
+uint32_t recon_hit_test(struct recon_panel *panel, int x, int y);
+
+#endif

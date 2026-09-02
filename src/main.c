@@ -6,7 +6,8 @@
  * Controls:
  *   Alt + Q      quit the compositor
  *   Alt + Enter  launch a terminal client
- *   click (50,50)-(114,114)  power button -> quit
+ *   Alt + Tab    cycle windows
+ *   Alt + C      close the focused window
  */
 
 #define _POSIX_C_SOURCE 200112L
@@ -48,6 +49,9 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "recon_server.h"
+#include "recon_shell.h"
+
 /* Where image assets live. CMake defines this; the env var overrides it so the
  * binary stays runnable when moved off the build machine. */
 #ifndef RECONOS_ASSET_DIR
@@ -66,108 +70,18 @@
 #define RECONOS_DEFAULT_CURSOR_SIZE 24
 #endif
 
-/* Power button geometry. */
-#define BUTTON_X 50
-#define BUTTON_Y 50
-#define BUTTON_SIZE 64
-
 /* --- STRUCTS --- */
 
-/*
- * What the pointer is currently doing. In PASSTHROUGH the pointer belongs to
- * whatever is under it; the other two mean the compositor has grabbed it to
- * drag or resize a window.
- */
-enum recon_cursor_mode {
-    RECON_CURSOR_PASSTHROUGH,
-    RECON_CURSOR_MOVE,
-    RECON_CURSOR_RESIZE,
-};
-
-struct recon_toplevel;
-
-struct recon_server {
-    struct wl_display *wl_display;
-    struct wlr_backend *backend;
-    struct wlr_renderer *renderer;
-    struct wlr_allocator *allocator;
-
-    struct wlr_scene *scene;
-    /* Keeps scene outputs positioned in step with the output layout. */
-    struct wlr_scene_output_layout *scene_layout;
-
-    /* Desktop chrome. Exactly one of background_buffer/background_rect is set,
-     * depending on whether the wallpaper image loaded. */
-    struct wlr_scene_buffer *background_buffer;
-    struct wlr_scene_rect *background_rect;
-    struct wlr_scene_node *button_node;
-
-    /*
-     * The pointer is drawn by wlroots on its own layer, not as a scene node.
-     * A scene node would sit under the pointer and above everything else, so
-     * every hit test would find the cursor instead of the window beneath it,
-     * and no client would ever receive a mouse event.
-     */
-    struct wlr_xcursor_manager *cursor_mgr;
-    struct wl_listener request_set_cursor;
-
-    struct wlr_xdg_shell *xdg_shell;
-    struct wl_listener new_xdg_surface;
-
-    /* Open windows, most recently focused first. */
-    struct wl_list toplevels;
-    /* Where the next window will be placed, so they don't stack exactly. */
-    int next_window_x, next_window_y;
-
-    /* State for an in-progress window drag or resize. */
-    enum recon_cursor_mode cursor_mode;
-    struct recon_toplevel *grabbed;
-    double grab_x, grab_y;
-    struct wlr_box grab_geometry;
-    uint32_t resize_edges;
-
-    struct wlr_seat *seat;
-    struct wlr_output_layout *output_layout;
-    struct wlr_cursor *cursor;
-
-    const char *socket_name;
-
-    /* Trust the driver to preserve buffer contents between frames, and redraw
-     * only what changed. Off by default; see output_frame(). */
-    bool partial_damage;
-    /* The wallpaper is sized to the first output, so it is set up lazily. */
-    bool background_ready;
-
-    struct wl_listener new_output;
-    struct wl_listener new_input;
-    struct wl_listener cursor_motion;
-    struct wl_listener cursor_motion_absolute;
-    struct wl_listener cursor_button;
-    struct wl_listener cursor_axis;
-    struct wl_listener cursor_frame;
-};
-
-/* An application window. */
-struct recon_toplevel {
-    struct wl_list link; /* recon_server.toplevels */
+/* A keyboard. Owned by main.c; the shell has no use for it. */
+struct recon_keyboard {
+    struct wlr_keyboard *wlr_keyboard;
     struct recon_server *server;
-    struct wlr_xdg_toplevel *xdg_toplevel;
-    struct wlr_scene_tree *scene_tree;
-
-    struct wl_listener map;
-    struct wl_listener unmap;
+    struct wl_listener modifiers;
+    struct wl_listener key;
     struct wl_listener destroy;
-    struct wl_listener request_move;
-    struct wl_listener request_resize;
-    struct wl_listener request_maximize;
-    struct wl_listener request_fullscreen;
-    struct wl_listener request_minimize;
-
-    /* Position and size to restore to when unmaximized. */
-    bool maximized;
-    struct wlr_box restore_geometry;
 };
 
+/* A screen. Owned by main.c; the shell has no use for it. */
 struct recon_output {
     struct wlr_output *wlr_output;
     struct recon_server *server;
@@ -178,14 +92,6 @@ struct recon_output {
     bool drew_once;
     bool warned_no_scene;
     bool warned_commit_failed;
-};
-
-struct recon_keyboard {
-    struct wlr_keyboard *wlr_keyboard;
-    struct recon_server *server;
-    struct wl_listener modifiers;
-    struct wl_listener key;
-    struct wl_listener destroy;
 };
 
 /* --- ASSET LOADING --- */
@@ -362,9 +268,7 @@ static struct wlr_buffer *load_image(const char *name, int fit_w, int fit_h) {
 
 /* Keep the shell's own chrome above application windows. */
 static void raise_chrome(struct recon_server *server) {
-    if (server->button_node != NULL) {
-        wlr_scene_node_raise_to_top(server->button_node);
-    }
+    recon_shell_raise(server->shell);
 }
 
 /*
@@ -374,7 +278,7 @@ static void raise_chrome(struct recon_server *server) {
  * once the compositor tells them they have the keyboard. Nothing here happens
  * automatically.
  */
-static void focus_toplevel(struct recon_toplevel *toplevel) {
+void recon_focus_toplevel(struct recon_toplevel *toplevel) {
     if (toplevel == NULL) {
         return;
     }
@@ -412,6 +316,9 @@ static void focus_toplevel(struct recon_toplevel *toplevel) {
         wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes,
             keyboard->num_keycodes, &keyboard->modifiers);
     }
+
+    /* The taskbar highlights the focused window. */
+    recon_shell_refresh(server->shell);
 }
 
 /* The window under the given layout coordinates, if any. */
@@ -471,7 +378,7 @@ static void begin_interactive(struct recon_toplevel *toplevel,
     }
 }
 
-/* The usable area of the screen the window currently sits on. */
+/* The area of the screen windows may use, excluding shell chrome. */
 static bool output_box_for(struct recon_toplevel *toplevel, struct wlr_box *box) {
     struct recon_server *server = toplevel->server;
     struct wlr_output *output = wlr_output_layout_output_at(server->output_layout,
@@ -488,6 +395,11 @@ static bool output_box_for(struct recon_toplevel *toplevel, struct wlr_box *box)
     }
 
     wlr_output_layout_get_box(server->output_layout, output, box);
+
+    /* Leave the taskbar visible: maximizing should fill the desktop, not
+     * cover the shell. */
+    box->height -= recon_shell_reserved_bottom(server->shell);
+
     return !wlr_box_empty(box);
 }
 
@@ -646,6 +558,13 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
         return;
     }
 
+    /* Over the taskbar or a menu: the shell owns the pointer, not a client. */
+    if (recon_shell_contains_point(server->shell, server->cursor->x, server->cursor->y)) {
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        wlr_seat_pointer_clear_focus(server->seat);
+        return;
+    }
+
     double sx, sy;
     struct wlr_surface *surface = NULL;
     toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
@@ -688,10 +607,8 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         double x = server->cursor->x;
         double y = server->cursor->y;
 
-        if (x >= BUTTON_X && x <= BUTTON_X + BUTTON_SIZE &&
-                y >= BUTTON_Y && y <= BUTTON_Y + BUTTON_SIZE) {
-            wlr_log(WLR_INFO, "ReconOS: power button clicked, shutting down");
-            wl_display_terminate(server->wl_display);
+        /* The shell sits above windows, so it sees clicks first. */
+        if (recon_shell_handle_click(server->shell, x, y, true)) {
             return;
         }
 
@@ -701,7 +618,7 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         struct recon_toplevel *toplevel =
             toplevel_at(server, x, y, &surface, &sx, &sy);
         if (toplevel != NULL) {
-            focus_toplevel(toplevel);
+            recon_focus_toplevel(toplevel);
         }
     }
 
@@ -744,8 +661,18 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
 
 /* --- INPUT: KEYBOARD --- */
 
-static void spawn_terminal(struct recon_server *server) {
-    const char *term = getenv("RECONOS_TERMINAL");
+/* Shut the compositor down. */
+void recon_quit(struct recon_server *server) {
+    wlr_log(WLR_INFO, "ReconOS: shutting down");
+    wl_display_terminate(server->wl_display);
+}
+
+/* Launch a client. A NULL command means the configured terminal. */
+void recon_spawn(struct recon_server *server, const char *command) {
+    const char *term = command;
+    if (term == NULL || *term == '\0') {
+        term = getenv("RECONOS_TERMINAL");
+    }
     if (term == NULL || *term == '\0') {
         term = "weston-terminal";
     }
@@ -777,7 +704,7 @@ static void cycle_focus(struct recon_server *server) {
     struct recon_toplevel *current =
         wl_container_of(server->toplevels.next, current, link);
     struct recon_toplevel *next = wl_container_of(current->link.next, next, link);
-    focus_toplevel(next);
+    recon_focus_toplevel(next);
 }
 
 /* Ask the focused window to close. The client decides how to comply. */
@@ -807,7 +734,7 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         wl_display_terminate(server->wl_display);
         return true;
     case XKB_KEY_Return:
-        spawn_terminal(server);
+        recon_spawn(server, NULL);
         return true;
     case XKB_KEY_Tab:
     case XKB_KEY_ISO_Left_Tab:
@@ -950,9 +877,8 @@ static void setup_background(struct recon_server *server, int width, int height)
 static void place_window(struct recon_toplevel *toplevel) {
     struct recon_server *server = toplevel->server;
 
-    /* Offset from the power button so the first window doesn't cover it. */
-    int x = BUTTON_X + BUTTON_SIZE + CASCADE_STEP + server->next_window_x;
-    int y = BUTTON_Y + server->next_window_y;
+    int x = CASCADE_STEP + server->next_window_x;
+    int y = CASCADE_STEP + server->next_window_y;
     wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
 
     server->next_window_x += CASCADE_STEP;
@@ -968,10 +894,16 @@ static void toplevel_map(struct wl_listener *listener, void *data) {
 
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
     place_window(toplevel);
-    focus_toplevel(toplevel);
+    recon_focus_toplevel(toplevel);
 
     const char *title = toplevel->xdg_toplevel->title;
     wlr_log(WLR_INFO, "ReconOS: window mapped: %s", title != NULL ? title : "(untitled)");
+}
+
+/* The taskbar shows window titles, so it follows title changes. */
+static void toplevel_set_title(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, set_title);
+    recon_shell_refresh(toplevel->server->shell);
 }
 
 static void toplevel_unmap(struct wl_listener *listener, void *data) {
@@ -990,7 +922,9 @@ static void toplevel_unmap(struct wl_listener *listener, void *data) {
     if (!wl_list_empty(&server->toplevels)) {
         struct recon_toplevel *next =
             wl_container_of(server->toplevels.next, next, link);
-        focus_toplevel(next);
+        recon_focus_toplevel(next);
+    } else {
+        recon_shell_refresh(server->shell);
     }
 }
 
@@ -1005,6 +939,7 @@ static void toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->request_maximize.link);
     wl_list_remove(&toplevel->request_fullscreen.link);
     wl_list_remove(&toplevel->request_minimize.link);
+    wl_list_remove(&toplevel->set_title.link);
     free(toplevel);
 }
 
@@ -1060,6 +995,8 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
         &toplevel->request_fullscreen);
     toplevel->request_minimize.notify = toplevel_request_minimize;
     wl_signal_add(&xdg_surface->toplevel->events.request_minimize, &toplevel->request_minimize);
+    toplevel->set_title.notify = toplevel_set_title;
+    wl_signal_add(&xdg_surface->toplevel->events.set_title, &toplevel->set_title);
 
     wlr_log(WLR_INFO, "ReconOS: new toplevel window");
 }
@@ -1179,9 +1116,12 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     wlr_output_effective_resolution(wlr_output, &width, &height);
 
     if (!server->background_ready) {
-        /* First screen decides the wallpaper's size. */
+        /* First screen decides the wallpaper's size, and carries the shell. */
         setup_background(server, width, height);
         server->background_ready = true;
+
+        server->shell = recon_shell_create(server, width, height);
+        raise_chrome(server);
     } else if (server->background_buffer != NULL) {
         wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);
     } else if (server->background_rect != NULL) {
@@ -1247,21 +1187,8 @@ int main(int argc, char **argv) {
     /* The desktop background is created once the first output reports its size,
      * so the wallpaper can be scaled to fit exactly. See setup_background(). */
 
-    /* Power button: icon if present, otherwise a plain red square so the
-     * clickable region is always visible. */
-    struct wlr_buffer *icon = load_image("power.png", BUTTON_SIZE, BUTTON_SIZE);
-    if (icon != NULL) {
-        struct wlr_scene_buffer *btn = wlr_scene_buffer_create(&server.scene->tree, icon);
-        wlr_buffer_drop(icon);
-        wlr_scene_buffer_set_dest_size(btn, BUTTON_SIZE, BUTTON_SIZE);
-        server.button_node = &btn->node;
-    } else {
-        float color[4] = {0.8f, 0.1f, 0.1f, 1.0f};
-        server.button_node =
-            &wlr_scene_rect_create(&server.scene->tree, BUTTON_SIZE, BUTTON_SIZE, color)->node;
-    }
-    wlr_scene_node_set_position(server.button_node, BUTTON_X, BUTTON_Y);
-
+    /* xdg-shell is how clients create ordinary application windows. Without
+     * this global they cannot open one at all and abort on startup. */
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
     server.new_xdg_surface.notify = server_new_xdg_surface;
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
@@ -1332,6 +1259,7 @@ int main(int argc, char **argv) {
 
     wl_display_run(server.wl_display);
 
+    recon_shell_destroy(server.shell);
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);
     return 0;

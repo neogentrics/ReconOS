@@ -50,6 +50,8 @@ add_custom_command(
 
 add_executable(ReconOS
     src/main.c
+    src/recon_shell.c
+    src/recon_ui.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
 
