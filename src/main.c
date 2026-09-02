@@ -44,6 +44,7 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_screencopy_v1.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
@@ -1348,6 +1349,9 @@ int main(int argc, char **argv) {
     wlr_data_device_manager_create(server.wl_display);
 
     server.output_layout = wlr_output_layout_create();
+    /* Advertises screen geometry to clients. Screenshot tools need it to know
+     * what area to ask for. */
+    wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
     server.scene = wlr_scene_create();
     server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
     if (server.scene_layout == NULL) {
