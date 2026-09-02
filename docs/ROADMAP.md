@@ -42,6 +42,35 @@ These develop alongside the main line and never block it:
   design from the ground up. Explicitly a learning exercise: vetted primitives
   guard anything that actually protects user data.
 
+## What ReconOS does and does not do yet
+
+The classic operating system components, and who currently implements each.
+This is the honest picture, and it is also the plan: everything Linux handles
+today is phase 2 work.
+
+| Component | Today | Phase 2 |
+| --- | --- | --- |
+| Process management | Linux | ReconOS |
+| Main memory management | Linux | ReconOS |
+| File management | Linux | ReconOS |
+| System calls | Linux | ReconOS |
+| Signals | Linux | ReconOS |
+| I/O device management | Linux (via wlroots) | ReconOS |
+| Secondary storage management | Linux | ReconOS |
+| Network management | Linux | ReconOS |
+| Security management | Linux | ReconOS |
+| Command interpreter | `bash` | ReconOS |
+
+ReconOS today is the layer above all of that: the compositor, the window
+management, the shell. That layer does not appear on the list because the list
+describes a kernel, and a kernel has no opinion about what a desktop looks
+like. When ReconOS launches a program it calls `fork()` and asks Linux to
+create the process; it does not create one itself.
+
+Naming this plainly matters, because a compositor can feel like an operating
+system long before it is one. The parts that make it an operating system are
+still ahead.
+
 ## v0.1.0 — first usable milestone
 
 **Done means:** a bare-bones desktop shell with a taskbar and start button,
