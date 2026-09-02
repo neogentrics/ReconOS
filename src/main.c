@@ -54,6 +54,18 @@
 #define RECONOS_ASSET_DIR "assets"
 #endif
 
+/*
+ * Cursor appearance. Both are overridable at runtime with
+ * RECONOS_CURSOR_THEME and RECONOS_CURSOR_SIZE; a NULL theme means whatever
+ * the system provides. Set here so a working cursor needs no configuration.
+ */
+#ifndef RECONOS_DEFAULT_CURSOR_THEME
+#define RECONOS_DEFAULT_CURSOR_THEME NULL
+#endif
+#ifndef RECONOS_DEFAULT_CURSOR_SIZE
+#define RECONOS_DEFAULT_CURSOR_SIZE 24
+#endif
+
 /* Power button geometry. */
 #define BUTTON_X 50
 #define BUTTON_Y 50
@@ -147,6 +159,13 @@ struct recon_toplevel {
     struct wl_listener destroy;
     struct wl_listener request_move;
     struct wl_listener request_resize;
+    struct wl_listener request_maximize;
+    struct wl_listener request_fullscreen;
+    struct wl_listener request_minimize;
+
+    /* Position and size to restore to when unmaximized. */
+    bool maximized;
+    struct wlr_box restore_geometry;
 };
 
 struct recon_output {
@@ -449,6 +468,97 @@ static void begin_interactive(struct recon_toplevel *toplevel,
         server->grab_geometry.x += toplevel->scene_tree->node.x;
         server->grab_geometry.y += toplevel->scene_tree->node.y;
         server->resize_edges = edges;
+    }
+}
+
+/* The usable area of the screen the window currently sits on. */
+static bool output_box_for(struct recon_toplevel *toplevel, struct wlr_box *box) {
+    struct recon_server *server = toplevel->server;
+    struct wlr_output *output = wlr_output_layout_output_at(server->output_layout,
+        toplevel->scene_tree->node.x, toplevel->scene_tree->node.y);
+
+    if (output == NULL) {
+        /* Off-screen, or no window position yet: fall back to the first screen. */
+        if (wl_list_empty(&server->output_layout->outputs)) {
+            return false;
+        }
+        struct wlr_output_layout_output *first =
+            wl_container_of(server->output_layout->outputs.next, first, link);
+        output = first->output;
+    }
+
+    wlr_output_layout_get_box(server->output_layout, output, box);
+    return !wlr_box_empty(box);
+}
+
+/* Fill the screen, remembering where the window was so it can be restored. */
+static void set_maximized(struct recon_toplevel *toplevel, bool maximized) {
+    if (toplevel->maximized == maximized) {
+        return;
+    }
+
+    if (maximized) {
+        struct wlr_box screen;
+        if (!output_box_for(toplevel, &screen)) {
+            return;
+        }
+
+        struct wlr_box geometry;
+        wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geometry);
+        toplevel->restore_geometry = (struct wlr_box){
+            .x = toplevel->scene_tree->node.x,
+            .y = toplevel->scene_tree->node.y,
+            .width = geometry.width,
+            .height = geometry.height,
+        };
+
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, screen.x, screen.y);
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, screen.width, screen.height);
+    } else {
+        wlr_scene_node_set_position(&toplevel->scene_tree->node,
+            toplevel->restore_geometry.x, toplevel->restore_geometry.y);
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+            toplevel->restore_geometry.width, toplevel->restore_geometry.height);
+    }
+
+    toplevel->maximized = maximized;
+    wlr_xdg_toplevel_set_maximized(toplevel->xdg_toplevel, maximized);
+}
+
+static void toplevel_request_maximize(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, request_maximize);
+
+    if (toplevel->xdg_toplevel->base->initialized) {
+        set_maximized(toplevel, toplevel->xdg_toplevel->requested.maximized);
+        /* xdg-shell requires a configure in reply to a state request, whether
+         * or not the state actually changed. */
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    }
+}
+
+/* Fullscreen is treated as maximize for now: no chrome exists to hide yet. */
+static void toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel =
+        wl_container_of(listener, toplevel, request_fullscreen);
+
+    if (toplevel->xdg_toplevel->base->initialized) {
+        bool wants = toplevel->xdg_toplevel->requested.fullscreen;
+        set_maximized(toplevel, wants);
+        wlr_xdg_toplevel_set_fullscreen(toplevel->xdg_toplevel, wants);
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+    }
+}
+
+/*
+ * Minimize is acknowledged but not acted on: a hidden window needs a taskbar
+ * to bring it back, and there isn't one yet. Replying is still required.
+ */
+static void toplevel_request_minimize(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel =
+        wl_container_of(listener, toplevel, request_minimize);
+
+    if (toplevel->xdg_toplevel->base->initialized) {
+        wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
     }
 }
 
@@ -892,6 +1002,9 @@ static void toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->destroy.link);
     wl_list_remove(&toplevel->request_move.link);
     wl_list_remove(&toplevel->request_resize.link);
+    wl_list_remove(&toplevel->request_maximize.link);
+    wl_list_remove(&toplevel->request_fullscreen.link);
+    wl_list_remove(&toplevel->request_minimize.link);
     free(toplevel);
 }
 
@@ -940,6 +1053,13 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
     wl_signal_add(&xdg_surface->toplevel->events.request_move, &toplevel->request_move);
     toplevel->request_resize.notify = toplevel_request_resize;
     wl_signal_add(&xdg_surface->toplevel->events.request_resize, &toplevel->request_resize);
+    toplevel->request_maximize.notify = toplevel_request_maximize;
+    wl_signal_add(&xdg_surface->toplevel->events.request_maximize, &toplevel->request_maximize);
+    toplevel->request_fullscreen.notify = toplevel_request_fullscreen;
+    wl_signal_add(&xdg_surface->toplevel->events.request_fullscreen,
+        &toplevel->request_fullscreen);
+    toplevel->request_minimize.notify = toplevel_request_minimize;
+    wl_signal_add(&xdg_surface->toplevel->events.request_minimize, &toplevel->request_minimize);
 
     wlr_log(WLR_INFO, "ReconOS: new toplevel window");
 }
@@ -1150,8 +1270,24 @@ int main(int argc, char **argv) {
     wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
 
     /* Load a cursor theme and show an arrow. Drawn on the pointer's own layer,
-     * so moving the mouse costs nothing and never blocks hit testing. */
-    server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+     * so moving the mouse costs nothing and never blocks hit testing.
+     * An unset theme means whatever the system provides. */
+    const char *cursor_theme = getenv("RECONOS_CURSOR_THEME");
+    if (cursor_theme == NULL || *cursor_theme == '\0') {
+        cursor_theme = RECONOS_DEFAULT_CURSOR_THEME;
+    }
+    int cursor_size = RECONOS_DEFAULT_CURSOR_SIZE;
+    const char *size_str = getenv("RECONOS_CURSOR_SIZE");
+    if (size_str != NULL) {
+        int parsed = atoi(size_str);
+        if (parsed > 0) {
+            cursor_size = parsed;
+        }
+    }
+    wlr_log(WLR_INFO, "ReconOS: cursor theme '%s' at size %d",
+        cursor_theme != NULL ? cursor_theme : "(system default)", cursor_size);
+
+    server.cursor_mgr = wlr_xcursor_manager_create(cursor_theme, cursor_size);
     if (server.cursor_mgr == NULL || !wlr_xcursor_manager_load(server.cursor_mgr, 1)) {
         wlr_log(WLR_ERROR, "ReconOS: could not load a cursor theme");
     } else {
