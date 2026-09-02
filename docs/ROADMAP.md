@@ -101,9 +101,6 @@ rewrite later.
 
 - `include/ReconOS.h` is unfinished scaffolding from an earlier iteration and is
   not currently part of the build.
-- There is no `assets/power.png`; the power button falls back to a flat colored
-  square. The original asset was lost to a failed download.
-- The cursor is a plain red square rather than a real cursor theme.
 - Minimize is acknowledged but does nothing. Hiding a window needs the shell to
   draw its own window frames first, so the taskbar can restore it.
 - Applications draw their own title bars, so every one looks like whatever
