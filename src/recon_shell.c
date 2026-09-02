@@ -294,6 +294,7 @@ void recon_shell_resize(struct recon_shell *shell, int screen_width, int screen_
 void recon_shell_refresh(struct recon_shell *shell) {
     if (shell != NULL) {
         draw_taskbar(shell);
+        recon_damage_all(shell->server);
     }
 }
 
@@ -318,6 +319,7 @@ void recon_shell_close_menu(struct recon_shell *shell) {
     shell->menu_open = false;
     recon_panel_set_enabled(shell->menu, false);
     draw_taskbar(shell);
+    recon_damage_all(shell->server);
 }
 
 static void toggle_menu(struct recon_shell *shell) {
@@ -330,6 +332,7 @@ static void toggle_menu(struct recon_shell *shell) {
         recon_panel_raise_to_top(shell->menu);
     }
     draw_taskbar(shell);
+    recon_damage_all(shell->server);
 }
 
 /* --- Input --- */

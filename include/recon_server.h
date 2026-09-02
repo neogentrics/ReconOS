@@ -87,6 +87,9 @@ struct recon_server {
 
     const char *socket_name;
 
+    /* Screens currently connected. */
+    struct wl_list outputs;
+
     /* Trust the driver to preserve buffer contents between frames, and redraw
      * only what changed. Off by default; see output_frame(). */
     bool partial_damage;
@@ -118,6 +121,7 @@ struct recon_toplevel {
     struct wl_listener request_fullscreen;
     struct wl_listener request_minimize;
     struct wl_listener set_title;
+    struct wl_listener commit;
 
     /* Position and size to restore to when unmaximized. */
     bool maximized;
@@ -128,5 +132,16 @@ struct recon_toplevel {
 void recon_focus_toplevel(struct recon_toplevel *toplevel);
 void recon_spawn(struct recon_server *server, const char *command);
 void recon_quit(struct recon_server *server);
+
+/*
+ * Report that something on screen changed and the next frame must repaint
+ * everything.
+ *
+ * Drivers that do not preserve buffer contents between frames cannot be given
+ * a partial repaint: whatever is not redrawn shows stale pixels. Rather than
+ * repainting forever, the compositor repaints fully whenever it is told
+ * something changed, and not at all otherwise.
+ */
+void recon_damage_all(struct recon_server *server);
 
 #endif

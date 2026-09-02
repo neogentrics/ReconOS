@@ -83,16 +83,35 @@ struct recon_keyboard {
 
 /* A screen. Owned by main.c; the shell has no use for it. */
 struct recon_output {
+    struct wl_list link; /* recon_server.outputs */
     struct wlr_output *wlr_output;
     struct recon_server *server;
     struct wl_listener frame;
     struct wl_listener destroy;
+
+    /* Set when something changed and the next frame must repaint in full. */
+    bool needs_full_redraw;
 
     /* Latches so a per-frame problem is reported once, not 60 times a second. */
     bool drew_once;
     bool warned_no_scene;
     bool warned_commit_failed;
 };
+
+/*
+ * Mark every screen as needing a complete repaint, and ask for a frame.
+ *
+ * Called from anywhere that changes what should be on screen. Nothing calls it
+ * from inside the frame handler, which is what keeps an idle desktop idle: no
+ * change means no frame, and no frame means no work.
+ */
+void recon_damage_all(struct recon_server *server) {
+    struct recon_output *output;
+    wl_list_for_each(output, &server->outputs, link) {
+        output->needs_full_redraw = true;
+        wlr_output_schedule_frame(output->wlr_output);
+    }
+}
 
 /* --- ASSET LOADING --- */
 
@@ -319,6 +338,7 @@ void recon_focus_toplevel(struct recon_toplevel *toplevel) {
 
     /* The taskbar highlights the focused window. */
     recon_shell_refresh(server->shell);
+    recon_damage_all(server);
 }
 
 /* The window under the given layout coordinates, if any. */
@@ -493,6 +513,7 @@ static void process_move(struct recon_server *server) {
     wlr_scene_node_set_position(&toplevel->scene_tree->node,
         server->cursor->x - server->grab_x,
         server->cursor->y - server->grab_y);
+    recon_damage_all(server);
 }
 
 /*
@@ -540,6 +561,7 @@ static void process_resize(struct recon_server *server) {
     wlr_scene_node_set_position(&toplevel->scene_tree->node,
         left - geometry.x, top - geometry.y);
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, right - left, bottom - top);
+    recon_damage_all(server);
 }
 
 /*
@@ -632,6 +654,7 @@ static void server_cursor_motion(struct wl_listener *listener, void *data) {
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
     process_cursor_motion(server, event->time_msec);
+    recon_damage_all(server);
 }
 
 static void server_cursor_motion_absolute(struct wl_listener *listener, void *data) {
@@ -640,6 +663,7 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
     process_cursor_motion(server, event->time_msec);
+    recon_damage_all(server);
 }
 
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
@@ -900,6 +924,11 @@ static void toplevel_map(struct wl_listener *listener, void *data) {
     wlr_log(WLR_INFO, "ReconOS: window mapped: %s", title != NULL ? title : "(untitled)");
 }
 
+static void toplevel_commit(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
+    recon_damage_all(toplevel->server);
+}
+
 /* The taskbar shows window titles, so it follows title changes. */
 static void toplevel_set_title(struct wl_listener *listener, void *data) {
     struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, set_title);
@@ -926,6 +955,7 @@ static void toplevel_unmap(struct wl_listener *listener, void *data) {
     } else {
         recon_shell_refresh(server->shell);
     }
+    recon_damage_all(server);
 }
 
 static void toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -940,6 +970,7 @@ static void toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->request_fullscreen.link);
     wl_list_remove(&toplevel->request_minimize.link);
     wl_list_remove(&toplevel->set_title.link);
+    wl_list_remove(&toplevel->commit.link);
     free(toplevel);
 }
 
@@ -997,6 +1028,8 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
     wl_signal_add(&xdg_surface->toplevel->events.request_minimize, &toplevel->request_minimize);
     toplevel->set_title.notify = toplevel_set_title;
     wl_signal_add(&xdg_surface->toplevel->events.set_title, &toplevel->set_title);
+    toplevel->commit.notify = toplevel_commit;
+    wl_signal_add(&xdg_surface->surface->events.commit, &toplevel->commit);
 
     wlr_log(WLR_INFO, "ReconOS: new toplevel window");
 }
@@ -1018,23 +1051,23 @@ static void output_frame(struct wl_listener *listener, void *data) {
     }
 
     /*
-     * Widen whatever changed to cover the whole screen.
+     * Repaint the whole screen if anything changed since the last frame.
      *
      * Partial redraws assume the driver hands back a buffer still holding the
      * previous frame, so untouched regions can be left alone. Not all drivers
-     * do -- hyperv_drm notably does not -- and the result is a screen of
-     * correct strips separated by stale ones.
+     * do -- hyperv_drm notably does not -- and the result is stale fragments
+     * of whatever used to be there.
      *
-     * Only existing damage is widened, never created. Marking the screen
-     * damaged unconditionally would make every frame commit, and each commit
-     * schedules the next frame, so the compositor would redraw forever at full
-     * speed. Widening only real damage keeps an idle desktop at zero frames.
+     * The flag is what keeps this from becoming a permanent full-speed
+     * redraw. Marking the screen damaged on every frame would make every
+     * frame commit, and every commit schedules another frame. Marking it only
+     * when something actually changed repaints correctly and then stops.
      *
      * Set RECONOS_PARTIAL_DAMAGE=1 on hardware known to preserve buffers.
      */
-    if (!output->server->partial_damage &&
-            pixman_region32_not_empty(&scene_output->damage_ring.current)) {
+    if (!output->server->partial_damage && output->needs_full_redraw) {
         wlr_damage_ring_add_whole(&scene_output->damage_ring);
+        output->needs_full_redraw = false;
     }
 
     if (!wlr_scene_output_commit(scene_output, NULL)) {
@@ -1055,6 +1088,7 @@ static void output_frame(struct wl_listener *listener, void *data) {
 
 static void output_destroy(struct wl_listener *listener, void *data) {
     struct recon_output *output = wl_container_of(listener, output, destroy);
+    wl_list_remove(&output->link);
     wl_list_remove(&output->frame.link);
     wl_list_remove(&output->destroy.link);
     free(output);
@@ -1075,6 +1109,8 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     }
     output->wlr_output = wlr_output;
     output->server = server;
+    output->needs_full_redraw = true;
+    wl_list_insert(&server->outputs, &output->link);
 
     output->frame.notify = output_frame;
     wl_signal_add(&wlr_output->events.frame, &output->frame);
@@ -1154,6 +1190,7 @@ int main(int argc, char **argv) {
     }
 
     wl_list_init(&server.toplevels);
+    wl_list_init(&server.outputs);
     server.cursor_mode = RECON_CURSOR_PASSTHROUGH;
 
     server.wl_display = wl_display_create();
