@@ -26,6 +26,9 @@
 #define WINDOW_WIDTH 560
 #define WINDOW_HEIGHT 420
 #define TITLE_HEIGHT 24
+#define MENUBAR_HEIGHT 20
+#define DROPDOWN_ITEM_HEIGHT 22
+#define DROPDOWN_WIDTH 150
 #define BORDER 3
 #define HEADER_HEIGHT 22
 #define ROW_HEIGHT 18
@@ -57,6 +60,9 @@
 #define COLOR_BUTTON RECON_RGB(0xC8, 0xC8, 0xC8)
 #define COLOR_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
 #define COLOR_STATUS RECON_RGB(0x30, 0x30, 0x30)
+#define COLOR_MENUBAR RECON_RGB(0xC8, 0xC8, 0xC8)
+#define COLOR_MENU_HILITE RECON_RGB(0x30, 0x50, 0x90)
+#define COLOR_MENU_HILITE_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
 
 /* Hit-region ids. */
 #define HIT_TITLEBAR 1
@@ -65,6 +71,9 @@
 #define HIT_SORT_NAME 10
 #define HIT_SORT_CPU 11
 #define HIT_SORT_MEM 12
+#define HIT_MENU_FILE 20
+#define HIT_MENU_VIEW 21
+#define HIT_DROP_BASE 50
 #define HIT_ROW_BASE 100
 
 enum sort_mode {
@@ -72,6 +81,19 @@ enum sort_mode {
     SORT_MEMORY,
     SORT_NAME,
 };
+
+/* Which menu bar item, if any, is showing its dropdown. */
+enum open_menu {
+    MENU_NONE,
+    MENU_FILE,
+    MENU_VIEW,
+};
+
+static const char *const FILE_ITEMS[] = { "New Task", "Exit" };
+static const char *const VIEW_ITEMS[] = { "Sort by Name", "Sort by CPU", "Sort by Memory" };
+
+#define FILE_COUNT ((int)(sizeof(FILE_ITEMS) / sizeof(FILE_ITEMS[0])))
+#define VIEW_COUNT ((int)(sizeof(VIEW_ITEMS) / sizeof(VIEW_ITEMS[0])))
 
 struct recon_taskmgr {
     struct recon_server *server;
@@ -83,6 +105,7 @@ struct recon_taskmgr {
     int x, y;
 
     enum sort_mode sort;
+    enum open_menu menu;
     int scroll;          /* first visible row */
     pid_t selected_pid;  /* survives re-sorting, unlike a row index */
 
@@ -97,12 +120,25 @@ struct recon_taskmgr {
 };
 
 static int visible_rows(void) {
-    return (WINDOW_HEIGHT - TITLE_HEIGHT - BORDER * 2 - HEADER_HEIGHT - FOOTER_HEIGHT)
-        / ROW_HEIGHT;
+    return (WINDOW_HEIGHT - TITLE_HEIGHT - MENUBAR_HEIGHT - BORDER * 2
+        - HEADER_HEIGHT - FOOTER_HEIGHT) / ROW_HEIGHT;
+}
+
+static int menubar_top(void) {
+    return TITLE_HEIGHT;
+}
+
+static int header_top(void) {
+    return TITLE_HEIGHT + MENUBAR_HEIGHT + BORDER;
 }
 
 static int list_top(void) {
-    return TITLE_HEIGHT + BORDER + HEADER_HEIGHT;
+    return header_top() + HEADER_HEIGHT;
+}
+
+/* Menu bar item extents, so drawing and hit testing agree. */
+static int menu_item_x(int index) {
+    return PADDING + index * 52;
 }
 
 /* --- Drawing --- */
@@ -126,10 +162,67 @@ static void draw_title_bar(struct recon_taskmgr *tm) {
     recon_hit_add(p, bx, by, 16, 16, HIT_CLOSE);
 }
 
+static void draw_menubar(struct recon_taskmgr *tm) {
+    struct recon_panel *p = tm->panel;
+    int width = recon_panel_width(p);
+    int y = menubar_top();
+    int ascent = recon_font_ascent(tm->font);
+    int baseline = y + (MENUBAR_HEIGHT + ascent) / 2 - 2;
+
+    recon_fill_rect(p, 0, y, width, MENUBAR_HEIGHT, COLOR_MENUBAR);
+    recon_fill_rect(p, 0, y + MENUBAR_HEIGHT - 1, width, 1,
+        RECON_RGB(0x90, 0x90, 0x90));
+
+    static const char *const LABELS[] = { "File", "View" };
+    static const uint32_t IDS[] = { HIT_MENU_FILE, HIT_MENU_VIEW };
+    static const enum open_menu MENUS[] = { MENU_FILE, MENU_VIEW };
+
+    for (int i = 0; i < 2; i++) {
+        int x = menu_item_x(i);
+        int w = recon_text_width(tm->font, LABELS[i]) + 16;
+        bool open = (tm->menu == MENUS[i]);
+
+        if (open) {
+            recon_fill_rect(p, x - 8, y + 2, w, MENUBAR_HEIGHT - 4, COLOR_MENU_HILITE);
+        }
+        recon_draw_text(p, tm->font, x, baseline, w, LABELS[i],
+            open ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
+        recon_hit_add(p, x - 8, y, w, MENUBAR_HEIGHT, IDS[i]);
+    }
+}
+
+/* Dropdowns are drawn last so they sit over the list beneath them. */
+static void draw_dropdown(struct recon_taskmgr *tm) {
+    if (tm->menu == MENU_NONE) {
+        return;
+    }
+
+    struct recon_panel *p = tm->panel;
+    const char *const *items = tm->menu == MENU_FILE ? FILE_ITEMS : VIEW_ITEMS;
+    int count = tm->menu == MENU_FILE ? FILE_COUNT : VIEW_COUNT;
+    int x = menu_item_x(tm->menu == MENU_FILE ? 0 : 1) - 8;
+    int y = menubar_top() + MENUBAR_HEIGHT;
+    int height = count * DROPDOWN_ITEM_HEIGHT + 4;
+    int ascent = recon_font_ascent(tm->font);
+
+    recon_fill_rect(p, x, y, DROPDOWN_WIDTH, height, COLOR_MENUBAR);
+    recon_draw_bevel(p, x, y, DROPDOWN_WIDTH, height, false);
+    recon_stroke_rect(p, x, y, DROPDOWN_WIDTH, height, RECON_RGB(0x40, 0x40, 0x40));
+
+    for (int i = 0; i < count; i++) {
+        int iy = y + 2 + i * DROPDOWN_ITEM_HEIGHT;
+        recon_draw_text(p, tm->font, x + 12,
+            iy + (DROPDOWN_ITEM_HEIGHT + ascent) / 2 - 2,
+            DROPDOWN_WIDTH - 24, items[i], COLOR_TEXT);
+        recon_hit_add(p, x, iy, DROPDOWN_WIDTH, DROPDOWN_ITEM_HEIGHT,
+            HIT_DROP_BASE + i);
+    }
+}
+
 static void draw_header(struct recon_taskmgr *tm) {
     struct recon_panel *p = tm->panel;
     int width = recon_panel_width(p);
-    int y = TITLE_HEIGHT + BORDER;
+    int y = header_top();
     int baseline = y + (HEADER_HEIGHT + recon_font_ascent(tm->font)) / 2 - 2;
     int inner_w = width - BORDER * 2;
 
@@ -252,15 +345,17 @@ static void redraw(struct recon_taskmgr *tm) {
     recon_fill(p, COLOR_FRAME);
 
     draw_title_bar(tm);
+    draw_menubar(tm);
     draw_header(tm);
     draw_rows(tm);
     draw_footer(tm);
+    draw_dropdown(tm);
 
     /* The window's own frame, since nothing else draws one for it. */
     recon_draw_bevel(p, 0, 0, width, height, false);
     recon_stroke_rect(p, 0, 0, width, height, RECON_RGB(0x30, 0x30, 0x30));
     /* A sunken edge around the list, so it reads as inset. */
-    recon_stroke_rect(p, BORDER - 1, TITLE_HEIGHT + BORDER - 1,
+    recon_stroke_rect(p, BORDER - 1, header_top() - 1,
         width - BORDER * 2 + 2,
         HEADER_HEIGHT + visible_rows() * ROW_HEIGHT + 2,
         RECON_RGB(0x80, 0x80, 0x80));
@@ -401,6 +496,7 @@ void recon_taskmgr_hide(struct recon_taskmgr *tm) {
 
     tm->visible = false;
     tm->dragging = false;
+    tm->menu = MENU_NONE;
     recon_panel_set_enabled(tm->panel, false);
 
     /* Stop sampling. A closed window should cost nothing. */
@@ -488,7 +584,48 @@ bool recon_taskmgr_handle_click(struct recon_taskmgr *tm, double lx, double ly,
     recon_panel_raise_to_top(tm->panel);
     uint32_t hit = recon_hit_test(tm->panel, px, py);
 
+    if (hit >= HIT_DROP_BASE && hit < HIT_ROW_BASE && tm->menu != MENU_NONE) {
+        int index = (int)(hit - HIT_DROP_BASE);
+        enum open_menu which = tm->menu;
+        tm->menu = MENU_NONE;
+
+        if (which == MENU_FILE) {
+            if (index == 0) {
+                /* New Task launches the configured terminal, which is the
+                 * closest thing to a run box until there is one. */
+                recon_spawn(tm->server, NULL);
+                snprintf(tm->status, sizeof(tm->status), "Started a new task");
+            } else {
+                recon_taskmgr_hide(tm);
+                return true;
+            }
+        } else if (which == MENU_VIEW) {
+            tm->sort = (index == 0) ? SORT_NAME
+                : (index == 1) ? SORT_CPU : SORT_MEMORY;
+            apply_sort(tm);
+        }
+        redraw(tm);
+        return true;
+    }
+
+    /* A click anywhere else closes an open dropdown first. */
+    if (tm->menu != MENU_NONE && hit != HIT_MENU_FILE && hit != HIT_MENU_VIEW) {
+        tm->menu = MENU_NONE;
+        redraw(tm);
+        return true;
+    }
+
     switch (hit) {
+    case HIT_MENU_FILE:
+        tm->menu = (tm->menu == MENU_FILE) ? MENU_NONE : MENU_FILE;
+        redraw(tm);
+        return true;
+
+    case HIT_MENU_VIEW:
+        tm->menu = (tm->menu == MENU_VIEW) ? MENU_NONE : MENU_VIEW;
+        redraw(tm);
+        return true;
+
     case HIT_CLOSE:
         recon_taskmgr_hide(tm);
         return true;

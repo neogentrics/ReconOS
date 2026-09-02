@@ -56,6 +56,8 @@
 #define COLOR_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
 #define COLOR_DIALOG_TITLE RECON_RGB(0x20, 0x2A, 0x44)
 #define COLOR_DIALOG_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
+/* Half-transparent black. Alpha is what makes the desktop show through. */
+#define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x99)
 
 /* Hit-region ids. Window buttons use TASK_BASE + index. */
 #define HIT_APPS_BUTTON 1
@@ -116,6 +118,9 @@ struct recon_shell {
     bool menu_open;
 
     struct recon_panel *security;
+    /* Dims the desktop behind the security box, so it is obvious that the
+     * question wants answering before anything else happens. */
+    struct recon_panel *dim;
     bool security_open;
     struct recon_taskmgr *taskmgr;
 
@@ -306,6 +311,12 @@ static void layout(struct recon_shell *shell) {
         recon_panel_set_position(shell->menu, TASKBAR_PADDING,
             shell->screen_height - TASKBAR_HEIGHT - menu_height());
     }
+    if (shell->dim != NULL) {
+        recon_panel_resize(shell->dim, shell->screen_width, shell->screen_height);
+        recon_panel_set_position(shell->dim, 0, 0);
+        recon_fill(shell->dim, COLOR_DIM);
+        recon_panel_commit(shell->dim);
+    }
     if (shell->security != NULL) {
         /* Centred: it is a question that interrupts, not a corner notice. */
         recon_panel_set_position(shell->security,
@@ -346,6 +357,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         draw_menu(shell);
     }
 
+    shell->dim = recon_panel_create(&server->scene->tree,
+        screen_width, screen_height);
+    if (shell->dim != NULL) {
+        recon_panel_set_enabled(shell->dim, false);
+    }
+
     shell->security = recon_panel_create(&server->scene->tree,
         SEC_WIDTH, security_height());
     if (shell->security != NULL) {
@@ -369,6 +386,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
     }
     recon_taskmgr_destroy(shell->taskmgr);
     recon_panel_destroy(shell->security);
+    recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
     recon_panel_destroy(shell->taskbar);
     recon_font_destroy(shell->font);
@@ -409,6 +427,7 @@ void recon_shell_raise(struct recon_shell *shell) {
      * taken over the screen. */
     recon_taskmgr_raise(shell->taskmgr);
     if (shell->security_open) {
+        recon_panel_raise_to_top(shell->dim);
         recon_panel_raise_to_top(shell->security);
     }
 }
@@ -430,9 +449,12 @@ void recon_shell_toggle_security(struct recon_shell *shell) {
         return;
     }
     shell->security_open = !shell->security_open;
+    recon_panel_set_enabled(shell->dim, shell->security_open);
     recon_panel_set_enabled(shell->security, shell->security_open);
     if (shell->security_open) {
         recon_shell_close_menu(shell);
+        /* Dim first, then the box on top of it. */
+        recon_panel_raise_to_top(shell->dim);
         recon_panel_raise_to_top(shell->security);
     }
     recon_damage_all(shell->server);
