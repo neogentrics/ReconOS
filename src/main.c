@@ -42,6 +42,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
+#include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/edges.h>
 #include <wlr/util/log.h>
@@ -88,7 +89,15 @@ struct recon_server {
     struct wlr_scene_buffer *background_buffer;
     struct wlr_scene_rect *background_rect;
     struct wlr_scene_node *button_node;
-    struct wlr_scene_node *cursor_node;
+
+    /*
+     * The pointer is drawn by wlroots on its own layer, not as a scene node.
+     * A scene node would sit under the pointer and above everything else, so
+     * every hit test would find the cursor instead of the window beneath it,
+     * and no client would ever receive a mouse event.
+     */
+    struct wlr_xcursor_manager *cursor_mgr;
+    struct wl_listener request_set_cursor;
 
     struct wlr_xdg_shell *xdg_shell;
     struct wl_listener new_xdg_surface;
@@ -337,9 +346,6 @@ static void raise_chrome(struct recon_server *server) {
     if (server->button_node != NULL) {
         wlr_scene_node_raise_to_top(server->button_node);
     }
-    if (server->cursor_node != NULL) {
-        wlr_scene_node_raise_to_top(server->cursor_node);
-    }
 }
 
 /*
@@ -521,8 +527,6 @@ static void process_resize(struct recon_server *server) {
  * the pointer has entered their surface, so this has to run on every motion.
  */
 static void process_cursor_motion(struct recon_server *server, uint32_t time) {
-    wlr_scene_node_set_position(server->cursor_node, server->cursor->x, server->cursor->y);
-
     if (server->cursor_mode == RECON_CURSOR_MOVE) {
         process_move(server);
         return;
@@ -540,8 +544,25 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
         wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
         wlr_seat_pointer_notify_motion(server->seat, time, sx, sy);
     } else {
-        /* Over the desktop; no client should think it still has the pointer. */
+        /* Over the desktop: no client should think it still has the pointer,
+         * and the shell's own cursor image applies again. */
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
         wlr_seat_pointer_clear_focus(server->seat);
+    }
+}
+
+/*
+ * A client asking to change the cursor image, e.g. a terminal switching to an
+ * I-beam over its text area. Honour it only for the client actually holding
+ * the pointer, so a background window cannot hijack the cursor.
+ */
+static void seat_request_set_cursor(struct wl_listener *listener, void *data) {
+    struct recon_server *server = wl_container_of(listener, server, request_set_cursor);
+    struct wlr_seat_pointer_request_set_cursor_event *event = data;
+
+    if (server->seat->pointer_state.focused_client == event->seat_client) {
+        wlr_cursor_set_surface(server->cursor, event->surface,
+            event->hotspot_x, event->hotspot_y);
     }
 }
 
@@ -1121,16 +1142,21 @@ int main(int argc, char **argv) {
     }
     wlr_scene_node_set_position(server.button_node, BUTTON_X, BUTTON_Y);
 
-    /* Cursor: a small square for now, until a real cursor theme is wired up. */
-    float cursor_color[4] = {1.0f, 0.0f, 0.0f, 1.0f};
-    server.cursor_node = &wlr_scene_rect_create(&server.scene->tree, 10, 10, cursor_color)->node;
-
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
     server.new_xdg_surface.notify = server_new_xdg_surface;
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
 
     server.cursor = wlr_cursor_create();
     wlr_cursor_attach_output_layout(server.cursor, server.output_layout);
+
+    /* Load a cursor theme and show an arrow. Drawn on the pointer's own layer,
+     * so moving the mouse costs nothing and never blocks hit testing. */
+    server.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
+    if (server.cursor_mgr == NULL || !wlr_xcursor_manager_load(server.cursor_mgr, 1)) {
+        wlr_log(WLR_ERROR, "ReconOS: could not load a cursor theme");
+    } else {
+        wlr_cursor_set_xcursor(server.cursor, server.cursor_mgr, "default");
+    }
 
     server.cursor_motion.notify = server_cursor_motion;
     wl_signal_add(&server.cursor->events.motion, &server.cursor_motion);
@@ -1144,6 +1170,8 @@ int main(int argc, char **argv) {
     wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
 
     server.seat = wlr_seat_create(server.wl_display, "seat0");
+    server.request_set_cursor.notify = seat_request_set_cursor;
+    wl_signal_add(&server.seat->events.request_set_cursor, &server.request_set_cursor);
     server.new_input.notify = server_new_input;
     wl_signal_add(&server.backend->events.new_input, &server.new_input);
     server.new_output.notify = server_new_output;
