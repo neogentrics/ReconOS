@@ -105,7 +105,7 @@ enum tab {
 static const char *const TAB_LABELS[] = { "Applications", "Processes" };
 #define TAB_COUNT ((int)(sizeof(TAB_LABELS) / sizeof(TAB_LABELS[0])))
 
-static const char *const FILE_ITEMS[] = { "New Task", "Exit" };
+static const char *const FILE_ITEMS[] = { "Exit" };
 static const char *const VIEW_ITEMS[] = { "Sort by Name", "Sort by CPU", "Sort by Memory" };
 
 #define FILE_COUNT ((int)(sizeof(FILE_ITEMS) / sizeof(FILE_ITEMS[0])))
@@ -568,14 +568,9 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
             tm->menu = MENU_NONE;
 
             if (which == MENU_FILE) {
-                if (index == 0) {
-                    /* New Task starts the configured terminal, the nearest
-                     * thing to a run box until there is one. */
-                    recon_spawn(tm->server, NULL);
-                    snprintf(tm->status, sizeof(tm->status), "Started a new task");
-                } else {
-                    recon_appwin_hide(tm->win);
-                }
+                /* New Task will return when there is a way to name what to
+                 * run. Until then Exit is the only honest entry. */
+                recon_appwin_hide(tm->win);
             } else {
                 tm->sort = (index == 0) ? SORT_NAME
                     : (index == 1) ? SORT_CPU : SORT_MEMORY;

@@ -24,6 +24,12 @@
 #define BUTTON_TOP 4
 #define TITLE_INSET 8
 
+/* How close to an edge counts as grabbing it. Wider than the border, because
+ * a 3px target is not one a person can reliably hit. */
+#define RESIZE_MARGIN 6
+#define MIN_WIDTH 160
+#define MIN_HEIGHT 120
+
 /* --- Frame colours --- */
 
 #define COLOR_FRAME RECON_RGB(0xC0, 0xC0, 0xC0)
@@ -61,6 +67,12 @@ struct recon_appwin {
 
     bool dragging;
     double drag_offset_x, drag_offset_y;
+
+    /* Edge drag in progress. Zero when not resizing. */
+    uint32_t resize_edges;
+    double resize_start_x, resize_start_y;
+    int resize_start_left, resize_start_top;
+    int resize_start_width, resize_start_height;
 
     int screen_w, screen_h, reserved_bottom;
 };
@@ -420,6 +432,122 @@ void recon_appwin_raise(struct recon_appwin *win) {
     }
 }
 
+/* --- Resizing --- */
+
+/* Edge flags, matching the sense of wlroots' own. */
+#define EDGE_TOP 1u
+#define EDGE_BOTTOM 2u
+#define EDGE_LEFT 4u
+#define EDGE_RIGHT 8u
+
+/* Which edges, if any, a window-local point is close enough to grab. */
+static uint32_t edges_at(struct recon_appwin *win, int px, int py) {
+    uint32_t edges = 0;
+
+    if (px < RESIZE_MARGIN) {
+        edges |= EDGE_LEFT;
+    } else if (px >= win->width - RESIZE_MARGIN) {
+        edges |= EDGE_RIGHT;
+    }
+
+    if (py < RESIZE_MARGIN) {
+        edges |= EDGE_TOP;
+    } else if (py >= win->height - RESIZE_MARGIN) {
+        edges |= EDGE_BOTTOM;
+    }
+
+    return edges;
+}
+
+/* The cursor that tells the user which way an edge will move. */
+static const char *cursor_for_edges(uint32_t edges) {
+    switch (edges) {
+    case EDGE_TOP: return "n-resize";
+    case EDGE_BOTTOM: return "s-resize";
+    case EDGE_LEFT: return "w-resize";
+    case EDGE_RIGHT: return "e-resize";
+    case EDGE_TOP | EDGE_LEFT: return "nw-resize";
+    case EDGE_TOP | EDGE_RIGHT: return "ne-resize";
+    case EDGE_BOTTOM | EDGE_LEFT: return "sw-resize";
+    case EDGE_BOTTOM | EDGE_RIGHT: return "se-resize";
+    default: return NULL;
+    }
+}
+
+static int min_width_of(struct recon_appwin *win) {
+    return win->impl->min_width > 0 ? win->impl->min_width : MIN_WIDTH;
+}
+
+static int min_height_of(struct recon_appwin *win) {
+    return win->impl->min_height > 0 ? win->impl->min_height : MIN_HEIGHT;
+}
+
+/*
+ * Move the grabbed edges to follow the pointer.
+ *
+ * Edges the user is not dragging stay where they are, which is why this works
+ * from the geometry at the start of the drag rather than the current one:
+ * accumulating deltas would let rounding walk the opposite edge across the
+ * screen.
+ */
+static void process_resize(struct recon_appwin *win, double lx, double ly) {
+    double dx = lx - win->resize_start_x;
+    double dy = ly - win->resize_start_y;
+
+    int left = win->resize_start_left;
+    int top = win->resize_start_top;
+    int width = win->resize_start_width;
+    int height = win->resize_start_height;
+
+    int min_w = min_width_of(win);
+    int min_h = min_height_of(win);
+
+    if (win->resize_edges & EDGE_LEFT) {
+        int new_left = left + (int)dx;
+        int new_width = width - (int)dx;
+        if (new_width < min_w) {
+            new_left -= min_w - new_width;
+            new_width = min_w;
+        }
+        left = new_left;
+        width = new_width;
+    } else if (win->resize_edges & EDGE_RIGHT) {
+        width = width + (int)dx;
+        if (width < min_w) {
+            width = min_w;
+        }
+    }
+
+    if (win->resize_edges & EDGE_TOP) {
+        int new_top = top + (int)dy;
+        int new_height = height - (int)dy;
+        if (new_height < min_h) {
+            new_top -= min_h - new_height;
+            new_height = min_h;
+        }
+        /* The title bar must stay reachable. */
+        if (new_top < 0) {
+            new_height += new_top;
+            new_top = 0;
+        }
+        top = new_top;
+        height = new_height;
+    } else if (win->resize_edges & EDGE_BOTTOM) {
+        height = height + (int)dy;
+        if (height < min_h) {
+            height = min_h;
+        }
+    }
+
+    win->x = left;
+    win->y = top;
+    win->width = width;
+    win->height = height;
+
+    apply_geometry(win);
+    recon_appwin_refresh(win);
+}
+
 /* --- Input --- */
 
 static bool to_local(struct recon_appwin *win, double lx, double ly,
@@ -435,6 +563,28 @@ static bool to_local(struct recon_appwin *win, double lx, double ly,
     return true;
 }
 
+/*
+ * The cursor to show at this point, or NULL to leave it alone. Lets the shell
+ * indicate that an edge can be dragged before the user tries it.
+ */
+const char *recon_appwin_cursor_at(struct recon_appwin *win, double lx, double ly) {
+    if (win == NULL || !win->open || win->minimized) {
+        return NULL;
+    }
+    if (win->resize_edges != 0) {
+        return cursor_for_edges(win->resize_edges);
+    }
+    if (win->maximized) {
+        return NULL;
+    }
+
+    int px, py;
+    if (!to_local(win, lx, ly, &px, &py)) {
+        return NULL;
+    }
+    return cursor_for_edges(edges_at(win, px, py));
+}
+
 bool recon_appwin_contains_point(struct recon_appwin *win, double lx, double ly) {
     int px, py;
     return win != NULL && win->open && !win->minimized &&
@@ -448,8 +598,9 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
     }
 
     if (!pressed) {
-        bool was_dragging = win->dragging;
+        bool was_dragging = win->dragging || win->resize_edges != 0;
         win->dragging = false;
+        win->resize_edges = 0;
         if (win->impl->click != NULL) {
             int px, py;
             if (to_local(win, lx, ly, &px, &py)) {
@@ -465,6 +616,23 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
     }
 
     recon_appwin_focus(win);
+
+    /* An edge grab beats anything drawn underneath it. A maximized window has
+     * no edges to drag: there is nowhere for them to go. */
+    if (!win->maximized) {
+        uint32_t edges = edges_at(win, px, py);
+        if (edges != 0) {
+            win->resize_edges = edges;
+            win->resize_start_x = lx;
+            win->resize_start_y = ly;
+            win->resize_start_left = win->x;
+            win->resize_start_top = win->y;
+            win->resize_start_width = win->width;
+            win->resize_start_height = win->height;
+            return true;
+        }
+    }
+
     uint32_t hit = recon_hit_test(win->panel, px, py);
 
     switch (hit) {
@@ -501,7 +669,16 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
 }
 
 void recon_appwin_handle_motion(struct recon_appwin *win, double lx, double ly) {
-    if (win == NULL || !win->dragging) {
+    if (win == NULL || !win->open || win->minimized) {
+        return;
+    }
+
+    if (win->resize_edges != 0) {
+        process_resize(win, lx, ly);
+        return;
+    }
+
+    if (!win->dragging) {
         return;
     }
 

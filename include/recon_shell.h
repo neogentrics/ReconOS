@@ -75,7 +75,10 @@ void recon_shell_open_app(struct recon_shell *shell, int index);
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
     uint32_t modifiers);
 
-/* Report pointer motion, so a task manager drag can follow it. */
+/* The cursor the shell wants shown at this point, or NULL for the default. */
+const char *recon_shell_cursor_at(struct recon_shell *shell, double lx, double ly);
+
+/* Report pointer motion, so a window drag or resize can follow it. */
 void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly);
 
 /* Offer a scroll to the shell. Returns true if consumed. */

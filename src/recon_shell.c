@@ -18,6 +18,7 @@
 #include "recon_shell.h"
 #include "recon_appwin.h"
 #include "recon_calc.h"
+#include "recon_notepad.h"
 #include "recon_taskmgr.h"
 #include "recon_ui.h"
 
@@ -73,6 +74,7 @@ enum recon_app_action {
     RECON_APP_LAUNCH,
     RECON_APP_TASKMGR,
     RECON_APP_CALC,
+    RECON_APP_NOTEPAD,
     RECON_APP_QUIT,
 };
 
@@ -88,7 +90,7 @@ struct recon_app_entry {
  * whatever a host distribution happens to have installed.
  */
 static const struct recon_app_entry APPS[] = {
-    { "Terminal", NULL, RECON_APP_LAUNCH },
+    { "Notepad", NULL, RECON_APP_NOTEPAD },
     { "Calculator", NULL, RECON_APP_CALC },
     { "Task Manager", NULL, RECON_APP_TASKMGR },
     { "Shut Down", NULL, RECON_APP_QUIT },
@@ -488,6 +490,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         shell->apps[shell->app_count++] = calc;
     }
 
+    struct recon_appwin *notepad = recon_notepad_create(server, shell->font);
+    if (notepad != NULL) {
+        shell->app_order[shell->app_count] = shell->app_count;
+        shell->apps[shell->app_count++] = notepad;
+    }
+
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_screen_changed(shell->apps[i], screen_width, screen_height,
             TASKBAR_HEIGHT);
@@ -645,6 +653,22 @@ void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) 
     }
 }
 
+const char *recon_shell_cursor_at(struct recon_shell *shell, double lx, double ly) {
+    if (shell == NULL) {
+        return NULL;
+    }
+    /* Ask in stacking order, so an edge hidden behind another window does not
+     * claim the cursor. */
+    for (int i = 0; i < shell->app_count; i++) {
+        const char *name =
+            recon_appwin_cursor_at(shell->apps[shell->app_order[i]], lx, ly);
+        if (name != NULL) {
+            return name;
+        }
+    }
+    return NULL;
+}
+
 bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
         double delta) {
     if (shell == NULL) {
@@ -784,6 +808,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                     recon_shell_open_taskmgr(shell);
                 } else if (APPS[index].action == RECON_APP_CALC) {
                     recon_shell_open_app(shell, 1);
+                } else if (APPS[index].action == RECON_APP_NOTEPAD) {
+                    recon_shell_open_app(shell, 2);
                 } else {
                     recon_spawn(shell->server, APPS[index].command);
                 }

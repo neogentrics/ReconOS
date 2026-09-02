@@ -97,6 +97,12 @@ void recon_appwin_raise(struct recon_appwin *win);
  */
 struct wlr_scene_node *recon_appwin_node(struct recon_appwin *win);
 
+/*
+ * The cursor to show at this point, or NULL to leave it alone. Lets a resize
+ * edge announce itself before the user tries to drag it.
+ */
+const char *recon_appwin_cursor_at(struct recon_appwin *win, double lx, double ly);
+
 /* Repaint. Call after changing anything the window displays. */
 void recon_appwin_refresh(struct recon_appwin *win);
 

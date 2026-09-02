@@ -691,7 +691,10 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
 
     /* Over the taskbar or a menu: the shell owns the pointer, not a client. */
     if (recon_shell_contains_point(server->shell, server->cursor->x, server->cursor->y)) {
-        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        const char *shape = recon_shell_cursor_at(server->shell,
+            server->cursor->x, server->cursor->y);
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr,
+            shape != NULL ? shape : "default");
         wlr_seat_pointer_clear_focus(server->seat);
         return;
     }
@@ -897,8 +900,9 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         wlr_log(WLR_INFO, "ReconOS: Alt+Q, shutting down");
         wl_display_terminate(server->wl_display);
         return true;
-    case XKB_KEY_Return:
-        recon_spawn(server, NULL);
+    case XKB_KEY_n:
+    case XKB_KEY_N:
+        recon_shell_open_app(server->shell, 2);
         return true;
     case XKB_KEY_Tab:
     case XKB_KEY_ISO_Left_Tab:
