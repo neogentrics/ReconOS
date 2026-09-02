@@ -65,6 +65,8 @@ struct recon_server {
     struct wlr_allocator *allocator;
 
     struct wlr_scene *scene;
+    /* Keeps scene outputs positioned in step with the output layout. */
+    struct wlr_scene_output_layout *scene_layout;
 
     /* Desktop chrome. Exactly one of background_buffer/background_rect is set,
      * depending on whether the wallpaper image loaded. */
@@ -94,6 +96,11 @@ struct recon_output {
     struct recon_server *server;
     struct wl_listener frame;
     struct wl_listener destroy;
+
+    /* Latches so a per-frame problem is reported once, not 60 times a second. */
+    bool drew_once;
+    bool warned_no_scene;
+    bool warned_commit_failed;
 };
 
 struct recon_keyboard {
@@ -236,12 +243,22 @@ static void spawn_terminal(struct recon_server *server) {
         term = "weston-terminal";
     }
 
-    if (fork() == 0) {
+    wlr_log(WLR_INFO, "ReconOS: launching '%s' on %s", term, server->socket_name);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        wlr_log(WLR_ERROR, "ReconOS: fork failed, cannot launch '%s'", term);
+        return;
+    }
+
+    if (pid == 0) {
         /* Point the child at our compositor socket. XDG_RUNTIME_DIR is
          * inherited, so it resolves the socket in the same place we created it. */
         setenv("WAYLAND_DISPLAY", server->socket_name, 1);
         execlp(term, term, (char *)NULL);
-        _exit(1);
+        /* Only reached if exec failed. */
+        fprintf(stderr, "ReconOS: failed to exec '%s'\n", term);
+        _exit(127);
     }
 }
 
@@ -342,11 +359,26 @@ static void output_frame(struct wl_listener *listener, void *data) {
     struct recon_output *output = wl_container_of(listener, output, frame);
     struct wlr_scene_output *scene_output =
         wlr_scene_get_scene_output(output->server->scene, output->wlr_output);
+
     if (scene_output == NULL) {
+        if (!output->warned_no_scene) {
+            wlr_log(WLR_ERROR, "ReconOS: no scene output for '%s', nothing will draw",
+                output->wlr_output->name);
+            output->warned_no_scene = true;
+        }
         return;
     }
 
-    wlr_scene_output_commit(scene_output, NULL);
+    if (!wlr_scene_output_commit(scene_output, NULL)) {
+        if (!output->warned_commit_failed) {
+            wlr_log(WLR_ERROR, "ReconOS: scene commit failed on '%s'",
+                output->wlr_output->name);
+            output->warned_commit_failed = true;
+        }
+    } else if (!output->drew_once) {
+        wlr_log(WLR_INFO, "ReconOS: first frame drawn on '%s'", output->wlr_output->name);
+        output->drew_once = true;
+    }
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -381,14 +413,36 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     output->destroy.notify = output_destroy;
     wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 
+    /* Turn the output on at its preferred mode. */
+    struct wlr_output_state state;
+    wlr_output_state_init(&state);
+    wlr_output_state_set_enabled(&state, true);
+
     struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
     if (mode != NULL) {
-        wlr_output_set_mode(wlr_output, mode);
+        wlr_output_state_set_mode(&state, mode);
     }
-    wlr_output_enable(wlr_output, true);
-    wlr_output_commit(wlr_output);
 
-    wlr_output_layout_add_auto(server->output_layout, wlr_output);
+    if (!wlr_output_commit_state(wlr_output, &state)) {
+        wlr_log(WLR_ERROR, "ReconOS: failed to enable output '%s'", wlr_output->name);
+    }
+    wlr_output_state_finish(&state);
+
+    /* Give the scene graph a viewport onto this output, then tie that viewport
+     * to the output's place in the layout. Attaching the layout to the scene
+     * only keeps positions in sync -- it does not create the viewport, and
+     * without one the scene has nowhere to draw. */
+    struct wlr_scene_output *scene_output =
+        wlr_scene_output_create(server->scene, wlr_output);
+    struct wlr_output_layout_output *layout_output =
+        wlr_output_layout_add_auto(server->output_layout, wlr_output);
+
+    if (scene_output == NULL || layout_output == NULL) {
+        wlr_log(WLR_ERROR, "ReconOS: could not attach output '%s' to the scene",
+            wlr_output->name);
+        return;
+    }
+    wlr_scene_output_layout_add_output(server->scene_layout, layout_output, scene_output);
 
     /* Stretch the desktop background to whatever this screen turned out to be. */
     int width, height;
@@ -399,6 +453,10 @@ static void server_new_output(struct wl_listener *listener, void *data) {
     if (server->background_rect != NULL) {
         wlr_scene_rect_set_size(server->background_rect, width, height);
     }
+
+    /* Kick off the render loop. Without this nothing requests a first frame,
+     * so output_frame never fires and the screen stays blank. */
+    wlr_output_schedule_frame(wlr_output);
 
     wlr_log(WLR_INFO, "ReconOS: output '%s' online at %dx%d",
         wlr_output->name, width, height);
@@ -436,7 +494,11 @@ int main(int argc, char **argv) {
 
     server.output_layout = wlr_output_layout_create();
     server.scene = wlr_scene_create();
-    wlr_scene_attach_output_layout(server.scene, server.output_layout);
+    server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
+    if (server.scene_layout == NULL) {
+        wlr_log(WLR_ERROR, "ReconOS: failed to attach output layout to scene");
+        return 1;
+    }
 
     /* Desktop background: wallpaper if we have one, flat colour if not.
      * Sized to 1x1 here; server_new_output resizes it to the real screen. */
