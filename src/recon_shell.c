@@ -125,6 +125,12 @@ struct recon_shell {
      * offered input in front-to-back order. */
     struct recon_appwin *apps[8];
     int app_count;
+    /*
+     * Indices into apps[], front-most first. Input must be offered in the
+     * order things are drawn, not the order they were created, or a window
+     * underneath answers for the one on top of it.
+     */
+    int app_order[8];
 
     struct recon_panel *security;
     /* Dims the desktop behind the security box, so it is obvious that the
@@ -154,6 +160,42 @@ static int menu_height(void) {
 static int security_height(void) {
     return SEC_TITLE_HEIGHT + SEC_PADDING * 3 +
         SEC_COUNT * (SEC_BUTTON_HEIGHT + SEC_PADDING) + 20;
+}
+
+/* Move a window to the front of the input order. */
+static void raise_app_order(struct recon_shell *shell, int index) {
+    int position = -1;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (shell->app_order[i] == index) {
+            position = i;
+            break;
+        }
+    }
+    if (position <= 0) {
+        return;
+    }
+    for (int i = position; i > 0; i--) {
+        shell->app_order[i] = shell->app_order[i - 1];
+    }
+    shell->app_order[0] = index;
+}
+
+/*
+ * Whether a client window is the topmost thing at this point.
+ *
+ * The scene graph knows what is actually drawn on top; the shell does not.
+ * Without asking it, a built-in window answers for clicks landing on a client
+ * window stacked above it.
+ */
+static bool client_on_top(struct recon_shell *shell, double lx, double ly) {
+    double sx, sy;
+    struct wlr_scene_node *node =
+        wlr_scene_node_at(&shell->server->scene->tree.node, lx, ly, &sx, &sy);
+    if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER) {
+        return false;
+    }
+    struct wlr_scene_buffer *buffer = wlr_scene_buffer_from_node(node);
+    return wlr_scene_surface_try_from_buffer(buffer) != NULL;
 }
 
 /* --- Drawing --- */
@@ -426,11 +468,13 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
 
     shell->taskmgr = recon_taskmgr_create(server, shell->font);
     if (shell->taskmgr != NULL) {
+        shell->app_order[shell->app_count] = shell->app_count;
         shell->apps[shell->app_count++] = shell->taskmgr;
     }
 
     struct recon_appwin *calc = recon_calc_create(server, shell->font);
     if (calc != NULL) {
+        shell->app_order[shell->app_count] = shell->app_count;
         shell->apps[shell->app_count++] = calc;
     }
 
@@ -511,6 +555,7 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
         return;
     }
     recon_shell_close_menu(shell);
+    raise_app_order(shell, 0);
     recon_appwin_show(shell->taskmgr);
     recon_appwin_focus(shell->taskmgr);
     recon_shell_refresh(shell);
@@ -521,6 +566,7 @@ void recon_shell_open_app(struct recon_shell *shell, int index) {
         return;
     }
     recon_shell_close_menu(shell);
+    raise_app_order(shell, index);
     recon_appwin_show(shell->apps[index]);
     recon_appwin_focus(shell->apps[index]);
     recon_shell_refresh(shell);
@@ -574,7 +620,7 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
         return false;
     }
     for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_handle_scroll(shell->apps[i], lx, ly, delta)) {
+        if (recon_appwin_handle_scroll(shell->apps[shell->app_order[i]], lx, ly, delta)) {
             return true;
         }
     }
@@ -636,9 +682,11 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         return true;
     }
-    for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_contains_point(shell->apps[i], lx, ly)) {
-            return true;
+    if (!client_on_top(shell, lx, ly)) {
+        for (int i = 0; i < shell->app_count; i++) {
+            if (recon_appwin_contains_point(shell->apps[i], lx, ly)) {
+                return true;
+            }
         }
     }
     if (shell->security_open && shell->security != NULL &&
@@ -719,11 +767,20 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         return true;
     }
 
-    /* Then built-in windows, which sit above the desktop but below the menu. */
-    for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_handle_click(shell->apps[i], lx, ly, pressed)) {
-            recon_shell_refresh(shell);
-            return true;
+    /*
+     * Then built-in windows, front-most first, and only if no client window is
+     * stacked above this point.
+     */
+    if (!client_on_top(shell, lx, ly)) {
+        for (int i = 0; i < shell->app_count; i++) {
+            int index = shell->app_order[i];
+            if (recon_appwin_handle_click(shell->apps[index], lx, ly, pressed)) {
+                if (pressed) {
+                    raise_app_order(shell, index);
+                }
+                recon_shell_refresh(shell);
+                return true;
+            }
         }
     }
 
@@ -732,6 +789,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             return true;
         }
         uint32_t hit = recon_hit_test(shell->taskbar, px, py);
+        wlr_log(WLR_DEBUG, "ReconOS: taskbar click at %d,%d -> hit %u (%d buttons)",
+            px, py, hit, shell->button_count);
 
         if (hit == HIT_APPS_BUTTON) {
             toggle_menu(shell);
