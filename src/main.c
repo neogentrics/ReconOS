@@ -43,6 +43,7 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/util/edges.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -58,6 +59,19 @@
 #define BUTTON_SIZE 64
 
 /* --- STRUCTS --- */
+
+/*
+ * What the pointer is currently doing. In PASSTHROUGH the pointer belongs to
+ * whatever is under it; the other two mean the compositor has grabbed it to
+ * drag or resize a window.
+ */
+enum recon_cursor_mode {
+    RECON_CURSOR_PASSTHROUGH,
+    RECON_CURSOR_MOVE,
+    RECON_CURSOR_RESIZE,
+};
+
+struct recon_toplevel;
 
 struct recon_server {
     struct wl_display *wl_display;
@@ -79,6 +93,18 @@ struct recon_server {
     struct wlr_xdg_shell *xdg_shell;
     struct wl_listener new_xdg_surface;
 
+    /* Open windows, most recently focused first. */
+    struct wl_list toplevels;
+    /* Where the next window will be placed, so they don't stack exactly. */
+    int next_window_x, next_window_y;
+
+    /* State for an in-progress window drag or resize. */
+    enum recon_cursor_mode cursor_mode;
+    struct recon_toplevel *grabbed;
+    double grab_x, grab_y;
+    struct wlr_box grab_geometry;
+    uint32_t resize_edges;
+
     struct wlr_seat *seat;
     struct wlr_output_layout *output_layout;
     struct wlr_cursor *cursor;
@@ -96,6 +122,22 @@ struct recon_server {
     struct wl_listener cursor_motion;
     struct wl_listener cursor_motion_absolute;
     struct wl_listener cursor_button;
+    struct wl_listener cursor_axis;
+    struct wl_listener cursor_frame;
+};
+
+/* An application window. */
+struct recon_toplevel {
+    struct wl_list link; /* recon_server.toplevels */
+    struct recon_server *server;
+    struct wlr_xdg_toplevel *xdg_toplevel;
+    struct wlr_scene_tree *scene_tree;
+
+    struct wl_listener map;
+    struct wl_listener unmap;
+    struct wl_listener destroy;
+    struct wl_listener request_move;
+    struct wl_listener request_resize;
 };
 
 struct recon_output {
@@ -288,13 +330,230 @@ static struct wlr_buffer *load_image(const char *name, int fit_w, int fit_h) {
     return &buf->base;
 }
 
+/* --- WINDOW MANAGEMENT --- */
+
+/* Keep the shell's own chrome above application windows. */
+static void raise_chrome(struct recon_server *server) {
+    if (server->button_node != NULL) {
+        wlr_scene_node_raise_to_top(server->button_node);
+    }
+    if (server->cursor_node != NULL) {
+        wlr_scene_node_raise_to_top(server->cursor_node);
+    }
+}
+
+/*
+ * Give a window keyboard focus and raise it.
+ *
+ * Wayland clients only draw themselves as focused, and only accept typing,
+ * once the compositor tells them they have the keyboard. Nothing here happens
+ * automatically.
+ */
+static void focus_toplevel(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL) {
+        return;
+    }
+
+    struct recon_server *server = toplevel->server;
+    struct wlr_seat *seat = server->seat;
+    struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
+    struct wlr_surface *focused = seat->keyboard_state.focused_surface;
+
+    if (focused == surface) {
+        return;
+    }
+
+    /* Tell the previously focused window it is no longer active, so it can
+     * redraw its title bar accordingly. */
+    if (focused != NULL) {
+        struct wlr_xdg_toplevel *prev = wlr_xdg_toplevel_try_from_wlr_surface(focused);
+        if (prev != NULL) {
+            wlr_xdg_toplevel_set_activated(prev, false);
+        }
+    }
+
+    wlr_scene_node_raise_to_top(&toplevel->scene_tree->node);
+    raise_chrome(server);
+
+    /* Move to the front of the list; alt-tab and refocus-on-close use this
+     * order to decide what is "most recent". */
+    wl_list_remove(&toplevel->link);
+    wl_list_insert(&server->toplevels, &toplevel->link);
+
+    wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
+    if (keyboard != NULL) {
+        wlr_seat_keyboard_notify_enter(seat, surface, keyboard->keycodes,
+            keyboard->num_keycodes, &keyboard->modifiers);
+    }
+}
+
+/* The window under the given layout coordinates, if any. */
+static struct recon_toplevel *toplevel_at(struct recon_server *server,
+        double lx, double ly, struct wlr_surface **surface, double *sx, double *sy) {
+    struct wlr_scene_node *node =
+        wlr_scene_node_at(&server->scene->tree.node, lx, ly, sx, sy);
+    if (node == NULL || node->type != WLR_SCENE_NODE_BUFFER) {
+        return NULL;
+    }
+
+    struct wlr_scene_buffer *scene_buffer = wlr_scene_buffer_from_node(node);
+    struct wlr_scene_surface *scene_surface =
+        wlr_scene_surface_try_from_buffer(scene_buffer);
+    if (scene_surface == NULL) {
+        return NULL;
+    }
+    *surface = scene_surface->surface;
+
+    /* Surfaces sit inside the window's scene tree, possibly nested. Walk up
+     * until we reach the tree we tagged with its toplevel. */
+    struct wlr_scene_tree *tree = node->parent;
+    while (tree != NULL && tree->node.data == NULL) {
+        tree = tree->node.parent;
+    }
+    return tree != NULL ? tree->node.data : NULL;
+}
+
+/* Take over the pointer to drag or resize a window. */
+static void begin_interactive(struct recon_toplevel *toplevel,
+        enum recon_cursor_mode mode, uint32_t edges) {
+    struct recon_server *server = toplevel->server;
+
+    /* Ignore requests from a window that isn't the one being pointed at. */
+    if (toplevel->xdg_toplevel->base->surface !=
+            wlr_surface_get_root_surface(server->seat->pointer_state.focused_surface)) {
+        return;
+    }
+
+    server->grabbed = toplevel;
+    server->cursor_mode = mode;
+
+    struct wlr_box geometry;
+    wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geometry);
+
+    if (mode == RECON_CURSOR_MOVE) {
+        /* Remember where in the window the pointer grabbed it. */
+        server->grab_x = server->cursor->x - toplevel->scene_tree->node.x;
+        server->grab_y = server->cursor->y - toplevel->scene_tree->node.y;
+    } else {
+        server->grab_x = server->cursor->x;
+        server->grab_y = server->cursor->y;
+        server->grab_geometry = geometry;
+        server->grab_geometry.x += toplevel->scene_tree->node.x;
+        server->grab_geometry.y += toplevel->scene_tree->node.y;
+        server->resize_edges = edges;
+    }
+}
+
+static void toplevel_request_move(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
+    begin_interactive(toplevel, RECON_CURSOR_MOVE, 0);
+}
+
+static void toplevel_request_resize(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
+    struct wlr_xdg_toplevel_resize_event *event = data;
+    begin_interactive(toplevel, RECON_CURSOR_RESIZE, event->edges);
+}
+
 /* --- INPUT: POINTER --- */
+
+/* Drag the grabbed window to follow the pointer. */
+static void process_move(struct recon_server *server) {
+    struct recon_toplevel *toplevel = server->grabbed;
+    wlr_scene_node_set_position(&toplevel->scene_tree->node,
+        server->cursor->x - server->grab_x,
+        server->cursor->y - server->grab_y);
+}
+
+/*
+ * Resize the grabbed window.
+ *
+ * The compositor decides the new geometry, but only the client can actually
+ * resize itself, so this asks for a size and repositions the window to keep
+ * the edges the user is not dragging where they were.
+ */
+static void process_resize(struct recon_server *server) {
+    struct recon_toplevel *toplevel = server->grabbed;
+    double dx = server->cursor->x - server->grab_x;
+    double dy = server->cursor->y - server->grab_y;
+
+    int left = server->grab_geometry.x;
+    int right = server->grab_geometry.x + server->grab_geometry.width;
+    int top = server->grab_geometry.y;
+    int bottom = server->grab_geometry.y + server->grab_geometry.height;
+
+    if (server->resize_edges & WLR_EDGE_TOP) {
+        top += dy;
+        if (top >= bottom) {
+            top = bottom - 1;
+        }
+    } else if (server->resize_edges & WLR_EDGE_BOTTOM) {
+        bottom += dy;
+        if (bottom <= top) {
+            bottom = top + 1;
+        }
+    }
+    if (server->resize_edges & WLR_EDGE_LEFT) {
+        left += dx;
+        if (left >= right) {
+            left = right - 1;
+        }
+    } else if (server->resize_edges & WLR_EDGE_RIGHT) {
+        right += dx;
+        if (right <= left) {
+            right = left + 1;
+        }
+    }
+
+    struct wlr_box geometry;
+    wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geometry);
+    wlr_scene_node_set_position(&toplevel->scene_tree->node,
+        left - geometry.x, top - geometry.y);
+    wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, right - left, bottom - top);
+}
+
+/*
+ * Point the pointer at whatever is under it.
+ *
+ * Wayland clients receive no pointer events until the compositor tells them
+ * the pointer has entered their surface, so this has to run on every motion.
+ */
+static void process_cursor_motion(struct recon_server *server, uint32_t time) {
+    wlr_scene_node_set_position(server->cursor_node, server->cursor->x, server->cursor->y);
+
+    if (server->cursor_mode == RECON_CURSOR_MOVE) {
+        process_move(server);
+        return;
+    }
+    if (server->cursor_mode == RECON_CURSOR_RESIZE) {
+        process_resize(server);
+        return;
+    }
+
+    double sx, sy;
+    struct wlr_surface *surface = NULL;
+    toplevel_at(server, server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+
+    if (surface != NULL) {
+        wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
+        wlr_seat_pointer_notify_motion(server->seat, time, sx, sy);
+    } else {
+        /* Over the desktop; no client should think it still has the pointer. */
+        wlr_seat_pointer_clear_focus(server->seat);
+    }
+}
 
 static void server_cursor_button(struct wl_listener *listener, void *data) {
     struct recon_server *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
 
-    if (event->state == WL_POINTER_BUTTON_STATE_PRESSED && event->button == BTN_LEFT) {
+    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        /* Any drag or resize ends when the button comes up. */
+        server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
+        server->grabbed = NULL;
+    } else if (event->button == BTN_LEFT) {
         double x = server->cursor->x;
         double y = server->cursor->y;
 
@@ -304,9 +563,17 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
             wl_display_terminate(server->wl_display);
             return;
         }
+
+        /* Clicking a window focuses it. */
+        double sx, sy;
+        struct wlr_surface *surface = NULL;
+        struct recon_toplevel *toplevel =
+            toplevel_at(server, x, y, &surface, &sx, &sy);
+        if (toplevel != NULL) {
+            focus_toplevel(toplevel);
+        }
     }
 
-    /* Anything not consumed by the shell goes to the focused client. */
     wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button,
         event->state);
 }
@@ -316,7 +583,7 @@ static void server_cursor_motion(struct wl_listener *listener, void *data) {
     struct wlr_pointer_motion_event *event = data;
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
-    wlr_scene_node_set_position(server->cursor_node, server->cursor->x, server->cursor->y);
+    process_cursor_motion(server, event->time_msec);
 }
 
 static void server_cursor_motion_absolute(struct wl_listener *listener, void *data) {
@@ -324,7 +591,24 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
     struct wlr_pointer_motion_absolute_event *event = data;
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
-    wlr_scene_node_set_position(server->cursor_node, server->cursor->x, server->cursor->y);
+    process_cursor_motion(server, event->time_msec);
+}
+
+static void server_cursor_axis(struct wl_listener *listener, void *data) {
+    struct recon_server *server = wl_container_of(listener, server, cursor_axis);
+    struct wlr_pointer_axis_event *event = data;
+
+    wlr_seat_pointer_notify_axis(server->seat, event->time_msec, event->orientation,
+        event->delta, event->delta_discrete, event->source);
+}
+
+/*
+ * Pointer events are sent in batches, and clients wait for the frame event
+ * before acting on them.
+ */
+static void server_cursor_frame(struct wl_listener *listener, void *data) {
+    struct recon_server *server = wl_container_of(listener, server, cursor_frame);
+    wlr_seat_pointer_notify_frame(server->seat);
 }
 
 /* --- INPUT: KEYBOARD --- */
@@ -354,8 +638,62 @@ static void spawn_terminal(struct recon_server *server) {
     }
 }
 
+/* Focus the window after the currently focused one, wrapping around. */
+static void cycle_focus(struct recon_server *server) {
+    if (wl_list_length(&server->toplevels) < 2) {
+        return;
+    }
+    struct recon_toplevel *current =
+        wl_container_of(server->toplevels.next, current, link);
+    struct recon_toplevel *next = wl_container_of(current->link.next, next, link);
+    focus_toplevel(next);
+}
+
+/* Ask the focused window to close. The client decides how to comply. */
+static void close_focused(struct recon_server *server) {
+    if (wl_list_empty(&server->toplevels)) {
+        return;
+    }
+    struct recon_toplevel *focused =
+        wl_container_of(server->toplevels.next, focused, link);
+    wlr_xdg_toplevel_send_close(focused->xdg_toplevel);
+}
+
+/*
+ * Compositor-level shortcuts. Returns true if the key was consumed and should
+ * not reach the focused window.
+ */
+static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
+        xkb_keysym_t sym) {
+    if (!(modifiers & WLR_MODIFIER_ALT)) {
+        return false;
+    }
+
+    switch (sym) {
+    case XKB_KEY_q:
+    case XKB_KEY_Q:
+        wlr_log(WLR_INFO, "ReconOS: Alt+Q, shutting down");
+        wl_display_terminate(server->wl_display);
+        return true;
+    case XKB_KEY_Return:
+        spawn_terminal(server);
+        return true;
+    case XKB_KEY_Tab:
+    case XKB_KEY_ISO_Left_Tab:
+        cycle_focus(server);
+        return true;
+    case XKB_KEY_c:
+    case XKB_KEY_C:
+        close_focused(server);
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void server_keyboard_key(struct wl_listener *listener, void *data) {
     struct recon_keyboard *keyboard = wl_container_of(listener, keyboard, key);
+    struct recon_server *server = keyboard->server;
     struct wlr_keyboard_key_event *event = data;
 
     /* libinput keycodes are offset by 8 from xkb's. */
@@ -363,21 +701,24 @@ static void server_keyboard_key(struct wl_listener *listener, void *data) {
     const xkb_keysym_t *syms;
     int nsyms = xkb_state_key_get_syms(keyboard->wlr_keyboard->xkb_state, keycode, &syms);
 
-    if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) {
-        return;
+    bool handled = false;
+    uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
+
+    if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+        for (int i = 0; i < nsyms; i++) {
+            if (handle_shortcut(server, modifiers, syms[i])) {
+                handled = true;
+                break;
+            }
+        }
     }
 
-    uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
-    for (int i = 0; i < nsyms; i++) {
-        if ((modifiers & WLR_MODIFIER_ALT) && syms[i] == XKB_KEY_q) {
-            wlr_log(WLR_INFO, "ReconOS: Alt+Q, shutting down");
-            wl_display_terminate(keyboard->server->wl_display);
-            return;
-        }
-        if ((modifiers & WLR_MODIFIER_ALT) && syms[i] == XKB_KEY_Return) {
-            spawn_terminal(keyboard->server);
-            return;
-        }
+    /* Everything the shell didn't claim belongs to the focused window. Without
+     * this, typing goes nowhere and applications appear frozen. */
+    if (!handled) {
+        wlr_seat_set_keyboard(server->seat, keyboard->wlr_keyboard);
+        wlr_seat_keyboard_notify_key(server->seat, event->time_msec,
+            event->keycode, event->state);
     }
 }
 
@@ -471,14 +812,115 @@ static void setup_background(struct recon_server *server, int width, int height)
 
 /* --- SURFACES --- */
 
+/* Step the cascade, wrapping before windows march off the screen. */
+#define CASCADE_STEP 32
+#define CASCADE_LIMIT 320
+
+static void place_window(struct recon_toplevel *toplevel) {
+    struct recon_server *server = toplevel->server;
+
+    /* Offset from the power button so the first window doesn't cover it. */
+    int x = BUTTON_X + BUTTON_SIZE + CASCADE_STEP + server->next_window_x;
+    int y = BUTTON_Y + server->next_window_y;
+    wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
+
+    server->next_window_x += CASCADE_STEP;
+    server->next_window_y += CASCADE_STEP;
+    if (server->next_window_x > CASCADE_LIMIT) {
+        server->next_window_x = 0;
+        server->next_window_y = 0;
+    }
+}
+
+static void toplevel_map(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+
+    wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+    place_window(toplevel);
+    focus_toplevel(toplevel);
+
+    const char *title = toplevel->xdg_toplevel->title;
+    wlr_log(WLR_INFO, "ReconOS: window mapped: %s", title != NULL ? title : "(untitled)");
+}
+
+static void toplevel_unmap(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, unmap);
+    struct recon_server *server = toplevel->server;
+
+    /* Don't leave a grab pointing at a window that is going away. */
+    if (server->grabbed == toplevel) {
+        server->grabbed = NULL;
+        server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
+    }
+
+    wl_list_remove(&toplevel->link);
+
+    /* Hand focus to whatever was most recently used before this one. */
+    if (!wl_list_empty(&server->toplevels)) {
+        struct recon_toplevel *next =
+            wl_container_of(server->toplevels.next, next, link);
+        focus_toplevel(next);
+    }
+}
+
+static void toplevel_destroy(struct wl_listener *listener, void *data) {
+    struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
+
+    wl_list_remove(&toplevel->map.link);
+    wl_list_remove(&toplevel->unmap.link);
+    wl_list_remove(&toplevel->destroy.link);
+    wl_list_remove(&toplevel->request_move.link);
+    wl_list_remove(&toplevel->request_resize.link);
+    free(toplevel);
+}
+
 static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
     struct recon_server *server = wl_container_of(listener, server, new_xdg_surface);
     struct wlr_xdg_surface *xdg_surface = data;
 
-    if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-        wlr_scene_xdg_surface_create(&server->scene->tree, xdg_surface);
-        wlr_log(WLR_INFO, "ReconOS: new toplevel window");
+    /* Popups (menus, tooltips) position themselves relative to their parent, so
+     * they just need to be placed in the parent's part of the scene graph. */
+    if (xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP) {
+        struct wlr_xdg_surface *parent =
+            wlr_xdg_surface_try_from_wlr_surface(xdg_surface->popup->parent);
+        if (parent != NULL && parent->data != NULL) {
+            struct wlr_scene_tree *parent_tree = parent->data;
+            xdg_surface->data = wlr_scene_xdg_surface_create(parent_tree, xdg_surface);
+        }
+        return;
     }
+
+    if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+        return;
+    }
+
+    struct recon_toplevel *toplevel = calloc(1, sizeof(*toplevel));
+    if (toplevel == NULL) {
+        return;
+    }
+
+    toplevel->server = server;
+    toplevel->xdg_toplevel = xdg_surface->toplevel;
+    toplevel->scene_tree = wlr_scene_xdg_surface_create(&server->scene->tree, xdg_surface);
+
+    /* Tag the tree so a surface found under the pointer can be traced back to
+     * its window; see toplevel_at(). */
+    toplevel->scene_tree->node.data = toplevel;
+    xdg_surface->data = toplevel->scene_tree;
+
+    toplevel->map.notify = toplevel_map;
+    wl_signal_add(&xdg_surface->surface->events.map, &toplevel->map);
+    toplevel->unmap.notify = toplevel_unmap;
+    wl_signal_add(&xdg_surface->surface->events.unmap, &toplevel->unmap);
+    toplevel->destroy.notify = toplevel_destroy;
+    wl_signal_add(&xdg_surface->events.destroy, &toplevel->destroy);
+
+    toplevel->request_move.notify = toplevel_request_move;
+    wl_signal_add(&xdg_surface->toplevel->events.request_move, &toplevel->request_move);
+    toplevel->request_resize.notify = toplevel_request_resize;
+    wl_signal_add(&xdg_surface->toplevel->events.request_resize, &toplevel->request_resize);
+
+    wlr_log(WLR_INFO, "ReconOS: new toplevel window");
 }
 
 /* --- OUTPUT --- */
@@ -630,6 +1072,9 @@ int main(int argc, char **argv) {
             "to preserve buffers between frames");
     }
 
+    wl_list_init(&server.toplevels);
+    server.cursor_mode = RECON_CURSOR_PASSTHROUGH;
+
     server.wl_display = wl_display_create();
     server.backend = wlr_backend_autocreate(server.wl_display, NULL);
     if (server.backend == NULL) {
@@ -693,6 +1138,10 @@ int main(int argc, char **argv) {
     wl_signal_add(&server.cursor->events.motion_absolute, &server.cursor_motion_absolute);
     server.cursor_button.notify = server_cursor_button;
     wl_signal_add(&server.cursor->events.button, &server.cursor_button);
+    server.cursor_axis.notify = server_cursor_axis;
+    wl_signal_add(&server.cursor->events.axis, &server.cursor_axis);
+    server.cursor_frame.notify = server_cursor_frame;
+    wl_signal_add(&server.cursor->events.frame, &server.cursor_frame);
 
     server.seat = wlr_seat_create(server.wl_display, "seat0");
     server.new_input.notify = server_new_input;
