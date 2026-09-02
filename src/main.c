@@ -54,6 +54,8 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "recon_control.h"
+#include "recon_fs.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 
@@ -928,6 +930,10 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
     case XKB_KEY_T:
         recon_shell_open_taskmgr(server->shell);
         return true;
+    case XKB_KEY_Return:
+        /* The ReconOS terminal, in the place the old one used to be. */
+        recon_shell_open_app(server->shell, 3);
+        return true;
     case XKB_KEY_c:
     case XKB_KEY_C:
         close_focused(server);
@@ -1363,6 +1369,15 @@ int main(int argc, char **argv) {
             "to preserve buffers between frames");
     }
 
+    /* The filesystem comes up before anything that might want to read from
+     * it, and creates its layout on first run. */
+    if (!recon_fs_init(NULL)) {
+        wlr_log(WLR_ERROR, "ReconOS: cannot open the filesystem: %s",
+            recon_fs_last_error());
+        return 1;
+    }
+    wlr_log(WLR_INFO, "ReconOS: filesystem rooted at %s", recon_fs_host_root());
+
     wl_list_init(&server.toplevels);
     wl_list_init(&server.outputs);
     server.cursor_mode = RECON_CURSOR_PASSTHROUGH;
@@ -1488,6 +1503,10 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Remote access to the command interpreter. Optional: without it ReconOS
+     * runs, just without being reachable from outside. */
+    struct recon_control *control = recon_control_create(&server, NULL);
+
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
     printf("ReconOS v0.0.7 - Alt+Enter for a terminal, "
         "Ctrl+Alt+Del for the task manager, Alt+Q to quit.\n");
@@ -1495,7 +1514,9 @@ int main(int argc, char **argv) {
 
     wl_display_run(server.wl_display);
 
+    recon_control_destroy(control);
     recon_shell_destroy(server.shell);
+    recon_fs_finish();
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);
     return 0;

@@ -19,6 +19,7 @@
 #include "recon_appwin.h"
 #include "recon_calc.h"
 #include "recon_notepad.h"
+#include "recon_terminal.h"
 #include "recon_taskmgr.h"
 #include "recon_ui.h"
 
@@ -75,6 +76,7 @@ enum recon_app_action {
     RECON_APP_TASKMGR,
     RECON_APP_CALC,
     RECON_APP_NOTEPAD,
+    RECON_APP_TERMINAL,
     RECON_APP_QUIT,
 };
 
@@ -90,6 +92,7 @@ struct recon_app_entry {
  * whatever a host distribution happens to have installed.
  */
 static const struct recon_app_entry APPS[] = {
+    { "Terminal", NULL, RECON_APP_TERMINAL },
     { "Notepad", NULL, RECON_APP_NOTEPAD },
     { "Calculator", NULL, RECON_APP_CALC },
     { "Task Manager", NULL, RECON_APP_TASKMGR },
@@ -516,6 +519,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         shell->apps[shell->app_count++] = notepad;
     }
 
+    struct recon_appwin *terminal = recon_terminal_create(server, shell->font);
+    if (terminal != NULL) {
+        shell->app_order[shell->app_count] = shell->app_count;
+        shell->apps[shell->app_count++] = terminal;
+    }
+
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_screen_changed(shell->apps[i], screen_width, screen_height,
             TASKBAR_HEIGHT);
@@ -835,6 +844,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                     recon_shell_open_app(shell, 1);
                 } else if (APPS[index].action == RECON_APP_NOTEPAD) {
                     recon_shell_open_app(shell, 2);
+                } else if (APPS[index].action == RECON_APP_TERMINAL) {
+                    recon_shell_open_app(shell, 3);
                 } else {
                     recon_spawn(shell->server, APPS[index].command);
                 }

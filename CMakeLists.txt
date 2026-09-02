@@ -52,10 +52,14 @@ add_executable(ReconOS
     src/main.c
     src/recon_appwin.c
     src/recon_calc.c
+    src/recon_cmd.c
+    src/recon_control.c
+    src/recon_fs.c
     src/recon_notepad.c
     src/recon_procinfo.c
     src/recon_shell.c
     src/recon_taskmgr.c
+    src/recon_terminal.c
     src/recon_ui.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
