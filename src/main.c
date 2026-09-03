@@ -492,8 +492,48 @@ void recon_focus_toplevel(struct recon_toplevel *toplevel) {
     recon_damage_all(server);
 }
 
+/*
+ * On screen when it is neither put away nor on another desktop.
+ *
+ * A client's surface is not the shell's to draw, but its place in the scene
+ * is the shell's to switch off -- which is all a desktop needs.
+ */
+static void toplevel_apply_visibility(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL || toplevel->scene_tree == NULL) {
+        return;
+    }
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node,
+        !toplevel->minimized && !toplevel->desktop_hidden);
+}
+
 bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel) {
     return toplevel != NULL && toplevel->minimized;
+}
+
+void recon_toplevel_set_desktop(struct recon_toplevel *toplevel, int desktop) {
+    if (toplevel != NULL) {
+        toplevel->desktop = desktop;
+    }
+}
+
+int recon_toplevel_desktop(struct recon_toplevel *toplevel) {
+    return toplevel != NULL ? toplevel->desktop : 0;
+}
+
+void recon_toplevel_set_desktop_showing(struct recon_toplevel *toplevel,
+        bool showing) {
+    if (toplevel == NULL || toplevel->desktop_hidden == !showing) {
+        return;
+    }
+    toplevel->desktop_hidden = !showing;
+
+    if (toplevel->desktop_hidden && toplevel->server->grabbed == toplevel) {
+        /* A grab pointing at a window that is no longer on screen would keep
+         * moving it from the other desktop. */
+        toplevel->server->grabbed = NULL;
+        toplevel->server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
+    }
+    toplevel_apply_visibility(toplevel);
 }
 
 const char *recon_toplevel_title(struct recon_toplevel *toplevel) {
@@ -537,7 +577,7 @@ void recon_toplevel_minimize(struct recon_toplevel *toplevel) {
 
     struct recon_server *server = toplevel->server;
     toplevel->minimized = true;
-    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+    toplevel_apply_visibility(toplevel);
     wlr_log(WLR_INFO, "ReconOS: minimized '%s'", recon_toplevel_title(toplevel));
 
     /* Don't leave a grab pointing at a window that is no longer visible. */
@@ -574,7 +614,7 @@ void recon_toplevel_restore(struct recon_toplevel *toplevel) {
         return;
     }
     toplevel->minimized = false;
-    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
+    toplevel_apply_visibility(toplevel);
     wlr_log(WLR_INFO, "ReconOS: restored '%s'", recon_toplevel_title(toplevel));
     recon_focus_toplevel(toplevel);
     recon_damage_all(toplevel->server);
@@ -1463,6 +1503,18 @@ static void toplevel_map(struct wl_listener *listener, void *data) {
     struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, map);
 
     wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
+
+    /*
+     * On the desktop somebody is looking at, not on the first one.
+     *
+     * The field starts at zero, so without this a client launched from
+     * desktop three would arrive on desktop one -- which is to say, it would
+     * appear not to have started at all.
+     */
+    recon_toplevel_set_desktop(toplevel,
+        recon_shell_desktop(toplevel->server->shell));
+    recon_toplevel_set_desktop_showing(toplevel, true);
+
     place_window(toplevel);
     recon_focus_toplevel(toplevel);
 

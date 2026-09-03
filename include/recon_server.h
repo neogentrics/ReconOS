@@ -130,6 +130,16 @@ struct recon_toplevel {
     struct wl_listener set_title;
     struct wl_listener commit;
 
+    /*
+     * Which desktop this window is on, and whether that desktop is showing.
+     *
+     * The same pair a built-in window keeps, for the same reason: minimized
+     * and elsewhere both end with the window not drawn and mean different
+     * things to the taskbar.
+     */
+    int desktop;
+    bool desktop_hidden;
+
     /* Position and size to restore to when unmaximized. */
     bool maximized;
     struct wlr_box restore_geometry;
@@ -204,6 +214,14 @@ void recon_toplevel_restore(struct recon_toplevel *toplevel);
 void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel);
 void recon_toplevel_close(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel);
+
+/* A client window's desktop, kept the same way a built-in window's is. Its
+ * surface is not the shell's to draw, but its place in the scene is the
+ * shell's to switch off, which is all a desktop needs. */
+void recon_toplevel_set_desktop(struct recon_toplevel *toplevel, int desktop);
+int recon_toplevel_desktop(struct recon_toplevel *toplevel);
+void recon_toplevel_set_desktop_showing(struct recon_toplevel *toplevel,
+    bool showing);
 const char *recon_toplevel_title(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);
 /* The process behind a client window, or 0 if it cannot be determined. */

@@ -440,6 +440,39 @@ people read — deleting something that was not there said `cannot read
 exist as far as anyone using ReconOS is concerned, and a break in the one
 rule `recon_fs.c` exists to keep. Fixed in v0.2.6.
 
+## v0.2.7 — four desktops
+
+The last of the four things the Multitasking page listed as not built. It now
+lists nothing.
+
+Alt+1 to Alt+4 switches; the same numbers sit on the taskbar as a pager, so
+the shortcut and the button agree and the feature is findable by looking
+rather than by reading. A dot under a number says that desktop has windows on
+it. Adding Shift takes the current window along and follows it — moving a
+window somewhere and staying behind means watching it disappear and then
+switching to check it arrived.
+
+A window on another desktop is off the screen *and* off the taskbar. A bar
+listing every window on every desktop would make these a way of hiding
+windows rather than of arranging them.
+
+Being on another desktop is kept apart from being minimized, even though both
+end with the window not drawn, because they mean different things to the
+taskbar: a minimized window is listed on its own desktop's bar, and one
+sitting elsewhere is not listed here at all. Folding them together would have
+put every window from every desktop on every bar, all marked as put away.
+
+Opening something brings it here rather than taking you to it. An application
+has one window, so "open Notepad" while it sits elsewhere has to mean one or
+the other, and being moved somewhere you did not ask to go is the more
+startling of the two.
+
+Client windows are in it too. A client's surface is not the shell's to draw,
+but its place in the scene is the shell's to switch off, which is all a
+desktop needs. One that maps while you are on desktop three arrives on
+desktop three — the field starts at zero, and without saying so a program
+launched from anywhere else would appear not to have started at all.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.

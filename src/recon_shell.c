@@ -1429,7 +1429,13 @@ static void draw_taskbar(struct recon_shell *shell) {
     int pager_w = DESKTOP_COUNT * (DESKTOP_BUTTON + 2) + TASKBAR_PADDING;
     available -= pager_w;
 
-    int window_count = wl_list_length(&shell->server->toplevels);
+    int window_count = 0;
+    struct recon_toplevel *counted;
+    wl_list_for_each(counted, &shell->server->toplevels, link) {
+        if (recon_toplevel_desktop(counted) == shell->current_desktop) {
+            window_count++;
+        }
+    }
     for (int i = 0; i < shell->app_count; i++) {
         if (recon_appwin_is_open(shell->apps[i]) &&
                 recon_appwin_desktop(shell->apps[i]) == shell->current_desktop) {
@@ -1488,6 +1494,9 @@ static void draw_taskbar(struct recon_shell *shell) {
     wl_list_for_each(toplevel, &shell->server->toplevels, link) {
         if (shell->button_count >= max_buttons) {
             break;
+        }
+        if (recon_toplevel_desktop(toplevel) != shell->current_desktop) {
+            continue;
         }
         if (x + button_width > width - pager_w - TASKBAR_PADDING) {
             break;
@@ -2422,6 +2431,12 @@ void recon_shell_set_desktop(struct recon_shell *shell, int desktop) {
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_set_desktop_showing(shell->apps[i],
             recon_appwin_desktop(shell->apps[i]) == desktop);
+    }
+
+    struct recon_toplevel *toplevel;
+    wl_list_for_each(toplevel, &shell->server->toplevels, link) {
+        recon_toplevel_set_desktop_showing(toplevel,
+            recon_toplevel_desktop(toplevel) == desktop);
     }
 
     /*

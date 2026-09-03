@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.6.** The version number tracks what works, not what is
+**Status: v0.2.7.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -33,7 +33,8 @@ v0.2.4 made skins installable, which the file format had been waiting for
 since the skin system was built. v0.2.5 made the registry changeable from the
 Control Panel rather than only readable there. v0.2.6 added window snapping,
 and fixed Alt+Tab, which had been quietly dead since ReconOS started drawing
-its own windows.
+its own windows. v0.2.7 added four desktops, which was the last thing the
+Multitasking page said was missing.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -112,8 +113,8 @@ look like one act. Saving redraws everything, since a setting here is one
 something is already using: set `theme` by hand and the desktop restyles
 while you watch.
 
-The other six -- Power, Storage, Multitasking, Update, Troubleshoot and
-Recovery -- are there and say plainly that
+The other five -- Power, Storage, Update, Troubleshoot and Recovery -- are
+there and say plainly that
 they are not built, and what has to exist first. Usually a kernel: a hosted
 process cannot suspend a machine, partition a disk, or reinstall itself. A
 gap nobody can see is a gap nobody remembers.
@@ -193,6 +194,13 @@ restore button already undoes it, because snapping counts as maximized.
 
 Alt+Tab steps through everything the taskbar lists, skipping what is
 minimized.
+
+**Four desktops.** Alt+1 to Alt+4 switches between them, and the same numbers
+sit on the taskbar as a pager so the shortcut and the button agree. A dot
+under a number means that desktop has windows on it. Adding Shift takes the
+current window along and follows it. A window on another desktop is off the
+screen *and* off the taskbar — a bar listing every window everywhere would
+make these a way of hiding windows rather than of arranging them.
 
 **A filesystem** with one root it cannot see outside of: `/System`, `/Apps`,
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
