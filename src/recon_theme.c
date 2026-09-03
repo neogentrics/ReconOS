@@ -169,7 +169,7 @@ static int role_from_name(const char *name) {
 /* The native look: grey chrome, deep navy titles, oxblood accent. */
 static const recon_color THEME_RECON[] = {
     RGB(C0,C0,C0), RGB(30,30,30), RGB(20,2A,44), RGB(6A,6A,72),
-    RGB(F0,F0,F0), RGB(D0,D0,D4), RGB(C8,C8,C8), RGB(10,10,10),
+    RGB(F0,F0,F0), RGB(F0,F0,F4), RGB(C8,C8,C8), RGB(10,10,10),
 
     RGB(C0,C0,C0), RGB(10,10,10), RGB(40,40,40), RGB(C8,C8,C8),
     RGB(A8,A8,B4),
@@ -199,8 +199,8 @@ static const recon_color THEME_RECON[] = {
 
 /* The 95-era look: brighter grey, the familiar navy, no softening. */
 static const recon_color THEME_CLASSIC[] = {
-    RGB(C0,C0,C0), RGB(00,00,00), RGB(00,00,80), RGB(80,80,80),
-    RGB(FF,FF,FF), RGB(C0,C0,C0), RGB(C0,C0,C0), RGB(00,00,00),
+    RGB(C0,C0,C0), RGB(00,00,00), RGB(00,00,80), RGB(6C,6C,6C),
+    RGB(FF,FF,FF), RGB(FF,FF,FF), RGB(C0,C0,C0), RGB(00,00,00),
 
     RGB(C0,C0,C0), RGB(00,00,00), RGB(3A,3A,3A), RGB(C0,C0,C0),
     RGB(A0,A0,A0),
@@ -230,7 +230,7 @@ static const recon_color THEME_AQUA[] = {
      * to say indistinguishable. A subtle look is not worth not knowing which
      * window has the keyboard. */
     RGB(EC,EC,EE), RGB(B8,B8,BC), RGB(8F,B4,DC), RGB(F2,F2,F4),
-    RGB(1C,1C,20), RGB(90,90,96), RGB(E4,E4,E8), RGB(40,40,46),
+    RGB(1C,1C,20), RGB(50,50,58), RGB(E4,E4,E8), RGB(40,40,46),
 
     RGB(E8,E8,EC), RGB(1C,1C,20), RGB(56,56,5E), RGB(E4,E4,E8),
     RGB(D0,D4,DC),
@@ -259,7 +259,7 @@ static const recon_color THEME_MIDNIGHT[] = {
     /* Active and inactive were three units apart -- a flat look taken far
      * enough to stop conveying anything. */
     RGB(2E,32,38), RGB(1A,1C,20), RGB(2F,4F,7A), RGB(2A,2E,34),
-    RGB(E8,E8,EC), RGB(90,94,9C), RGB(3A,3E,46), RGB(E0,E0,E4),
+    RGB(E8,E8,EC), RGB(C4,C8,D0), RGB(3A,3E,46), RGB(E0,E0,E4),
 
     RGB(24,28,2E), RGB(E0,E0,E4), RGB(B8,BC,C4), RGB(3A,3E,46),
     RGB(4E,54,5E),
@@ -310,8 +310,8 @@ static const recon_color THEME_MIDNIGHT[] = {
 
 /* Red-green, the common kind. Blue and orange are the reliable axis. */
 static const recon_color THEME_DEUTERAN[] = {
-    RGB(C8,C8,C8), RGB(30,30,30), RGB(00,54,8A), RGB(7A,7A,7A),
-    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(00,54,8A), RGB(6E,6E,6E),
+    RGB(FF,FF,FF), RGB(F4,F4,F4), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(A8,B4,C4),
@@ -341,8 +341,8 @@ static const recon_color THEME_DEUTERAN[] = {
  * is lighter here than in the deuteran set.
  */
 static const recon_color THEME_PROTAN[] = {
-    RGB(C8,C8,C8), RGB(30,30,30), RGB(0A,66,99), RGB(7A,7A,7A),
-    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(0A,66,99), RGB(6E,6E,6E),
+    RGB(FF,FF,FF), RGB(F4,F4,F4), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(A8,C0,CC),
@@ -378,8 +378,8 @@ static const recon_color THEME_PROTAN[] = {
  * magenta stay separable.
  */
 static const recon_color THEME_TRITAN[] = {
-    RGB(C8,C8,C8), RGB(30,30,30), RGB(7A,10,30), RGB(7A,7A,7A),
-    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(7A,10,30), RGB(6E,6E,6E),
+    RGB(FF,FF,FF), RGB(F4,F4,F4), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(C4,A8,B4),
@@ -463,7 +463,7 @@ static const recon_color THEME_CONTRAST[] = {
  */
 static const recon_color THEME_BEACON[] = {
     RGB(E8,EA,F0), RGB(6E,84,B4), RGB(2A,5B,C8), RGB(8C,A4,C8),
-    RGB(FF,FF,FF), RGB(E4,EA,F4), RGB(3A,6E,D8), RGB(FF,FF,FF),
+    RGB(FF,FF,FF), RGB(F8,FA,FF), RGB(3A,6E,D8), RGB(FF,FF,FF),
 
     /* bar.text and bar.text-dim are drawn on a taskbar button, and this
      * skin's buttons are light -- so they are dark here, despite the bar
@@ -497,8 +497,8 @@ static const recon_color THEME_BEACON[] = {
 };
 
 static const recon_color THEME_READING[] = {
-    RGB(E4,DF,D4), RGB(58,52,46), RGB(4A,5A,6E), RGB(9A,94,88),
-    RGB(FB,F7,EE), RGB(E0,DA,CE), RGB(EA,E5,DA), RGB(3A,36,30),
+    RGB(E4,DF,D4), RGB(58,52,46), RGB(4A,5A,6E), RGB(C8,C2,B4),
+    RGB(FB,F7,EE), RGB(3A,36,30), RGB(EA,E5,DA), RGB(3A,36,30),
 
     RGB(E4,DF,D4), RGB(3A,36,30), RGB(6E,68,5E), RGB(EA,E5,DA),
     RGB(C8,C2,B4),

@@ -205,6 +205,14 @@ static void check_skin(const char *skin, enum deficiency kind, bool hueless) {
         RECON_THEME_SELECTION_TEXT, RECON_THEME_SELECTION, READABLE);
     check_pair(skin, kind, "title text on an active title bar",
         RECON_THEME_TITLE_TEXT, RECON_THEME_TITLE_ACTIVE, READABLE);
+    /*
+     * And on an inactive one, which was never checked. The same omission as
+     * the taskbar labels: a pair that is drawn on screen and was not among
+     * the pairs measured. A window you are not typing into still has to say
+     * which window it is.
+     */
+    check_pair(skin, kind, "title text on an inactive title bar",
+        RECON_THEME_TITLE_TEXT_INACTIVE, RECON_THEME_TITLE_INACTIVE, READABLE);
 
     /*
      * A skin that deliberately says nothing with hue is not held to the

@@ -39,6 +39,7 @@
 #define COLOR_TITLE_ACTIVE THEME(TITLE_ACTIVE)
 #define COLOR_TITLE_INACTIVE THEME(TITLE_INACTIVE)
 #define COLOR_TITLE_TEXT THEME(TITLE_TEXT)
+#define COLOR_TITLE_TEXT_INACTIVE THEME(TITLE_TEXT_INACTIVE)
 #define COLOR_BUTTON THEME(WINDOW_BUTTON)
 #define COLOR_GLYPH THEME(WINDOW_BUTTON_GLYPH)
 #define COLOR_EDGE THEME(WINDOW_EDGE)
@@ -191,8 +192,19 @@ static void draw_frame(struct recon_appwin *win) {
 
     /* The title bar is draggable except where the buttons are. */
     int buttons_width = 3 * BUTTON_SIZE + 2 * BUTTON_GAP + TITLE_INSET * 2;
+    /*
+     * The colour that goes with the bar underneath it.
+     *
+     * This always used the active colour. title.text-inactive existed as a
+     * role, was answered by all ten skins, and was read by nothing -- so an
+     * unfocused window's name was drawn in the colour meant for a focused
+     * one. On skins where the two bars are near-identical greys that looked
+     * fine, which is why it survived; on Beacon it is white on a light blue
+     * bar, and the window's own name had vanished from its title.
+     */
     recon_draw_text(p, win->font, text_x, (TITLE_HEIGHT + ascent) / 2 - 1,
-        win->width - buttons_width - text_x, win->impl->title, COLOR_TITLE_TEXT);
+        win->width - buttons_width - text_x, win->impl->title,
+        win->focused ? COLOR_TITLE_TEXT : COLOR_TITLE_TEXT_INACTIVE);
     recon_hit_add(p, 0, 0, win->width - buttons_width + TITLE_INSET, TITLE_HEIGHT,
         HIT_TITLEBAR);
 
