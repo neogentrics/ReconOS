@@ -166,24 +166,51 @@ static bool make_tree(const char *host_path) {
     return true;
 }
 
-bool recon_fs_init(const char *host_root) {
-    const char *root = host_root;
-    if (root == NULL || *root == '\0') {
-        root = getenv("RECONOS_ROOT");
-    }
-    if (root == NULL || *root == '\0') {
-        root = DEFAULT_HOST_ROOT;
-    }
-
-    /* Strip any trailing slash, so joins do not double it. */
-    snprintf(g_host_root, sizeof(g_host_root), "%s", root);
+/* Trim a trailing slash, so joining paths does not double it. */
+static void set_root(const char *path) {
+    snprintf(g_host_root, sizeof(g_host_root), "%s", path);
     size_t len = strlen(g_host_root);
     while (len > 1 && g_host_root[len - 1] == '/') {
         g_host_root[--len] = '\0';
     }
+}
 
-    if (!make_tree(g_host_root)) {
-        return false;
+bool recon_fs_init(const char *host_root) {
+    const char *requested = host_root;
+    if (requested == NULL || *requested == '\0') {
+        requested = getenv("RECONOS_ROOT");
+    }
+
+    if (requested != NULL && *requested != '\0') {
+        /* An explicit location is not second-guessed: if it cannot be used,
+         * something is wrong that a fallback would only hide. */
+        set_root(requested);
+        return make_tree(g_host_root) && recon_fs_create_user(RECON_USER_ADMIN);
+    }
+
+    /*
+     * Otherwise prefer /recon, which is where ReconOS belongs on a machine it
+     * owns, and fall back to somewhere writable when it cannot be created.
+     * Running as an ordinary user is normal during development, and refusing
+     * to start over a directory permission would be a poor way to say so.
+     */
+    set_root(DEFAULT_HOST_ROOT);
+    /*
+     * Existing is not the same as usable: /recon may be there from a run as
+     * root and not be writable now. Check what actually matters.
+     */
+    if (!make_tree(g_host_root) || access(g_host_root, W_OK) != 0) {
+        const char *home = getenv("HOME");
+        if (home == NULL || *home == '\0') {
+            home = "/tmp";
+        }
+        char fallback[RECON_PATH_MAX];
+        snprintf(fallback, sizeof(fallback), "%s/.reconos", home);
+        set_root(fallback);
+
+        if (!make_tree(g_host_root)) {
+            return false;
+        }
     }
 
     /* The standard layout, created on first run so the system always has the
