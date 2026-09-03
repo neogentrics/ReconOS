@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.4.** The version number tracks what works, not what is
+**Status: v0.2.5.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -30,7 +30,8 @@ the Start menu an All Programs list and restricted the control socket to the
 account that owns it. v0.2.3 added gradients to the skin system, a boot
 splash, and fixed the unreadable labels that finding the gradients turned up.
 v0.2.4 made skins installable, which the file format had been waiting for
-since the skin system was built.
+since the skin system was built. v0.2.5 made the registry changeable from the
+Control Panel rather than only readable there.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -97,14 +98,20 @@ installed, alphabetically. The two are not the same list truncated: the column
 answers what you use, All Programs answers what is here, and only one of those
 is in an order you can search by name.
 
-**A Control Panel** with thirteen pages. Six do something: Accounts,
-Appearance, Reading, Programs, Modules, About. Modules loads and unloads code
-in the running system and says why anything refused to load. The Registry page
-asks for the administrator's password before showing what the system
-remembers, and locks itself again when you leave it.
+**A Control Panel** with thirteen pages. Seven do something: Accounts,
+Appearance, Reading, Programs, Modules, Registry, About. Modules loads and
+unloads code in the running system and says why anything refused to load.
 
-The other seven -- Power, Storage, Multitasking, Update, Troubleshoot,
-Recovery, and the install half of Programs -- are there and say plainly that
+The Registry page asks for the administrator's password before showing what
+the system remembers, locks itself again when you leave it, and can change
+what it shows — the key of an existing setting is not editable, because a key
+you can type over is a rename, and a rename here is a delete and an add that
+look like one act. Saving redraws everything, since a setting here is one
+something is already using: set `theme` by hand and the desktop restyles
+while you watch.
+
+The other six -- Power, Storage, Multitasking, Update, Troubleshoot and
+Recovery -- are there and say plainly that
 they are not built, and what has to exist first. Usually a kernel: a hosted
 process cannot suspend a machine, partition a disk, or reinstall itself. A
 gap nobody can see is a gap nobody remembers.

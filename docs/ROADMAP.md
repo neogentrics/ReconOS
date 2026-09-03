@@ -356,6 +356,35 @@ and refuses a built-in. Administrator only.
 part of the gate nothing outside could drive, so lock, switch-user and the
 limited-account refusals were all being checked by hand.
 
+## v0.2.5 — the registry can be changed
+
+It could be read from the Control Panel, behind an administrator's password,
+and changing it was still the terminal's `reg` command. Change, Add and
+Remove now sit under the list.
+
+The key of an existing setting is not editable. A key you can type over is a
+rename, and a rename here is a delete and an add that look like one act --
+which is how somebody ends up with the old key still in the file and no idea
+it is there. Removing asks first and says what removing does: whatever reads
+the setting goes back to its default, which may not be what is on screen.
+
+Saving redraws everything, because a setting here is one something is already
+using -- the skin, the spacing, where a window opens. Setting `theme` by hand
+restyles the desktop while you watch, which is the difference between a page
+that shows the registry and a page that is the registry.
+
+Three things found while building it: the status line read the key from the
+edit field *after* clearing the field, so it said `Saved ''`; a key longer
+than the registry allows was being shortened rather than refused, which would
+store a setting under a name nobody typed; and the key being changed had to
+be copied out when the field opened, because adding or removing anything
+renumbers the hive.
+
+The build is warning-free again. `question_target` was an account name's
+length and had been silently truncating module names; `set_status(cp, false,
+"")` was six calls with an empty printf format, which is enough noise to hide
+a real warning.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -437,8 +466,11 @@ rewrite later.
   is not enough to carry the socket off the local machine.
 - Properties is in the context menu and disabled: there is no properties view
   yet, and hiding the entry would suggest there never will be.
-- The registry can be read from the Control Panel but not changed there. The
-  terminal's `reg` command changes it for anyone who means to.
+- Nothing warns before a registry change breaks something. The page asks for
+  the administrator's password and asks again before a removal, and that is
+  all: it does not know which settings the system depends on, so setting
+  `theme` to a skin that does not exist is refused by the skin system and
+  setting it to nonsense in some future key would not be.
 
 Fixed since this list was written: `include/ReconOS.h` is now the version
 header and is in the build; folders and files are named by typing rather than
