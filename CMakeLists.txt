@@ -54,6 +54,8 @@ add_executable(ReconOS
     src/recon_calc.c
     src/recon_cmd.c
     src/recon_control.c
+    src/recon_desktop.c
+    src/recon_explorer.c
     src/recon_fs.c
     src/recon_notepad.c
     src/recon_procinfo.c

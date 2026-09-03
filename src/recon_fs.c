@@ -188,8 +188,11 @@ bool recon_fs_init(const char *host_root) {
         RECON_DIR_SYSTEM_APPS,
         RECON_DIR_SYSTEM_CONFIG,
         RECON_DIR_SYSTEM_THEMES,
+        RECON_DIR_SYSTEM_ICONS,
         RECON_DIR_APPS,
         RECON_DIR_USERS,
+        "/Users/Desktop",
+        "/Users/Documents",
         RECON_DIR_TEMP,
         NULL,
     };

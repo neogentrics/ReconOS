@@ -26,15 +26,21 @@
  * The layout, which is deliberately Windows-shaped: the system's own files
  * kept apart from installed applications, kept apart from user documents.
  *
- *   /System     ReconOS itself -- its apps, settings and themes
+ *   /System     ReconOS itself -- its apps, settings, themes and icons
  *   /Apps       installed applications
- *   /Users      user documents
+ *   /Users      user documents, including the desktop
  *   /Temp       scratch space, not preserved
  */
 #define RECON_DIR_SYSTEM "/System"
 #define RECON_DIR_SYSTEM_APPS "/System/Apps"
 #define RECON_DIR_SYSTEM_CONFIG "/System/Config"
 #define RECON_DIR_SYSTEM_THEMES "/System/Themes"
+/*
+ * Icons the system and its native applications draw from. Installed
+ * applications carry their own alongside themselves under /Apps, so removing
+ * one takes its icons with it.
+ */
+#define RECON_DIR_SYSTEM_ICONS "/System/Icons"
 #define RECON_DIR_APPS "/Apps"
 #define RECON_DIR_USERS "/Users"
 #define RECON_DIR_TEMP "/Temp"

@@ -18,9 +18,12 @@
 #include "recon_shell.h"
 #include "recon_appwin.h"
 #include "recon_calc.h"
+#include "recon_desktop.h"
+#include "recon_explorer.h"
 #include "recon_notepad.h"
 #include "recon_terminal.h"
 #include "recon_taskmgr.h"
+#include "recon_fs.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -77,6 +80,7 @@ enum recon_app_action {
     RECON_APP_CALC,
     RECON_APP_NOTEPAD,
     RECON_APP_TERMINAL,
+    RECON_APP_EXPLORER,
     RECON_APP_QUIT,
 };
 
@@ -92,6 +96,7 @@ struct recon_app_entry {
  * whatever a host distribution happens to have installed.
  */
 static const struct recon_app_entry APPS[] = {
+    { "File Explorer", NULL, RECON_APP_EXPLORER },
     { "Terminal", NULL, RECON_APP_TERMINAL },
     { "Notepad", NULL, RECON_APP_NOTEPAD },
     { "Calculator", NULL, RECON_APP_CALC },
@@ -122,6 +127,7 @@ struct recon_shell {
     struct recon_server *server;
     struct recon_font *font;
 
+    struct recon_desktop *desktop;
     struct recon_panel *taskbar;
     struct recon_panel *menu;
     bool menu_open;
@@ -454,6 +460,8 @@ static void layout(struct recon_shell *shell) {
         recon_appwin_screen_changed(shell->apps[i], shell->screen_width,
             shell->screen_height, TASKBAR_HEIGHT);
     }
+    recon_desktop_resize(shell->desktop, shell->screen_width,
+        shell->screen_height - TASKBAR_HEIGHT);
 }
 
 /* --- Lifecycle --- */
@@ -525,10 +533,37 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         shell->apps[shell->app_count++] = terminal;
     }
 
+    struct recon_appwin *explorer = recon_explorer_create(server, shell->font);
+    if (explorer != NULL) {
+        shell->app_order[shell->app_count] = shell->app_count;
+        shell->apps[shell->app_count++] = explorer;
+    }
+
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_screen_changed(shell->apps[i], screen_width, screen_height,
             TASKBAR_HEIGHT);
     }
+
+    /* Shortcuts for the native applications, written on first run only, so
+     * removing one stays removed. */
+    static const struct { const char *file; const char *target; } DEFAULTS[] = {
+        { "File Explorer.app", "File Explorer" },
+        { "Terminal.app", "ReconOS Terminal" },
+        { "Notepad.app", "Notepad" },
+    };
+    if (!recon_fs_exists("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized")) {
+        for (size_t i = 0; i < sizeof(DEFAULTS) / sizeof(DEFAULTS[0]); i++) {
+            char path[RECON_PATH_MAX];
+            snprintf(path, sizeof(path), "%s/%s", RECON_DESKTOP_DIR, DEFAULTS[i].file);
+            char body[RECON_NAME_MAX + 2];
+            int length = snprintf(body, sizeof(body), "%s\n", DEFAULTS[i].target);
+            recon_fs_write("/", path, body, (size_t)length);
+        }
+        recon_fs_write("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized", "1\n", 2);
+    }
+
+    shell->desktop = recon_desktop_create(server, shell->font,
+        screen_width, screen_height - TASKBAR_HEIGHT);
 
     layout(shell);
     draw_taskbar(shell);
@@ -555,6 +590,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_destroy(shell->apps[i]);
     }
+    recon_desktop_destroy(shell->desktop);
     recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
@@ -575,6 +611,7 @@ void recon_shell_resize(struct recon_shell *shell, int screen_width, int screen_
 
 void recon_shell_refresh(struct recon_shell *shell) {
     if (shell != NULL) {
+        recon_desktop_reload(shell->desktop);
         draw_taskbar(shell);
         recon_damage_all(shell->server);
     }
@@ -588,6 +625,11 @@ void recon_shell_raise(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
     }
+    /* The desktop stays at the bottom, above only the wallpaper. */
+    recon_desktop_lower(shell->desktop, shell->server->background_buffer != NULL
+        ? &shell->server->background_buffer->node
+        : (shell->server->background_rect != NULL
+            ? &shell->server->background_rect->node : NULL));
     recon_panel_raise_to_top(shell->taskbar);
     if (shell->menu_open) {
         recon_panel_raise_to_top(shell->menu);
@@ -846,6 +888,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                     recon_shell_open_app(shell, 2);
                 } else if (APPS[index].action == RECON_APP_TERMINAL) {
                     recon_shell_open_app(shell, 3);
+                } else if (APPS[index].action == RECON_APP_EXPLORER) {
+                    recon_shell_open_app(shell, 4);
                 } else {
                     recon_spawn(shell->server, APPS[index].command);
                 }
@@ -949,6 +993,29 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     if (shell->menu_open && pressed) {
         recon_shell_close_menu(shell);
         return true;
+    }
+
+    /*
+     * The desktop answers last. It is the backdrop, so it only sees clicks
+     * nothing in front of it wanted -- and only when the scene agrees nothing
+     * is drawn over it there.
+     */
+    if (node == recon_desktop_node(shell->desktop)) {
+        struct recon_desktop_action action;
+        if (recon_desktop_handle_click(shell->desktop, lx, ly, pressed, &action)) {
+            if (action.kind == RECON_DESKTOP_ACTION_OPEN_APP) {
+                for (int i = 0; i < shell->app_count; i++) {
+                    if (strcmp(recon_appwin_title(shell->apps[i]), action.target) == 0) {
+                        recon_shell_open_app(shell, i);
+                        break;
+                    }
+                }
+            } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
+                /* Folders open in the file explorer, which is index 4. */
+                recon_shell_open_app(shell, 4);
+            }
+            return true;
+        }
     }
 
     return false;
