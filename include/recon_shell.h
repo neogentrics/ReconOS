@@ -120,6 +120,34 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
  * nothing when clicked is a different problem from one that is not where it
  * appears to be, and from outside the two are indistinguishable without this.
  */
+/* --- Asking the user something --- */
+
+/*
+ * A question with buttons, drawn over everything and answered before anything
+ * else happens.
+ *
+ * The system needs one of these because the alternative is what ReconOS did
+ * before: a Delete button that relabelled itself to "Confirm Delete". That
+ * makes the button change width, so the second click can miss it entirely,
+ * and it puts a question in a place nobody reads. Destructive things should
+ * be asked about plainly.
+ *
+ * The answer is the index of the button chosen, or -1 if it was dismissed.
+ */
+typedef void (*recon_answer_fn)(void *user, int choice);
+
+#define RECON_DIALOG_BUTTONS_MAX 3
+
+void recon_shell_ask(struct recon_shell *shell, const char *title,
+    const char *message, const char *const *buttons, int button_count,
+    recon_answer_fn answer, void *user);
+
+bool recon_shell_dialog_open(struct recon_shell *shell);
+
+/* Drop a pending question without answering it. Used when whatever asked is
+ * going away, so its callback is never reached with a dead pointer. */
+void recon_shell_cancel_dialog(struct recon_shell *shell, void *user);
+
 void recon_shell_describe(struct recon_shell *shell, char *out, size_t size);
 
 /* The focused built-in window, or NULL. */
@@ -134,6 +162,10 @@ struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell);
  * arithmetic of locating the entry is skipped, not the path being tested.
  */
 bool recon_shell_context_entry_at(struct recon_shell *shell, const char *label,
+    int *x, int *y);
+
+/* The middle of a named button in the open dialog, in screen coordinates. */
+bool recon_shell_dialog_button_at(struct recon_shell *shell, const char *label,
     int *x, int *y);
 
 enum recon_context_kind {

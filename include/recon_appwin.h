@@ -155,6 +155,10 @@ bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
 
+/* The application's own state pointer, so an application's public functions
+ * can be given the window and find themselves from it. */
+void *recon_appwin_user(struct recon_appwin *win);
+
 /*
  * The middle of the region with this id, in screen coordinates. False when the
  * window has no such region.
@@ -164,6 +168,18 @@ const char *recon_appwin_title(struct recon_appwin *win);
  * the real hit test; only the measuring is skipped.
  */
 bool recon_appwin_hit_centre(struct recon_appwin *win, uint32_t id, int *x, int *y);
+
+/*
+ * Ask the user a question, without the application needing to know the shell
+ * exists. The answer comes back on the callback with the index of the button
+ * chosen, or -1 if it was dismissed.
+ *
+ * Buttons read left to right; put the safe answer last, because that is what
+ * Enter and Escape both choose.
+ */
+void recon_appwin_ask(struct recon_appwin *win, const char *title,
+    const char *message, const char *const *buttons, int button_count,
+    void (*answer)(void *user, int choice));
 
 /* Whatever the application has to say about its own state. */
 void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size);

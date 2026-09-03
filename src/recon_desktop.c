@@ -49,6 +49,14 @@ enum item_kind {
     ITEM_FOLDER,
     ITEM_FILE,
     ITEM_SHORTCUT,
+    /*
+     * The recycle bin. Not a file on the desktop at all -- it is a view of the
+     * user's bin, put here because a system where deleting has nowhere visible
+     * to put things is a system people do not trust. It cannot be renamed or
+     * deleted, which is why it needs a kind of its own rather than being a
+     * shortcut that happens to point at the bin.
+     */
+    ITEM_TRASH,
 };
 
 struct desktop_item {
@@ -133,6 +141,15 @@ static void layout_items(struct recon_desktop *desktop) {
 
 static int index_of(struct recon_desktop *desktop, const char *name);
 
+bool recon_desktop_is_trash_item(const char *name) {
+    return name != NULL && strcmp(name, RECON_DESKTOP_TRASH_NAME) == 0;
+}
+
+int recon_desktop_trash_count(struct recon_desktop *desktop) {
+    (void)desktop;
+    return recon_fs_trash_count();
+}
+
 void recon_desktop_reload(struct recon_desktop *desktop) {
     /*
      * A rename in progress is held as an index, and the indices are about to
@@ -165,7 +182,26 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
     }
 
     desktop->item_count = 0;
+
+    /*
+     * The recycle bin comes first and always. It is not a file on the desktop
+     * -- it is a view of the user's bin -- so it is added here rather than
+     * found, and cannot be removed by deleting something.
+     */
+    {
+        struct desktop_item *bin = &desktop->items[desktop->item_count++];
+        snprintf(bin->name, sizeof(bin->name), "%s", RECON_DESKTOP_TRASH_NAME);
+        snprintf(bin->label, sizeof(bin->label), "%s", RECON_DESKTOP_TRASH_NAME);
+        bin->target[0] = '\0';
+        bin->kind = ITEM_TRASH;
+    }
+
     for (int i = 0; i < count; i++) {
+        /* Nothing on disk may take the bin's name and shadow it. */
+        if (recon_desktop_is_trash_item(entries[i].name)) {
+            continue;
+        }
+
         struct desktop_item *item = &desktop->items[desktop->item_count];
 
         snprintf(item->name, sizeof(item->name), "%s", entries[i].name);
@@ -228,9 +264,20 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         }
     }
 
+    /* A full bin looks different from an empty one, which is most of the
+     * reason for having it in sight. */
+    if (item->kind == ITEM_TRASH) {
+        const char *icon = recon_fs_trash_count() > 0
+            ? RECON_ICON_TRASH_FULL : RECON_ICON_TRASH;
+        if (recon_icon_draw(p, icon, cx, cy, ICON_IMAGE)) {
+            return;
+        }
+    }
+
     const char *generic =
         item->kind == ITEM_FOLDER ? RECON_ICON_FOLDER :
-        item->kind == ITEM_SHORTCUT ? RECON_ICON_APP : RECON_ICON_FILE;
+        item->kind == ITEM_SHORTCUT ? RECON_ICON_APP :
+        item->kind == ITEM_TRASH ? RECON_ICON_TRASH : RECON_ICON_FILE;
     if (recon_icon_draw(p, generic, cx, cy, ICON_IMAGE)) {
         return;
     }
@@ -262,6 +309,17 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         recon_fill_rect(p, cx + 2, cy + 2, ICON_IMAGE - 4, ICON_IMAGE - 8, COLOR_APP);
         recon_draw_bevel(p, cx + 2, cy + 2, ICON_IMAGE - 4, ICON_IMAGE - 8, false);
         recon_stroke_rect(p, cx + 2, cy + 2, ICON_IMAGE - 4, ICON_IMAGE - 8, COLOR_EDGE);
+        break;
+
+    case ITEM_TRASH:
+        /* A tapered bin, if no icon file could be drawn. */
+        recon_fill_rect(p, cx + 5, cy + 6, ICON_IMAGE - 10, ICON_IMAGE - 12,
+            RECON_RGB(0x9A, 0xA4, 0xB0));
+        recon_stroke_rect(p, cx + 5, cy + 6, ICON_IMAGE - 10, ICON_IMAGE - 12,
+            COLOR_EDGE);
+        recon_fill_rect(p, cx + 3, cy + 3, ICON_IMAGE - 6, 3,
+            RECON_RGB(0xB8, 0xC0, 0xCA));
+        recon_stroke_rect(p, cx + 3, cy + 3, ICON_IMAGE - 6, 3, COLOR_EDGE);
         break;
     }
 }
@@ -420,6 +478,14 @@ const char *recon_desktop_item_at(struct recon_desktop *desktop, double lx, doub
 /* What opening a named item means, for the shell to carry out. */
 bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
         struct recon_desktop_action *action) {
+    /* The bin opens where the bin is, rather than being a file to open. */
+    if (recon_desktop_is_trash_item(name)) {
+        action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
+        snprintf(action->target, sizeof(action->target), "%s",
+            recon_fs_trash_dir());
+        return true;
+    }
+
     if (desktop == NULL || name == NULL || action == NULL) {
         return false;
     }
@@ -448,15 +514,32 @@ bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
 }
 
 void recon_desktop_delete(struct recon_desktop *desktop, const char *name) {
-    if (desktop == NULL || name == NULL) {
+    if (desktop == NULL || name == NULL || recon_desktop_is_trash_item(name)) {
         return;
     }
 
     char path[RECON_PATH_MAX];
     desktop_path(path, sizeof(path), name);
 
-    /* A folder with things in it needs the recursive form. The desktop asks
-     * before it gets here, so by this point the answer is already yes. */
+    /* Into the bin, not gone. Deleting something from a desktop is the most
+     * casual delete there is -- a stray keypress on a selected icon -- and it
+     * is the one that most needs to be recoverable. */
+    recon_fs_trash("/", path);
+
+    desktop->selected = -1;
+    recon_desktop_reload(desktop);
+}
+
+void recon_desktop_purge(struct recon_desktop *desktop, const char *name) {
+    if (desktop == NULL || name == NULL || recon_desktop_is_trash_item(name)) {
+        return;
+    }
+
+    char path[RECON_PATH_MAX];
+    desktop_path(path, sizeof(path), name);
+
+    /* A folder with things in it needs the recursive form. This is only
+     * reached after the question has been answered. */
     if (!recon_fs_remove("/", path)) {
         recon_fs_remove_tree("/", path);
     }

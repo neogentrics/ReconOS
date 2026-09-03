@@ -51,7 +51,7 @@
  * rely on Documents being there without checking.
  */
 #define RECON_USER_ADMIN "Administrator"
-#define RECON_USER_FOLDERS { "Desktop", "Documents", "Downloads",     "Music", "Pictures", "Videos" }
+#define RECON_USER_FOLDERS { "Desktop", "Documents", "Downloads",     "Music", "Pictures", "Videos", ".Trash", ".Trash/files", ".Trash/info" }
 
 enum recon_file_kind {
     RECON_FILE_REGULAR,
@@ -158,6 +158,43 @@ bool recon_fs_unique_name(const char *cwd, const char *directory,
 
 /* True if the path is inside /System, which is protected. */
 bool recon_fs_is_protected(const char *cwd, const char *path);
+
+/* --- The recycle bin --- */
+
+/*
+ * Deleting puts things here first.
+ *
+ * A system where delete means gone is a system people are afraid to use. The
+ * bin belongs to the user rather than to the machine -- one account emptying
+ * it should not reach into another's -- and lives hidden inside their folder
+ * so it does not clutter a listing that is meant to hold their own work.
+ *
+ * Each item keeps a note of where it came from, so restoring puts it back
+ * rather than dropping it somewhere convenient.
+ */
+
+/* The bin's own paths, for a listing. */
+const char *recon_fs_trash_dir(void);
+
+/* Move something to the bin. Refuses /System, and refuses the bin itself. */
+bool recon_fs_trash(const char *cwd, const char *path);
+
+/* Put an item back where it came from. Fails if something is there now. */
+bool recon_fs_trash_restore(const char *name);
+
+/* Where an item came from, for showing in a listing. */
+bool recon_fs_trash_origin(const char *name, char *out, size_t size);
+
+/* Remove one item permanently, or everything. */
+bool recon_fs_trash_purge(const char *name);
+bool recon_fs_trash_empty(void);
+
+/* How many items are in the bin. */
+int recon_fs_trash_count(void);
+
+/* True if the path is the bin or inside it, which changes what can be done
+ * with it: a file in the bin is restored or purged, not deleted again. */
+bool recon_fs_is_trash(const char *cwd, const char *path);
 
 /* --- The file clipboard --- */
 

@@ -312,6 +312,74 @@ static void draw_file(color *px) {
     draw_page(px, true);
 }
 
+/* --- The recycle bin --- */
+
+#define C_BIN RGB(0x9A, 0xA4, 0xB0)
+#define C_BIN_DARK RGB(0x6E, 0x78, 0x86)
+#define C_BIN_LID RGB(0xB8, 0xC0, 0xCA)
+#define C_BIN_EDGE RGB(0x2A, 0x2E, 0x36)
+#define C_BIN_FULL RGB(0xD8, 0xC0, 0x60)
+
+/*
+ * A tapered bin with a lid, at 32x32.
+ *
+ * Two versions rather than one: an empty bin and a full one should be
+ * distinguishable at a glance, which is most of the reason for having it on
+ * the desktop at all.
+ */
+static void draw_bin(color *px, bool full) {
+    const int lid_y = 8;
+    const int body_top = 11;
+    const int body_bottom = 28;
+
+    if (full) {
+        /* Something poking out from under the lid. */
+        fill_rect(px, 10, 4, 5, 4, C_BIN_FULL);
+        fill_rect(px, 16, 3, 4, 5, C_BIN_FULL);
+        fill_rect(px, 13, 2, 4, 3, C_BIN_FULL);
+    }
+
+    /* Handle, then the lid across the top. */
+    fill_rect(px, 13, lid_y - 2, 6, 2, C_BIN_LID);
+    fill_rect(px, 4, lid_y, 24, 3, C_BIN_LID);
+    stroke_rect(px, 4, lid_y, 24, 3, C_BIN_EDGE);
+
+    /*
+     * The body narrows towards the base a row at a time. A plain rectangle
+     * reads as a box rather than a bin.
+     */
+    const int height = body_bottom - body_top;
+    for (int row = 0; row < height; row++) {
+        int inset = 6 + (row * 3) / height;
+        int width = ICON_SIZE - inset * 2;
+        if (width <= 2) {
+            break;
+        }
+
+        /* Three vertical ribs, the way a moulded bin has. */
+        color shade = C_BIN;
+        fill_rect(px, inset, body_top + row, width, 1, shade);
+        fill_rect(px, inset + width / 4, body_top + row, 1, 1, C_BIN_DARK);
+        fill_rect(px, inset + width / 2, body_top + row, 1, 1, C_BIN_DARK);
+        fill_rect(px, inset + (width * 3) / 4, body_top + row, 1, 1, C_BIN_DARK);
+
+        /* Edges follow the taper. */
+        plot(px, inset, body_top + row, C_BIN_EDGE);
+        plot(px, inset + width - 1, body_top + row, C_BIN_EDGE);
+    }
+
+    /* The base. */
+    fill_rect(px, 9, body_bottom - 1, 14, 1, C_BIN_EDGE);
+}
+
+static void draw_trash_empty(color *px) {
+    draw_bin(px, false);
+}
+
+static void draw_trash_full(color *px) {
+    draw_bin(px, true);
+}
+
 static const struct generated_icon ICONS[] = {
     { "folder", draw_folder },
     { "file", draw_file },
@@ -321,6 +389,8 @@ static const struct generated_icon ICONS[] = {
     { "calculator", draw_calculator },
     { "explorer", draw_explorer },
     { "taskmanager", draw_taskmanager },
+    { "trash", draw_trash_empty },
+    { "trash-full", draw_trash_full },
     { "shutdown", draw_shutdown },
     { "system", draw_system },
 };

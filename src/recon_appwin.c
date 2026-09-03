@@ -415,6 +415,18 @@ bool recon_appwin_is_maximized(struct recon_appwin *win) {
     return win != NULL && win->maximized;
 }
 
+void recon_appwin_ask(struct recon_appwin *win, const char *title,
+        const char *message, const char *const *buttons, int button_count,
+        void (*answer)(void *user, int choice)) {
+    if (win == NULL || win->server == NULL) {
+        return;
+    }
+    /* The application's own `user` pointer goes back to it, so it does not
+     * have to carry a second identity through the question. */
+    recon_shell_ask(win->server->shell, title, message, buttons, button_count,
+        answer, win->user);
+}
+
 void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size) {
     if (win == NULL || out == NULL || size == 0) {
         return;
@@ -486,6 +498,10 @@ void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y) {
     }
     if (x != NULL) { *x = win->x + BORDER; }
     if (y != NULL) { *y = win->y + TITLE_HEIGHT; }
+}
+
+void *recon_appwin_user(struct recon_appwin *win) {
+    return win != NULL ? win->user : NULL;
 }
 
 const char *recon_appwin_title(struct recon_appwin *win) {

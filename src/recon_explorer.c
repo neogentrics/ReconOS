@@ -49,6 +49,9 @@ struct shortcut_entry {
     const char *icon;
 };
 
+/* A sidebar entry whose path is worked out rather than fixed. */
+#define SIDEBAR_TRASH "\x01trash"
+
 static const struct shortcut_entry SIDEBAR[] = {
     { "Desktop", NULL, RECON_ICON_FOLDER },
     { "Documents", NULL, RECON_ICON_FOLDER },
@@ -58,6 +61,7 @@ static const struct shortcut_entry SIDEBAR[] = {
     { "Videos", NULL, RECON_ICON_FOLDER },
     { "This System", "/", RECON_ICON_EXPLORER },
     { "Apps", RECON_DIR_APPS, RECON_ICON_APP },
+    { "Recycle Bin", SIDEBAR_TRASH, RECON_ICON_TRASH },
 };
 
 #define SIDEBAR_COUNT ((int)(sizeof(SIDEBAR) / sizeof(SIDEBAR[0])))
@@ -83,6 +87,8 @@ static const struct shortcut_entry SIDEBAR[] = {
 #define HIT_DELETE (RECON_APPWIN_HIT_USER + 6)
 #define HIT_REFRESH (RECON_APPWIN_HIT_USER + 7)
 #define HIT_RENAME (RECON_APPWIN_HIT_USER + 8)
+#define HIT_RESTORE (RECON_APPWIN_HIT_USER + 9)
+#define HIT_EMPTY_BIN (RECON_APPWIN_HIT_USER + 10)
 #define HIT_SIDEBAR_BASE (RECON_APPWIN_HIT_USER + 20)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
 
@@ -102,6 +108,9 @@ enum explorer_context {
     EXCTX_NEW_FILE,
     EXCTX_REFRESH,
     EXCTX_PROPERTIES,
+    EXCTX_PURGE,        /* delete permanently, skipping the bin */
+    EXCTX_RESTORE,      /* put back where it came from */
+    EXCTX_EMPTY_BIN,
 };
 
 /*
@@ -111,10 +120,18 @@ enum explorer_context {
  * separately rather than happening because the first confirmation happened to
  * land on a directory.
  */
-enum delete_stage {
-    DELETE_IDLE,
-    DELETE_CONFIRM,      /* Asked once; a second click does it. */
-    DELETE_CONFIRM_TREE, /* The folder is not empty; asked about its contents. */
+/*
+ * What a pending question was about.
+ *
+ * Deleting used to be confirmed by relabelling the Delete button to "Confirm
+ * Delete". That changed the button's width, so the second click could miss it
+ * entirely, and it put a question somewhere nobody reads. It is a dialog now.
+ */
+enum pending_question {
+    QUESTION_NONE,
+    QUESTION_TRASH,      /* move to the recycle bin */
+    QUESTION_PURGE,      /* delete permanently */
+    QUESTION_EMPTY_BIN,
 };
 
 struct recon_explorer {
@@ -143,8 +160,12 @@ struct recon_explorer {
      * armed state is cleared by anything else the user does, so a stray second
      * click cannot delete something they have since moved on from.
      */
-    enum delete_stage delete_stage;
-    char delete_target[RECON_NAME_MAX];
+    enum pending_question question;
+    char question_target[RECON_NAME_MAX];
+
+    /* True while looking inside the recycle bin, which changes what the
+     * actions mean: things there are restored or purged, not deleted again. */
+    bool in_trash;
 
     /*
      * Renaming happens in place: the row turns into a text box. A dialog for
@@ -246,10 +267,10 @@ static void navigate_to(struct recon_explorer *ex, const char *path, bool record
     snprintf(ex->cwd, sizeof(ex->cwd), "%s", canonical);
     ex->selected = -1;
     ex->scroll = 0;
-    /* Leaving the folder abandons anything half-started in it: a delete
-     * confirmed here is not confirmed somewhere else. */
-    ex->delete_stage = DELETE_IDLE;
-    ex->delete_target[0] = '\0';
+    /* Leaving the folder abandons anything half-started in it. */
+    ex->question = QUESTION_NONE;
+    ex->question_target[0] = '\0';
+    ex->in_trash = recon_fs_is_trash("/", canonical);
     ex->renaming = -1;
     recon_edit_end(&ex->rename_edit);
     if (record) {
@@ -296,10 +317,9 @@ static void select_by_name(struct recon_explorer *ex, const char *name) {
     }
 }
 
-/* Anything the user does that is not the next step of a delete cancels it. */
 static void cancel_delete(struct recon_explorer *ex) {
-    ex->delete_stage = DELETE_IDLE;
-    ex->delete_target[0] = '\0';
+    ex->question = QUESTION_NONE;
+    ex->question_target[0] = '\0';
 }
 
 static void cancel_rename(struct recon_explorer *ex) {
@@ -433,6 +453,81 @@ static void do_commit_rename(struct recon_explorer *ex) {
     set_status(ex, false, "Renamed to '%s'", renamed);
 }
 
+/* --- Deleting --- */
+
+/*
+ * The answer to whatever was asked.
+ *
+ * Called by the shell with the explorer's own pointer, so it does not need to
+ * carry an identity through the question.
+ */
+static void explorer_answer(void *user, int choice) {
+    struct recon_explorer *ex = user;
+
+    enum pending_question asked = ex->question;
+    char name[RECON_NAME_MAX];
+    snprintf(name, sizeof(name), "%s", ex->question_target);
+    cancel_delete(ex);
+
+    /* Button 0 goes ahead; anything else, including Escape, declines. */
+    if (choice != 0) {
+        set_status(ex, false, "Nothing was changed");
+        recon_appwin_refresh(ex->win);
+        return;
+    }
+
+    switch (asked) {
+    case QUESTION_TRASH:
+        if (!recon_fs_trash(ex->cwd, name)) {
+            set_status(ex, true, "%s", recon_fs_last_error());
+        } else {
+            ex->selected = -1;
+            reload(ex);
+            set_status(ex, false, "Moved '%s' to the Recycle Bin", name);
+        }
+        break;
+
+    case QUESTION_PURGE:
+        if (ex->in_trash ? !recon_fs_trash_purge(name)
+                         : !(recon_fs_remove(ex->cwd, name) ||
+                             recon_fs_remove_tree(ex->cwd, name))) {
+            set_status(ex, true, "%s", recon_fs_last_error());
+        } else {
+            ex->selected = -1;
+            reload(ex);
+            set_status(ex, false, "Deleted '%s' permanently", name);
+        }
+        break;
+
+    case QUESTION_EMPTY_BIN:
+        recon_fs_trash_empty();
+        ex->selected = -1;
+        reload(ex);
+        set_status(ex, false, "The Recycle Bin is empty");
+        break;
+
+    case QUESTION_NONE:
+        break;
+    }
+
+    recon_appwin_refresh(ex->win);
+}
+
+/* Ask about something, remembering what was asked so the answer means
+ * something when it arrives. */
+static void ask_about(struct recon_explorer *ex, enum pending_question question,
+        const char *name, const char *title, const char *message,
+        const char *go_ahead) {
+    ex->question = question;
+    snprintf(ex->question_target, sizeof(ex->question_target), "%s",
+        name != NULL ? name : "");
+
+    /* Cancel last, because that is what Enter and Escape both choose. A
+     * dialog that deletes when you hit Return by reflex is worse than none. */
+    const char *buttons[2] = { go_ahead, "Cancel" };
+    recon_appwin_ask(ex->win, title, message, buttons, 2, explorer_answer);
+}
+
 static void do_delete(struct recon_explorer *ex) {
     const struct recon_dirent *entry = selection(ex);
     if (entry == NULL) {
@@ -440,62 +535,83 @@ static void do_delete(struct recon_explorer *ex) {
         return;
     }
 
-    /* The confirmation is tied to a name, not to a row: if the selection moved
-     * since the first click, this is a different request. */
-    if (ex->delete_stage != DELETE_IDLE &&
-            strcmp(ex->delete_target, entry->name) != 0) {
-        cancel_delete(ex);
+    char message[320];
+
+    /* Inside the bin there is nowhere further to send things, so the only
+     * delete available is the permanent one. */
+    if (ex->in_trash) {
+        snprintf(message, sizeof(message),
+            "Permanently delete '%s'? This cannot be undone.", entry->name);
+        ask_about(ex, QUESTION_PURGE, entry->name, "Delete Permanently",
+            message, "Delete");
+        return;
     }
 
-    if (ex->delete_stage == DELETE_IDLE) {
-        /* Ask before doing it. Deleting is not undoable here, so it should
-         * take a deliberate second action rather than one stray click. */
-        ex->delete_stage = DELETE_CONFIRM;
-        snprintf(ex->delete_target, sizeof(ex->delete_target), "%s", entry->name);
-        set_status(ex, true, "Delete '%s'? Click Delete again to confirm.",
+    if (recon_fs_is_protected(ex->cwd, entry->name)) {
+        set_status(ex, true, "'%s' is part of the system and is protected",
             entry->name);
+        return;
+    }
+
+    snprintf(message, sizeof(message), "Move '%s' to the Recycle Bin?",
+        entry->name);
+    ask_about(ex, QUESTION_TRASH, entry->name, "Delete", message, "Move");
+}
+
+/* Skipping the bin, for when the user means it. */
+static void do_purge(struct recon_explorer *ex) {
+    const struct recon_dirent *entry = selection(ex);
+    if (entry == NULL) {
+        set_status(ex, true, "Select something first");
+        return;
+    }
+    if (recon_fs_is_protected(ex->cwd, entry->name)) {
+        set_status(ex, true, "'%s' is part of the system and is protected",
+            entry->name);
+        return;
+    }
+
+    char message[320];
+    snprintf(message, sizeof(message),
+        "Permanently delete '%s'? This cannot be undone.", entry->name);
+    ask_about(ex, QUESTION_PURGE, entry->name, "Delete Permanently",
+        message, "Delete");
+}
+
+static void do_restore(struct recon_explorer *ex) {
+    const struct recon_dirent *entry = selection(ex);
+    if (entry == NULL || !ex->in_trash) {
+        set_status(ex, true, "Select something in the Recycle Bin first");
         return;
     }
 
     char name[RECON_NAME_MAX];
     snprintf(name, sizeof(name), "%s", entry->name);
 
-    if (ex->delete_stage == DELETE_CONFIRM_TREE) {
-        cancel_delete(ex);
-        if (!recon_fs_remove_tree(ex->cwd, name)) {
-            set_status(ex, true, "%s", recon_fs_last_error());
-            return;
-        }
-        ex->selected = -1;
-        reload(ex);
-        set_status(ex, false, "Deleted '%s' and everything in it", name);
+    if (!recon_fs_trash_restore(name)) {
+        set_status(ex, true, "%s", recon_fs_last_error());
         return;
     }
 
-    cancel_delete(ex);
+    char origin[RECON_PATH_MAX] = "where it came from";
+    ex->selected = -1;
+    reload(ex);
+    set_status(ex, false, "Restored '%s' to %s", name, origin);
+}
 
-    if (recon_fs_remove(ex->cwd, name)) {
-        ex->selected = -1;
-        reload(ex);
-        set_status(ex, false, "Deleted '%s'", name);
+static void do_empty_bin(struct recon_explorer *ex) {
+    int count = recon_fs_trash_count();
+    if (count <= 0) {
+        set_status(ex, false, "The Recycle Bin is already empty");
         return;
     }
 
-    /*
-     * A folder with things in it is not a failure, it is a bigger question.
-     * Ask it rather than reporting an error the user can do nothing with.
-     */
-    if (entry->kind == RECON_FILE_DIRECTORY &&
-            !recon_fs_is_protected(ex->cwd, name)) {
-        ex->delete_stage = DELETE_CONFIRM_TREE;
-        snprintf(ex->delete_target, sizeof(ex->delete_target), "%s", name);
-        set_status(ex, true,
-            "'%s' is not empty. Click Delete again to remove its contents too.",
-            name);
-        return;
-    }
-
-    set_status(ex, true, "%s", recon_fs_last_error());
+    char message[320];
+    snprintf(message, sizeof(message),
+        "Permanently delete %d item%s in the Recycle Bin? This cannot be undone.",
+        count, count == 1 ? "" : "s");
+    ask_about(ex, QUESTION_EMPTY_BIN, NULL, "Empty Recycle Bin",
+        message, "Empty");
 }
 
 /* Remember what to move or copy. Held as an absolute path, so navigating
@@ -648,6 +764,22 @@ static int draw_arrow_button(struct recon_explorer *ex, struct recon_panel *p,
     return x + width + 2;
 }
 
+/* Where a sidebar entry points. Worked out in one place so the drawing and
+ * the clicking cannot disagree about it. */
+static void sidebar_path(int index, char *out, size_t size) {
+    if (index < 0 || index >= SIDEBAR_COUNT) {
+        snprintf(out, size, "/");
+        return;
+    }
+    if (SIDEBAR[index].path == NULL) {
+        snprintf(out, size, "%s", recon_fs_user_dir(SIDEBAR[index].label));
+    } else if (strcmp(SIDEBAR[index].path, SIDEBAR_TRASH) == 0) {
+        snprintf(out, size, "%s", recon_fs_trash_dir());
+    } else {
+        snprintf(out, size, "%s", SIDEBAR[index].path);
+    }
+}
+
 /* The sidebar: places worth reaching without walking the tree. */
 static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
         int x, int y, int h) {
@@ -663,11 +795,7 @@ static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
         }
 
         char path[RECON_PATH_MAX];
-        if (SIDEBAR[i].path != NULL) {
-            snprintf(path, sizeof(path), "%s", SIDEBAR[i].path);
-        } else {
-            snprintf(path, sizeof(path), "%s", recon_fs_user_dir(SIDEBAR[i].label));
-        }
+        sidebar_path(i, path, sizeof(path));
 
         /* The place being looked at is marked, so the sidebar says where you
          * are as well as where you can go. */
@@ -715,16 +843,18 @@ static void explorer_draw(void *user, struct recon_panel *p,
     bx = draw_button(ex, p, bx, by, "New Folder", HIT_NEWFOLDER, false);
     bx = draw_button(ex, p, bx, by, "Rename", HIT_RENAME, false);
 
-    /* The button says what the next click will do, so the confirmation is
-     * visible on the control rather than only in the status line. */
-    const char *delete_label = "Delete";
-    if (ex->delete_stage == DELETE_CONFIRM) {
-        delete_label = "Confirm Delete";
-    } else if (ex->delete_stage == DELETE_CONFIRM_TREE) {
-        delete_label = "Delete Contents";
+    /*
+     * Inside the bin the actions are different, so the button says so. The
+     * label is fixed for a given place rather than changing as a
+     * confirmation: a button that grows between the first click and the
+     * second moves out from under the pointer.
+     */
+    if (ex->in_trash) {
+        bx = draw_button(ex, p, bx, by, "Restore", HIT_RESTORE, false);
+        draw_button(ex, p, bx, by, "Empty Bin", HIT_EMPTY_BIN, true);
+    } else {
+        draw_button(ex, p, bx, by, "Delete", HIT_DELETE, false);
     }
-    draw_button(ex, p, bx, by, delete_label, HIT_DELETE,
-        ex->delete_stage != DELETE_IDLE);
 
     /* Path bar. */
     int py = y + TOOLBAR_HEIGHT;
@@ -807,8 +937,21 @@ static void explorer_draw(void *user, struct recon_panel *p,
                 lx + COL_TYPE - name_x - 10, entry->name, text);
         }
 
-        recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 80,
-            is_dir ? "Folder" : "File", text);
+        /* In the bin, the Type column is worth less than knowing where the
+         * thing came from, so it says that instead. */
+        if (ex->in_trash) {
+            char origin[RECON_PATH_MAX];
+            if (recon_fs_trash_origin(entry->name, origin, sizeof(origin))) {
+                recon_draw_text(p, ex->font, lx + COL_TYPE, baseline,
+                    lw - COL_TYPE - 8, origin, text);
+            } else {
+                recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 120,
+                    is_dir ? "Folder" : "File", text);
+            }
+        } else {
+            recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 80,
+                is_dir ? "Folder" : "File", text);
+        }
 
         if (!is_dir) {
             char size[32];
@@ -863,11 +1006,9 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
     if (hit_id >= HIT_SIDEBAR_BASE && hit_id < HIT_ROW_BASE) {
         int index = (int)(hit_id - HIT_SIDEBAR_BASE);
         if (index >= 0 && index < SIDEBAR_COUNT) {
-            if (SIDEBAR[index].path != NULL) {
-                navigate(ex, SIDEBAR[index].path);
-            } else {
-                navigate(ex, recon_fs_user_dir(SIDEBAR[index].label));
-            }
+            char path[RECON_PATH_MAX];
+            sidebar_path(index, path, sizeof(path));
+            navigate(ex, path);
         }
         return true;
     }
@@ -896,6 +1037,12 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
         return true;
     case HIT_DELETE:
         do_delete(ex);
+        return true;
+    case HIT_RESTORE:
+        do_restore(ex);
+        return true;
+    case HIT_EMPTY_BIN:
+        do_empty_bin(ex);
         return true;
     default:
         break;
@@ -976,7 +1123,12 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
 
     case XKB_KEY_Delete:
-        do_delete(ex);
+        /* Shift means skip the bin, the way it does everywhere else. */
+        if (modifiers & RECON_MOD_SHIFT) {
+            do_purge(ex);
+        } else {
+            do_delete(ex);
+        }
         return true;
 
     case XKB_KEY_Up:
@@ -1077,12 +1229,22 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         bool is_dir = (entry->kind == RECON_FILE_DIRECTORY);
         bool protectedd = recon_fs_is_protected(ex->cwd, entry->name);
 
+        /* In the bin the choices are different: things there are put back
+         * or destroyed, not deleted again into the place they already are. */
+        if (ex->in_trash) {
+            recon_menu_add(menu, "Restore", EXCTX_RESTORE, true, true);
+            recon_menu_add(menu, "Delete Permanently", EXCTX_PURGE, true, true);
+            recon_menu_add(menu, "Empty Recycle Bin", EXCTX_EMPTY_BIN, true, false);
+            return true;
+        }
+
         recon_menu_add(menu, is_dir ? "Open" : "Select", EXCTX_OPEN, true, true);
         recon_menu_add(menu, "Cut", EXCTX_CUT, !protectedd, false);
         recon_menu_add(menu, "Copy", EXCTX_COPY, true, false);
         recon_menu_add(menu, "Paste", EXCTX_PASTE, has_clip && is_dir, true);
         recon_menu_add(menu, "Rename", EXCTX_RENAME, !protectedd, false);
-        recon_menu_add(menu, "Delete", EXCTX_DELETE, !protectedd, true);
+        recon_menu_add(menu, "Delete", EXCTX_DELETE, !protectedd, false);
+        recon_menu_add(menu, "Delete Permanently", EXCTX_PURGE, !protectedd, true);
         /* Shown but unavailable: there is no properties view yet, and hiding
          * it would suggest there never will be. */
         recon_menu_add(menu, "Properties", EXCTX_PROPERTIES, false, false);
@@ -1099,6 +1261,13 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         cancel_rename(ex);
         cancel_delete(ex);
         ex->selected = -1;
+
+        if (ex->in_trash) {
+            recon_menu_add(menu, "Empty Recycle Bin", EXCTX_EMPTY_BIN,
+                recon_fs_trash_count() > 0, true);
+            recon_menu_add(menu, "Refresh", EXCTX_REFRESH, true, false);
+            return true;
+        }
 
         recon_menu_add(menu, "New Folder", EXCTX_NEW_FOLDER, true, false);
         recon_menu_add(menu, "New File", EXCTX_NEW_FILE, true, true);
@@ -1124,6 +1293,9 @@ static void explorer_context_action(void *user, uint32_t id) {
     case EXCTX_NEW_FILE:    do_new_file(ex); break;
     case EXCTX_REFRESH:     reload(ex); break;
     case EXCTX_PROPERTIES:  break; /* Offered as disabled; never chosen. */
+    case EXCTX_PURGE:       do_purge(ex); break;
+    case EXCTX_RESTORE:     do_restore(ex); break;
+    case EXCTX_EMPTY_BIN:   do_empty_bin(ex); break;
     }
 }
 
@@ -1133,8 +1305,9 @@ static void explorer_describe(void *user, char *out, size_t size) {
     struct recon_explorer *ex = user;
 
     const char *stage =
-        ex->delete_stage == DELETE_CONFIRM ? "confirm" :
-        ex->delete_stage == DELETE_CONFIRM_TREE ? "confirm-tree" : "idle";
+        ex->question == QUESTION_TRASH ? "asking: move to bin" :
+        ex->question == QUESTION_PURGE ? "asking: delete permanently" :
+        ex->question == QUESTION_EMPTY_BIN ? "asking: empty bin" : "idle";
 
     const char *selected = "(none)";
     if (ex->selected >= 0 && ex->selected < ex->entry_count) {
@@ -1146,11 +1319,12 @@ static void explorer_describe(void *user, char *out, size_t size) {
         "  entries: %d  scroll: %d  rows visible: %d\n"
         "  selected: [%d] %s\n"
         "  renaming: %d\n"
-        "  delete: %s target '%s'\n"
+        "  question: %s target '%s'\n"
+        "  in recycle bin: %s\n"
         "  status: %s\n",
         ex->cwd, ex->entry_count, ex->scroll, ex->rows_visible,
         ex->selected, selected, ex->renaming,
-        stage, ex->delete_target, ex->status);
+        stage, ex->question_target, ex->in_trash ? "yes" : "no", ex->status);
 }
 
 /* The listing may have changed while the window was closed. */
@@ -1190,6 +1364,25 @@ static const struct recon_appwin_impl EXPLORER_IMPL = {
     .visibility = explorer_visibility,
     .destroy = explorer_destroy,
 };
+
+void recon_explorer_open_at(struct recon_appwin *win, const char *path) {
+    if (win == NULL || path == NULL || *path == '\0') {
+        return;
+    }
+    /* Confirmed rather than assumed: handing this another application's
+     * window would otherwise reinterpret its state as an explorer's. */
+    if (strcmp(recon_appwin_title(win), EXPLORER_IMPL.title) != 0) {
+        return;
+    }
+
+    struct recon_explorer *ex = recon_appwin_user(win);
+    if (ex == NULL) {
+        return;
+    }
+
+    navigate(ex, path);
+    recon_appwin_refresh(win);
+}
 
 struct recon_appwin *recon_explorer_create(struct recon_server *server,
         struct recon_font *font) {

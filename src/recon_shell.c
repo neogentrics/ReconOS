@@ -76,6 +76,7 @@
 #define HIT_MENU_BASE 200
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
+#define HIT_DIALOG_BASE 500
 
 /* What a context menu entry does. */
 enum context_action {
@@ -95,6 +96,8 @@ enum context_action {
     CTX_REFRESH,
     CTX_TASK_MANAGER,
     CTX_SHOW_DESKTOP,
+    CTX_PURGE,
+    CTX_EMPTY_BIN,
     CTX_RESTORE,
     CTX_MINIMIZE,
     CTX_MAXIMIZE,
@@ -216,6 +219,33 @@ struct recon_shell {
     enum recon_context_kind context_kind;
     char context_target[RECON_PATH_MAX];
 
+    /*
+     * The question currently being asked, if any. One at a time: a second
+     * question stacked on the first would leave the user answering them in an
+     * order nobody chose.
+     */
+    /* What the shell itself asked, when the question is its own rather than
+     * an application's. */
+    enum {
+        DESKTOP_ASK_NONE,
+        DESKTOP_ASK_TRASH,
+        DESKTOP_ASK_PURGE,
+        DESKTOP_ASK_EMPTY_BIN,
+    } desktop_question;
+    char desktop_question_target[RECON_NAME_MAX];
+
+    struct recon_panel *dialog;
+    bool dialog_open;
+    char dialog_title[64];
+    char dialog_message[256];
+    char dialog_buttons[RECON_DIALOG_BUTTONS_MAX][24];
+    int dialog_button_count;
+    int dialog_default;   /* what Enter chooses */
+    int dialog_cancel;    /* what Escape chooses */
+    int dialog_hover;
+    recon_answer_fn dialog_answer;
+    void *dialog_user;
+
     struct recon_panel *security;
     /* Dims the desktop behind the security box, so it is obvious that the
      * question wants answering before anything else happens. */
@@ -240,6 +270,234 @@ struct recon_shell {
     /* Which built-in window a window context menu was opened on. */
     int context_app;
 };
+
+/* --- Asking the user something --- */
+
+#define DIALOG_WIDTH 380
+#define DIALOG_TITLE_HEIGHT 24
+#define DIALOG_PADDING 14
+#define DIALOG_BUTTON_HEIGHT 26
+#define DIALOG_BUTTON_WIDTH 96
+#define DIALOG_BUTTON_GAP 8
+#define DIALOG_LINE_MAX 3
+
+/* How many lines the message needs, wrapped to the dialog's width. */
+static int dialog_wrap(struct recon_shell *shell, const char *message,
+        char lines[DIALOG_LINE_MAX][128]) {
+    int usable = DIALOG_WIDTH - DIALOG_PADDING * 2;
+    int count = 0;
+
+    const char *word = message;
+    lines[0][0] = '\0';
+
+    while (*word != '\0' && count < DIALOG_LINE_MAX) {
+        const char *end = strchr(word, ' ');
+        size_t length = (end != NULL) ? (size_t)(end - word) : strlen(word);
+
+        char candidate[128];
+        snprintf(candidate, sizeof(candidate), "%s%s%.*s",
+            lines[count], lines[count][0] != '\0' ? " " : "",
+            (int)length, word);
+
+        if (recon_text_width(shell->font, candidate) > usable &&
+                lines[count][0] != '\0') {
+            count++;
+            if (count >= DIALOG_LINE_MAX) {
+                break;
+            }
+            snprintf(lines[count], sizeof(lines[count]), "%.*s", (int)length, word);
+        } else {
+            snprintf(lines[count], sizeof(lines[count]), "%s", candidate);
+        }
+
+        word += length;
+        while (*word == ' ') {
+            word++;
+        }
+    }
+
+    return count + 1;
+}
+
+static int dialog_height(struct recon_shell *shell) {
+    char lines[DIALOG_LINE_MAX][128];
+    int count = dialog_wrap(shell, shell->dialog_message, lines);
+    int line_height = recon_font_line_height(shell->font);
+    if (line_height <= 0) {
+        line_height = 18;
+    }
+    return DIALOG_TITLE_HEIGHT + DIALOG_PADDING * 2 + count * line_height +
+        DIALOG_PADDING + DIALOG_BUTTON_HEIGHT + DIALOG_PADDING;
+}
+
+static void draw_dialog(struct recon_shell *shell) {
+    struct recon_panel *p = shell->dialog;
+    if (p == NULL) {
+        return;
+    }
+
+    int width = recon_panel_width(p);
+    int height = recon_panel_height(p);
+    int ascent = recon_font_ascent(shell->font);
+    int line_height = recon_font_line_height(shell->font);
+    if (line_height <= 0) {
+        line_height = 18;
+    }
+
+    recon_fill(p, COLOR_BAR);
+    recon_hit_clear(p);
+
+    recon_fill_rect(p, 0, 0, width, DIALOG_TITLE_HEIGHT, COLOR_DIALOG_TITLE);
+    recon_draw_text(p, shell->font, DIALOG_PADDING,
+        (DIALOG_TITLE_HEIGHT + ascent) / 2 - 1, width - DIALOG_PADDING * 2,
+        shell->dialog_title, COLOR_DIALOG_TITLE_TEXT);
+
+    char lines[DIALOG_LINE_MAX][128];
+    int count = dialog_wrap(shell, shell->dialog_message, lines);
+    for (int i = 0; i < count; i++) {
+        recon_draw_text(p, shell->font, DIALOG_PADDING,
+            DIALOG_TITLE_HEIGHT + DIALOG_PADDING + ascent + i * line_height,
+            width - DIALOG_PADDING * 2, lines[i], COLOR_TEXT);
+    }
+
+    /* Buttons along the bottom right, in the order given, so the safe choice
+     * can be placed where the eye lands last. */
+    int by = height - DIALOG_PADDING - DIALOG_BUTTON_HEIGHT;
+    int bx = width - DIALOG_PADDING -
+        shell->dialog_button_count * DIALOG_BUTTON_WIDTH -
+        (shell->dialog_button_count - 1) * DIALOG_BUTTON_GAP;
+
+    for (int i = 0; i < shell->dialog_button_count; i++) {
+        bool hovered = (i == shell->dialog_hover);
+
+        recon_fill_rect(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
+            hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
+        recon_draw_bevel(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT, false);
+
+        /* The default is outlined, so Enter's meaning is visible. */
+        if (i == shell->dialog_default) {
+            recon_stroke_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
+                DIALOG_BUTTON_HEIGHT - 4, COLOR_ACCENT);
+        }
+
+        int text_w = recon_text_width(shell->font, shell->dialog_buttons[i]);
+        recon_draw_text(p, shell->font, bx + (DIALOG_BUTTON_WIDTH - text_w) / 2,
+            by + (DIALOG_BUTTON_HEIGHT + ascent) / 2 - 2, DIALOG_BUTTON_WIDTH,
+            shell->dialog_buttons[i], COLOR_TEXT);
+
+        recon_hit_add(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
+            HIT_DIALOG_BASE + i);
+
+        bx += DIALOG_BUTTON_WIDTH + DIALOG_BUTTON_GAP;
+    }
+
+    recon_draw_bevel(p, 0, 0, width, height, false);
+    recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
+    recon_panel_commit(p);
+}
+
+bool recon_shell_dialog_open(struct recon_shell *shell) {
+    return shell != NULL && shell->dialog_open;
+}
+
+/* Take the question down and hand the answer back. */
+static void dialog_finish(struct recon_shell *shell, int choice) {
+    if (!shell->dialog_open) {
+        return;
+    }
+
+    recon_answer_fn answer = shell->dialog_answer;
+    void *user = shell->dialog_user;
+
+    /* Cleared before the callback runs: the answer may well ask another
+     * question, and it should not be refused because this one is still up. */
+    shell->dialog_open = false;
+    shell->dialog_answer = NULL;
+    shell->dialog_user = NULL;
+    recon_panel_set_enabled(shell->dialog, false);
+    if (shell->dim != NULL && !shell->security_open) {
+        recon_panel_set_enabled(shell->dim, false);
+    }
+    recon_damage_all(shell->server);
+
+    if (answer != NULL) {
+        answer(user, choice);
+    }
+}
+
+void recon_shell_cancel_dialog(struct recon_shell *shell, void *user) {
+    if (shell == NULL || !shell->dialog_open || shell->dialog_user != user) {
+        return;
+    }
+    /* Dropped without answering: whatever asked is going away, so calling back
+     * into it would be a use after free. */
+    shell->dialog_open = false;
+    shell->dialog_answer = NULL;
+    shell->dialog_user = NULL;
+    recon_panel_set_enabled(shell->dialog, false);
+    if (shell->dim != NULL && !shell->security_open) {
+        recon_panel_set_enabled(shell->dim, false);
+    }
+    recon_damage_all(shell->server);
+}
+
+void recon_shell_ask(struct recon_shell *shell, const char *title,
+        const char *message, const char *const *buttons, int button_count,
+        recon_answer_fn answer, void *user) {
+    if (shell == NULL || shell->dialog == NULL || buttons == NULL ||
+            button_count < 1) {
+        return;
+    }
+    if (button_count > RECON_DIALOG_BUTTONS_MAX) {
+        button_count = RECON_DIALOG_BUTTONS_MAX;
+    }
+
+    /* A question already up is answered as dismissed rather than dropped, so
+     * whatever asked it is not left waiting forever. */
+    if (shell->dialog_open) {
+        dialog_finish(shell, -1);
+    }
+
+    snprintf(shell->dialog_title, sizeof(shell->dialog_title), "%s",
+        title != NULL ? title : "ReconOS");
+    snprintf(shell->dialog_message, sizeof(shell->dialog_message), "%s",
+        message != NULL ? message : "");
+
+    for (int i = 0; i < button_count; i++) {
+        snprintf(shell->dialog_buttons[i], sizeof(shell->dialog_buttons[i]),
+            "%s", buttons[i]);
+    }
+    shell->dialog_button_count = button_count;
+
+    /*
+     * The last button is the default and the way out. Callers put the safe
+     * answer last, so Enter and Escape both decline rather than confirm --
+     * a dialog that destroys something when you hit Return by reflex is worse
+     * than no dialog.
+     */
+    shell->dialog_default = button_count - 1;
+    shell->dialog_cancel = button_count - 1;
+    shell->dialog_hover = -1;
+    shell->dialog_answer = answer;
+    shell->dialog_user = user;
+    shell->dialog_open = true;
+
+    int height = dialog_height(shell);
+    recon_panel_resize(shell->dialog, DIALOG_WIDTH, height);
+    recon_panel_set_position(shell->dialog,
+        (shell->screen_width - DIALOG_WIDTH) / 2,
+        (shell->screen_height - height) / 2);
+
+    if (shell->dim != NULL) {
+        recon_panel_set_enabled(shell->dim, true);
+        recon_panel_raise_to_top(shell->dim);
+    }
+
+    draw_dialog(shell);
+    recon_panel_set_enabled(shell->dialog, true);
+    recon_panel_raise_to_top(shell->dialog);
+    recon_damage_all(shell->server);
+}
 
 static int menu_height(void) {
     return APP_COUNT * MENU_ITEM_HEIGHT + MENU_PADDING * 2;
@@ -330,6 +588,37 @@ struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell) {
     return shell->apps[shell->focused_app];
 }
 
+bool recon_shell_dialog_button_at(struct recon_shell *shell, const char *label,
+        int *x, int *y) {
+    if (shell == NULL || !shell->dialog_open || shell->dialog == NULL ||
+            label == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < shell->dialog_button_count; i++) {
+        if (strcasecmp(shell->dialog_buttons[i], label) != 0) {
+            continue;
+        }
+
+        /* Asked of the panel rather than recomputed, so this cannot drift
+         * from where the button was actually drawn. */
+        int rx, ry, rw, rh;
+        uint32_t id;
+        for (size_t r = 0; recon_hit_region(shell->dialog, r, &rx, &ry, &rw, &rh, &id); r++) {
+            if (id != (uint32_t)(HIT_DIALOG_BASE + i)) {
+                continue;
+            }
+            int px = 0, py = 0;
+            recon_panel_position(shell->dialog, &px, &py);
+            if (x != NULL) { *x = px + rx + rw / 2; }
+            if (y != NULL) { *y = py + ry + rh / 2; }
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     if (shell == NULL || out == NULL || size == 0) {
         return;
@@ -371,6 +660,20 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     }
 
     EMIT("apps menu: %s\n", shell->menu_open ? "open" : "closed");
+
+    if (!shell->dialog_open) {
+        EMIT("dialog: closed\n");
+    } else {
+        EMIT("dialog: \"%s\" -- %s\n", shell->dialog_title, shell->dialog_message);
+        for (int i = 0; i < shell->dialog_button_count; i++) {
+            int bx = 0, by = 0;
+            bool found = recon_shell_dialog_button_at(shell,
+                shell->dialog_buttons[i], &bx, &by);
+            EMIT("  [%d] %-12s%s click at %d,%d\n", i, shell->dialog_buttons[i],
+                i == shell->dialog_default ? " (default)" : "         ",
+                found ? bx : -1, found ? by : -1);
+        }
+    }
 
     if (!shell->context_open) {
         EMIT("context menu: closed\n");
@@ -859,6 +1162,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         recon_panel_set_enabled(shell->dim, false);
     }
 
+    shell->dialog = recon_panel_create(&server->scene->tree, DIALOG_WIDTH, 200);
+    if (shell->dialog != NULL) {
+        recon_panel_set_enabled(shell->dialog, false);
+    }
+    shell->dialog_hover = -1;
+
     shell->context = recon_panel_create(&server->scene->tree,
         CONTEXT_WIDTH, CONTEXT_ITEM_HEIGHT * CONTEXT_ITEMS_MAX);
     if (shell->context != NULL) {
@@ -969,6 +1278,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
         recon_appwin_destroy(shell->apps[i]);
     }
     recon_desktop_destroy(shell->desktop);
+    recon_panel_destroy(shell->dialog);
     recon_panel_destroy(shell->context);
     recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->dim);
@@ -1109,8 +1419,86 @@ static void open_desktop_item(struct recon_shell *shell, const char *name) {
             }
         }
     } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
-        recon_shell_open_named(shell, "File Explorer");
+        /*
+         * Open the explorer *at* the folder. Opening it and leaving it
+         * wherever it was looks exactly like the folder failing to open,
+         * which is what it looked like.
+         */
+        int index = recon_shell_app_index(shell, "File Explorer");
+        if (index < 0) {
+            return;
+        }
+        recon_shell_open_app(shell, index);
+        recon_explorer_open_at(shell->apps[index], action.target);
     }
+}
+
+/* The answer to a question the shell asked about a desktop item. */
+static void desktop_answered(void *user, int choice) {
+    struct recon_shell *shell = user;
+
+    int asked = shell->desktop_question;
+    char name[RECON_NAME_MAX];
+    snprintf(name, sizeof(name), "%s", shell->desktop_question_target);
+    shell->desktop_question = DESKTOP_ASK_NONE;
+
+    /* Button 0 goes ahead; anything else, Escape included, declines. */
+    if (choice != 0) {
+        return;
+    }
+
+    switch (asked) {
+    case DESKTOP_ASK_TRASH:
+        recon_desktop_delete(shell->desktop, name);
+        break;
+    case DESKTOP_ASK_PURGE:
+        recon_desktop_purge(shell->desktop, name);
+        break;
+    case DESKTOP_ASK_EMPTY_BIN:
+        recon_fs_trash_empty();
+        recon_desktop_reload(shell->desktop);
+        break;
+    default:
+        break;
+    }
+
+    recon_shell_refresh(shell);
+}
+
+static void ask_desktop(struct recon_shell *shell, int question, const char *name) {
+    shell->desktop_question = question;
+    snprintf(shell->desktop_question_target,
+        sizeof(shell->desktop_question_target), "%s", name != NULL ? name : "");
+
+    char message[320];
+    const char *title;
+    const char *go_ahead;
+
+    if (question == DESKTOP_ASK_EMPTY_BIN) {
+        int count = recon_fs_trash_count();
+        if (count <= 0) {
+            shell->desktop_question = DESKTOP_ASK_NONE;
+            return;
+        }
+        title = "Empty Recycle Bin";
+        go_ahead = "Empty";
+        snprintf(message, sizeof(message),
+            "Permanently delete %d item%s in the Recycle Bin? "
+            "This cannot be undone.", count, count == 1 ? "" : "s");
+    } else if (question == DESKTOP_ASK_PURGE) {
+        title = "Delete Permanently";
+        go_ahead = "Delete";
+        snprintf(message, sizeof(message),
+            "Permanently delete '%s'? This cannot be undone.", name);
+    } else {
+        title = "Delete";
+        go_ahead = "Move";
+        snprintf(message, sizeof(message), "Move '%s' to the Recycle Bin?", name);
+    }
+
+    /* Cancel last: it is what Enter and Escape both choose. */
+    const char *buttons[2] = { go_ahead, "Cancel" };
+    recon_shell_ask(shell, title, message, buttons, 2, desktop_answered, shell);
 }
 
 /* Carry out what a context menu entry asked for. */
@@ -1206,6 +1594,9 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
             break;
 
         case CTX_RENAME:
+            if (recon_desktop_is_trash_item(shell->context_target)) {
+                break; /* The bin is part of the system, not a file. */
+            }
             /* The desktop takes the keyboard while a name is being typed, so
              * nothing else may hold focus. */
             set_focused_app(shell, -1);
@@ -1213,15 +1604,27 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
             break;
 
         case CTX_CUT:
-            recon_desktop_clip(shell->desktop, shell->context_target, true);
+            if (!recon_desktop_is_trash_item(shell->context_target)) {
+                recon_desktop_clip(shell->desktop, shell->context_target, true);
+            }
             break;
         case CTX_COPY:
-            recon_desktop_clip(shell->desktop, shell->context_target, false);
+            if (!recon_desktop_is_trash_item(shell->context_target)) {
+                recon_desktop_clip(shell->desktop, shell->context_target, false);
+            }
             break;
 
         case CTX_DELETE:
         case CTX_DELETE_TREE:
-            recon_desktop_delete(shell->desktop, shell->context_target);
+            ask_desktop(shell, DESKTOP_ASK_TRASH, shell->context_target);
+            break;
+
+        case CTX_PURGE:
+            ask_desktop(shell, DESKTOP_ASK_PURGE, shell->context_target);
+            break;
+
+        case CTX_EMPTY_BIN:
+            ask_desktop(shell, DESKTOP_ASK_EMPTY_BIN, NULL);
             break;
 
         default:
@@ -1283,6 +1686,11 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
 bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double ly) {
     if (shell == NULL) {
         return false;
+    }
+
+    /* No menus while a question is up: it must be answered first. */
+    if (shell->dialog_open) {
+        return true;
     }
 
     recon_shell_close_menu(shell);
@@ -1400,16 +1808,28 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
             bool has_contents = is_dir &&
                 recon_fs_list("/", path, NULL, 0) > 0;
 
+            /*
+             * The recycle bin is not a file, so most of what can be done to a
+             * desktop icon makes no sense for it. It gets its own menu rather
+             * than a menu of things that would fail.
+             */
+            if (recon_desktop_is_trash_item(name)) {
+                int count = recon_fs_trash_count();
+                context_add(shell, "Open", CTX_OPEN, true, true);
+                context_add(shell, "Empty Recycle Bin", CTX_EMPTY_BIN,
+                    count > 0, true);
+                context_add(shell, "Properties", CTX_PROPERTIES, false, false);
+                context_show(shell, lx, ly);
+                return true;
+            }
+
             context_add(shell, "Open", CTX_OPEN, true, true);
             context_add(shell, "Cut", CTX_CUT, true, false);
             context_add(shell, "Copy", CTX_COPY, true, true);
             context_add(shell, "Rename", CTX_RENAME, true, false);
-            if (has_contents) {
-                context_add(shell, "Delete and Contents", CTX_DELETE_TREE,
-                    true, true);
-            } else {
-                context_add(shell, "Delete", CTX_DELETE, true, true);
-            }
+            context_add(shell, "Delete", CTX_DELETE, true, false);
+            context_add(shell, "Delete Permanently", CTX_PURGE, true, true);
+            (void)has_contents;
             /* Shown but unavailable: there is no properties view yet, and
              * hiding it would suggest there never will be. */
             context_add(shell, "Properties", CTX_PROPERTIES, false, false);
@@ -1419,6 +1839,8 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
             context_add(shell, "New File", CTX_NEW_FILE, true, false);
             context_add(shell, "New Shortcut", CTX_NEW_SHORTCUT, true, true);
             context_add(shell, "Paste", CTX_PASTE, !recon_fs_clip_empty(), true);
+            context_add(shell, "Empty Recycle Bin", CTX_EMPTY_BIN,
+                recon_fs_trash_count() > 0, true);
             context_add(shell, "Refresh", CTX_REFRESH, true, false);
         }
         context_show(shell, lx, ly);
@@ -1432,6 +1854,24 @@ bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
         uint32_t modifiers) {
     if (shell == NULL) {
         return false;
+    }
+
+    /* A question owns the keyboard while it is up. */
+    if (shell->dialog_open) {
+        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+            dialog_finish(shell, shell->dialog_default);
+        } else if (sym == XKB_KEY_Escape) {
+            dialog_finish(shell, shell->dialog_cancel);
+        } else if (sym == XKB_KEY_Left || sym == XKB_KEY_Right ||
+                sym == XKB_KEY_Tab) {
+            int step = (sym == XKB_KEY_Left) ? -1 : 1;
+            shell->dialog_default =
+                (shell->dialog_default + step + shell->dialog_button_count) %
+                shell->dialog_button_count;
+            draw_dialog(shell);
+            recon_damage_all(shell->server);
+        }
+        return true;
     }
 
     /*
@@ -1486,6 +1926,22 @@ void recon_shell_toggle_security(struct recon_shell *shell) {
  */
 static void update_hover(struct recon_shell *shell, double lx, double ly) {
     int px, py;
+
+    if (shell->dialog_open) {
+        int hover = -1;
+        if (point_in_panel(shell->dialog, lx, ly, &px, &py)) {
+            uint32_t hit = recon_hit_test(shell->dialog, px, py);
+            if (hit >= HIT_DIALOG_BASE) {
+                hover = (int)(hit - HIT_DIALOG_BASE);
+            }
+        }
+        if (hover != shell->dialog_hover) {
+            shell->dialog_hover = hover;
+            draw_dialog(shell);
+            recon_damage_all(shell->server);
+        }
+        return;
+    }
 
     int menu = -1;
     int context = -1;
@@ -1649,6 +2105,29 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     }
 
     int px, py;
+
+    /*
+     * A question takes every click until it is answered, including the ones
+     * that miss it. That is what makes it a question rather than a notice:
+     * the thing being asked about must not change underneath the answer.
+     */
+    if (shell->dialog_open) {
+        if (!pressed) {
+            return true;
+        }
+        if (point_in_panel(shell->dialog, lx, ly, &px, &py)) {
+            uint32_t hit = recon_hit_test(shell->dialog, px, py);
+            if (hit >= HIT_DIALOG_BASE) {
+                int choice = (int)(hit - HIT_DIALOG_BASE);
+                if (choice >= 0 && choice < shell->dialog_button_count) {
+                    dialog_finish(shell, choice);
+                }
+            }
+        }
+        /* Clicking outside does nothing at all -- not even dismiss. A
+         * destructive question should be answered deliberately. */
+        return true;
+    }
 
     /* An open context menu takes the next click wherever it lands: either it
      * chose something, or it dismissed the menu. */

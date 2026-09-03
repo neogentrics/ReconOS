@@ -34,6 +34,17 @@ enum recon_desktop_action_kind {
     RECON_DESKTOP_ACTION_OPEN_PATH, /* target is a ReconOS path */
 };
 
+/* The name the recycle bin appears under. Fixed, because it is the same thing
+ * on every desktop and nothing should be able to shadow it. */
+#define RECON_DESKTOP_TRASH_NAME "Recycle Bin"
+
+/* True if the named desktop item is the recycle bin, which cannot be renamed,
+ * cut, copied or deleted. */
+bool recon_desktop_is_trash_item(const char *name);
+
+/* How many items the bin holds, for the label and the icon. */
+int recon_desktop_trash_count(struct recon_desktop *desktop);
+
 /*
  * What a click asked for. The desktop reports rather than acts, because
  * opening an application or a folder is the shell's business, not the
@@ -72,7 +83,11 @@ const char *recon_desktop_item_at(struct recon_desktop *desktop, double lx, doub
 bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
     struct recon_desktop_action *action);
 
+/* Move a desktop item to the recycle bin. */
 void recon_desktop_delete(struct recon_desktop *desktop, const char *name);
+
+/* Destroy it outright. Only after the user has been asked. */
+void recon_desktop_purge(struct recon_desktop *desktop, const char *name);
 void recon_desktop_new_folder(struct recon_desktop *desktop);
 void recon_desktop_new_file(struct recon_desktop *desktop);
 void recon_desktop_new_shortcut(struct recon_desktop *desktop);

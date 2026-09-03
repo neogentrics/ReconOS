@@ -27,6 +27,10 @@
 #define RECON_ICON_CALCULATOR "calculator"
 #define RECON_ICON_EXPLORER "explorer"
 #define RECON_ICON_TASKMGR "taskmanager"
+/* Two bins, so a full one looks different from an empty one at a glance --
+ * which is the whole point of having it on the desktop. */
+#define RECON_ICON_TRASH "trash"
+#define RECON_ICON_TRASH_FULL "trash-full"
 
 /* The pixels for an icon, or NULL if there is no file for it. */
 const unsigned char *recon_icon_get(const char *name, int *width, int *height);

@@ -501,6 +501,36 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    if (strcasecmp(what, "answer") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui answer <button label>\n");
+            return;
+        }
+
+        char label[64];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(label) - 1; i++) {
+            int w = snprintf(label + used, sizeof(label) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (w < 0) {
+                break;
+            }
+            used += (size_t)w;
+        }
+
+        int x = 0, y = 0;
+        if (!recon_shell_dialog_button_at(server->shell, label, &x, &y)) {
+            out(s, "No dialog button called '%s' is showing.\n", label);
+            return;
+        }
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "answered '%s' at %d,%d\n", label, x, y);
+        return;
+    }
+
     if (strcasecmp(what, "menu") == 0) {
         if (argc < 3) {
             out(s, "Usage: ui menu <label>\n");

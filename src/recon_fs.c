@@ -293,6 +293,9 @@ bool recon_fs_create_user(const char *name) {
         return false;
     }
 
+    /* The recycle bin is part of an account, not something created the first
+     * time a file is deleted: a bin that only exists once used cannot be
+     * opened to find out it is empty. */
     static const char *const FOLDERS[] = RECON_USER_FOLDERS;
     for (size_t i = 0; i < sizeof(FOLDERS) / sizeof(FOLDERS[0]); i++) {
         char child[RECON_PATH_MAX * 3];
@@ -822,6 +825,262 @@ bool recon_fs_unique_name(const char *cwd, const char *directory,
 
     set_error("no free name for '%s'", base);
     return false;
+}
+
+/* --- The recycle bin --- */
+
+/*
+ * Layout, inside the user's folder:
+ *   .Trash/files/<name>       what was deleted, under a name unique in here
+ *   .Trash/info/<name>.origin one line: where it came from
+ *
+ * Two directories rather than one so a note can never be mistaken for a
+ * deleted file, and so listing the bin is just listing files/.
+ */
+#define TRASH_ROOT ".Trash"
+#define TRASH_FILES ".Trash/files"
+#define TRASH_INFO ".Trash/info"
+
+static char g_trash_path[RECON_PATH_MAX];
+
+static const char *trash_subdir(const char *which) {
+    snprintf(g_trash_path, sizeof(g_trash_path), "%s/%s",
+        recon_fs_user_dir(NULL), which);
+    return g_trash_path;
+}
+
+const char *recon_fs_trash_dir(void) {
+    return trash_subdir(TRASH_FILES);
+}
+
+/* Make sure the bin exists. Called before anything that writes to it, since
+ * a user created before the bin existed has no .Trash. */
+static bool ensure_trash(void) {
+    char host[RECON_PATH_MAX * 2];
+
+    const char *dirs[] = { TRASH_ROOT, TRASH_FILES, TRASH_INFO };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char reconos[RECON_PATH_MAX];
+        snprintf(reconos, sizeof(reconos), "%s/%s", recon_fs_user_dir(NULL), dirs[i]);
+        snprintf(host, sizeof(host), "%s%s", g_host_root, reconos);
+        if (!make_tree(host)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool recon_fs_is_trash(const char *cwd, const char *path) {
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return false;
+    }
+
+    char root[RECON_PATH_MAX];
+    snprintf(root, sizeof(root), "%s/%s", recon_fs_user_dir(NULL), TRASH_ROOT);
+
+    size_t len = strlen(root);
+    if (strncmp(canonical, root, len) != 0) {
+        return false;
+    }
+    return canonical[len] == '\0' || canonical[len] == '/';
+}
+
+bool recon_fs_trash(const char *cwd, const char *path) {
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return false;
+    }
+
+    if (path_is_protected(canonical)) {
+        set_error("'%s' is part of the system and is protected", canonical);
+        return false;
+    }
+    if (recon_fs_is_trash(cwd, path)) {
+        set_error("'%s' is already in the recycle bin", canonical);
+        return false;
+    }
+    if (strcmp(canonical, "/") == 0) {
+        set_error("the root cannot be deleted");
+        return false;
+    }
+    if (!recon_fs_exists(cwd, canonical)) {
+        set_error("'%s' not found", canonical);
+        return false;
+    }
+    if (!ensure_trash()) {
+        return false;
+    }
+
+    const char *leaf = strrchr(canonical, '/');
+    leaf = (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : canonical;
+
+    /* Two files with the same name can be deleted from different folders, so
+     * the name in the bin is made unique rather than assumed to be. */
+    char base[RECON_NAME_MAX];
+    char extension[RECON_NAME_MAX] = "";
+    snprintf(base, sizeof(base), "%s", leaf);
+    char *dot = strrchr(base, '.');
+    if (dot != NULL && dot != base) {
+        snprintf(extension, sizeof(extension), "%s", dot);
+        *dot = '\0';
+    }
+
+    char files_dir[RECON_PATH_MAX];
+    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", files_dir, base, extension, name, sizeof(name))) {
+        return false;
+    }
+
+    char target[RECON_PATH_MAX];
+    snprintf(target, sizeof(target), "%s/%s", files_dir, name);
+
+    if (!recon_fs_rename("/", canonical, target)) {
+        return false;
+    }
+
+    /*
+     * Write the note after the move, not before: a note without a file is a
+     * restore that fails confusingly, while a file without a note is one that
+     * can still be purged and can be put somewhere sensible by hand.
+     */
+    char info[RECON_PATH_MAX];
+    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+
+    char body[RECON_PATH_MAX + 2];
+    int length = snprintf(body, sizeof(body), "%s\n", canonical);
+    recon_fs_write("/", info, body, (size_t)length);
+
+    return true;
+}
+
+bool recon_fs_trash_origin(const char *name, char *out, size_t size) {
+    if (name == NULL || out == NULL) {
+        return false;
+    }
+
+    char info[RECON_PATH_MAX];
+    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+
+    size_t length = 0;
+    char *data = recon_fs_read("/", info, &length);
+    if (data == NULL) {
+        return false;
+    }
+
+    char *newline = strchr(data, '\n');
+    if (newline != NULL) {
+        *newline = '\0';
+    }
+    snprintf(out, size, "%s", data);
+    free(data);
+    return out[0] != '\0';
+}
+
+bool recon_fs_trash_restore(const char *name) {
+    if (name == NULL || *name == '\0' || strchr(name, '/') != NULL) {
+        set_error("invalid name");
+        return false;
+    }
+
+    char origin[RECON_PATH_MAX];
+    if (!recon_fs_trash_origin(name, origin, sizeof(origin))) {
+        set_error("nothing recorded about where '%s' came from", name);
+        return false;
+    }
+
+    char source[RECON_PATH_MAX];
+    snprintf(source, sizeof(source), "%s/%s", trash_subdir(TRASH_FILES), name);
+
+    if (recon_fs_exists("/", origin)) {
+        set_error("something is already at '%s'", origin);
+        return false;
+    }
+
+    /*
+     * The folder it came from may itself have been deleted since. Recreate the
+     * path rather than refusing: the point of restoring is to get the file
+     * back, and putting it in a folder that has to be remade is still that.
+     */
+    char parent[RECON_PATH_MAX];
+    snprintf(parent, sizeof(parent), "%s", origin);
+    char *slash = strrchr(parent, '/');
+    if (slash != NULL && slash != parent) {
+        *slash = '\0';
+        char host[RECON_PATH_MAX * 2];
+        snprintf(host, sizeof(host), "%s%s", g_host_root, parent);
+        if (!make_tree(host)) {
+            return false;
+        }
+    }
+
+    if (!recon_fs_rename("/", source, origin)) {
+        return false;
+    }
+
+    char info[RECON_PATH_MAX];
+    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+    recon_fs_remove("/", info);
+    return true;
+}
+
+bool recon_fs_trash_purge(const char *name) {
+    if (name == NULL || *name == '\0' || strchr(name, '/') != NULL) {
+        set_error("invalid name");
+        return false;
+    }
+
+    char target[RECON_PATH_MAX];
+    snprintf(target, sizeof(target), "%s/%s", trash_subdir(TRASH_FILES), name);
+
+    struct recon_dirent info_entry;
+    bool is_dir = recon_fs_stat("/", target, &info_entry) &&
+        info_entry.kind == RECON_FILE_DIRECTORY;
+
+    bool ok = is_dir ? recon_fs_remove_tree("/", target)
+                     : recon_fs_remove("/", target);
+    if (!ok) {
+        return false;
+    }
+
+    char info[RECON_PATH_MAX];
+    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+    recon_fs_remove("/", info);
+    return true;
+}
+
+int recon_fs_trash_count(void) {
+    char files_dir[RECON_PATH_MAX];
+    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+
+    int count = recon_fs_list("/", files_dir, NULL, 0);
+    return count > 0 ? count : 0;
+}
+
+bool recon_fs_trash_empty(void) {
+    char files_dir[RECON_PATH_MAX];
+    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+
+    struct recon_dirent entries[512];
+    int count = recon_fs_list("/", files_dir, entries, 512);
+    if (count < 0) {
+        return true; /* No bin yet is an empty bin. */
+    }
+    if (count > 512) {
+        count = 512;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < count; i++) {
+        if (!recon_fs_trash_purge(entries[i].name)) {
+            ok = false;
+        }
+    }
+    return ok;
 }
 
 /* --- The file clipboard --- */
