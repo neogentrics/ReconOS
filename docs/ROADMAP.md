@@ -234,19 +234,68 @@ when something the module registered is still in use.
 **Run New Task** runs one, now that there is a registry of installed
 applications to run it from.
 
+**Wallpaper is part of the theme, and the system draws its own.** Four are
+generated on first run -- Night Sky, Deep Field, Daybreak, Ember -- as
+ordinary PNGs in `/System/Wallpapers` that anybody can replace. Two dark, one
+light, one warm, so every skin has something that does not fight it. Stars are
+placed by hashing the position, so redrawing one gives back the same picture
+without a copy being kept. A skin names one it suits; an account's own choice
+beats the skin; a setting pointing at a deleted file falls back to any
+wallpaper rather than to a blank desktop.
+
+**Beacon**, a tenth skin: bright blue chrome, light frames, a green accent,
+paired with Daybreak. The palette and the feeling of the early 2000s, not the
+shapes -- and one skin among ten rather than the default.
+
+Capture earned its place immediately. It found that desktop labels were white
+with a dark shadow, which reads on a night sky and vanishes on a daytime one;
+four skins now use dark labels with a light halo. It also found the horizon
+meeting the sky at a different colour than the ground, so it read as a band
+rather than as light behind an edge. Neither is expressible as an assertion.
+
+## v0.2.2 — the menu learns, and the socket is the owner's
+
+**All Programs.** The left column of the Start menu is now the six
+applications this account opens most, counted per account. All Programs at the
+foot of it lists everything installed, alphabetically. The two are not the
+same list truncated -- the column answers what you use, All Programs answers
+what is here -- so it is always offered, rather than appearing once a seventh
+application is installed and changing the menu's shape under somebody.
+
+Opening the menu now redraws and re-sizes it. It never had to before, because
+nothing in it changed between one opening and the next; the panel kept
+whatever was last painted, and the Apps button showed the order as it stood
+when the menu was first built.
+
+**The control socket is restricted to its owner.** It accepts every command
+the terminal accepts, and it had no authentication *and* no permissions of its
+own -- the mode came from the umask, which leaves a socket in `/tmp` that
+every other account on the machine can drive. Set after bind and before
+listen, so there is no moment where it is both connectable and open to
+everybody. A file permission, not a login.
+
+Two things found while doing it. A socket path over 107 bytes was silently
+truncated by the kernel, so bind used one name while the unlink, the chmod and
+the shutdown cleanup used another -- the socket would have come up unprotected
+under a name nothing could remove. And the startup line reporting the network
+compared the gateway against a raw NUL *byte* written into the source instead
+of the escape, so a machine with no gateway did not say "(none)".
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
 
-**Wallpaper is not part of a theme.** There is one image, it does not change
-with the skin, and there is no way to choose another. It also is not ours: a
-default background of the system's own is still to be made.
-
 **No custom skins.** The format exists and there is no way to install one.
 
-**No screen capture, paint program, or properties dialogs.** Desktop icon
-positions are not remembered. Client windows still draw their own decorations.
-The control socket still has no authentication.
+**No paint program, and no properties dialogs.** Desktop icon positions are
+not remembered. Client windows still draw their own decorations. The control
+socket still has no authentication, only file permissions.
+
+**Nothing can listen, and nothing is encrypted.** Streams connect outwards in
+the clear; there is no TLS and no way to accept a connection.
+
+**Every skin fills flat.** Gradients are the single thing keeping Beacon from
+looking like the era it is reaching for.
 
 **No boot splash.** The system appears without announcing itself.
 

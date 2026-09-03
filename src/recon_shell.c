@@ -114,6 +114,9 @@
  * to the right column without any arithmetic about how many are in the other. */
 #define HIT_PLACE_BASE 250
 #define HIT_POWER_BASE 280
+/* The row at the foot of the left column, which is neither an application nor
+ * a place and so belongs to neither range. */
+#define HIT_ALL_PROGRAMS 290
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
 #define HIT_DIALOG_BASE 500
@@ -251,37 +254,146 @@ struct menu_entry {
     bool is_shutdown;
 };
 
-/* How many applications the left column shows. */
-static int menu_entry_count(void) {
-    int count = 0;
-    int installed = recon_installed_app_count();
-    for (int i = 0; i < installed; i++) {
-        struct recon_installed_app app;
-        if (recon_installed_app_at(i, &app) && app.in_menu) {
-            count++;
-        }
+/*
+ * How many applications the left column shows before it stops.
+ *
+ * Six because the menu is a fixed height and the right column is seven
+ * entries deep; more than this and the left column decides how tall the menu
+ * is, which is the thing All Programs exists to stop.
+ */
+#define MENU_PINNED_MAX 6
+
+/* Where an account's use of an application is counted. */
+#define MENU_OPENS_PREFIX "start/opens"
+#define MENU_APPS_MAX 64
+
+/*
+ * Registry keys cannot contain spaces, and half the applications have one in
+ * their name -- "File Explorer", "Control Panel". Without this the count for
+ * every one of those was written to a key the registry rejected, so they were
+ * permanently at zero and permanently last.
+ */
+static void opens_key(const char *name, char *out, size_t size) {
+    char safe[64];
+    size_t used = 0;
+    for (const char *c = name != NULL ? name : "";
+            *c != '\0' && used < sizeof(safe) - 1; c++) {
+        safe[used++] = (*c == ' ' || *c == '/') ? '-' : *c;
     }
-    return count;
+    safe[used] = '\0';
+    snprintf(out, size, "%s/%s", MENU_OPENS_PREFIX, safe);
 }
 
-static bool menu_entry_at(int index, struct menu_entry *out) {
-    int seen = 0;
-    int installed = recon_installed_app_count();
+static void note_app_opened(const char *name) {
+    char key[128];
+    opens_key(name, key, sizeof(key));
 
-    for (int i = 0; i < installed; i++) {
+    int opens = recon_registry_get_int(RECON_REG_USER, key, 0);
+    /* Per account, because which applications somebody reaches for is a fact
+     * about them and not about the machine. */
+    recon_registry_set_int(RECON_REG_USER, key, opens + 1);
+}
+
+static int opens_of(const char *name) {
+    char key[128];
+    opens_key(name, key, sizeof(key));
+    return recon_registry_get_int(RECON_REG_USER, key, 0);
+}
+
+/*
+ * The applications the left column is currently showing.
+ *
+ * Two orders, for two questions. Closed, the column answers "what do you
+ * use?" -- most-opened first, which is what the space is worth spending on.
+ * Open, it answers "what is installed?", and the only order that helps you
+ * find a name you already know is alphabetical.
+ */
+static int menu_apps(bool show_all, struct menu_entry *out, int max) {
+    struct menu_entry found[MENU_APPS_MAX];
+    int counts[MENU_APPS_MAX];
+    int total = 0;
+
+    int installed = recon_installed_app_count();
+    for (int i = 0; i < installed && total < MENU_APPS_MAX; i++) {
         struct recon_installed_app app;
         if (!recon_installed_app_at(i, &app) || !app.in_menu) {
             continue;
         }
-        if (seen == index) {
-            snprintf(out->label, sizeof(out->label), "%s", app.name);
-            snprintf(out->icon, sizeof(out->icon), "%s", app.icon);
-            out->is_shutdown = false;
-            return true;
-        }
-        seen++;
+        snprintf(found[total].label, sizeof(found[total].label), "%s", app.name);
+        snprintf(found[total].icon, sizeof(found[total].icon), "%s", app.icon);
+        found[total].is_shutdown = false;
+        counts[total] = show_all ? 0 : opens_of(app.name);
+        total++;
     }
-    return false;
+
+    /* An insertion sort: the list is a dozen entries at most, and this keeps
+     * equal counts in the order they were installed rather than shuffling the
+     * menu about every time it is drawn. */
+    for (int i = 1; i < total; i++) {
+        struct menu_entry entry = found[i];
+        int count = counts[i];
+        int j = i - 1;
+        while (j >= 0) {
+            bool after = show_all
+                ? strcasecmp(found[j].label, entry.label) > 0
+                : counts[j] < count;
+            if (!after) {
+                break;
+            }
+            found[j + 1] = found[j];
+            counts[j + 1] = counts[j];
+            j--;
+        }
+        found[j + 1] = entry;
+        counts[j + 1] = count;
+    }
+
+    int shown = total;
+    if (!show_all && shown > MENU_PINNED_MAX) {
+        shown = MENU_PINNED_MAX;
+    }
+    if (shown > max) {
+        shown = max;
+    }
+    for (int i = 0; i < shown; i++) {
+        out[i] = found[i];
+    }
+    return shown;
+}
+
+/*
+ * All Programs is always offered, even when the short column happens to be
+ * showing every application there is.
+ *
+ * The first rule tried here was to hide it in that case, on the grounds that a
+ * button opening the list you are already looking at is a button that does
+ * nothing. That was wrong, and hiding it proved it: with six applications
+ * installed it never appeared at all. The two lists answer different
+ * questions -- the column asks what you use, All Programs asks what is
+ * installed, and only one of them is in an order you can search by name. They
+ * stop being the same list the moment a seventh is installed, and a menu that
+ * grows a new button at that point is a menu whose shape nobody can learn.
+ */
+static bool menu_has_more(void) {
+    return true;
+}
+
+/* These take the mode rather than the shell because they are defined above
+ * it -- and because what the column shows is the only thing about the shell
+ * they were ever asking. */
+static int menu_entry_count(bool show_all) {
+    struct menu_entry entries[MENU_APPS_MAX];
+    return menu_apps(show_all, entries, MENU_APPS_MAX);
+}
+
+static bool menu_entry_at(bool show_all, int index, struct menu_entry *out) {
+    struct menu_entry entries[MENU_APPS_MAX];
+    int count = menu_apps(show_all, entries, MENU_APPS_MAX);
+    if (index < 0 || index >= count) {
+        return false;
+    }
+    *out = entries[index];
+    return true;
 }
 
 /* What the Ctrl+Alt+Del box offers, in the order it offers it. */
@@ -330,6 +442,14 @@ struct recon_shell {
     int menu_hover;
     int context_hover;
     int security_hover;
+
+    /*
+     * Whether the left column is showing everything installed rather than the
+     * few this account opens most. Cleared when the menu closes: All Programs
+     * is somewhere you go to find one thing, not a preference, and a menu that
+     * reopened expanded would make the short list unreachable by accident.
+     */
+    bool menu_show_all;
 
     /* Built-in windows. Listed on the taskbar beside client windows, and
      * offered input in front-to-back order. */
@@ -645,11 +765,15 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
     recon_damage_all(shell->server);
 }
 
-static int menu_height(void) {
+static int menu_height(bool show_all) {
     /* As tall as whichever column needs more, plus the header and footer.
      * Sizing to the left alone would clip the right when few applications are
      * installed, which is exactly the state a new system is in. */
-    int left = menu_entry_count() * MENU_ITEM_HEIGHT;
+    int rows = menu_entry_count(show_all);
+    if (menu_has_more()) {
+        rows++;    /* the All Programs row, which is part of the column */
+    }
+    int left = rows * MENU_ITEM_HEIGHT;
     int right = MENU_PLACE_COUNT * MENU_ITEM_HEIGHT;
     int body = left > right ? left : right;
 
@@ -791,10 +915,11 @@ bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
     uint32_t wanted = 0;
     bool found = false;
 
-    int apps = menu_entry_count();
+    int apps = menu_entry_count(shell->menu_show_all);
     for (int i = 0; i < apps && !found; i++) {
         struct menu_entry entry;
-        if (menu_entry_at(i, &entry) && strcasecmp(entry.label, label) == 0) {
+        if (menu_entry_at(shell->menu_show_all, i, &entry) &&
+                strcasecmp(entry.label, label) == 0) {
             wanted = HIT_MENU_BASE + i;
             found = true;
         }
@@ -811,6 +936,13 @@ bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
             wanted = HIT_POWER_BASE + i;
             found = true;
         }
+    }
+    /* Both of its labels, so a caller can ask for the row without having to
+     * know which way it is currently facing. */
+    if (!found && (strcasecmp(label, "All Programs") == 0 ||
+            strcasecmp(label, "Back") == 0)) {
+        wanted = HIT_ALL_PROGRAMS;
+        found = true;
     }
     if (!found) {
         return false;
@@ -879,11 +1011,11 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     if (shell->menu_open) {
         /* Everything in it, with where to click, so a test does not have to
          * work out the layout for itself. */
-        int apps = menu_entry_count();
+        int apps = menu_entry_count(shell->menu_show_all);
         for (int i = 0; i < apps; i++) {
             struct menu_entry entry;
             int mx = 0, my = 0;
-            if (menu_entry_at(i, &entry) &&
+            if (menu_entry_at(shell->menu_show_all, i, &entry) &&
                     recon_shell_menu_entry_at(shell, entry.label, &mx, &my)) {
                 EMIT("  app    %-18s click at %d,%d\n", entry.label, mx, my);
             }
@@ -1303,10 +1435,10 @@ static void draw_menu(struct recon_shell *shell) {
         body_bottom - body_y, COLOR_MENU_SEPARATOR);
 
     /* --- Left: the applications --- */
-    int count = menu_entry_count();
+    int count = menu_entry_count(shell->menu_show_all);
     for (int i = 0; i < count; i++) {
         struct menu_entry entry;
-        if (!menu_entry_at(i, &entry)) {
+        if (!menu_entry_at(shell->menu_show_all, i, &entry)) {
             break;
         }
 
@@ -1333,6 +1465,56 @@ static void draw_menu(struct recon_shell *shell) {
         recon_hit_add(menu, MENU_PADDING, y,
             MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
             HIT_MENU_BASE + i);
+    }
+
+    /*
+     * --- The foot of the left column: All Programs ---
+     *
+     * Offered only when there is more than the column is showing. A button
+     * that opens the same list you are already looking at teaches people that
+     * buttons here do nothing.
+     */
+    if (menu_has_more()) {
+        int y = body_y + count * MENU_ITEM_HEIGHT;
+        if (y + MENU_ITEM_HEIGHT <= body_bottom) {
+            bool hovered = (shell->menu_hover == HIT_ALL_PROGRAMS);
+            int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
+
+            /* A line above it, so it reads as a way out of the list rather
+             * than as the last application in it. */
+            recon_fill_rect(menu, MENU_PADDING + 6, y,
+                MENU_LEFT_WIDTH - MENU_PADDING * 2 - 12, 1,
+                COLOR_MENU_SEPARATOR);
+
+            if (hovered) {
+                recon_fill_rect(menu, MENU_PADDING, y + 1,
+                    MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 1,
+                    COLOR_MENU_HILITE);
+            }
+
+            unsigned ink = hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT;
+            const char *label = shell->menu_show_all
+                ? "Back" : "All Programs";
+            recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET,
+                baseline, MENU_LEFT_WIDTH - MENU_PADDING * 2 - 24, label, ink);
+
+            /*
+             * An arrow at the right edge: pointing on to a longer list, or
+             * back to the short one. Drawn rather than an icon, because it has
+             * to face either way and an icon file cannot.
+             */
+            int ax = MENU_LEFT_WIDTH - MENU_PADDING - 16;
+            int ay = y + MENU_ITEM_HEIGHT / 2;
+            for (int step = 0; step < 5; step++) {
+                int dx = shell->menu_show_all ? (4 - step) : step;
+                recon_fill_rect(menu, ax + dx, ay - (4 - step),
+                    1, (4 - step) * 2 + 1, ink);
+            }
+
+            recon_hit_add(menu, MENU_PADDING, y,
+                MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
+                HIT_ALL_PROGRAMS);
+        }
     }
 
     /* --- Right: places, then the things that configure the machine --- */
@@ -1451,8 +1633,17 @@ static void layout(struct recon_shell *shell) {
             shell->screen_height - TASKBAR_HEIGHT);
     }
     if (shell->menu != NULL) {
+        /*
+         * Sized here as well as placed, because the menu's height depends on
+         * how many applications the left column is showing and that changes
+         * while the menu is open. Sizing it only at creation left All Programs
+         * drawing a longer list into a panel that was still the short list's
+         * height, so everything past the sixth entry was clipped away.
+         */
+        int height = menu_height(shell->menu_show_all);
+        recon_panel_resize(shell->menu, MENU_WIDTH, height);
         recon_panel_set_position(shell->menu, TASKBAR_PADDING,
-            shell->screen_height - TASKBAR_HEIGHT - menu_height());
+            shell->screen_height - TASKBAR_HEIGHT - height);
     }
     if (shell->dim != NULL) {
         recon_panel_resize(shell->dim, shell->screen_width, shell->screen_height);
@@ -1502,7 +1693,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         return NULL;
     }
 
-    shell->menu = recon_panel_create(&server->scene->tree, MENU_WIDTH, menu_height());
+    shell->menu = recon_panel_create(&server->scene->tree, MENU_WIDTH,
+        menu_height(false));
     if (shell->menu != NULL) {
         recon_panel_set_enabled(shell->menu, false);
         draw_menu(shell);
@@ -1982,6 +2174,14 @@ void recon_shell_open_named(struct recon_shell *shell, const char *title) {
             recon_modules_last_error());
         return;
     }
+
+    /*
+     * Counted here rather than in the menu's click handler, so opening
+     * something from the desktop or by typing `apps notepad` counts the same
+     * as picking it from the menu. What the left column shows is meant to be
+     * what this person actually uses, not what they used a particular way.
+     */
+    note_app_opened(title);
 
     int index = adopt_window(shell, win);
     if (index >= 0) {
@@ -2606,9 +2806,10 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         uint32_t hit = recon_hit_test(shell->menu, px, py);
         if (hit >= HIT_MENU_BASE) {
-            /* The raw id, not an index. The menu has three ranges in it now --
-             * applications, places, and what to do with the machine -- and an
-             * index relative to one of them cannot say which. */
+            /* The raw id, not an index. The menu has four ranges in it now --
+             * applications, All Programs, places, and what to do with the
+             * machine -- and an index relative to one of them cannot say
+             * which. */
             menu = (int)hit;
         }
     } else if (shell->security_open && shell->security != NULL &&
@@ -2704,6 +2905,8 @@ void recon_shell_close_menu(struct recon_shell *shell) {
         return;
     }
     shell->menu_open = false;
+    /* Back to the short list, so the menu opens the same way every time. */
+    shell->menu_show_all = false;
     recon_panel_set_enabled(shell->menu, false);
     draw_taskbar(shell);
     recon_damage_all(shell->server);
@@ -2716,7 +2919,19 @@ static void toggle_menu(struct recon_shell *shell) {
     shell->menu_open = !shell->menu_open;
     recon_panel_set_enabled(shell->menu, shell->menu_open);
     if (shell->menu_open) {
+        /*
+         * Sized, placed and redrawn on the way open, not just switched on.
+         *
+         * The panel keeps whatever was last painted into it, and what belongs
+         * in it now changes between one opening and the next: the left column
+         * is ordered by what this account opens most, and All Programs may
+         * have left the panel at its taller size. Opening it with the Apps
+         * button showed the order as it stood when the menu was first built,
+         * which on a fresh desktop is the order things were installed in.
+         */
+        layout(shell);
         recon_panel_raise_to_top(shell->menu);
+        draw_menu(shell);
     }
     draw_taskbar(shell);
     recon_damage_all(shell->server);
@@ -2870,6 +3085,21 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             return true;
         }
         uint32_t hit = recon_hit_test(shell->menu, px, py);
+
+        /*
+         * Checked before the power range, which begins at a lower id and
+         * would otherwise swallow this one -- the ranges below are compared
+         * with >=, so the order of these branches is what separates them.
+         */
+        if (hit == HIT_ALL_PROGRAMS) {
+            shell->menu_show_all = !shell->menu_show_all;
+            shell->menu_hover = -1;
+            layout(shell);
+            draw_menu(shell);
+            recon_damage_all(shell->server);
+            return true;
+        }
+
         if (hit >= HIT_MENU_BASE) {
             /* The right column: a place to go, or something that
              * configures the machine. */
@@ -2934,7 +3164,8 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
 
             int index = (int)(hit - HIT_MENU_BASE);
             struct menu_entry entry;
-            if (index >= 0 && menu_entry_at(index, &entry)) {
+            if (index >= 0 &&
+                    menu_entry_at(shell->menu_show_all, index, &entry)) {
                 /* Close the menu first: quitting never returns here. */
                 recon_shell_close_menu(shell);
                 if (entry.is_shutdown) {

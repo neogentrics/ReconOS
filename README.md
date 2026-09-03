@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.1.** The version number tracks what works, not what is
+**Status: v0.2.2.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -24,8 +24,10 @@ clicked them.
 v0.2.0 added the first networking: ReconOS can see the network and reach
 across it. It does not implement one -- see *The network* below, which is
 blunt about the difference. v0.2.1 added connections that carry data, the
-rule about which programs may open one, screen capture, and installing and
-removing programs.
+rule about which programs may open one, screen capture, installing and
+removing programs, and wallpapers the system draws for itself. v0.2.2 gave
+the Start menu an All Programs list and restricted the control socket to the
+account that owns it.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -77,6 +79,13 @@ Control Panel on the right, who is signed in across the top, and Lock / Sign
 Out / Switch User / Restart / Shut Down along the bottom. Lock covers the
 screen without ending the session: the account stays signed in, the windows
 stay open, and coming back is the same desktop.
+
+The left column is the six applications this account opens most, counted per
+account since which programs somebody reaches for is a fact about them rather
+than about the machine. **All Programs** at the foot of it lists everything
+installed, alphabetically. The two are not the same list truncated: the column
+answers what you use, All Programs answers what is here, and only one of those
+is in an order you can search by name.
 
 **A Control Panel** with thirteen pages. Six do something: Accounts,
 Appearance, Reading, Programs, Modules, About. Modules loads and unloads code
