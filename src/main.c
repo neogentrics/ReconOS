@@ -62,6 +62,7 @@
 #include "recon_server.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
+#include "recon_net.h"
 #include "recon_registry.h"
 #include "recon_access.h"
 #include "recon_theme.h"
@@ -1488,6 +1489,18 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         server->shell = recon_shell_create(server, width, height);
         recon_apps_init(server);
 
+        /*
+         * Networking, which means reading what the host already has. Before
+         * the shell needs it and before any module can ask -- and after the
+         * registry, since it wants the machine name from there.
+         */
+        recon_net_init(wl_display_get_event_loop(server->wl_display));
+        wlr_log(WLR_INFO, "ReconOS: network %s, %d interface%s, gateway %s",
+            recon_net_online() ? "up" : "down",
+            recon_net_interface_count(),
+            recon_net_interface_count() == 1 ? "" : "s",
+            recon_net_gateway()[0] != ' ' ? recon_net_gateway() : "(none)");
+
         /* The reader's settings, once there is a font to apply them to. */
         recon_access_apply(recon_shell_font(server->shell));
 
@@ -1725,6 +1738,7 @@ int main(int argc, char **argv) {
     recon_control_destroy(control);
     recon_shell_destroy(server.shell);
     recon_users_finish();
+    recon_net_finish();
     recon_theme_finish();
     recon_registry_finish();
     recon_fs_finish();

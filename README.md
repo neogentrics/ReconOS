@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.1.3.** The version number tracks what works, not what is
+**Status: v0.2.0.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -20,6 +20,10 @@ that came out of somebody actually using it: setup that looks like it belongs
 to something, accounts with faces, a login that asks who you are before it
 asks anything else, and a long list of things that were wrong once a person
 clicked them.
+
+v0.2.0 adds the first networking: ReconOS can see the network and reach
+across it. It does not implement one -- see *The network* below, which is
+blunt about the difference.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -97,6 +101,24 @@ be dragged wider. Two buttons there do nothing yet and say so.
 everywhere worth going, a toolbar of icons in groups, and a sidebar that
 separates your own folders from the machine's. It hides the system's own
 bookkeeping from your home folder.
+
+**The network — seen, not implemented.** ReconOS has no kernel, so it has no
+ARP, no IP and no TCP. What it has is `recon_net`, which presents the host's
+network in ReconOS's own terms: which interfaces exist, their addresses, the
+gateway, the resolvers, and whether there is a way out. It can resolve a name
+and ask whether a host answers, without freezing the desktop while a dead
+host times out.
+
+That is the same bargain `recon_fs` makes with the filesystem, and it buys the
+same thing: one file knows Linux is underneath, and when ReconOS has a stack
+of its own that file is what changes. The Control Panel's Network page and the
+`net` command both say so on screen, because a page listing an IP address and
+a gateway looks exactly like an operating system doing networking, and this
+one is not.
+
+Deliberately not there yet: listening, sending, receiving. Those need a stream
+API and a policy about which applications may open a connection, and neither
+exists.
 
 **A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
 right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a

@@ -57,7 +57,7 @@ today is phase 2 work.
 | Signals | Linux | ReconOS |
 | I/O device management | Linux (via wlroots) | ReconOS |
 | Secondary storage management | Linux | ReconOS |
-| Network management | Linux | ReconOS |
+| Network management | Linux (read and used via `recon_net`) | ReconOS |
 | Security management | Linux | ReconOS |
 | Command interpreter | `bash` | ReconOS |
 
@@ -160,13 +160,41 @@ rather than the way down, because that is when the work happens -- nothing is
 installed during a restart, and a progress bar before shutting down would be
 an animation of nothing.
 
+## v0.2.0 — the network, seen
+
+The first networking, and the first version number to move its middle digit,
+because this is a capability the system did not have rather than a round of
+polish.
+
+`recon_net` is to the network what `recon_fs` is to the filesystem: the one
+file that knows Linux is underneath, presenting what it finds in ReconOS's own
+terms. Interfaces, addresses, the gateway, the resolvers, whether there is a
+way out, resolving a name, and asking whether a host answers.
+
+**It does not block.** A reachability test is started, handed to the event
+loop, and answered later -- a network that is not there takes the whole
+timeout to say so, and freezing a desktop for three seconds is a poor way to
+report it. Verified: while a probe to an unroutable address was timing out,
+the system answered on its control socket immediately.
+
+Because an answer arrives after whatever asked has finished running, the
+outcome is recorded. `net reach` starts a test and `net` reports what came
+back; the Control Panel's Network page reads the same record.
+
+`recon_net` takes an event loop rather than the server, because an event loop
+is all it needs. That is what lets it be tested without a compositor, and it
+is also the more honest boundary: this file knows about Linux, not about
+ReconOS's window system.
+
+**What is deliberately absent:** listening, sending and receiving. An
+application that wants a connection needs a stream API and a policy about
+which applications may open one. Neither exists, and inventing a socket API
+before anything wants one is how an interface gets fixed in place before it
+is understood.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
-
-**No networking at all.** No stack, no configuration, no way for anything to
-reach anything. Until this exists a browser is pointless, the machine's name
-is decoration, and nothing can be installed from anywhere.
 
 **No screen capture.** It should be a native application on Print Screen.
 

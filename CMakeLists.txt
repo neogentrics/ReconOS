@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.1.3
+    VERSION 0.2.0
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -53,6 +53,7 @@ add_executable(ReconOS
     src/recon_apps.c
     src/recon_avatar.c
     src/recon_modules.c
+    src/recon_net.c
     src/recon_appwin.c
     src/recon_cmd.c
     src/recon_control.c
@@ -189,6 +190,25 @@ add_executable(recon_users_tests
 target_include_directories(recon_users_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# Networking reports rather than computes, which is exactly the kind of code
+# that goes wrong quietly: a wrong answer looks like a true fact about a
+# different machine. These check the parts that are true of any machine --
+# loopback exists, an interface is listed once -- rather than of this one.
+add_executable(recon_net_tests
+    tests/test_net.c
+    src/recon_net.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_net_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Only wayland-server, because that is genuinely all recon_net needs: an
+# event loop to hang a socket on. No wlroots, no generated protocol headers,
+# no compositor.
+target_link_libraries(recon_net_tests PRIVATE ${WAYLAND_LIBRARIES})
+target_include_directories(recon_net_tests PRIVATE ${WAYLAND_INCLUDE_DIRS})
+
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
@@ -196,3 +216,4 @@ add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)
+add_test(NAME network COMMAND recon_net_tests)

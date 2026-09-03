@@ -21,6 +21,7 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
 #include "recon_server.h"
@@ -76,6 +77,9 @@ enum action {
     ACTION_UNLOCK_REGISTRY,
     ACTION_LOCK_REGISTRY,
     ACTION_REGISTRY_HIVE,
+    /* Network */
+    ACTION_TEST_NETWORK,
+    ACTION_REFRESH_NETWORK,
     /* Reading */
     ACTION_SPACING_LESS,
     ACTION_SPACING_MORE,
@@ -94,6 +98,7 @@ enum page {
     PAGE_PROGRAMS,
     PAGE_MODULES,
 
+    PAGE_NETWORK,
     PAGE_POWER,
     PAGE_STORAGE,
     PAGE_MULTITASKING,
@@ -119,7 +124,8 @@ static const struct {
     { "Programs", RECON_ICON_APP, true },
     { "Modules", RECON_ICON_SYSTEM, false },
 
-    { "Power", RECON_ICON_SHUTDOWN, true },
+    { "Network", RECON_ICON_SYSTEM, true },
+    { "Power", RECON_ICON_SHUTDOWN, false },
     { "Storage", RECON_ICON_EXPLORER, false },
     { "Multitasking", RECON_ICON_TASKMGR, false },
     { "Update", RECON_ICON_SYSTEM, false },
@@ -863,6 +869,144 @@ static void draw_modules(struct control_panel *cp, struct recon_panel *p,
 }
 
 /*
+ * The network, as ReconOS can see it.
+ *
+ * Everything here is read from the host, and the page says so at the bottom
+ * rather than letting a list of addresses imply that ReconOS is doing the
+ * networking. It is not; see include/recon_net.h.
+ */
+static void draw_network(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    /* Read again every time the page is drawn: an address that was true when
+     * the window opened is not a fact, it is a memory. */
+    recon_net_refresh();
+
+    bool online = recon_net_online();
+    y = draw_heading(cp, p, x, y, w, "Network",
+        online ? "This machine has a way out."
+               : "This machine has no way out at the moment.");
+
+    /* The machine's own name, which is ReconOS's rather than the host's. */
+    char summary[192];
+    snprintf(summary, sizeof(summary), "Called          %s",
+        recon_net_machine_name());
+    recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_TEXT);
+    y += line + 6;
+
+    /* Interfaces. Loopback last and dimmed: it is real, and it is never the
+     * answer to "am I connected". */
+    int count = recon_net_interface_count();
+    int rows = (h - y - BUTTON_HEIGHT - PADDING * 3) / ROW_HEIGHT;
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = (rows < count ? rows : count) * ROW_HEIGHT;
+    if (cp->list_h > 0) {
+        recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+    }
+
+    int drawn = 0;
+    for (int pass = 0; pass < 2 && drawn < rows; pass++) {
+        for (int i = 0; i < count && drawn < rows; i++) {
+            struct recon_net_interface interface;
+            if (!recon_net_interface_at(i, &interface)) {
+                continue;
+            }
+            /* Real interfaces first, loopback second. */
+            if (interface.loopback != (pass == 1)) {
+                continue;
+            }
+
+            char detail[128];
+            snprintf(detail, sizeof(detail), "%s%s%s",
+                interface.address[0] != '\0' ? interface.address
+                                             : "no address",
+                interface.up ? "" : "   down",
+                interface.loopback ? "   this machine only"
+                    : (interface.wireless ? "   wireless" : ""));
+
+            draw_row(cp, p, x, y + drawn * ROW_HEIGHT, w, drawn,
+                interface.name, detail, false);
+            drawn++;
+        }
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, "No interfaces at all.", COLOR_DIM);
+    }
+
+    y += cp->list_h + PADDING;
+
+    const char *gateway = recon_net_gateway();
+    snprintf(summary, sizeof(summary), "Gateway         %s",
+        gateway[0] != '\0' ? gateway : "none");
+    recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_TEXT);
+    y += line + 2;
+
+    int servers = recon_net_nameserver_count();
+    for (int i = 0; i < servers; i++) {
+        snprintf(summary, sizeof(summary), "%-15s %s",
+            i == 0 ? "Resolver" : "", recon_net_nameserver_at(i));
+        recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_TEXT);
+        y += line + 2;
+    }
+    if (servers == 0) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Resolver        none configured", COLOR_TEXT);
+        y += line + 2;
+    }
+
+    /* The last test, if one has been run. */
+    char host[128];
+    enum recon_net_result result;
+    int elapsed = 0;
+    if (recon_net_last_probe(host, sizeof(host), &result, &elapsed)) {
+        if (result == RECON_NET_OK) {
+            snprintf(summary, sizeof(summary), "Last test       %s answered "
+                "in %d ms", host, elapsed);
+        } else {
+            snprintf(summary, sizeof(summary), "Last test       %s: %s",
+                host, recon_net_result_name(result));
+        }
+        recon_draw_text(p, cp->font, x, y + ascent, w, summary,
+            result == RECON_NET_OK ? COLOR_TEXT : COLOR_WARNING);
+        y += line + 2;
+    }
+
+    if (recon_net_probe_count() > 0) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Testing...", COLOR_DIM);
+        y += line + 2;
+    }
+
+    y += PADDING;
+    int bx = draw_button(cp, p, x, y, "Test the connection",
+        HIT_ACTION_BASE + ACTION_TEST_NETWORK, true);
+    draw_button(cp, p, bx, y, "Read again",
+        HIT_ACTION_BASE + ACTION_REFRESH_NETWORK, true);
+    y += BUTTON_HEIGHT + PADDING;
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "ReconOS has no network stack of its own. This is the host's,",
+        COLOR_DIM);
+    y += line;
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "reported through ReconOS. Its own comes with its own kernel.",
+        COLOR_DIM);
+}
+
+/*
  * The registry, behind a password.
  *
  * Read-only for now: seeing what the system remembers is most of the value,
@@ -1074,6 +1218,7 @@ static void panel_draw(void *user, struct recon_panel *p,
     case PAGE_READING:    draw_reading(cp, p, cx, cy, cw, chh); break;
     case PAGE_PROGRAMS:   draw_programs(cp, p, cx, cy, cw, chh); break;
     case PAGE_MODULES:    draw_modules(cp, p, cx, cy, cw, chh); break;
+    case PAGE_NETWORK:    draw_network(cp, p, cx, cy, cw, chh); break;
     case PAGE_REGISTRY:   draw_registry(cp, p, cx, cy, cw, chh); break;
     case PAGE_ABOUT:      draw_system(cp, p, cx, cy, cw, chh); break;
     default:
@@ -1316,6 +1461,33 @@ static void do_action(struct control_panel *cp, enum action action) {
     case ACTION_REGISTRY_HIVE:
         cp->registry_hive = cp->registry_hive == 0 ? 1 : 0;
         cp->registry_scroll = 0;
+        break;
+
+    case ACTION_TEST_NETWORK: {
+        /*
+         * Asks whether something out there answers, and does not wait for the
+         * answer. A dead network takes the whole timeout to say so, and a
+         * Control Panel frozen for three seconds because somebody pressed a
+         * button is worse than the answer is useful. The result lands where
+         * the page reads it, and the page redraws when it next does.
+         */
+        if (!recon_net_online()) {
+            set_status(cp, true,
+                "Nothing is configured to test with -- no gateway.");
+            break;
+        }
+        if (!recon_net_probe("example.com", 80, 3000, NULL, NULL)) {
+            set_status(cp, true, "%s", recon_net_last_error());
+            break;
+        }
+        set_status(cp, false,
+            "Asking example.com. The answer appears above.");
+        break;
+    }
+
+    case ACTION_REFRESH_NETWORK:
+        recon_net_refresh();
+        set_status(cp, false, "Read the network again.");
         break;
 
     case ACTION_SPACING_LESS:

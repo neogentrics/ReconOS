@@ -18,6 +18,7 @@
 #include "recon_cmd.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
+#include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
 #include "recon_session.h"
@@ -1288,6 +1289,123 @@ static void cmd_mem(struct recon_cmd_session *s, int argc, char **argv) {
     recon_proc_snapshot_destroy(snapshot);
 }
 
+/*
+ * `net` -- what the network looks like, and whether anything answers.
+ *
+ * The test does not block. A command's output is written when the command
+ * returns, and an answer that arrives later cannot be written into it, so
+ * `net reach` starts the test and `net` reports what came back. That is the
+ * honest shape given how the interpreter works, and it is also the shape a
+ * desktop wants: nothing freezes while a dead host is waited on.
+ */
+static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc > 1 && strcasecmp(argv[1], "refresh") == 0) {
+        recon_net_refresh();
+        out(s, "Read the network again.\n");
+        return;
+    }
+
+    if (argc > 2 && strcasecmp(argv[1], "resolve") == 0) {
+        char address[RECON_NET_ADDR_MAX];
+        enum recon_net_result result =
+            recon_net_resolve(argv[2], address, sizeof(address));
+
+        if (result == RECON_NET_OK) {
+            out(s, "%s is %s\n", argv[2], address);
+        } else {
+            /* The error already names the host; saying it twice reads as a
+             * stutter. */
+            out(s, "%s\n", recon_net_last_error());
+        }
+        return;
+    }
+
+    if (argc > 2 && strcasecmp(argv[1], "reach") == 0) {
+        int port = (argc > 3) ? atoi(argv[3]) : 80;
+        if (!recon_net_probe(argv[2], port, 3000, NULL, NULL)) {
+            out(s, "Cannot test that: %s\n", recon_net_last_error());
+            return;
+        }
+        out(s, "Asking %s on port %d. 'net' shows the answer.\n",
+            argv[2], port);
+        return;
+    }
+
+    if (argc > 1 && strcasecmp(argv[1], "interfaces") != 0) {
+        out(s, "Usage: net [interfaces|refresh|resolve <host>|reach <host> [port]]\n");
+        return;
+    }
+
+    recon_net_refresh();
+
+    if (argc > 1) {
+        int count = recon_net_interface_count();
+        for (int i = 0; i < count; i++) {
+            struct recon_net_interface interface;
+            if (!recon_net_interface_at(i, &interface)) {
+                continue;
+            }
+            out(s, "  %-10s %-24s %s%s%s\n",
+                interface.name,
+                interface.address[0] != '\0' ? interface.address : "(none)",
+                interface.up ? "up" : "down",
+                interface.loopback ? ", loopback" : "",
+                interface.wireless ? ", wireless" : "");
+            out(s, "  %-10s %llu received, %llu sent\n", "",
+                interface.rx_bytes, interface.tx_bytes);
+        }
+        out(s, "\n  %d interface%s\n", count, count == 1 ? "" : "s");
+        return;
+    }
+
+    /* The summary. */
+    out(s, "Machine    %s\n", recon_net_machine_name());
+    out(s, "Network    %s\n", recon_net_online() ? "up" : "down");
+
+    int count = recon_net_interface_count();
+    for (int i = 0; i < count; i++) {
+        struct recon_net_interface interface;
+        if (!recon_net_interface_at(i, &interface) || interface.loopback) {
+            continue;
+        }
+        out(s, "%-10s %s%s\n", interface.name,
+            interface.address[0] != '\0' ? interface.address : "(no address)",
+            interface.up ? "" : "  (down)");
+    }
+
+    const char *gateway = recon_net_gateway();
+    out(s, "Gateway    %s\n", gateway[0] != '\0' ? gateway : "(none)");
+
+    int servers = recon_net_nameserver_count();
+    for (int i = 0; i < servers; i++) {
+        out(s, "%-10s %s\n", i == 0 ? "Resolver" : "",
+            recon_net_nameserver_at(i));
+    }
+    if (servers == 0) {
+        out(s, "Resolver   (none configured)\n");
+    }
+
+    char host[128];
+    enum recon_net_result result;
+    int elapsed = 0;
+    if (recon_net_last_probe(host, sizeof(host), &result, &elapsed)) {
+        out(s, "Last test  %s: %s", host, recon_net_result_name(result));
+        if (result == RECON_NET_OK) {
+            out(s, " in %d ms", elapsed);
+        }
+        out(s, "\n");
+    }
+
+    int running = recon_net_probe_count();
+    if (running > 0) {
+        out(s, "%-10s %d test%s still running\n", "", running,
+            running == 1 ? "" : "s");
+    }
+
+    out(s, "\nReconOS has no network stack of its own. This is the host's,\n");
+    out(s, "reported through ReconOS -- see include/recon_net.h.\n");
+}
+
 static void cmd_echo(struct recon_cmd_session *s, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         out(s, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -1328,6 +1446,7 @@ static const struct command COMMANDS[] = {
     { "users",    "users [action] ...",    "List or change accounts",           cmd_users },
     { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
+    { "net",      "net [action] ...",      "The network, and whether it answers", cmd_net },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },
     { "echo",     "echo <text>",           "Print text",                        cmd_echo },
