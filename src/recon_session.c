@@ -32,7 +32,13 @@
 #define GAP 14
 
 #define ACCOUNTS_VISIBLE 6
-#define OPTIONS_VISIBLE 8
+/*
+ * An upper bound, not the number shown. Sizing the list to this rather than
+ * to how many there are cut the last skin off the setup screen, so it could
+ * not be chosen at all -- and the one that went missing was Reading, which is
+ * the one somebody who needs it is looking for.
+ */
+#define OPTIONS_MAX 12
 
 /* --- Hit ids --- */
 
@@ -156,9 +162,14 @@ static int card_height(struct recon_session *session) {
     case STAGE_ACCOUNT:
         return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
             (FIELD_HEIGHT + line + GAP) * 3 + BUTTON_HEIGHT + GAP * 2;
-    case STAGE_LOOK:
+    case STAGE_LOOK: {
+        int count = recon_theme_count();
+        if (count > OPTIONS_MAX) {
+            count = OPTIONS_MAX;
+        }
         return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
-            ROW_HEIGHT * OPTIONS_VISIBLE + BUTTON_HEIGHT + GAP * 3;
+            ROW_HEIGHT * count + BUTTON_HEIGHT + GAP * 3;
+    }
     case STAGE_READING:
         return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
             ROW_HEIGHT * ACCESSIBILITY_COUNT + BUTTON_HEIGHT + GAP * 3;
@@ -345,8 +356,8 @@ static void draw(struct recon_session *session) {
         y += TITLE_SIZE + line + GAP;
 
         int count = recon_theme_count();
-        if (count > OPTIONS_VISIBLE) {
-            count = OPTIONS_VISIBLE;
+        if (count > OPTIONS_MAX) {
+            count = OPTIONS_MAX;
         }
         for (int i = 0; i < count; i++) {
             struct recon_theme_info info;
