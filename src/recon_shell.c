@@ -118,6 +118,19 @@
 /* The row at the foot of the left column, which is neither an application nor
  * a place and so belongs to neither range. */
 #define HIT_ALL_PROGRAMS 290
+/* The desktop pager at the right end of the taskbar. */
+#define HIT_DESKTOP_BASE 291
+
+/*
+ * Four desktops.
+ *
+ * A fixed number rather than one you can add to, because the shortcuts are
+ * what make desktops worth having and a number key each is what makes the
+ * shortcuts learnable. Four fits on the taskbar without the pager competing
+ * with the windows for width.
+ */
+#define DESKTOP_COUNT 4
+#define DESKTOP_BUTTON 22
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
 #define HIT_DIALOG_BASE 500
@@ -451,6 +464,16 @@ struct recon_shell {
      * reopened expanded would make the short list unreachable by accident.
      */
     bool menu_show_all;
+
+    /*
+     * Which virtual desktop is showing. Windows remember their own; this is
+     * the one whose windows are on screen and on the taskbar.
+     *
+     * Named for what it holds rather than just "desktop", because that word
+     * was already taken by the surface the icons sit on -- which is one thing
+     * that does not multiply when these do.
+     */
+    int current_desktop;
 
     /* Built-in windows. Listed on the taskbar beside client windows, and
      * offered input in front-to-back order. */
@@ -1001,13 +1024,15 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
         int wx = 0, wy = 0, ww = 0, wh = 0, cx = 0, cy = 0;
         recon_appwin_geometry(win, &wx, &wy, &ww, &wh);
         recon_appwin_content_origin(win, &cx, &cy);
-        EMIT("  %-22s %-9s%s frame %d,%d %dx%d content-origin %d,%d\n",
+        EMIT("  %-22s %-9s%s desktop %d frame %d,%d %dx%d content-origin %d,%d\n",
             recon_appwin_title(win),
             recon_appwin_is_minimized(win) ? "minimized" : "open",
             recon_appwin_is_focused(win) ? " focused" : "",
+            recon_appwin_desktop(win) + 1,
             wx, wy, ww, wh, cx, cy);
     }
 
+    EMIT("desktop: %d of %d\n", shell->current_desktop + 1, DESKTOP_COUNT);
     EMIT("apps menu: %s\n", shell->menu_open ? "open" : "closed");
 
     if (shell->menu_open) {
@@ -1299,6 +1324,50 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
         active ? COLOR_TEXT : COLOR_TEXT_DIM);
 }
 
+/*
+ * The desktop pager, at the right end of the taskbar.
+ *
+ * Numbered rather than named, and always all four, so the shortcut and the
+ * button agree: Alt+2 and the button marked 2 are the same thing, and a
+ * feature nobody can see on screen is a feature nobody finds.
+ *
+ * A dot under a number says that desktop has windows on it, which is what
+ * turns the pager from four identical buttons into somewhere you can see the
+ * shape of what you have open.
+ */
+static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
+        int x, int baseline) {
+    for (int i = 0; i < DESKTOP_COUNT; i++) {
+        int bx = x + i * (DESKTOP_BUTTON + 2);
+        bool current = (i == shell->current_desktop);
+
+        recon_fill_role(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON, BUTTON_HEIGHT,
+            current ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
+        recon_draw_bevel(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
+            BUTTON_HEIGHT, current);
+
+        char label[4];
+        snprintf(label, sizeof(label), "%d", i + 1);
+        int text_w = recon_text_width(shell->font, label);
+        recon_draw_text(bar, shell->font, bx + (DESKTOP_BUTTON - text_w) / 2,
+            baseline, DESKTOP_BUTTON, label,
+            current ? COLOR_TEXT : COLOR_BUTTON_TEXT);
+
+        bool occupied = false;
+        for (int a = 0; a < shell->app_count && !occupied; a++) {
+            occupied = recon_appwin_is_open(shell->apps[a]) &&
+                recon_appwin_desktop(shell->apps[a]) == i;
+        }
+        if (occupied && !current) {
+            recon_fill_rect(bar, bx + DESKTOP_BUTTON / 2 - 1,
+                TASKBAR_PADDING + BUTTON_HEIGHT - 6, 3, 3, COLOR_ACCENT);
+        }
+
+        recon_hit_add(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON, BUTTON_HEIGHT,
+            HIT_DESKTOP_BASE + i);
+    }
+}
+
 static void draw_taskbar(struct recon_shell *shell) {
     struct recon_panel *bar = shell->taskbar;
     if (bar == NULL) {
@@ -1356,12 +1425,19 @@ static void draw_taskbar(struct recon_shell *shell) {
     int x = TASKBAR_PADDING * 2 + APPS_BUTTON_WIDTH;
     int available = width - x - TASKBAR_PADDING;
 
+    /* Room at the right end for the pager, so windows never draw over it. */
+    int pager_w = DESKTOP_COUNT * (DESKTOP_BUTTON + 2) + TASKBAR_PADDING;
+    available -= pager_w;
+
     int window_count = wl_list_length(&shell->server->toplevels);
     for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_is_open(shell->apps[i])) {
+        if (recon_appwin_is_open(shell->apps[i]) &&
+                recon_appwin_desktop(shell->apps[i]) == shell->current_desktop) {
             window_count++;
         }
     }
+
+    draw_pager(shell, bar, width - pager_w + TASKBAR_PADDING, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
         recon_panel_commit(bar);
@@ -1385,7 +1461,13 @@ static void draw_taskbar(struct recon_shell *shell) {
         if (!recon_appwin_is_open(win) || shell->button_count >= max_buttons) {
             continue;
         }
-        if (x + button_width > width - TASKBAR_PADDING) {
+        /* This desktop's windows only. A bar listing all of them would make
+         * the desktops a way of hiding windows rather than of arranging
+         * them. */
+        if (recon_appwin_desktop(win) != shell->current_desktop) {
+            continue;
+        }
+        if (x + button_width > width - pager_w - TASKBAR_PADDING) {
             break;
         }
 
@@ -1407,7 +1489,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         if (shell->button_count >= max_buttons) {
             break;
         }
-        if (x + button_width > width - TASKBAR_PADDING) {
+        if (x + button_width > width - pager_w - TASKBAR_PADDING) {
             break;
         }
 
@@ -2323,11 +2405,100 @@ void recon_shell_cycle_windows(struct recon_shell *shell) {
     }
 }
 
+/*
+ * Show one desktop and hide the rest.
+ *
+ * Every window is told whether its desktop is the one showing, rather than
+ * only the ones that change, because a window created while another desktop
+ * was up has never been told anything and would otherwise be visible on all
+ * of them.
+ */
+void recon_shell_set_desktop(struct recon_shell *shell, int desktop) {
+    if (shell == NULL || desktop < 0 || desktop >= DESKTOP_COUNT) {
+        return;
+    }
+    shell->current_desktop = desktop;
+
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_set_desktop_showing(shell->apps[i],
+            recon_appwin_desktop(shell->apps[i]) == desktop);
+    }
+
+    /*
+     * Whatever had the keyboard may have just gone. Rather than pick a
+     * replacement, the shell forgets the focus and the next click or Alt+Tab
+     * chooses -- guessing which window somebody wanted on a desktop they have
+     * only just arrived at is a guess that is wrong half the time.
+     */
+    if (shell->focused_app >= 0 && shell->focused_app < shell->app_count &&
+            recon_appwin_desktop(shell->apps[shell->focused_app]) != desktop) {
+        set_focused_app(shell, -1);
+    }
+
+    recon_shell_close_menu(shell);
+    draw_taskbar(shell);
+    recon_damage_all(shell->server);
+}
+
+int recon_shell_desktop(struct recon_shell *shell) {
+    return shell != NULL ? shell->current_desktop : 0;
+}
+
+int recon_shell_desktop_count(void) {
+    return DESKTOP_COUNT;
+}
+
+/*
+ * Send the window that has the keyboard to another desktop, and follow it.
+ *
+ * Following is the point: moving a window somewhere and staying behind means
+ * watching it disappear, then switching to check it arrived. Together they
+ * are one action -- "take this with me".
+ */
+void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop) {
+    if (shell == NULL || desktop < 0 || desktop >= DESKTOP_COUNT) {
+        return;
+    }
+    /* Held on to, because set_desktop below clears the focus when the window
+     * that had it is not on the desktop being shown -- which is true for a
+     * moment here, between the move and the switch. */
+    int index = shell->focused_app;
+    if (index < 0 || index >= shell->app_count) {
+        return;
+    }
+
+    struct recon_appwin *win = shell->apps[index];
+    if (!recon_appwin_is_open(win)) {
+        return;
+    }
+
+    recon_appwin_set_desktop(win, desktop);
+    recon_shell_set_desktop(shell, desktop);
+
+    /* It came with you, so it keeps the keyboard. */
+    raise_app_order(shell, index);
+    set_focused_app(shell, index);
+    recon_appwin_focus(win);
+    recon_shell_refresh(shell);
+}
+
 void recon_shell_open_app(struct recon_shell *shell, int index) {
     if (shell == NULL || index < 0 || index >= shell->app_count) {
         return;
     }
     recon_shell_close_menu(shell);
+
+    /*
+     * Opening something brings it here rather than taking you to it.
+     *
+     * An application has one window, so "open Notepad" while it sits on
+     * another desktop has to mean one or the other. Being moved somewhere you
+     * did not ask to go is the more startling of the two, and moving the
+     * window is what somebody choosing it from this desktop's menu meant.
+     */
+    recon_appwin_set_desktop(shell->apps[index], shell->current_desktop);
+    recon_appwin_set_desktop_showing(shell->apps[index], true);
+
     raise_app_order(shell, index);
     set_focused_app(shell, index);
     recon_appwin_show(shell->apps[index]);
@@ -3349,6 +3520,9 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
 
         if (hit == HIT_APPS_BUTTON) {
             toggle_menu(shell);
+        } else if (hit >= HIT_DESKTOP_BASE &&
+                hit < HIT_DESKTOP_BASE + (uint32_t)DESKTOP_COUNT) {
+            recon_shell_set_desktop(shell, (int)(hit - HIT_DESKTOP_BASE));
         } else if (hit >= HIT_TASK_BASE && hit < HIT_MENU_BASE) {
             int index = (int)(hit - HIT_TASK_BASE);
             if (index >= 0 && index < shell->button_count) {

@@ -1170,6 +1170,30 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
     case XKB_KEY_T:
         recon_shell_open_taskmgr(server->shell);
         return true;
+
+    /*
+     * Alt+1..4 goes to a desktop; adding Shift takes the current window
+     * along. A number key each is what makes four desktops learnable, and it
+     * is the same number the pager on the taskbar shows.
+     */
+    case XKB_KEY_1: case XKB_KEY_2: case XKB_KEY_3: case XKB_KEY_4:
+        recon_shell_set_desktop(server->shell, (int)(sym - XKB_KEY_1));
+        return true;
+    case XKB_KEY_exclam:   /* Shift+1 and friends, which is what the */
+    case XKB_KEY_at:       /* keyboard actually sends. */
+    case XKB_KEY_numbersign:
+    case XKB_KEY_dollar: {
+        static const xkb_keysym_t SHIFTED[] = {
+            XKB_KEY_exclam, XKB_KEY_at, XKB_KEY_numbersign, XKB_KEY_dollar,
+        };
+        for (int i = 0; i < (int)(sizeof(SHIFTED) / sizeof(SHIFTED[0])); i++) {
+            if (sym == SHIFTED[i]) {
+                recon_shell_move_to_desktop(server->shell, i);
+                break;
+            }
+        }
+        return true;
+    }
     case XKB_KEY_Return:
         /* The ReconOS terminal, in the place the old one used to be. */
         recon_shell_open_app(server->shell, 3);

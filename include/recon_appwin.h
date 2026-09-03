@@ -169,6 +169,25 @@ void recon_appwin_restore(struct recon_appwin *win);
 void recon_appwin_set_maximized(struct recon_appwin *win, bool maximized);
 
 /* Open at all, whether or not currently minimized. */
+/* --- Desktops --- */
+
+/*
+ * Which desktop a window belongs to.
+ *
+ * The shell decides what the numbers mean; a window only remembers which one
+ * it was put on. Separate from being minimized, because the two look the same
+ * on screen and mean different things to the taskbar: a minimized window is
+ * listed on its own desktop's bar, and one on another desktop is not listed
+ * there at all.
+ */
+void recon_appwin_set_desktop(struct recon_appwin *win, int desktop);
+int recon_appwin_desktop(struct recon_appwin *win);
+
+/* Tell a window whether the desktop it is on is the one being shown. A window
+ * that goes away this way gives up the keyboard: typing into something nobody
+ * can see is worse than typing nowhere. */
+void recon_appwin_set_desktop_showing(struct recon_appwin *win, bool showing);
+
 bool recon_appwin_is_open(struct recon_appwin *win);
 bool recon_appwin_is_minimized(struct recon_appwin *win);
 bool recon_appwin_is_maximized(struct recon_appwin *win);

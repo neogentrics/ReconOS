@@ -151,6 +151,24 @@ void recon_shell_open_app(struct recon_shell *shell, int index);
  */
 void recon_shell_cycle_windows(struct recon_shell *shell);
 
+/* --- Desktops --- */
+
+/*
+ * Show one desktop and hide the rest. Its windows come back, the others go
+ * away, and the taskbar lists what is here.
+ */
+void recon_shell_set_desktop(struct recon_shell *shell, int desktop);
+int recon_shell_desktop(struct recon_shell *shell);
+int recon_shell_desktop_count(void);
+
+/*
+ * Send the window that has the keyboard to another desktop, and follow it.
+ *
+ * Following is the point: moving a window somewhere and staying behind means
+ * watching it disappear and then switching to check it arrived.
+ */
+void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop);
+
 /* Take focus away from every built-in window, when it goes elsewhere. */
 void recon_shell_clear_app_focus(struct recon_shell *shell);
 

@@ -60,6 +60,20 @@ struct recon_appwin {
     bool open;
     bool minimized;
     bool maximized;
+
+    /*
+     * Which desktop this window belongs to, and whether that desktop is the
+     * one showing.
+     *
+     * Kept apart from `minimized` on purpose. Both end with the window off
+     * the screen, and they mean different things to everything else: a
+     * minimized window is still listed on the taskbar of the desktop it is
+     * on, and one sitting on another desktop is not listed here at all.
+     * Folding them together would have put every window from every desktop on
+     * every taskbar, marked as put away.
+     */
+    int desktop;
+    bool desktop_hidden;
     bool focused;
 
     int x, y;
@@ -339,6 +353,49 @@ static void center(struct recon_appwin *win) {
     }
 }
 
+/*
+ * On screen when it is open, not put away, and on the desktop being shown.
+ *
+ * The three reasons a window can be invisible used to be spelled out at each
+ * of the five places that enabled or disabled the panel, which is how a
+ * fourth reason ends up being applied at four of them.
+ */
+static void apply_visibility(struct recon_appwin *win) {
+    if (win == NULL || win->panel == NULL) {
+        return;
+    }
+    recon_panel_set_enabled(win->panel,
+        win->open && !win->minimized && !win->desktop_hidden);
+}
+
+void recon_appwin_set_desktop(struct recon_appwin *win, int desktop) {
+    if (win == NULL) {
+        return;
+    }
+    win->desktop = desktop;
+}
+
+int recon_appwin_desktop(struct recon_appwin *win) {
+    return win != NULL ? win->desktop : 0;
+}
+
+void recon_appwin_set_desktop_showing(struct recon_appwin *win, bool showing) {
+    if (win == NULL || win->desktop_hidden == !showing) {
+        return;
+    }
+    win->desktop_hidden = !showing;
+
+    if (win->desktop_hidden) {
+        /* A window that vanishes because the desktop changed must not keep
+         * the keyboard, or typing would go to something nobody can see. */
+        win->focused = false;
+        win->dragging = false;
+        win->resize_edges = 0;
+    }
+    apply_visibility(win);
+    recon_appwin_refresh(win);
+}
+
 void recon_appwin_show(struct recon_appwin *win) {
     if (win != NULL && !win->geometry_restored) {
         /* Set first: restoring may maximize the window, which saves, and
@@ -363,7 +420,7 @@ void recon_appwin_show(struct recon_appwin *win) {
     }
 
     win->minimized = false;
-    recon_panel_set_enabled(win->panel, true);
+    apply_visibility(win);
     recon_panel_raise_to_top(win->panel);
     recon_appwin_refresh(win);
 }
@@ -377,7 +434,7 @@ void recon_appwin_hide(struct recon_appwin *win) {
     win->minimized = false;
     win->dragging = false;
     win->focused = false;
-    recon_panel_set_enabled(win->panel, false);
+    apply_visibility(win);
 
     if (win->impl->visibility != NULL) {
         win->impl->visibility(win->user, false);
@@ -408,7 +465,7 @@ void recon_appwin_minimize(struct recon_appwin *win) {
     win->minimized = true;
     win->dragging = false;
     win->focused = false;
-    recon_panel_set_enabled(win->panel, false);
+    apply_visibility(win);
 
     if (win->impl->visibility != NULL) {
         win->impl->visibility(win->user, false);
@@ -422,7 +479,7 @@ void recon_appwin_restore(struct recon_appwin *win) {
     }
 
     win->minimized = false;
-    recon_panel_set_enabled(win->panel, true);
+    apply_visibility(win);
     recon_panel_raise_to_top(win->panel);
 
     if (win->impl->visibility != NULL) {
