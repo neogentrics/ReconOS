@@ -162,6 +162,18 @@ struct recon_session {
     /* Whether the reading and colour list was asked for. */
     bool wants_help;
 
+    /*
+     * The account this screen is locked to, or empty.
+     *
+     * Locking and switching user are different acts. Somebody who locks their
+     * machine is still using it -- their session is running behind this
+     * screen with their windows open -- and the screen exists to keep other
+     * people out of it, so it offers their account and no other. Switching
+     * user ends the session first, and then there is nothing to protect and
+     * every account is fair to offer.
+     */
+    char locked_to[RECON_USERS_NAME_MAX];
+
     /* Which account the login screen has selected. */
     int account;
     int account_scroll;
@@ -259,9 +271,11 @@ static int card_height(struct recon_session *session) {
             ROW_HEIGHT * ACCESSIBILITY_COUNT + BUTTON_HEIGHT + GAP * 3;
     case STAGE_LOGIN:
     default: {
-        int strip = recon_users_count() > 1 ? AVATAR_SMALL + GAP : 0;
-        return base + AVATAR_SIZE + line * 3 + FIELD_HEIGHT + strip +
-            BUTTON_HEIGHT + GAP * 4;
+        bool locked = session->locked_to[0] != '\0';
+        int strip = (recon_users_count() > 1 && !locked)
+            ? AVATAR_SMALL + GAP : 0;
+        return base + AVATAR_SIZE + line * (locked ? 4 : 3) + FIELD_HEIGHT +
+            strip + BUTTON_HEIGHT + GAP * 4;
     }
     }
 }
@@ -678,6 +692,19 @@ static void draw(struct recon_session *session) {
         struct recon_user chosen_user;
         bool have_user = recon_users_at(session->account, &chosen_user);
 
+        /*
+         * A locked machine says so, above the face. There is a session
+         * running behind this screen and that is worth knowing: it is the
+         * difference between "sign in" and "you left this open".
+         */
+        if (session->locked_to[0] != '\0') {
+            const char *locked = "Locked";
+            int locked_w = recon_text_width(session->font, locked);
+            recon_draw_text(p, session->font, x + (w - locked_w) / 2,
+                y + ascent, w, locked, THEME(ACCENT));
+            y += line + 6;
+        }
+
         /* The heading font for the initial: at this size the body font
          * leaves a letter lost in the middle of the disc. */
         int face = AVATAR_SIZE;
@@ -696,16 +723,14 @@ static void draw(struct recon_session *session) {
                 THEME(MENU_TEXT));
             y += recon_font_line_height(big) + 2;
 
-            /* Role, and whether this account is still signed in behind the
-             * screen, under the name where a caption belongs. */
-            const char *signed_in = recon_users_current();
+            /* Role, and -- when this screen is locked rather than signed out
+             * of -- that the session behind it is still theirs. */
+            bool locked = session->locked_to[0] != '\0';
             char caption[96];
             snprintf(caption, sizeof(caption), "%s%s",
                 chosen_user.role == RECON_ROLE_ADMINISTRATOR
                     ? "Administrator" : "Limited",
-                (signed_in != NULL &&
-                 strcmp(signed_in, chosen_user.name) == 0)
-                    ? "   still signed in" : "");
+                locked ? "   still signed in" : "");
 
             int caption_w = recon_text_width(session->font, caption);
             recon_draw_text(p, session->font, x + (w - caption_w) / 2,
@@ -736,9 +761,14 @@ static void draw(struct recon_session *session) {
          *
          * Only when there is more than one: a strip offering the single
          * account you are already looking at is a control with nothing to do.
+         *
+         * And never while locked. A locked machine has somebody's session
+         * running behind it; offering to sign in as somebody else from here
+         * would either abandon that session or pretend to protect it. Switch
+         * User ends the session first, and *that* screen offers everybody.
          */
         int count = recon_users_count();
-        if (count > 1) {
+        if (count > 1 && session->locked_to[0] == '\0') {
             int shown = count < ACCOUNTS_VISIBLE ? count : ACCOUNTS_VISIBLE;
             int step = AVATAR_SMALL + 12;
             int strip_w = shown * step - 12;
@@ -997,6 +1027,22 @@ static void advance(struct recon_session *session) {
             return;
         }
 
+        /*
+         * The lock is enforced here as well as drawn.
+         *
+         * Hiding the other accounts stops somebody choosing one; it does not
+         * stop the selection being somewhere else for a reason nobody
+         * anticipated. A lock that is only a drawing is not a lock.
+         */
+        if (session->locked_to[0] != '\0' &&
+                strcmp(session->locked_to, user.name) != 0) {
+            set_message(session, true,
+                "The machine is locked. Only %s can unlock it.",
+                session->locked_to);
+            recon_session_refresh(session);
+            return;
+        }
+
         if (!recon_users_login(user.name, session->password.text)) {
             /*
              * Deliberately vague. Saying "wrong password" confirms the account
@@ -1011,6 +1057,7 @@ static void advance(struct recon_session *session) {
         }
 
         recon_edit_end(&session->password);
+        session->locked_to[0] = '\0';
         session->signed_in_flag = true;
         go_to(session, STAGE_DONE);
         break;
@@ -1128,6 +1175,9 @@ void recon_session_lock(struct recon_session *session) {
     session->password.masked = true;
     session->account = 0;
     session->account_scroll = 0;
+    /* Nobody is signed in any more, so there is no session to protect and
+     * every account is fair to offer. */
+    session->locked_to[0] = '\0';
     go_to(session, STAGE_LOGIN);
 }
 
@@ -1151,10 +1201,13 @@ void recon_session_lock_screen(struct recon_session *session) {
     session->password.masked = true;
     session->account_scroll = 0;
 
-    /* Start on the account that locked it, since that is who is most likely
-     * to be coming back. */
+    /* Locked to whoever locked it: theirs is the only account this screen
+     * will offer, and their password is the only one that opens it. */
     session->account = 0;
+    session->locked_to[0] = '\0';
     if (who != NULL) {
+        snprintf(session->locked_to, sizeof(session->locked_to), "%s", who);
+
         int count = recon_users_count();
         for (int i = 0; i < count; i++) {
             struct recon_user user;
@@ -1325,7 +1378,10 @@ bool recon_session_handle_key(struct recon_session *session,
         int step = (sym == XKB_KEY_Down) ? 1 : -1;
 
         if (session->stage == STAGE_LOGIN) {
-            int count = recon_users_count();
+            /* Not while locked: there is one account on offer, and stepping
+             * off it with the keyboard would be a way round the lock. */
+            int count = session->locked_to[0] != '\0'
+                ? 0 : recon_users_count();
             int next = session->account + step;
             if (next >= 0 && next < count) {
                 session->account = next;
@@ -1383,17 +1439,31 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
         return;
     }
 
+    /*
+     * Designated initialisers, so a stage added in the middle of the enum
+     * cannot silently shift every name one along. Two were added and this
+     * table was not, which is how "login" started reporting itself as null.
+     */
     static const char *const STAGE_NAMES[] = {
-        "welcome", "account", "look", "reading", "finished", "login", "done",
+        [STAGE_WELCOME]  = "welcome",
+        [STAGE_ACCOUNT]  = "account",
+        [STAGE_MACHINE]  = "machine",
+        [STAGE_HELP]     = "help",
+        [STAGE_READING]  = "reading",
+        [STAGE_LOOK]     = "look",
+        [STAGE_FINISHED] = "finished",
+        [STAGE_LOGIN]    = "login",
+        [STAGE_DONE]     = "done",
     };
 
     snprintf(out, size,
-        "session: %s\n"
+        "session: %s%s\n"
         "  accounts: %d\n"
         "  selected: %d\n"
         "  signed in: %s\n"
         "  message: %s\n",
         STAGE_NAMES[session->stage],
+        session->locked_to[0] != '\0' ? " (locked)" : "",
         recon_users_count(),
         session->stage == STAGE_LOGIN ? session->account : session->option,
         recon_users_current() != NULL ? recon_users_current() : "(nobody)",

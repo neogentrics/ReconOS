@@ -86,8 +86,87 @@ architected and a first-run setup flow in place.
 | 4 | Apps menu and application launcher | **Done** |
 | 5 | Native first-party applications | **Done** — six of them |
 | 6 | Idle CPU/RAM baseline established and enforced | **Done** — 0.00% CPU, 17MB |
-| 7 | Skin system plumbing — chrome driven by data, not hardcoded | |
-| 8 | Minimal first-run setup flow | |
+| 7 | Skin system plumbing — chrome driven by data, not hardcoded | **Done** — 47 roles, 9 skins |
+| 8 | Minimal first-run setup flow | **Done** |
+
+## Since v0.1.0
+
+### v0.1.1 — one account at a time, and the shape of the rest
+
+**Fixed.** Opening the File Explorer as one account showed the folder a
+different account had left it in. Two causes: the user registry hive was
+written per account but only read once at boot, and application windows are
+built once and handed out again on every open. Windows now end at a change of
+person, and the hive is re-read. A limited account could also list and read
+another account's files, which it no longer can.
+
+**Added.** A Task Manager tab for Users, with draggable columns. A Control
+Panel of thirteen pages: Programs, Modules, Registry and About work; Power,
+Storage, Multitasking, Update, Troubleshoot and Recovery are present and say
+what has to exist before they can. Lock, which covers the screen without
+ending the session. An address bar you can type into, with a drop-down of
+places. A toolbar of drawn icons.
+
+**Also fixed.** Back and Forward had each other's arrows. The Start menu
+stayed open over a window that was clicked. `/System` protection compared
+paths by prefix, so `/Systems` was protected. Home went to the root of the
+filesystem instead of the user's folder. Home folders showed `.Trash` and the
+registry hive.
+
+### v0.1.2 — setup that looks like it belongs to something
+
+**Added.** A band across every setup and login screen carrying the Recon
+Towers mark, and a larger font for headings. A step asking what the machine is
+called. One question deciding whether the accessibility list is shown at all,
+instead of showing it to everybody. Pictures of each skin in the skin list,
+drawn from the palette. Account pictures, eight of them drawn at first run
+plus a coloured disc with the account's initial for anyone who has not chosen.
+A login screen built around the person signing in.
+
+**Fixed.** Lock offered every account, so anybody could sign in over a locked
+session; it is locked to whoever locked it, enforced and not merely drawn.
+Double-clicking the Recycle Bin did nothing, because the desktop's open-an-item
+switch had no case for it while the context menu's Open — a second copy of the
+same logic — did. The Task Manager's Type column said where an application came
+from rather than what it is, its Memory column said "in ReconOS", its menus
+highlighted nothing under the pointer and stayed open when the window lost
+focus. The address bar's drop-down listed your own folders twice when you stood
+in your own folder. `scripts/run-windowed.sh`, which runs the whole system in a
+window on an existing desktop, including on Windows through WSLg.
+
+## What is known to be missing
+
+Collected from using it. Nothing here is started.
+
+**No networking at all.** No stack, no configuration, no way for anything to
+reach anything. Until this exists a browser is pointless, the machine's name
+is decoration, and nothing can be installed from anywhere.
+
+**No update system.** A new version simply appears after a restart, which
+reads as the system changing under you. Restarting into an update should say
+what it is doing.
+
+**No screen capture.** It should be a native application on Print Screen.
+
+**Wallpaper is not part of a theme.** There is one image, it does not change
+with the skin, and there is no way to choose another. It also is not ours: a
+default background of the system's own is still to be made.
+
+**No custom skins.** The format exists and there is no way to install one.
+
+**The login screen names the sign-in method before anybody has chosen an
+account.** It should offer the accounts, and only reveal how to sign in once
+one is picked -- which is also where a PIN or biometrics would go.
+
+**No screen capture, paint program, or properties dialogs.** Desktop icon
+positions are not remembered. Client windows still draw their own decorations.
+The control socket still has no authentication.
+
+**No boot splash.** The system appears without announcing itself.
+
+**Relay is a name, not a language.** Modules are native code loaded by
+`dlopen` behind an ABI check, which is a real gate; the language and its
+interpreter do not exist.
 
 ### On the skin system
 
@@ -135,13 +214,15 @@ rewrite later.
 
 ## Known issues
 
-- `include/ReconOS.h` is unfinished scaffolding from an earlier iteration and is
-  not currently part of the build.
 - Client windows draw their own title bars, so a client looks like whatever
   toolkit built it. Built-in windows are framed by ReconOS; extending that to
   clients needs the xdg-decoration protocol.
 - The control socket has no authentication.
-- There is no way to type a name, so New Folder and New Shortcut pick one.
 - Properties is in the context menu and disabled: there is no properties view
   yet, and hiding the entry would suggest there never will be.
-- No login: the system starts as the administrator.
+- The registry can be read from the Control Panel but not changed there. The
+  terminal's `reg` command changes it for anyone who means to.
+
+Fixed since this list was written: `include/ReconOS.h` is now the version
+header and is in the build; folders and files are named by typing rather than
+being given a name; and there is a login screen.

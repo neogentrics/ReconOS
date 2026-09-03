@@ -828,24 +828,17 @@ bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double
     const struct desktop_item *item = &desktop->items[index];
 
     if (desktop->selected == index) {
-        /* Clicking an already-selected item opens it, which is a double click
-         * without needing to measure the gap between two. */
-        switch (item->kind) {
-        case ITEM_SHORTCUT:
-            action->kind = RECON_DESKTOP_ACTION_OPEN_APP;
-            snprintf(action->target, sizeof(action->target), "%s", item->target);
-            break;
-        case ITEM_FOLDER:
-            action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
-            snprintf(action->target, sizeof(action->target), "%s/%s",
-                recon_fs_user_dir("Desktop"), item->name);
-            break;
-        case ITEM_FILE:
-            action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
-            snprintf(action->target, sizeof(action->target), "%s",
-                recon_fs_user_dir("Desktop"));
-            break;
-        }
+        /*
+         * Clicking an already-selected item opens it, which is a double click
+         * without needing to measure the gap between two.
+         *
+         * Asked of recon_desktop_action_for rather than worked out here. This
+         * switch used to repeat that function's logic and had no case for the
+         * Recycle Bin, so double-clicking the bin produced no action at all
+         * while Open on its right-click menu -- which went through the other
+         * copy -- worked. One place decides what opening a thing means.
+         */
+        recon_desktop_action_for(desktop, item->name, action);
         return true;
     }
 

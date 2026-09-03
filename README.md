@@ -8,12 +8,20 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.1.1.** The version number tracks what works, not what is
-planned. v0.1.0 was the milestone defined as "a usable desktop": it sets itself
-up on first run, asks who you are on every run after, and gives that person a
-desktop of their own. v0.1.1 made that last part true -- see *One account at a
-time* below -- and put the shape of the rest of the system into the Control
-Panel, most of it marked as not built yet.
+**Status: v0.1.2.** The version number tracks what works, not what is
+planned.
+
+v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
+first run, asks who you are on every run after, and gives that person a desktop
+of their own. v0.1.1 made that last part true -- see *One account at a time*
+below -- and put the shape of the rest of the system into the Control Panel,
+most of it marked plainly as not built yet. v0.1.2 is the round that came out
+of somebody actually using it: setup that looks like it belongs to something,
+accounts with faces, and a long list of things that were wrong once a person
+clicked them.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
+and the list of what is known to be missing.
 
 Still early. There is no kernel of its own, client windows draw their own
 decorations, and the account roles are enforced by ReconOS inside ReconOS
@@ -22,12 +30,27 @@ is not here is listed at the end.
 
 ## What works right now
 
-**It sets itself up.** A system with no accounts asks who is using it, offers a
-look, offers the reading and colour-vision settings up front rather than buried
-somewhere, and hands over a desktop. Every run after that asks which account
-you are. Signing out returns to that screen; signing in as a *different* person
-closes the previous one's windows, because the whole point of a login screen is
-that one account does not see another's open documents.
+**It sets itself up.** A system with no accounts walks through five short
+screens: welcome, who you are, what the machine is called, whether anything
+about reading or colour needs adjusting, and how it should look. The
+accessibility list is only shown to somebody who says they want it -- asking
+everybody to rule out six conditions before they can use their computer is the
+wrong shape for a question most people answer "none of these" to. The skin
+list shows a small picture of each skin, drawn from that skin's own palette.
+
+Every run after that asks which account you are, on a screen built around that
+person: their picture, their name, their role. Signing out returns to it.
+Signing in as a *different* person ends the previous one's windows, because
+the whole point of a login screen is that one account does not see another's
+open documents. **Lock** covers the screen without ending the session, so the
+account stays signed in with its windows open and coming back is the same
+desktop.
+
+**Every account has a face.** A set of pictures ReconOS draws for itself at
+first run, written into `/System/Icons` like every other icon so a photograph
+dropped over one replaces it. An account that has not chosen gets a coloured
+disc with its initial, the colour worked out from the name so it is stable
+without being stored anywhere.
 
 **One account at a time, properly.** Each account gets its own settings
 hive, its own folders, and its own windows. A limited account cannot read

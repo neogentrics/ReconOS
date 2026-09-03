@@ -99,7 +99,14 @@ static const struct shortcut_entry SIDEBAR[] = {
 struct place {
     char label[RECON_NAME_MAX];
     char path[RECON_PATH_MAX];
-    bool starts_group;
+    /* A heading above this entry, or NULL. The list has two halves that mean
+     * different things -- where you can jump to, and what is inside the
+     * folder you are looking at -- and a bare rule between them left the
+     * reader to work out which half was which. */
+    const char *heading;
+    /* An entry with no path is a note, not a destination: it says something
+     * about the section it is in and cannot be clicked. */
+    bool is_note;
 };
 
 #define COLOR_BG THEME(WINDOW_FRAME)
@@ -1091,7 +1098,8 @@ static void build_places(struct recon_explorer *ex) {
         struct place *place = &ex->places[ex->place_count++];
         snprintf(place->label, sizeof(place->label), "%s", SIDEBAR[i].label);
         sidebar_path(i, place->path, sizeof(place->path));
-        place->starts_group = SIDEBAR[i].starts_group;
+        place->heading = (ex->place_count == 1) ? "Go to" : NULL;
+        place->is_note = false;
     }
 
     /*
@@ -1103,12 +1111,13 @@ static void build_places(struct recon_explorer *ex) {
         struct place *bin = &ex->places[ex->place_count++];
         snprintf(bin->label, sizeof(bin->label), "Recycle Bin");
         snprintf(bin->path, sizeof(bin->path), "%s", recon_fs_trash_dir());
-        bin->starts_group = false;
+        bin->heading = NULL;
+        bin->is_note = false;
     }
 
     /* Then what is in this folder, which is the half that makes the
      * drop-down worth having: it is a way down as well as a way across. */
-    bool first = true;
+    int here = 0;
     for (int i = 0; i < ex->entry_count && ex->place_count < PLACES_MAX; i++) {
         if (ex->entries[i].kind != RECON_FILE_DIRECTORY) {
             continue;
@@ -1137,17 +1146,35 @@ static void build_places(struct recon_explorer *ex) {
         struct place *place = &ex->places[ex->place_count++];
         snprintf(place->label, sizeof(place->label), "%s", ex->entries[i].name);
         snprintf(place->path, sizeof(place->path), "%s", path);
-        place->starts_group = first;
-        first = false;
+        place->heading = (here == 0) ? "In this folder" : NULL;
+        place->is_note = false;
+        here++;
+    }
+
+    /*
+     * Say so when there is nothing here, rather than ending the list.
+     *
+     * A folder with no folders in it produced no second section at all, so
+     * the drop-down looked like a list of shortcuts that had forgotten to
+     * mention where you were standing. An empty section that says it is empty
+     * answers the question; a missing one leaves it open.
+     */
+    if (here == 0 && ex->place_count < PLACES_MAX) {
+        struct place *note = &ex->places[ex->place_count++];
+        snprintf(note->label, sizeof(note->label),
+            "No folders inside this one");
+        note->path[0] = '\0';
+        note->heading = "In this folder";
+        note->is_note = true;
     }
 }
 
-/* How tall the open list is, dividers included. */
+/* How tall the open list is, headings and rules included. */
 static int places_height(struct recon_explorer *ex) {
     int height = 4;
     for (int i = 0; i < ex->place_count; i++) {
-        if (ex->places[i].starts_group && i > 0) {
-            height += 5;
+        if (ex->places[i].heading != NULL) {
+            height += PLACE_ROW + (i > 0 ? 6 : 0);
         }
         height += PLACE_ROW;
     }
@@ -1167,20 +1194,43 @@ static void draw_places(struct recon_explorer *ex, struct recon_panel *p,
 
     int iy = y + 4;
     for (int i = 0; i < ex->place_count; i++) {
-        if (ex->places[i].starts_group && i > 0) {
-            recon_fill_rect(p, x + 6, iy + 2, w - 12, 1, THEME(MENU_SEPARATOR));
-            iy += 5;
+        /* A heading, and above all but the first a rule to part the sections
+         * properly. */
+        if (ex->places[i].heading != NULL) {
+            if (i > 0) {
+                recon_fill_rect(p, x + 6, iy + 2, w - 12, 1,
+                    THEME(MENU_SEPARATOR));
+                iy += 6;
+            }
+            if (iy + PLACE_ROW > y + height) {
+                break;
+            }
+            recon_draw_text(p, ex->font, x + 10,
+                iy + (PLACE_ROW + ascent) / 2 - 2, w - 20,
+                ex->places[i].heading, THEME(MENU_TEXT_DISABLED));
+            iy += PLACE_ROW;
         }
+
         if (iy + PLACE_ROW > y + height) {
             break;
+        }
+
+        /* A note describes the section it sits in; it is not somewhere to
+         * go, so it is neither highlighted nor offered to a click. */
+        if (ex->places[i].is_note) {
+            recon_draw_text(p, ex->font, x + 22,
+                iy + (PLACE_ROW + ascent) / 2 - 2, w - 32,
+                ex->places[i].label, THEME(MENU_TEXT_DISABLED));
+            iy += PLACE_ROW;
+            continue;
         }
 
         bool current = strcmp(ex->places[i].path, ex->cwd) == 0;
         if (current) {
             recon_fill_rect(p, x + 1, iy, w - 2, PLACE_ROW, THEME(MENU_HILITE));
         }
-        recon_draw_text(p, ex->font, x + 10, iy + (PLACE_ROW + ascent) / 2 - 2,
-            w - 20, ex->places[i].label,
+        recon_draw_text(p, ex->font, x + 22, iy + (PLACE_ROW + ascent) / 2 - 2,
+            w - 32, ex->places[i].label,
             current ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT));
 
         recon_hit_add(p, x, iy, w, PLACE_ROW, HIT_PLACE_BASE + i);
@@ -1738,6 +1788,26 @@ static void explorer_motion(void *user, uint32_t hit_id, int cx, int cy) {
     }
 }
 
+/*
+ * The window stopped being in front, so anything that was only up because it
+ * was in front goes away.
+ *
+ * Clicking elsewhere *inside* the window already closed the drop-down;
+ * clicking outside it did not, because the window never saw that click. A
+ * list left hanging over a window nobody is using belongs to nothing.
+ */
+static void explorer_focus_changed(void *user, bool focused) {
+    struct recon_explorer *ex = user;
+    if (focused) {
+        return;
+    }
+    if (ex->places_open || ex->typing_path) {
+        close_places(ex);
+        stop_typing_path(ex);
+        recon_appwin_refresh(ex->win);
+    }
+}
+
 static void explorer_scroll(void *user, double delta) {
     struct recon_explorer *ex = user;
     int max = ex->entry_count - ex->rows_visible;
@@ -1917,6 +1987,7 @@ static const struct recon_appwin_impl EXPLORER_IMPL = {
     .click = explorer_click,
     .key = explorer_key,
     .motion = explorer_motion,
+    .focus_changed = explorer_focus_changed,
     .scroll = explorer_scroll,
     .context = explorer_context,
     .context_action = explorer_context_action,
