@@ -552,6 +552,82 @@ void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
     }
 }
 
+/*
+ * One channel of the ramp, rounded rather than truncated.
+ *
+ * Truncating loses most of a step on a short gradient: a title bar is under
+ * thirty rows, so an eight-unit difference between the two colours moves by
+ * less than one unit per row and integer division floors nearly all of it
+ * away, leaving a flat fill that was supposed to be a gradient.
+ */
+static unsigned ramp(unsigned from, unsigned to, int shift, int step, int of) {
+    int a = (int)((from >> shift) & 0xFF);
+    int b = (int)((to >> shift) & 0xFF);
+    int value = a + ((b - a) * step * 2 + (of > 0 ? of : 1)) / ((of > 0 ? of : 1) * 2);
+    if (value < 0) { value = 0; }
+    if (value > 255) { value = 255; }
+    return (unsigned)value;
+}
+
+/*
+ * Fill the way the skin says a role should look.
+ *
+ * Here rather than in recon_theme.c, which is where it reads more naturally,
+ * because the skin tests link recon_theme.c on its own -- deliberately, so
+ * that measuring a palette does not need a compositor. A drawing call in
+ * there left them with undefined references to the drawing module and to
+ * wlroots behind it. Asking the theme a question is cheap in either
+ * direction; drawing is what has the dependencies, so drawing is where this
+ * belongs.
+ */
+void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
+        enum recon_theme_role role) {
+    recon_color from, to;
+    if (recon_theme_gradient(role, &from, &to)) {
+        recon_fill_gradient(panel, x, y, w, h, from, to);
+        return;
+    }
+    recon_fill_rect(panel, x, y, w, h, recon_theme_color(role));
+}
+
+void recon_fill_gradient(struct recon_panel *panel, int x, int y, int w, int h,
+        recon_color from, recon_color to) {
+    if (panel == NULL) {
+        return;
+    }
+    if (from == to) {
+        recon_fill_rect(panel, x, y, w, h, from);
+        return;
+    }
+
+    /*
+     * The ramp is positioned against the rectangle that was asked for, not
+     * against what survives clipping. A title bar hanging off the top of a
+     * panel has to show the *bottom* of its gradient, and clip_rect moves y
+     * and shortens h, so a row's place in the ramp has to be worked out from
+     * the original before that happens.
+     */
+    int want_y = y;
+    int want_h = h;
+    if (!clip_rect(panel, &x, &y, &w, &h)) {
+        return;
+    }
+
+    int last = want_h > 1 ? want_h - 1 : 1;
+    for (int row = y; row < y + h; row++) {
+        int step = row - want_y;
+        recon_color color = 0xFF000000u |
+            (ramp(from, to, 16, step, last) << 16) |
+            (ramp(from, to, 8, step, last) << 8) |
+            ramp(from, to, 0, step, last);
+
+        uint32_t *p = panel->pixels + (size_t)row * panel->width + x;
+        for (int col = 0; col < w; col++) {
+            p[col] = color;
+        }
+    }
+}
+
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
         recon_color color) {
     if (panel == NULL || w <= 0 || h <= 0) {

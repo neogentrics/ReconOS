@@ -180,8 +180,25 @@ static void check_skin(const char *skin, enum deficiency kind, bool hueless) {
     /* Text has to be readable before anything else matters. */
     check_pair(skin, kind, "text on its surface",
         RECON_THEME_SURFACE_TEXT, RECON_THEME_SURFACE, READABLE);
-    check_pair(skin, kind, "taskbar text on the taskbar",
-        RECON_THEME_BAR_TEXT, RECON_THEME_BAR, READABLE);
+    /*
+     * Each label against the surface it is actually drawn on.
+     *
+     * This used to be one check pairing bar text with the bar itself, which
+     * is a surface no label is ever drawn on: every label on the taskbar sits
+     * on a button. The bar and the buttons are near-identical greys in most
+     * skins, so the wrong pairing passed and looked right -- until a skin
+     * arrived with a deep blue bar and light buttons, where white bar text
+     * measured as excellent against the bar and was invisible on every button
+     * on screen. Getting the pairs right then found the same fault in the
+     * high-contrast skin, which is the one place it should have been
+     * impossible.
+     */
+    check_pair(skin, kind, "the current window's name on its button",
+        RECON_THEME_BAR_TEXT, RECON_THEME_BUTTON_ACTIVE, READABLE);
+    check_pair(skin, kind, "a background window's name on its button",
+        RECON_THEME_BAR_TEXT_DIM, RECON_THEME_BUTTON, READABLE);
+    check_pair(skin, kind, "a button's own label on the button",
+        RECON_THEME_BUTTON_TEXT, RECON_THEME_BUTTON, READABLE);
     check_pair(skin, kind, "menu text on the menu",
         RECON_THEME_MENU_TEXT, RECON_THEME_MENU, READABLE);
     check_pair(skin, kind, "selected text on the selection",

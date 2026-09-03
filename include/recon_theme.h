@@ -54,9 +54,28 @@ enum recon_theme_role {
     /* --- The shell: taskbar and its buttons --- */
     RECON_THEME_BAR,
     RECON_THEME_BAR_TEXT,
+    /*
+     * The name of a window that is not the current one, on its own button.
+     *
+     * Dimmer than BAR_TEXT, and still readable: this is the label somebody
+     * reads to find the window they want, so being quieter is what marks it
+     * as not-current, not being hard to see. Four skins had it below what the
+     * accessibility test calls readable, which nothing noticed while the test
+     * was measuring it against the wrong surface.
+     */
     RECON_THEME_BAR_TEXT_DIM,
     RECON_THEME_BUTTON,
     RECON_THEME_BUTTON_ACTIVE,
+    /*
+     * A button's own label -- "Apps", "End Task", "Cancel".
+     *
+     * Separate from BAR_TEXT, which is the label of the window a taskbar
+     * button stands for, and which is drawn on BUTTON_ACTIVE. One role could
+     * not serve both: the high-contrast skin fills an ordinary button white
+     * and a pressed one black, so a single colour was invisible on one of
+     * them whichever it was.
+     */
+    RECON_THEME_BUTTON_TEXT,
 
     /* --- Menus --- */
     RECON_THEME_MENU,
@@ -156,6 +175,34 @@ recon_color recon_theme_color(enum recon_theme_role role);
 /* Shorthand at drawing sites, where the noise would otherwise be the point. */
 #define THEME(role) recon_theme_color(RECON_THEME_##role)
 
+/*
+ * The second colour of a role's gradient, if the skin gave it one.
+ *
+ * False when it did not, which is the normal case: a gradient is something a
+ * skin opts into for a handful of surfaces, so this is not a role of its own
+ * and does not have to be answered by every skin. A skin file says so with a
+ * `.to` alongside the colour:
+ *
+ *     title.active    = #2A5BC8
+ *     title.active.to = #4A8BE8
+ *
+ * Callers should use recon_fill_role rather than this, unless they need the
+ * two colours for something other than filling a rectangle.
+ */
+bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
+    recon_color *to);
+
+/*
+ * Fill a rectangle the way the current skin says that role should look:
+ * a vertical gradient where it asked for one, a flat fill where it did not.
+ *
+ * This is what drawing sites call. It exists so that adding a gradient to a
+ * skin is a change to the skin and not a change to the code that draws --
+ * which is the same bargain the roles themselves make.
+ */
+void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
+    enum recon_theme_role role);
+
 const char *recon_theme_current(void);
 
 /* The wallpaper the current skin suggests, or "". */
@@ -182,6 +229,12 @@ bool recon_theme_at(int index, struct recon_theme_info *out);
  * deliberately hideous colour recon_theme_color does.
  */
 recon_color recon_theme_color_of(int index, enum recon_theme_role role);
+
+/* The same for a gradient, so a skin shown in a list shows its ramps too. A
+ * preview drawn flat makes every skin with a gradient look like a skin
+ * without one. */
+bool recon_theme_gradient_of(int index, enum recon_theme_role role,
+    recon_color *from, recon_color *to);
 
 /*
  * Bumped whenever the colours change. Anything holding a cached colour can

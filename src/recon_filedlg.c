@@ -32,6 +32,7 @@
 #define COLOR_TITLE THEME(DIALOG_TITLE)
 #define COLOR_TITLE_TEXT THEME(DIALOG_TITLE_TEXT)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
+#define COLOR_BUTTON_TEXT THEME(BUTTON_TEXT)
 #define COLOR_DIR THEME(DIRECTORY)
 #define COLOR_LIST_BG THEME(SURFACE)
 #define COLOR_SELECTED THEME(SELECTION)
@@ -366,14 +367,15 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
     recon_draw_text(panel, font,
         accept_x + (BUTTON_WIDTH - recon_text_width(font, accept_label)) / 2,
         by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, accept_label,
-        COLOR_TEXT);
+        COLOR_BUTTON_TEXT);
     recon_hit_add(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, HIT_ACCEPT);
 
     recon_fill_rect(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, COLOR_BUTTON);
     recon_draw_bevel(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, false);
     recon_draw_text(panel, font,
         cancel_x + (BUTTON_WIDTH - recon_text_width(font, "Cancel")) / 2,
-        by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, "Cancel", COLOR_TEXT);
+        by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, "Cancel",
+        COLOR_BUTTON_TEXT);
     recon_hit_add(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, HIT_CANCEL);
 
     if (dialog->message[0] != '\0') {

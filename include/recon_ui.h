@@ -128,6 +128,20 @@ void recon_fill(struct recon_panel *panel, recon_color color);
 void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);
 
+/*
+ * A vertical ramp from one colour at the top edge to another at the bottom.
+ *
+ * Vertical only, because every surface that wants one here is horizontal --
+ * title bars, the taskbar, a menu header. A horizontal ramp would be a second
+ * mechanism serving nothing.
+ *
+ * Alpha is not interpolated: both ends are drawn opaque. Everything this
+ * paints is chrome sitting on its own panel, and a half-transparent title bar
+ * is not a thing any skin should be able to ask for by accident.
+ */
+void recon_fill_gradient(struct recon_panel *panel, int x, int y, int w, int h,
+    recon_color from, recon_color to);
+
 /* A one-pixel outline just inside the given rectangle. */
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);

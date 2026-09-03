@@ -115,6 +115,7 @@ struct place {
 #define COLOR_LIST_BG THEME(SURFACE)
 #define COLOR_HEADER THEME(SURFACE_HEADER)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
+#define COLOR_BUTTON_TEXT THEME(BUTTON_TEXT)
 #define COLOR_DIR THEME(DIRECTORY)
 #define COLOR_ROW_ALT THEME(SURFACE_ALT)
 #define COLOR_SELECTED THEME(SELECTION)
@@ -838,7 +839,7 @@ static int draw_button(struct recon_explorer *ex, struct recon_panel *p,
     recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
     recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
     recon_draw_text(p, ex->font, x + 11, y + (BUTTON_HEIGHT + ascent) / 2 - 2,
-        width - 16, label, warning ? COLOR_WARNING : COLOR_TEXT);
+        width - 16, label, warning ? COLOR_WARNING : COLOR_BUTTON_TEXT);
     recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
 
     return x + width + BUTTON_GAP;

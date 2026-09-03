@@ -90,6 +90,7 @@
  */
 #define COLOR_TEXT THEME(BAR_TEXT)
 #define COLOR_TEXT_DIM THEME(BAR_TEXT_DIM)
+#define COLOR_BUTTON_TEXT THEME(BUTTON_TEXT)
 #define COLOR_MENU_TEXT THEME(MENU_TEXT)
 #define COLOR_MENU_TEXT_DISABLED THEME(MENU_TEXT_DISABLED)
 #define COLOR_BUTTON THEME(BUTTON)
@@ -613,7 +614,8 @@ static void draw_dialog(struct recon_shell *shell) {
     recon_fill(p, COLOR_BAR);
     recon_hit_clear(p);
 
-    recon_fill_rect(p, 0, 0, width, DIALOG_TITLE_HEIGHT, COLOR_DIALOG_TITLE);
+    recon_fill_role(p, 0, 0, width, DIALOG_TITLE_HEIGHT,
+        RECON_THEME_DIALOG_TITLE);
     recon_draw_text(p, shell->font, DIALOG_PADDING,
         (DIALOG_TITLE_HEIGHT + ascent) / 2 - 1, width - DIALOG_PADDING * 2,
         shell->dialog_title, COLOR_DIALOG_TITLE_TEXT);
@@ -1093,8 +1095,8 @@ static void draw_context(struct recon_shell *shell) {
         bool hovered = (i == shell->context_hover) && shell->context_items[i].enabled;
 
         if (hovered) {
-            recon_fill_rect(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
-                CONTEXT_ITEM_HEIGHT, COLOR_MENU_HILITE);
+            recon_fill_role(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
+                CONTEXT_ITEM_HEIGHT, RECON_THEME_MENU_HILITE);
         }
 
         recon_draw_text(p, shell->font, 14, y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
@@ -1251,12 +1253,22 @@ static int appwin_index_for_node(struct recon_shell *shell,
 static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
         int x, int w, int baseline, const char *title, const char *icon,
         bool active, bool minimized) {
-    recon_color fill = active ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON;
-    if (minimized) {
-        fill = COLOR_BAR;
-    }
+    /*
+     * A minimized window keeps the button fill and is marked by the pressed
+     * bevel and the dimmed label instead.
+     *
+     * It used to be filled with the bar's own colour, so that a put-away
+     * window sank into the bar. That works while a skin's bar and its buttons
+     * are near-identical greys, which was true of every skin there was at the
+     * time. Beacon has a deep blue bar and light buttons, and there the rule
+     * inverted the contrast: the label was dimmed for a light button and then
+     * drawn on a dark one.
+     */
+    enum recon_theme_role fill = active
+        ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON;
+    (void)minimized;
 
-    recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
+    recon_fill_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
     recon_draw_bevel(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, active || minimized);
 
     /* The icon comes first, so a bar of buttons can be read at a glance
@@ -1282,16 +1294,24 @@ static void draw_taskbar(struct recon_shell *shell) {
     int width = recon_panel_width(bar);
     int baseline = TASKBAR_PADDING + (BUTTON_HEIGHT + recon_font_ascent(shell->font)) / 2 - 2;
 
-    recon_fill(bar, COLOR_BAR);
-    /* A highlight along the top edge lifts the bar off the wallpaper. */
-    recon_fill_rect(bar, 0, 0, width, 1, RECON_RGB(0xE8, 0xE8, 0xE8));
+    recon_fill_role(bar, 0, 0, width, recon_panel_height(bar), RECON_THEME_BAR);
+
+    /*
+     * A highlight along the top edge lifts the bar off the wallpaper -- but
+     * only where the skin fills the bar flat. A gradient already puts its
+     * lightest row at the top, and a fixed light grey line on top of that was
+     * a stripe of the wrong colour across a blue bar.
+     */
+    if (!recon_theme_gradient(RECON_THEME_BAR, NULL, NULL)) {
+        recon_fill_rect(bar, 0, 0, width, 1, RECON_RGB(0xE8, 0xE8, 0xE8));
+    }
 
     recon_hit_clear(bar);
 
     /* Apps button. */
-    recon_fill_rect(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+    recon_fill_role(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT,
-        shell->menu_open ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
+        shell->menu_open ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
     recon_draw_bevel(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open);
 
@@ -1303,7 +1323,15 @@ static void draw_taskbar(struct recon_shell *shell) {
             10, 10, COLOR_ACCENT);
     }
     recon_draw_text(bar, shell->font, TASKBAR_PADDING + 6 + mark_size + 6, baseline,
-        APPS_BUTTON_WIDTH - mark_size - 18, "Apps", COLOR_TEXT);
+        APPS_BUTTON_WIDTH - mark_size - 18, "Apps",
+        /*
+         * Its own label, not a window's, so it follows the button it is on
+         * rather than the taskbar. COLOR_TEXT is the colour for a label on a
+         * *pressed* button, which is what the Apps button is only while the
+         * menu is open; using it in both states left "Apps" white on a white
+         * button in the high-contrast skin.
+         */
+        shell->menu_open ? COLOR_TEXT : COLOR_BUTTON_TEXT);
     recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
 
@@ -1409,7 +1437,8 @@ static void draw_menu(struct recon_shell *shell) {
      * The header: who is signed in. Across the top of both columns, because it
      * is a fact about the whole menu rather than about either side.
      */
-    recon_fill_rect(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT, COLOR_DIALOG_TITLE);
+    recon_fill_role(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
+        RECON_THEME_DIALOG_TITLE);
 
     /*
      * The person's own picture, not the system's mark. The mark is already on
@@ -1450,9 +1479,9 @@ static void draw_menu(struct recon_shell *shell) {
         bool hovered = (shell->menu_hover == HIT_MENU_BASE + i);
 
         if (hovered) {
-            recon_fill_rect(menu, MENU_PADDING, y,
+            recon_fill_role(menu, MENU_PADDING, y,
                 MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
-                COLOR_MENU_HILITE);
+                RECON_THEME_MENU_HILITE);
         }
 
         int label_x = MENU_PADDING + TEXT_INSET;
@@ -1487,9 +1516,9 @@ static void draw_menu(struct recon_shell *shell) {
                 COLOR_MENU_SEPARATOR);
 
             if (hovered) {
-                recon_fill_rect(menu, MENU_PADDING, y + 1,
+                recon_fill_role(menu, MENU_PADDING, y + 1,
                     MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 1,
-                    COLOR_MENU_HILITE);
+                    RECON_THEME_MENU_HILITE);
             }
 
             unsigned ink = hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT;
@@ -1537,8 +1566,8 @@ static void draw_menu(struct recon_shell *shell) {
         bool hovered = (shell->menu_hover == HIT_PLACE_BASE + i);
 
         if (hovered) {
-            recon_fill_rect(menu, right_x, y, right_w, MENU_ITEM_HEIGHT,
-                COLOR_MENU_HILITE);
+            recon_fill_role(menu, right_x, y, right_w, MENU_ITEM_HEIGHT,
+                RECON_THEME_MENU_HILITE);
         }
 
         int label_x = right_x + TEXT_INSET;
@@ -1556,7 +1585,8 @@ static void draw_menu(struct recon_shell *shell) {
 
     /* --- Footer: what to do with the machine --- */
     int fy = height - MENU_FOOTER_HEIGHT;
-    recon_fill_rect(menu, 1, fy, width - 2, MENU_FOOTER_HEIGHT - 1, COLOR_BAR);
+    recon_fill_role(menu, 1, fy, width - 2, MENU_FOOTER_HEIGHT - 1,
+        RECON_THEME_BAR);
     recon_fill_rect(menu, 1, fy, width - 2, 1, COLOR_MENU_SEPARATOR);
 
     int button_w = (width - 2 - MENU_PADDING * 2) / MENU_POWER_COUNT;
@@ -1567,7 +1597,8 @@ static void draw_menu(struct recon_shell *shell) {
         bool hovered = (shell->menu_hover == HIT_POWER_BASE + i);
 
         if (hovered) {
-            recon_fill_rect(menu, bx, by, button_w - 2, bh, COLOR_MENU_HILITE);
+            recon_fill_role(menu, bx, by, button_w - 2, bh,
+                RECON_THEME_MENU_HILITE);
         }
 
         int text_w = recon_text_width(shell->font, MENU_POWER[i].label);
@@ -1595,7 +1626,8 @@ static void draw_security(struct recon_shell *shell) {
     recon_fill(p, COLOR_MENU);
     recon_hit_clear(p);
 
-    recon_fill_rect(p, 0, 0, width, SEC_TITLE_HEIGHT, COLOR_DIALOG_TITLE);
+    recon_fill_role(p, 0, 0, width, SEC_TITLE_HEIGHT,
+        RECON_THEME_DIALOG_TITLE);
     recon_draw_text(p, shell->font, SEC_PADDING,
         (SEC_TITLE_HEIGHT + ascent) / 2 - 1, width - SEC_PADDING * 2,
         "ReconOS Security", COLOR_DIALOG_TITLE_TEXT);

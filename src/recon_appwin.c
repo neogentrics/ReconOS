@@ -161,8 +161,8 @@ static void draw_frame(struct recon_appwin *win) {
 
     recon_fill(p, COLOR_FRAME);
 
-    recon_fill_rect(p, 0, 0, win->width, TITLE_HEIGHT,
-        win->focused ? COLOR_TITLE_ACTIVE : COLOR_TITLE_INACTIVE);
+    recon_fill_role(p, 0, 0, win->width, TITLE_HEIGHT,
+        win->focused ? RECON_THEME_TITLE_ACTIVE : RECON_THEME_TITLE_INACTIVE);
 
     /* An icon at the left, so a window says what it is before it is read. */
     int text_x = TITLE_INSET;

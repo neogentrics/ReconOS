@@ -20,7 +20,30 @@
 struct theme {
     struct recon_theme_info info;
     recon_color colors[RECON_THEME_ROLE_COUNT];
+
+    /*
+     * The far end of a gradient, per role, and whether there is one.
+     *
+     * A separate flag rather than a sentinel colour, because every colour is
+     * a legal answer -- including one equal to the first, which a skin might
+     * reasonably write while tuning a ramp down to nothing.
+     */
+    recon_color gradient[RECON_THEME_ROLE_COUNT];
+    bool has_gradient[RECON_THEME_ROLE_COUNT];
+
     bool used;
+};
+
+/*
+ * A gradient a built-in skin declares, as a sparse list.
+ *
+ * Sparse because a handful of surfaces want one out of forty-eight roles, and
+ * writing the other forty-two as "no gradient" in every skin would bury the
+ * few that matter.
+ */
+struct gradient_spec {
+    enum recon_theme_role role;
+    recon_color to;
 };
 
 static struct theme g_themes[THEMES_MAX];
@@ -67,6 +90,7 @@ static const char *const ROLE_NAMES[] = {
     "bar.text-dim",
     "button",
     "button.active",
+    "button.text",
 
     "menu",
     "menu.border",
@@ -142,12 +166,13 @@ static int role_from_name(const char *name) {
 #define RGBA(r, g, b, a) RECON_RGBA(0x##r, 0x##g, 0x##b, 0x##a)
 
 /* The native look: grey chrome, deep navy titles, oxblood accent. */
-static const recon_color THEME_RECON[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_RECON[] = {
     RGB(C0,C0,C0), RGB(30,30,30), RGB(20,2A,44), RGB(6A,6A,72),
     RGB(F0,F0,F0), RGB(D0,D0,D4), RGB(C8,C8,C8), RGB(10,10,10),
 
     RGB(C0,C0,C0), RGB(10,10,10), RGB(40,40,40), RGB(C8,C8,C8),
     RGB(A8,A8,B4),
+    RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(30,30,30), RGB(10,10,10), RGB(40,40,40),
     RGB(30,50,90), RGB(FF,FF,FF), RGB(90,90,90),
@@ -172,12 +197,13 @@ static const recon_color THEME_RECON[RECON_THEME_ROLE_COUNT] = {
 };
 
 /* The 95-era look: brighter grey, the familiar navy, no softening. */
-static const recon_color THEME_CLASSIC[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_CLASSIC[] = {
     RGB(C0,C0,C0), RGB(00,00,00), RGB(00,00,80), RGB(80,80,80),
     RGB(FF,FF,FF), RGB(C0,C0,C0), RGB(C0,C0,C0), RGB(00,00,00),
 
-    RGB(C0,C0,C0), RGB(00,00,00), RGB(80,80,80), RGB(C0,C0,C0),
+    RGB(C0,C0,C0), RGB(00,00,00), RGB(3A,3A,3A), RGB(C0,C0,C0),
     RGB(A0,A0,A0),
+    RGB(00,00,00),
 
     RGB(C0,C0,C0), RGB(00,00,00), RGB(00,00,00), RGB(80,80,80),
     RGB(00,00,80), RGB(FF,FF,FF), RGB(80,80,80),
@@ -198,15 +224,16 @@ static const recon_color THEME_CLASSIC[RECON_THEME_ROLE_COUNT] = {
 };
 
 /* Light and quiet: pale chrome, blue selection, thin edges. */
-static const recon_color THEME_AQUA[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_AQUA[] = {
     /* The active and inactive title bars were seven units apart, which is
      * to say indistinguishable. A subtle look is not worth not knowing which
      * window has the keyboard. */
     RGB(EC,EC,EE), RGB(B8,B8,BC), RGB(8F,B4,DC), RGB(F2,F2,F4),
     RGB(1C,1C,20), RGB(90,90,96), RGB(E4,E4,E8), RGB(40,40,46),
 
-    RGB(E8,E8,EC), RGB(1C,1C,20), RGB(88,88,90), RGB(E4,E4,E8),
+    RGB(E8,E8,EC), RGB(1C,1C,20), RGB(56,56,5E), RGB(E4,E4,E8),
     RGB(D0,D4,DC),
+    RGB(1C,1C,20),
 
     RGB(F4,F4,F6), RGB(C0,C0,C6), RGB(1C,1C,20), RGB(A0,A0,A6),
     RGB(2A,6C,E0), RGB(FF,FF,FF), RGB(D8,D8,DC),
@@ -227,14 +254,15 @@ static const recon_color THEME_AQUA[RECON_THEME_ROLE_COUNT] = {
 };
 
 /* Dark and flat, the way a modern Linux desktop tends to look. */
-static const recon_color THEME_MIDNIGHT[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_MIDNIGHT[] = {
     /* Active and inactive were three units apart -- a flat look taken far
      * enough to stop conveying anything. */
     RGB(2E,32,38), RGB(1A,1C,20), RGB(2F,4F,7A), RGB(2A,2E,34),
     RGB(E8,E8,EC), RGB(90,94,9C), RGB(3A,3E,46), RGB(E0,E0,E4),
 
-    RGB(24,28,2E), RGB(E0,E0,E4), RGB(90,94,9C), RGB(3A,3E,46),
+    RGB(24,28,2E), RGB(E0,E0,E4), RGB(B8,BC,C4), RGB(3A,3E,46),
     RGB(4E,54,5E),
+    RGB(DC,DC,E0),
 
     RGB(32,36,3E), RGB(16,18,1C), RGB(E4,E4,E8), RGB(78,7C,84),
     RGB(3E,7A,C8), RGB(FF,FF,FF), RGB(4A,4E,56),
@@ -280,12 +308,13 @@ static const recon_color THEME_MIDNIGHT[RECON_THEME_ROLE_COUNT] = {
  */
 
 /* Red-green, the common kind. Blue and orange are the reliable axis. */
-static const recon_color THEME_DEUTERAN[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_DEUTERAN[] = {
     RGB(C8,C8,C8), RGB(30,30,30), RGB(00,54,8A), RGB(7A,7A,7A),
     RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(A8,B4,C4),
+    RGB(10,10,10),
 
     RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
     RGB(00,72,B2), RGB(FF,FF,FF), RGB(90,90,90),
@@ -310,12 +339,13 @@ static const recon_color THEME_DEUTERAN[RECON_THEME_ROLE_COUNT] = {
  * near-black rather than as a colour at all. Everything that has to be seen
  * is lighter here than in the deuteran set.
  */
-static const recon_color THEME_PROTAN[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_PROTAN[] = {
     RGB(C8,C8,C8), RGB(30,30,30), RGB(0A,66,99), RGB(7A,7A,7A),
     RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(A8,C0,CC),
+    RGB(10,10,10),
 
     RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
     RGB(1B,8F,D6), RGB(FF,FF,FF), RGB(90,90,90),
@@ -346,12 +376,13 @@ static const recon_color THEME_PROTAN[RECON_THEME_ROLE_COUNT] = {
  * axis the other two rely on is exactly the wrong choice. Red, green and
  * magenta stay separable.
  */
-static const recon_color THEME_TRITAN[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_TRITAN[] = {
     RGB(C8,C8,C8), RGB(30,30,30), RGB(7A,10,30), RGB(7A,7A,7A),
     RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
     RGB(C4,A8,B4),
+    RGB(10,10,10),
 
     RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
     RGB(8A,0F,3C), RGB(FF,FF,FF), RGB(90,90,90),
@@ -378,11 +409,12 @@ static const recon_color THEME_TRITAN[RECON_THEME_ROLE_COUNT] = {
  * information. Everything that must be told apart is told apart by black
  * against white.
  */
-static const recon_color THEME_CONTRAST[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_CONTRAST[] = {
     RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00), RGB(FF,FF,FF),
     RGB(FF,FF,FF), RGB(00,00,00), RGB(FF,FF,FF), RGB(00,00,00),
 
-    RGB(00,00,00), RGB(FF,FF,FF), RGB(B0,B0,B0), RGB(FF,FF,FF),
+    RGB(00,00,00), RGB(FF,FF,FF), RGB(3C,3C,3C), RGB(FF,FF,FF),
+    RGB(00,00,00),
     RGB(00,00,00),
 
     RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00), RGB(70,70,70),
@@ -428,12 +460,17 @@ static const recon_color THEME_CONTRAST[RECON_THEME_ROLE_COUNT] = {
  * willing to try, and there is no reason the familiar option has to be the
  * default to be worth having.
  */
-static const recon_color THEME_BEACON[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_BEACON[] = {
     RGB(E8,EA,F0), RGB(6E,84,B4), RGB(2A,5B,C8), RGB(8C,A4,C8),
     RGB(FF,FF,FF), RGB(E4,EA,F4), RGB(3A,6E,D8), RGB(FF,FF,FF),
 
-    RGB(2A,5B,C8), RGB(FF,FF,FF), RGB(C4,D4,F0), RGB(E0,E6,F2),
+    /* bar.text and bar.text-dim are drawn on a taskbar button, and this
+     * skin's buttons are light -- so they are dark here, despite the bar
+     * behind them being deep blue. White was chosen for the bar and left
+     * every button label white on near-white. */
+    RGB(2A,5B,C8), RGB(16,20,32), RGB(74,86,A8), RGB(E0,E6,F2),
     RGB(C0,D0,EC),
+    RGB(16,20,32),
 
     RGB(F4,F6,FA), RGB(6E,84,B4), RGB(16,20,32), RGB(96,A0,B4),
     RGB(31,68,D5), RGB(FF,FF,FF), RGB(C8,D4,E8),
@@ -458,12 +495,13 @@ static const recon_color THEME_BEACON[RECON_THEME_ROLE_COUNT] = {
     RGB(3E,8E,3E), RGB(FF,FF,FF), RGB(C8,4A,10), RGB(1E,4E,A8),
 };
 
-static const recon_color THEME_READING[RECON_THEME_ROLE_COUNT] = {
+static const recon_color THEME_READING[] = {
     RGB(E4,DF,D4), RGB(58,52,46), RGB(4A,5A,6E), RGB(9A,94,88),
     RGB(FB,F7,EE), RGB(E0,DA,CE), RGB(EA,E5,DA), RGB(3A,36,30),
 
     RGB(E4,DF,D4), RGB(3A,36,30), RGB(6E,68,5E), RGB(EA,E5,DA),
     RGB(C8,C2,B4),
+    RGB(3A,36,30),
 
     RGB(EF,EA,DF), RGB(58,52,46), RGB(3A,36,30), RGB(8A,84,78),
     RGB(4A,5A,6E), RGB(FB,F7,EE), RGB(C0,BA,AE),
@@ -483,6 +521,97 @@ static const recon_color THEME_READING[RECON_THEME_ROLE_COUNT] = {
     RGB(8A,5A,2A), RGB(FB,F7,EE), RGB(A8,3A,20), RGB(3A,5A,7A),
 };
 
+/*
+ * Every skin answers every role.
+ *
+ * These arrays are sized by what is in them rather than declared as
+ * [RECON_THEME_ROLE_COUNT], which is what makes this checkable: a table
+ * declared at full length and initialised with one value short does not fail
+ * to compile, it silently zero-fills, and a role that came out as transparent
+ * black would look like a missing feature rather than a missing colour. Sized
+ * by their contents, a short table is a compile error naming the skin.
+ */
+#define CHECK_SKIN(table) _Static_assert(     sizeof(table) / sizeof((table)[0]) == RECON_THEME_ROLE_COUNT,     #table " does not answer every role")
+
+CHECK_SKIN(THEME_RECON);
+CHECK_SKIN(THEME_CLASSIC);
+CHECK_SKIN(THEME_AQUA);
+CHECK_SKIN(THEME_MIDNIGHT);
+CHECK_SKIN(THEME_BEACON);
+CHECK_SKIN(THEME_DEUTERAN);
+CHECK_SKIN(THEME_PROTAN);
+CHECK_SKIN(THEME_TRITAN);
+CHECK_SKIN(THEME_CONTRAST);
+CHECK_SKIN(THEME_READING);
+
+#undef CHECK_SKIN
+
+/* --- Gradients --- */
+
+/*
+ * Beacon is the skin this was built for. Every ramp goes light at the top to
+ * deeper at the bottom, which is the whole trick: it reads as a lit surface
+ * with the light above it, and that single cue is most of what separates the
+ * early 2000s from the flat fills of the decade before.
+ *
+ * Kept shallow on purpose. A steep ramp on a title bar is a stripe, and text
+ * sitting on it then has two very different backgrounds to be legible against.
+ */
+static const struct gradient_spec GRAD_BEACON[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(1B,42,9E) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(74,8C,B4) },
+    { RECON_THEME_BAR,            RGB(1B,42,9E) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(1B,42,9E) },
+
+    { RECON_THEME_BUTTON,         RGB(C6,D2,E8) },
+    { RECON_THEME_BUTTON_ACTIVE,  RGB(D6,E2,F6) },
+
+    { RECON_THEME_ACCENT,         RGB(2A,6E,2A) },
+    { RECON_THEME_SELECTION,      RGB(24,52,B4) },
+    { RECON_THEME_MENU_HILITE,    RGB(24,52,B4) },
+
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
+/*
+ * The native look gets one too, shallower still. Recon is meant to read as
+ * its own thing rather than as a period piece, so this is barely a ramp --
+ * enough that chrome is not perfectly flat, not enough to be a style.
+ */
+static const struct gradient_spec GRAD_RECON[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(16,1E,34) },
+    { RECON_THEME_BAR,            RGB(A8,A8,B0) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(16,1E,34) },
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
+/*
+ * Aqua's is the one that earns it most after Beacon: a light skin has almost
+ * no contrast between its own surfaces, so a shallow ramp is what stops the
+ * title bar and the window below it reading as one shape.
+ */
+static const struct gradient_spec GRAD_AQUA[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(96,B4,D8) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(CE,D6,DE) },
+    { RECON_THEME_BAR,            RGB(D4,DA,E2) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(96,B4,D8) },
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
+/*
+ * Classic, Midnight, Reading, Contrast and the three colour-vision skins get
+ * none, each for its own reason.
+ *
+ * Classic is the 95 era, and 95 was flat -- a gradient there would be the
+ * wrong decade. Contrast cannot have one at all: it exists so that nothing
+ * depends on a shade, and a ramp behind text is a range of contrast ratios
+ * where the skin promises one. Midnight and Reading are deliberately quiet.
+ * And the dichromat skins are tested as pairs of flat colours a measured
+ * distance apart; a ramp would put one end of a pair a different distance
+ * from its partner than the other end, which is a promise the test could no
+ * longer check.
+ */
+
 #undef RGB
 #undef RGBA
 
@@ -497,26 +626,28 @@ static const struct {
     const char *description;
     const recon_color *colors;
     const char *wallpaper;
+    /* NULL for a skin that fills flat, which is most of them. */
+    const struct gradient_spec *gradients;
 } BUILT_IN[] = {
     { "Recon", "The native look: grey chrome, navy titles, oxblood accent",
-      THEME_RECON, "Night Sky.png" },
+      THEME_RECON, "Night Sky.png", GRAD_RECON },
     { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC,
-      "Daybreak.png" },
+      "Daybreak.png", NULL },
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
-      "Daybreak.png" },
-    { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png" },
+      "Daybreak.png", GRAD_AQUA },
+    { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL },
     { "Beacon", "Bright blue chrome and a green accent, early 2000s",
-      THEME_BEACON, "Daybreak.png" },
+      THEME_BEACON, "Daybreak.png", GRAD_BEACON },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
-      THEME_DEUTERAN, "Night Sky.png" },
+      THEME_DEUTERAN, "Night Sky.png", NULL },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",
-      THEME_PROTAN, "Night Sky.png" },
+      THEME_PROTAN, "Night Sky.png", NULL },
     { "Tritan", "Blue-yellow safe: red, green and magenta carry meaning",
-      THEME_TRITAN, "Deep Field.png" },
+      THEME_TRITAN, "Deep Field.png", NULL },
     { "Contrast", "Black on white throughout; nothing depends on hue",
-      THEME_CONTRAST, "Daybreak.png" },
+      THEME_CONTRAST, "Daybreak.png", NULL },
     { "Reading", "Warm off-white and softened contrast, easier to read on",
-      THEME_READING, "Ember.png" },
+      THEME_READING, "Ember.png", NULL },
 };
 
 #define BUILT_IN_COUNT ((int)(sizeof(BUILT_IN) / sizeof(BUILT_IN[0])))
@@ -600,6 +731,15 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
     recon_color colors[RECON_THEME_ROLE_COUNT];
     memcpy(colors, THEME_RECON, sizeof(colors));
 
+    /*
+     * Gradients start empty rather than inherited. The default skin's ramps
+     * are chosen for its own colours, and carrying them into a skin that
+     * replaced those colours would give it a ramp running to a shade of a
+     * palette it does not use.
+     */
+    recon_color gradient[RECON_THEME_ROLE_COUNT] = {0};
+    bool has_gradient[RECON_THEME_ROLE_COUNT] = {0};
+
     char *saveptr = NULL;
     for (char *line = strtok_r(text, "\n", &saveptr);
             line != NULL;
@@ -642,13 +782,32 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
             continue;
         }
 
+        /*
+         * A key ending in ".to" is the far end of that role's gradient rather
+         * than a role of its own. Checked before the role lookup, because
+         * "title.active.to" is not a role name and would otherwise be skipped
+         * as unknown.
+         */
+        size_t key_len = strlen(line);
+        bool is_gradient = key_len > 3 &&
+            strcasecmp(line + key_len - 3, ".to") == 0;
+        if (is_gradient) {
+            line[key_len - 3] = ' ';
+        }
+
         int role = role_from_name(line);
         if (role < 0) {
             continue; /* An unknown role is skipped, not guessed at. */
         }
 
         recon_color parsed;
-        if (parse_color(value, &parsed)) {
+        if (!parse_color(value, &parsed)) {
+            continue;
+        }
+        if (is_gradient) {
+            gradient[role] = parsed;
+            has_gradient[role] = true;
+        } else {
             colors[role] = parsed;
         }
     }
@@ -663,6 +822,8 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
         "%s", description);
     theme->info.built_in = false;
     memcpy(theme->colors, colors, sizeof(colors));
+    memcpy(theme->gradient, gradient, sizeof(gradient));
+    memcpy(theme->has_gradient, has_gradient, sizeof(has_gradient));
     return true;
 }
 
@@ -747,6 +908,15 @@ void recon_theme_init(void) {
             "%s", BUILT_IN[i].wallpaper);
         theme->info.built_in = true;
         memcpy(theme->colors, BUILT_IN[i].colors, sizeof(theme->colors));
+
+        for (const struct gradient_spec *g = BUILT_IN[i].gradients;
+                g != NULL && g->role != RECON_THEME_ROLE_COUNT; g++) {
+            if (g->role < 0 || g->role >= RECON_THEME_ROLE_COUNT) {
+                continue;
+            }
+            theme->gradient[g->role] = g->to;
+            theme->has_gradient[g->role] = true;
+        }
     }
 
     /* Then anything on disk, which may add to them but cannot replace one. */
@@ -814,6 +984,22 @@ recon_color recon_theme_color(enum recon_theme_role role) {
     return g_themes[g_current].colors[role];
 }
 
+bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
+        recon_color *to) {
+    if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        return false;
+    }
+    if (g_current < 0 || !g_themes[g_current].used) {
+        return false;    /* The fallback skin is the flat one. */
+    }
+    if (!g_themes[g_current].has_gradient[role]) {
+        return false;
+    }
+    if (from != NULL) { *from = g_themes[g_current].colors[role]; }
+    if (to != NULL) { *to = g_themes[g_current].gradient[role]; }
+    return true;
+}
+
 const char *recon_theme_wallpaper(void) {
     if (g_current < 0 || !g_themes[g_current].used) {
         return "";
@@ -869,6 +1055,30 @@ recon_color recon_theme_color_of(int index, enum recon_theme_role role) {
         seen++;
     }
     return RECON_RGB(0xFF, 0x00, 0xFF);
+}
+
+bool recon_theme_gradient_of(int index, enum recon_theme_role role,
+        recon_color *from, recon_color *to) {
+    if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        return false;
+    }
+
+    int seen = 0;
+    for (int i = 0; i < THEMES_MAX; i++) {
+        if (!g_themes[i].used) {
+            continue;
+        }
+        if (seen == index) {
+            if (!g_themes[i].has_gradient[role]) {
+                return false;
+            }
+            if (from != NULL) { *from = g_themes[i].colors[role]; }
+            if (to != NULL) { *to = g_themes[i].gradient[role]; }
+            return true;
+        }
+        seen++;
+    }
+    return false;
 }
 
 bool recon_theme_set(const char *name) {

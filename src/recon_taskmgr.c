@@ -68,6 +68,7 @@
 #define COLOR_LIST_BG THEME(SURFACE)
 #define COLOR_HEADER THEME(SURFACE_HEADER)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
+#define COLOR_BUTTON_TEXT THEME(BUTTON_TEXT)
 #define COLOR_ROW_ALT THEME(SURFACE_ALT)
 #define COLOR_ROW_SELECTED THEME(SELECTION)
 #define COLOR_ROW_SELECTED_TEXT THEME(SELECTION_TEXT)
@@ -777,7 +778,7 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         int label_w = recon_text_width(tm->font, buttons[i].label);
         recon_draw_text(p, tm->font, bx + (width - label_w) / 2,
             by + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8,
-            buttons[i].label, COLOR_TEXT);
+            buttons[i].label, COLOR_BUTTON_TEXT);
         recon_hit_add(p, bx, by, width, BUTTON_HEIGHT, buttons[i].id);
 
         bx -= 6;

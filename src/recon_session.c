@@ -660,6 +660,24 @@ static void draw_theme_preview(struct recon_panel *p, int index,
 
 #define SKIN(role) recon_theme_color_of(index, RECON_THEME_##role)
 
+/*
+ * Filled the way that skin would fill it, ramp and all.
+ *
+ * Not recon_fill_role, which asks the skin that is *in use* -- here the whole
+ * point is to show a skin that is not. A preview drawn flat would make a skin
+ * with gradients look identical to one without, which is most of what
+ * separates several of them.
+ */
+#define SKIN_FILL(px, py, pw, ph, role)                                       \
+    do {                                                                      \
+        recon_color from, to;                                                 \
+        if (recon_theme_gradient_of(index, RECON_THEME_##role, &from, &to)) { \
+            recon_fill_gradient(p, (px), (py), (pw), (ph), from, to);         \
+        } else {                                                              \
+            recon_fill_rect(p, (px), (py), (pw), (ph), SKIN(role));           \
+        }                                                                     \
+    } while (0)
+
     /* The desktop behind it. */
     recon_fill_rect(p, x, y, w, h, SKIN(READOUT));
 
@@ -669,19 +687,20 @@ static void draw_theme_preview(struct recon_panel *p, int index,
     int win_w = w - 20;
     int win_h = h - 12;
 
-    recon_fill_rect(p, win_x, win_y, win_w, 6, SKIN(TITLE_ACTIVE));
+    SKIN_FILL(win_x, win_y, win_w, 6, TITLE_ACTIVE);
     recon_fill_rect(p, win_x, win_y + 6, win_w, win_h - 6, SKIN(SURFACE));
-    recon_fill_rect(p, win_x + 3, win_y + 9, win_w - 6, 3, SKIN(SELECTION));
+    SKIN_FILL(win_x + 3, win_y + 9, win_w - 6, 3, SELECTION);
     recon_fill_rect(p, win_x + 3, win_y + 14, win_w - 12, 2,
         SKIN(SURFACE_TEXT));
 
     /* The taskbar along the bottom, with the accent on it. */
-    recon_fill_rect(p, x, y + h - 6, w, 6, SKIN(BAR));
+    SKIN_FILL(x, y + h - 6, w, 6, BAR);
     recon_fill_rect(p, x + 2, y + h - 5, 10, 4, SKIN(ACCENT));
 
     recon_stroke_rect(p, x, y, w, h, SKIN(WINDOW_EDGE));
 
 #undef SKIN
+#undef SKIN_FILL
 }
 
 static void draw(struct recon_session *session) {
