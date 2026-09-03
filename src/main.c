@@ -58,6 +58,7 @@
 #include "recon_fs.h"
 #include "recon_icon_gen.h"
 #include "recon_server.h"
+#include "recon_apps.h"
 #include "recon_shell.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
@@ -1222,6 +1223,10 @@ static void toplevel_unmap(struct wl_listener *listener, void *data) {
 static void toplevel_destroy(struct wl_listener *listener, void *data) {
     struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, destroy);
 
+    /* Out of the application table before the memory goes, or the next
+     * refresh would read a freed toplevel to get its title. */
+    recon_apps_remove_client(toplevel);
+
     wl_list_remove(&toplevel->map.link);
     wl_list_remove(&toplevel->unmap.link);
     wl_list_remove(&toplevel->destroy.link);
@@ -1417,7 +1422,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         setup_background(server, width, height);
         server->background_ready = true;
 
+        /* The application table needs the shell to enumerate built-ins. */
         server->shell = recon_shell_create(server, width, height);
+        recon_apps_init(server);
         raise_chrome(server);
     } else if (server->background_buffer != NULL) {
         wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);

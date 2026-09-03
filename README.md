@@ -33,6 +33,22 @@ supplies its contents and nothing else.
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
 the root is refused rather than quietly clamped.
 
+**A recycle bin.** Deleting puts things there rather than destroying them, and
+each item remembers where it came from so restoring puts it back — recreating
+the folder it came from if that has gone since. It is the first icon on the
+desktop and the last entry in the explorer's sidebar, and shows full and empty
+differently. Shift+Delete skips it, after asking.
+
+**Dialogs.** Anything destructive asks in a window, with Cancel last so it is
+what both Enter and Escape choose. Clicking outside does not dismiss one.
+
+**An application table** — what is *running*, which is a different question
+from what processes exist. Several built-in applications share ReconOS's
+process, so no process list could show them separately, and a client program
+can own several windows. The task manager works from this: End Task closes a
+built-in, asks a client through its own window, and only offers to force one
+that has been asked and has not answered.
+
 Files can be **renamed, moved, copied and deleted**, from the file explorer, the
 desktop, or the command line. Renaming happens in place — the row or the label
 becomes a text box. Deleting asks first, and emptying a folder is a separate
@@ -44,6 +60,25 @@ explorer pastes onto the desktop.
 shell: nothing here reaches the host or runs host programs. Reachable from the
 terminal window, and over a local socket so a running system can be examined
 from outside.
+
+**A way to drive the desktop from outside it**, over that same socket:
+
+```
+ui click 60 55          press where a person would
+ui rclick 500 400       open a context menu
+ui menu "New Folder"    choose an entry by name
+ui hit 1006             press a registered region by id
+ui answer Cancel        answer a dialog by button name
+ui type Reports         type
+state                   focus, windows, open menus and dialogs, with coordinates
+ui app                  what the focused application believes about itself
+```
+
+This exists because a desktop cannot be tested by reasoning about it. Every
+"the button does nothing" report needs the button pressed and the result
+watched, and asking a person to click while somebody else reads the code is
+not that. Input goes through the same entry points real input uses, so a pass
+here means the thing a user touches works.
 
 **Applications**, all native:
 

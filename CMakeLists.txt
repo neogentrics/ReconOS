@@ -50,6 +50,7 @@ add_custom_command(
 
 add_executable(ReconOS
     src/main.c
+    src/recon_apps.c
     src/recon_appwin.c
     src/recon_calc.c
     src/recon_cmd.c

@@ -20,6 +20,7 @@
 #include <wayland-server-core.h>
 #include <wlr/util/log.h>
 
+#include "recon_apps.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_procinfo.h"
@@ -62,6 +63,8 @@
 #define COLOR_MENUBAR RECON_RGB(0xC8, 0xC8, 0xC8)
 #define COLOR_MENU_HILITE RECON_RGB(0x30, 0x50, 0x90)
 #define COLOR_MENU_HILITE_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
+/* For the one row in a list that wants acting on. */
+#define COLOR_ALERT RECON_RGB(0x8B, 0x1A, 0x1A)
 
 /* Application hit ids, above the framework's own. */
 #define HIT_END_TASK (RECON_APPWIN_HIT_USER + 1)
@@ -113,6 +116,9 @@ static const char *const VIEW_ITEMS[] = { "Sort by Name", "Sort by CPU", "Sort b
 #define VIEW_COUNT ((int)(sizeof(VIEW_ITEMS) / sizeof(VIEW_ITEMS[0])))
 
 struct recon_taskmgr {
+    /* The application a force-close question is about, or 0. */
+    uint32_t pending_force;
+
     struct recon_server *server;
     struct recon_font *font;
     struct recon_appwin *win;
@@ -187,14 +193,15 @@ static bool in_current_tab(struct recon_taskmgr *tm, const struct recon_process 
 }
 
 /*
- * One row of the Applications view: an open window, with where it came from.
+ * One row of the Applications view.
+ *
+ * Taken from the application table rather than assembled here from windows.
+ * "What is running" is a question about applications, and a window list is not
+ * the same answer: several built-in applications share ReconOS's process, and
+ * a client program can own more than one window.
  */
 struct app_row {
-    const char *title;
-    const char *kind;
-    bool minimized;
-    pid_t pid;                    /* 0 for windows built into ReconOS */
-    struct recon_appwin *appwin;  /* NULL for client windows */
+    struct recon_app_info info;
 };
 
 /* Memory of the process behind a window, or 0 if it has none of its own. */
@@ -214,39 +221,32 @@ static size_t memory_for_pid(struct recon_taskmgr *tm, pid_t pid) {
 
 #define MAX_APP_ROWS 32
 
-/* Collect the open windows, built-in ones first so their order is stable. */
+/* Ask the application table what is running, and attribute memory where a
+ * process can be pointed at. */
 static int collect_apps(struct recon_taskmgr *tm, struct app_row *rows, int max) {
+    int total = recon_apps_refresh();
     int count = 0;
-    struct recon_shell *shell = tm->server->shell;
 
-    int builtin = recon_shell_app_count(shell);
-    for (int i = 0; i < builtin && count < max; i++) {
-        struct recon_appwin *win = recon_shell_app_at(shell, i);
-        if (!recon_appwin_is_open(win)) {
+    for (int i = 0; i < total && count < max; i++) {
+        if (!recon_apps_at(i, &rows[count].info)) {
             continue;
         }
-        rows[count].title = recon_appwin_title(win);
-        rows[count].kind = "ReconOS";
-        rows[count].minimized = recon_appwin_is_minimized(win);
-        rows[count].pid = 0;
-        rows[count].appwin = win;
+        rows[count].info.memory_kb = memory_for_pid(tm, rows[count].info.pid);
         count++;
     }
-
-    struct recon_toplevel *toplevel;
-    wl_list_for_each(toplevel, &tm->server->toplevels, link) {
-        if (count >= max) {
-            break;
-        }
-        rows[count].title = recon_toplevel_title(toplevel);
-        rows[count].kind = "Client";
-        rows[count].minimized = recon_toplevel_is_minimized(toplevel);
-        rows[count].pid = recon_toplevel_pid(toplevel);
-        rows[count].appwin = NULL;
-        count++;
-    }
-
     return count;
+}
+
+static const char *app_kind_name(const struct recon_app_info *info) {
+    return info->kind == RECON_APP_KIND_BUILTIN ? "ReconOS" : "Client";
+}
+
+static const char *app_state_name(const struct recon_app_info *info) {
+    switch (info->state) {
+    case RECON_APP_NOT_RESPONDING: return "Not responding";
+    case RECON_APP_MINIMIZED:      return "Minimized";
+    default:                       return "Running";
+    }
 }
 
 /* --- Drawing --- */
@@ -421,24 +421,33 @@ static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
 
-        recon_color text = selected ? COLOR_ROW_SELECTED_TEXT : COLOR_TEXT;
-        recon_draw_text(p, tm->font, x + COL_NAME, baseline,
-            COL_PID - COL_NAME - 10, entry->title, text);
-        recon_draw_text(p, tm->font, x + COL_PID, baseline, 120,
-            entry->minimized ? "Minimized" : "Running", text);
-        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 100,
-            entry->kind, text);
+        const struct recon_app_info *info = &entry->info;
 
-        /* Windows built into ReconOS share its process, so they have no
+        recon_color text = selected ? COLOR_ROW_SELECTED_TEXT : COLOR_TEXT;
+
+        /* An application that is not answering is said so in the accent
+         * colour: it is the one row in the list that wants acting on. */
+        recon_color state_colour = text;
+        if (info->state == RECON_APP_NOT_RESPONDING && !selected) {
+            state_colour = COLOR_ALERT;
+        }
+
+        recon_draw_text(p, tm->font, x + COL_NAME, baseline,
+            COL_PID - COL_NAME - 10, info->name, text);
+        recon_draw_text(p, tm->font, x + COL_PID, baseline, 120,
+            app_state_name(info), state_colour);
+        recon_draw_text(p, tm->font, x + COL_CPU + 60, baseline, 100,
+            app_kind_name(info), text);
+
+        /* Applications built into ReconOS share its process, so they have no
          * memory figure of their own to report. */
         char memory[32];
-        size_t kb = memory_for_pid(tm, entry->pid);
-        if (entry->appwin != NULL) {
+        if (info->kind == RECON_APP_KIND_BUILTIN) {
             snprintf(memory, sizeof(memory), "in ReconOS");
-        } else if (kb >= 1024) {
-            snprintf(memory, sizeof(memory), "%.1f MB", kb / 1024.0);
-        } else if (kb > 0) {
-            snprintf(memory, sizeof(memory), "%zu KB", kb);
+        } else if (info->memory_kb >= 1024) {
+            snprintf(memory, sizeof(memory), "%.1f MB", info->memory_kb / 1024.0);
+        } else if (info->memory_kb > 0) {
+            snprintf(memory, sizeof(memory), "%zu KB", info->memory_kb);
         } else {
             snprintf(memory, sizeof(memory), "-");
         }
@@ -546,6 +555,31 @@ static const struct recon_process *process_for_row(struct recon_taskmgr *tm, int
 
 /* --- Input --- */
 
+/* The answer to "force this application to stop?". */
+static void taskmgr_answered(void *user, int choice) {
+    struct recon_taskmgr *tm = user;
+
+    uint32_t id = tm->pending_force;
+    tm->pending_force = 0;
+
+    if (choice != 0 || id == 0) {
+        snprintf(tm->status, sizeof(tm->status), "Nothing was ended");
+        recon_appwin_refresh(tm->win);
+        return;
+    }
+
+    struct recon_app_info info;
+    if (!recon_apps_find(id, &info)) {
+        snprintf(tm->status, sizeof(tm->status), "It has already gone");
+    } else if (recon_apps_force_end(id)) {
+        snprintf(tm->status, sizeof(tm->status), "Ended '%s'", info.name);
+    } else {
+        snprintf(tm->status, sizeof(tm->status), "Could not end '%s'", info.name);
+    }
+
+    recon_appwin_refresh(tm->win);
+}
+
 static void end_selected_task(struct recon_taskmgr *tm) {
     if (tm->tab == TAB_APPLICATIONS) {
         struct app_row list[MAX_APP_ROWS];
@@ -555,16 +589,40 @@ static void end_selected_task(struct recon_taskmgr *tm) {
             return;
         }
 
-        const struct app_row *entry = &list[tm->selected_row];
-        if (entry->appwin != NULL) {
-            recon_appwin_hide(entry->appwin);
-            snprintf(tm->status, sizeof(tm->status), "Closed %s", entry->title);
-        } else {
-            /* Client windows are asked to close through the window itself, so
-             * the program can decline or save first. */
-            snprintf(tm->status, sizeof(tm->status),
-                "Close '%s' from its own window", entry->title);
+        const struct recon_app_info *info = &list[tm->selected_row].info;
+
+        /*
+         * A program that has been asked and has not answered can be stopped
+         * outright, after saying what that costs. Offering force before the
+         * polite close has been tried would make force the thing people
+         * press first, and it loses unsaved work.
+         */
+        if (recon_apps_can_force(info->id) &&
+                info->state == RECON_APP_NOT_RESPONDING) {
+            tm->pending_force = info->id;
+
+            char message[256];
+            snprintf(message, sizeof(message),
+                "'%s' is not responding. End it now? Anything unsaved is lost.",
+                info->name);
+
+            const char *buttons[2] = { "End Now", "Wait" };
+            recon_appwin_ask(tm->win, "End Application", message, buttons, 2,
+                taskmgr_answered);
+            return;
         }
+
+        if (recon_apps_end(info->id)) {
+            snprintf(tm->status, sizeof(tm->status),
+                info->kind == RECON_APP_KIND_BUILTIN
+                    ? "Closed '%s'"
+                    : "Asked '%s' to close",
+                info->name);
+        } else {
+            snprintf(tm->status, sizeof(tm->status),
+                "Could not end '%s'", info->name);
+        }
+
         tm->selected_row = -1;
         return;
     }
