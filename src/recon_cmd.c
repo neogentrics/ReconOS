@@ -422,6 +422,7 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         out(s, "  ui click <x> <y>      move there, then press and release\n");
         out(s, "  ui rclick <x> <y>     the same with the right button\n");
         out(s, "  ui press|release      the left button, without moving\n");
+        out(s, "  ui drag <id> <dx> <dy>  press a region, move, release\n");
         out(s, "  ui key <name>         one key, e.g. Return, Escape, F2, ctrl+c\n");
         out(s, "  ui type <text>        a character at a time\n");
         out(s, "  ui where              where the pointer is\n");
@@ -535,6 +536,47 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         buffer[0] = '\0';
         recon_appwin_describe_hits(win, buffer, sizeof(buffer));
         out(s, "%s clickable regions:\n%s", recon_appwin_title(win), buffer);
+        return;
+    }
+
+    /*
+     * Press on a region, move, release.
+     *
+     * 'ui hit' presses and releases in the same place, which cannot express a
+     * drag at all -- so anything dragged (a column boundary, a window edge, a
+     * selection) was untestable except by measuring a screenshot. This is the
+     * gesture, done through the same entry points a real pointer uses.
+     */
+    if (strcasecmp(what, "drag") == 0) {
+        if (argc < 5) {
+            out(s, "Usage: ui drag <region id> <dx> <dy>\n");
+            return;
+        }
+        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        if (win == NULL) {
+            out(s, "No built-in window has focus.\n");
+            return;
+        }
+
+        uint32_t id = (uint32_t)strtoul(argv[2], NULL, 10);
+        int x = 0, y = 0;
+        if (!recon_appwin_hit_centre(win, id, &x, &y)) {
+            out(s, "%s has no region with id %u.\n", recon_appwin_title(win), id);
+            return;
+        }
+
+        int dx = atoi(argv[3]);
+        int dy = atoi(argv[4]);
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        /* A step in the middle, because a drag that only ever reports its
+         * endpoint would not exercise the code that follows the pointer. */
+        recon_inject_pointer(server, x + dx / 2, y + dy / 2);
+        recon_inject_pointer(server, x + dx, y + dy);
+        recon_inject_button(server, BTN_LEFT, false);
+
+        out(s, "dragged region %u from %d,%d by %d,%d\n", id, x, y, dx, dy);
         return;
     }
 
