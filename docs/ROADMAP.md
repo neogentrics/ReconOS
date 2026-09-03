@@ -192,11 +192,51 @@ which applications may open one. Neither exists, and inventing a socket API
 before anything wants one is how an interface gets fixed in place before it
 is understood.
 
+## v0.2.1 — connections, capture, and installing things
+
+**Streams.** Opening a connection, writing to it, reading from it, and having
+it close -- non-blocking throughout, on the event loop. Send queues into a
+fixed buffer and refuses when full, which is real backpressure: a stream that
+lets a caller queue without limit turns a slow network into memory that grows
+until something dies.
+
+**The permission rule** came with it. Every stream is opened in the name of an
+application; one nobody has allowed cannot open one; the default is no. It is
+not isolation and says so -- ReconOS is one process, so anything that wanted
+to bypass it could call the host's socket() directly. It binds what goes
+through ReconOS, which is all of ours.
+
+Two bugs found by running it rather than reading it. The permission prefix
+ended in a slash, and the registry compares prefixes by whole segment, so
+every permission was written correctly and none could be listed. And registry
+keys may not contain a space, so an application whose name has one -- most of
+them -- recorded nothing at all, silently.
+
+**Screen capture.** Print Screen, or `capture`. It asks for the next frame
+rather than grabbing the last one, because a compositor keeps no copy of what
+it drew. The frame loop is untouched unless a capture is pending:
+`wlr_scene_output_commit` renders and commits in one step and leaves no moment
+at which the finished frame can be read, so building the state separately is
+the long way round and is only taken when somebody asked.
+
+This one changed how the rest of the work gets done. Verifying the desktop
+used to mean dumping individual panels and reasoning about how they would
+compose. Now there is a picture of the whole screen -- wallpaper, windows,
+taskbar, and the cursor, which no panel dump ever showed.
+
+**Installing and removing programs.** The Programs page said this was not
+built because nothing recorded which files an application owns. Something
+does: a module knows the path it was loaded from. Installing copies a `.rex`
+into `/Apps` and loads it; if it copies and will not load, the copy is removed
+again. Removing unloads first and then deletes, because unload already refuses
+when something the module registered is still in use.
+
+**Run New Task** runs one, now that there is a registry of installed
+applications to run it from.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
-
-**No screen capture.** It should be a native application on Print Screen.
 
 **Wallpaper is not part of a theme.** There is one image, it does not change
 with the skin, and there is no way to choose another. It also is not ours: a

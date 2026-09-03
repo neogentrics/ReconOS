@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.0.** The version number tracks what works, not what is
+**Status: v0.2.1.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -21,9 +21,11 @@ to something, accounts with faces, a login that asks who you are before it
 asks anything else, and a long list of things that were wrong once a person
 clicked them.
 
-v0.2.0 adds the first networking: ReconOS can see the network and reach
+v0.2.0 added the first networking: ReconOS can see the network and reach
 across it. It does not implement one -- see *The network* below, which is
-blunt about the difference.
+blunt about the difference. v0.2.1 added connections that carry data, the
+rule about which programs may open one, screen capture, and installing and
+removing programs.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -116,9 +118,29 @@ of its own that file is what changes. The Control Panel's Network page and the
 a gateway looks exactly like an operating system doing networking, and this
 one is not.
 
-Deliberately not there yet: listening, sending, receiving. Those need a stream
-API and a policy about which applications may open a connection, and neither
-exists.
+**Connections that carry data**, with a rule about who may open one. Every
+stream is opened in the name of an application, and one nobody has allowed
+cannot open it; the default is no, because a system that never asks has
+answered "all of them" without saying so. `net apps`, `net allow` and `net
+deny` show and change it. This is not isolation and says so: ReconOS is one
+process, so it binds what goes through ReconOS, the same way accounts are
+bound.
+
+Deliberately not there yet: listening, and TLS. Accepting connections means
+deciding what may reach this machine, which is a bigger question than what
+this machine may reach. Without TLS this is `http://` only.
+
+**Screen capture.** Print Screen, or `capture` from the terminal, writes a PNG
+into the account's Pictures folder. It asks for the *next* frame rather than
+grabbing the last one, because a compositor keeps no copy of what it drew.
+ReconOS writes the PNG itself -- 8-bit RGB, no interlacing, no palette -- since
+the alternative was a second image library for one direction of one format.
+
+**Installing and removing programs.** A `.rex` is copied into `/Apps` and
+loaded; removing unloads it and deletes the file. Both from the Control Panel
+or from `install` and `uninstall`. Administrator-only: a module runs inside
+ReconOS with everything ReconOS can do, so installing one is closer to
+installing a driver than to saving a file.
 
 **A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
 right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a
