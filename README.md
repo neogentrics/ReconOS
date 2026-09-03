@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.5.** The version number tracks what works, not what is
+**Status: v0.2.6.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -31,7 +31,9 @@ account that owns it. v0.2.3 added gradients to the skin system, a boot
 splash, and fixed the unreadable labels that finding the gradients turned up.
 v0.2.4 made skins installable, which the file format had been waiting for
 since the skin system was built. v0.2.5 made the registry changeable from the
-Control Panel rather than only readable there.
+Control Panel rather than only readable there. v0.2.6 added window snapping,
+and fixed Alt+Tab, which had been quietly dead since ReconOS started drawing
+its own windows.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -181,6 +183,16 @@ one stays replaced.
 **Windows the system owns** — minimize, maximize, close, dragging and resizing
 belong to the window framework rather than to each application, so a program
 supplies its contents and nothing else.
+
+**Snapping and Alt+Tab.** Drag a window until the pointer touches the left or
+right edge and it fills that half; the top fills the screen. The pointer
+decides which edge, not the window — a window dragged by the middle of a wide
+title bar has its own edge far from the screen's while your hand is against
+it. A snapped window restores to where it was when the drag started, and the
+restore button already undoes it, because snapping counts as maximized.
+
+Alt+Tab steps through everything the taskbar lists, skipping what is
+minimized.
 
 **A filesystem** with one root it cannot see outside of: `/System`, `/Apps`,
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of

@@ -81,7 +81,7 @@ architected and a first-run setup flow in place.
 | --- | --- | --- |
 | 0 | Verified build and run baseline on VM and hardware | **Done** (VM) |
 | 1 | Application windows via `xdg-shell` | **Done** |
-| 2 | Window management — focus, move, resize, close, alt-tab | **Done** |
+| 2 | Window management — focus, move, resize, close, alt-tab | **Done** — alt-tab regressed and was fixed in v0.2.6 |
 | 3 | Shell chrome — taskbar, drawn by the compositor itself | **Done** |
 | 4 | Apps menu and application launcher | **Done** |
 | 5 | Native first-party applications | **Done** — six of them |
@@ -384,6 +384,35 @@ The build is warning-free again. `question_target` was an account name's
 length and had been silently truncating module names; `set_status(cp, false,
 "")` was six calls with an empty printf format, which is enough noise to hide
 a real warning.
+
+## v0.2.6 — snapping, and a shortcut that had stopped working
+
+**Injected keys went straight to the shell**, bypassing the compositor's
+shortcut handler, so no system shortcut could be driven from outside at all:
+not Alt+Tab, not Alt+Q, not Ctrl+Alt+Delete, not Print Screen. None of them
+had ever been tested.
+
+Sending one the same route a real key takes immediately found that **Alt+Tab
+had stopped working**. It cycled the compositor's list of *client* windows,
+which was right when the only windows were clients and became a shortcut that
+did nothing once ReconOS drew its own — a desktop with a Notepad and a
+Terminal on it has no clients in that list. A shortcut nothing can press is a
+shortcut nobody notices the loss of. It now cycles what the taskbar lists,
+skipping minimized windows rather than restoring them.
+
+**Snapping.** Drag a window until the pointer touches the left or right edge
+and it fills that half; the top fills the screen. The pointer decides which
+edge, not the window, because the gesture people make is "put the mouse where
+I want the window to go". The top is checked before the sides, since a
+pointer in the top-left corner is touching both. A snapped window restores to
+where it was when the drag *started* rather than where the drag left it,
+which is in the corner. Snapping counts as maximized, so the restore button
+already undoes it. Only a move snaps: a resize that ends at an edge is
+somebody sizing a window against it.
+
+Two of the four things the Multitasking page listed as not built are built,
+and the page no longer says otherwise. Print Screen and Ctrl+Alt+Delete are
+now verified from a test rather than by hand.
 
 ## What is known to be missing
 
