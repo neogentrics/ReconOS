@@ -380,10 +380,12 @@ store a setting under a name nobody typed; and the key being changed had to
 be copied out when the field opened, because adding or removing anything
 renumbers the hive.
 
-The build is warning-free again. `question_target` was an account name's
-length and had been silently truncating module names; `set_status(cp, false,
-"")` was six calls with an empty printf format, which is enough noise to hide
-a real warning.
+`question_target` was an account name's length and had been silently
+truncating module names; `set_status(cp, false, "")` was six calls with an
+empty printf format, which is enough noise to hide a real warning. (This
+section originally claimed the build was warning-free after that. It was not
+— that was true of the one file being rebuilt at the time. A clean build had
+36 warnings; see v0.2.6.)
 
 ## v0.2.6 — snapping, and a shortcut that had stopped working
 
@@ -413,6 +415,30 @@ somebody sizing a window against it.
 Two of the four things the Multitasking page listed as not built are built,
 and the page no longer says otherwise. Print Screen and Ctrl+Alt+Delete are
 now verified from a test rather than by hand.
+
+### The warnings
+
+A clean build had 36 warnings, which is enough that a new one would not be
+noticed. Fixed in v0.2.6:
+
+- Five `implicit declaration of strcasecmp` — two files call it without
+  `<strings.h>`, so the compiler was assuming a signature. It happens to work
+  on this target and is undefined behaviour everywhere.
+- Four paths built from a folder and a name where the two together can exceed
+  the buffer. A truncated path is not a shortened name for the same file, it
+  is the name of a different one, and these go on to move, copy or delete what
+  they name. `recon_fs_join` refuses instead.
+- The empty-format `set_status` calls in the explorer, as in the Control Panel.
+
+Twenty remain, all the same shape: a name copied out of a path into a
+name-sized buffer, where the bound holds in practice but the compiler cannot
+see it. Worth a sweep; not worth silencing individually.
+
+**Separately**, the filesystem had been leaking host paths into messages
+people read — deleting something that was not there said `cannot read
+'/tmp/lookroot/Users/Joshua/Documents/x'`. That is a path which does not
+exist as far as anyone using ReconOS is concerned, and a break in the one
+rule `recon_fs.c` exists to keep. Fixed in v0.2.6.
 
 ## What is known to be missing
 
