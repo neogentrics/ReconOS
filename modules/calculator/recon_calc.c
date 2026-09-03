@@ -13,6 +13,7 @@
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_calc.h"
+#include "recon_module.h"
 #include "recon_ui.h"
 
 #define DISPLAY_HEIGHT 44
@@ -453,3 +454,34 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
     }
     return win;
 }
+
+/* --- The module --- */
+
+/*
+ * The calculator is an application ReconOS loads rather than one it contains.
+ *
+ * It is here as the first thing to go through the module path, and it is a
+ * good first thing: entirely self-contained, useful, and nothing else depends
+ * on it. If it fails to load the user loses a calculator, not a desktop.
+ */
+static bool calculator_load(void) {
+    static const struct recon_app_registration APP = {
+        .name = "Calculator",
+        .icon = RECON_ICON_CALCULATOR,
+        .create = recon_calc_create,
+        .in_menu = true,
+    };
+    return recon_register_app(&APP);
+}
+
+static void calculator_unload(void) {
+    recon_unregister_app("Calculator");
+}
+
+RECON_MODULE(
+    .name = "Calculator",
+    .version = "1.0",
+    .description = "Arithmetic by mouse or keyboard",
+    .load = calculator_load,
+    .unload = calculator_unload,
+);

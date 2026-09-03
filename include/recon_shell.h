@@ -66,6 +66,9 @@ void recon_shell_open_taskmgr(struct recon_shell *shell);
  * The built-in windows, for anything that needs to enumerate open windows --
  * the task manager's Applications view, for one.
  */
+/* The font the shell draws with, so anything it hands work to draws the same. */
+struct recon_font *recon_shell_font(struct recon_shell *shell);
+
 int recon_shell_app_count(struct recon_shell *shell);
 struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index);
 

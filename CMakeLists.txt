@@ -51,8 +51,8 @@ add_custom_command(
 add_executable(ReconOS
     src/main.c
     src/recon_apps.c
+    src/recon_modules.c
     src/recon_appwin.c
-    src/recon_calc.c
     src/recon_cmd.c
     src/recon_control.c
     src/recon_desktop.c
@@ -84,12 +84,25 @@ target_include_directories(ReconOS PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
+# Modules are loaded with dlopen and call back into ReconOS directly, so the
+# executable must export its own symbols rather than hiding them. Without this
+# a module links but every ReconOS function it calls is undefined at load.
+set_target_properties(ReconOS PROPERTIES ENABLE_EXPORTS ON)
+
 target_link_libraries(ReconOS PRIVATE
     ${WLR_LIBRARIES}
     ${WAYLAND_LIBRARIES}
     ${XKB_LIBRARIES}
     ${PIXMAN_LIBRARIES}
+    ${CMAKE_DL_LIBS}
     m)
+
+# Where built modules are collected, so a fresh system can install them into
+# its own filesystem on first run rather than starting with no applications.
+target_compile_definitions(ReconOS PRIVATE
+    RECONOS_MODULE_DIR="${CMAKE_BINARY_DIR}/modules")
+
+add_subdirectory(modules)
 
 # --- Tests ---
 #

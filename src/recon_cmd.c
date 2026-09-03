@@ -15,6 +15,7 @@
 #include "recon_appwin.h"
 #include "recon_cmd.h"
 #include "recon_fs.h"
+#include "recon_modules.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
 #include "recon_shell.h"
@@ -58,6 +59,34 @@ static void out(struct recon_cmd_session *s, const char *fmt, ...) {
     }
 }
 
+/*
+ * Printing from a module's command.
+ *
+ * A module is given the session as an opaque pointer and this to write with,
+ * so it never has to know how output is buffered -- which is the sort of
+ * detail that would otherwise become part of the interface and be impossible
+ * to change afterwards.
+ */
+void recon_command_print(void *session, const char *fmt, ...) {
+    struct recon_cmd_session *s = session;
+    if (s == NULL || s->output_used >= sizeof(s->output) - 1) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    int written = vsnprintf(s->output + s->output_used,
+        sizeof(s->output) - s->output_used, fmt, args);
+    va_end(args);
+
+    if (written > 0) {
+        s->output_used += (size_t)written;
+        if (s->output_used >= sizeof(s->output)) {
+            s->output_used = sizeof(s->output) - 1;
+        }
+    }
+}
+
 /* --- Commands --- */
 
 typedef void (*command_fn)(struct recon_cmd_session *s, int argc, char **argv);
@@ -81,6 +110,18 @@ static void cmd_help(struct recon_cmd_session *s, int argc, char **argv) {
                 return;
             }
         }
+        int extra = recon_module_command_count();
+        for (int i = 0; i < extra; i++) {
+            struct recon_command_registration command;
+            if (recon_module_command_at(i, &command) &&
+                    strcasecmp(command.name, argv[1]) == 0) {
+                out(s, "%s\n  %s\n  %s\n", command.name,
+                    command.usage != NULL ? command.usage : command.name,
+                    command.summary != NULL ? command.summary : "");
+                return;
+            }
+        }
+
         out(s, "No command named '%s'.\n", argv[1]);
         return;
     }
@@ -88,6 +129,20 @@ static void cmd_help(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "ReconOS commands. 'help <command>' for detail.\n\n");
     for (int i = 0; i < command_count(); i++) {
         out(s, "  %-10s %s\n", COMMANDS[i].name, COMMANDS[i].summary);
+    }
+
+    /* Commands modules added, listed apart so it is clear which are part of
+     * the system and which arrived with something installed. */
+    int extra = recon_module_command_count();
+    if (extra > 0) {
+        out(s, "\nFrom modules:\n");
+        for (int i = 0; i < extra; i++) {
+            struct recon_command_registration command;
+            if (recon_module_command_at(i, &command)) {
+                out(s, "  %-10s %s\n", command.name,
+                    command.summary != NULL ? command.summary : "");
+            }
+        }
     }
 }
 
@@ -601,6 +656,72 @@ static void cmd_state(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "%s", buffer);
 }
 
+/* What a module added, and what was refused. */
+static void cmd_modules(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc > 1 && strcasecmp(argv[1], "load") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: modules load <path>\n");
+            return;
+        }
+        if (!recon_modules_load(argv[2])) {
+            out(s, "%s\n", recon_modules_last_error());
+            return;
+        }
+        out(s, "Loaded '%s'.\n", argv[2]);
+        return;
+    }
+
+    if (argc > 1 && strcasecmp(argv[1], "unload") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: modules unload <name>\n");
+            return;
+        }
+        if (!recon_modules_unload(argv[2])) {
+            out(s, "%s\n", recon_modules_last_error());
+            return;
+        }
+        out(s, "Unloaded '%s'.\n", argv[2]);
+        return;
+    }
+
+    int count = recon_modules_count();
+    if (count == 0) {
+        out(s, "No modules are loaded.\n");
+    }
+
+    for (int i = 0; i < count; i++) {
+        struct recon_module_state state;
+        if (!recon_modules_at(i, &state)) {
+            continue;
+        }
+
+        out(s, "  %-18s %-8s %-6s %s\n",
+            state.name,
+            state.version[0] != '\0' ? state.version : "-",
+            state.is_app ? "app" : "system",
+            state.loaded ? state.description : "NOT LOADED");
+
+        /* Say why, when it did not. A module that fails invisibly is a module
+         * nobody fixes. */
+        if (!state.loaded && state.problem[0] != '\0') {
+            out(s, "  %-18s %s\n", "", state.problem);
+        }
+    }
+
+    int apps = recon_installed_app_count();
+    if (apps > 0) {
+        out(s, "\nApplications:\n");
+        for (int i = 0; i < apps; i++) {
+            struct recon_installed_app app;
+            if (!recon_installed_app_at(i, &app)) {
+                continue;
+            }
+            out(s, "  %-18s %s\n", app.name,
+                app.module[0] != '\0' ? app.module : "built in");
+        }
+    }
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -634,26 +755,58 @@ static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
 
 static void cmd_apps(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_shell *shell = s->server->shell;
-    int count = recon_shell_app_count(shell);
+
+    /*
+     * What is installed, not what happens to have a window. Applications are
+     * built the first time they are opened, so a list of windows would show
+     * nothing on a system nobody has touched yet -- which is exactly when
+     * somebody wants to know what is there.
+     */
+    int count = recon_installed_app_count();
 
     if (argc < 2) {
-        out(s, "Built-in applications:\n");
+        out(s, "Applications:\n");
         for (int i = 0; i < count; i++) {
-            struct recon_appwin *win = recon_shell_app_at(shell, i);
-            out(s, "  %d  %-24s %s\n", i, recon_appwin_title(win),
-                recon_appwin_is_open(win) ? "open" : "closed");
+            struct recon_installed_app app;
+            if (!recon_installed_app_at(i, &app)) {
+                continue;
+            }
+            struct recon_appwin *win = recon_installed_app_existing(app.name);
+            const char *state = (win == NULL) ? "not started"
+                : (recon_appwin_is_open(win) ? "open" : "closed");
+
+            out(s, "  %d  %-20s %-12s %s\n", i, app.name, state,
+                app.module[0] != '\0' ? app.module : "built in");
         }
-        out(s, "\n'apps <number>' opens one.\n");
+        out(s, "\n'apps <number>' or 'apps <name>' opens one.\n");
         return;
     }
 
-    int index = atoi(argv[1]);
-    if (index < 0 || index >= count) {
-        out(s, "No application numbered %d.\n", index);
+    /* By name as well as by number: a number that moves when something is
+     * installed is a number nobody can write down. */
+    struct recon_installed_app app;
+    bool found = false;
+
+    if (argv[1][0] >= '0' && argv[1][0] <= '9') {
+        int index = atoi(argv[1]);
+        found = (index >= 0 && index < count) &&
+            recon_installed_app_at(index, &app);
+    } else {
+        for (int i = 0; i < count && !found; i++) {
+            if (recon_installed_app_at(i, &app) &&
+                    strcasecmp(app.name, argv[1]) == 0) {
+                found = true;
+            }
+        }
+    }
+
+    if (!found) {
+        out(s, "No application called '%s'.\n", argv[1]);
         return;
     }
-    recon_shell_open_app(shell, index);
-    out(s, "Opened %s.\n", recon_appwin_title(recon_shell_app_at(shell, index)));
+
+    recon_shell_open_named(shell, app.name);
+    out(s, "Opened %s.\n", app.name);
 }
 
 static void cmd_mem(struct recon_cmd_session *s, int argc, char **argv) {
@@ -708,6 +861,7 @@ static const struct command COMMANDS[] = {
     { "copy",     "copy <name> <dest>",    "Copy a file or folder",             cmd_copy },
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
+    { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },
@@ -816,6 +970,24 @@ const char *recon_cmd_run(struct recon_cmd_session *session, const char *line) {
     for (int i = 0; i < command_count(); i++) {
         if (strcasecmp(COMMANDS[i].name, argv[0]) == 0) {
             COMMANDS[i].run(session, argc, argv);
+            return session->output;
+        }
+    }
+
+    /*
+     * Then whatever modules added. Built-in names win, so a module cannot
+     * take over `del` or `shutdown` by registering one -- registration
+     * already refuses a duplicate, and this makes the rule hold even if that
+     * check is ever loosened.
+     */
+    int extra = recon_module_command_count();
+    for (int i = 0; i < extra; i++) {
+        struct recon_command_registration command;
+        if (!recon_module_command_at(i, &command)) {
+            continue;
+        }
+        if (strcasecmp(command.name, argv[0]) == 0) {
+            command.run(session, argc, argv);
             return session->output;
         }
     }

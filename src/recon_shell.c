@@ -10,6 +10,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp */
 
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/log.h>
@@ -17,7 +18,6 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_appwin.h"
-#include "recon_calc.h"
 #include "recon_desktop.h"
 #include "recon_explorer.h"
 #include "recon_notepad.h"
@@ -25,6 +25,7 @@
 #include "recon_taskmgr.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_modules.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -117,36 +118,61 @@ enum context_action {
 
 /* --- Apps menu contents --- */
 
-enum recon_app_action {
-    RECON_APP_LAUNCH,
-    RECON_APP_TASKMGR,
-    RECON_APP_CALC,
-    RECON_APP_NOTEPAD,
-    RECON_APP_TERMINAL,
-    RECON_APP_EXPLORER,
-    RECON_APP_QUIT,
-};
-
-struct recon_app_entry {
-    const char *label;
-    const char *command; /* NULL means the configured terminal */
-    enum recon_app_action action;
-    const char *icon;
-};
-
 /*
- * Hardcoded for now. Reading .desktop files off the system would work, but
- * ReconOS is meant to present its own applications rather than inherit
- * whatever a host distribution happens to have installed.
+ * The Apps menu is built from the application registry rather than from a list
+ * here, so an application contributed by a module appears in it without the
+ * shell being told about that module. The built-in applications register
+ * through the same call a module uses -- an extension path that only outsiders
+ * take is an extension path nobody keeps working.
+ *
+ * Shut Down is not an application, so it is appended as an action after them.
  */
-static const struct recon_app_entry APPS[] = {
-    { "File Explorer", NULL, RECON_APP_EXPLORER, RECON_ICON_EXPLORER },
-    { "Terminal", NULL, RECON_APP_TERMINAL, RECON_ICON_TERMINAL },
-    { "Notepad", NULL, RECON_APP_NOTEPAD, RECON_ICON_NOTEPAD },
-    { "Calculator", NULL, RECON_APP_CALC, RECON_ICON_CALCULATOR },
-    { "Task Manager", NULL, RECON_APP_TASKMGR, RECON_ICON_TASKMGR },
-    { "Shut Down", NULL, RECON_APP_QUIT, "shutdown" },
+#define MENU_ACTION_COUNT 1
+
+struct menu_entry {
+    char label[64];
+    char icon[64];
+    bool is_shutdown;
 };
+
+static int menu_entry_count(void) {
+    int count = 0;
+    int installed = recon_installed_app_count();
+    for (int i = 0; i < installed; i++) {
+        struct recon_installed_app app;
+        if (recon_installed_app_at(i, &app) && app.in_menu) {
+            count++;
+        }
+    }
+    return count + MENU_ACTION_COUNT;
+}
+
+static bool menu_entry_at(int index, struct menu_entry *out) {
+    int seen = 0;
+    int installed = recon_installed_app_count();
+
+    for (int i = 0; i < installed; i++) {
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(i, &app) || !app.in_menu) {
+            continue;
+        }
+        if (seen == index) {
+            snprintf(out->label, sizeof(out->label), "%s", app.name);
+            snprintf(out->icon, sizeof(out->icon), "%s", app.icon);
+            out->is_shutdown = false;
+            return true;
+        }
+        seen++;
+    }
+
+    if (index == seen) {
+        snprintf(out->label, sizeof(out->label), "Shut Down");
+        snprintf(out->icon, sizeof(out->icon), "shutdown");
+        out->is_shutdown = true;
+        return true;
+    }
+    return false;
+}
 
 /* What the Ctrl+Alt+Del box offers, in the order it offers it. */
 enum sec_action {
@@ -163,7 +189,6 @@ static const char *const SEC_ITEMS[] = {
 
 #define SEC_COUNT ((int)(sizeof(SEC_ITEMS) / sizeof(SEC_ITEMS[0])))
 
-#define APP_COUNT ((int)(sizeof(APPS) / sizeof(APPS[0])))
 
 /* --- Shell --- */
 
@@ -251,7 +276,6 @@ struct recon_shell {
      * question wants answering before anything else happens. */
     struct recon_panel *dim;
     bool security_open;
-    struct recon_appwin *taskmgr;
 
     int screen_width, screen_height;
 
@@ -500,7 +524,7 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
 }
 
 static int menu_height(void) {
-    return APP_COUNT * MENU_ITEM_HEIGHT + MENU_PADDING * 2;
+    return menu_entry_count() * MENU_ITEM_HEIGHT + MENU_PADDING * 2;
 }
 
 static int security_height(void) {
@@ -1025,7 +1049,13 @@ static void draw_menu(struct recon_shell *shell) {
     recon_hit_clear(menu);
 
     int ascent = recon_font_ascent(shell->font);
-    for (int i = 0; i < APP_COUNT; i++) {
+    int count = menu_entry_count();
+    for (int i = 0; i < count; i++) {
+        struct menu_entry entry;
+        if (!menu_entry_at(i, &entry)) {
+            break;
+        }
+
         int y = MENU_PADDING + i * MENU_ITEM_HEIGHT;
         int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
         bool hovered = (i == shell->menu_hover);
@@ -1037,11 +1067,11 @@ static void draw_menu(struct recon_shell *shell) {
 
         int label_x = MENU_PADDING + TEXT_INSET;
         int icon_size = MENU_ITEM_HEIGHT - 8;
-        if (recon_icon_draw(menu, APPS[i].icon, MENU_PADDING + 6, y + 4, icon_size)) {
+        if (recon_icon_draw(menu, entry.icon, MENU_PADDING + 6, y + 4, icon_size)) {
             label_x = MENU_PADDING + 6 + icon_size + 8;
         }
         recon_draw_text(menu, shell->font, label_x, baseline,
-            width - label_x - MENU_PADDING, APPS[i].label,
+            width - label_x - MENU_PADDING, entry.label,
             hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
         recon_hit_add(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
             MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
@@ -1181,34 +1211,27 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         draw_security(shell);
     }
 
-    shell->taskmgr = recon_taskmgr_create(server, shell->font);
-    if (shell->taskmgr != NULL) {
-        shell->app_order[shell->app_count] = shell->app_count;
-        shell->apps[shell->app_count++] = shell->taskmgr;
-    }
+    /*
+     * The built-in applications are registered, not constructed. Their windows
+     * are built the first time somebody opens one, so an application nobody
+     * touches costs an entry in a list rather than a window's worth of pixels.
+     *
+     * They go through recon_register_builtin_app, which is recon_register_app
+     * with the contributing module left empty -- the same registry a module
+     * adds to, so the path a module takes is the path the system takes.
+     */
+    static const struct recon_app_registration BUILTIN_APPS[] = {
+        { "File Explorer", RECON_ICON_EXPLORER, recon_explorer_create, true },
+        { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true },
+        { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
+        { "Task Manager", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
+    };
 
-    struct recon_appwin *calc = recon_calc_create(server, shell->font);
-    if (calc != NULL) {
-        shell->app_order[shell->app_count] = shell->app_count;
-        shell->apps[shell->app_count++] = calc;
-    }
-
-    struct recon_appwin *notepad = recon_notepad_create(server, shell->font);
-    if (notepad != NULL) {
-        shell->app_order[shell->app_count] = shell->app_count;
-        shell->apps[shell->app_count++] = notepad;
-    }
-
-    struct recon_appwin *terminal = recon_terminal_create(server, shell->font);
-    if (terminal != NULL) {
-        shell->app_order[shell->app_count] = shell->app_count;
-        shell->apps[shell->app_count++] = terminal;
-    }
-
-    struct recon_appwin *explorer = recon_explorer_create(server, shell->font);
-    if (explorer != NULL) {
-        shell->app_order[shell->app_count] = shell->app_count;
-        shell->apps[shell->app_count++] = explorer;
+    for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {
+        if (!recon_register_builtin_app(&BUILTIN_APPS[i])) {
+            wlr_log(WLR_ERROR, "ReconOS: could not register '%s'",
+                BUILTIN_APPS[i].name);
+        }
     }
 
     for (int i = 0; i < shell->app_count; i++) {
@@ -1220,7 +1243,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * removing one stays removed. */
     static const struct { const char *file; const char *target; } DEFAULTS[] = {
         { "File Explorer.app", "File Explorer" },
-        { "Terminal.app", "ReconOS Terminal" },
+        { "Terminal.app", "Terminal" },
         { "Notepad.app", "Notepad" },
     };
     char marker[RECON_PATH_MAX];
@@ -1258,11 +1281,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     /* Debug aid: open and maximize a window at startup, so the state that
      * shows the rendering fault can be reached without a person clicking. */
     const char *autostart = getenv("RECONOS_DEBUG_AUTOSTART");
-    if (autostart != NULL && strcmp(autostart, "taskmgr-max") == 0 &&
-            shell->taskmgr != NULL) {
-        recon_appwin_show(shell->taskmgr);
-        recon_appwin_focus(shell->taskmgr);
-        recon_appwin_set_maximized(shell->taskmgr, true);
+    if (autostart != NULL && strcmp(autostart, "taskmgr-max") == 0) {
+        recon_shell_open_named(shell, "Task Manager");
+        struct recon_appwin *win = recon_installed_app_existing("Task Manager");
+        if (win != NULL) {
+            recon_appwin_set_maximized(win, true);
+        }
     }
 
     wlr_log(WLR_INFO, "ReconOS: shell up, taskbar %dx%d",
@@ -1343,11 +1367,14 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
         return;
     }
     recon_shell_close_menu(shell);
-    raise_app_order(shell, 0);
-    set_focused_app(shell, 0);
-    recon_appwin_show(shell->taskmgr);
-    recon_appwin_focus(shell->taskmgr);
-    recon_shell_refresh(shell);
+    /* No longer a special case: it is an application like the others, and
+     * opening it by name is what makes it possible for it to become a module
+     * later without this having to change. */
+    recon_shell_open_named(shell, "Task Manager");
+}
+
+struct recon_font *recon_shell_font(struct recon_shell *shell) {
+    return shell != NULL ? shell->font : NULL;
 }
 
 int recon_shell_app_count(struct recon_shell *shell) {
@@ -1365,6 +1392,21 @@ int recon_shell_app_index(struct recon_shell *shell, const char *title) {
     if (shell == NULL || title == NULL) {
         return -1;
     }
+
+    /*
+     * By registry name first, then by window title. The two differ once an
+     * application renames its window -- the notepad showing the file it is
+     * editing -- and the registry name is the stable one.
+     */
+    struct recon_appwin *win = recon_installed_app_existing(title);
+    if (win != NULL) {
+        for (int i = 0; i < shell->app_count; i++) {
+            if (shell->apps[i] == win) {
+                return i;
+            }
+        }
+    }
+
     for (int i = 0; i < shell->app_count; i++) {
         if (strcmp(recon_appwin_title(shell->apps[i]), title) == 0) {
             return i;
@@ -1373,20 +1415,80 @@ int recon_shell_app_index(struct recon_shell *shell, const char *title) {
     return -1;
 }
 
+/*
+ * Where a window sits in the shell's list, adding it if it is new.
+ *
+ * The shell's array is the windows that exist, which is a different list from
+ * the applications that could exist. A window joins it the first time its
+ * application is opened.
+ */
+static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
+    if (win == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        if (shell->apps[i] == win) {
+            return i;
+        }
+    }
+    if (shell->app_count >= (int)(sizeof(shell->apps) / sizeof(shell->apps[0]))) {
+        wlr_log(WLR_ERROR, "ReconOS: no room for another window");
+        return -1;
+    }
+
+    int index = shell->app_count;
+    shell->app_order[index] = index;
+    shell->apps[index] = win;
+    shell->app_count++;
+
+    /* A window that has just appeared needs placing for the current screen;
+     * it was not there when the last resize went round. */
+    recon_appwin_screen_changed(win, shell->screen_width, shell->screen_height,
+        TASKBAR_HEIGHT);
+    return index;
+}
+
 void recon_shell_open_named(struct recon_shell *shell, const char *title) {
-    int index = recon_shell_app_index(shell, title);
+    if (shell == NULL || title == NULL) {
+        return;
+    }
+
+    /* Built on demand if this is the first time. */
+    struct recon_appwin *win = recon_installed_app_window(title);
+    if (win == NULL) {
+        wlr_log(WLR_ERROR, "ReconOS: cannot open '%s': %s", title,
+            recon_modules_last_error());
+        return;
+    }
+
+    int index = adopt_window(shell, win);
     if (index >= 0) {
         recon_shell_open_app(shell, index);
     }
 }
 
 const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *title) {
-    if (shell == NULL || title == NULL) {
+    (void)shell;
+    if (title == NULL) {
         return NULL;
     }
-    for (int i = 0; i < shell->app_count; i++) {
-        if (strcmp(recon_appwin_title(shell->apps[i]), title) == 0) {
-            return recon_appwin_icon(shell->apps[i]);
+
+    /*
+     * Asked of the registry rather than of the open windows. Applications are
+     * built the first time they are opened, so on a fresh desktop none of them
+     * exists yet -- and a shortcut whose icon depends on the application
+     * already running is a shortcut that looks broken until you use it.
+     */
+    const char *name = recon_installed_app_resolve(title);
+    if (name == NULL) {
+        return NULL;
+    }
+
+    int count = recon_installed_app_count();
+    for (int i = 0; i < count; i++) {
+        struct recon_installed_app app;
+        if (recon_installed_app_at(i, &app) && strcmp(app.name, name) == 0) {
+            return app.icon[0] != '\0' ? recon_installed_app_icon(name) : NULL;
         }
     }
     return NULL;
@@ -1405,31 +1507,43 @@ void recon_shell_open_app(struct recon_shell *shell, int index) {
 }
 
 /* Open whatever a desktop item points at. */
+static void perform_desktop_action(struct recon_shell *shell,
+    const struct recon_desktop_action *action);
+
 static void open_desktop_item(struct recon_shell *shell, const char *name) {
     struct recon_desktop_action action;
     if (!recon_desktop_action_for(shell->desktop, name, &action)) {
         return;
     }
 
-    if (action.kind == RECON_DESKTOP_ACTION_OPEN_APP) {
-        for (int i = 0; i < shell->app_count; i++) {
-            if (strcmp(recon_appwin_title(shell->apps[i]), action.target) == 0) {
-                recon_shell_open_app(shell, i);
-                return;
-            }
-        }
-    } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
+    perform_desktop_action(shell, &action);
+}
+
+/*
+ * Carry out what opening a desktop item asked for.
+ *
+ * One place, because there are two ways to open one -- clicking it and
+ * choosing Open from its menu -- and they were drifting apart. Both used to
+ * search the open windows for a title match, which stopped working the moment
+ * applications began being built on demand: on a fresh desktop there are no
+ * windows to search, so every shortcut silently did nothing.
+ */
+static void perform_desktop_action(struct recon_shell *shell,
+        const struct recon_desktop_action *action) {
+    if (action->kind == RECON_DESKTOP_ACTION_OPEN_APP) {
+        recon_shell_open_named(shell, action->target);
+        return;
+    }
+
+    if (action->kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
         /*
          * Open the explorer *at* the folder. Opening it and leaving it
          * wherever it was looks exactly like the folder failing to open,
          * which is what it looked like.
          */
-        int index = recon_shell_app_index(shell, "File Explorer");
-        if (index < 0) {
-            return;
-        }
-        recon_shell_open_app(shell, index);
-        recon_explorer_open_at(shell->apps[index], action.target);
+        recon_shell_open_named(shell, "File Explorer");
+        recon_explorer_open_at(recon_installed_app_existing("File Explorer"),
+            action->target);
     }
 }
 
@@ -2190,23 +2304,14 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         uint32_t hit = recon_hit_test(shell->menu, px, py);
         if (hit >= HIT_MENU_BASE) {
             int index = (int)(hit - HIT_MENU_BASE);
-            if (index >= 0 && index < APP_COUNT) {
+            struct menu_entry entry;
+            if (index >= 0 && menu_entry_at(index, &entry)) {
                 /* Close the menu first: quitting never returns here. */
                 recon_shell_close_menu(shell);
-                if (APPS[index].action == RECON_APP_QUIT) {
+                if (entry.is_shutdown) {
                     recon_quit(shell->server);
-                } else if (APPS[index].action == RECON_APP_TASKMGR) {
-                    recon_shell_open_taskmgr(shell);
-                } else if (APPS[index].action == RECON_APP_CALC) {
-                    recon_shell_open_app(shell, 1);
-                } else if (APPS[index].action == RECON_APP_NOTEPAD) {
-                    recon_shell_open_app(shell, 2);
-                } else if (APPS[index].action == RECON_APP_TERMINAL) {
-                    recon_shell_open_app(shell, 3);
-                } else if (APPS[index].action == RECON_APP_EXPLORER) {
-                    recon_shell_open_app(shell, 4);
                 } else {
-                    recon_spawn(shell->server, APPS[index].command);
+                    recon_shell_open_named(shell, entry.label);
                 }
                 return true;
             }
@@ -2318,17 +2423,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     if (node == recon_desktop_node(shell->desktop)) {
         struct recon_desktop_action action;
         if (recon_desktop_handle_click(shell->desktop, lx, ly, pressed, &action)) {
-            if (action.kind == RECON_DESKTOP_ACTION_OPEN_APP) {
-                for (int i = 0; i < shell->app_count; i++) {
-                    if (strcmp(recon_appwin_title(shell->apps[i]), action.target) == 0) {
-                        recon_shell_open_app(shell, i);
-                        break;
-                    }
-                }
-            } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
-                /* Folders open in the file explorer, which is index 4. */
-                recon_shell_open_app(shell, 4);
-            }
+            perform_desktop_action(shell, &action);
             return true;
         }
     }

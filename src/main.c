@@ -59,6 +59,7 @@
 #include "recon_icon_gen.h"
 #include "recon_server.h"
 #include "recon_apps.h"
+#include "recon_modules.h"
 #include "recon_shell.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
@@ -1425,6 +1426,23 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         /* The application table needs the shell to enumerate built-ins. */
         server->shell = recon_shell_create(server, width, height);
         recon_apps_init(server);
+
+        /*
+         * Modules load after the shell, because most of them register
+         * applications and there has to be somewhere to register them.
+         */
+        recon_modules_init(server, recon_shell_font(server->shell));
+
+        /* What this build shipped with, if the filesystem does not have it
+         * yet. A new system would otherwise come up with no applications at
+         * all, since they live in modules now. */
+        recon_modules_install_shipped();
+
+        int loaded = recon_modules_load_all();
+        if (loaded > 0) {
+            wlr_log(WLR_INFO, "ReconOS: %d module%s loaded",
+                loaded, loaded == 1 ? "" : "s");
+        }
         raise_chrome(server);
     } else if (server->background_buffer != NULL) {
         wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);

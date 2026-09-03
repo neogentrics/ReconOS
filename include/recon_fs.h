@@ -43,6 +43,7 @@
 #define RECON_DIR_SYSTEM_ICONS "/System/Icons"
 #define RECON_DIR_APPS "/Apps"
 #define RECON_DIR_USERS "/Users"
+#define RECON_DIR_SYSTEM_MODULES "/System/Modules"
 #define RECON_DIR_TEMP "/Temp"
 
 /*

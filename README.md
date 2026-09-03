@@ -42,6 +42,20 @@ differently. Shift+Delete skips it, after asking.
 **Dialogs.** Anything destructive asks in a window, with Cancel last so it is
 what both Enter and Escape choose. Clicking outside does not dismiss one.
 
+**Modules** — code ReconOS loads at runtime, so a feature can arrive without
+the core being rebuilt. `.rts` is a system module (a subsystem, driver or
+service); `.rex` is an application, which appears in the Apps menu. The
+extension names the ReconOS contract rather than the machine code inside it, so
+a wrapped foreign binary can present the same interface later without the
+format changing. The Calculator is the first thing to go through this path: it
+is no longer in the core binary at all. See [docs/MODULES.md](docs/MODULES.md).
+
+Applications are built the first time somebody opens one. An application nobody
+touches costs an entry in a list rather than a window's worth of pixels, which
+is most of the argument for modules over compiling everything in. The built-in
+applications register through the same call a module uses — an extension path
+that only outsiders take is an extension path nobody keeps working.
+
 **An application table** — what is *running*, which is a different question
 from what processes exist. Several built-in applications share ReconOS's
 process, so no process list could show them separately, and a client program
@@ -215,11 +229,12 @@ tarball an "image" before then would be claiming something ReconOS cannot do.
 ```
 src/          compositor source
 include/      project headers
+modules/      applications and subsystems built as .rex / .rts
 tests/        tests that need no display
 scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
 third_party/  vendored dependencies (stb_image)
-docs/         roadmap and development notes
+docs/         roadmap, module interface, development notes
 ```
 
 ## Where this is going
