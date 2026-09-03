@@ -71,6 +71,27 @@
 #define HIT_TASK_BASE 100
 #define HIT_MENU_BASE 200
 #define HIT_SEC_BASE 300
+#define HIT_CONTEXT_BASE 400
+
+/* What a context menu entry does. */
+enum context_action {
+    CTX_OPEN,
+    CTX_DELETE,
+    CTX_NEW_FOLDER,
+    CTX_NEW_SHORTCUT,
+    CTX_REFRESH,
+    CTX_RESTORE,
+    CTX_MINIMIZE,
+    CTX_MAXIMIZE,
+    CTX_CLOSE,
+    CTX_PROPERTIES,
+};
+
+/* The context menu. */
+#define CONTEXT_ITEM_HEIGHT 24
+#define CONTEXT_WIDTH 200
+#define CONTEXT_PADDING 3
+#define CONTEXT_ITEMS_MAX 10
 
 /* --- Apps menu contents --- */
 
@@ -150,6 +171,23 @@ struct recon_shell {
      */
     int focused_app;
 
+    /*
+     * The right-click menu. One panel serves every use of it -- desktop,
+     * explorer, taskbar -- because a context menu is the same thing wherever
+     * it appears, differing only in what it offers.
+     */
+    struct recon_panel *context;
+    bool context_open;
+    struct {
+        char label[48];
+        uint32_t id;
+        bool enabled;
+        bool separator_after;
+    } context_items[CONTEXT_ITEMS_MAX];
+    int context_item_count;
+    enum recon_context_kind context_kind;
+    char context_target[RECON_PATH_MAX];
+
     struct recon_panel *security;
     /* Dims the desktop behind the security box, so it is obvious that the
      * question wants answering before anything else happens. */
@@ -169,6 +207,8 @@ struct recon_shell {
         struct recon_appwin *appwin;
     } buttons[32];
     int button_count;
+    /* Which button a taskbar context menu was opened on. */
+    int context_button;
 };
 
 static int menu_height(void) {
@@ -190,6 +230,117 @@ static void set_focused_app(struct recon_shell *shell, int index) {
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_set_focused(shell->apps[i], i == index);
     }
+}
+
+/* --- Context menu --- */
+
+/* Defined with the other input helpers, further down. */
+static bool point_in_panel(struct recon_panel *panel, double lx, double ly,
+    int *px, int *py);
+
+static int context_height(struct recon_shell *shell) {
+    int height = CONTEXT_PADDING * 2;
+    for (int i = 0; i < shell->context_item_count; i++) {
+        height += CONTEXT_ITEM_HEIGHT;
+        if (shell->context_items[i].separator_after) {
+            height += 5;
+        }
+    }
+    return height;
+}
+
+static void draw_context(struct recon_shell *shell) {
+    struct recon_panel *p = shell->context;
+    if (p == NULL) {
+        return;
+    }
+
+    int width = recon_panel_width(p);
+    int height = recon_panel_height(p);
+    int ascent = recon_font_ascent(shell->font);
+
+    recon_fill(p, COLOR_MENU);
+    recon_hit_clear(p);
+
+    int y = CONTEXT_PADDING;
+    for (int i = 0; i < shell->context_item_count; i++) {
+        recon_draw_text(p, shell->font, 14, y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
+            width - 24, shell->context_items[i].label,
+            shell->context_items[i].enabled ? COLOR_TEXT : COLOR_TEXT_DIM);
+
+        /* Disabled entries are shown rather than hidden, so the menu keeps the
+         * same shape and what is unavailable is visible. */
+        if (shell->context_items[i].enabled) {
+            recon_hit_add(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
+                CONTEXT_ITEM_HEIGHT, HIT_CONTEXT_BASE + i);
+        }
+        y += CONTEXT_ITEM_HEIGHT;
+
+        if (shell->context_items[i].separator_after) {
+            recon_fill_rect(p, 6, y + 2, width - 12, 1, RECON_RGB(0x90, 0x90, 0x90));
+            y += 5;
+        }
+    }
+
+    recon_draw_bevel(p, 0, 0, width, height, false);
+    recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
+    recon_panel_commit(p);
+}
+
+static void context_add(struct recon_shell *shell, const char *label,
+        enum context_action action, bool enabled, bool separator) {
+    if (shell->context_item_count >= CONTEXT_ITEMS_MAX) {
+        return;
+    }
+    int i = shell->context_item_count++;
+    snprintf(shell->context_items[i].label, sizeof(shell->context_items[i].label),
+        "%s", label);
+    shell->context_items[i].id = (uint32_t)action;
+    shell->context_items[i].enabled = enabled;
+    shell->context_items[i].separator_after = separator;
+}
+
+/* Show the menu at a point, kept on screen if it would run off an edge. */
+static void context_show(struct recon_shell *shell, double lx, double ly) {
+    if (shell->context == NULL || shell->context_item_count == 0) {
+        return;
+    }
+
+    int height = context_height(shell);
+    recon_panel_resize(shell->context, CONTEXT_WIDTH, height);
+
+    int x = (int)lx;
+    int y = (int)ly;
+    if (x + CONTEXT_WIDTH > shell->screen_width) {
+        x = shell->screen_width - CONTEXT_WIDTH;
+    }
+    if (y + height > shell->screen_height - TASKBAR_HEIGHT) {
+        /* Above the pointer rather than below, so it neither runs off the
+         * bottom nor hides behind the taskbar. */
+        y -= height;
+    }
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+
+    recon_panel_set_position(shell->context, x, y);
+    draw_context(shell);
+    recon_panel_set_enabled(shell->context, true);
+    recon_panel_raise_to_top(shell->context);
+    shell->context_open = true;
+    recon_damage_all(shell->server);
+}
+
+void recon_shell_close_context(struct recon_shell *shell) {
+    if (shell == NULL || !shell->context_open) {
+        return;
+    }
+    shell->context_open = false;
+    recon_panel_set_enabled(shell->context, false);
+    recon_damage_all(shell->server);
 }
 
 /* Move a window to the front of the input order. */
@@ -502,6 +653,12 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         recon_panel_set_enabled(shell->dim, false);
     }
 
+    shell->context = recon_panel_create(&server->scene->tree,
+        CONTEXT_WIDTH, CONTEXT_ITEM_HEIGHT * CONTEXT_ITEMS_MAX);
+    if (shell->context != NULL) {
+        recon_panel_set_enabled(shell->context, false);
+    }
+
     shell->security = recon_panel_create(&server->scene->tree,
         SEC_WIDTH, security_height());
     if (shell->security != NULL) {
@@ -554,7 +711,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     if (!recon_fs_exists("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized")) {
         for (size_t i = 0; i < sizeof(DEFAULTS) / sizeof(DEFAULTS[0]); i++) {
             char path[RECON_PATH_MAX];
-            snprintf(path, sizeof(path), "%s/%s", RECON_DESKTOP_DIR, DEFAULTS[i].file);
+            snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"),
+                DEFAULTS[i].file);
             char body[RECON_NAME_MAX + 2];
             int length = snprintf(body, sizeof(body), "%s\n", DEFAULTS[i].target);
             recon_fs_write("/", path, body, (size_t)length);
@@ -562,6 +720,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         recon_fs_write("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized", "1\n", 2);
     }
 
+    shell->context_button = -1;
     shell->desktop = recon_desktop_create(server, shell->font,
         screen_width, screen_height - TASKBAR_HEIGHT);
 
@@ -591,6 +750,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
         recon_appwin_destroy(shell->apps[i]);
     }
     recon_desktop_destroy(shell->desktop);
+    recon_panel_destroy(shell->context);
     recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
@@ -682,6 +842,161 @@ void recon_shell_open_app(struct recon_shell *shell, int index) {
     recon_appwin_show(shell->apps[index]);
     recon_appwin_focus(shell->apps[index]);
     recon_shell_refresh(shell);
+}
+
+/* Open whatever a desktop item points at. */
+static void open_desktop_item(struct recon_shell *shell, const char *name) {
+    struct recon_desktop_action action;
+    if (!recon_desktop_action_for(shell->desktop, name, &action)) {
+        return;
+    }
+
+    if (action.kind == RECON_DESKTOP_ACTION_OPEN_APP) {
+        for (int i = 0; i < shell->app_count; i++) {
+            if (strcmp(recon_appwin_title(shell->apps[i]), action.target) == 0) {
+                recon_shell_open_app(shell, i);
+                return;
+            }
+        }
+    } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
+        recon_shell_open_app(shell, 4); /* the file explorer */
+    }
+}
+
+/* Carry out what a context menu entry asked for. */
+static void context_activate(struct recon_shell *shell, enum context_action action) {
+    switch (shell->context_kind) {
+    case RECON_CONTEXT_TASKBAR_WINDOW: {
+        if (shell->context_button < 0 || shell->context_button >= shell->button_count) {
+            return;
+        }
+        struct taskbar_button *button = &shell->buttons[shell->context_button];
+
+        if (button->appwin != NULL) {
+            switch (action) {
+            case CTX_RESTORE:
+                recon_appwin_restore(button->appwin);
+                break;
+            case CTX_MINIMIZE:
+                recon_appwin_minimize(button->appwin);
+                break;
+            case CTX_MAXIMIZE:
+                recon_appwin_set_maximized(button->appwin,
+                    !recon_appwin_is_maximized(button->appwin));
+                break;
+            case CTX_CLOSE:
+                recon_appwin_hide(button->appwin);
+                break;
+            default:
+                break;
+            }
+        } else if (button->toplevel != NULL) {
+            switch (action) {
+            case CTX_RESTORE:
+                recon_toplevel_restore(button->toplevel);
+                break;
+            case CTX_MINIMIZE:
+                recon_toplevel_minimize(button->toplevel);
+                break;
+            case CTX_MAXIMIZE:
+                recon_toplevel_toggle_maximized(button->toplevel);
+                break;
+            case CTX_CLOSE:
+                recon_toplevel_close(button->toplevel);
+                break;
+            default:
+                break;
+            }
+        }
+        break;
+    }
+
+    case RECON_CONTEXT_DESKTOP_ITEM:
+        if (action == CTX_OPEN) {
+            open_desktop_item(shell, shell->context_target);
+        } else if (action == CTX_DELETE) {
+            recon_desktop_delete(shell->desktop, shell->context_target);
+        }
+        break;
+
+    case RECON_CONTEXT_DESKTOP:
+        if (action == CTX_NEW_FOLDER) {
+            recon_desktop_new_folder(shell->desktop);
+        } else if (action == CTX_NEW_SHORTCUT) {
+            recon_desktop_new_shortcut(shell->desktop);
+        } else if (action == CTX_REFRESH) {
+            recon_desktop_reload(shell->desktop);
+        }
+        break;
+    }
+
+    recon_shell_refresh(shell);
+}
+
+bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double ly) {
+    if (shell == NULL) {
+        return false;
+    }
+
+    recon_shell_close_menu(shell);
+    recon_shell_close_context(shell);
+    shell->context_item_count = 0;
+    shell->context_target[0] = 0;
+
+    int px, py;
+
+    /* A window button on the taskbar. */
+    if (shell->taskbar != NULL && point_in_panel(shell->taskbar, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->taskbar, px, py);
+        if (hit < HIT_TASK_BASE || hit >= HIT_MENU_BASE) {
+            return false;
+        }
+
+        int index = (int)(hit - HIT_TASK_BASE);
+        if (index < 0 || index >= shell->button_count) {
+            return false;
+        }
+
+        shell->context_kind = RECON_CONTEXT_TASKBAR_WINDOW;
+        shell->context_button = index;
+
+        struct taskbar_button *button = &shell->buttons[index];
+        bool builtin = (button->appwin != NULL);
+        bool minimized = builtin
+            ? recon_appwin_is_minimized(button->appwin)
+            : recon_toplevel_is_minimized(button->toplevel);
+
+        context_add(shell, "Restore", CTX_RESTORE, minimized, false);
+        context_add(shell, "Minimize", CTX_MINIMIZE, !minimized, false);
+        context_add(shell, "Maximize", CTX_MAXIMIZE, true, true);
+        context_add(shell, "Close", CTX_CLOSE, true, false);
+        context_show(shell, lx, ly);
+        return true;
+    }
+
+    /* The desktop, on an icon or on empty space. */
+    struct wlr_scene_node *node = topmost_node(shell, lx, ly);
+    if (node == recon_desktop_node(shell->desktop)) {
+        const char *name = recon_desktop_item_at(shell->desktop, lx, ly);
+        if (name != NULL) {
+            shell->context_kind = RECON_CONTEXT_DESKTOP_ITEM;
+            snprintf(shell->context_target, sizeof(shell->context_target), "%s", name);
+            context_add(shell, "Open", CTX_OPEN, true, true);
+            context_add(shell, "Delete", CTX_DELETE, true, true);
+            /* Shown but unavailable: there is no properties view yet, and
+             * hiding it would suggest there never will be. */
+            context_add(shell, "Properties", CTX_PROPERTIES, false, false);
+        } else {
+            shell->context_kind = RECON_CONTEXT_DESKTOP;
+            context_add(shell, "New Folder", CTX_NEW_FOLDER, true, false);
+            context_add(shell, "New Shortcut", CTX_NEW_SHORTCUT, true, true);
+            context_add(shell, "Refresh", CTX_REFRESH, true, false);
+        }
+        context_show(shell, lx, ly);
+        return true;
+    }
+
+    return false;
 }
 
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
@@ -834,6 +1149,28 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     }
 
     int px, py;
+
+    /* An open context menu takes the next click wherever it lands: either it
+     * chose something, or it dismissed the menu. */
+    if (shell->context_open) {
+        if (!pressed) {
+            return true;
+        }
+        if (point_in_panel(shell->context, lx, ly, &px, &py)) {
+            uint32_t hit = recon_hit_test(shell->context, px, py);
+            recon_shell_close_context(shell);
+            if (hit >= HIT_CONTEXT_BASE) {
+                int index = (int)(hit - HIT_CONTEXT_BASE);
+                if (index >= 0 && index < shell->context_item_count) {
+                    context_activate(shell,
+                        (enum context_action)shell->context_items[index].id);
+                }
+            }
+        } else {
+            recon_shell_close_context(shell);
+        }
+        return true;
+    }
 
     /* The security box is modal in spirit: while it is up it takes the click,
      * wherever the click landed. */

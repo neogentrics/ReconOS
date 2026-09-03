@@ -45,6 +45,14 @@
 #define RECON_DIR_USERS "/Users"
 #define RECON_DIR_TEMP "/Temp"
 
+/*
+ * Every user gets the same folders, created with the account. Which ones
+ * exist is the system's decision rather than each user's, so a program can
+ * rely on Documents being there without checking.
+ */
+#define RECON_USER_ADMIN "Administrator"
+#define RECON_USER_FOLDERS { "Desktop", "Documents", "Downloads",     "Music", "Pictures", "Videos" }
+
 enum recon_file_kind {
     RECON_FILE_REGULAR,
     RECON_FILE_DIRECTORY,
@@ -63,6 +71,24 @@ struct recon_dirent {
  */
 bool recon_fs_init(const char *host_root);
 void recon_fs_finish(void);
+
+/* --- Users --- */
+
+/*
+ * The account in use. There is one for now, created on first run, and it is
+ * the administrator: the system is single-user until there is a way to log in
+ * as somebody else.
+ */
+const char *recon_fs_current_user(void);
+
+/*
+ * A folder belonging to the current user, as a ReconOS path -- pass NULL for
+ * the user's own directory. The returned string is valid until the next call.
+ */
+const char *recon_fs_user_dir(const char *subdirectory);
+
+/* Create an account and its folders. Existing accounts are left alone. */
+bool recon_fs_create_user(const char *name);
 
 /* The host directory backing the root, for diagnostics. */
 const char *recon_fs_host_root(void);

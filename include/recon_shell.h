@@ -88,6 +88,20 @@ void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly);
 bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
     double delta);
 
+/*
+ * What a right click landed on, which decides what the menu offers.
+ */
+enum recon_context_kind {
+    RECON_CONTEXT_DESKTOP,
+    RECON_CONTEXT_DESKTOP_ITEM,
+    RECON_CONTEXT_TASKBAR_WINDOW,
+};
+
+/* Offer a right click to the shell. Returns true if it opened a menu. */
+bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double ly);
+
+void recon_shell_close_context(struct recon_shell *shell);
+
 /* Close the apps menu if it is open. */
 void recon_shell_close_menu(struct recon_shell *shell);
 

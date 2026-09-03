@@ -154,6 +154,7 @@ void recon_damage_all(struct recon_server *server);
 void recon_toplevel_minimize(struct recon_toplevel *toplevel);
 void recon_toplevel_restore(struct recon_toplevel *toplevel);
 void recon_toplevel_toggle_maximized(struct recon_toplevel *toplevel);
+void recon_toplevel_close(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel);
 const char *recon_toplevel_title(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);

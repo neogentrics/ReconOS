@@ -20,6 +20,8 @@
 
 static char g_host_root[RECON_PATH_MAX];
 static char g_error[256];
+static char g_user[RECON_NAME_MAX] = RECON_USER_ADMIN;
+static char g_user_path[RECON_PATH_MAX];
 
 static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
@@ -137,6 +139,9 @@ bool recon_fs_resolve(const char *cwd, const char *path,
 
 /* --- Setup --- */
 
+/* Defined below; recon_fs_init creates the first account. */
+bool recon_fs_create_user(const char *name);
+
 /* Create a directory and any parents, ignoring those that already exist. */
 static bool make_tree(const char *host_path) {
     char work[RECON_PATH_MAX];
@@ -191,8 +196,6 @@ bool recon_fs_init(const char *host_root) {
         RECON_DIR_SYSTEM_ICONS,
         RECON_DIR_APPS,
         RECON_DIR_USERS,
-        "/Users/Desktop",
-        "/Users/Documents",
         RECON_DIR_TEMP,
         NULL,
     };
@@ -205,6 +208,50 @@ bool recon_fs_init(const char *host_root) {
         }
     }
 
+    /* The administrator exists from the first run: something has to own the
+     * desktop, and there is no way to log in as anybody else yet. */
+    if (!recon_fs_create_user(RECON_USER_ADMIN)) {
+        return false;
+    }
+
+    return true;
+}
+
+const char *recon_fs_current_user(void) {
+    return g_user;
+}
+
+const char *recon_fs_user_dir(const char *subdirectory) {
+    if (subdirectory == NULL || *subdirectory == '\0') {
+        snprintf(g_user_path, sizeof(g_user_path), "%s/%s", RECON_DIR_USERS, g_user);
+    } else {
+        snprintf(g_user_path, sizeof(g_user_path), "%s/%s/%s",
+            RECON_DIR_USERS, g_user, subdirectory);
+    }
+    return g_user_path;
+}
+
+bool recon_fs_create_user(const char *name) {
+    if (name == NULL || *name == '\0' || strchr(name, '/') != NULL) {
+        set_error("invalid user name");
+        return false;
+    }
+
+    /* Room for the root, the users directory and the longest folder name. */
+    char host[RECON_PATH_MAX * 2];
+    snprintf(host, sizeof(host), "%s%s/%s", g_host_root, RECON_DIR_USERS, name);
+    if (!make_tree(host)) {
+        return false;
+    }
+
+    static const char *const FOLDERS[] = RECON_USER_FOLDERS;
+    for (size_t i = 0; i < sizeof(FOLDERS) / sizeof(FOLDERS[0]); i++) {
+        char child[RECON_PATH_MAX * 3];
+        snprintf(child, sizeof(child), "%s/%s", host, FOLDERS[i]);
+        if (!make_tree(child)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -283,7 +330,7 @@ int recon_fs_list(const char *cwd, const char *path,
             continue;
         }
         if (count < max) {
-            char child[RECON_PATH_MAX * 2];
+            char child[RECON_PATH_MAX * 3];
             snprintf(child, sizeof(child), "%s/%s", host, entry->d_name);
 
             struct stat st;

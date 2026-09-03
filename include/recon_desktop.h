@@ -23,7 +23,7 @@ struct recon_font;
 struct recon_desktop;
 struct wlr_scene_node;
 
-#define RECON_DESKTOP_DIR "/Users/Desktop"
+/* The desktop folder belongs to whoever is logged in; ask the filesystem. */
 #define RECON_DESKTOP_HIT_BASE 100
 
 enum recon_desktop_action_kind {
@@ -60,5 +60,18 @@ struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop);
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,
     bool pressed, struct recon_desktop_action *action);
+
+/* --- Operations, for the context menu --- */
+
+/* The item at a point, by name, or NULL over empty desktop. Selects it. */
+const char *recon_desktop_item_at(struct recon_desktop *desktop, double lx, double ly);
+
+/* What opening a named item should do. */
+bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
+    struct recon_desktop_action *action);
+
+void recon_desktop_delete(struct recon_desktop *desktop, const char *name);
+void recon_desktop_new_folder(struct recon_desktop *desktop);
+void recon_desktop_new_shortcut(struct recon_desktop *desktop);
 
 #endif

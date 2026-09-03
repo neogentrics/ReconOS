@@ -450,6 +450,13 @@ void recon_toplevel_minimize(struct recon_toplevel *toplevel) {
     recon_damage_all(server);
 }
 
+/* Ask a client window to close. The program decides how to comply. */
+void recon_toplevel_close(struct recon_toplevel *toplevel) {
+    if (toplevel != NULL) {
+        wlr_xdg_toplevel_send_close(toplevel->xdg_toplevel);
+    }
+}
+
 void recon_toplevel_restore(struct recon_toplevel *toplevel) {
     if (toplevel == NULL || !toplevel->minimized) {
         return;
@@ -757,11 +764,18 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         server->grabbed = NULL;
         recon_shell_handle_click(server->shell, server->cursor->x, server->cursor->y,
             false);
+    } else if (event->button == BTN_RIGHT) {
+        /* Right click opens a context menu where there is one to open. */
+        if (recon_shell_handle_right_click(server->shell,
+                server->cursor->x, server->cursor->y)) {
+            return;
+        }
     } else if (event->button == BTN_LEFT) {
         double x = server->cursor->x;
         double y = server->cursor->y;
 
         /* The shell sits above windows, so it sees clicks first. */
+        recon_shell_close_context(server->shell);
         if (recon_shell_handle_click(server->shell, x, y, true)) {
             return;
         }

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp */
 
 #include <wlr/types/wlr_scene.h>
 
@@ -72,7 +73,7 @@ struct recon_desktop {
 /* Read a shortcut's target: the first non-empty line of the file. */
 static bool read_shortcut(const char *name, char *target, size_t size) {
     char path[RECON_PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", RECON_DESKTOP_DIR, name);
+    snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"), name);
 
     size_t length = 0;
     char *data = recon_fs_read("/", path, &length);
@@ -123,7 +124,7 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
     }
 
     struct recon_dirent entries[ITEMS_MAX];
-    int count = recon_fs_list("/", RECON_DESKTOP_DIR, entries, ITEMS_MAX);
+    int count = recon_fs_list("/", recon_fs_user_dir("Desktop"), entries, ITEMS_MAX);
     if (count < 0) {
         count = 0;
     }
@@ -317,6 +318,115 @@ struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop) {
     return recon_panel_node(desktop->panel);
 }
 
+/* --- Operations --- */
+
+/* The item at a point, by name, or NULL for empty desktop. */
+const char *recon_desktop_item_at(struct recon_desktop *desktop, double lx, double ly) {
+    if (desktop == NULL) {
+        return NULL;
+    }
+
+    int px = (int)lx;
+    int py = (int)ly;
+    uint32_t hit = recon_hit_test(desktop->panel, px, py);
+    if (hit < RECON_DESKTOP_HIT_BASE) {
+        return NULL;
+    }
+
+    int index = (int)(hit - RECON_DESKTOP_HIT_BASE);
+    if (index < 0 || index >= desktop->item_count) {
+        return NULL;
+    }
+
+    /* Select it too: a right click should act on what it points at, and show
+     * which that is. */
+    desktop->selected = index;
+    recon_desktop_refresh(desktop);
+    return desktop->items[index].name;
+}
+
+/* What opening a named item means, for the shell to carry out. */
+bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
+        struct recon_desktop_action *action) {
+    if (desktop == NULL || name == NULL || action == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < desktop->item_count; i++) {
+        if (strcmp(desktop->items[i].name, name) != 0) {
+            continue;
+        }
+
+        const struct desktop_item *item = &desktop->items[i];
+        if (item->kind == ITEM_SHORTCUT) {
+            action->kind = RECON_DESKTOP_ACTION_OPEN_APP;
+            snprintf(action->target, sizeof(action->target), "%s", item->target);
+        } else if (item->kind == ITEM_FOLDER) {
+            action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
+            snprintf(action->target, sizeof(action->target), "%s/%s",
+                recon_fs_user_dir("Desktop"), item->name);
+        } else {
+            action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
+            snprintf(action->target, sizeof(action->target), "%s",
+                recon_fs_user_dir("Desktop"));
+        }
+        return true;
+    }
+    return false;
+}
+
+void recon_desktop_delete(struct recon_desktop *desktop, const char *name) {
+    if (desktop == NULL || name == NULL) {
+        return;
+    }
+    char path[RECON_PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"), name);
+    recon_fs_remove("/", path);
+    desktop->selected = -1;
+    recon_desktop_reload(desktop);
+}
+
+void recon_desktop_new_folder(struct recon_desktop *desktop) {
+    if (desktop == NULL) {
+        return;
+    }
+
+    /* Pick an unused name, since there is nowhere to type one yet. */
+    char path[RECON_PATH_MAX];
+    for (int i = 1; i < 1000; i++) {
+        snprintf(path, sizeof(path), "%s/New Folder %d",
+            recon_fs_user_dir("Desktop"), i);
+        if (!recon_fs_exists("/", path)) {
+            recon_fs_mkdir("/", path);
+            break;
+        }
+    }
+    recon_desktop_reload(desktop);
+}
+
+/*
+ * A shortcut is a text file naming an application, so creating one needs
+ * nothing but a write. It points at the file explorer as a starting point;
+ * editing the file changes where it points.
+ */
+void recon_desktop_new_shortcut(struct recon_desktop *desktop) {
+    if (desktop == NULL) {
+        return;
+    }
+
+    char path[RECON_PATH_MAX];
+    for (int i = 1; i < 1000; i++) {
+        snprintf(path, sizeof(path), "%s/New Shortcut %d.app",
+            recon_fs_user_dir("Desktop"), i);
+        if (!recon_fs_exists("/", path)) {
+            const char *body = "File Explorer\n";
+            recon_fs_write("/", path, body, strlen(body));
+            break;
+        }
+    }
+    recon_desktop_reload(desktop);
+}
+
 /* --- Input --- */
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,
@@ -361,11 +471,12 @@ bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double
         case ITEM_FOLDER:
             action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
             snprintf(action->target, sizeof(action->target), "%s/%s",
-                RECON_DESKTOP_DIR, item->name);
+                recon_fs_user_dir("Desktop"), item->name);
             break;
         case ITEM_FILE:
             action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
-            snprintf(action->target, sizeof(action->target), "%s", RECON_DESKTOP_DIR);
+            snprintf(action->target, sizeof(action->target), "%s",
+                recon_fs_user_dir("Desktop"));
             break;
         }
         return true;
