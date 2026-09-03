@@ -56,6 +56,7 @@
 
 #include "recon_control.h"
 #include "recon_fs.h"
+#include "recon_icon_gen.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 
@@ -1391,6 +1392,14 @@ int main(int argc, char **argv) {
         return 1;
     }
     wlr_log(WLR_INFO, "ReconOS: filesystem rooted at %s", recon_fs_host_root());
+
+    /* Draw the default icons if they are not already there. Replaced ones are
+     * left alone, so the generated set is a starting point rather than
+     * something reimposed on every start. */
+    int icons = recon_icons_write_defaults(false);
+    if (icons > 0) {
+        wlr_log(WLR_INFO, "ReconOS: wrote %d default icons", icons);
+    }
 
     wl_list_init(&server.toplevels);
     wl_list_init(&server.outputs);

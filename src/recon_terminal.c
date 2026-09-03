@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_cmd.h"
 #include "recon_terminal.h"
 #include "recon_ui.h"
@@ -344,6 +345,7 @@ static void terminal_destroy(void *user) {
 
 static const struct recon_appwin_impl TERMINAL_IMPL = {
     .title = "ReconOS Terminal",
+    .icon = RECON_ICON_TERMINAL,
     .default_width = 640,
     .default_height = 400,
     .min_width = 320,

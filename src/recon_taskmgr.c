@@ -21,6 +21,7 @@
 #include <wlr/util/log.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
 #include "recon_shell.h"
@@ -714,6 +715,7 @@ static void taskmgr_destroy(void *user) {
 
 static const struct recon_appwin_impl TASKMGR_IMPL = {
     .title = "ReconOS Task Manager",
+    .icon = RECON_ICON_TASKMGR,
     .default_width = 560,
     .default_height = 440,
     .min_width = 420,

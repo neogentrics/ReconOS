@@ -11,6 +11,7 @@
 #include <wlr/util/log.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_ui.h"
@@ -146,10 +147,18 @@ static void draw_frame(struct recon_appwin *win) {
     recon_fill_rect(p, 0, 0, win->width, TITLE_HEIGHT,
         win->focused ? COLOR_TITLE_ACTIVE : COLOR_TITLE_INACTIVE);
 
+    /* An icon at the left, so a window says what it is before it is read. */
+    int text_x = TITLE_INSET;
+    const char *icon = win->impl->icon != NULL ? win->impl->icon : RECON_ICON_APP;
+    int icon_size = TITLE_HEIGHT - 8;
+    if (recon_icon_draw(p, icon, TITLE_INSET, 4, icon_size)) {
+        text_x = TITLE_INSET + icon_size + 6;
+    }
+
     /* The title bar is draggable except where the buttons are. */
     int buttons_width = 3 * BUTTON_SIZE + 2 * BUTTON_GAP + TITLE_INSET * 2;
-    recon_draw_text(p, win->font, TITLE_INSET, (TITLE_HEIGHT + ascent) / 2 - 1,
-        win->width - buttons_width, win->impl->title, COLOR_TITLE_TEXT);
+    recon_draw_text(p, win->font, text_x, (TITLE_HEIGHT + ascent) / 2 - 1,
+        win->width - buttons_width - text_x, win->impl->title, COLOR_TITLE_TEXT);
     recon_hit_add(p, 0, 0, win->width - buttons_width + TITLE_INSET, TITLE_HEIGHT,
         HIT_TITLEBAR);
 
@@ -404,6 +413,13 @@ bool recon_appwin_is_maximized(struct recon_appwin *win) {
 
 const char *recon_appwin_title(struct recon_appwin *win) {
     return win != NULL ? win->impl->title : "";
+}
+
+const char *recon_appwin_icon(struct recon_appwin *win) {
+    if (win == NULL) {
+        return RECON_ICON_APP;
+    }
+    return win->impl->icon != NULL ? win->impl->icon : RECON_ICON_APP;
 }
 
 bool recon_appwin_is_focused(struct recon_appwin *win) {

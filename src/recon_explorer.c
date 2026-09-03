@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_explorer.h"
 #include "recon_fs.h"
 #include "recon_ui.h"
@@ -437,6 +438,7 @@ static void explorer_destroy(void *user) {
 
 static const struct recon_appwin_impl EXPLORER_IMPL = {
     .title = "File Explorer",
+    .icon = RECON_ICON_EXPLORER,
     .default_width = 560,
     .default_height = 420,
     .min_width = 340,

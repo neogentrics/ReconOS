@@ -35,6 +35,9 @@ struct recon_appwin;
  */
 struct recon_appwin_impl {
     const char *title;
+    /* Icon name, looked up in /System/Icons. NULL falls back to a generic
+     * application icon, so a window without one still looks like a window. */
+    const char *icon;
     int default_width, default_height;
     int min_width, min_height;
 
@@ -80,6 +83,7 @@ bool recon_appwin_is_minimized(struct recon_appwin *win);
 bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
+const char *recon_appwin_icon(struct recon_appwin *win);
 
 /*
  * Raise to the front. Focus itself is not decided here: exactly one window may

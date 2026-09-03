@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_calc.h"
 #include "recon_ui.h"
 
@@ -425,6 +426,7 @@ static void calc_destroy(void *user) {
 
 static const struct recon_appwin_impl CALC_IMPL = {
     .title = "Calculator",
+    .icon = RECON_ICON_CALCULATOR,
     .default_width = 260,
     .default_height = 330,
     .min_width = 200,

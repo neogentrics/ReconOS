@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_notepad.h"
 #include "recon_ui.h"
 
@@ -334,6 +335,7 @@ static void notepad_destroy(void *user) {
 
 static const struct recon_appwin_impl NOTEPAD_IMPL = {
     .title = "Notepad",
+    .icon = RECON_ICON_NOTEPAD,
     .default_width = 520,
     .default_height = 400,
     .min_width = 260,

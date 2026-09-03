@@ -24,6 +24,7 @@
 #include "recon_terminal.h"
 #include "recon_taskmgr.h"
 #include "recon_fs.h"
+#include "recon_icons.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -109,6 +110,7 @@ struct recon_app_entry {
     const char *label;
     const char *command; /* NULL means the configured terminal */
     enum recon_app_action action;
+    const char *icon;
 };
 
 /*
@@ -117,12 +119,12 @@ struct recon_app_entry {
  * whatever a host distribution happens to have installed.
  */
 static const struct recon_app_entry APPS[] = {
-    { "File Explorer", NULL, RECON_APP_EXPLORER },
-    { "Terminal", NULL, RECON_APP_TERMINAL },
-    { "Notepad", NULL, RECON_APP_NOTEPAD },
-    { "Calculator", NULL, RECON_APP_CALC },
-    { "Task Manager", NULL, RECON_APP_TASKMGR },
-    { "Shut Down", NULL, RECON_APP_QUIT },
+    { "File Explorer", NULL, RECON_APP_EXPLORER, RECON_ICON_EXPLORER },
+    { "Terminal", NULL, RECON_APP_TERMINAL, RECON_ICON_TERMINAL },
+    { "Notepad", NULL, RECON_APP_NOTEPAD, RECON_ICON_NOTEPAD },
+    { "Calculator", NULL, RECON_APP_CALC, RECON_ICON_CALCULATOR },
+    { "Task Manager", NULL, RECON_APP_TASKMGR, RECON_ICON_TASKMGR },
+    { "Shut Down", NULL, RECON_APP_QUIT, "shutdown" },
 };
 
 /* What the Ctrl+Alt+Del box offers, in the order it offers it. */
@@ -396,7 +398,8 @@ static int appwin_index_for_node(struct recon_shell *shell,
  * dimmed, so the bar shows at a glance what is on screen and what is put away.
  */
 static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
-        int x, int w, int baseline, const char *title, bool active, bool minimized) {
+        int x, int w, int baseline, const char *title, const char *icon,
+        bool active, bool minimized) {
     recon_color fill = active ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON;
     if (minimized) {
         fill = COLOR_BAR;
@@ -404,8 +407,19 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
 
     recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
     recon_draw_bevel(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, active || minimized);
-    recon_draw_text(bar, shell->font, x + TEXT_INSET, baseline, w - TEXT_INSET * 2,
-        title, active ? COLOR_TEXT : COLOR_TEXT_DIM);
+
+    /* The icon comes first, so a bar of buttons can be read at a glance
+     * without depending on the titles fitting. */
+    int text_x = x + TEXT_INSET;
+    int icon_size = BUTTON_HEIGHT - 10;
+    if (icon != NULL &&
+            recon_icon_draw(bar, icon, x + 5, TASKBAR_PADDING + 5, icon_size)) {
+        text_x = x + 5 + icon_size + 5;
+    }
+
+    recon_draw_text(bar, shell->font, text_x, baseline,
+        w - (text_x - x) - TEXT_INSET, title,
+        active ? COLOR_TEXT : COLOR_TEXT_DIM);
 }
 
 static void draw_taskbar(struct recon_shell *shell) {
@@ -430,11 +444,15 @@ static void draw_taskbar(struct recon_shell *shell) {
     recon_draw_bevel(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open);
 
-    /* A small mark so the button reads as the system menu, not a window. */
-    recon_fill_rect(bar, TASKBAR_PADDING + TEXT_INSET, TASKBAR_PADDING + 9, 10, 10,
-        COLOR_ACCENT);
-    recon_draw_text(bar, shell->font, TASKBAR_PADDING + TEXT_INSET + 16, baseline,
-        APPS_BUTTON_WIDTH - TEXT_INSET - 20, "Apps", COLOR_TEXT);
+    /* A mark so the button reads as the system menu rather than a window. */
+    int mark_size = BUTTON_HEIGHT - 10;
+    if (!recon_icon_draw(bar, "system", TASKBAR_PADDING + 6, TASKBAR_PADDING + 5,
+            mark_size)) {
+        recon_fill_rect(bar, TASKBAR_PADDING + TEXT_INSET, TASKBAR_PADDING + 9,
+            10, 10, COLOR_ACCENT);
+    }
+    recon_draw_text(bar, shell->font, TASKBAR_PADDING + 6 + mark_size + 6, baseline,
+        APPS_BUTTON_WIDTH - mark_size - 18, "Apps", COLOR_TEXT);
     recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
 
@@ -480,7 +498,8 @@ static void draw_taskbar(struct recon_shell *shell) {
 
         bool active = recon_appwin_is_focused(win);
         draw_task_button(shell, bar, x, button_width, baseline,
-            recon_appwin_title(win), active, recon_appwin_is_minimized(win));
+            recon_appwin_title(win), recon_appwin_icon(win),
+            active, recon_appwin_is_minimized(win));
 
         recon_hit_add(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
             HIT_TASK_BASE + shell->button_count);
@@ -499,8 +518,10 @@ static void draw_taskbar(struct recon_shell *shell) {
             break;
         }
 
+        /* A client window has no icon of its own, so it gets the generic
+         * application one rather than nothing. */
         draw_task_button(shell, bar, x, button_width, baseline,
-            recon_toplevel_title(toplevel),
+            recon_toplevel_title(toplevel), RECON_ICON_APP,
             recon_toplevel_is_focused(toplevel),
             recon_toplevel_is_minimized(toplevel));
 
@@ -535,8 +556,13 @@ static void draw_menu(struct recon_shell *shell) {
         int y = MENU_PADDING + i * MENU_ITEM_HEIGHT;
         int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
 
-        recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET, baseline,
-            width - MENU_PADDING * 2 - TEXT_INSET * 2, APPS[i].label, COLOR_TEXT);
+        int label_x = MENU_PADDING + TEXT_INSET;
+        int icon_size = MENU_ITEM_HEIGHT - 8;
+        if (recon_icon_draw(menu, APPS[i].icon, MENU_PADDING + 6, y + 4, icon_size)) {
+            label_x = MENU_PADDING + 6 + icon_size + 8;
+        }
+        recon_draw_text(menu, shell->font, label_x, baseline,
+            width - label_x - MENU_PADDING, APPS[i].label, COLOR_TEXT);
         recon_hit_add(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
             MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
     }
@@ -708,7 +734,9 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Terminal.app", "ReconOS Terminal" },
         { "Notepad.app", "Notepad" },
     };
-    if (!recon_fs_exists("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized")) {
+    char marker[RECON_PATH_MAX];
+    snprintf(marker, sizeof(marker), "%s/.desktop-set-up", recon_fs_user_dir(NULL));
+    if (!recon_fs_exists("/", marker)) {
         for (size_t i = 0; i < sizeof(DEFAULTS) / sizeof(DEFAULTS[0]); i++) {
             char path[RECON_PATH_MAX];
             snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"),
