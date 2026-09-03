@@ -68,6 +68,13 @@ void recon_shell_open_taskmgr(struct recon_shell *shell);
 int recon_shell_app_count(struct recon_shell *shell);
 struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index);
 
+/*
+ * The icon an application uses, found by its title. Lets a shortcut show the
+ * icon of what it points at rather than deriving a name from the title, which
+ * only works while the two happen to match.
+ */
+const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *title);
+
 /* Open a built-in window by its registration index. */
 void recon_shell_open_app(struct recon_shell *shell, int index);
 
@@ -95,6 +102,7 @@ enum recon_context_kind {
     RECON_CONTEXT_DESKTOP,
     RECON_CONTEXT_DESKTOP_ITEM,
     RECON_CONTEXT_TASKBAR_WINDOW,
+    RECON_CONTEXT_WINDOW,
 };
 
 /* Offer a right click to the shell. Returns true if it opened a menu. */

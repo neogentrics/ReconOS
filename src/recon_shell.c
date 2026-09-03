@@ -64,6 +64,9 @@
 #define COLOR_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
 #define COLOR_DIALOG_TITLE RECON_RGB(0x20, 0x2A, 0x44)
 #define COLOR_DIALOG_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
+/* What the pointer is over, in a menu. */
+#define COLOR_MENU_HILITE RECON_RGB(0x30, 0x50, 0x90)
+#define COLOR_MENU_HILITE_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
 /* Half-transparent black. Alpha is what makes the desktop show through. */
 #define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x99)
 
@@ -154,6 +157,14 @@ struct recon_shell {
     struct recon_panel *taskbar;
     struct recon_panel *menu;
     bool menu_open;
+    /*
+     * The entry the pointer is over, or -1. A menu that does not show what is
+     * about to be chosen makes the user aim and hope; this is what turns a
+     * list into something you can read before committing to it.
+     */
+    int menu_hover;
+    int context_hover;
+    int security_hover;
 
     /* Built-in windows. Listed on the taskbar beside client windows, and
      * offered input in front-to-back order. */
@@ -211,6 +222,8 @@ struct recon_shell {
     int button_count;
     /* Which button a taskbar context menu was opened on. */
     int context_button;
+    /* Which built-in window a window context menu was opened on. */
+    int context_app;
 };
 
 static int menu_height(void) {
@@ -239,6 +252,8 @@ static void set_focused_app(struct recon_shell *shell, int index) {
 /* Defined with the other input helpers, further down. */
 static bool point_in_panel(struct recon_panel *panel, double lx, double ly,
     int *px, int *py);
+static void draw_menu(struct recon_shell *shell);
+static void draw_security(struct recon_shell *shell);
 
 static int context_height(struct recon_shell *shell) {
     int height = CONTEXT_PADDING * 2;
@@ -266,9 +281,19 @@ static void draw_context(struct recon_shell *shell) {
 
     int y = CONTEXT_PADDING;
     for (int i = 0; i < shell->context_item_count; i++) {
+        /* Only entries that can be chosen highlight: showing a disabled one
+         * as selectable would promise something the click will not do. */
+        bool hovered = (i == shell->context_hover) && shell->context_items[i].enabled;
+
+        if (hovered) {
+            recon_fill_rect(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
+                CONTEXT_ITEM_HEIGHT, COLOR_MENU_HILITE);
+        }
+
         recon_draw_text(p, shell->font, 14, y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
             width - 24, shell->context_items[i].label,
-            shell->context_items[i].enabled ? COLOR_TEXT : COLOR_TEXT_DIM);
+            !shell->context_items[i].enabled ? COLOR_TEXT_DIM :
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
 
         /* Disabled entries are shown rather than hidden, so the menu keeps the
          * same shape and what is unavailable is visible. */
@@ -332,6 +357,7 @@ static void context_show(struct recon_shell *shell, double lx, double ly) {
     draw_context(shell);
     recon_panel_set_enabled(shell->context, true);
     recon_panel_raise_to_top(shell->context);
+    shell->context_hover = -1;
     shell->context_open = true;
     recon_damage_all(shell->server);
 }
@@ -555,6 +581,12 @@ static void draw_menu(struct recon_shell *shell) {
     for (int i = 0; i < APP_COUNT; i++) {
         int y = MENU_PADDING + i * MENU_ITEM_HEIGHT;
         int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
+        bool hovered = (i == shell->menu_hover);
+
+        if (hovered) {
+            recon_fill_rect(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
+                MENU_ITEM_HEIGHT, COLOR_MENU_HILITE);
+        }
 
         int label_x = MENU_PADDING + TEXT_INSET;
         int icon_size = MENU_ITEM_HEIGHT - 8;
@@ -562,7 +594,8 @@ static void draw_menu(struct recon_shell *shell) {
             label_x = MENU_PADDING + 6 + icon_size + 8;
         }
         recon_draw_text(menu, shell->font, label_x, baseline,
-            width - label_x - MENU_PADDING, APPS[i].label, COLOR_TEXT);
+            width - label_x - MENU_PADDING, APPS[i].label,
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
         recon_hit_add(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
             MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
     }
@@ -595,7 +628,10 @@ static void draw_security(struct recon_shell *shell) {
     int y = SEC_TITLE_HEIGHT + SEC_PADDING * 2 + 20;
     for (int i = 0; i < SEC_COUNT; i++) {
         int bw = width - SEC_PADDING * 2;
-        recon_fill_rect(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, COLOR_BUTTON);
+        bool hovered = (i == shell->security_hover);
+
+        recon_fill_rect(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT,
+            hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
         recon_draw_bevel(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, false);
         recon_draw_text(p, shell->font, SEC_PADDING + 12,
             y + (SEC_BUTTON_HEIGHT + ascent) / 2 - 2, bw - 24,
@@ -749,6 +785,10 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
 
     shell->context_button = -1;
+    shell->context_app = -1;
+    shell->menu_hover = -1;
+    shell->context_hover = -1;
+    shell->security_hover = -1;
     shell->desktop = recon_desktop_create(server, shell->font,
         screen_width, screen_height - TASKBAR_HEIGHT);
 
@@ -860,6 +900,18 @@ struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index) {
     return shell->apps[index];
 }
 
+const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *title) {
+    if (shell == NULL || title == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        if (strcmp(recon_appwin_title(shell->apps[i]), title) == 0) {
+            return recon_appwin_icon(shell->apps[i]);
+        }
+    }
+    return NULL;
+}
+
 void recon_shell_open_app(struct recon_shell *shell, int index) {
     if (shell == NULL || index < 0 || index >= shell->app_count) {
         return;
@@ -939,6 +991,30 @@ static void context_activate(struct recon_shell *shell, enum context_action acti
         break;
     }
 
+    case RECON_CONTEXT_WINDOW: {
+        if (shell->context_app < 0 || shell->context_app >= shell->app_count) {
+            return;
+        }
+        struct recon_appwin *win = shell->apps[shell->context_app];
+        switch (action) {
+        case CTX_RESTORE:
+            recon_appwin_set_maximized(win, false);
+            break;
+        case CTX_MINIMIZE:
+            recon_appwin_minimize(win);
+            break;
+        case CTX_MAXIMIZE:
+            recon_appwin_set_maximized(win, true);
+            break;
+        case CTX_CLOSE:
+            recon_appwin_hide(win);
+            break;
+        default:
+            break;
+        }
+        break;
+    }
+
     case RECON_CONTEXT_DESKTOP_ITEM:
         if (action == CTX_OPEN) {
             open_desktop_item(shell, shell->context_target);
@@ -1002,8 +1078,30 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         return true;
     }
 
-    /* The desktop, on an icon or on empty space. */
     struct wlr_scene_node *node = topmost_node(shell, lx, ly);
+
+    /*
+     * A window under the pointer offers what can be done to the window. Right
+     * click should answer everywhere rather than only in the two places that
+     * happen to have something interesting to say.
+     */
+    int app_index = appwin_index_for_node(shell, node);
+    if (app_index >= 0) {
+        struct recon_appwin *win = shell->apps[app_index];
+        shell->context_kind = RECON_CONTEXT_WINDOW;
+        shell->context_app = app_index;
+
+        context_add(shell, "Restore", CTX_RESTORE,
+            recon_appwin_is_maximized(win), false);
+        context_add(shell, "Minimize", CTX_MINIMIZE, true, false);
+        context_add(shell, "Maximize", CTX_MAXIMIZE,
+            !recon_appwin_is_maximized(win), true);
+        context_add(shell, "Close", CTX_CLOSE, true, false);
+        context_show(shell, lx, ly);
+        return true;
+    }
+
+    /* The desktop, on an icon or on empty space. */
     if (node == recon_desktop_node(shell->desktop)) {
         const char *name = recon_desktop_item_at(shell->desktop, lx, ly);
         if (name != NULL) {
@@ -1063,10 +1161,66 @@ void recon_shell_toggle_security(struct recon_shell *shell) {
     recon_damage_all(shell->server);
 }
 
+/*
+ * Follow the pointer across whichever menu is open, redrawing only when the
+ * highlighted entry actually changes -- moving within one entry should not
+ * cost a repaint.
+ */
+static void update_hover(struct recon_shell *shell, double lx, double ly) {
+    int px, py;
+
+    int menu = -1;
+    int context = -1;
+    int security = -1;
+
+    if (shell->context_open && shell->context != NULL &&
+            point_in_panel(shell->context, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->context, px, py);
+        if (hit >= HIT_CONTEXT_BASE) {
+            context = (int)(hit - HIT_CONTEXT_BASE);
+        }
+    } else if (shell->menu_open && shell->menu != NULL &&
+            point_in_panel(shell->menu, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->menu, px, py);
+        if (hit >= HIT_MENU_BASE) {
+            menu = (int)(hit - HIT_MENU_BASE);
+        }
+    } else if (shell->security_open && shell->security != NULL &&
+            point_in_panel(shell->security, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->security, px, py);
+        if (hit >= HIT_SEC_BASE) {
+            security = (int)(hit - HIT_SEC_BASE);
+        }
+    }
+
+    if (context != shell->context_hover) {
+        shell->context_hover = context;
+        if (shell->context_open) {
+            draw_context(shell);
+            recon_damage_all(shell->server);
+        }
+    }
+    if (menu != shell->menu_hover) {
+        shell->menu_hover = menu;
+        if (shell->menu_open) {
+            draw_menu(shell);
+            recon_damage_all(shell->server);
+        }
+    }
+    if (security != shell->security_hover) {
+        shell->security_hover = security;
+        if (shell->security_open) {
+            draw_security(shell);
+            recon_damage_all(shell->server);
+        }
+    }
+}
+
 void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) {
     if (shell == NULL) {
         return;
     }
+    update_hover(shell, lx, ly);
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_handle_motion(shell->apps[i], lx, ly);
     }

@@ -16,7 +16,14 @@ that counts as a usable desktop, and it is not reached yet.
 ## What works right now
 
 **A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
-right-click menus, and a Ctrl+Alt+Del box.
+right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a
+window, a taskbar button, a desktop icon or the desktop itself all offer what
+can be done there.
+
+**Its own icons**, drawn by ReconOS at first run and written to
+`/System/Icons` as `.ico` files. Nothing is bundled and nothing is borrowed,
+and any icon can be replaced by dropping a different file over it — a replaced
+one stays replaced.
 
 **Windows the system owns** — minimize, maximize, close, dragging and resizing
 belong to the window framework rather than to each application, so a program
@@ -31,8 +38,14 @@ shell: nothing here reaches the host or runs host programs. Reachable from the
 terminal window, and over a local socket so a running system can be examined
 from outside.
 
-**Applications**, all native: Task Manager, File Explorer, Terminal, Notepad,
-Calculator.
+**Applications**, all native:
+
+- **File Explorer** — back and forward through where you have been, a sidebar
+  of places, folders and files with icons, deletion that asks first
+- **Task Manager** — processes with CPU and memory, and a view of open windows
+- **Terminal** — the command interpreter, emulating nothing
+- **Notepad** — text editing
+- **Calculator** — arithmetic by mouse or keyboard
 
 **Client windows** via `xdg-shell`, for programs written against Wayland.
 

@@ -21,6 +21,7 @@
 #include "recon_desktop.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_shell.h"
 #include "recon_server.h"
 #include "recon_ui.h"
 
@@ -175,20 +176,14 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     int cy = item->y + 6;
 
     /*
-     * A file in /System/Icons wins. A shortcut asks for its target's icon
-     * first, so Terminal.app can look like the terminal rather than like an
-     * anonymous application.
+     * A shortcut shows the icon of what it points at, asked for by name rather
+     * than derived from the title: "File Explorer" is not "fileexplorer", and
+     * guessing only works while the two happen to line up.
      */
     if (item->kind == ITEM_SHORTCUT && item->target[0] != '\0') {
-        char name[RECON_NAME_MAX];
-        size_t out = 0;
-        for (const char *c = item->target; *c != '\0' && out < sizeof(name) - 1; c++) {
-            if (*c != ' ') {
-                name[out++] = (char)tolower((unsigned char)*c);
-            }
-        }
-        name[out] = '\0';
-        if (recon_icon_draw(p, name, cx, cy, ICON_IMAGE)) {
+        const char *icon = recon_shell_icon_for_app(desktop->server->shell,
+            item->target);
+        if (icon != NULL && recon_icon_draw(p, icon, cx, cy, ICON_IMAGE)) {
             return;
         }
     }
