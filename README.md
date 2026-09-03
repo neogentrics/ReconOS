@@ -8,10 +8,12 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.1.0.** The version number tracks what works, not what is
-planned, and this is the milestone that was defined as "a usable desktop": it
-sets itself up on first run, asks who you are on every run after, and gives
-that person a desktop of their own.
+**Status: v0.1.1.** The version number tracks what works, not what is
+planned. v0.1.0 was the milestone defined as "a usable desktop": it sets itself
+up on first run, asks who you are on every run after, and gives that person a
+desktop of their own. v0.1.1 made that last part true -- see *One account at a
+time* below -- and put the shape of the rest of the system into the Control
+Panel, most of it marked as not built yet.
 
 Still early. There is no kernel of its own, client windows draw their own
 decorations, and the account roles are enforced by ReconOS inside ReconOS
@@ -27,16 +29,45 @@ you are. Signing out returns to that screen; signing in as a *different* person
 closes the previous one's windows, because the whole point of a login screen is
 that one account does not see another's open documents.
 
-**A Start menu** in two columns: applications on the left, places and the
-Control Panel on the right, who is signed in across the top, and Sign Out /
-Switch User / Restart / Shut Down along the bottom.
+**One account at a time, properly.** Each account gets its own settings
+hive, its own folders, and its own windows. A limited account cannot read
+another account's files, only administrators can; and signing in as a different
+person ends the previous person's windows rather than handing them over. This
+did not work in v0.1.0 -- the hive was written per account and read once at
+boot, and application windows were built once and reused -- so the second
+person to sign in got the first one's File Explorer, still in their folder.
 
-**A Control Panel** with four pages -- Accounts, Appearance, Reading, System.
-Create and remove accounts, change passwords, promote and demote between
-administrator and limited, choose a skin, adjust spacing and text size. Built
-into ReconOS rather than shipped as a module, deliberately: this is where
-somebody goes to repair a system, and it should not be a thing that can fail to
-load.
+**A Start menu** in two columns: applications on the left, places and the
+Control Panel on the right, who is signed in across the top, and Lock / Sign
+Out / Switch User / Restart / Shut Down along the bottom. Lock covers the
+screen without ending the session: the account stays signed in, the windows
+stay open, and coming back is the same desktop.
+
+**A Control Panel** with thirteen pages. Six do something: Accounts,
+Appearance, Reading, Programs, Modules, About. Modules loads and unloads code
+in the running system and says why anything refused to load. The Registry page
+asks for the administrator's password before showing what the system
+remembers, and locks itself again when you leave it.
+
+The other seven -- Power, Storage, Multitasking, Update, Troubleshoot,
+Recovery, and the install half of Programs -- are there and say plainly that
+they are not built, and what has to exist first. Usually a kernel: a hosted
+process cannot suspend a machine, partition a disk, or reinstall itself. A
+gap nobody can see is a gap nobody remembers.
+
+The Control Panel is built into ReconOS rather than shipped as a module,
+deliberately: this is where somebody goes to repair a system, and it should not
+be a thing that can fail to load.
+
+**A Task Manager** with three tabs. Applications is what is running and can
+close it, politely or by force. Processes is the machine's. Users is who has an
+account and what they are using, expandable to what each has open. Columns can
+be dragged wider. Two buttons there do nothing yet and say so.
+
+**A File Explorer** with an address bar you can type into and a drop-down of
+everywhere worth going, a toolbar of icons in groups, and a sidebar that
+separates your own folders from the machine's. It hides the system's own
+bookkeeping from your home folder.
 
 **A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
 right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a
