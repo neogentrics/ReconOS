@@ -19,6 +19,9 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 
+#include <linux/input-event-codes.h> /* BTN_LEFT, BTN_RIGHT */
+#include <xkbcommon/xkbcommon.h>
+
 #define OUTPUT_MAX 16384
 #define MAX_ARGS 16
 #define LIST_MAX 512
@@ -341,6 +344,233 @@ static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Copied '%s' to '%s'.\n", argv[1], target);
 }
 
+/*
+ * Drive the desktop as though a person were using it.
+ *
+ * A desktop cannot be tested by reading it. "The delete button does nothing"
+ * is a report that needs the button pressed and the result watched, and this
+ * is what presses it. Input goes through the same path real input takes, so a
+ * pass here means the thing a user touches works, not that a shortcut around
+ * it works.
+ */
+static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: ui move|click|rclick|press|release|key|type ...\n");
+        out(s, "  ui move <x> <y>       put the pointer somewhere\n");
+        out(s, "  ui click <x> <y>      move there, then press and release\n");
+        out(s, "  ui rclick <x> <y>     the same with the right button\n");
+        out(s, "  ui press|release      the left button, without moving\n");
+        out(s, "  ui key <name>         one key, e.g. Return, Escape, F2, ctrl+c\n");
+        out(s, "  ui type <text>        a character at a time\n");
+        out(s, "  ui where              where the pointer is\n");
+        return;
+    }
+
+    struct recon_server *server = s->server;
+    const char *what = argv[1];
+
+    if (strcasecmp(what, "where") == 0) {
+        int x = 0, y = 0;
+        recon_pointer_position(server, &x, &y);
+        out(s, "%d %d\n", x, y);
+        return;
+    }
+
+    if (strcasecmp(what, "move") == 0 || strcasecmp(what, "click") == 0 ||
+            strcasecmp(what, "rclick") == 0) {
+        if (argc < 4) {
+            out(s, "Usage: ui %s <x> <y>\n", what);
+            return;
+        }
+        int x = atoi(argv[2]);
+        int y = atoi(argv[3]);
+        recon_inject_pointer(server, x, y);
+
+        if (strcasecmp(what, "move") == 0) {
+            out(s, "pointer at %d %d\n", x, y);
+            return;
+        }
+
+        uint32_t button = (strcasecmp(what, "rclick") == 0) ? BTN_RIGHT : BTN_LEFT;
+        recon_inject_button(server, button, true);
+        recon_inject_button(server, button, false);
+        out(s, "%s at %d %d\n", what, x, y);
+        return;
+    }
+
+    if (strcasecmp(what, "press") == 0 || strcasecmp(what, "release") == 0) {
+        bool pressed = (strcasecmp(what, "press") == 0);
+        uint32_t button = (argc > 2 && strcasecmp(argv[2], "right") == 0)
+            ? BTN_RIGHT : BTN_LEFT;
+        recon_inject_button(server, button, pressed);
+        out(s, "%s\n", what);
+        return;
+    }
+
+    if (strcasecmp(what, "key") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui key <name>\n");
+            return;
+        }
+
+        /*
+         * "ctrl+c" and "shift+Tab" rather than a separate modifier argument:
+         * a key press is one thing, and splitting it across two arguments
+         * invites sending half of it.
+         */
+        char spec[128];
+        snprintf(spec, sizeof(spec), "%s", argv[2]);
+
+        uint32_t modifiers = 0;
+        char *name = spec;
+        for (char *plus = strchr(name, '+'); plus != NULL; plus = strchr(name, '+')) {
+            *plus = '\0';
+            if (strcasecmp(name, "ctrl") == 0) {
+                modifiers |= RECON_MOD_CTRL;
+            } else if (strcasecmp(name, "shift") == 0) {
+                modifiers |= RECON_MOD_SHIFT;
+            } else if (strcasecmp(name, "alt") == 0) {
+                modifiers |= RECON_MOD_ALT;
+            } else {
+                out(s, "No modifier called '%s'.\n", name);
+                return;
+            }
+            name = plus + 1;
+        }
+
+        xkb_keysym_t sym = xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE);
+        if (sym == XKB_KEY_NoSymbol) {
+            out(s, "No key called '%s'.\n", name);
+            return;
+        }
+
+        recon_inject_key(server, sym, modifiers);
+        out(s, "key %s\n", argv[2]);
+        return;
+    }
+
+    if (strcasecmp(what, "app") == 0) {
+        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        if (win == NULL) {
+            out(s, "No built-in window has focus.\n");
+            return;
+        }
+        char buffer[2048];
+        buffer[0] = '\0';
+        recon_appwin_describe(win, buffer, sizeof(buffer));
+        out(s, "%s:\n%s", recon_appwin_title(win),
+            buffer[0] != '\0' ? buffer : "  (says nothing about itself)\n");
+        return;
+    }
+
+    if (strcasecmp(what, "hits") == 0) {
+        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        if (win == NULL) {
+            out(s, "No built-in window has focus.\n");
+            return;
+        }
+        char buffer[3072];
+        buffer[0] = '\0';
+        recon_appwin_describe_hits(win, buffer, sizeof(buffer));
+        out(s, "%s clickable regions:\n%s", recon_appwin_title(win), buffer);
+        return;
+    }
+
+    if (strcasecmp(what, "hit") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui hit <region id>\n");
+            return;
+        }
+        struct recon_appwin *win = recon_shell_focused_app(server->shell);
+        if (win == NULL) {
+            out(s, "No built-in window has focus.\n");
+            return;
+        }
+
+        uint32_t id = (uint32_t)strtoul(argv[2], NULL, 10);
+        int x = 0, y = 0;
+        if (!recon_appwin_hit_centre(win, id, &x, &y)) {
+            out(s, "%s has no region with id %u.\n", recon_appwin_title(win), id);
+            return;
+        }
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "clicked region %u at %d,%d\n", id, x, y);
+        return;
+    }
+
+    if (strcasecmp(what, "menu") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui menu <label>\n");
+            return;
+        }
+
+        /* Join the rest, so "ui menu New Folder" works without quoting. */
+        char label[64];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(label) - 1; i++) {
+            int w = snprintf(label + used, sizeof(label) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (w < 0) {
+                break;
+            }
+            used += (size_t)w;
+        }
+
+        int x = 0, y = 0;
+        if (!recon_shell_context_entry_at(server->shell, label, &x, &y)) {
+            out(s, "No menu entry called '%s' is showing.\n", label);
+            return;
+        }
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "chose '%s' at %d,%d\n", label, x, y);
+        return;
+    }
+
+    if (strcasecmp(what, "type") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui type <text>\n");
+            return;
+        }
+
+        int typed = 0;
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) {
+                recon_inject_key(server, XKB_KEY_space, 0);
+                typed++;
+            }
+            for (const char *c = argv[i]; *c != '\0'; c++) {
+                /* Only printable ASCII: anything else is not something a
+                 * keyboard would have produced here. */
+                if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7E) {
+                    continue;
+                }
+                recon_inject_key(server, (uint32_t)*c, 0);
+                typed++;
+            }
+        }
+        out(s, "typed %d character%s\n", typed, typed == 1 ? "" : "s");
+        return;
+    }
+
+    out(s, "No 'ui' action called '%s'.\n", what);
+}
+
+/* What the shell currently has open, so a failure can be looked at rather
+ * than guessed at. */
+static void cmd_state(struct recon_cmd_session *s, int argc, char **argv) {
+    (void)argc; (void)argv;
+    char buffer[4096];
+    buffer[0] = '\0';
+    recon_shell_describe(s->server->shell, buffer, sizeof(buffer));
+    out(s, "%s", buffer);
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -449,6 +679,8 @@ static const struct command COMMANDS[] = {
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
+    { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
+    { "state",    "state",                 "What the shell has open",           cmd_state },
     { "echo",     "echo <text>",           "Print text",                        cmd_echo },
     { "exit",     "exit",                  "End this session",                  cmd_exit },
     { "shutdown", "shutdown",              "Shut ReconOS down",                 cmd_shutdown },

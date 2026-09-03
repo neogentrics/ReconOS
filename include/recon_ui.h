@@ -79,6 +79,10 @@ bool recon_panel_resize(struct recon_panel *panel, int width, int height);
 void recon_panel_commit(struct recon_panel *panel);
 
 void recon_panel_set_position(struct recon_panel *panel, int x, int y);
+
+/* Where the panel currently sits, so what is drawn can be located from
+ * outside without keeping a second copy of the position. */
+void recon_panel_position(const struct recon_panel *panel, int *x, int *y);
 void recon_panel_raise_to_top(struct recon_panel *panel);
 void recon_panel_set_enabled(struct recon_panel *panel, bool enabled);
 
@@ -140,16 +144,24 @@ struct recon_edit {
     char text[RECON_EDIT_MAX];
     int length;
     int caret;
+    /*
+     * The other end of the selection, or -1 for none. Typing over a selection
+     * replaces it, which is what makes renaming work the way it does
+     * everywhere else: the name arrives selected, and the first key replaces
+     * it instead of being appended to it.
+     */
+    int anchor;
     bool active;
 };
 
 /*
- * Start editing `initial`.
+ * Start editing `initial`, with it selected so typing replaces it.
  *
- * When `select_stem` is true the caret goes before the last dot rather than at
- * the end, so renaming "notes.txt" and typing replaces the name and keeps the
- * extension -- retyping ".txt" every time is the kind of small tax that makes
- * a feature feel unfinished.
+ * When `select_stem` is true the selection stops before the last dot, so
+ * renaming "notes.txt" and typing replaces the name and keeps the extension --
+ * retyping ".txt" every time is the kind of small tax that makes a feature
+ * feel unfinished. For a name with no extension, or when false, the whole
+ * thing is selected.
  */
 void recon_edit_begin(struct recon_edit *edit, const char *initial,
     bool select_stem);
@@ -184,6 +196,14 @@ void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
 void recon_hit_clear(struct recon_panel *panel);
 bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
     uint32_t id);
+
+/*
+ * Enumerate the regions a panel registered, so what is clickable can be found
+ * from outside rather than by measuring a screenshot. Returns false once
+ * `index` runs past the end.
+ */
+bool recon_hit_region(const struct recon_panel *panel, size_t index,
+    int *x, int *y, int *w, int *h, uint32_t *id);
 
 /* The id of the topmost region containing the point, or RECON_HIT_NONE. */
 uint32_t recon_hit_test(struct recon_panel *panel, int x, int y);

@@ -131,12 +131,25 @@ static void layout_items(struct recon_desktop *desktop) {
     }
 }
 
+static int index_of(struct recon_desktop *desktop, const char *name);
+
 void recon_desktop_reload(struct recon_desktop *desktop) {
-    /* Indices are about to change, and a rename tied to one of them would
-     * follow the wrong icon. */
-    if (desktop != NULL && desktop->renaming >= 0) {
-        desktop->renaming = -1;
-        recon_edit_end(&desktop->rename_edit);
+    /*
+     * A rename in progress is held as an index, and the indices are about to
+     * change. Remember which name is being edited and find it again below.
+     *
+     * Simply cancelling here looked safe and was not: every context menu
+     * action ends with a shell refresh, which reloads the desktop, so a
+     * rename was destroyed in the same breath that started it. "Rename does
+     * nothing" was this.
+     */
+    char renaming_name[RECON_NAME_MAX];
+    bool was_renaming = false;
+    if (desktop != NULL && desktop->renaming >= 0 &&
+            desktop->renaming < desktop->item_count) {
+        snprintf(renaming_name, sizeof(renaming_name), "%s",
+            desktop->items[desktop->renaming].name);
+        was_renaming = true;
     }
     if (desktop == NULL) {
         return;
@@ -181,6 +194,17 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
     }
 
     layout_items(desktop);
+
+    /* Put the rename back on the same file, wherever it now sits. If it has
+     * gone -- deleted from underneath, or renamed already -- the edit goes
+     * with it rather than pointing at whatever took its place. */
+    if (was_renaming) {
+        desktop->renaming = index_of(desktop, renaming_name);
+        if (desktop->renaming < 0) {
+            recon_edit_end(&desktop->rename_edit);
+        }
+    }
+
     recon_desktop_refresh(desktop);
 }
 

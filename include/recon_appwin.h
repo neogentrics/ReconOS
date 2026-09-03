@@ -17,6 +17,7 @@
 #define RECON_APPWIN_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <xkbcommon/xkbcommon.h>
@@ -120,6 +121,15 @@ struct recon_appwin_impl {
     /* Shown or hidden, so an application can start and stop doing work. */
     void (*visibility)(void *user, bool visible);
 
+    /*
+     * Report the application's own state in a few lines.
+     *
+     * Optional, and only for diagnosis: when a button "does nothing", the
+     * question is what the application believed at the time, and nothing
+     * outside it can answer that.
+     */
+    void (*describe)(void *user, char *out, size_t size);
+
     /* Free whatever `user` points at. */
     void (*destroy)(void *user);
 };
@@ -144,6 +154,30 @@ bool recon_appwin_is_minimized(struct recon_appwin *win);
 bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
+
+/*
+ * The middle of the region with this id, in screen coordinates. False when the
+ * window has no such region.
+ *
+ * Lets a test click "the Delete button" by its id rather than by working out
+ * where the toolbar laid it out. The click that follows is a real one through
+ * the real hit test; only the measuring is skipped.
+ */
+bool recon_appwin_hit_centre(struct recon_appwin *win, uint32_t id, int *x, int *y);
+
+/* Whatever the application has to say about its own state. */
+void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size);
+
+/* List the window's clickable regions, for diagnosis. */
+void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size);
+
+/* Where the window is and how big, so it can be found from outside without
+ * a second copy of the geometry. */
+void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y, int *w, int *h);
+
+/* The top-left of the content area, inside the frame -- what an application's
+ * own coordinates are relative to. */
+void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y);
 
 /*
  * Show something other than the application's name -- the file being edited,

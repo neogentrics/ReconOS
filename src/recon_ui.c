@@ -421,6 +421,21 @@ void recon_panel_set_enabled(struct recon_panel *panel, bool enabled) {
     }
 }
 
+void recon_panel_position(const struct recon_panel *panel, int *x, int *y) {
+    if (panel == NULL || panel->scene_buffer == NULL) {
+        return;
+    }
+    /* Read back from the scene node rather than keeping a copy on the panel.
+     * The node is what actually decides where this is drawn, so a second
+     * record of it could only ever be right or wrong, never authoritative. */
+    if (x != NULL) {
+        *x = panel->scene_buffer->node.x;
+    }
+    if (y != NULL) {
+        *y = panel->scene_buffer->node.y;
+    }
+}
+
 int recon_panel_width(const struct recon_panel *panel) {
     return panel != NULL ? panel->width : 0;
 }
@@ -662,6 +677,20 @@ bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
     return true;
 }
 
+bool recon_hit_region(const struct recon_panel *panel, size_t index,
+        int *x, int *y, int *w, int *h, uint32_t *id) {
+    if (panel == NULL || index >= panel->hit_count) {
+        return false;
+    }
+    const struct recon_hit_region *region = &panel->hits[index];
+    if (x != NULL) { *x = region->x; }
+    if (y != NULL) { *y = region->y; }
+    if (w != NULL) { *w = region->w; }
+    if (h != NULL) { *h = region->h; }
+    if (id != NULL) { *id = region->id; }
+    return true;
+}
+
 uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
     if (panel == NULL) {
         return RECON_HIT_NONE;
@@ -682,6 +711,7 @@ uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
 #define EDIT_TEXT RECON_RGB(0x10, 0x10, 0x10)
 #define EDIT_CARET RECON_RGB(0x10, 0x10, 0x10)
 #define EDIT_BORDER RECON_RGB(0x30, 0x50, 0x90)
+#define EDIT_SELECTION RECON_RGB(0xB0, 0xC8, 0xF0)
 
 void recon_edit_begin(struct recon_edit *edit, const char *initial,
         bool select_stem) {
@@ -695,13 +725,18 @@ void recon_edit_begin(struct recon_edit *edit, const char *initial,
     edit->active = true;
 
     if (select_stem) {
-        /* A leading dot is the whole name, not an extension, so "..config"
+        /* A leading dot is the whole name, not an extension, so ".config"
          * does not lose its identity to a rule about file types. */
         const char *dot = strrchr(edit->text, '.');
         if (dot != NULL && dot != edit->text) {
             edit->caret = (int)(dot - edit->text);
         }
     }
+
+    /* Selected from the start, so the first keystroke replaces rather than
+     * appends. Typing "Notes" over "New Folder" should leave "Notes", not
+     * "New FolderNotes". */
+    edit->anchor = (edit->caret > 0) ? 0 : -1;
 }
 
 void recon_edit_end(struct recon_edit *edit) {
@@ -712,9 +747,39 @@ void recon_edit_end(struct recon_edit *edit) {
     edit->text[0] = '\0';
     edit->length = 0;
     edit->caret = 0;
+    edit->anchor = -1;
+}
+
+/* The selected span, low to high. False when nothing is selected. */
+static bool edit_selection(const struct recon_edit *edit, int *from, int *to) {
+    if (edit->anchor < 0 || edit->anchor == edit->caret) {
+        return false;
+    }
+    *from = edit->anchor < edit->caret ? edit->anchor : edit->caret;
+    *to = edit->anchor < edit->caret ? edit->caret : edit->anchor;
+    return true;
+}
+
+/* Remove whatever is selected, leaving the caret where it was. Returns true
+ * if anything went. */
+static bool edit_delete_selection(struct recon_edit *edit) {
+    int from, to;
+    if (!edit_selection(edit, &from, &to)) {
+        edit->anchor = -1;
+        return false;
+    }
+
+    memmove(edit->text + from, edit->text + to,
+        (size_t)(edit->length - to) + 1);
+    edit->length -= (to - from);
+    edit->caret = from;
+    edit->anchor = -1;
+    return true;
 }
 
 static void edit_insert(struct recon_edit *edit, char c) {
+    edit_delete_selection(edit);
+
     if (edit->length + 1 >= RECON_EDIT_MAX) {
         return;
     }
@@ -741,6 +806,16 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
     }
     (void)modifiers;
 
+    if ((modifiers & (1u << 2)) != 0) {  /* Ctrl */
+        if (sym == XKB_KEY_a || sym == XKB_KEY_A) {
+            edit->anchor = 0;
+            edit->caret = edit->length;
+            return RECON_EDIT_CHANGED;
+        }
+        /* Other control combinations are not text and must not be typed. */
+        return RECON_EDIT_IGNORED;
+    }
+
     switch (sym) {
     case XKB_KEY_Return:
     case XKB_KEY_KP_Enter:
@@ -750,34 +825,54 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         return RECON_EDIT_CANCEL;
 
     case XKB_KEY_BackSpace:
-        if (edit->caret > 0) {
+        /* Backspace over a selection removes the selection, not the character
+         * before it. */
+        if (!edit_delete_selection(edit) && edit->caret > 0) {
             edit_delete_at(edit, edit->caret - 1);
             edit->caret--;
         }
         return RECON_EDIT_CHANGED;
 
     case XKB_KEY_Delete:
-        edit_delete_at(edit, edit->caret);
+        if (!edit_delete_selection(edit)) {
+            edit_delete_at(edit, edit->caret);
+        }
         return RECON_EDIT_CHANGED;
 
     case XKB_KEY_Left:
-        if (edit->caret > 0) {
+        /* Moving off a selection lands at its edge rather than stepping from
+         * wherever the caret happened to be inside it. */
+        if (edit->anchor >= 0) {
+            int from, to;
+            if (edit_selection(edit, &from, &to)) {
+                edit->caret = from;
+            }
+            edit->anchor = -1;
+        } else if (edit->caret > 0) {
             edit->caret--;
         }
         return RECON_EDIT_CHANGED;
 
     case XKB_KEY_Right:
-        if (edit->caret < edit->length) {
+        if (edit->anchor >= 0) {
+            int from, to;
+            if (edit_selection(edit, &from, &to)) {
+                edit->caret = to;
+            }
+            edit->anchor = -1;
+        } else if (edit->caret < edit->length) {
             edit->caret++;
         }
         return RECON_EDIT_CHANGED;
 
     case XKB_KEY_Home:
         edit->caret = 0;
+        edit->anchor = -1;
         return RECON_EDIT_CHANGED;
 
     case XKB_KEY_End:
         edit->caret = edit->length;
+        edit->anchor = -1;
         return RECON_EDIT_CHANGED;
 
     default:
@@ -833,6 +928,33 @@ void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
     }
 
     int baseline = y + (h + recon_font_ascent(font)) / 2 - 1;
+
+    /* The selection, behind the text, so it is visible that typing will
+     * replace rather than append. */
+    int from, to;
+    if (edit_selection(edit, &from, &to)) {
+        char head[RECON_EDIT_MAX];
+        memcpy(head, edit->text, (size_t)from);
+        head[from] = '\0';
+        int from_x = recon_text_width(font, head);
+
+        memcpy(head, edit->text, (size_t)to);
+        head[to] = '\0';
+        int to_x = recon_text_width(font, head);
+
+        int sx = x + pad + from_x - offset;
+        int sw = to_x - from_x;
+        if (sx < x + pad) {
+            sw -= (x + pad) - sx;
+            sx = x + pad;
+        }
+        if (sw > 0) {
+            if (sx + sw > x + w - pad) {
+                sw = x + w - pad - sx;
+            }
+            recon_fill_rect(panel, sx, y + 2, sw, h - 4, EDIT_SELECTION);
+        }
+    }
 
     /* Drawn without truncation so the ellipsis logic does not fight the
      * scrolling; the panel clips whatever runs past its edge. */

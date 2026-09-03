@@ -93,6 +93,8 @@ enum context_action {
     CTX_NEW_FILE,
     CTX_NEW_SHORTCUT,
     CTX_REFRESH,
+    CTX_TASK_MANAGER,
+    CTX_SHOW_DESKTOP,
     CTX_RESTORE,
     CTX_MINIMIZE,
     CTX_MAXIMIZE,
@@ -105,6 +107,10 @@ enum context_action {
 #define CONTEXT_WIDTH 200
 #define CONTEXT_PADDING 3
 #define CONTEXT_ITEMS_MAX RECON_MENU_MAX
+/* The gap a separator adds under an entry. Named because three places need to
+ * agree about it, and a drawn menu whose entries are not where the hit test
+ * says they are looks exactly like a menu whose entries do nothing. */
+#define CONTEXT_SEPARATOR_HEIGHT 5
 
 /* --- Apps menu contents --- */
 
@@ -264,15 +270,125 @@ static bool point_in_panel(struct recon_panel *panel, double lx, double ly,
 static void draw_menu(struct recon_shell *shell);
 static void draw_security(struct recon_shell *shell);
 
-static int context_height(struct recon_shell *shell) {
-    int height = CONTEXT_PADDING * 2;
-    for (int i = 0; i < shell->context_item_count; i++) {
-        height += CONTEXT_ITEM_HEIGHT;
+/*
+ * Where entry `index` starts, inside the menu panel.
+ *
+ * The one place this arithmetic lives. Drawing, hit-testing and looking the
+ * entry up from outside all go through it, so they cannot drift apart.
+ */
+static int context_entry_y(struct recon_shell *shell, int index) {
+    int y = CONTEXT_PADDING;
+    for (int i = 0; i < index && i < shell->context_item_count; i++) {
+        y += CONTEXT_ITEM_HEIGHT;
         if (shell->context_items[i].separator_after) {
-            height += 5;
+            y += CONTEXT_SEPARATOR_HEIGHT;
         }
     }
-    return height;
+    return y;
+}
+
+static int context_height(struct recon_shell *shell) {
+    if (shell->context_item_count == 0) {
+        return CONTEXT_PADDING * 2;
+    }
+    int last = shell->context_item_count - 1;
+    return context_entry_y(shell, last) + CONTEXT_ITEM_HEIGHT +
+        (shell->context_items[last].separator_after ? CONTEXT_SEPARATOR_HEIGHT : 0) +
+        CONTEXT_PADDING;
+}
+
+bool recon_shell_context_entry_at(struct recon_shell *shell, const char *label,
+        int *x, int *y) {
+    if (shell == NULL || !shell->context_open || shell->context == NULL ||
+            label == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < shell->context_item_count; i++) {
+        if (strcasecmp(shell->context_items[i].label, label) != 0) {
+            continue;
+        }
+
+        int px = 0, py = 0;
+        recon_panel_position(shell->context, &px, &py);
+        if (x != NULL) {
+            *x = px + CONTEXT_WIDTH / 2;
+        }
+        if (y != NULL) {
+            *y = py + context_entry_y(shell, i) + CONTEXT_ITEM_HEIGHT / 2;
+        }
+        return true;
+    }
+    return false;
+}
+
+struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell) {
+    if (shell == NULL || shell->focused_app < 0 ||
+            shell->focused_app >= shell->app_count) {
+        return NULL;
+    }
+    return shell->apps[shell->focused_app];
+}
+
+void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
+    if (shell == NULL || out == NULL || size == 0) {
+        return;
+    }
+
+    size_t used = 0;
+    #define EMIT(...) do { \
+        if (used < size) { \
+            int w = snprintf(out + used, size - used, __VA_ARGS__); \
+            if (w > 0) { used += (size_t)w; } \
+        } \
+    } while (0)
+
+    EMIT("focus: ");
+    if (shell->focused_app >= 0 && shell->focused_app < shell->app_count) {
+        EMIT("%s\n", recon_appwin_title(shell->apps[shell->focused_app]));
+    } else {
+        EMIT("(none)\n");
+    }
+
+    EMIT("desktop renaming: %s\n",
+        recon_desktop_is_renaming(shell->desktop) ? "yes" : "no");
+    EMIT("clipboard: %s\n", recon_fs_clip_empty() ? "(empty)" : "holds something");
+
+    EMIT("windows:\n");
+    for (int i = 0; i < shell->app_count; i++) {
+        struct recon_appwin *win = shell->apps[i];
+        if (!recon_appwin_is_open(win)) {
+            continue;
+        }
+        int wx = 0, wy = 0, ww = 0, wh = 0, cx = 0, cy = 0;
+        recon_appwin_geometry(win, &wx, &wy, &ww, &wh);
+        recon_appwin_content_origin(win, &cx, &cy);
+        EMIT("  %-22s %-9s%s frame %d,%d %dx%d content-origin %d,%d\n",
+            recon_appwin_title(win),
+            recon_appwin_is_minimized(win) ? "minimized" : "open",
+            recon_appwin_is_focused(win) ? " focused" : "",
+            wx, wy, ww, wh, cx, cy);
+    }
+
+    EMIT("apps menu: %s\n", shell->menu_open ? "open" : "closed");
+
+    if (!shell->context_open) {
+        EMIT("context menu: closed\n");
+    } else {
+        int px = 0, py = 0;
+        recon_panel_position(shell->context, &px, &py);
+        EMIT("context menu: open kind=%d at %d,%d target='%s'\n",
+            (int)shell->context_kind, px, py, shell->context_target);
+        for (int i = 0; i < shell->context_item_count; i++) {
+            EMIT("  [%d] %-22s %-8s click at %d,%d\n", i,
+                shell->context_items[i].label,
+                shell->context_items[i].enabled ? "enabled" : "disabled",
+                px + CONTEXT_WIDTH / 2,
+                py + context_entry_y(shell, i) + CONTEXT_ITEM_HEIGHT / 2);
+        }
+    }
+
+    #undef EMIT
 }
 
 static void draw_context(struct recon_shell *shell) {
@@ -288,8 +404,9 @@ static void draw_context(struct recon_shell *shell) {
     recon_fill(p, COLOR_MENU);
     recon_hit_clear(p);
 
-    int y = CONTEXT_PADDING;
     for (int i = 0; i < shell->context_item_count; i++) {
+        int y = context_entry_y(shell, i);
+
         /* Only entries that can be chosen highlight: showing a disabled one
          * as selectable would promise something the click will not do. */
         bool hovered = (i == shell->context_hover) && shell->context_items[i].enabled;
@@ -310,11 +427,10 @@ static void draw_context(struct recon_shell *shell) {
             recon_hit_add(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
                 CONTEXT_ITEM_HEIGHT, HIT_CONTEXT_BASE + i);
         }
-        y += CONTEXT_ITEM_HEIGHT;
 
         if (shell->context_items[i].separator_after) {
-            recon_fill_rect(p, 6, y + 2, width - 12, 1, RECON_RGB(0x90, 0x90, 0x90));
-            y += 5;
+            recon_fill_rect(p, 6, y + CONTEXT_ITEM_HEIGHT + 2, width - 12, 1,
+                RECON_RGB(0x90, 0x90, 0x90));
         }
     }
 
@@ -935,6 +1051,25 @@ struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index) {
     return shell->apps[index];
 }
 
+int recon_shell_app_index(struct recon_shell *shell, const char *title) {
+    if (shell == NULL || title == NULL) {
+        return -1;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        if (strcmp(recon_appwin_title(shell->apps[i]), title) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void recon_shell_open_named(struct recon_shell *shell, const char *title) {
+    int index = recon_shell_app_index(shell, title);
+    if (index >= 0) {
+        recon_shell_open_app(shell, index);
+    }
+}
+
 const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *title) {
     if (shell == NULL || title == NULL) {
         return NULL;
@@ -974,7 +1109,7 @@ static void open_desktop_item(struct recon_shell *shell, const char *name) {
             }
         }
     } else if (action.kind == RECON_DESKTOP_ACTION_OPEN_PATH) {
-        recon_shell_open_app(shell, 4); /* the file explorer */
+        recon_shell_open_named(shell, "File Explorer");
     }
 }
 
@@ -1094,6 +1229,33 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
         }
         break;
 
+    case RECON_CONTEXT_TASKBAR:
+        if (action == CTX_TASK_MANAGER) {
+            recon_shell_open_named(shell, "Task Manager");
+        } else if (action == CTX_SHOW_DESKTOP) {
+            /*
+             * Minimize everything rather than hiding it: the windows are
+             * still open and still on the taskbar, which is what makes this
+             * reversible by clicking one of them.
+             */
+            for (int i = 0; i < shell->app_count; i++) {
+                if (recon_appwin_is_open(shell->apps[i]) &&
+                        !recon_appwin_is_minimized(shell->apps[i])) {
+                    recon_appwin_minimize(shell->apps[i]);
+                }
+            }
+            struct recon_toplevel *toplevel;
+            wl_list_for_each(toplevel, &shell->server->toplevels, link) {
+                if (!recon_toplevel_is_minimized(toplevel)) {
+                    recon_toplevel_minimize(toplevel);
+                }
+            }
+            set_focused_app(shell, -1);
+        } else if (action == CTX_REFRESH) {
+            recon_desktop_reload(shell->desktop);
+        }
+        break;
+
     case RECON_CONTEXT_APP:
         break; /* Handled above. */
 
@@ -1133,13 +1295,22 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
     /* A window button on the taskbar. */
     if (shell->taskbar != NULL && point_in_panel(shell->taskbar, lx, ly, &px, &py)) {
         uint32_t hit = recon_hit_test(shell->taskbar, px, py);
-        if (hit < HIT_TASK_BASE || hit >= HIT_MENU_BASE) {
-            return false;
-        }
+        int index = (hit >= HIT_TASK_BASE && hit < HIT_MENU_BASE)
+            ? (int)(hit - HIT_TASK_BASE) : -1;
 
-        int index = (int)(hit - HIT_TASK_BASE);
+        /*
+         * Empty taskbar has its own menu rather than no menu. Right-clicking
+         * the bar and getting nothing reads as broken, and the things worth
+         * offering there -- the task manager, clearing the screen -- have
+         * nowhere else obvious to live.
+         */
         if (index < 0 || index >= shell->button_count) {
-            return false;
+            shell->context_kind = RECON_CONTEXT_TASKBAR;
+            context_add(shell, "Task Manager", CTX_TASK_MANAGER, true, false);
+            context_add(shell, "Show Desktop", CTX_SHOW_DESKTOP, true, true);
+            context_add(shell, "Refresh", CTX_REFRESH, true, false);
+            context_show(shell, lx, ly);
+            return true;
         }
 
         shell->context_kind = RECON_CONTEXT_TASKBAR_WINDOW;

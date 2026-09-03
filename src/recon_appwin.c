@@ -415,6 +415,79 @@ bool recon_appwin_is_maximized(struct recon_appwin *win) {
     return win != NULL && win->maximized;
 }
 
+void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size) {
+    if (win == NULL || out == NULL || size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (win->impl != NULL && win->impl->describe != NULL) {
+        win->impl->describe(win->user, out, size);
+    }
+}
+
+bool recon_appwin_hit_centre(struct recon_appwin *win, uint32_t id,
+        int *x, int *y) {
+    if (win == NULL || win->panel == NULL) {
+        return false;
+    }
+    for (size_t i = 0;; i++) {
+        int rx, ry, rw, rh;
+        uint32_t rid;
+        if (!recon_hit_region(win->panel, i, &rx, &ry, &rw, &rh, &rid)) {
+            return false;
+        }
+        if (rid != id) {
+            continue;
+        }
+        /* Panel coordinates are relative to the window's top-left. */
+        if (x != NULL) { *x = win->x + rx + rw / 2; }
+        if (y != NULL) { *y = win->y + ry + rh / 2; }
+        return true;
+    }
+}
+
+void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size) {
+    if (win == NULL || out == NULL || size == 0) {
+        return;
+    }
+
+    size_t used = 0;
+    for (size_t i = 0; used < size; i++) {
+        int rx, ry, rw, rh;
+        uint32_t rid;
+        if (!recon_hit_region(win->panel, i, &rx, &ry, &rw, &rh, &rid)) {
+            break;
+        }
+        int written = snprintf(out + used, size - used,
+            "  id %-6u %dx%d at screen %d,%d  centre %d,%d\n",
+            rid, rw, rh, win->x + rx, win->y + ry,
+            win->x + rx + rw / 2, win->y + ry + rh / 2);
+        if (written < 0) {
+            break;
+        }
+        used += (size_t)written;
+    }
+}
+
+void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y,
+        int *w, int *h) {
+    if (win == NULL) {
+        return;
+    }
+    if (x != NULL) { *x = win->x; }
+    if (y != NULL) { *y = win->y; }
+    if (w != NULL) { *w = win->width; }
+    if (h != NULL) { *h = win->height; }
+}
+
+void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y) {
+    if (win == NULL) {
+        return;
+    }
+    if (x != NULL) { *x = win->x + BORDER; }
+    if (y != NULL) { *y = win->y + TITLE_HEIGHT; }
+}
+
 const char *recon_appwin_title(struct recon_appwin *win) {
     if (win == NULL) {
         return "";

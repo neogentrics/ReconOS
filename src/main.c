@@ -755,30 +755,47 @@ static void seat_request_set_cursor(struct wl_listener *listener, void *data) {
     }
 }
 
-static void server_cursor_button(struct wl_listener *listener, void *data) {
-    struct recon_server *server = wl_container_of(listener, server, cursor_button);
-    struct wlr_pointer_button_event *event = data;
-
-    if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+/*
+ * What a button press means, independent of where the event came from.
+ *
+ * Split out so injected input takes the identical path to real input. A test
+ * harness that goes around the thing it is testing proves nothing.
+ *
+ * Returns true when the shell consumed the event, so a real event knows
+ * whether the seat still needs telling.
+ */
+static bool dispatch_button(struct recon_server *server, uint32_t button,
+        bool pressed) {
+    if (!pressed) {
         /* Any drag or resize ends when the button comes up. */
         server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
         server->grabbed = NULL;
         recon_shell_handle_click(server->shell, server->cursor->x, server->cursor->y,
             false);
-    } else if (event->button == BTN_RIGHT) {
+        return false;
+    }
+
+    if (button == BTN_RIGHT) {
         /* Right click opens a context menu where there is one to open. */
-        if (recon_shell_handle_right_click(server->shell,
-                server->cursor->x, server->cursor->y)) {
-            return;
-        }
-    } else if (event->button == BTN_LEFT) {
+        return recon_shell_handle_right_click(server->shell,
+            server->cursor->x, server->cursor->y);
+    }
+
+    if (button == BTN_LEFT) {
         double x = server->cursor->x;
         double y = server->cursor->y;
 
-        /* The shell sits above windows, so it sees clicks first. */
-        recon_shell_close_context(server->shell);
+        /*
+         * The shell sits above windows, so it sees clicks first.
+         *
+         * The context menu is deliberately NOT closed here. Closing it first
+         * cleared `context_open` before the shell could look at it, so the
+         * branch that turns a click into a menu choice never ran and every
+         * context menu entry silently did nothing. The shell closes the menu
+         * itself, after working out what was chosen.
+         */
         if (recon_shell_handle_click(server->shell, x, y, true)) {
-            return;
+            return true;
         }
 
         /* Clicking a window focuses it. */
@@ -789,6 +806,55 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         if (toplevel != NULL) {
             recon_focus_toplevel(toplevel);
         }
+    }
+
+    return false;
+}
+
+void recon_inject_pointer(struct recon_server *server, int x, int y) {
+    if (server == NULL || server->cursor == NULL) {
+        return;
+    }
+    wlr_cursor_warp_closest(server->cursor, NULL, (double)x, (double)y);
+    recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
+    recon_damage_all(server);
+}
+
+void recon_inject_button(struct recon_server *server, uint32_t button, bool pressed) {
+    if (server == NULL) {
+        return;
+    }
+    dispatch_button(server, button, pressed);
+    recon_damage_all(server);
+}
+
+void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers) {
+    if (server == NULL) {
+        return;
+    }
+    recon_shell_handle_key(server->shell, sym, modifiers);
+    recon_damage_all(server);
+}
+
+void recon_pointer_position(struct recon_server *server, int *x, int *y) {
+    if (server == NULL || server->cursor == NULL) {
+        return;
+    }
+    if (x != NULL) {
+        *x = (int)server->cursor->x;
+    }
+    if (y != NULL) {
+        *y = (int)server->cursor->y;
+    }
+}
+
+static void server_cursor_button(struct wl_listener *listener, void *data) {
+    struct recon_server *server = wl_container_of(listener, server, cursor_button);
+    struct wlr_pointer_button_event *event = data;
+
+    if (dispatch_button(server, event->button,
+            event->state != WL_POINTER_BUTTON_STATE_RELEASED)) {
+        return;
     }
 
     wlr_seat_pointer_notify_button(server->seat, event->time_msec, event->button,

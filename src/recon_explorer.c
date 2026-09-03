@@ -1127,6 +1127,32 @@ static void explorer_context_action(void *user, uint32_t id) {
     }
 }
 
+/* What the explorer currently believes, for when a button appears to do
+ * nothing and the question is what it thought it was acting on. */
+static void explorer_describe(void *user, char *out, size_t size) {
+    struct recon_explorer *ex = user;
+
+    const char *stage =
+        ex->delete_stage == DELETE_CONFIRM ? "confirm" :
+        ex->delete_stage == DELETE_CONFIRM_TREE ? "confirm-tree" : "idle";
+
+    const char *selected = "(none)";
+    if (ex->selected >= 0 && ex->selected < ex->entry_count) {
+        selected = ex->entries[ex->selected].name;
+    }
+
+    snprintf(out, size,
+        "  cwd: %s\n"
+        "  entries: %d  scroll: %d  rows visible: %d\n"
+        "  selected: [%d] %s\n"
+        "  renaming: %d\n"
+        "  delete: %s target '%s'\n"
+        "  status: %s\n",
+        ex->cwd, ex->entry_count, ex->scroll, ex->rows_visible,
+        ex->selected, selected, ex->renaming,
+        stage, ex->delete_target, ex->status);
+}
+
 /* The listing may have changed while the window was closed. */
 static void explorer_visibility(void *user, bool visible) {
     struct recon_explorer *ex = user;
@@ -1160,6 +1186,7 @@ static const struct recon_appwin_impl EXPLORER_IMPL = {
     .scroll = explorer_scroll,
     .context = explorer_context,
     .context_action = explorer_context_action,
+    .describe = explorer_describe,
     .visibility = explorer_visibility,
     .destroy = explorer_destroy,
 };

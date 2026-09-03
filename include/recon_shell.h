@@ -11,6 +11,7 @@
 #define RECON_SHELL_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 struct recon_server;
 struct recon_shell;
@@ -75,6 +76,19 @@ struct recon_appwin *recon_shell_app_at(struct recon_shell *shell, int index);
  */
 const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *title);
 
+/*
+ * Find a built-in application by name, or -1.
+ *
+ * Callers used to hardcode the position in the list, which is only ever right
+ * by luck: the order is decided by the order things are constructed, and one
+ * application failing to start shifts every index after it. Asking by name
+ * cannot drift.
+ */
+int recon_shell_app_index(struct recon_shell *shell, const char *title);
+
+/* Open a built-in application by name. Does nothing if there is no such one. */
+void recon_shell_open_named(struct recon_shell *shell, const char *title);
+
 /* Open a built-in window by its registration index. */
 void recon_shell_open_app(struct recon_shell *shell, int index);
 
@@ -98,10 +112,36 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
 /*
  * What a right click landed on, which decides what the menu offers.
  */
+/*
+ * Report what the shell currently has open -- focus, windows, and the entries
+ * of any menu that is up, with where each one is.
+ *
+ * The point is to be able to look rather than infer. A menu entry that does
+ * nothing when clicked is a different problem from one that is not where it
+ * appears to be, and from outside the two are indistinguishable without this.
+ */
+void recon_shell_describe(struct recon_shell *shell, char *out, size_t size);
+
+/* The focused built-in window, or NULL. */
+struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell);
+
+/*
+ * The middle of a named entry in the open context menu, in screen
+ * coordinates. False when no menu is open or nothing matches.
+ *
+ * Lets a test click "Rename" instead of clicking (137, 163) and hoping. The
+ * click that follows is a real one through the real hit test -- only the
+ * arithmetic of locating the entry is skipped, not the path being tested.
+ */
+bool recon_shell_context_entry_at(struct recon_shell *shell, const char *label,
+    int *x, int *y);
+
 enum recon_context_kind {
     RECON_CONTEXT_DESKTOP,
     RECON_CONTEXT_DESKTOP_ITEM,
     RECON_CONTEXT_TASKBAR_WINDOW,
+    /* The bar itself, not a window button on it. */
+    RECON_CONTEXT_TASKBAR,
     RECON_CONTEXT_WINDOW,
     /* A menu the application under the pointer asked for. Its entry ids mean
      * whatever that application decided they mean. */

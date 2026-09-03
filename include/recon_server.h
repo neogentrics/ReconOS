@@ -150,6 +150,27 @@ void recon_quit(struct recon_server *server);
  */
 void recon_damage_all(struct recon_server *server);
 
+/* --- Synthetic input --- */
+
+/*
+ * Feed the system input as though it came from a mouse or keyboard.
+ *
+ * This exists because a desktop cannot be tested by reasoning about it. Every
+ * "the button does nothing" report needs a way to press that button and watch
+ * what happens, and asking a person to click while somebody else reads the
+ * code is not that. These go through exactly the same entry points as real
+ * input -- not a shortcut around them -- so what they exercise is what a user
+ * exercises.
+ *
+ * Reached from the control socket via the `ui` command.
+ */
+void recon_inject_pointer(struct recon_server *server, int x, int y);
+void recon_inject_button(struct recon_server *server, uint32_t button, bool pressed);
+void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers);
+
+/* Where the pointer is, so a test can check what it is about to click. */
+void recon_pointer_position(struct recon_server *server, int *x, int *y);
+
 /* Window state for client windows. Built-in windows have their own. */
 void recon_toplevel_minimize(struct recon_toplevel *toplevel);
 void recon_toplevel_restore(struct recon_toplevel *toplevel);
