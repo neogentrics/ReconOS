@@ -24,6 +24,8 @@
 #include "recon_theme.h"
 #include "recon_ui.h"
 
+#define MENUBAR_HEIGHT 20
+#define MENU_TITLE_PAD 10
 #define TOOLBAR_HEIGHT 30
 #define PATHBAR_HEIGHT 24
 #define HEADER_HEIGHT 22
@@ -134,8 +136,10 @@ struct place {
 #define HIT_EMPTY_BIN (RECON_APPWIN_HIT_USER + 10)
 #define HIT_PATH (RECON_APPWIN_HIT_USER + 11)
 #define HIT_PATH_DROP (RECON_APPWIN_HIT_USER + 12)
+#define HIT_MENU_BASE (RECON_APPWIN_HIT_USER + 14)
 #define HIT_SIDEBAR_BASE (RECON_APPWIN_HIT_USER + 20)
 #define HIT_PLACE_BASE (RECON_APPWIN_HIT_USER + 40)
+#define HIT_MENU_ITEM_BASE (RECON_APPWIN_HIT_USER + 80)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
 
 /*
@@ -238,6 +242,11 @@ struct recon_explorer {
     /* Which entry the pointer is over, or -1. A list that does not say which
      * row a click will take is a list you have to aim at twice. */
     int place_hover;
+
+    /* Which menu on the menu bar is open, and which of its entries the
+     * pointer is over. -1 for none. */
+    int menu_open;
+    int menu_item_hover;
 
     /*
      * What the pointer is over, in words. The toolbar is icons now, and an
@@ -1026,6 +1035,115 @@ static void sidebar_path(int index, char *out, size_t size) {
     }
 }
 
+/*
+ * --- The menu bar ---
+ *
+ * The row of words above everything, which every application with a File
+ * menu has and this one did not. It carries what belongs in a menu rather
+ * than on a toolbar: the things you do occasionally, and the things whose
+ * names are worth reading.
+ */
+static const char *const MENU_FILE_ITEMS[] = {
+    "New Folder", "New File", "Rename", "Delete", "Close",
+};
+
+static const char *const MENU_EDIT_ITEMS[] = {
+    "Cut", "Copy", "Paste",
+};
+
+static const char *const MENU_VIEW_ITEMS[] = {
+    "Refresh", "Home", "Up One Folder",
+};
+
+static const struct {
+    const char *label;
+    const char *const *items;
+    int count;
+} MENUS[] = {
+    { "File", MENU_FILE_ITEMS,
+      (int)(sizeof(MENU_FILE_ITEMS) / sizeof(MENU_FILE_ITEMS[0])) },
+    { "Edit", MENU_EDIT_ITEMS,
+      (int)(sizeof(MENU_EDIT_ITEMS) / sizeof(MENU_EDIT_ITEMS[0])) },
+    { "View", MENU_VIEW_ITEMS,
+      (int)(sizeof(MENU_VIEW_ITEMS) / sizeof(MENU_VIEW_ITEMS[0])) },
+};
+
+#define MENU_COUNT ((int)(sizeof(MENUS) / sizeof(MENUS[0])))
+
+/* Where a menu's title sits, so drawing it and clicking it agree. */
+static int menu_title_x(struct recon_explorer *ex, int index) {
+    int mx = PADDING;
+    for (int i = 0; i < index && i < MENU_COUNT; i++) {
+        mx += recon_text_width(ex->font, MENUS[i].label) + MENU_TITLE_PAD * 2;
+    }
+    return mx;
+}
+
+static void draw_menubar(struct recon_explorer *ex, struct recon_panel *p,
+        int x, int y, int w) {
+    int ascent = recon_font_ascent(ex->font);
+
+    recon_fill_rect(p, x, y, w, MENUBAR_HEIGHT, THEME(MENU));
+
+    for (int i = 0; i < MENU_COUNT; i++) {
+        int mx = x + menu_title_x(ex, i);
+        int mw = recon_text_width(ex->font, MENUS[i].label) + MENU_TITLE_PAD * 2;
+        bool open = (ex->menu_open == i);
+
+        if (open) {
+            recon_fill_rect(p, mx, y, mw, MENUBAR_HEIGHT, THEME(MENU_HILITE));
+        }
+        recon_draw_text(p, ex->font, mx + MENU_TITLE_PAD,
+            y + (MENUBAR_HEIGHT + ascent) / 2 - 2, mw, MENUS[i].label,
+            open ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT));
+
+        recon_hit_add(p, mx, y, mw, MENUBAR_HEIGHT, HIT_MENU_BASE + i);
+    }
+}
+
+/* Drawn last, so it covers what is beneath it. */
+static void draw_menu_dropdown(struct recon_explorer *ex, struct recon_panel *p,
+        int x, int y) {
+    if (ex->menu_open < 0 || ex->menu_open >= MENU_COUNT) {
+        return;
+    }
+
+    int ascent = recon_font_ascent(ex->font);
+    int count = MENUS[ex->menu_open].count;
+
+    int widest = 0;
+    for (int i = 0; i < count; i++) {
+        int iw = recon_text_width(ex->font, MENUS[ex->menu_open].items[i]);
+        if (iw > widest) {
+            widest = iw;
+        }
+    }
+
+    int dw = widest + 40;
+    int dh = count * PLACE_ROW + 6;
+    int dx = x + menu_title_x(ex, ex->menu_open);
+    int dy = y + MENUBAR_HEIGHT;
+
+    recon_fill_rect(p, dx, dy, dw, dh, THEME(MENU));
+    recon_stroke_rect(p, dx, dy, dw, dh, THEME(MENU_BORDER));
+
+    for (int i = 0; i < count; i++) {
+        int iy = dy + 3 + i * PLACE_ROW;
+        bool hovered = (ex->menu_item_hover == i);
+
+        if (hovered) {
+            recon_fill_rect(p, dx + 1, iy, dw - 2, PLACE_ROW,
+                THEME(SELECTION));
+        }
+        recon_draw_text(p, ex->font, dx + 14,
+            iy + (PLACE_ROW + ascent) / 2 - 2, dw - 20,
+            MENUS[ex->menu_open].items[i],
+            hovered ? THEME(SELECTION_TEXT) : THEME(MENU_TEXT));
+
+        recon_hit_add(p, dx, iy, dw, PLACE_ROW, HIT_MENU_ITEM_BASE + i);
+    }
+}
+
 /* Whether a sidebar entry is offered to whoever is signed in. */
 static bool sidebar_visible(int index) {
     if (index < 0 || index >= SIDEBAR_COUNT) {
@@ -1323,51 +1441,72 @@ static void explorer_draw(void *user, struct recon_panel *p,
 
     recon_fill_rect(p, x, y, w, h, COLOR_BG);
 
+    /* A menu bar, above everything, the way Notepad has one. */
+    draw_menubar(ex, p, x, y, w);
+
     /*
-     * Toolbar: where you have been on the left, then what you can do. The
-     * arrows are drawn rather than lettered, since a direction reads faster
-     * as a shape than as a word.
+     * One bar: where you have been, then where you are, then what you can do
+     * here.
+     *
+     * These were two rows -- a row of buttons and, under it, an address bar
+     * running the whole width of the window. The address bar did not need
+     * that width, and the second row bought nothing but height. Putting the
+     * navigation to the left of the address and the actions to its right
+     * makes the row read left to right as one sentence, and gives the listing
+     * back the space.
      */
+    int by = y + MENUBAR_HEIGHT + (TOOLBAR_HEIGHT - BUTTON_HEIGHT) / 2;
     int bx = x + PADDING;
-    int by = y + (TOOLBAR_HEIGHT - BUTTON_HEIGHT) / 2;
 
     bool can_back = ex->history_pos > 0;
     bool can_forward = ex->history_pos + 1 < ex->history_count;
 
-    /* Where you have been. */
+    /* Where you have been, and where you started. */
     bx = draw_tool(ex, p, bx, by, GLYPH_BACK, HIT_BACK, can_back);
     bx = draw_tool(ex, p, bx, by, GLYPH_FORWARD, HIT_FORWARD, can_forward);
     bx = draw_tool(ex, p, bx, by, GLYPH_UP, HIT_UP, strcmp(ex->cwd, "/") != 0);
     bx = draw_tool(ex, p, bx, by, GLYPH_REFRESH, HIT_REFRESH, true);
-    bx = draw_tool_divider(p, bx, by);
-
-    /* Where you started. */
     bx = draw_tool(ex, p, bx, by, GLYPH_HOME, HIT_HOME, true);
     bx = draw_tool_divider(p, bx, by);
 
     /*
-     * What you can do here. Inside the bin these mean different things, so
-     * different ones are offered: things in a bin are restored or emptied,
-     * not renamed and deleted again.
+     * What you can do here, laid out from the right. Inside the bin these
+     * mean different things, so different ones are offered: things in a bin
+     * are restored or emptied, not renamed and deleted again.
      */
+    int actions_right = x + w - PADDING;
+    int actions_left;
+
     if (ex->in_trash) {
-        bx = draw_tool(ex, p, bx, by, GLYPH_RESTORE, HIT_RESTORE, true);
-        draw_button(ex, p, bx, by, "Empty Bin", HIT_EMPTY_BIN, true);
+        int empty_w = recon_text_width(ex->font, "Empty Bin") + 22;
+        actions_left = actions_right - empty_w - 2 - 28;
+        int ax = draw_tool(ex, p, actions_left, by, GLYPH_RESTORE,
+            HIT_RESTORE, true);
+        draw_button(ex, p, ax, by, "Empty Bin", HIT_EMPTY_BIN, true);
     } else {
-        bx = draw_tool(ex, p, bx, by, GLYPH_NEW_FOLDER, HIT_NEWFOLDER, true);
-        bx = draw_tool(ex, p, bx, by, GLYPH_RENAME, HIT_RENAME, true);
-        draw_tool(ex, p, bx, by, GLYPH_DELETE, HIT_DELETE, true);
+        actions_left = actions_right - 28 * 3;
+        int ax = draw_tool(ex, p, actions_left, by, GLYPH_NEW_FOLDER,
+            HIT_NEWFOLDER, true);
+        ax = draw_tool(ex, p, ax, by, GLYPH_RENAME, HIT_RENAME, true);
+        draw_tool(ex, p, ax, by, GLYPH_DELETE, HIT_DELETE, true);
     }
+    draw_tool_divider(p, actions_left - 8, by);
 
     /*
-     * The address bar. It reads as a label and works as a field: clicking it
-     * lets you type a path, and the button at its right end drops down
-     * everywhere you might want to go from here.
+     * The address bar, in the middle of that row. It reads as a label and
+     * works as a field: clicking it lets you type a path, and the button at
+     * its right end drops down everywhere you might want to go from here.
      */
-    int py = y + TOOLBAR_HEIGHT;
-    int path_x = x + PADDING;
-    int path_w = w - PADDING * 2;
+    int py = by + (BUTTON_HEIGHT - PATHBAR_HEIGHT) / 2;
+    int path_x = bx + 4;
+    int path_w = (actions_left - 12) - path_x;
     int drop_w = 20;
+
+    /* A window narrow enough that the buttons meet in the middle gets a
+     * field of nothing rather than one drawn backwards. */
+    if (path_w < drop_w + 40) {
+        path_w = drop_w + 40;
+    }
 
     if (ex->typing_path) {
         recon_edit_draw(p, ex->font, path_x, py, path_w - drop_w,
@@ -1396,7 +1535,7 @@ static void explorer_draw(void *user, struct recon_panel *p,
     recon_hit_add(p, drop_x, py, drop_w, PATHBAR_HEIGHT, HIT_PATH_DROP);
 
     /* Sidebar down the left, listing to the right of it. */
-    int body_y = py + PATHBAR_HEIGHT + 2;
+    int body_y = y + MENUBAR_HEIGHT + TOOLBAR_HEIGHT + 2;
     int body_h = h - (body_y - y) - STATUS_HEIGHT;
     draw_sidebar(ex, p, x, body_y, body_h);
 
@@ -1524,9 +1663,48 @@ static void explorer_draw(void *user, struct recon_panel *p,
         draw_places(ex, p, path_x, py + PATHBAR_HEIGHT, path_w,
             (sy - (py + PATHBAR_HEIGHT)) - 2);
     }
+    draw_menu_dropdown(ex, p, x, y);
 }
 
 /* --- Input --- */
+
+/*
+ * What a menu entry does.
+ *
+ * Every one of these is something the toolbar or a shortcut can already do.
+ * The menu is a second way to reach them with their names written out, which
+ * is what a menu bar is for -- not a second implementation.
+ */
+static void do_menu_item(struct recon_explorer *ex, int menu, int item) {
+    if (menu == 0) {           /* File */
+        switch (item) {
+        case 0: do_new_folder(ex); break;
+        case 1: do_new_file(ex); break;
+        case 2: do_begin_rename(ex); break;
+        case 3: do_delete(ex); break;
+        case 4: recon_appwin_hide(ex->win); break;
+        default: break;
+        }
+        return;
+    }
+
+    if (menu == 1) {           /* Edit */
+        switch (item) {
+        case 0: do_clip(ex, true); break;
+        case 1: do_clip(ex, false); break;
+        case 2: do_paste(ex); break;
+        default: break;
+        }
+        return;
+    }
+
+    switch (item) {            /* View */
+    case 0: reload(ex); break;
+    case 1: navigate(ex, recon_fs_user_dir(NULL)); break;
+    case 2: navigate(ex, ".."); break;
+    default: break;
+    }
+}
 
 static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed) {
     struct recon_explorer *ex = user;
@@ -1537,6 +1715,42 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
     /* Anything other than pressing Delete again cancels a pending delete. */
     if (hit_id != HIT_DELETE) {
         cancel_delete(ex);
+    }
+
+    /*
+     * An open menu takes the next click wherever it lands: it either chose an
+     * entry or dismissed the menu. Answered first, because it is drawn over
+     * everything and a click that looks like it landed on the listing landed
+     * on the menu.
+     */
+    if (ex->menu_open >= 0) {
+        int which = ex->menu_open;
+
+        if (hit_id >= HIT_MENU_ITEM_BASE && hit_id < HIT_ROW_BASE) {
+            int index = (int)(hit_id - HIT_MENU_ITEM_BASE);
+            ex->menu_open = -1;
+            ex->menu_item_hover = -1;
+            do_menu_item(ex, which, index);
+            return true;
+        }
+
+        ex->menu_open = -1;
+        ex->menu_item_hover = -1;
+
+        /* Clicking the title that opened it closes it and nothing more. */
+        if (hit_id >= HIT_MENU_BASE && hit_id < HIT_SIDEBAR_BASE) {
+            return true;
+        }
+    }
+
+    if (hit_id >= HIT_MENU_BASE && hit_id < HIT_SIDEBAR_BASE) {
+        int index = (int)(hit_id - HIT_MENU_BASE);
+        if (index >= 0 && index < MENU_COUNT) {
+            ex->menu_open = index;
+            ex->menu_item_hover = -1;
+            close_places(ex);
+        }
+        return true;
     }
 
     /*
@@ -1676,6 +1890,14 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     /* An open drop-down is dismissed by any key rather than navigated with
      * the arrows: the arrows already mean something in the listing behind it,
      * and two meanings for one key is how a keyboard stops being predictable. */
+    if (ex->menu_open >= 0) {
+        ex->menu_open = -1;
+        ex->menu_item_hover = -1;
+        if (sym == XKB_KEY_Escape) {
+            return true;
+        }
+    }
+
     if (ex->places_open) {
         close_places(ex);
         if (sym == XKB_KEY_Escape) {
@@ -1820,6 +2042,20 @@ static void explorer_motion(void *user, uint32_t hit_id, int cx, int cy) {
     (void)cx;
     (void)cy;
 
+    /* Same for an open menu: it covers what is underneath, so what is
+     * underneath is not what the pointer is on. */
+    if (ex->menu_open >= 0) {
+        int hover = -1;
+        if (hit_id >= HIT_MENU_ITEM_BASE && hit_id < HIT_ROW_BASE) {
+            hover = (int)(hit_id - HIT_MENU_ITEM_BASE);
+        }
+        if (hover != ex->menu_item_hover) {
+            ex->menu_item_hover = hover;
+            recon_appwin_refresh(ex->win);
+        }
+        return;
+    }
+
     /* An open list tracks what the pointer is over, and nothing else does
      * while it is up: it covers what is underneath, so what is underneath is
      * not what the pointer is on. */
@@ -1873,9 +2109,11 @@ static void explorer_focus_changed(void *user, bool focused) {
     if (focused) {
         return;
     }
-    if (ex->places_open || ex->typing_path) {
+    if (ex->places_open || ex->typing_path || ex->menu_open >= 0) {
         close_places(ex);
         stop_typing_path(ex);
+        ex->menu_open = -1;
+        ex->menu_item_hover = -1;
         recon_appwin_refresh(ex->win);
     }
 }
@@ -2098,6 +2336,11 @@ struct recon_appwin *recon_explorer_create(struct recon_server *server,
     ex->selected = -1;
     ex->renaming = -1;
     ex->place_hover = -1;
+    /* Not zero. Zero is the File menu, so a calloc'd window came up believing
+     * File was already open -- and the first click on File closed it instead
+     * of opening it, which looked exactly like the menu bar doing nothing. */
+    ex->menu_open = -1;
+    ex->menu_item_hover = -1;
 
     /*
      * Where it was last, if that is still a folder. A remembered path can
