@@ -205,6 +205,59 @@ static void test_protection(void) {
     check(recon_fs_remove("/", "/Systems"), "and can be removed");
 }
 
+/*
+ * One account's folder is not another's to read.
+ *
+ * Writing to somebody else's files was refused from the start; reading them
+ * was not, so a limited account could open every document another account
+ * had. Being unable to change someone's files is worth very little if you can
+ * still read them, so this is checked rather than assumed.
+ */
+static void test_reading_across_accounts(void) {
+    printf("what one account may read of another\n");
+
+    check(recon_fs_create_user("Ada"), "an account exists");
+    check(recon_fs_create_user("Grace"), "and another");
+    check(recon_fs_write("/", "/Users/Ada/Documents/notes.txt", "secret", 6),
+        "one of them has a document");
+
+    struct recon_dirent entries[16];
+
+    /* An administrator may look everywhere: that is what the role is for. */
+    recon_fs_set_user("Grace", true);
+    check(recon_fs_list("/", "/Users/Ada", entries, 16) >= 0,
+        "an administrator may list another account's folder");
+    check(file_says("/Users/Ada/Documents/notes.txt", "secret"),
+        "and may read what is in it");
+
+    /* A limited account may not. */
+    recon_fs_set_user("Grace", false);
+    check(recon_fs_list("/", "/Users/Ada", entries, 16) < 0,
+        "a limited account may not list another's folder");
+    check(recon_fs_read("/", "/Users/Ada/Documents/notes.txt", NULL) == NULL,
+        "nor read a file inside it");
+
+    /* Its own is still its own. */
+    check(recon_fs_list("/", "/Users/Grace", entries, 16) >= 0,
+        "but may still list its own");
+
+    /*
+     * The system's files stay readable. A limited account may look at how the
+     * machine is set up; it just may not change it. Refusing the read as well
+     * would leave an account unable to load its own settings.
+     */
+    check(recon_fs_list("/", "/System", entries, 16) >= 0,
+        "and may still read the system's own folder");
+
+    /* A name that merely starts with another's is a different account. */
+    check(recon_fs_create_user("Adamant"), "an account whose name starts the same");
+    recon_fs_set_user("Adamant", false);
+    check(recon_fs_list("/", "/Users/Adamant", entries, 16) >= 0,
+        "'Adamant' is not shut out of its own folder by 'Ada'");
+
+    recon_fs_set_user(NULL, true);
+}
+
 static void test_escapes(void) {
     printf("escaping the root\n");
 
@@ -266,6 +319,7 @@ int main(void) {
     test_copy();
     test_delete();
     test_protection();
+    test_reading_across_accounts();
     test_escapes();
     test_clipboard();
 

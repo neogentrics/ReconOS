@@ -353,6 +353,36 @@ const char *recon_fs_refusal(const char *cwd, const char *path) {
     return NULL;
 }
 
+/*
+ * Refuse to *show* a limited account another account's folder.
+ *
+ * Separate from permitted(), which is about writing. Writing to somebody
+ * else's files was already refused, but the listing was not, so a limited
+ * account could walk into /Users/<someone else> and read everything in it.
+ * Not being able to change another person's documents is worth very little
+ * if you can still open them.
+ *
+ * The system's own files stay readable: a limited account may look at
+ * /System, it just may not change what is there.
+ */
+static bool readable(const char *cwd, const char *path) {
+    if (g_user_is_admin) {
+        return true;
+    }
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host),
+            canonical, sizeof(canonical))) {
+        return true; /* It will fail for its own reasons. */
+    }
+    if (belongs_to_another_user(canonical)) {
+        set_error("that belongs to another account");
+        return false;
+    }
+    return true;
+}
+
 /* Refuse a write the signed-in account is not entitled to make. */
 static bool permitted(const char *cwd, const char *path) {
     const char *refusal = recon_fs_refusal(cwd, path);
@@ -461,6 +491,9 @@ int recon_fs_list(const char *cwd, const char *path,
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
         return -1;
     }
+    if (!readable(cwd, path)) {
+        return -1;
+    }
 
     DIR *dir = opendir(host);
     if (dir == NULL) {
@@ -507,6 +540,9 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return NULL;
+    }
+    if (!readable(cwd, path)) {
         return NULL;
     }
 

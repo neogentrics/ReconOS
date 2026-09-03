@@ -121,6 +121,17 @@ struct recon_appwin *recon_installed_app_window(const char *name);
 struct recon_appwin *recon_installed_app_existing(const char *name);
 
 /*
+ * Forget every cached window without destroying any of them.
+ *
+ * For a change of account. The windows themselves belong to the shell, which
+ * destroys them; this only stops the registry handing the next person the
+ * previous one's File Explorer, still showing the folder they left it in.
+ * Calling it without destroying them leaks; destroying them without calling
+ * it leaves dangling pointers behind.
+ */
+void recon_installed_apps_forget_windows(void);
+
+/*
  * Register something built into ReconOS. Same registry as a module's, with the
  * contributing module recorded as empty.
  */

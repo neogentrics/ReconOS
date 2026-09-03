@@ -60,6 +60,19 @@ enum recon_registry_scope {
  */
 bool recon_registry_init(void);
 
+/*
+ * Read the signed-in account's hive again, discarding whatever is held in
+ * memory for the previous one.
+ *
+ * Loading once at startup was wrong in a way that only showed up once there
+ * were accounts to switch between: the hive was *written* to the right
+ * per-account file but never re-read, so after a switch the new account was
+ * still looking at the old one's settings -- their skin, their spacing, and
+ * the folder their File Explorer was last in. Call this after the signed-in
+ * account changes and before anything reads a user setting.
+ */
+void recon_registry_reload_user(void);
+
 /* Write anything outstanding and let go. */
 void recon_registry_finish(void);
 

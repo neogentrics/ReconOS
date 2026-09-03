@@ -312,6 +312,12 @@ bool recon_registry_init(void) {
     return true;
 }
 
+void recon_registry_reload_user(void) {
+    /* load() clears the hive first, so this drops the previous account's
+     * settings rather than merging one person's over another's. */
+    load(RECON_REG_USER);
+}
+
 void recon_registry_finish(void) {
     memset(&g_system, 0, sizeof(g_system));
     memset(&g_user, 0, sizeof(g_user));

@@ -1770,17 +1770,36 @@ static void adopt_signed_in_user(struct recon_shell *shell) {
      * A different person means a clean desktop. Leaving the windows would
      * show one account the other's open documents, which is the one thing a
      * login screen exists to prevent.
+     *
+     * Destroyed rather than hidden. Hiding them looked equivalent and was
+     * not: an application's window is built once and handed out again on
+     * every open, so the next person clicking File Explorer was given the
+     * previous person's -- hidden, then shown again, still sitting in their
+     * folder. A window carries the state of whoever was using it, so the way
+     * to stop it carrying that across a login is to end it.
      */
     if (who != NULL && shell->last_user[0] != '\0' &&
             strcmp(shell->last_user, who) != 0) {
         for (int i = 0; i < shell->app_count; i++) {
-            recon_appwin_hide(shell->apps[i]);
+            recon_appwin_destroy(shell->apps[i]);
+            shell->apps[i] = NULL;
         }
+        shell->app_count = 0;
+        /* The registry hands these out; it must not keep handing out ones
+         * that no longer exist. */
+        recon_installed_apps_forget_windows();
         set_focused_app(shell, -1);
         recon_fs_clip_clear();
     }
     snprintf(shell->last_user, sizeof(shell->last_user), "%s",
         who != NULL ? who : "");
+
+    /*
+     * Before anything reads a user setting. The skin, the spacing and the
+     * folder the explorer opens at all live in this account's hive, and until
+     * it is re-read they are still the last account's.
+     */
+    recon_registry_reload_user();
 
     recon_theme_init();
     recon_access_apply(shell->font);

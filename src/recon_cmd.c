@@ -1180,21 +1180,38 @@ static void cmd_apps(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_installed_app app;
     bool found = false;
 
-    if (argv[1][0] >= '0' && argv[1][0] <= '9') {
-        int index = atoi(argv[1]);
+    /*
+     * The whole tail is the name, not just the first word. Every application
+     * with a space in its name -- File Explorer, Task Manager, Control Panel,
+     * which is most of them -- was unopenable by name before this: 'apps File
+     * Explorer' looked for an application called "File".
+     */
+    char label[64];
+    size_t used = 0;
+    for (int i = 1; i < argc && used < sizeof(label) - 1; i++) {
+        int written = snprintf(label + used, sizeof(label) - used, "%s%s",
+            i > 1 ? " " : "", argv[i]);
+        if (written < 0) {
+            break;
+        }
+        used += (size_t)written;
+    }
+
+    if (label[0] >= '0' && label[0] <= '9') {
+        int index = atoi(label);
         found = (index >= 0 && index < count) &&
             recon_installed_app_at(index, &app);
     } else {
         for (int i = 0; i < count && !found; i++) {
             if (recon_installed_app_at(i, &app) &&
-                    strcasecmp(app.name, argv[1]) == 0) {
+                    strcasecmp(app.name, label) == 0) {
                 found = true;
             }
         }
     }
 
     if (!found) {
-        out(s, "No application called '%s'.\n", argv[1]);
+        out(s, "No application called '%s'.\n", label);
         return;
     }
 

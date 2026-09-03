@@ -42,31 +42,64 @@
 #define HISTORY_MAX 64
 
 /*
- * Places worth reaching in one click. The user's own folders first, then the
- * system, which is the order they are wanted in.
+ * Places worth reaching in one click, in two groups: the folders that belong
+ * to the person using the machine, then the machine itself. The rule for what
+ * earns a place here is that it is somewhere you keep things.
+ *
+ * The Recycle Bin used to be listed and is not any more -- it is on the
+ * desktop, which is where a bin belongs, and a second copy of it in the
+ * sidebar only made the list longer. Applications are likewise reached from
+ * the Start menu rather than by browsing to the folder they happen to live
+ * in; /Apps is still there for anyone who wants to look at it.
  */
 struct shortcut_entry {
     const char *label;
     const char *path;   /* NULL means the current user's folder of that name */
     const char *icon;
+    bool starts_group;  /* Draw a dividing rule above this one. */
+    bool admin_only;
 };
 
-/* A sidebar entry whose path is worked out rather than fixed. */
-#define SIDEBAR_TRASH "\x01trash"
-
 static const struct shortcut_entry SIDEBAR[] = {
-    { "Desktop", NULL, RECON_ICON_FOLDER },
-    { "Documents", NULL, RECON_ICON_FOLDER },
-    { "Downloads", NULL, RECON_ICON_FOLDER },
-    { "Pictures", NULL, RECON_ICON_FOLDER },
-    { "Music", NULL, RECON_ICON_FOLDER },
-    { "Videos", NULL, RECON_ICON_FOLDER },
-    { "This System", "/", RECON_ICON_EXPLORER },
-    { "Apps", RECON_DIR_APPS, RECON_ICON_APP },
-    { "Recycle Bin", SIDEBAR_TRASH, RECON_ICON_TRASH },
+    { "Desktop", NULL, RECON_ICON_FOLDER, false, false },
+    { "Documents", NULL, RECON_ICON_FOLDER, false, false },
+    { "Downloads", NULL, RECON_ICON_FOLDER, false, false },
+    { "Pictures", NULL, RECON_ICON_FOLDER, false, false },
+    { "Music", NULL, RECON_ICON_FOLDER, false, false },
+    { "Videos", NULL, RECON_ICON_FOLDER, false, false },
+
+    /*
+     * "This System" was a poor name for it -- everything on screen is this
+     * system. This is the root of the filesystem, which in ReconOS is the
+     * Recon Core.
+     */
+    { "Recon Core", "/", RECON_ICON_EXPLORER, true, false },
+
+    /* Only an administrator may look inside another account's folder, so
+     * only an administrator is offered the way in. */
+    { "Accounts", RECON_DIR_USERS, RECON_ICON_APP, false, true },
 };
 
 #define SIDEBAR_COUNT ((int)(sizeof(SIDEBAR) / sizeof(SIDEBAR[0])))
+
+/* Height of one sidebar row, and of the gap a group divider occupies. */
+#define SIDEBAR_ROW 24
+#define SIDEBAR_GROUP_GAP 9
+
+/*
+ * The address bar's drop-down: everywhere you might reasonably want to go
+ * from here. The known places first, then what is inside the folder being
+ * looked at -- the same two things Windows offers from its address bar, for
+ * the same reason, which is that "up and along" is a slow way to travel.
+ */
+#define PLACES_MAX 32
+#define PLACE_ROW 20
+
+struct place {
+    char label[RECON_NAME_MAX];
+    char path[RECON_PATH_MAX];
+    bool starts_group;
+};
 
 #define COLOR_BG THEME(WINDOW_FRAME)
 #define COLOR_LIST_BG THEME(SURFACE)
@@ -91,7 +124,10 @@ static const struct shortcut_entry SIDEBAR[] = {
 #define HIT_RENAME (RECON_APPWIN_HIT_USER + 8)
 #define HIT_RESTORE (RECON_APPWIN_HIT_USER + 9)
 #define HIT_EMPTY_BIN (RECON_APPWIN_HIT_USER + 10)
+#define HIT_PATH (RECON_APPWIN_HIT_USER + 11)
+#define HIT_PATH_DROP (RECON_APPWIN_HIT_USER + 12)
 #define HIT_SIDEBAR_BASE (RECON_APPWIN_HIT_USER + 20)
+#define HIT_PLACE_BASE (RECON_APPWIN_HIT_USER + 40)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
 
 /*
@@ -176,6 +212,28 @@ struct recon_explorer {
      */
     int renaming;   /* Index being renamed, or -1. */
     struct recon_edit rename_edit;
+
+    /*
+     * The address bar is a place you can type as well as read. Clicking it
+     * turns it into a text box holding the current path, selected, so typing
+     * replaces it and Enter goes there.
+     */
+    bool typing_path;
+    struct recon_edit path_edit;
+
+    /* The drop-down at the right of the address bar, and what is in it while
+     * it is open. Filled when it opens rather than every frame: the folder
+     * cannot change underneath a list somebody is reading. */
+    bool places_open;
+    struct place places[PLACES_MAX];
+    int place_count;
+
+    /*
+     * What the pointer is over, in words. The toolbar is icons now, and an
+     * icon nobody recognises is worse than a word -- so the status bar says
+     * what the thing under the pointer does.
+     */
+    char hint[64];
 
     /* Where the listing was drawn, relative to the content area, so a right
      * click can tell a row from the empty space below the last one. */
@@ -740,38 +798,158 @@ static int draw_button(struct recon_explorer *ex, struct recon_panel *p,
 }
 
 /*
- * A navigation button. direction is -1 for back, 1 for forward, 0 for up; the
- * glyph is drawn as a triangle so it reads at a glance and needs no font.
+ * --- Toolbar glyphs ---
+ *
+ * Drawn from filled rectangles rather than loaded from files. Two reasons:
+ * an icon file that is missing would leave a blank button, and these are
+ * small enough that a hand-placed shape is sharper than a scaled bitmap.
+ *
+ * They are icons and not words because the toolbar was running out of room
+ * and because a shape is read faster than a label -- but an unrecognised
+ * icon is worse than a word, so every one of them also names itself in the
+ * status bar when the pointer is over it.
  */
-static int draw_arrow_button(struct recon_explorer *ex, struct recon_panel *p,
-        int x, int y, int direction, uint32_t id, bool enabled) {
-    int width = 30;
+enum glyph {
+    GLYPH_BACK,
+    GLYPH_FORWARD,
+    GLYPH_UP,
+    GLYPH_REFRESH,
+    GLYPH_HOME,
+    GLYPH_NEW_FOLDER,
+    GLYPH_RENAME,
+    GLYPH_DELETE,
+    GLYPH_RESTORE,
+};
 
-    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
-
-    recon_color ink = enabled ? COLOR_TEXT : RECON_RGB(0x98, 0x98, 0x98);
-    int cx = x + width / 2;
-    int cy = y + BUTTON_HEIGHT / 2;
-
-    if (direction == 0) {
-        /* Up: a triangle over a stem. */
-        for (int i = 0; i < 5; i++) {
+/* A triangle pointing left, right or up, centred on (cx, cy). */
+static void draw_triangle(struct recon_panel *p, int cx, int cy,
+        int direction, recon_color ink) {
+    for (int i = 0; i < 5; i++) {
+        if (direction == 0) {
             recon_fill_rect(p, cx - i, cy - 4 + i, i * 2 + 1, 1, ink);
-        }
-        recon_fill_rect(p, cx - 1, cy + 1, 3, 5, ink);
-    } else {
-        for (int i = 0; i < 5; i++) {
+        } else {
             int dx = direction < 0 ? cx + 2 - i : cx - 2 + i;
             recon_fill_rect(p, dx, cy - i, 1, i * 2 + 1, ink);
         }
     }
+}
 
-    /* Only offer the click when it would do something. */
+static void draw_glyph(struct recon_panel *p, enum glyph glyph,
+        int cx, int cy, recon_color ink) {
+    switch (glyph) {
+    case GLYPH_BACK:
+        draw_triangle(p, cx, cy, -1, ink);
+        break;
+
+    case GLYPH_FORWARD:
+        draw_triangle(p, cx, cy, 1, ink);
+        break;
+
+    case GLYPH_UP:
+        draw_triangle(p, cx, cy - 2, 0, ink);
+        recon_fill_rect(p, cx - 1, cy + 1, 3, 5, ink);
+        break;
+
+    case GLYPH_REFRESH:
+        /* Three quarters of a ring, with an arrowhead where the fourth
+         * quarter would have been: a circle that is going somewhere. */
+        recon_fill_rect(p, cx - 5, cy - 2, 2, 5, ink);
+        recon_fill_rect(p, cx + 3, cy - 3, 2, 4, ink);
+        recon_fill_rect(p, cx - 4, cy - 5, 3, 2, ink);
+        recon_fill_rect(p, cx + 1, cy - 5, 3, 2, ink);
+        recon_fill_rect(p, cx - 2, cy - 6, 3, 2, ink);
+        recon_fill_rect(p, cx - 4, cy + 3, 3, 2, ink);
+        recon_fill_rect(p, cx - 1, cy + 4, 3, 2, ink);
+        recon_fill_rect(p, cx + 2, cy + 1, 2, 3, ink);
+        /* The arrowhead, top right. */
+        for (int i = 0; i < 3; i++) {
+            recon_fill_rect(p, cx + 2 + i, cy - 6 + i, 1, (3 - i) * 2, ink);
+        }
+        break;
+
+    case GLYPH_HOME:
+        /* A roof over a box. */
+        for (int i = 0; i < 6; i++) {
+            recon_fill_rect(p, cx - i, cy - 5 + i, i * 2 + 1, 1, ink);
+        }
+        recon_fill_rect(p, cx - 4, cy + 1, 9, 1, ink);
+        recon_fill_rect(p, cx - 4, cy + 1, 1, 5, ink);
+        recon_fill_rect(p, cx + 4, cy + 1, 1, 5, ink);
+        recon_fill_rect(p, cx - 4, cy + 5, 9, 1, ink);
+        /* A door, so it reads as a house rather than as a tent on a box. */
+        recon_fill_rect(p, cx - 1, cy + 2, 3, 4, ink);
+        break;
+
+    case GLYPH_NEW_FOLDER:
+        /* A folder with a tab, and a plus in the corner. */
+        recon_fill_rect(p, cx - 7, cy - 4, 5, 1, ink);
+        recon_fill_rect(p, cx - 7, cy - 3, 11, 1, ink);
+        recon_fill_rect(p, cx - 7, cy - 3, 1, 8, ink);
+        recon_fill_rect(p, cx + 3, cy - 3, 1, 8, ink);
+        recon_fill_rect(p, cx - 7, cy + 4, 11, 1, ink);
+        recon_fill_rect(p, cx + 4, cy + 1, 5, 1, ink);
+        recon_fill_rect(p, cx + 6, cy - 1, 1, 5, ink);
+        break;
+
+    case GLYPH_RENAME:
+        /* A pencil on a line: the line is what is being written on. */
+        for (int i = 0; i < 6; i++) {
+            recon_fill_rect(p, cx - 4 + i, cy + 1 - i, 2, 2, ink);
+        }
+        recon_fill_rect(p, cx - 6, cy + 2, 3, 3, ink);   /* the tip */
+        recon_fill_rect(p, cx - 7, cy + 6, 14, 1, ink);  /* the line */
+        break;
+
+    case GLYPH_DELETE:
+        /* A bin: lid, handle, body, two ribs. */
+        recon_fill_rect(p, cx - 2, cy - 6, 5, 1, ink);
+        recon_fill_rect(p, cx - 6, cy - 5, 13, 2, ink);
+        recon_fill_rect(p, cx - 5, cy - 2, 1, 8, ink);
+        recon_fill_rect(p, cx + 5, cy - 2, 1, 8, ink);
+        recon_fill_rect(p, cx - 5, cy + 6, 11, 1, ink);
+        recon_fill_rect(p, cx - 2, cy - 1, 1, 6, ink);
+        recon_fill_rect(p, cx + 2, cy - 1, 1, 6, ink);
+        break;
+
+    case GLYPH_RESTORE:
+        /* The same bin with something coming back out of it. */
+        recon_fill_rect(p, cx - 6, cy - 1, 13, 2, ink);
+        recon_fill_rect(p, cx - 5, cy + 2, 1, 5, ink);
+        recon_fill_rect(p, cx + 5, cy + 2, 1, 5, ink);
+        recon_fill_rect(p, cx - 5, cy + 7, 11, 1, ink);
+        draw_triangle(p, cx, cy - 4, 0, ink);
+        break;
+    }
+}
+
+/*
+ * A toolbar button: one glyph, no label. `enabled` decides both the ink and
+ * whether the button is offered to a click at all -- a button that cannot do
+ * anything should not report a failure the user could not have avoided.
+ */
+static int draw_tool(struct recon_explorer *ex, struct recon_panel *p,
+        int x, int y, enum glyph glyph, uint32_t id, bool enabled) {
+    const int width = 28;
+    (void)ex;
+
+    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
+    recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
+
+    draw_glyph(p, glyph, x + width / 2, y + BUTTON_HEIGHT / 2,
+        enabled ? COLOR_TEXT : THEME(MENU_TEXT_DISABLED));
+
     if (enabled) {
         recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
     }
     return x + width + 2;
+}
+
+/* A vertical rule between groups of toolbar buttons, so "where I have been"
+ * and "what I can do here" do not read as one undifferentiated row. */
+static int draw_tool_divider(struct recon_panel *p, int x, int y) {
+    recon_fill_rect(p, x + 3, y + 3, 1, BUTTON_HEIGHT - 6,
+        THEME(MENU_SEPARATOR));
+    return x + 8;
 }
 
 /* Where a sidebar entry points. Worked out in one place so the drawing and
@@ -783,14 +961,20 @@ static void sidebar_path(int index, char *out, size_t size) {
     }
     if (SIDEBAR[index].path == NULL) {
         snprintf(out, size, "%s", recon_fs_user_dir(SIDEBAR[index].label));
-    } else if (strcmp(SIDEBAR[index].path, SIDEBAR_TRASH) == 0) {
-        snprintf(out, size, "%s", recon_fs_trash_dir());
     } else {
         snprintf(out, size, "%s", SIDEBAR[index].path);
     }
 }
 
-/* The sidebar: places worth reaching without walking the tree. */
+/* Whether a sidebar entry is offered to whoever is signed in. */
+static bool sidebar_visible(int index) {
+    if (index < 0 || index >= SIDEBAR_COUNT) {
+        return false;
+    }
+    return !SIDEBAR[index].admin_only || recon_fs_user_is_administrator();
+}
+
+/* The sidebar: places worth reaching without walking the tree, in groups. */
 static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
         int x, int y, int h) {
     int ascent = recon_font_ascent(ex->font);
@@ -798,9 +982,22 @@ static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
     recon_fill_rect(p, x, y, SIDEBAR_WIDTH, h, COLOR_BG);
     recon_fill_rect(p, x + SIDEBAR_WIDTH - 1, y, 1, h, RECON_RGB(0x90, 0x90, 0x90));
 
+    int iy = y + 4;
     for (int i = 0; i < SIDEBAR_COUNT; i++) {
-        int iy = y + 4 + i * 24;
-        if (iy + 24 > y + h) {
+        if (!sidebar_visible(i)) {
+            continue;
+        }
+
+        /* A rule between groups. Drawn before the row it belongs to rather
+         * than after the previous one, so a hidden entry cannot leave a
+         * divider hanging under nothing. */
+        if (SIDEBAR[i].starts_group && iy > y + 4) {
+            recon_fill_rect(p, x + 8, iy + SIDEBAR_GROUP_GAP / 2,
+                SIDEBAR_WIDTH - 20, 1, THEME(MENU_SEPARATOR));
+            iy += SIDEBAR_GROUP_GAP;
+        }
+
+        if (iy + SIDEBAR_ROW > y + h) {
             break;
         }
 
@@ -823,7 +1020,111 @@ static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
             current ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
         recon_hit_add(p, x + 2, iy, SIDEBAR_WIDTH - 6, 22, HIT_SIDEBAR_BASE + i);
+        iy += SIDEBAR_ROW;
     }
+}
+
+/* --- The address bar's drop-down --- */
+
+/*
+ * Fill the list: the known places, then the folders inside the one being
+ * looked at. Built when the list opens rather than while it is drawn, so what
+ * is on screen cannot change between reading it and clicking it.
+ */
+static void build_places(struct recon_explorer *ex) {
+    ex->place_count = 0;
+
+    for (int i = 0; i < SIDEBAR_COUNT && ex->place_count < PLACES_MAX; i++) {
+        if (!sidebar_visible(i)) {
+            continue;
+        }
+        struct place *place = &ex->places[ex->place_count++];
+        snprintf(place->label, sizeof(place->label), "%s", SIDEBAR[i].label);
+        sidebar_path(i, place->path, sizeof(place->path));
+        place->starts_group = SIDEBAR[i].starts_group;
+    }
+
+    /* Then what is in this folder, which is the half that makes the
+     * drop-down worth having: it is a way down as well as a way across. */
+    bool first = true;
+    for (int i = 0; i < ex->entry_count && ex->place_count < PLACES_MAX; i++) {
+        if (ex->entries[i].kind != RECON_FILE_DIRECTORY) {
+            continue;
+        }
+        struct place *place = &ex->places[ex->place_count++];
+        snprintf(place->label, sizeof(place->label), "%s", ex->entries[i].name);
+        snprintf(place->path, sizeof(place->path), "%s%s%s",
+            ex->cwd, strcmp(ex->cwd, "/") == 0 ? "" : "/", ex->entries[i].name);
+        place->starts_group = first;
+        first = false;
+    }
+}
+
+/* How tall the open list is, dividers included. */
+static int places_height(struct recon_explorer *ex) {
+    int height = 4;
+    for (int i = 0; i < ex->place_count; i++) {
+        if (ex->places[i].starts_group && i > 0) {
+            height += 5;
+        }
+        height += PLACE_ROW;
+    }
+    return height + 4;
+}
+
+static void draw_places(struct recon_explorer *ex, struct recon_panel *p,
+        int x, int y, int w, int limit) {
+    int ascent = recon_font_ascent(ex->font);
+    int height = places_height(ex);
+    if (height > limit) {
+        height = limit;
+    }
+
+    recon_fill_rect(p, x, y, w, height, THEME(MENU));
+    recon_stroke_rect(p, x, y, w, height, THEME(MENU_BORDER));
+
+    int iy = y + 4;
+    for (int i = 0; i < ex->place_count; i++) {
+        if (ex->places[i].starts_group && i > 0) {
+            recon_fill_rect(p, x + 6, iy + 2, w - 12, 1, THEME(MENU_SEPARATOR));
+            iy += 5;
+        }
+        if (iy + PLACE_ROW > y + height) {
+            break;
+        }
+
+        bool current = strcmp(ex->places[i].path, ex->cwd) == 0;
+        if (current) {
+            recon_fill_rect(p, x + 1, iy, w - 2, PLACE_ROW, THEME(MENU_HILITE));
+        }
+        recon_draw_text(p, ex->font, x + 10, iy + (PLACE_ROW + ascent) / 2 - 2,
+            w - 20, ex->places[i].label,
+            current ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT));
+
+        recon_hit_add(p, x, iy, w, PLACE_ROW, HIT_PLACE_BASE + i);
+        iy += PLACE_ROW;
+    }
+}
+
+static void close_places(struct recon_explorer *ex) {
+    ex->places_open = false;
+    ex->place_count = 0;
+}
+
+/* --- The address bar --- */
+
+static void begin_typing_path(struct recon_explorer *ex) {
+    close_places(ex);
+    ex->typing_path = true;
+    /* The whole path arrives selected, so typing replaces it -- the usual
+     * reason to click an address bar is to go somewhere else entirely. */
+    recon_edit_begin(&ex->path_edit, ex->cwd, false);
+    set_status(ex, false, "Type a path, then Enter. Escape to leave it.");
+}
+
+static void stop_typing_path(struct recon_explorer *ex) {
+    ex->typing_path = false;
+    recon_edit_end(&ex->path_edit);
 }
 
 static void explorer_draw(void *user, struct recon_panel *p,
@@ -844,35 +1145,66 @@ static void explorer_draw(void *user, struct recon_panel *p,
     bool can_back = ex->history_pos > 0;
     bool can_forward = ex->history_pos + 1 < ex->history_count;
 
-    bx = draw_arrow_button(ex, p, bx, by, -1, HIT_BACK, can_back);
-    bx = draw_arrow_button(ex, p, bx, by, 1, HIT_FORWARD, can_forward);
-    bx = draw_arrow_button(ex, p, bx, by, 0, HIT_UP, strcmp(ex->cwd, "/") != 0);
-    bx += 6;
-    bx = draw_button(ex, p, bx, by, "Home", HIT_HOME, false);
-    bx = draw_button(ex, p, bx, by, "Refresh", HIT_REFRESH, false);
-    bx = draw_button(ex, p, bx, by, "New Folder", HIT_NEWFOLDER, false);
-    bx = draw_button(ex, p, bx, by, "Rename", HIT_RENAME, false);
+    /* Where you have been. */
+    bx = draw_tool(ex, p, bx, by, GLYPH_BACK, HIT_BACK, can_back);
+    bx = draw_tool(ex, p, bx, by, GLYPH_FORWARD, HIT_FORWARD, can_forward);
+    bx = draw_tool(ex, p, bx, by, GLYPH_UP, HIT_UP, strcmp(ex->cwd, "/") != 0);
+    bx = draw_tool(ex, p, bx, by, GLYPH_REFRESH, HIT_REFRESH, true);
+    bx = draw_tool_divider(p, bx, by);
+
+    /* Where you started. */
+    bx = draw_tool(ex, p, bx, by, GLYPH_HOME, HIT_HOME, true);
+    bx = draw_tool_divider(p, bx, by);
 
     /*
-     * Inside the bin the actions are different, so the button says so. The
-     * label is fixed for a given place rather than changing as a
-     * confirmation: a button that grows between the first click and the
-     * second moves out from under the pointer.
+     * What you can do here. Inside the bin these mean different things, so
+     * different ones are offered: things in a bin are restored or emptied,
+     * not renamed and deleted again.
      */
     if (ex->in_trash) {
-        bx = draw_button(ex, p, bx, by, "Restore", HIT_RESTORE, false);
+        bx = draw_tool(ex, p, bx, by, GLYPH_RESTORE, HIT_RESTORE, true);
         draw_button(ex, p, bx, by, "Empty Bin", HIT_EMPTY_BIN, true);
     } else {
-        draw_button(ex, p, bx, by, "Delete", HIT_DELETE, false);
+        bx = draw_tool(ex, p, bx, by, GLYPH_NEW_FOLDER, HIT_NEWFOLDER, true);
+        bx = draw_tool(ex, p, bx, by, GLYPH_RENAME, HIT_RENAME, true);
+        draw_tool(ex, p, bx, by, GLYPH_DELETE, HIT_DELETE, true);
     }
 
-    /* Path bar. */
+    /*
+     * The address bar. It reads as a label and works as a field: clicking it
+     * lets you type a path, and the button at its right end drops down
+     * everywhere you might want to go from here.
+     */
     int py = y + TOOLBAR_HEIGHT;
-    recon_fill_rect(p, x + PADDING, py, w - PADDING * 2, PATHBAR_HEIGHT, COLOR_PATH_BG);
-    recon_draw_bevel(p, x + PADDING, py, w - PADDING * 2, PATHBAR_HEIGHT, true);
-    recon_draw_text(p, ex->font, x + PADDING + 6,
-        py + (PATHBAR_HEIGHT + ascent) / 2 - 2, w - PADDING * 2 - 12,
-        ex->cwd, COLOR_TEXT);
+    int path_x = x + PADDING;
+    int path_w = w - PADDING * 2;
+    int drop_w = 20;
+
+    if (ex->typing_path) {
+        recon_edit_draw(p, ex->font, path_x, py, path_w - drop_w,
+            PATHBAR_HEIGHT, &ex->path_edit);
+    } else {
+        recon_fill_rect(p, path_x, py, path_w - drop_w, PATHBAR_HEIGHT,
+            COLOR_PATH_BG);
+        recon_draw_bevel(p, path_x, py, path_w - drop_w, PATHBAR_HEIGHT, true);
+        recon_draw_text(p, ex->font, path_x + 6,
+            py + (PATHBAR_HEIGHT + ascent) / 2 - 2, path_w - drop_w - 12,
+            ex->cwd, COLOR_TEXT);
+    }
+    recon_hit_add(p, path_x, py, path_w - drop_w, PATHBAR_HEIGHT, HIT_PATH);
+
+    int drop_x = path_x + path_w - drop_w;
+    recon_fill_rect(p, drop_x, py, drop_w, PATHBAR_HEIGHT,
+        ex->places_open ? THEME(BUTTON_ACTIVE) : COLOR_BUTTON);
+    recon_draw_bevel(p, drop_x, py, drop_w, PATHBAR_HEIGHT, ex->places_open);
+    /* A chevron: the same shape every drop-down in the system uses. */
+    for (int i = 0; i < 4; i++) {
+        recon_fill_rect(p, drop_x + drop_w / 2 - 3 + i,
+            py + PATHBAR_HEIGHT / 2 - 2 + i, 1, 1, COLOR_TEXT);
+        recon_fill_rect(p, drop_x + drop_w / 2 + 3 - i,
+            py + PATHBAR_HEIGHT / 2 - 2 + i, 1, 1, COLOR_TEXT);
+    }
+    recon_hit_add(p, drop_x, py, drop_w, PATHBAR_HEIGHT, HIT_PATH_DROP);
 
     /* Sidebar down the left, listing to the right of it. */
     int body_y = py + PATHBAR_HEIGHT + 2;
@@ -983,12 +1315,26 @@ static void explorer_draw(void *user, struct recon_panel *p,
             lw - COL_NAME, "This folder is empty", RECON_RGB(0x80, 0x80, 0x80));
     }
 
-    /* Status. */
+    /*
+     * Status, or -- while the pointer is over a toolbar icon -- what that
+     * icon does. The hint wins because it answers a question the user is
+     * asking right now.
+     */
     int sy = y + h - STATUS_HEIGHT;
+    bool hinting = ex->hint[0] != '\0';
     recon_fill_rect(p, x, sy, w, STATUS_HEIGHT, COLOR_BG);
     recon_draw_text(p, ex->font, x + PADDING, sy + (STATUS_HEIGHT + ascent) / 2 - 2,
-        w - PADDING * 2, ex->status,
-        ex->status_is_warning ? COLOR_WARNING : COLOR_STATUS);
+        w - PADDING * 2, hinting ? ex->hint : ex->status,
+        (!hinting && ex->status_is_warning) ? COLOR_WARNING : COLOR_STATUS);
+
+    /*
+     * The drop-down last of all, so it is drawn over the listing and, since
+     * the topmost hit region wins, clicked in preference to it.
+     */
+    if (ex->places_open) {
+        draw_places(ex, p, path_x, py + PATHBAR_HEIGHT, path_w,
+            (sy - (py + PATHBAR_HEIGHT)) - 2);
+    }
 }
 
 /* --- Input --- */
@@ -1005,6 +1351,41 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
     }
 
     /*
+     * An open drop-down takes the next click wherever it lands: it either
+     * chose a place or dismissed the list. Handled before everything else so
+     * a click that lands on the listing underneath dismisses rather than
+     * selects -- a list that is dismissed *and* acted through is a list that
+     * does something you did not ask for.
+     */
+    if (ex->places_open) {
+        if (hit_id >= HIT_PLACE_BASE && hit_id < HIT_ROW_BASE) {
+            int index = (int)(hit_id - HIT_PLACE_BASE);
+            char path[RECON_PATH_MAX];
+            bool valid = index >= 0 && index < ex->place_count;
+            if (valid) {
+                snprintf(path, sizeof(path), "%s", ex->places[index].path);
+            }
+            close_places(ex);
+            if (valid) {
+                navigate(ex, path);
+            }
+            return true;
+        }
+        close_places(ex);
+        if (hit_id != HIT_PATH_DROP) {
+            return true;
+        }
+        /* Clicking the button that opened it closes it, and nothing more. */
+        return true;
+    }
+
+    /* Typing a path is abandoned by clicking anywhere but the field itself. */
+    if (ex->typing_path && hit_id != HIT_PATH) {
+        stop_typing_path(ex);
+        set_status(ex, false, "");
+    }
+
+    /*
      * Clicking away from a rename applies it, the way a name typed into a
      * listing behaves everywhere else. Only Escape throws the typing away.
      */
@@ -1013,7 +1394,10 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
         do_commit_rename(ex);
     }
 
-    if (hit_id >= HIT_SIDEBAR_BASE && hit_id < HIT_ROW_BASE) {
+    /* Bounded at HIT_PLACE_BASE, not at HIT_ROW_BASE: the drop-down's ids sit
+     * between the two, and a range that swallowed them would have turned
+     * every place in the list into a sidebar entry. */
+    if (hit_id >= HIT_SIDEBAR_BASE && hit_id < HIT_PLACE_BASE) {
         int index = (int)(hit_id - HIT_SIDEBAR_BASE);
         if (index >= 0 && index < SIDEBAR_COUNT) {
             char path[RECON_PATH_MAX];
@@ -1034,7 +1418,19 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
         navigate(ex, "..");
         return true;
     case HIT_HOME:
-        navigate(ex, "/");
+        /* Home is the signed-in account's own folder. It used to be the root
+         * of the filesystem, which is where a system starts rather than where
+         * a person does. */
+        navigate(ex, recon_fs_user_dir(NULL));
+        return true;
+    case HIT_PATH:
+        if (!ex->typing_path) {
+            begin_typing_path(ex);
+        }
+        return true;
+    case HIT_PATH_DROP:
+        build_places(ex);
+        ex->places_open = ex->place_count > 0;
         return true;
     case HIT_REFRESH:
         reload(ex);
@@ -1087,6 +1483,36 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
 
 static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_explorer *ex = user;
+
+    /* An open drop-down is dismissed by any key rather than navigated with
+     * the arrows: the arrows already mean something in the listing behind it,
+     * and two meanings for one key is how a keyboard stops being predictable. */
+    if (ex->places_open) {
+        close_places(ex);
+        if (sym == XKB_KEY_Escape) {
+            return true;
+        }
+    }
+
+    /* The address bar has the keyboard while it is being typed into. */
+    if (ex->typing_path && ex->path_edit.active) {
+        switch (recon_edit_key(&ex->path_edit, sym, modifiers)) {
+        case RECON_EDIT_COMMIT: {
+            char wanted[RECON_PATH_MAX];
+            snprintf(wanted, sizeof(wanted), "%s", ex->path_edit.text);
+            stop_typing_path(ex);
+            navigate(ex, wanted);
+            return true;
+        }
+        case RECON_EDIT_CANCEL:
+            stop_typing_path(ex);
+            set_status(ex, false, "");
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+    }
 
     /* While a name is being typed, the keyboard belongs to the editor: Up and
      * Delete mean things inside a word, not things to do to files. */
@@ -1190,6 +1616,43 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     default:
         return false;
+    }
+}
+
+/*
+ * Say what the thing under the pointer does.
+ *
+ * The toolbar is icons, and an icon is only faster than a word once you know
+ * what it means. This is where that is learned: hover it, and the status bar
+ * at the bottom says so in words.
+ */
+static void explorer_motion(void *user, uint32_t hit_id, int cx, int cy) {
+    struct recon_explorer *ex = user;
+    (void)cx;
+    (void)cy;
+
+    const char *hint = NULL;
+    switch (hit_id) {
+    case HIT_BACK:      hint = "Back"; break;
+    case HIT_FORWARD:   hint = "Forward"; break;
+    case HIT_UP:        hint = "Up one folder"; break;
+    case HIT_REFRESH:   hint = "Refresh this folder"; break;
+    case HIT_HOME:      hint = "Your own folder"; break;
+    case HIT_NEWFOLDER: hint = "New folder"; break;
+    case HIT_RENAME:    hint = "Rename what is selected"; break;
+    case HIT_DELETE:    hint = "Move to the Recycle Bin"; break;
+    case HIT_RESTORE:   hint = "Put back where it came from"; break;
+    case HIT_PATH:      hint = "Click to type a path"; break;
+    case HIT_PATH_DROP: hint = "Go to another folder"; break;
+    default:            break;
+    }
+
+    /* Only redrawn when it actually changed, so moving the pointer across a
+     * button does not repaint the window on every step. */
+    const char *now = hint != NULL ? hint : "";
+    if (strcmp(ex->hint, now) != 0) {
+        snprintf(ex->hint, sizeof(ex->hint), "%s", now);
+        recon_appwin_refresh(ex->win);
     }
 }
 
@@ -1331,10 +1794,14 @@ static void explorer_describe(void *user, char *out, size_t size) {
         "  renaming: %d\n"
         "  question: %s target '%s'\n"
         "  in recycle bin: %s\n"
+        "  typing path: %s\n"
+        "  places open: %s (%d)\n"
         "  status: %s\n",
         ex->cwd, ex->entry_count, ex->scroll, ex->rows_visible,
         ex->selected, selected, ex->renaming,
-        stage, ex->question_target, ex->in_trash ? "yes" : "no", ex->status);
+        stage, ex->question_target, ex->in_trash ? "yes" : "no",
+        ex->typing_path ? ex->path_edit.text : "no",
+        ex->places_open ? "yes" : "no", ex->place_count, ex->status);
 }
 
 /* The listing may have changed while the window was closed. */
@@ -1367,6 +1834,7 @@ static const struct recon_appwin_impl EXPLORER_IMPL = {
     .draw = explorer_draw,
     .click = explorer_click,
     .key = explorer_key,
+    .motion = explorer_motion,
     .scroll = explorer_scroll,
     .context = explorer_context,
     .context_action = explorer_context_action,

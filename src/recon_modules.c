@@ -243,6 +243,12 @@ const char *recon_installed_app_resolve(const char *target) {
     return NULL;
 }
 
+void recon_installed_apps_forget_windows(void) {
+    for (int i = 0; i < APPS_MAX; i++) {
+        g_apps[i].window = NULL;
+    }
+}
+
 struct recon_appwin *recon_installed_app_existing(const char *name) {
     struct app_slot *slot = app_slot_for(recon_installed_app_resolve(name));
     return slot != NULL ? slot->window : NULL;
