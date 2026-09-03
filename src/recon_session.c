@@ -4,6 +4,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #include "recon_appwin.h"
 #include "recon_avatar.h"
 #include "recon_icon_gen.h"
+#include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_registry.h"
@@ -23,6 +25,7 @@
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_users.h"
+#include "recon_wallpaper.h"
 
 /* --- Layout --- */
 
@@ -101,7 +104,9 @@
  * quietly undo it.
  */
 enum stage {
-    /* Shown before anything else, on the first run of a new version. */
+    /* The splash, on every start. */
+    STAGE_BOOTING,
+    /* Then, on the first run of a new version. */
     STAGE_UPDATING,
     /* Setup, in order. */
     STAGE_WELCOME,
@@ -196,6 +201,80 @@ static const struct update_step UPDATE_STEPS[] = {
  * drives it is created before that. */
 static int update_tick(void *data);
 
+/*
+ * --- The splash ---
+ *
+ * The system used to appear without announcing itself: one frame of nothing,
+ * then a login screen.
+ *
+ * What it reports is a count of what it brought up -- icons, skins,
+ * wallpapers, accounts, modules -- rather than progress through work being
+ * done. The startup work is finished before this screen can exist, and a bar
+ * pretending to drive it would be a decoration in front of nothing. Counting
+ * is honest about which it is: these are real numbers, read at the moment
+ * each line appears, and if one of them says zero then something really is
+ * missing.
+ *
+ * It is skippable, because a splash is the one part of a system that a
+ * developer sees a hundred times a day and a user sees once.
+ */
+#define BOOT_TICK_MS 55        /* the animation, which wants to be smooth */
+#define BOOT_TICKS_PER_STEP 3  /* the lines, which do not */
+
+struct boot_step {
+    const char *label;
+    /* How many of the thing there are, or -1 when there is nothing to count. */
+    int (*count)(void);
+};
+
+/* Counted from the folder rather than from the icon cache, which only holds
+ * what has been asked for so far -- at this point in a start, almost nothing. */
+static int boot_count_icons(void) {
+    struct recon_dirent entries[128];
+    int found = recon_fs_list("/", RECON_DIR_SYSTEM_ICONS, entries, 128);
+    return found < 0 ? -1 : found;
+}
+
+static int boot_count_skins(void) {
+    return recon_theme_count();
+}
+
+static int boot_count_wallpapers(void) {
+    return recon_wallpaper_count();
+}
+
+static int boot_count_accounts(void) {
+    return recon_users_count();
+}
+
+static int boot_count_modules(void) {
+    return recon_modules_count();
+}
+
+static const struct boot_step BOOT_STEPS[] = {
+    { "Filesystem", NULL },
+    { "Settings", NULL },
+    { "Icons", boot_count_icons },
+    { "Appearance", boot_count_skins },
+    { "Wallpapers", boot_count_wallpapers },
+    { "Applications", boot_count_modules },
+    { "Accounts", boot_count_accounts },
+};
+
+#define BOOT_STEP_COUNT ((int)(sizeof(BOOT_STEPS) / sizeof(BOOT_STEPS[0])))
+
+static int boot_tick(void *data);
+
+
+/*
+ * M_PI is not in the C standard, and this file asks for POSIX rather than GNU
+ * so math.h does not offer it. Written out rather than reached for through a
+ * feature macro, which would change what else the file sees.
+ */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /* Which field the keyboard is going to. */
 enum focus {
     FOCUS_NAME,
@@ -259,6 +338,16 @@ struct recon_session {
      * accept, and offering a choice of one is not a choice.
      */
     bool picking_account;
+
+    /*
+     * The splash: which line it has reached, what that line found, and how
+     * far round the rings have turned.
+     */
+    int boot_step;
+    int boot_ticks;
+    unsigned boot_phase;
+    char boot_detail[64];
+    struct wl_event_source *boot_timer;
 
     /* The update screen: which step, what it found, and where it came from. */
     int update_step;
@@ -337,6 +426,9 @@ static int card_height(struct recon_session *session) {
     int base = BANNER_HEIGHT + CARD_PADDING * 2;
 
     switch (session->stage) {
+    case STAGE_BOOTING:
+        /* No card: the splash is the whole screen and draws its own layout. */
+        return session->height;
     case STAGE_UPDATING:
         return base + TITLE_SIZE + line * 4 + 14 + GAP * 4;
     case STAGE_WELCOME:
@@ -703,6 +795,162 @@ static void draw_theme_preview(struct recon_panel *p, int index,
 #undef SKIN_FILL
 }
 
+/*
+ * --- The splash ---
+ *
+ * The mark, two rings turning around it, and a line for each part of the
+ * system as it is counted.
+ *
+ * The rings are drawn as points rather than as an outline, because a circle
+ * of single pixels at this radius reads as a thin ring and needs no
+ * anti-aliasing to look deliberate. Each has a brighter arc that travels
+ * round, the two at different speeds and in opposite directions, which is
+ * what makes it shimmer rather than merely spin.
+ */
+#define SPLASH_LOGO 128
+#define SPLASH_RING_GAP 26
+#define SPLASH_ARC 70          /* degrees of the brighter part */
+
+static void draw_ring(struct recon_panel *p, int cx, int cy, int radius,
+        int thickness, unsigned phase, bool reverse, recon_color dim,
+        recon_color bright) {
+    if (radius <= 0) {
+        return;
+    }
+
+    /*
+     * Enough samples that neighbouring points touch.
+     *
+     * One per degree looked right on the inner ring and came out as a dotted
+     * line on the outer one: a circle of radius 86 is 540 pixels around, so
+     * 360 points leave gaps. Seven per unit of radius is a little over the
+     * circumference either way.
+     */
+    int samples = radius * 7;
+    if (samples < 360) {
+        samples = 360;
+    }
+
+    for (int i = 0; i < samples; i++) {
+        int degree = (i * 360) / samples;
+        double radians = (i * 2.0 * M_PI) / samples;
+        int x = cx + (int)(cos(radians) * radius);
+        int y = cy + (int)(sin(radians) * radius);
+
+        /* Where this point sits relative to the travelling arc. */
+        int lead = reverse ? (int)(360 - phase % 360) : (int)(phase % 360);
+        int offset = (degree - lead + 360) % 360;
+
+        recon_color color = dim;
+        if (offset < SPLASH_ARC) {
+            /*
+             * Faded along the arc rather than switched on, so the bright part
+             * has a tail. A hard edge travelling round looked like a fault in
+             * the drawing rather than like light.
+             */
+            int through = (offset * 255) / SPLASH_ARC;
+            int weight = 255 - through;
+            int r = (int)((dim >> 16) & 0xFF) +
+                (((int)((bright >> 16) & 0xFF) - (int)((dim >> 16) & 0xFF)) * weight) / 255;
+            int g = (int)((dim >> 8) & 0xFF) +
+                (((int)((bright >> 8) & 0xFF) - (int)((dim >> 8) & 0xFF)) * weight) / 255;
+            int b = (int)(dim & 0xFF) +
+                (((int)(bright & 0xFF) - (int)(dim & 0xFF)) * weight) / 255;
+            color = 0xFF000000u | ((unsigned)r << 16) | ((unsigned)g << 8) |
+                (unsigned)b;
+        }
+
+        recon_fill_rect(p, x - thickness / 2, y - thickness / 2,
+            thickness, thickness, color);
+    }
+}
+
+static void draw_splash(struct recon_session *session, struct recon_panel *p) {
+    int line = recon_font_line_height(session->font);
+    if (line <= 0) {
+        line = 18;
+    }
+    int ascent = recon_font_ascent(session->font);
+
+    struct recon_font *big = session->heading != NULL
+        ? session->heading : session->font;
+
+    int cx = session->width / 2;
+
+    /*
+     * The mark sits above the middle rather than in it, so the lines beneath
+     * have somewhere to grow into without the whole thing shifting as they
+     * arrive.
+     */
+    int cy = session->height / 2 - 70;
+
+    draw_ring(p, cx, cy, SPLASH_LOGO / 2 + SPLASH_RING_GAP, 2,
+        session->boot_phase * 5, false,
+        THEME(MENU_TEXT_DISABLED), THEME(ACCENT));
+    draw_ring(p, cx, cy, SPLASH_LOGO / 2 + SPLASH_RING_GAP + 12, 1,
+        session->boot_phase * 3, true,
+        THEME(MENU_TEXT_DISABLED), THEME(DIRECTORY));
+
+    recon_icon_draw(p, RECON_ICON_LOGO, cx - SPLASH_LOGO / 2,
+        cy - SPLASH_LOGO / 2, SPLASH_LOGO);
+
+    int y = cy + SPLASH_LOGO / 2 + SPLASH_RING_GAP + 40;
+
+    int name_w = recon_text_width(big, RECONOS_FULL_NAME);
+    recon_draw_text(p, big, cx - name_w / 2, y + recon_font_ascent(big),
+        session->width, RECONOS_FULL_NAME, THEME(READOUT_TEXT));
+    y += recon_font_line_height(big) + 4;
+
+    char version[64];
+    snprintf(version, sizeof(version), "Version %s", RECONOS_VERSION);
+    int version_w = recon_text_width(session->font, version);
+    recon_draw_text(p, session->font, cx - version_w / 2, y + ascent,
+        session->width, version, THEME(MENU_TEXT_DISABLED));
+    y += line + 28;
+
+    /* The bar, as wide as the mark and its rings, so the whole thing reads as
+     * one object rather than as a logo with a bar under it. */
+    int bar_w = SPLASH_LOGO + SPLASH_RING_GAP * 2 + 48;
+    int bar_x = cx - bar_w / 2;
+    int bar_h = 4;
+    int done = session->boot_step;
+    if (done > BOOT_STEP_COUNT) {
+        done = BOOT_STEP_COUNT;
+    }
+
+    /*
+     * The empty part in the same dim grey as the rings, not in a field
+     * colour: a text field's border is meant to be seen against a window, and
+     * on this backdrop it came out brighter than the filled part -- a bar
+     * that looked emptier the fuller it got.
+     */
+    recon_fill_rect(p, bar_x, y, bar_w, bar_h, THEME(MENU_TEXT_DISABLED));
+    recon_fill_rect(p, bar_x, y, bar_w * done / BOOT_STEP_COUNT, bar_h,
+        THEME(ACCENT));
+    y += bar_h + 16;
+
+    /*
+     * The line it has reached, and what that line counted. Only the current
+     * one, because a splash that scrolls a log is a boot message screen, and
+     * this is not that.
+     */
+    int index = session->boot_step;
+    if (index >= BOOT_STEP_COUNT) {
+        index = BOOT_STEP_COUNT - 1;
+    }
+
+    char what[128];
+    if (session->boot_detail[0] != '\0') {
+        snprintf(what, sizeof(what), "%s   %s", BOOT_STEPS[index].label,
+            session->boot_detail);
+    } else {
+        snprintf(what, sizeof(what), "%s", BOOT_STEPS[index].label);
+    }
+    int what_w = recon_text_width(session->font, what);
+    recon_draw_text(p, session->font, cx - what_w / 2, y + ascent,
+        session->width, what, THEME(MENU_TEXT_DISABLED));
+}
+
 static void draw(struct recon_session *session) {
     struct recon_panel *p = session->panel;
     if (p == NULL || session->stage == STAGE_DONE) {
@@ -719,6 +967,17 @@ static void draw(struct recon_session *session) {
      * gate, not a window over something. */
     recon_fill(p, THEME(READOUT));
     recon_hit_clear(p);
+
+    /*
+     * The splash has no card and takes no input, so it is drawn here and
+     * returns rather than being a case in the switch below -- everything
+     * after this point is about laying out a card with questions in it.
+     */
+    if (session->stage == STAGE_BOOTING) {
+        draw_splash(session, p);
+        recon_panel_commit(p);
+        return;
+    }
 
     int cx, cy, cw, ch;
     card_rect(session, &cx, &cy, &cw, &ch);
@@ -1440,6 +1699,7 @@ struct recon_session *recon_session_create(struct recon_server *server,
 
     struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
     session->update_timer = wl_event_loop_add_timer(loop, update_tick, session);
+    session->boot_timer = wl_event_loop_add_timer(loop, boot_tick, session);
 
     return session;
 }
@@ -1448,6 +1708,9 @@ void recon_session_destroy(struct recon_session *session) {
     if (session == NULL) {
         return;
     }
+    if (session->boot_timer != NULL) {
+        wl_event_source_remove(session->boot_timer);
+    }
     if (session->update_timer != NULL) {
         wl_event_source_remove(session->update_timer);
     }
@@ -1455,6 +1718,10 @@ void recon_session_destroy(struct recon_session *session) {
     recon_panel_destroy(session->panel);
     free(session);
 }
+
+/* What the splash hands off to. Defined below, with the login screen it leads
+ * into. */
+static void begin_after_splash(struct recon_session *session);
 
 /* Where the login screen would have gone, once the update screen is done. */
 static void after_update(struct recon_session *session) {
@@ -1467,6 +1734,74 @@ static void after_update(struct recon_session *session) {
         session->picking_account = true;
         go_to(session, STAGE_LOGIN);
     }
+}
+
+static int boot_tick(void *data) {
+    struct recon_session *session = data;
+
+    if (session->stage != STAGE_BOOTING) {
+        return 0;
+    }
+
+    session->boot_phase++;
+
+    /*
+     * The rings turn on every tick and the lines advance on every third, so
+     * the animation can be smooth without the text flickering past faster
+     * than it can be read.
+     */
+    if (++session->boot_ticks >= BOOT_TICKS_PER_STEP) {
+        session->boot_ticks = 0;
+        session->boot_step++;
+
+        if (session->boot_step >= BOOT_STEP_COUNT) {
+            begin_after_splash(session);
+            return 0;
+        }
+
+        int found = -1;
+        if (BOOT_STEPS[session->boot_step].count != NULL) {
+            found = BOOT_STEPS[session->boot_step].count();
+        }
+        if (found >= 0) {
+            snprintf(session->boot_detail, sizeof(session->boot_detail),
+                "%d", found);
+        } else {
+            session->boot_detail[0] = '\0';
+        }
+    }
+
+    recon_session_refresh(session);
+    wl_event_source_timer_update(session->boot_timer, BOOT_TICK_MS);
+    return 0;
+}
+
+void recon_session_begin(struct recon_session *session) {
+    if (session == NULL) {
+        return;
+    }
+
+    /*
+     * Straight past the splash when there is no timer to drive it, or when
+     * whoever started the system asked to skip it.
+     *
+     * Skippable because a splash is the one part of a system a developer sees
+     * a hundred times a day and a user sees once -- and because the automated
+     * tests drive a running system over the control socket, where a second of
+     * announcing itself is a second of every test.
+     */
+    const char *skip = getenv("RECONOS_NO_SPLASH");
+    if (session->boot_timer == NULL || (skip != NULL && *skip != '\0')) {
+        begin_after_splash(session);
+        return;
+    }
+
+    session->boot_step = 0;
+    session->boot_ticks = 0;
+    session->boot_phase = 0;
+    session->boot_detail[0] = '\0';
+    go_to(session, STAGE_BOOTING);
+    wl_event_source_timer_update(session->boot_timer, BOOT_TICK_MS);
 }
 
 static int update_tick(void *data) {
@@ -1509,11 +1844,12 @@ static int update_tick(void *data) {
     return 0;
 }
 
-void recon_session_begin(struct recon_session *session) {
-    if (session == NULL) {
-        return;
-    }
-
+/*
+ * What the splash hands off to: the update screen, setup, or the login
+ * screen. This was recon_session_begin itself before there was a splash in
+ * front of it.
+ */
+static void begin_after_splash(struct recon_session *session) {
     recon_edit_begin(&session->name, "", false);
     recon_edit_begin(&session->password, "", false);
     recon_edit_begin(&session->confirm, "", false);
@@ -1890,6 +2226,7 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
      * table was not, which is how "login" started reporting itself as null.
      */
     static const char *const STAGE_NAMES[] = {
+        [STAGE_BOOTING]  = "booting",
         [STAGE_UPDATING] = "updating",
         [STAGE_WELCOME]  = "welcome",
         [STAGE_ACCOUNT]  = "account",
