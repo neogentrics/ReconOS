@@ -608,6 +608,41 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
     }
 }
 
+void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
+        const unsigned char *rgba, int image_width, int image_height) {
+    if (panel == NULL || rgba == NULL || w <= 0 || h <= 0 ||
+            image_width <= 0 || image_height <= 0) {
+        return;
+    }
+
+    for (int row = 0; row < h; row++) {
+        int py = y + row;
+        if (py < 0 || py >= panel->height) {
+            continue;
+        }
+        int sy = row * image_height / h;
+        const unsigned char *src_row = rgba + (size_t)sy * image_width * 4;
+        uint32_t *dst_row = panel->pixels + (size_t)py * panel->width;
+
+        for (int col = 0; col < w; col++) {
+            int px = x + col;
+            if (px < 0 || px >= panel->width) {
+                continue;
+            }
+            int sx = col * image_width / w;
+            const unsigned char *src = src_row + (size_t)sx * 4;
+
+            unsigned char alpha = src[3];
+            if (alpha == 0) {
+                continue;
+            }
+            /* blend_pixel takes one colour and a coverage, which is exactly
+             * what a pixel and its alpha are. */
+            blend_pixel(&dst_row[px], RECON_RGB(src[0], src[1], src[2]), alpha);
+        }
+    }
+}
+
 /* --- Click targets --- */
 
 void recon_hit_clear(struct recon_panel *panel) {

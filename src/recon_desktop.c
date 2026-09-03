@@ -9,6 +9,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 
 #include "recon_desktop.h"
 #include "recon_fs.h"
+#include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_ui.h"
 
@@ -172,6 +174,33 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     int cx = item->x + (ICON_WIDTH - ICON_IMAGE) / 2;
     int cy = item->y + 6;
 
+    /*
+     * A file in /System/Icons wins. A shortcut asks for its target's icon
+     * first, so Terminal.app can look like the terminal rather than like an
+     * anonymous application.
+     */
+    if (item->kind == ITEM_SHORTCUT && item->target[0] != '\0') {
+        char name[RECON_NAME_MAX];
+        size_t out = 0;
+        for (const char *c = item->target; *c != '\0' && out < sizeof(name) - 1; c++) {
+            if (*c != ' ') {
+                name[out++] = (char)tolower((unsigned char)*c);
+            }
+        }
+        name[out] = '\0';
+        if (recon_icon_draw(p, name, cx, cy, ICON_IMAGE)) {
+            return;
+        }
+    }
+
+    const char *generic =
+        item->kind == ITEM_FOLDER ? RECON_ICON_FOLDER :
+        item->kind == ITEM_SHORTCUT ? RECON_ICON_APP : RECON_ICON_FILE;
+    if (recon_icon_draw(p, generic, cx, cy, ICON_IMAGE)) {
+        return;
+    }
+
+    /* No icon file: draw one, so the desktop is complete without any. */
     switch (item->kind) {
     case ITEM_FOLDER:
         /* A folder: a tab along the top of a body. */

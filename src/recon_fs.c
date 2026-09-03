@@ -185,31 +185,33 @@ bool recon_fs_init(const char *host_root) {
         /* An explicit location is not second-guessed: if it cannot be used,
          * something is wrong that a fallback would only hide. */
         set_root(requested);
-        return make_tree(g_host_root) && recon_fs_create_user(RECON_USER_ADMIN);
-    }
-
-    /*
-     * Otherwise prefer /recon, which is where ReconOS belongs on a machine it
-     * owns, and fall back to somewhere writable when it cannot be created.
-     * Running as an ordinary user is normal during development, and refusing
-     * to start over a directory permission would be a poor way to say so.
-     */
-    set_root(DEFAULT_HOST_ROOT);
-    /*
-     * Existing is not the same as usable: /recon may be there from a run as
-     * root and not be writable now. Check what actually matters.
-     */
-    if (!make_tree(g_host_root) || access(g_host_root, W_OK) != 0) {
-        const char *home = getenv("HOME");
-        if (home == NULL || *home == '\0') {
-            home = "/tmp";
-        }
-        char fallback[RECON_PATH_MAX];
-        snprintf(fallback, sizeof(fallback), "%s/.reconos", home);
-        set_root(fallback);
-
         if (!make_tree(g_host_root)) {
             return false;
+        }
+    } else {
+        /*
+         * Otherwise prefer /recon, which is where ReconOS belongs on a machine
+         * it owns, and fall back to somewhere writable when it cannot be used.
+         * Running as an ordinary user is normal during development, and
+         * refusing to start over a directory permission would be a poor way to
+         * report a problem with an obvious answer.
+         *
+         * Existing is not the test: /recon may be there from a run as root and
+         * not be writable now. Writability is what matters.
+         */
+        set_root(DEFAULT_HOST_ROOT);
+        if (!make_tree(g_host_root) || access(g_host_root, W_OK) != 0) {
+            const char *home = getenv("HOME");
+            if (home == NULL || *home == '\0') {
+                home = "/tmp";
+            }
+            char fallback[RECON_PATH_MAX];
+            snprintf(fallback, sizeof(fallback), "%s/.reconos", home);
+            set_root(fallback);
+
+            if (!make_tree(g_host_root)) {
+                return false;
+            }
         }
     }
 

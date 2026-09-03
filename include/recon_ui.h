@@ -112,6 +112,15 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
 void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
     int x, int y, int max_width, const char *text, recon_color color);
 
+/*
+ * Draw RGBA pixels into a rectangle, scaling to fit and blending by alpha.
+ *
+ * Nearest-neighbour, which suits icons: they are drawn at or near their own
+ * size, and smoothing a 16-colour icon costs more than it gains.
+ */
+void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
+    const unsigned char *rgba, int image_width, int image_height);
+
 /* --- Click targets --- */
 
 /*
