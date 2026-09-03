@@ -33,8 +33,17 @@ void recon_session_destroy(struct recon_session *session);
  */
 void recon_session_begin(struct recon_session *session);
 
-/* Back to the login screen, for signing out. */
+/* Back to the login screen, for signing out. The account is logged out. */
 void recon_session_lock(struct recon_session *session);
+
+/*
+ * The login screen over a session that is still running.
+ *
+ * The account stays signed in and its windows stay open; signing back in as
+ * the same person returns to the same desktop. Signing in as somebody else
+ * from here is a switch, and the shell clears the previous desktop then.
+ */
+void recon_session_lock_screen(struct recon_session *session);
 
 /* True while setup or login is showing, which is when it owns the screen. */
 bool recon_session_active(struct recon_session *session);

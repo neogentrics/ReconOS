@@ -41,7 +41,18 @@
 
 /* Where the files live. */
 #define RECON_REGISTRY_SYSTEM_FILE "/System/Config/system.reg"
-#define RECON_REGISTRY_USER_FILE "user.reg"
+
+/*
+ * Hidden, because it sits in the middle of the person's home folder and is
+ * not theirs to manage: it exists so the desktop can remember their skin.
+ * The File Explorer hides dot-prefixed names, so this stops it being the
+ * first thing they see next to Documents.
+ */
+#define RECON_REGISTRY_USER_FILE ".user.reg"
+
+/* What it was called before it was hidden. Read once, if the new name is not
+ * there, so an existing system keeps its settings across the rename. */
+#define RECON_REGISTRY_USER_FILE_LEGACY "user.reg"
 
 #define RECON_REGISTRY_KEY_MAX 128
 #define RECON_REGISTRY_VALUE_MAX 512

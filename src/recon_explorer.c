@@ -267,6 +267,33 @@ static void reload(struct recon_explorer *ex) {
         ex->entry_count = ENTRIES_MAX;
     }
 
+    /*
+     * Drop the system's own bookkeeping from the listing.
+     *
+     * A person's home folder was showing them .Trash and their registry
+     * hive -- the Recycle Bin, which is already on the desktop and is not a
+     * folder anyone should be walking into by hand, and a file that exists so
+     * the desktop can remember their skin. Neither is theirs to manage, and
+     * both being in the way of the folders that are theirs made the folder
+     * look like a workspace they did not tidy.
+     *
+     * Hidden by the leading dot, the way every system that has this problem
+     * solves it, rather than by a list of names that would go stale. The
+     * terminal still shows them: 'dir' is where you go to see what is
+     * actually there.
+     */
+    int kept = 0;
+    for (int i = 0; i < ex->entry_count; i++) {
+        if (ex->entries[i].name[0] == '.') {
+            continue;
+        }
+        if (kept != i) {
+            ex->entries[kept] = ex->entries[i];
+        }
+        kept++;
+    }
+    ex->entry_count = kept;
+
     int dirs = 0;
     size_t bytes = 0;
     for (int i = 0; i < ex->entry_count; i++) {
@@ -821,14 +848,21 @@ enum glyph {
     GLYPH_RESTORE,
 };
 
-/* A triangle pointing left, right or up, centred on (cx, cy). */
+/*
+ * A triangle pointing left (-1), right (1) or up (0), centred on (cx, cy).
+ *
+ * The point of the triangle is the narrow end, so the column of height 1 goes
+ * in the direction of travel. This was the other way round, which meant Back
+ * had a right-pointing arrow on it and Forward a left-pointing one -- the two
+ * buttons said the opposite of what they did.
+ */
 static void draw_triangle(struct recon_panel *p, int cx, int cy,
         int direction, recon_color ink) {
     for (int i = 0; i < 5; i++) {
         if (direction == 0) {
             recon_fill_rect(p, cx - i, cy - 4 + i, i * 2 + 1, 1, ink);
         } else {
-            int dx = direction < 0 ? cx + 2 - i : cx - 2 + i;
+            int dx = direction < 0 ? cx - 2 + i : cx + 2 - i;
             recon_fill_rect(p, dx, cy - i, 1, i * 2 + 1, ink);
         }
     }

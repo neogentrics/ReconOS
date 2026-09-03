@@ -166,6 +166,17 @@ int recon_theme_count(void);
 bool recon_theme_at(int index, struct recon_theme_info *out);
 
 /*
+ * A colour from a skin that is not the one in use.
+ *
+ * For showing a skin rather than describing it: a list of skins drawn
+ * entirely in the current skin's colours tells you nothing about any of the
+ * others, and several of ours share a selection blue, so the list looked as
+ * though half the skins were the same. Out of range returns the same
+ * deliberately hideous colour recon_theme_color does.
+ */
+recon_color recon_theme_color_of(int index, enum recon_theme_role role);
+
+/*
  * Bumped whenever the colours change. Anything holding a cached colour can
  * compare this to know it is stale -- nothing does yet, and this exists so
  * that the first thing to want it does not have to invent a way.

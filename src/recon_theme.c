@@ -311,28 +311,34 @@ static const recon_color THEME_DEUTERAN[RECON_THEME_ROLE_COUNT] = {
  * is lighter here than in the deuteran set.
  */
 static const recon_color THEME_PROTAN[RECON_THEME_ROLE_COUNT] = {
-    RGB(C8,C8,C8), RGB(30,30,30), RGB(00,4C,7A), RGB(7A,7A,7A),
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(0A,66,99), RGB(7A,7A,7A),
     RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
 
     RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
-    RGB(A8,B4,C4),
+    RGB(A8,C0,CC),
 
     RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
-    RGB(00,72,B2), RGB(FF,FF,FF), RGB(90,90,90),
+    RGB(1B,8F,D6), RGB(FF,FF,FF), RGB(90,90,90),
 
-    RGB(C8,C8,C8), RGB(00,4C,7A), RGB(FF,FF,FF), RGBA(00,00,00,99),
+    RGB(C8,C8,C8), RGB(0A,66,99), RGB(FF,FF,FF), RGBA(00,00,00,99),
 
+    /*
+     * A lighter blue than the deuteran set's, all the way through. That skin
+     * says everything meant to be seen is lighter here, because protan makes
+     * dark colours read darker still -- and then it used the identical blue,
+     * so the two skins were indistinguishable and the promise was empty.
+     */
     RGB(FF,FF,FF), RGB(F0,F0,F0), RGB(10,10,10), RGB(4A,4A,4A),
-    RGB(DC,DC,DC), RGB(00,72,B2), RGB(FF,FF,FF),
+    RGB(DC,DC,DC), RGB(1B,8F,D6), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGB(00,72,B2), RGB(10,10,10), RGB(A8,D0,F0),
+    RGB(FF,FF,FF), RGB(1B,8F,D6), RGB(10,10,10), RGB(B8,DC,F4),
     RGB(10,10,10),
 
     RGB(10,14,18), RGB(E0,E0,E0), RGB(56,B4,E9), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(00,72,B2,A0),
+    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(1B,8F,D6,A0),
 
-    RGB(F0,B4,20), RGB(10,10,10), RGB(B8,5C,00), RGB(00,72,B2),
+    RGB(F0,B4,20), RGB(10,10,10), RGB(B8,5C,00), RGB(1B,8F,D6),
 };
 
 /*
@@ -781,6 +787,24 @@ bool recon_theme_at(int index, struct recon_theme_info *out) {
         seen++;
     }
     return false;
+}
+
+recon_color recon_theme_color_of(int index, enum recon_theme_role role) {
+    if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        return RECON_RGB(0xFF, 0x00, 0xFF);
+    }
+
+    int seen = 0;
+    for (int i = 0; i < THEMES_MAX; i++) {
+        if (!g_themes[i].used) {
+            continue;
+        }
+        if (seen == index) {
+            return g_themes[i].colors[role];
+        }
+        seen++;
+    }
+    return RECON_RGB(0xFF, 0x00, 0xFF);
 }
 
 bool recon_theme_set(const char *name) {

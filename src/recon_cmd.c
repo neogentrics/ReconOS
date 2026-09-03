@@ -652,6 +652,14 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
             used += (size_t)w;
         }
 
+        /*
+         * Open the menu first if it is closed. Choosing something from the
+         * Start menu is what this means, and a person would open it -- making
+         * every test do that with a click at a guessed coordinate was one
+         * more thing to get wrong on a screen of a different size.
+         */
+        recon_shell_open_menu(server->shell);
+
         int x = 0, y = 0;
         if (!recon_shell_menu_entry_at(server->shell, label, &x, &y)) {
             out(s, "The Start menu is not showing '%s'.\n", label);

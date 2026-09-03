@@ -405,14 +405,31 @@ static void draw(struct recon_session *session) {
         int count = recon_users_count();
         int shown = count < ACCOUNTS_VISIBLE ? count : ACCOUNTS_VISIBLE;
 
+        const char *signed_in = recon_users_current();
+
         for (int i = 0; i < shown; i++) {
             int index = session->account_scroll + i;
             struct recon_user user;
             if (!recon_users_at(index, &user)) {
                 break;
             }
+
+            /*
+             * Role, and whether the account is still signed in behind this
+             * screen -- which it is when the screen was locked rather than
+             * signed out of. Coming back to a machine and being told which
+             * account is still open on it is the point of the mark.
+             */
+            char detail[64];
+            bool active = signed_in != NULL &&
+                strcmp(signed_in, user.name) == 0;
+            snprintf(detail, sizeof(detail), "%s%s%s",
+                user.role == RECON_ROLE_ADMINISTRATOR ? "Administrator" : "",
+                (user.role == RECON_ROLE_ADMINISTRATOR && active) ? "   " : "",
+                active ? "still signed in" : "");
+
             draw_row(session, p, x, y, w, user.name,
-                user.role == RECON_ROLE_ADMINISTRATOR ? "Administrator" : NULL,
+                detail[0] != '\0' ? detail : NULL,
                 HIT_ACCOUNT_BASE + i, index == session->account);
             y += ROW_HEIGHT;
         }
@@ -742,6 +759,43 @@ void recon_session_lock(struct recon_session *session) {
     session->password.masked = true;
     session->account = 0;
     session->account_scroll = 0;
+    go_to(session, STAGE_LOGIN);
+}
+
+void recon_session_lock_screen(struct recon_session *session) {
+    if (session == NULL) {
+        return;
+    }
+
+    /*
+     * The account stays signed in. That is the whole difference from signing
+     * out, and it is what makes the "signed in" mark on the login screen mean
+     * something: with only sign-out there was never an account still signed in
+     * to mark, so the mark would have been a decoration rather than a fact.
+     *
+     * Signing back in as the same person returns to the same desktop, windows
+     * and all -- the shell only clears those when the person changes.
+     */
+    const char *who = recon_users_current();
+
+    recon_edit_begin(&session->password, "", false);
+    session->password.masked = true;
+    session->account_scroll = 0;
+
+    /* Start on the account that locked it, since that is who is most likely
+     * to be coming back. */
+    session->account = 0;
+    if (who != NULL) {
+        int count = recon_users_count();
+        for (int i = 0; i < count; i++) {
+            struct recon_user user;
+            if (recon_users_at(i, &user) && strcmp(user.name, who) == 0) {
+                session->account = i;
+                break;
+            }
+        }
+    }
+
     go_to(session, STAGE_LOGIN);
 }
 

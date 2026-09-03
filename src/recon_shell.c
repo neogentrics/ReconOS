@@ -54,13 +54,18 @@
  * the bottom ends your session -- so a menu of one long list would be shorter
  * and worse.
  */
-#define MENU_ITEM_HEIGHT 28
-#define MENU_LEFT_WIDTH 210
-#define MENU_RIGHT_WIDTH 190
+/*
+ * The apps menu. Wider and taller than it was: at 400px across with 28px rows
+ * it read as a context menu that happened to be in the corner rather than as
+ * the way into the system, and the labels had no room to breathe.
+ */
+#define MENU_ITEM_HEIGHT 32
+#define MENU_LEFT_WIDTH 260
+#define MENU_RIGHT_WIDTH 230
 #define MENU_WIDTH (MENU_LEFT_WIDTH + MENU_RIGHT_WIDTH)
 #define MENU_PADDING 4
-#define MENU_HEADER_HEIGHT 44
-#define MENU_FOOTER_HEIGHT 36
+#define MENU_HEADER_HEIGHT 52
+#define MENU_FOOTER_HEIGHT 40
 #define MENU_DIVIDER 1
 
 #define FONT_HEIGHT 14
@@ -204,6 +209,7 @@ static const struct menu_place MENU_PLACES[] = {
  * there.
  */
 enum menu_power {
+    POWER_LOCK,
     POWER_SIGN_OUT,
     POWER_SWITCH_USER,
     POWER_RESTART,
@@ -214,6 +220,7 @@ static const struct {
     const char *label;
     enum menu_power action;
 } MENU_POWER[] = {
+    { "Lock", POWER_LOCK },
     { "Sign Out", POWER_SIGN_OUT },
     { "Switch User", POWER_SWITCH_USER },
     { "Restart", POWER_RESTART },
@@ -657,6 +664,7 @@ static void set_focused_app(struct recon_shell *shell, int index) {
 static bool point_in_panel(struct recon_panel *panel, double lx, double ly,
     int *px, int *py);
 static void draw_menu(struct recon_shell *shell);
+static void toggle_menu(struct recon_shell *shell);
 static void draw_security(struct recon_shell *shell);
 
 /*
@@ -1828,6 +1836,17 @@ void recon_shell_sign_out(struct recon_shell *shell) {
     recon_session_lock(shell->session);
 }
 
+void recon_shell_lock(struct recon_shell *shell) {
+    if (shell == NULL || shell->session == NULL) {
+        return;
+    }
+    /* The windows are not touched. Locking is not signing out: coming back
+     * should be the same desktop, in the same state, where it was left. */
+    set_focused_app(shell, -1);
+    set_desktop_visible(shell, false);
+    recon_session_lock_screen(shell->session);
+}
+
 bool recon_shell_session_active(struct recon_shell *shell) {
     return shell != NULL && recon_session_active(shell->session);
 }
@@ -2636,6 +2655,21 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
     return false;
 }
 
+void recon_shell_open_menu(struct recon_shell *shell) {
+    if (shell == NULL || shell->menu_open) {
+        return;
+    }
+    toggle_menu(shell);
+    /*
+     * Drawn as well as enabled. A panel's clickable regions are registered
+     * while it is drawn, so a menu that has been switched on but not yet
+     * painted has none -- which looks from outside like a menu with nothing
+     * in it. Every other route to opening it goes through a redraw; this one
+     * has to say so.
+     */
+    draw_menu(shell);
+}
+
 void recon_shell_close_menu(struct recon_shell *shell) {
     if (shell == NULL || !shell->menu_open) {
         return;
@@ -2816,6 +2850,9 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
 
                 if (which >= 0 && which < MENU_POWER_COUNT) {
                     switch (MENU_POWER[which].action) {
+                    case POWER_LOCK:
+                        recon_shell_lock(shell);
+                        break;
                     case POWER_SIGN_OUT:
                     case POWER_SWITCH_USER:
                         /*
@@ -2823,6 +2860,9 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                          * nothing to switch *between* -- signing out and
                          * signing in as somebody else is the whole of it, and
                          * the windows are closed when the person changes.
+                         *
+                         * Lock is the one that differs: it leaves the account
+                         * signed in and its windows open.
                          */
                         recon_shell_sign_out(shell);
                         break;
@@ -2873,6 +2913,30 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         }
         recon_shell_close_menu(shell);
         return true;
+    }
+
+    /*
+     * The click did not land in the menu, so the menu is finished.
+     *
+     * Closed here rather than further down, where the old dismissal sat: by
+     * then a click on a window had already been handled and returned, so
+     * clicking a window left the menu standing over it until something else
+     * was clicked. The Apps button is the exception -- it toggles the menu,
+     * and closing it here first would make the toggle reopen it, so it could
+     * never be closed by the button that opened it.
+     */
+    if (shell->menu_open && pressed) {
+        bool on_apps_button = shell->taskbar != NULL &&
+            point_in_panel(shell->taskbar, lx, ly, &px, &py) &&
+            recon_hit_test(shell->taskbar, px, py) == HIT_APPS_BUTTON;
+        if (!on_apps_button) {
+            recon_shell_close_menu(shell);
+            /*
+             * Not consumed. Clicking a window while the menu is open both
+             * dismisses the menu and raises the window, which is one click
+             * for one intention rather than a click spent on dismissal.
+             */
+        }
     }
 
     /*
@@ -2960,13 +3024,6 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         } else {
             recon_shell_close_menu(shell);
         }
-        return true;
-    }
-
-    /* Clicking anywhere else dismisses an open menu, and that click is
-     * consumed rather than reaching the window behind it. */
-    if (shell->menu_open && pressed) {
-        recon_shell_close_menu(shell);
         return true;
     }
 

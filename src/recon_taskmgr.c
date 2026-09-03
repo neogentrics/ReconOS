@@ -151,9 +151,11 @@ static const struct column DEFAULT_COLUMNS[TAB_COUNT][COLUMNS_MAX] = {
      * dashes rather than zeroes, because zero would be a claim and a dash is
      * an admission.
      */
+    /* Narrower than the others so all six fit the window it opens at: a
+     * column past the right edge is a column nobody knows is there. */
     [TAB_USERS] = {
-        { "User", 180 }, { "Status", 110 }, { "CPU", 70 }, { "Memory", 100 },
-        { "Disk", 70 }, { "Network", 80 },
+        { "User", 150 }, { "Status", 100 }, { "CPU", 60 }, { "Memory", 90 },
+        { "Disk", 60 }, { "Network", 70 },
     },
 };
 

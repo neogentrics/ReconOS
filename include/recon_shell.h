@@ -50,6 +50,15 @@ void recon_shell_restyle(struct recon_shell *shell);
 void recon_shell_sign_out(struct recon_shell *shell);
 
 /*
+ * Cover the desktop with the login screen without ending the session.
+ *
+ * The account stays signed in and its windows stay where they are; signing
+ * back in as the same person returns to them. Signing in as somebody else is
+ * a switch, and that does clear the desktop.
+ */
+void recon_shell_lock(struct recon_shell *shell);
+
+/*
  * Put up setup or the login screen, whichever applies. Called once the rest of
  * the system is running: the gate is the last thing built and the first thing
  * seen.
@@ -233,5 +242,10 @@ void recon_shell_close_context(struct recon_shell *shell);
 
 /* Close the apps menu if it is open. */
 void recon_shell_close_menu(struct recon_shell *shell);
+
+/* Open it if it is not. For driving the desktop from the control socket:
+ * "choose this from the Start menu" should not require knowing where the
+ * Start button happens to be on this screen. */
+void recon_shell_open_menu(struct recon_shell *shell);
 
 #endif

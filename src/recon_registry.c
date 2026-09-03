@@ -249,6 +249,23 @@ static void load(enum recon_registry_scope scope) {
 
     size_t size = 0;
     char *text = recon_fs_read("/", path, &size);
+
+    /*
+     * The user's hive used to be called "user.reg", in plain sight in the
+     * middle of their home folder. It is hidden now. An installation that
+     * predates the change still has the old file, and losing somebody's skin
+     * and spacing to a rename would be a poor trade for tidiness, so it is
+     * read once and written back under the new name.
+     */
+    bool migrated = false;
+    if (text == NULL && scope == RECON_REG_USER) {
+        char legacy[RECON_PATH_MAX];
+        snprintf(legacy, sizeof(legacy), "%s/%s", recon_fs_user_dir(NULL),
+            RECON_REGISTRY_USER_FILE_LEGACY);
+        text = recon_fs_read("/", legacy, &size);
+        migrated = (text != NULL);
+    }
+
     if (text == NULL) {
         /* Never saved anything. A normal first run, not a problem. */
         return;
@@ -304,6 +321,18 @@ static void load(enum recon_registry_scope scope) {
     }
 
     free(text);
+
+    if (migrated) {
+        /* Written under the new name, then the old one taken away. Leaving it
+         * would mean two files claiming to be the settings, and the stale one
+         * winning the next time somebody looked. */
+        char legacy[RECON_PATH_MAX];
+        snprintf(legacy, sizeof(legacy), "%s/%s", recon_fs_user_dir(NULL),
+            RECON_REGISTRY_USER_FILE_LEGACY);
+        if (save(scope)) {
+            recon_fs_remove("/", legacy);
+        }
+    }
 }
 
 bool recon_registry_init(void) {
