@@ -192,7 +192,7 @@ static const recon_color THEME_CLASSIC[RECON_THEME_ROLE_COUNT] = {
 
     RGB(00,00,00), RGB(C0,C0,C0), RGB(00,FF,00), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(00,00,80,A0),
+    RGB(00,00,00), RGBA(FF,FF,FF,C8), RGBA(00,00,80,A0),
 
     RGB(00,00,80), RGB(FF,FF,FF), RGB(80,00,00), RGB(00,00,80),
 };
@@ -221,7 +221,7 @@ static const recon_color THEME_AQUA[RECON_THEME_ROLE_COUNT] = {
 
     RGB(1E,1E,22), RGB(E0,E0,E4), RGB(64,C8,96), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGBA(00,00,00,B0), RGBA(2A,6C,E0,90),
+    RGB(1C,1C,20), RGBA(FF,FF,FF,C8), RGBA(2A,6C,E0,90),
 
     RGB(2A,6C,E0), RGB(FF,FF,FF), RGB(C0,3A,2A), RGB(2A,6C,E0),
 };
@@ -398,7 +398,7 @@ static const recon_color THEME_CONTRAST[RECON_THEME_ROLE_COUNT] = {
 
     RGB(00,00,00), RGB(FF,FF,FF), RGB(FF,FF,FF), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGBA(00,00,00,FF), RGBA(00,00,00,C0),
+    RGB(00,00,00), RGBA(FF,FF,FF,FF), RGBA(00,00,00,C0),
 
     RGB(00,00,00), RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00),
 };
@@ -414,6 +414,50 @@ static const recon_color THEME_CONTRAST[RECON_THEME_ROLE_COUNT] = {
  * Meant to be worn together with `access reading`, which does the spacing.
  * Colour and spacing are separate settings because they help separately.
  */
+/*
+ * Bright blue chrome and a green accent: the look people remember fondly
+ * from the early 2000s, in our own colours.
+ *
+ * Not a copy of one. That era's look was built on gradients and rounded
+ * corners, and ReconOS draws flat fills with square edges -- so this is the
+ * palette and the *feeling*, not the shapes. Reproducing it exactly would
+ * mean lifting somebody's design as well as needing chrome geometry the skin
+ * system does not have.
+ *
+ * The point of it is comfort. A system that feels familiar is one people are
+ * willing to try, and there is no reason the familiar option has to be the
+ * default to be worth having.
+ */
+static const recon_color THEME_BEACON[RECON_THEME_ROLE_COUNT] = {
+    RGB(E8,EA,F0), RGB(6E,84,B4), RGB(2A,5B,C8), RGB(8C,A4,C8),
+    RGB(FF,FF,FF), RGB(E4,EA,F4), RGB(3A,6E,D8), RGB(FF,FF,FF),
+
+    RGB(2A,5B,C8), RGB(FF,FF,FF), RGB(C4,D4,F0), RGB(E0,E6,F2),
+    RGB(C0,D0,EC),
+
+    RGB(F4,F6,FA), RGB(6E,84,B4), RGB(16,20,32), RGB(96,A0,B4),
+    RGB(31,68,D5), RGB(FF,FF,FF), RGB(C8,D4,E8),
+
+    RGB(EC,EE,F4), RGB(2A,5B,C8), RGB(FF,FF,FF), RGBA(00,00,20,88),
+
+    RGB(FF,FF,FF), RGB(F2,F5,FB), RGB(16,20,32), RGB(5A,66,78),
+    RGB(DC,E4,F2), RGB(31,68,D5), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(7A,90,BC), RGB(16,20,32), RGB(BC,D2,F4),
+    RGB(16,20,32),
+
+    RGB(10,18,28), RGB(D8,E4,F4), RGB(6E,C8,6E), RGB(FF,FF,FF),
+
+    /* Dark on a light wallpaper. A white label with a dark shadow reads on a
+     * night sky and disappears on a daytime one, which is what this skin
+     * pairs with. */
+    RGB(16,20,32), RGBA(FF,FF,FF,C8), RGBA(31,68,D5,A0),
+
+    /* Green, the way that era's start button was, and a hot orange for
+     * warnings so the two are apart in hue and in luminance. */
+    RGB(3E,8E,3E), RGB(FF,FF,FF), RGB(C8,4A,10), RGB(1E,4E,A8),
+};
+
 static const recon_color THEME_READING[RECON_THEME_ROLE_COUNT] = {
     RGB(E4,DF,D4), RGB(58,52,46), RGB(4A,5A,6E), RGB(9A,94,88),
     RGB(FB,F7,EE), RGB(E0,DA,CE), RGB(EA,E5,DA), RGB(3A,36,30),
@@ -461,6 +505,8 @@ static const struct {
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
       "Daybreak.png" },
     { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png" },
+    { "Beacon", "Bright blue chrome and a green accent, early 2000s",
+      THEME_BEACON, "Daybreak.png" },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
       THEME_DEUTERAN, "Night Sky.png" },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",
