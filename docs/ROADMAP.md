@@ -134,6 +134,32 @@ focus. The address bar's drop-down listed your own folders twice when you stood
 in your own folder. `scripts/run-windowed.sh`, which runs the whole system in a
 window on an existing desktop, including on Windows through WSLg.
 
+### v0.1.3 — choose an account, then sign in
+
+The login screen did both at once: a password box for whichever account
+happened to be selected, with the others as a strip of faces underneath.
+A stray click while typing changed who you were signing in as. It is two
+screens now, with Back to accounts and Escape returning to the first. A
+locked machine skips the grid, because there is exactly one account it will
+accept.
+
+Restart and shut down are two small round buttons in the bottom right. There
+was no way to restart from the login screen at all, so a machine that needed
+one had to be shut down and started by hand.
+
+The File Explorer's toolbar and address bar became one row -- navigation left,
+address in the middle, actions right -- with a File/Edit/View menu bar above
+it. The address bar's drop-down is sized to its contents rather than to the
+window, and highlights what the pointer is over.
+
+**Updates announce themselves.** The system records the version it last ran
+as; when that does not match the version running now, the first start after
+an update says so, with a bar that advances as it fills in the icons, themes
+and applications the new version has and the old one did not. On the way *up*
+rather than the way down, because that is when the work happens -- nothing is
+installed during a restart, and a progress bar before shutting down would be
+an animation of nothing.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -142,10 +168,6 @@ Collected from using it. Nothing here is started.
 reach anything. Until this exists a browser is pointless, the machine's name
 is decoration, and nothing can be installed from anywhere.
 
-**No update system.** A new version simply appears after a restart, which
-reads as the system changing under you. Restarting into an update should say
-what it is doing.
-
 **No screen capture.** It should be a native application on Print Screen.
 
 **Wallpaper is not part of a theme.** There is one image, it does not change
@@ -153,10 +175,6 @@ with the skin, and there is no way to choose another. It also is not ours: a
 default background of the system's own is still to be made.
 
 **No custom skins.** The format exists and there is no way to install one.
-
-**The login screen names the sign-in method before anybody has chosen an
-account.** It should offer the accounts, and only reveal how to sign in once
-one is picked -- which is also where a PIN or biometrics would go.
 
 **No screen capture, paint program, or properties dialogs.** Desktop icon
 positions are not remembered. Client windows still draw their own decorations.

@@ -15,7 +15,9 @@
 #include "recon_access.h"
 #include "recon_appwin.h"
 #include "recon_avatar.h"
+#include "recon_icon_gen.h"
 #include "recon_icons.h"
+#include "recon_modules.h"
 #include "recon_registry.h"
 #include "recon_server.h"
 #include "recon_theme.h"
@@ -99,6 +101,8 @@
  * quietly undo it.
  */
 enum stage {
+    /* Shown before anything else, on the first run of a new version. */
+    STAGE_UPDATING,
     /* Setup, in order. */
     STAGE_WELCOME,
     STAGE_ACCOUNT,
@@ -131,6 +135,66 @@ static const struct {
  * Panel can say whose machine this is. */
 #define MACHINE_NAME_KEY "system/machine-name"
 #define MACHINE_NAME_DEFAULT "recon-tower"
+
+/*
+ * --- Coming up on a new version ---
+ *
+ * The version the system last ran as. When it does not match the version
+ * running now, this is the first start after an update, and the system says
+ * so instead of quietly being different.
+ *
+ * It is shown on the way *up* rather than on the way down, because that is
+ * when the work happens. Nothing is installed during a restart -- the new
+ * build is already on disk -- and a progress bar before shutting down would
+ * be an animation of nothing. What genuinely runs on the first start of a new
+ * version is this: filling in icons, themes and modules the new version has
+ * and the old one did not. Each step below does that work and reports what it
+ * found, so the bar measures something real.
+ */
+#define INSTALLED_VERSION_KEY "system/installed-version"
+
+#define UPDATE_STEP_MS 420
+
+struct update_step {
+    const char *label;
+    /* Returns how many things it put in place, or -1 for "nothing to count". */
+    int (*run)(void);
+};
+
+static int update_icons(void) {
+    return recon_icons_write_defaults(false);
+}
+
+static int update_themes(void) {
+    return recon_theme_write_defaults();
+}
+
+static int update_modules(void) {
+    return recon_modules_install_shipped();
+}
+
+static int update_settings(void) {
+    /* Nothing to migrate yet. The step is here because settings are the thing
+     * most likely to need it, and a version that needs to move one should
+     * have somewhere obvious to do it from. */
+    return -1;
+}
+
+static const struct update_step UPDATE_STEPS[] = {
+    { "Checking what changed", NULL },
+    { "Icons", update_icons },
+    { "Appearance", update_themes },
+    { "Applications", update_modules },
+    { "Settings", update_settings },
+    { "Finishing", NULL },
+};
+
+#define UPDATE_STEP_COUNT \
+    ((int)(sizeof(UPDATE_STEPS) / sizeof(UPDATE_STEPS[0])))
+
+/* Defined with the rest of the update flow, further down; the timer that
+ * drives it is created before that. */
+static int update_tick(void *data);
 
 /* Which field the keyboard is going to. */
 enum focus {
@@ -195,6 +259,12 @@ struct recon_session {
      * accept, and offering a choice of one is not a choice.
      */
     bool picking_account;
+
+    /* The update screen: which step, what it found, and where it came from. */
+    int update_step;
+    char update_from[32];
+    char update_detail[96];
+    struct wl_event_source *update_timer;
 
     /* Which account the login screen has selected. */
     int account;
@@ -267,6 +337,8 @@ static int card_height(struct recon_session *session) {
     int base = BANNER_HEIGHT + CARD_PADDING * 2;
 
     switch (session->stage) {
+    case STAGE_UPDATING:
+        return base + TITLE_SIZE + line * 4 + 14 + GAP * 4;
     case STAGE_WELCOME:
         return base + TITLE_SIZE + line * 5 + BUTTON_HEIGHT + GAP * 2;
     case STAGE_FINISHED:
@@ -645,6 +717,51 @@ static void draw(struct recon_session *session) {
     int w = cw - CARD_PADDING * 2;
 
     switch (session->stage) {
+    case STAGE_UPDATING: {
+        char title[96];
+        snprintf(title, sizeof(title), "Updating to %s", RECONOS_VERSION);
+        draw_title(session, p, x, y, w, title, NULL);
+        y += TITLE_SIZE + GAP;
+
+        char from[96];
+        snprintf(from, sizeof(from), "This machine last ran %s.",
+            session->update_from[0] != '\0' ? session->update_from
+                                            : "an earlier version");
+        recon_draw_text(p, session->font, x, y + ascent, w, from,
+            THEME(MENU_TEXT_DISABLED));
+        y += line + GAP;
+
+        /* The bar, filled in proportion to the steps that have finished. */
+        int bar_h = 14;
+        int done = session->update_step;
+        if (done > UPDATE_STEP_COUNT) {
+            done = UPDATE_STEP_COUNT;
+        }
+
+        recon_fill_rect(p, x, y, w, bar_h, THEME(FIELD));
+        recon_fill_rect(p, x, y, w * done / UPDATE_STEP_COUNT, bar_h,
+            THEME(ACCENT));
+        recon_stroke_rect(p, x, y, w, bar_h, THEME(FIELD_BORDER));
+        y += bar_h + GAP;
+
+        /* What it is doing, and what that step actually found. */
+        int index = session->update_step;
+        if (index >= UPDATE_STEP_COUNT) {
+            index = UPDATE_STEP_COUNT - 1;
+        }
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            UPDATE_STEPS[index].label, THEME(MENU_TEXT));
+        y += line + 2;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            session->update_detail, THEME(MENU_TEXT_DISABLED));
+        y += line + GAP;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "Do not turn the machine off.", THEME(MENU_TEXT_DISABLED));
+        break;
+    }
+
     case STAGE_WELCOME:
         draw_title(session, p, x, y, w, "Welcome", NULL);
         y += TITLE_SIZE + GAP;
@@ -1302,6 +1419,9 @@ struct recon_session *recon_session_create(struct recon_server *server,
     session->heading = recon_font_load(getenv("RECONOS_FONT"),
         recon_font_line_height(font) + 10);
 
+    struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
+    session->update_timer = wl_event_loop_add_timer(loop, update_tick, session);
+
     return session;
 }
 
@@ -1309,9 +1429,65 @@ void recon_session_destroy(struct recon_session *session) {
     if (session == NULL) {
         return;
     }
+    if (session->update_timer != NULL) {
+        wl_event_source_remove(session->update_timer);
+    }
     recon_font_destroy(session->heading);
     recon_panel_destroy(session->panel);
     free(session);
+}
+
+/* Where the login screen would have gone, once the update screen is done. */
+static void after_update(struct recon_session *session) {
+    recon_registry_set(RECON_REG_SYSTEM, INSTALLED_VERSION_KEY,
+        RECONOS_VERSION);
+
+    if (recon_users_count() == 0) {
+        go_to(session, STAGE_WELCOME);
+    } else {
+        session->picking_account = true;
+        go_to(session, STAGE_LOGIN);
+    }
+}
+
+static int update_tick(void *data) {
+    struct recon_session *session = data;
+
+    if (session->stage != STAGE_UPDATING) {
+        return 0;
+    }
+
+    int index = session->update_step;
+    if (index >= UPDATE_STEP_COUNT) {
+        after_update(session);
+        return 0;
+    }
+
+    /*
+     * The work for this step, then the screen. Doing it here rather than all
+     * at once before the screen appears is what makes the bar mean something:
+     * it is behind the work, not a decoration in front of it.
+     */
+    int found = -1;
+    if (UPDATE_STEPS[index].run != NULL) {
+        found = UPDATE_STEPS[index].run();
+    }
+
+    if (found > 0) {
+        snprintf(session->update_detail, sizeof(session->update_detail),
+            "%d added.", found);
+    } else if (found == 0) {
+        snprintf(session->update_detail, sizeof(session->update_detail),
+            "Already up to date.");
+    } else {
+        session->update_detail[0] = '\0';
+    }
+
+    session->update_step++;
+    recon_session_refresh(session);
+
+    wl_event_source_timer_update(session->update_timer, UPDATE_STEP_MS);
+    return 0;
 }
 
 void recon_session_begin(struct recon_session *session) {
@@ -1327,6 +1503,37 @@ void recon_session_begin(struct recon_session *session) {
     session->focus = FOCUS_NAME;
     session->account = 0;
     session->account_scroll = 0;
+
+    /*
+     * A machine that last ran a different version has just been updated, and
+     * says so rather than quietly being different. Skipped on a system that
+     * has never been set up: there is nothing to have updated *from*, and the
+     * first thing anybody sees should be the welcome.
+     */
+    const char *ran = recon_registry_get(RECON_REG_SYSTEM,
+        INSTALLED_VERSION_KEY, "");
+
+    if (recon_users_count() > 0 && strcmp(ran, RECONOS_VERSION) != 0) {
+        snprintf(session->update_from, sizeof(session->update_from), "%s", ran);
+        session->update_step = 0;
+        session->update_detail[0] = '\0';
+        go_to(session, STAGE_UPDATING);
+
+        if (session->update_timer != NULL) {
+            wl_event_source_timer_update(session->update_timer,
+                UPDATE_STEP_MS);
+        } else {
+            /* No timer means no way to advance it, so do not show a screen
+             * that would never finish. */
+            after_update(session);
+        }
+        return;
+    }
+
+    /* Nothing new. Record it anyway, so a system that predates this has a
+     * version written down and does not announce an update it did not have. */
+    recon_registry_set(RECON_REG_SYSTEM, INSTALLED_VERSION_KEY,
+        RECONOS_VERSION);
 
     if (recon_users_count() == 0) {
         /* Never set up. Ask who is using it. */
@@ -1664,6 +1871,7 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
      * table was not, which is how "login" started reporting itself as null.
      */
     static const char *const STAGE_NAMES[] = {
+        [STAGE_UPDATING] = "updating",
         [STAGE_WELCOME]  = "welcome",
         [STAGE_ACCOUNT]  = "account",
         [STAGE_MACHINE]  = "machine",
