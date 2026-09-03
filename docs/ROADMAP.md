@@ -86,7 +86,7 @@ architected and a first-run setup flow in place.
 | 4 | Apps menu and application launcher | **Done** |
 | 5 | Native first-party applications | **Done** — six of them |
 | 6 | Idle CPU/RAM baseline established and enforced | **Done** — 0.00% CPU, 17MB |
-| 7 | Skin system plumbing — chrome driven by data, not hardcoded | **Done** — 47 roles, 9 skins |
+| 7 | Skin system plumbing — chrome driven by data, not hardcoded | **Done** — 48 roles, 10 skins |
 | 8 | Minimal first-run setup flow | **Done** |
 
 ## Since v0.1.0
@@ -281,6 +281,46 @@ under a name nothing could remove. And the startup line reporting the network
 compared the gateway against a raw NUL *byte* written into the source instead
 of the escape, so a machine with no gateway did not say "(none)".
 
+## v0.2.3 — gradients, and the labels they showed were wrong
+
+**Gradients**, opt-in per role. A skin names a second colour and that surface
+ramps from one to the other, top to bottom; a skin that says nothing fills
+flat, which is why this is not a role of its own. Built-in skins declare a
+sparse list; a skin file writes a `.to` beside the colour. Drawing sites call
+`recon_fill_role`, so adding a ramp stays a change to the skin rather than to
+the code that draws.
+
+Beacon, Recon and Aqua get one. Classic does not: it is the 95 era, and 95
+filled flat. Contrast cannot: it exists so that nothing depends on a shade,
+and a ramp behind text is a range of contrast ratios where the skin promises
+a number. The dichromat skins are measured as pairs of flat colours a fixed
+distance apart, and a ramp would put one end of a pair a different distance
+from its partner than the other.
+
+**Then capture showed every taskbar label in Beacon was white on near-white.**
+`bar.text` was chosen to sit on the blue bar, and no label is ever drawn on
+the bar -- they are all on buttons, which Beacon fills light. The
+accessibility test had been measuring `bar.text` against the bar, a surface
+nothing is drawn on, and passing.
+
+Pairing each label with the surface it is actually drawn on found the same
+fault in the high-contrast skin, where it should have been impossible: its
+Apps button was white text on a white button. That skin fills an ordinary
+button white and a pressed one black, so no single colour serves both, which
+is what the new `button.text` role is for -- a button's own label, as against
+the name of the window a taskbar button stands for. The corrected pairing also
+found four skins dimming a background window's name below readable. That name
+is what somebody reads to find their window: being quieter than the current
+one is what marks it, not being hard to see.
+
+**Two things hardened.** The skin tables are sized by their contents and
+asserted against the role count, so a table one value short is a compile
+error naming the skin rather than a silent zero-fill that draws a role as
+transparent black. And a minimized taskbar button keeps the button fill
+instead of the bar's -- sinking into the bar works while a skin's bar and its
+buttons are near-identical greys, which was true of every skin when the rule
+was written.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -294,8 +334,9 @@ socket still has no authentication, only file permissions.
 **Nothing can listen, and nothing is encrypted.** Streams connect outwards in
 the clear; there is no TLS and no way to accept a connection.
 
-**Every skin fills flat.** Gradients are the single thing keeping Beacon from
-looking like the era it is reaching for.
+**Window frame shapes and chrome geometry are fixed.** A skin can recolour a
+title bar and now ramp it, but not change its height, its corner radius, or
+where its buttons sit.
 
 **No boot splash.** The system appears without announcing itself.
 

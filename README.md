@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.2.** The version number tracks what works, not what is
+**Status: v0.2.3.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -27,7 +27,8 @@ blunt about the difference. v0.2.1 added connections that carry data, the
 rule about which programs may open one, screen capture, installing and
 removing programs, and wallpapers the system draws for itself. v0.2.2 gave
 the Start menu an All Programs list and restricted the control socket to the
-account that owns it.
+account that owns it. v0.2.3 added gradients to the skin system, and fixed
+the unreadable labels that finding them turned up.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -193,9 +194,23 @@ bar = 802020
 ```
 
 `theme` lists them, `theme <name>` puts one on and redraws everything, and
-`theme roles` prints all 47 roles with what they currently resolve to — which
+`theme roles` prints all 48 roles with what they currently resolve to — which
 is what to start from when writing one. The choice is per-account and
 remembered.
+
+**Gradients** are opt-in per role. A `.to` beside a colour makes that surface
+ramp from one to the other, top to bottom:
+
+```
+title.active    = 2A5BC8
+title.active.to = 1B429E
+```
+
+A skin that says nothing ramps nothing, which is why this is not a role of its
+own — most surfaces do not want one. Beacon, Recon and Aqua ship with a few;
+Classic does not, because the era it comes from filled flat, and Contrast
+cannot, because a ramp behind text is a range of contrast ratios where that
+skin promises a number.
 
 **Accessibility.** Five more skins, and they are verified rather than eyeballed:
 **Deuteran**, **Protan** and **Tritan** for the three kinds of colour vision
