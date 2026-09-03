@@ -51,6 +51,11 @@
  * sidebar only made the list longer. Applications are likewise reached from
  * the Start menu rather than by browsing to the folder they happen to live
  * in; /Apps is still there for anyone who wants to look at it.
+ *
+ * /Users was here briefly and should not have been. This list is places you
+ * keep things; the folder holding everybody's account is administration, and
+ * administration is the Control Panel's job. An administrator who wants to
+ * look at it can walk there from Recon Core, which is what Recon Core is for.
  */
 struct shortcut_entry {
     const char *label;
@@ -74,10 +79,6 @@ static const struct shortcut_entry SIDEBAR[] = {
      * Recon Core.
      */
     { "Recon Core", "/", RECON_ICON_EXPLORER, true, false },
-
-    /* Only an administrator may look inside another account's folder, so
-     * only an administrator is offered the way in. */
-    { "Accounts", RECON_DIR_USERS, RECON_ICON_APP, false, true },
 };
 
 #define SIDEBAR_COUNT ((int)(sizeof(SIDEBAR) / sizeof(SIDEBAR[0])))

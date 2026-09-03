@@ -14,6 +14,7 @@
 #include "ReconOS.h"
 #include "recon_access.h"
 #include "recon_appwin.h"
+#include "recon_avatar.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_server.h"
@@ -45,6 +46,16 @@
 /* A row in the skin list carries a picture of the skin, not only its name. */
 #define PREVIEW_WIDTH 84
 #define PREVIEW_HEIGHT 26
+
+/*
+ * The login screen is about a person, so it is built around their picture:
+ * one large one for whoever is being signed in, and small ones for the other
+ * accounts to switch between. The password box is narrower than the card --
+ * a field the full width of the window looks like somewhere to write an essay.
+ */
+#define AVATAR_SIZE 88
+#define AVATAR_SMALL 40
+#define LOGIN_FIELD_WIDTH 280
 
 #define ACCOUNTS_VISIBLE 6
 /*
@@ -247,10 +258,11 @@ static int card_height(struct recon_session *session) {
         return base + TITLE_SIZE + line * 2 +
             ROW_HEIGHT * ACCESSIBILITY_COUNT + BUTTON_HEIGHT + GAP * 3;
     case STAGE_LOGIN:
-    default:
-        return base + TITLE_SIZE + line +
-            ROW_HEIGHT * ACCOUNTS_VISIBLE + FIELD_HEIGHT + line +
+    default: {
+        int strip = recon_users_count() > 1 ? AVATAR_SMALL + GAP : 0;
+        return base + AVATAR_SIZE + line * 3 + FIELD_HEIGHT + strip +
             BUTTON_HEIGHT + GAP * 4;
+    }
     }
 }
 
@@ -657,54 +669,102 @@ static void draw(struct recon_session *session) {
     }
 
     case STAGE_LOGIN: {
-        draw_title(session, p, x, y, w, RECONOS_FULL_NAME, NULL);
-        y += TITLE_SIZE + GAP;
+        /*
+         * The name of the system used to be drawn here as well as in the band
+         * above, so the login screen said "Recon Towers OS" twice and had
+         * nothing to say about the person signing in. This is their screen:
+         * their picture, their name, and a box for their password.
+         */
+        struct recon_user chosen_user;
+        bool have_user = recon_users_at(session->account, &chosen_user);
 
-        int count = recon_users_count();
-        int shown = count < ACCOUNTS_VISIBLE ? count : ACCOUNTS_VISIBLE;
+        /* The heading font for the initial: at this size the body font
+         * leaves a letter lost in the middle of the disc. */
+        int face = AVATAR_SIZE;
+        recon_avatar_draw(p,
+            session->heading != NULL ? session->heading : session->font,
+            have_user ? chosen_user.name : NULL,
+            x + (w - face) / 2, y, face);
+        y += face + 10;
 
-        const char *signed_in = recon_users_current();
+        if (have_user) {
+            struct recon_font *big = session->heading != NULL
+                ? session->heading : session->font;
+            int name_w = recon_text_width(big, chosen_user.name);
+            recon_draw_text(p, big, x + (w - name_w) / 2,
+                y + recon_font_ascent(big), w, chosen_user.name,
+                THEME(MENU_TEXT));
+            y += recon_font_line_height(big) + 2;
 
-        for (int i = 0; i < shown; i++) {
-            int index = session->account_scroll + i;
-            struct recon_user user;
-            if (!recon_users_at(index, &user)) {
-                break;
-            }
+            /* Role, and whether this account is still signed in behind the
+             * screen, under the name where a caption belongs. */
+            const char *signed_in = recon_users_current();
+            char caption[96];
+            snprintf(caption, sizeof(caption), "%s%s",
+                chosen_user.role == RECON_ROLE_ADMINISTRATOR
+                    ? "Administrator" : "Limited",
+                (signed_in != NULL &&
+                 strcmp(signed_in, chosen_user.name) == 0)
+                    ? "   still signed in" : "");
 
-            /*
-             * Role, and whether the account is still signed in behind this
-             * screen -- which it is when the screen was locked rather than
-             * signed out of. Coming back to a machine and being told which
-             * account is still open on it is the point of the mark.
-             */
-            char detail[64];
-            bool active = signed_in != NULL &&
-                strcmp(signed_in, user.name) == 0;
-            snprintf(detail, sizeof(detail), "%s%s%s",
-                user.role == RECON_ROLE_ADMINISTRATOR ? "Administrator" : "",
-                (user.role == RECON_ROLE_ADMINISTRATOR && active) ? "   " : "",
-                active ? "still signed in" : "");
-
-            draw_row(session, p, x, y, w, user.name,
-                detail[0] != '\0' ? detail : NULL,
-                HIT_ACCOUNT_BASE + i, index == session->account);
-            y += ROW_HEIGHT;
+            int caption_w = recon_text_width(session->font, caption);
+            recon_draw_text(p, session->font, x + (w - caption_w) / 2,
+                y + ascent, w, caption, THEME(MENU_TEXT_DISABLED));
+            y += line + GAP;
         }
-        y += GAP;
 
         /* The password field is only useful if the chosen account has one. */
-        struct recon_user chosen;
-        bool needs_password = recon_users_at(session->account, &chosen) &&
-            chosen.has_password;
+        int field_w = LOGIN_FIELD_WIDTH;
+        if (field_w > w) {
+            field_w = w;
+        }
+        int field_x = x + (w - field_w) / 2;
 
-        if (needs_password) {
-            y = draw_field(session, p, x, y, w, "Password", &session->password,
-                HIT_PASSWORD_FIELD, true);
+        if (have_user && chosen_user.has_password) {
+            y = draw_field(session, p, field_x, y, field_w, "Password",
+                &session->password, HIT_PASSWORD_FIELD, true);
         } else {
-            recon_draw_text(p, session->font, x, y + ascent, w,
-                "This account has no password.", THEME(MENU_TEXT_DISABLED));
+            const char *note = "This account has no password.";
+            int note_w = recon_text_width(session->font, note);
+            recon_draw_text(p, session->font, x + (w - note_w) / 2, y + ascent,
+                w, note, THEME(MENU_TEXT_DISABLED));
             y += line + GAP;
+        }
+
+        /*
+         * Other accounts, as a row of faces rather than a list of names.
+         *
+         * Only when there is more than one: a strip offering the single
+         * account you are already looking at is a control with nothing to do.
+         */
+        int count = recon_users_count();
+        if (count > 1) {
+            int shown = count < ACCOUNTS_VISIBLE ? count : ACCOUNTS_VISIBLE;
+            int step = AVATAR_SMALL + 12;
+            int strip_w = shown * step - 12;
+            int sx = x + (w - strip_w) / 2;
+
+            y += GAP;
+            for (int i = 0; i < shown; i++) {
+                int index = session->account_scroll + i;
+                struct recon_user user;
+                if (!recon_users_at(index, &user)) {
+                    break;
+                }
+
+                int ax = sx + i * step;
+                if (index == session->account) {
+                    /* A ring rather than a fill, so the face is not tinted by
+                     * the thing marking it. */
+                    recon_stroke_rect(p, ax - 3, y - 3, AVATAR_SMALL + 6,
+                        AVATAR_SMALL + 6, THEME(ACCENT));
+                }
+                recon_avatar_draw(p, session->font, user.name, ax, y,
+                    AVATAR_SMALL);
+                recon_hit_add(p, ax - 3, y - 3, AVATAR_SMALL + 6,
+                    AVATAR_SMALL + 6, HIT_ACCOUNT_BASE + i);
+            }
+            y += AVATAR_SMALL + GAP;
         }
         break;
     }

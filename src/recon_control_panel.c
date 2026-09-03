@@ -16,6 +16,7 @@
 #include "ReconOS.h"
 #include "recon_access.h"
 #include "recon_appwin.h"
+#include "recon_avatar.h"
 #include "recon_control_panel.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
@@ -63,6 +64,7 @@ enum action {
     ACTION_REMOVE_USER,
     ACTION_TOGGLE_ROLE,
     ACTION_SET_PASSWORD,
+    ACTION_NEXT_AVATAR,
     /* Programs and modules */
     ACTION_INSTALL_PROGRAM,
     ACTION_REMOVE_PROGRAM,
@@ -349,10 +351,13 @@ static int draw_heading(struct control_panel *cp, struct recon_panel *p,
     return y + 6;
 }
 
-/* A row of a list, with an optional second column. */
-static void draw_row(struct control_panel *cp, struct recon_panel *p,
-        int x, int y, int w, int index, const char *label, const char *detail,
-        bool selected) {
+/*
+ * A row of a list, with an optional second column, and the text starting
+ * `indent` from the left edge so something can be drawn in front of it.
+ */
+static void draw_row_at(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int indent, int index, const char *label,
+        const char *detail, bool selected) {
     int ascent = recon_font_ascent(cp->font);
 
     if (selected) {
@@ -364,7 +369,7 @@ static void draw_row(struct control_panel *cp, struct recon_panel *p,
     recon_color ink = selected ? COLOR_SELECTED_TEXT : COLOR_TEXT;
     recon_color faint = selected ? COLOR_SELECTED_TEXT : COLOR_DIM;
 
-    recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+    recon_draw_text(p, cp->font, x + indent, y + (ROW_HEIGHT + ascent) / 2 - 2,
         w / 2, label, ink);
     if (detail != NULL) {
         recon_draw_text(p, cp->font, x + w / 2, y + (ROW_HEIGHT + ascent) / 2 - 2,
@@ -372,6 +377,12 @@ static void draw_row(struct control_panel *cp, struct recon_panel *p,
     }
 
     recon_hit_add(p, x, y, w, ROW_HEIGHT, HIT_ROW_BASE + index);
+}
+
+static void draw_row(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int index, const char *label, const char *detail,
+        bool selected) {
+    draw_row_at(cp, p, x, y, w, 10, index, label, detail, selected);
 }
 
 /* --- The pages --- */
@@ -411,8 +422,14 @@ static void draw_accounts(struct control_panel *cp, struct recon_panel *p,
              strcmp(recon_users_current(), user.name) == 0)
                 ? "   signed in" : "");
 
-        draw_row(cp, p, x, y + i * ROW_HEIGHT, w, i, user.name, detail,
+        int ry = y + i * ROW_HEIGHT;
+
+        /* The row first, then the picture over it, so the highlight does not
+         * paint across the face of the account you have selected. */
+        draw_row_at(cp, p, x, ry, w, ROW_HEIGHT + 6, i, user.name, detail,
             i == cp->selected);
+        recon_avatar_draw(p, cp->font, user.name, x + 4, ry + 2,
+            ROW_HEIGHT - 4);
     }
 
     y += cp->list_h + PADDING;
@@ -463,6 +480,15 @@ static void draw_accounts(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_ADD_USER, admin);
     bx = draw_button(cp, p, bx, y, "Password",
         HIT_ACTION_BASE + ACTION_SET_PASSWORD, admin && have);
+    /*
+     * Changing a picture is not administration: it is somebody deciding what
+     * they look like. So an account may change its own without being an
+     * administrator, which is the one thing on this page that is true of.
+     */
+    bool own = have && recon_users_current() != NULL &&
+        strcmp(recon_users_current(), chosen.name) == 0;
+    bx = draw_button(cp, p, bx, y, "Picture",
+        HIT_ACTION_BASE + ACTION_NEXT_AVATAR, have && (admin || own));
     bx = draw_button(cp, p, bx, y,
         (have && chosen.role == RECON_ROLE_ADMINISTRATOR)
             ? "Make Limited" : "Make Administrator",
@@ -1111,6 +1137,48 @@ static void do_action(struct control_panel *cp, enum action action) {
         const char *buttons[2] = { "Remove", "Cancel" };
         recon_appwin_ask(cp->win, "Remove Account", message, buttons, 2,
             answered);
+        break;
+    }
+
+    case ACTION_NEXT_AVATAR: {
+        if (!have) {
+            break;
+        }
+
+        /*
+         * Step to the next picture, wrapping back round to the drawn initial.
+         *
+         * A grid of pictures would be better and is a window of its own. This
+         * is one button that walks the whole set, including the "none" that
+         * comes back to the letter on a disc, so nothing is unreachable.
+         */
+        int count = recon_avatar_count();
+        const char *current = recon_avatar_of(chosen.name);
+
+        int index = -1;   /* -1 is the drawn initial. */
+        for (int i = 0; i < count; i++) {
+            char name[64];
+            if (recon_avatar_at(i, name, sizeof(name)) &&
+                    strcmp(name, current) == 0) {
+                index = i;
+                break;
+            }
+        }
+
+        index++;
+        char wanted[64] = "";
+        if (index < count) {
+            recon_avatar_at(index, wanted, sizeof(wanted));
+        }
+
+        if (!recon_avatar_set(chosen.name, wanted)) {
+            set_status(cp, true, "Could not change the picture.");
+            break;
+        }
+        /* The Start menu shows it too, so it has to hear about this. */
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "%s's picture is now %s.", chosen.name,
+            wanted[0] != '\0' ? wanted : "their initial");
         break;
     }
 

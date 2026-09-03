@@ -26,6 +26,7 @@
 #include "recon_taskmgr.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_avatar.h"
 #include "recon_modules.h"
 #include "ReconOS.h"
 #include "recon_access.h"
@@ -183,10 +184,24 @@ struct menu_place {
     const char *target;
 };
 
+/*
+ * The same places the File Explorer's sidebar offers, in the same order.
+ *
+ * Three of the six were listed, which made the menu look like it had been
+ * abandoned halfway: Desktop, Music and Videos exist, are folders in exactly
+ * the same sense, and were simply missing. Two lists of places that disagree
+ * about what the places are is worse than either list alone.
+ */
 static const struct menu_place MENU_PLACES[] = {
+    { "Desktop", RECON_ICON_FOLDER, PLACE_FOLDER, "Desktop" },
     { "Documents", RECON_ICON_FOLDER, PLACE_FOLDER, "Documents" },
-    { "Pictures", RECON_ICON_FOLDER, PLACE_FOLDER, "Pictures" },
     { "Downloads", RECON_ICON_FOLDER, PLACE_FOLDER, "Downloads" },
+    { "Pictures", RECON_ICON_FOLDER, PLACE_FOLDER, "Pictures" },
+    { "Music", RECON_ICON_FOLDER, PLACE_FOLDER, "Music" },
+    { "Videos", RECON_ICON_FOLDER, PLACE_FOLDER, "Videos" },
+    { "", NULL, PLACE_SEPARATOR, NULL },
+    /* The machine itself, above the thing that configures it. */
+    { "Recon Core", RECON_ICON_EXPLORER, PLACE_FOLDER, "/" },
     { "", NULL, PLACE_SEPARATOR, NULL },
     /*
      * Only things the left column does not already have. The Task Manager was
@@ -277,7 +292,7 @@ enum sec_action {
 };
 
 static const char *const SEC_ITEMS[] = {
-    "Task Manager",
+    "Watchtower",
     "Shut Down",
     "Cancel",
 };
@@ -1264,12 +1279,16 @@ static void draw_menu(struct recon_shell *shell) {
      */
     recon_fill_rect(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT, COLOR_DIALOG_TITLE);
 
+    /*
+     * The person's own picture, not the system's mark. The mark is already on
+     * the Apps button an inch below, so the header was showing it twice and
+     * saying nothing about whose menu this is. This is the one place the
+     * account is named on the desktop; it should look like them.
+     */
     const char *who = recon_users_current();
-    int header_x = 12;
-    if (recon_icon_draw(menu, RECON_ICON_SYSTEM, 10, 8,
-            MENU_HEADER_HEIGHT - 16)) {
-        header_x = 10 + (MENU_HEADER_HEIGHT - 16) + 10;
-    }
+    int face = MENU_HEADER_HEIGHT - 16;
+    recon_avatar_draw(menu, shell->font, who, 10, 8, face);
+    int header_x = 10 + face + 12;
 
     recon_draw_text(menu, shell->font, header_x,
         (MENU_HEADER_HEIGHT + ascent) / 2 - 1, width - header_x - 12,
@@ -1527,7 +1546,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "File Explorer", RECON_ICON_EXPLORER, recon_explorer_create, true },
         { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true },
         { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
-        { "Task Manager", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
+        { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing
@@ -1608,8 +1627,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * shows the rendering fault can be reached without a person clicking. */
     const char *autostart = getenv("RECONOS_DEBUG_AUTOSTART");
     if (autostart != NULL && strcmp(autostart, "taskmgr-max") == 0) {
-        recon_shell_open_named(shell, "Task Manager");
-        struct recon_appwin *win = recon_installed_app_existing("Task Manager");
+        recon_shell_open_named(shell, "Watchtower");
+        struct recon_appwin *win = recon_installed_app_existing("Watchtower");
         if (win != NULL) {
             recon_appwin_set_maximized(win, true);
         }
@@ -1697,7 +1716,7 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
     /* No longer a special case: it is an application like the others, and
      * opening it by name is what makes it possible for it to become a module
      * later without this having to change. */
-    recon_shell_open_named(shell, "Task Manager");
+    recon_shell_open_named(shell, "Watchtower");
 }
 
 void recon_shell_restyle(struct recon_shell *shell) {
@@ -2241,7 +2260,7 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
 
     case RECON_CONTEXT_TASKBAR:
         if (action == CTX_TASK_MANAGER) {
-            recon_shell_open_named(shell, "Task Manager");
+            recon_shell_open_named(shell, "Watchtower");
         } else if (action == CTX_SHOW_DESKTOP) {
             /*
              * Minimize everything rather than hiding it: the windows are
@@ -2326,7 +2345,7 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
          */
         if (index < 0 || index >= shell->button_count) {
             shell->context_kind = RECON_CONTEXT_TASKBAR;
-            context_add(shell, "Task Manager", CTX_TASK_MANAGER, true, false);
+            context_add(shell, "Watchtower", CTX_TASK_MANAGER, true, false);
             context_add(shell, "Show Desktop", CTX_SHOW_DESKTOP, true, true);
             context_add(shell, "Refresh", CTX_REFRESH, true, false);
             context_show(shell, lx, ly);
@@ -2889,11 +2908,16 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                     recon_shell_open_named(shell, MENU_PLACES[which].target);
                 } else if (MENU_PLACES[which].kind == PLACE_FOLDER) {
                     /* A place opens where it is, not wherever the explorer
-                     * happened to be left. */
+                     * happened to be left. A target beginning with a slash is
+                     * an absolute path -- the root of the filesystem is a
+                     * place too, and it is not inside anybody's folder. */
+                    const char *target = MENU_PLACES[which].target;
+                    const char *path = (target[0] == '/')
+                        ? target : recon_fs_user_dir(target);
+
                     recon_shell_open_named(shell, "File Explorer");
                     recon_explorer_open_at(
-                        recon_installed_app_existing("File Explorer"),
-                        recon_fs_user_dir(MENU_PLACES[which].target));
+                        recon_installed_app_existing("File Explorer"), path);
                 }
                 return true;
             }

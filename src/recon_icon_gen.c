@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "recon_avatar.h"
 #include "recon_fs.h"
 #include "recon_icon_gen.h"
 
@@ -70,6 +71,19 @@ static void stroke_rect(color *px, int x, int y, int w, int h, color c) {
     for (int row = y; row < y + h; row++) {
         plot(px, x, row, c);
         plot(px, x + w - 1, row, c);
+    }
+}
+
+/* A filled disc, for anything round. */
+static void fill_disc(color *px, int cx, int cy, int radius, color c) {
+    for (int y = cy - radius; y <= cy + radius; y++) {
+        for (int x = cx - radius; x <= cx + radius; x++) {
+            int dx = x - cx;
+            int dy = y - cy;
+            if (dx * dx + dy * dy <= radius * radius) {
+                plot(px, x, y, c);
+            }
+        }
     }
 }
 
@@ -380,6 +394,109 @@ static void draw_trash_full(color *px) {
     draw_bin(px, true);
 }
 
+/*
+ * --- Account pictures ---
+ *
+ * The set somebody picks from when they are asked what they should look like.
+ *
+ * Drawn, for the same reason the icons are: a system that generates its own
+ * has a complete set the moment it first runs, with nothing shipped, nothing
+ * borrowed and nobody's licence to honour. They are ordinary files in
+ * /System/Icons like everything else, so a person who would rather use a
+ * photograph drops one over the top and it stays.
+ *
+ * Each is a plain shape on a coloured disc. Simple on purpose: at the size a
+ * login screen shows them, a detailed picture is a smudge, and these have to
+ * be told apart at a glance by somebody choosing between them.
+ */
+static void avatar_disc(color *px, color background) {
+    fill_disc(px, 16, 16, 15, background);
+}
+
+static void draw_avatar_mountain(color *px) {
+    avatar_disc(px, RGB(0x3E, 0x6E, 0x8E));
+    /* Two peaks and a snow line. */
+    for (int i = 0; i < 9; i++) {
+        fill_rect(px, 11 - i, 12 + i, i * 2 + 1, 1, RGB(0xE8, 0xE8, 0xF0));
+    }
+    for (int i = 0; i < 7; i++) {
+        fill_rect(px, 21 - i, 14 + i, i * 2 + 1, 1, RGB(0xC0, 0xC8, 0xD8));
+    }
+}
+
+static void draw_avatar_leaf(color *px) {
+    avatar_disc(px, RGB(0x4E, 0x7C, 0x4E));
+    for (int y = 0; y < 16; y++) {
+        int w = (y < 8 ? y : 15 - y) + 2;
+        fill_rect(px, 16 - w / 2, 8 + y, w, 1, RGB(0xB8, 0xE0, 0x90));
+    }
+    fill_rect(px, 15, 9, 1, 14, RGB(0x3A, 0x5E, 0x3A));
+}
+
+static void draw_avatar_wave(color *px) {
+    avatar_disc(px, RGB(0x2E, 0x5E, 0x8E));
+    for (int band = 0; band < 3; band++) {
+        int y = 12 + band * 5;
+        for (int x = 5; x < 27; x++) {
+            int lift = ((x + band * 3) / 3) % 2;
+            plot(px, x, y + lift, RGB(0xA8, 0xD8, 0xF0));
+            plot(px, x, y + lift + 1, RGB(0x88, 0xC0, 0xE8));
+        }
+    }
+}
+
+static void draw_avatar_star(color *px) {
+    avatar_disc(px, RGB(0x2A, 0x2A, 0x4E));
+    /* A four-point star: two tapering bars crossed. */
+    for (int i = 0; i < 12; i++) {
+        int w = (i < 6 ? i : 11 - i) / 2 + 1;
+        fill_rect(px, 16 - w / 2, 10 + i, w + 1, 1, RGB(0xF0, 0xE0, 0x90));
+    }
+    for (int i = 0; i < 12; i++) {
+        int h = (i < 6 ? i : 11 - i) / 2 + 1;
+        fill_rect(px, 10 + i, 16 - h / 2, 1, h + 1, RGB(0xF0, 0xE0, 0x90));
+    }
+}
+
+static void draw_avatar_gear(color *px) {
+    avatar_disc(px, RGB(0x5E, 0x5E, 0x68));
+    fill_disc(px, 16, 16, 9, RGB(0xC8, 0xC8, 0xD0));
+    for (int i = 0; i < 4; i++) {
+        fill_rect(px, 15, 4 + i * 8, 3, 4, RGB(0xC8, 0xC8, 0xD0));
+        fill_rect(px, 4 + i * 8, 15, 4, 3, RGB(0xC8, 0xC8, 0xD0));
+    }
+    fill_disc(px, 16, 16, 4, RGB(0x5E, 0x5E, 0x68));
+}
+
+static void draw_avatar_moon(color *px) {
+    avatar_disc(px, RGB(0x1E, 0x24, 0x3E));
+    fill_disc(px, 15, 16, 10, RGB(0xF0, 0xEC, 0xD0));
+    fill_disc(px, 21, 13, 9, RGB(0x1E, 0x24, 0x3E));
+    plot(px, 8, 8, RGB(0xF0, 0xEC, 0xD0));
+    plot(px, 24, 24, RGB(0xF0, 0xEC, 0xD0));
+}
+
+static void draw_avatar_flame(color *px) {
+    avatar_disc(px, RGB(0x6E, 0x2A, 0x1E));
+    for (int y = 0; y < 16; y++) {
+        int w = (y < 5 ? y : (y < 11 ? 5 : 20 - y)) + 1;
+        fill_rect(px, 16 - w, 8 + y, w * 2, 1, RGB(0xF0, 0xA0, 0x30));
+    }
+    for (int y = 0; y < 9; y++) {
+        int w = (y < 3 ? y : (y < 6 ? 3 : 11 - y)) + 1;
+        fill_rect(px, 16 - w / 2, 15 + y, w, 1, RGB(0xF8, 0xE8, 0x90));
+    }
+}
+
+static void draw_avatar_key(color *px) {
+    avatar_disc(px, RGB(0x4E, 0x3E, 0x6E));
+    fill_disc(px, 12, 13, 6, RGB(0xE8, 0xD0, 0x80));
+    fill_disc(px, 12, 13, 3, RGB(0x4E, 0x3E, 0x6E));
+    fill_rect(px, 14, 17, 3, 10, RGB(0xE8, 0xD0, 0x80));
+    fill_rect(px, 17, 21, 4, 2, RGB(0xE8, 0xD0, 0x80));
+    fill_rect(px, 17, 25, 4, 2, RGB(0xE8, 0xD0, 0x80));
+}
+
 static const struct generated_icon ICONS[] = {
     { "folder", draw_folder },
     { "file", draw_file },
@@ -393,6 +510,18 @@ static const struct generated_icon ICONS[] = {
     { "trash-full", draw_trash_full },
     { "shutdown", draw_shutdown },
     { "system", draw_system },
+
+    /* The account pictures. Named with a prefix so the set can be listed by
+     * looking for it, which is how the picker finds them without a second
+     * table to keep in step. */
+    { RECON_AVATAR_PREFIX "mountain", draw_avatar_mountain },
+    { RECON_AVATAR_PREFIX "leaf", draw_avatar_leaf },
+    { RECON_AVATAR_PREFIX "wave", draw_avatar_wave },
+    { RECON_AVATAR_PREFIX "star", draw_avatar_star },
+    { RECON_AVATAR_PREFIX "gear", draw_avatar_gear },
+    { RECON_AVATAR_PREFIX "moon", draw_avatar_moon },
+    { RECON_AVATAR_PREFIX "flame", draw_avatar_flame },
+    { RECON_AVATAR_PREFIX "key", draw_avatar_key },
 };
 
 int recon_icons_write_defaults(bool overwrite) {

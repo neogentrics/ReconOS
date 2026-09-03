@@ -1257,7 +1257,14 @@ static void taskmgr_describe(void *user, char *out, size_t size) {
 }
 
 static const struct recon_appwin_impl TASKMGR_IMPL = {
-    .title = "ReconOS Task Manager",
+    /*
+     * "ReconOS Task Manager" said the system's name twice -- once in the
+     * title bar of a ReconOS window, once in the title of a ReconOS
+     * application. A tower has a watchtower: the place you go to see what is
+     * moving. The old name still finds it, so anything written down before
+     * the rename keeps working.
+     */
+    .title = "Watchtower",
     .icon = RECON_ICON_TASKMGR,
     .default_width = 560,
     .default_height = 440,
