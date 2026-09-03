@@ -25,6 +25,7 @@
 #include "recon_icons.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
+#include "recon_modules.h"
 #include "recon_shell.h"
 #include "recon_taskmgr.h"
 #include "recon_theme.h"
@@ -209,6 +210,10 @@ struct recon_taskmgr {
 
     /* Which dropdown entry the pointer is over, or -1. */
     int menu_hover;
+
+    /* Typing the name of something to run. */
+    bool running_task;
+    struct recon_edit task_name;
 
     struct wl_event_source *timer;
     char status[128];
@@ -778,6 +783,24 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         bx -= 6;
     }
 
+    /*
+     * The name of something to run goes where the status line is, because
+     * that is the space next to the button that asked for it. A field
+     * somewhere else would be a field you have to go and find.
+     */
+    if (tm->running_task) {
+        int field_w = bx - x - PADDING * 2;
+        if (field_w > 240) {
+            field_w = 240;
+        }
+        if (field_w > 40) {
+            recon_edit_draw(p, tm->font, x + PADDING,
+                y + (FOOTER_HEIGHT - BUTTON_HEIGHT) / 2, field_w,
+                BUTTON_HEIGHT, &tm->task_name);
+        }
+        return;
+    }
+
     recon_draw_text(p, tm->font, x + PADDING, y + (FOOTER_HEIGHT + ascent) / 2 - 2,
         bx - x - PADDING * 2, tm->status, COLOR_STATUS);
 }
@@ -985,6 +1008,60 @@ static void drag_column_to(struct recon_taskmgr *tm, int cx) {
     tm->columns[tm->tab][tm->dragging_column].width = width;
 }
 
+/* Open whatever was typed into Run New Task. */
+static void run_typed_task(struct recon_taskmgr *tm) {
+    const char *name = tm->task_name.text;
+
+    if (*name == '\0') {
+        tm->running_task = false;
+        recon_edit_end(&tm->task_name);
+        tm->status[0] = '\0';
+        return;
+    }
+
+    /*
+     * Resolved through the application registry, so "terminal" finds
+     * "Terminal" and "ReconOS Terminal" finds it too -- the same rule
+     * shortcuts and the Start menu use. A second rule for the same question
+     * is a second rule to keep in step.
+     */
+    const char *found = recon_installed_app_resolve(name);
+    if (found == NULL) {
+        snprintf(tm->status, sizeof(tm->status),
+            "Nothing installed is called '%s'.", name);
+        return;
+    }
+
+    tm->running_task = false;
+    recon_edit_end(&tm->task_name);
+
+    recon_shell_open_named(tm->server->shell, found);
+    snprintf(tm->status, sizeof(tm->status), "Started '%s'.", found);
+}
+
+static bool taskmgr_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
+    struct recon_taskmgr *tm = user;
+
+    if (!tm->running_task) {
+        return false;
+    }
+
+    switch (recon_edit_key(&tm->task_name, sym, modifiers)) {
+    case RECON_EDIT_COMMIT:
+        run_typed_task(tm);
+        return true;
+    case RECON_EDIT_CANCEL:
+        tm->running_task = false;
+        recon_edit_end(&tm->task_name);
+        tm->status[0] = '\0';
+        return true;
+    case RECON_EDIT_CHANGED:
+    case RECON_EDIT_IGNORED:
+        return true;
+    }
+    return true;
+}
+
 /* A menu left open on a window that is no longer in front belongs to
  * nothing, so it closes when the window stops being in front. */
 static void taskmgr_focus_changed(void *user, bool focused) {
@@ -1103,18 +1180,23 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
         return true;
 
     /*
-     * Two buttons that are here and do not work yet, deliberately.
+     * Run New Task works now that there is a registry of installed
+     * applications to run one from. It asks for a name and opens it.
      *
-     * Running a named program needs somewhere for programs to be installed
-     * from and a way to name one, and disconnecting an account needs more
-     * than one session to disconnect from. Neither exists. The buttons are
-     * where they will be, and say plainly that they are not built, which is
-     * more use than leaving a gap and forgetting the gap was meant to be
-     * filled.
+     * Disconnect is still here and still does not, because it needs more than
+     * one session to disconnect from and there is one.
      */
     case HIT_RUN_TASK:
+        if (tm->running_task) {
+            /* Pressing it again is "go", not "start over": the field is
+             * already there and the button is the obvious thing to press. */
+            run_typed_task(tm);
+            return true;
+        }
+        tm->running_task = true;
+        recon_edit_begin(&tm->task_name, "", false);
         snprintf(tm->status, sizeof(tm->status),
-            "Run New Task is not built yet: nothing to run one from.");
+            "The name of an application, then Enter.");
         return true;
 
     case HIT_DISCONNECT:
@@ -1272,6 +1354,7 @@ static const struct recon_appwin_impl TASKMGR_IMPL = {
     .min_height = 260,
     .draw = taskmgr_draw,
     .click = taskmgr_click,
+    .key = taskmgr_key,
     .motion = taskmgr_motion,
     .cursor = taskmgr_cursor,
     .focus_changed = taskmgr_focus_changed,
