@@ -430,9 +430,11 @@ noticed. Fixed in v0.2.6:
   they name. `recon_fs_join` refuses instead.
 - The empty-format `set_status` calls in the explorer, as in the Control Panel.
 
-Twenty remain, all the same shape: a name copied out of a path into a
+Fourteen sites remain, all the same shape: a name copied out of a path into a
 name-sized buffer, where the bound holds in practice but the compiler cannot
-see it. Worth a sweep; not worth silencing individually.
+see it. (A build reports them 26 times, because `recon_fs.c` and its
+neighbours are compiled into seven targets — the site count is the honest
+number.) Worth a sweep; not worth silencing individually.
 
 **Separately**, the filesystem had been leaking host paths into messages
 people read — deleting something that was not there said `cannot read
