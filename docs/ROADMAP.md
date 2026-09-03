@@ -475,6 +475,23 @@ desktop needs. One that maps while you are on desktop three arrives on
 desktop three — the field starts at zero, and without saying so a program
 launched from anywhere else would appear not to have started at all.
 
+### And a role nothing read
+
+`title.text-inactive` was defined, answered by all ten skins, and read by
+nothing — an unfocused window's name was drawn in the colour meant for a
+focused one. On skins whose two title bars are near-identical greys that
+looked fine, which is why it survived.
+
+The accessibility test had measured title text against the *active* bar and
+never against the inactive one, the same omission as the taskbar labels.
+Adding the check failed eight of the ten skins: they had been tuned to look
+quiet against a bar the text was never actually drawn on, so quiet was as far
+as anyone took it.
+
+That is twice now that getting the *pairs* right — rather than adding new
+kinds of check — has found something invisible on screen. The lesson worth
+keeping: a palette test is only as good as its list of what is drawn on what.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
