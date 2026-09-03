@@ -1724,6 +1724,16 @@ void recon_shell_restyle(struct recon_shell *shell) {
         return;
     }
 
+    /*
+     * The wallpaper too, since a skin names one. Restyling is the moment the
+     * skin may have changed, and a desktop whose chrome changed colour while
+     * the picture behind it stayed put looks half-finished.
+     *
+     * Reloading is a no-op when the picture is already the right one: the
+     * background is rebuilt, and what it rebuilds from is the same file.
+     */
+    recon_background_reload(shell->server);
+
     /* Everything the shell draws itself. */
     draw_taskbar(shell);
     draw_menu(shell);

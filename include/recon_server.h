@@ -56,6 +56,10 @@ struct recon_server {
      * the wallpaper image loaded. */
     struct wlr_scene_buffer *background_buffer;
     struct wlr_scene_rect *background_rect;
+    /* The size the background was built for, so it can be rebuilt when the
+     * wallpaper changes without waiting for a screen to say how big it is. */
+    int screen_width;
+    int screen_height;
 
     /*
      * The pointer is drawn by wlroots on its own layer, not as a scene node.
@@ -168,6 +172,10 @@ void recon_restart(struct recon_server *server);
  * something changed, and not at all otherwise.
  */
 void recon_damage_all(struct recon_server *server);
+
+/* Put the chosen wallpaper on, replacing whatever is there. Called when the
+ * choice changes, so it takes effect without a restart. */
+void recon_background_reload(struct recon_server *server);
 
 /* --- Synthetic input --- */
 

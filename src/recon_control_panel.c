@@ -29,6 +29,7 @@
 #include "recon_theme.h"
 #include "recon_ui.h"
 #include "recon_users.h"
+#include "recon_wallpaper.h"
 
 #define SIDEBAR_WIDTH 150
 #define ROW_HEIGHT 26
@@ -57,6 +58,7 @@
 #define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 300)
 #define HIT_PENDING_BASE (RECON_APPWIN_HIT_USER + 400)
 #define HIT_AVATAR_BASE (RECON_APPWIN_HIT_USER + 500)
+#define HIT_WALLPAPER_BASE (RECON_APPWIN_HIT_USER + 600)
 
 /* What the buttons on each page do. */
 enum action {
@@ -648,6 +650,50 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
             w / 2 - 10, info.description, faint);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+    }
+
+    /*
+     * And the wallpaper, under the skins, because it is the other half of how
+     * the desktop looks. Choosing a skin puts its wallpaper on; choosing a
+     * wallpaper here keeps it until the skin changes again.
+     */
+    y += cp->list_h + PADDING;
+
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    recon_draw_text(p, cp->font, x, y + ascent, w, "Wallpaper", COLOR_TEXT);
+    y += line + 4;
+
+    int papers = recon_wallpaper_count();
+    int room = (h - y - PADDING) / ROW_HEIGHT;
+    if (room < 0) {
+        room = 0;
+    }
+
+    const char *showing = recon_wallpaper_current();
+
+    for (int i = 0; i < papers && i < room; i++) {
+        char name[96];
+        if (!recon_wallpaper_at(i, name, sizeof(name))) {
+            break;
+        }
+
+        int ry = y + i * ROW_HEIGHT;
+        bool chosen = strcmp(name, showing) == 0;
+
+        if (chosen) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
+        } else if (i % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_draw_text(p, cp->font, x + 14, ry + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 28, name, chosen ? COLOR_SELECTED_TEXT : COLOR_TEXT);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_WALLPAPER_BASE + i);
     }
 }
 
@@ -1637,6 +1683,18 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
     if (!pressed) {
         return false;
+    }
+
+    /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_WALLPAPER_BASE) {
+        int index = (int)(hit_id - HIT_WALLPAPER_BASE);
+        char name[96];
+        if (recon_wallpaper_at(index, name, sizeof(name)) &&
+                recon_wallpaper_set(name)) {
+            recon_background_reload(cp->server);
+            set_status(cp, false, "Wallpaper is now '%s'.", name);
+        }
+        return true;
     }
 
     /* A picture chosen from the grid. */

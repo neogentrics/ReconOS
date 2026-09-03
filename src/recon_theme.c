@@ -442,26 +442,35 @@ static const recon_color THEME_READING[RECON_THEME_ROLE_COUNT] = {
 #undef RGB
 #undef RGBA
 
+/*
+ * Each skin names the wallpaper it goes with. A default rather than a rule:
+ * choosing a skin puts its wallpaper on, and a wallpaper chosen afterwards
+ * stays until the skin changes again. A skin that owned the background would
+ * mean somebody who liked one picture could not keep it.
+ */
 static const struct {
     const char *name;
     const char *description;
     const recon_color *colors;
+    const char *wallpaper;
 } BUILT_IN[] = {
     { "Recon", "The native look: grey chrome, navy titles, oxblood accent",
-      THEME_RECON },
-    { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC },
-    { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA },
-    { "Midnight", "Dark and flat", THEME_MIDNIGHT },
+      THEME_RECON, "Night Sky.png" },
+    { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC,
+      "Daybreak.png" },
+    { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
+      "Daybreak.png" },
+    { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png" },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
-      THEME_DEUTERAN },
+      THEME_DEUTERAN, "Night Sky.png" },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",
-      THEME_PROTAN },
+      THEME_PROTAN, "Night Sky.png" },
     { "Tritan", "Blue-yellow safe: red, green and magenta carry meaning",
-      THEME_TRITAN },
+      THEME_TRITAN, "Deep Field.png" },
     { "Contrast", "Black on white throughout; nothing depends on hue",
-      THEME_CONTRAST },
+      THEME_CONTRAST, "Daybreak.png" },
     { "Reading", "Warm off-white and softened contrast, easier to read on",
-      THEME_READING },
+      THEME_READING, "Ember.png" },
 };
 
 #define BUILT_IN_COUNT ((int)(sizeof(BUILT_IN) / sizeof(BUILT_IN[0])))
@@ -688,6 +697,8 @@ void recon_theme_init(void) {
         }
         snprintf(theme->info.description, sizeof(theme->info.description),
             "%s", BUILT_IN[i].description);
+        snprintf(theme->info.wallpaper, sizeof(theme->info.wallpaper),
+            "%s", BUILT_IN[i].wallpaper);
         theme->info.built_in = true;
         memcpy(theme->colors, BUILT_IN[i].colors, sizeof(theme->colors));
     }
@@ -755,6 +766,13 @@ recon_color recon_theme_color(enum recon_theme_role role) {
         return THEME_RECON[role];
     }
     return g_themes[g_current].colors[role];
+}
+
+const char *recon_theme_wallpaper(void) {
+    if (g_current < 0 || !g_themes[g_current].used) {
+        return "";
+    }
+    return g_themes[g_current].info.wallpaper;
 }
 
 const char *recon_theme_current(void) {

@@ -124,6 +124,10 @@ enum recon_theme_role {
 struct recon_theme_info {
     char name[48];
     char description[96];
+    /* The wallpaper this skin goes with, by file name in /System/Wallpapers.
+     * A suggestion: choosing the skin puts it on, and a wallpaper chosen
+     * afterwards stays. Empty when the skin has no opinion. */
+    char wallpaper[96];
     /* True for one compiled in, false for one read from /System/Themes. */
     bool built_in;
 };
@@ -153,6 +157,9 @@ recon_color recon_theme_color(enum recon_theme_role role);
 #define THEME(role) recon_theme_color(RECON_THEME_##role)
 
 const char *recon_theme_current(void);
+
+/* The wallpaper the current skin suggests, or "". */
+const char *recon_theme_wallpaper(void);
 
 /* --- Choosing --- */
 

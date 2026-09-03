@@ -63,6 +63,7 @@
 #include "recon_apps.h"
 #include "recon_modules.h"
 #include "recon_capture.h"
+#include "recon_wallpaper.h"
 #include "recon_net.h"
 #include "recon_registry.h"
 #include "recon_access.h"
@@ -318,12 +319,80 @@ static void install_asset_icon(const char *asset, const char *icon_name) {
     free(path);
 }
 
+/* The bundled photograph, copied in as one wallpaper among the drawn ones. */
+static void install_asset_wallpaper(const char *asset, const char *name) {
+    char destination[RECON_PATH_MAX];
+    snprintf(destination, sizeof(destination), "%s/%s",
+        RECON_DIR_WALLPAPERS, name);
+    if (recon_fs_exists("/", destination)) {
+        return;
+    }
+
+    char *path = asset_path(asset);
+    if (path == NULL) {
+        return;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        free(path);
+        return;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    /* Larger than an icon, so a larger ceiling -- but still one, because an
+     * asset directory is not a place to read arbitrary amounts from. */
+    if (size > 0 && size < 32 * 1024 * 1024) {
+        char *bytes = malloc((size_t)size);
+        if (bytes != NULL && fread(bytes, 1, (size_t)size, f) == (size_t)size) {
+            if (recon_fs_write("/", destination, bytes, (size_t)size)) {
+                wlr_log(WLR_INFO, "ReconOS: installed %s", destination);
+            }
+        }
+        free(bytes);
+    }
+
+    fclose(f);
+    free(path);
+}
+
 /*
  * Decode an image asset into a wlr_buffer, or NULL if it can't be loaded.
  *
  * Pass a positive fit_w/fit_h to shrink an oversized image to those dimensions
  * at load time; pass 0 to keep it at its natural size.
  */
+/*
+ * Wrap decoded pixels in a wlr_buffer the scene graph can hold.
+ *
+ * Shared by the two loaders -- one reads from the asset directory, the other
+ * from the ReconOS filesystem -- because the wrapping is identical and having
+ * it twice is how the second copy ends up with a different pixel format.
+ */
+static struct wlr_buffer *image_buffer_create(unsigned char *data, int width,
+        int height, bool from_stb) {
+    struct recon_image_buffer *buf = calloc(1, sizeof(*buf));
+    if (buf == NULL) {
+        if (from_stb) {
+            stbi_image_free(data);
+        } else {
+            free(data);
+        }
+        return NULL;
+    }
+
+    buf->data = data;
+    buf->data_from_stb = from_stb;
+    /* stb gives us bytes in R,G,B,A order, which is DRM's ABGR8888. */
+    buf->format = DRM_FORMAT_ABGR8888;
+    buf->stride = (size_t)width * 4;
+    wlr_buffer_init(&buf->base, &image_buffer_impl, width, height);
+    return &buf->base;
+}
+
 static struct wlr_buffer *load_image(const char *name, int fit_w, int fit_h) {
     char *path = asset_path(name);
     if (path == NULL) {
@@ -354,24 +423,7 @@ static struct wlr_buffer *load_image(const char *name, int fit_w, int fit_h) {
         }
     }
     free(path);
-
-    struct recon_image_buffer *buf = calloc(1, sizeof(*buf));
-    if (buf == NULL) {
-        if (from_stb) {
-            stbi_image_free(data);
-        } else {
-            free(data);
-        }
-        return NULL;
-    }
-
-    buf->data = data;
-    buf->data_from_stb = from_stb;
-    /* stb gives us bytes in R,G,B,A order, which is DRM's ABGR8888. */
-    buf->format = DRM_FORMAT_ABGR8888;
-    buf->stride = (size_t)width * 4;
-    wlr_buffer_init(&buf->base, &image_buffer_impl, width, height);
-    return &buf->base;
+    return image_buffer_create(data, width, height, from_stb);
 }
 
 /* --- WINDOW MANAGEMENT --- */
@@ -1205,8 +1257,110 @@ static void server_new_input(struct wl_listener *listener, void *data) {
  * known. Nodes are added to the top of the scene, so the background is lowered
  * beneath the chrome that main() already created.
  */
+/*
+ * Decode an image out of the ReconOS filesystem.
+ *
+ * Wallpapers live at /System/Wallpapers rather than in the asset directory,
+ * because they are files the user owns: replaceable, addable, and visible in
+ * the File Explorer like anything else. The asset directory is only where the
+ * ones that ship come *from*.
+ */
+static struct wlr_buffer *load_reconos_image(const char *reconos_path,
+        int fit_w, int fit_h) {
+    size_t size = 0;
+    char *bytes = recon_fs_read("/", reconos_path, &size);
+    if (bytes == NULL) {
+        return NULL;
+    }
+
+    int width, height, channels;
+    unsigned char *data = stbi_load_from_memory((const unsigned char *)bytes,
+        (int)size, &width, &height, &channels, 4);
+    free(bytes);
+
+    if (data == NULL) {
+        wlr_log(WLR_ERROR, "ReconOS: could not decode '%s'", reconos_path);
+        return NULL;
+    }
+
+    bool from_stb = true;
+    if (fit_w > 0 && fit_h > 0 && (width > fit_w || height > fit_h)) {
+        unsigned char *scaled = downscale_rgba(data, width, height, fit_w, fit_h);
+        if (scaled != NULL) {
+            stbi_image_free(data);
+            data = scaled;
+            width = fit_w;
+            height = fit_h;
+            from_stb = false;
+        }
+    }
+
+    struct wlr_buffer *buffer = image_buffer_create(data, width, height,
+        from_stb);
+    if (buffer == NULL) {
+        if (from_stb) {
+            stbi_image_free(data);
+        } else {
+            free(data);
+        }
+    }
+    return buffer;
+}
+
+static void setup_background(struct recon_server *server, int width, int height);
+
+/*
+ * Put the wallpaper on, replacing whatever was there.
+ *
+ * Called at startup and again whenever the choice changes, which is what
+ * makes changing it feel like a setting rather than something that needs a
+ * restart. The old node goes first: two backgrounds is one too many, and the
+ * one underneath would never be seen but would still be drawn.
+ */
+void recon_background_reload(struct recon_server *server) {
+    if (server == NULL || !server->background_ready) {
+        return;
+    }
+
+    int width = server->screen_width;
+    int height = server->screen_height;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (server->background_buffer != NULL) {
+        wlr_scene_node_destroy(&server->background_buffer->node);
+        server->background_buffer = NULL;
+    }
+    if (server->background_rect != NULL) {
+        wlr_scene_node_destroy(&server->background_rect->node);
+        server->background_rect = NULL;
+    }
+
+    setup_background(server, width, height);
+    recon_damage_all(server);
+}
+
 static void setup_background(struct recon_server *server, int width, int height) {
-    struct wlr_buffer *wallpaper = load_image("wallpaper.jpg", width, height);
+    server->screen_width = width;
+    server->screen_height = height;
+
+    /*
+     * Whichever wallpaper is chosen, from the filesystem. Falls back to the
+     * bundled asset only when there is nothing there at all -- which is the
+     * moment before the defaults have been written.
+     */
+    struct wlr_buffer *wallpaper = NULL;
+
+    const char *chosen = recon_wallpaper_current();
+    if (chosen != NULL && *chosen != '\0') {
+        char path[RECON_PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", RECON_DIR_WALLPAPERS, chosen);
+        wallpaper = load_reconos_image(path, width, height);
+    }
+    if (wallpaper == NULL) {
+        wallpaper = load_image("wallpaper.jpg", width, height);
+    }
 
     struct wlr_scene_node *node;
     if (wallpaper != NULL) {
@@ -1643,6 +1797,17 @@ int main(int argc, char **argv) {
      * a different file over it.
      */
     install_asset_icon("logo.png", RECON_ICON_LOGO);
+
+    /*
+     * Wallpapers, drawn the way the icons are. A system with nothing
+     * installed should still look like something, and the photograph that
+     * ships is one option among them rather than the only one.
+     */
+    int papers = recon_wallpapers_write_defaults();
+    if (papers > 0) {
+        wlr_log(WLR_INFO, "ReconOS: drew %d wallpapers", papers);
+    }
+    install_asset_wallpaper("wallpaper.jpg", "Earth.jpg");
 
     wl_list_init(&server.toplevels);
     wl_list_init(&server.outputs);

@@ -24,6 +24,7 @@
 #include "recon_registry.h"
 #include "recon_session.h"
 #include "recon_users.h"
+#include "recon_wallpaper.h"
 #include "recon_access.h"
 #include "recon_theme.h"
 #include "recon_server.h"
@@ -1690,6 +1691,46 @@ static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Removed '%s'.\n", name);
 }
 
+/* `wallpaper` -- what is behind everything, and what else there is. */
+static void cmd_wallpaper(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Showing: %s\n\n", recon_wallpaper_current());
+
+        int count = recon_wallpaper_count();
+        for (int i = 0; i < count; i++) {
+            char name[96];
+            if (recon_wallpaper_at(i, name, sizeof(name))) {
+                out(s, "  %s\n", name);
+            }
+        }
+        out(s, "\n'wallpaper <name>' chooses one. 'wallpaper theme' follows "
+            "the skin.\n");
+        return;
+    }
+
+    /* Joined, because these have spaces in their names. */
+    char name[96];
+    size_t used = 0;
+    for (int i = 1; i < argc && used < sizeof(name) - 1; i++) {
+        int written = snprintf(name + used, sizeof(name) - used, "%s%s",
+            i > 1 ? " " : "", argv[i]);
+        if (written < 0) {
+            break;
+        }
+        used += (size_t)written;
+    }
+
+    bool follow = strcasecmp(name, "theme") == 0;
+    if (!recon_wallpaper_set(follow ? NULL : name)) {
+        out(s, "There is no wallpaper called '%s'.\n", name);
+        return;
+    }
+
+    recon_background_reload(s->server);
+    out(s, follow ? "Following the skin: %s\n" : "Showing %s\n",
+        recon_wallpaper_current());
+}
+
 static void cmd_echo(struct recon_cmd_session *s, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         out(s, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -1728,6 +1769,7 @@ static const struct command COMMANDS[] = {
     { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
+    { "wallpaper","wallpaper [name]",      "What is behind everything",          cmd_wallpaper },
     { "session",  "session",               "What the login screen shows",       cmd_session },
     { "users",    "users [action] ...",    "List or change accounts",           cmd_users },
     { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
