@@ -159,7 +159,13 @@ add_executable(recon_theme_tests
     tests/test_theme.c
     src/recon_theme.c
     src/recon_registry.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # Installing a skin writes into /System, so recon_theme asks who is
+    # signed in before it tries. Accounts and password hashing come along
+    # with that -- neither needs a compositor, which is the property these
+    # test targets are actually protecting.
+    src/recon_users.c
+    src/recon_crypt.c)
 
 target_include_directories(recon_theme_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -171,7 +177,9 @@ add_executable(recon_access_tests
     tests/test_access.c
     src/recon_theme.c
     src/recon_registry.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    src/recon_users.c
+    src/recon_crypt.c)
 
 target_include_directories(recon_access_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")

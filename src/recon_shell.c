@@ -2104,6 +2104,21 @@ bool recon_shell_session_active(struct recon_shell *shell) {
     return shell != NULL && recon_session_active(shell->session);
 }
 
+/*
+ * Where an account's tile is on the login screen, passed through to the
+ * session.
+ *
+ * The shell owns the session and everything outside talks to the shell, the
+ * same way describe_session works.
+ */
+bool recon_shell_account_at(struct recon_shell *shell, const char *name,
+        int *x, int *y) {
+    if (shell == NULL || !recon_session_active(shell->session)) {
+        return false;
+    }
+    return recon_session_account_at(shell->session, name, x, y);
+}
+
 void recon_shell_describe_session(struct recon_shell *shell,
         char *out, size_t size) {
     if (shell == NULL || out == NULL || size == 0) {

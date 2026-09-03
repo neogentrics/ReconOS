@@ -252,6 +252,41 @@ unsigned recon_theme_generation(void);
  */
 int recon_theme_write_defaults(void);
 
+/* --- Installing --- */
+
+/*
+ * Take a skin file at `path` and put it where skins live.
+ *
+ * The file format has existed since the skin system did, and until now there
+ * was no way to get one into /System/Themes short of writing it there by
+ * hand -- so a skin somebody wrote was a file the system could read and
+ * nobody could install.
+ *
+ * It is read and parsed *before* it is copied, so a file that is not a skin
+ * is refused rather than left in the folder for the next start to trip over.
+ * A name already taken is refused too: a file cannot shadow a built-in, so
+ * copying one in under an existing name would put a file in place that the
+ * system would then silently ignore.
+ *
+ * Administrator only, which the filesystem enforces on /System anyway; this
+ * says so with a sentence rather than with a write error.
+ *
+ * False with recon_theme_last_error() explaining why. Nothing is left behind
+ * on failure.
+ */
+bool recon_theme_install(const char *path);
+
+/*
+ * Remove an installed skin.
+ *
+ * Built-in skins are refused: they are compiled in, so deleting the file
+ * would remove a copy of something that would come back on the next start,
+ * and the skin would still be there. If the skin being removed is the one in
+ * use, the default is put on first -- taking away the colours somebody is
+ * looking at without giving them others is not something to do quietly.
+ */
+bool recon_theme_uninstall(const char *name);
+
 /* The name of a role, as it appears in a theme file. NULL if out of range. */
 const char *recon_theme_role_name(enum recon_theme_role role);
 

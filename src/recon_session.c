@@ -2215,6 +2215,64 @@ bool recon_session_handle_key(struct recon_session *session,
     return true;
 }
 
+/*
+ * Where an account's tile is on the login screen, so a test can choose one
+ * the way a person does.
+ *
+ * The account grid was the one part of the gate nothing outside could reach:
+ * every other screen is driven by keys, and picking an account is a click on
+ * a tile whose position depends on how many accounts there are and how far
+ * the grid has scrolled. Tests either guessed a coordinate or skipped it --
+ * which is why lock, switch-user and what a limited account may do were all
+ * verified by hand, and all three had bugs in them.
+ *
+ * False when the grid is not showing, or there is no such account, or it has
+ * scrolled out of view. Coordinates are in screen space, ready for a click.
+ */
+bool recon_session_account_at(struct recon_session *session, const char *name,
+        int *x, int *y) {
+    if (session == NULL || name == NULL || session->panel == NULL) {
+        return false;
+    }
+    if (session->stage != STAGE_LOGIN || !session->picking_account) {
+        return false;
+    }
+
+    int count = recon_users_count();
+    for (int i = 0; i < count; i++) {
+        struct recon_user user;
+        if (!recon_users_at(i, &user) || strcasecmp(user.name, name) != 0) {
+            continue;
+        }
+
+        /* The tiles carry a hit region each, numbered from the first one
+         * showing rather than from the first account, so this asks the panel
+         * where that id ended up instead of repeating the layout. */
+        uint32_t wanted = HIT_ACCOUNT_BASE + (uint32_t)(i - session->account_scroll);
+        if (i < session->account_scroll) {
+            return false;
+        }
+
+        int px = 0, py = 0;
+        recon_panel_position(session->panel, &px, &py);
+
+        for (size_t r = 0;; r++) {
+            int rx, ry, rw, rh;
+            uint32_t id;
+            if (!recon_hit_region(session->panel, r, &rx, &ry, &rw, &rh, &id)) {
+                return false;
+            }
+            if (id != wanted) {
+                continue;
+            }
+            if (x != NULL) { *x = px + rx + rw / 2; }
+            if (y != NULL) { *y = py + ry + rh / 2; }
+            return true;
+        }
+    }
+    return false;
+}
+
 void recon_session_describe(struct recon_session *session, char *out, size_t size) {
     if (session == NULL || out == NULL || size == 0) {
         return;

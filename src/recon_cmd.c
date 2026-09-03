@@ -638,6 +638,37 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    if (strcasecmp(what, "account") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui account <name>\n");
+            return;
+        }
+
+        /* Joined, so an account name with a space in it works unquoted. */
+        char name[64];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(name) - 1; i++) {
+            int w = snprintf(name + used, sizeof(name) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (w < 0) {
+                break;
+            }
+            used += (size_t)w;
+        }
+
+        int x = 0, y = 0;
+        if (!recon_shell_account_at(server->shell, name, &x, &y)) {
+            out(s, "The login screen is not offering '%s'.\n", name);
+            return;
+        }
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "chose '%s' at %d,%d\n", name, x, y);
+        return;
+    }
+
     if (strcasecmp(what, "start") == 0) {
         if (argc < 3) {
             out(s, "Usage: ui start <label>\n");
@@ -946,6 +977,71 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
         }
         out(s, "\n  %d roles. Skins live in %s as %s files.\n",
             RECON_THEME_ROLE_COUNT, RECON_DIR_THEMES, RECON_THEME_EXT);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "install") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: theme install <file>\n");
+            return;
+        }
+
+        /* Joined, so a path with a space in it works without quoting -- the
+         * same reason `apps File Explorer` joins its tail. */
+        char path[RECON_PATH_MAX];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(path) - 1; i++) {
+            int n = snprintf(path + used, sizeof(path) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (n < 0) {
+                break;
+            }
+            used += (size_t)n;
+        }
+
+        const char *resolved = path[0] == '/' ? path : NULL;
+        char joined[RECON_PATH_MAX];
+        if (resolved == NULL) {
+            snprintf(joined, sizeof(joined), "%s/%s",
+                strcmp(recon_cmd_cwd(s), "/") == 0 ? "" : recon_cmd_cwd(s),
+                path);
+            resolved = joined;
+        }
+
+        if (!recon_theme_install(resolved)) {
+            out(s, "%s\n", recon_theme_last_error());
+            return;
+        }
+        out(s, "Installed. 'theme' lists it; 'theme <name>' puts it on.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "remove") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: theme remove <name>\n");
+            return;
+        }
+
+        char name[48];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(name) - 1; i++) {
+            int n = snprintf(name + used, sizeof(name) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (n < 0) {
+                break;
+            }
+            used += (size_t)n;
+        }
+
+        if (!recon_theme_uninstall(name)) {
+            out(s, "%s\n", recon_theme_last_error());
+            return;
+        }
+
+        /* The skin may have been the one on screen, in which case removing it
+         * put the default on and everything drawn needs to hear about it. */
+        recon_shell_restyle(s->server->shell);
+        out(s, "Removed. The skin in use is '%s'.\n", recon_theme_current());
         return;
     }
 
@@ -1768,7 +1864,9 @@ static const struct command COMMANDS[] = {
     { "install",  "install <path>",        "Put a program into the system",      cmd_install },
     { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
-    { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
+    { "theme",    "theme [name|roles|install|remove]",
+                                       "List skins, put one on, add or remove",
+                                                                          cmd_theme },
     { "wallpaper","wallpaper [name]",      "What is behind everything",          cmd_wallpaper },
     { "session",  "session",               "What the login screen shows",       cmd_session },
     { "users",    "users [action] ...",    "List or change accounts",           cmd_users },

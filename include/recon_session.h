@@ -70,4 +70,19 @@ bool recon_session_handle_key(struct recon_session *session,
 /* What is on screen, for diagnosis from the control socket. */
 void recon_session_describe(struct recon_session *session, char *out, size_t size);
 
+/*
+ * Where an account's tile is on the login screen, in screen coordinates.
+ *
+ * So that choosing an account can be driven from outside, the way choosing a
+ * Start menu entry can. The account grid was the one part of the gate nothing
+ * could reach: every other screen is worked by keys, and picking an account
+ * is a click on a tile whose position depends on how many accounts there are
+ * and how far the grid has scrolled.
+ *
+ * False when the grid is not showing, when there is no such account, or when
+ * it has scrolled out of view.
+ */
+bool recon_session_account_at(struct recon_session *session, const char *name,
+    int *x, int *y);
+
 #endif

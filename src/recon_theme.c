@@ -14,6 +14,7 @@
 #include "recon_fs.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
+#include "recon_users.h"
 
 #define THEMES_MAX 16
 
@@ -824,6 +825,216 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
     memcpy(theme->colors, colors, sizeof(colors));
     memcpy(theme->gradient, gradient, sizeof(gradient));
     memcpy(theme->has_gradient, has_gradient, sizeof(has_gradient));
+    return true;
+}
+
+/* --- Installing --- */
+
+/*
+ * The name a skin file gives itself, and whether it says anything a skin
+ * should say.
+ *
+ * Read before the file is copied anywhere. A file that is not a skin, copied
+ * into /System/Themes first and parsed afterwards, becomes something every
+ * start has to skip -- and it would be skipped silently, since a line that
+ * will not parse costs that line and not the file. Better to refuse it while
+ * it is still somebody else's file.
+ */
+static bool inspect_theme_file(const char *path, char *name, size_t name_size) {
+    size_t size = 0;
+    char *text = recon_fs_read("/", path, &size);
+    if (text == NULL) {
+        set_error("cannot read '%s'", path);
+        return false;
+    }
+
+    name[0] = '\0';
+    int roles = 0;
+
+    char *saveptr = NULL;
+    for (char *line = strtok_r(text, "\n", &saveptr);
+            line != NULL;
+            line = strtok_r(NULL, "\n", &saveptr)) {
+
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (*line == '\0' || *line == '#') {
+            continue;
+        }
+
+        char *equals = strchr(line, '=');
+        if (equals == NULL) {
+            continue;
+        }
+        *equals = '\0';
+
+        char *key_end = equals;
+        while (key_end > line && (key_end[-1] == ' ' || key_end[-1] == '\t')) {
+            *--key_end = '\0';
+        }
+        char *value = equals + 1;
+        while (*value == ' ' || *value == '\t') {
+            value++;
+        }
+        char *value_end = value + strlen(value);
+        while (value_end > value &&
+                (value_end[-1] == ' ' || value_end[-1] == '\t' ||
+                 value_end[-1] == '\r')) {
+            *--value_end = '\0';
+        }
+
+        if (strcasecmp(line, "name") == 0) {
+            snprintf(name, name_size, "%s", value);
+            continue;
+        }
+
+        size_t key_len = strlen(line);
+        if (key_len > 3 && strcasecmp(line + key_len - 3, ".to") == 0) {
+            line[key_len - 3] = '\0';
+        }
+
+        recon_color parsed;
+        if (role_from_name(line) >= 0 && parse_color(value, &parsed)) {
+            roles++;
+        }
+    }
+
+    free(text);
+
+    if (name[0] == '\0') {
+        set_error("that file does not name a skin -- it needs a 'name =' line");
+        return false;
+    }
+    if (roles == 0) {
+        /*
+         * A skin that changes nothing is legal to *write* -- everything is
+         * inherited -- but installing one is almost certainly a mistake, and
+         * an entry in the list that looks identical to the default is a
+         * confusing thing to have put there on purpose.
+         */
+        set_error("'%s' sets no colours, so it would look like the default",
+            name);
+        return false;
+    }
+    return true;
+}
+
+bool recon_theme_install(const char *path) {
+    if (path == NULL || *path == '\0') {
+        set_error("no file given");
+        return false;
+    }
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can install a skin");
+        return false;
+    }
+    if (!recon_fs_exists("/", path)) {
+        set_error("there is no file at '%s'", path);
+        return false;
+    }
+
+    char name[48];
+    if (!inspect_theme_file(path, name, sizeof(name))) {
+        return false;
+    }
+
+    if (find_theme(name) != NULL) {
+        /* A file cannot shadow a built-in, so copying one in under a name
+         * already taken would install something the system then ignores. */
+        set_error("there is already a skin called '%s'", name);
+        return false;
+    }
+
+    recon_fs_mkdir("/", RECON_DIR_THEMES);
+
+    /*
+     * Named for the skin rather than for the file it came from, so the folder
+     * reads as a list of skins and the name collision above is the only check
+     * that matters -- otherwise the same skin could be installed twice under
+     * two file names, and the second one would be loaded and ignored.
+     */
+    char target[RECON_PATH_MAX];
+    snprintf(target, sizeof(target), "%s/%s%s", RECON_DIR_THEMES, name,
+        RECON_THEME_EXT);
+
+    if (recon_fs_exists("/", target)) {
+        set_error("there is already a file at '%s'", target);
+        return false;
+    }
+
+    if (!recon_fs_copy("/", path, target)) {
+        set_error("cannot copy into %s", RECON_DIR_THEMES);
+        return false;
+    }
+
+    if (!load_theme_file(target, name)) {
+        /* It read once and will not read now, so leave nothing behind. */
+        recon_fs_remove("/", target);
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
+bool recon_theme_uninstall(const char *name) {
+    if (name == NULL || *name == '\0') {
+        set_error("no skin named");
+        return false;
+    }
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can remove a skin");
+        return false;
+    }
+
+    struct theme *theme = find_theme(name);
+    if (theme == NULL) {
+        set_error("there is no skin called '%s'", name);
+        return false;
+    }
+    if (theme->info.built_in) {
+        set_error("'%s' ships with ReconOS and cannot be removed",
+            theme->info.name);
+        return false;
+    }
+
+    /* Its own spelling of its name, so the file is found whatever case the
+     * caller used. */
+    char installed[48];
+    snprintf(installed, sizeof(installed), "%s", theme->info.name);
+
+    char path[RECON_PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s%s", RECON_DIR_THEMES, installed,
+        RECON_THEME_EXT);
+
+    /*
+     * Off the screen before off the disk. Taking away the colours somebody is
+     * looking at and leaving them with none is not a quiet operation, and
+     * recon_theme_set redraws everything on the way past.
+     */
+    if (g_current >= 0 && &g_themes[g_current] == theme) {
+        recon_theme_set(RECON_THEME_DEFAULT);
+
+        /* recon_theme_set moved g_current; the entry is still the same one,
+         * but look it up again rather than trusting a pointer across a call
+         * that rearranges what it points into. */
+        theme = find_theme(installed);
+        if (theme == NULL) {
+            set_error("'%s' went missing while it was being removed",
+                installed);
+            return false;
+        }
+    }
+
+    if (recon_fs_exists("/", path) && !recon_fs_remove("/", path)) {
+        set_error("cannot remove '%s'", path);
+        return false;
+    }
+
+    memset(theme, 0, sizeof(*theme));
+    g_count--;
+    g_generation++;
     return true;
 }
 

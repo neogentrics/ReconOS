@@ -69,6 +69,12 @@ void recon_shell_begin_session(struct recon_shell *shell);
 bool recon_shell_session_active(struct recon_shell *shell);
 
 /* What the gate is showing, for diagnosis from outside. */
+/* Where an account's tile is on the login screen, in screen coordinates, so
+ * that choosing one can be driven from outside. False when the grid is not
+ * showing or there is no such account. */
+bool recon_shell_account_at(struct recon_shell *shell, const char *name,
+    int *x, int *y);
+
 void recon_shell_describe_session(struct recon_shell *shell,
     char *out, size_t size);
 
