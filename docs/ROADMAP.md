@@ -341,11 +341,28 @@ nothing, so it counts instead: real numbers read as each line appears, and a
 zero means something is genuinely missing. `RECONOS_NO_SPLASH` skips it,
 which is what the harnesses use.
 
+## v0.2.4 — a skin you can install
+
+Added in v0.2.4. `theme install <file>` reads and parses the file *before*
+copying it into `/System/Themes`, so something that is not a skin is refused
+while it is still somebody else's file rather than becoming a thing every
+start has to skip. A name already taken is refused, because a file cannot
+shadow a built-in and installing one under an existing name would put a file
+in place that the system then ignores. `theme remove <name>` takes an
+installed skin away, putting the default on first if it was the one in use,
+and refuses a built-in. Administrator only.
+
+`ui account <name>` came with it: the login screen's account grid was the one
+part of the gate nothing outside could drive, so lock, switch-user and the
+limited-account refusals were all being checked by hand.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
 
-**No custom skins.** The format exists and there is no way to install one.
+**Custom skins can be installed but not written from inside ReconOS.**
+`theme install` takes a file and `theme remove` takes it away; there is no
+editor for one, so writing a skin still means writing a text file.
 
 **No paint program, and no properties dialogs.** Desktop icon positions are
 not remembered. Client windows still draw their own decorations. The control

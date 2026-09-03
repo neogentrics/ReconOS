@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.3.** The version number tracks what works, not what is
+**Status: v0.2.4.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -29,6 +29,8 @@ removing programs, and wallpapers the system draws for itself. v0.2.2 gave
 the Start menu an All Programs list and restricted the control socket to the
 account that owns it. v0.2.3 added gradients to the skin system, a boot
 splash, and fixed the unreadable labels that finding the gradients turned up.
+v0.2.4 made skins installable, which the file format had been waiting for
+since the skin system was built.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -192,15 +194,18 @@ swapping one restyles the whole system without a drawing call changing. Four
 ship: **Recon** (the native look), **Classic** (the 95 era), **Aqua** (light),
 **Midnight** (dark). They live in `/System/Themes` as text.
 
-A skin file only says what it wants to change; everything else is inherited. A
-file containing three lines restyles just the taskbar:
+A skin file only says what it wants to change; everything else is inherited
+from **Recon**, the native skin — so a light skin should say what its desktop
+labels look like, or it gets Recon's white-on-dark ones, which are meant for a
+night sky. A file containing three lines restyles just the taskbar:
 
 ```
 name = OnlyBar
 bar = 802020
 ```
 
-`theme` lists them, `theme <name>` puts one on and redraws everything, and
+`theme` lists them, `theme <name>` puts one on and redraws everything,
+`theme install <file>` adds one and `theme remove <name>` takes it away, and
 `theme roles` prints all 48 roles with what they currently resolve to — which
 is what to start from when writing one. The choice is per-account and
 remembered.
