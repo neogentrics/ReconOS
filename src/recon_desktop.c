@@ -23,6 +23,7 @@
 #include "recon_icons.h"
 #include "recon_shell.h"
 #include "recon_server.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 #define ICON_WIDTH 88
@@ -33,15 +34,15 @@
 
 #define ITEMS_MAX 128
 
-#define COLOR_LABEL RECON_RGB(0xF0, 0xF0, 0xF0)
-#define COLOR_LABEL_SHADOW RECON_RGBA(0x00, 0x00, 0x00, 0xC0)
-#define COLOR_SELECTED RECON_RGBA(0x30, 0x50, 0x90, 0xA0)
+#define COLOR_LABEL THEME(DESKTOP_LABEL)
+#define COLOR_LABEL_SHADOW THEME(DESKTOP_LABEL_SHADOW)
+#define COLOR_SELECTED THEME(DESKTOP_SELECTION)
 #define COLOR_FOLDER RECON_RGB(0xE0, 0xC0, 0x60)
 #define COLOR_FOLDER_TAB RECON_RGB(0xC8, 0xA8, 0x48)
 #define COLOR_FILE RECON_RGB(0xF4, 0xF4, 0xF4)
 #define COLOR_FILE_FOLD RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_APP RECON_RGB(0x8B, 0x1A, 0x1A)
-#define COLOR_EDGE RECON_RGB(0x30, 0x30, 0x30)
+#define COLOR_APP THEME(ACCENT)
+#define COLOR_EDGE THEME(WINDOW_EDGE)
 
 /* A desktop item is one of these. Shortcuts are files ending in .app whose
  * contents name a built-in application. */

@@ -64,6 +64,7 @@ add_executable(ReconOS
     src/recon_filedlg.c
     src/recon_notepad.c
     src/recon_registry.c
+    src/recon_theme.c
     src/recon_procinfo.c
     src/recon_shell.c
     src/recon_taskmgr.c
@@ -130,6 +131,18 @@ add_executable(recon_registry_tests
 target_include_directories(recon_registry_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# A skin's failures are silent: a role no skin answers draws as nothing and
+# looks like a missing feature rather than a missing colour.
+add_executable(recon_theme_tests
+    tests/test_theme.c
+    src/recon_theme.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_theme_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
+add_test(NAME theme COMMAND recon_theme_tests)

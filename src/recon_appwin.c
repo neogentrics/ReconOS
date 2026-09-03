@@ -15,6 +15,7 @@
 #include "recon_server.h"
 #include "recon_registry.h"
 #include "recon_shell.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 /* --- Frame metrics --- */
@@ -34,13 +35,13 @@
 
 /* --- Frame colours --- */
 
-#define COLOR_FRAME RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_TITLE_ACTIVE RECON_RGB(0x20, 0x2A, 0x44)
-#define COLOR_TITLE_INACTIVE RECON_RGB(0x6A, 0x6A, 0x72)
-#define COLOR_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
-#define COLOR_BUTTON RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_GLYPH RECON_RGB(0x10, 0x10, 0x10)
-#define COLOR_EDGE RECON_RGB(0x30, 0x30, 0x30)
+#define COLOR_FRAME THEME(WINDOW_FRAME)
+#define COLOR_TITLE_ACTIVE THEME(TITLE_ACTIVE)
+#define COLOR_TITLE_INACTIVE THEME(TITLE_INACTIVE)
+#define COLOR_TITLE_TEXT THEME(TITLE_TEXT)
+#define COLOR_BUTTON THEME(WINDOW_BUTTON)
+#define COLOR_GLYPH THEME(WINDOW_BUTTON_GLYPH)
+#define COLOR_EDGE THEME(WINDOW_EDGE)
 
 /* Framework hit ids, kept below RECON_APPWIN_HIT_USER. */
 #define HIT_TITLEBAR 1

@@ -20,6 +20,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/log.h>
 
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 /* --- Font --- */
@@ -707,11 +708,11 @@ uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
 
 /* --- Text entry --- */
 
-#define EDIT_BG RECON_RGB(0xFF, 0xFF, 0xFF)
-#define EDIT_TEXT RECON_RGB(0x10, 0x10, 0x10)
-#define EDIT_CARET RECON_RGB(0x10, 0x10, 0x10)
-#define EDIT_BORDER RECON_RGB(0x30, 0x50, 0x90)
-#define EDIT_SELECTION RECON_RGB(0xB0, 0xC8, 0xF0)
+#define EDIT_BG THEME(FIELD)
+#define EDIT_TEXT THEME(FIELD_TEXT)
+#define EDIT_CARET THEME(CARET)
+#define EDIT_BORDER THEME(FIELD_BORDER)
+#define EDIT_SELECTION THEME(FIELD_SELECTION)
 
 void recon_edit_begin(struct recon_edit *edit, const char *initial,
         bool select_stem) {

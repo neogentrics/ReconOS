@@ -27,6 +27,7 @@
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_registry.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -56,21 +57,28 @@
  * The one place the shell's colours are defined. A skin is a different set of
  * these, which is why nothing below uses a literal.
  */
-#define COLOR_BAR RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_TEXT RECON_RGB(0x10, 0x10, 0x10)
-#define COLOR_TEXT_DIM RECON_RGB(0x40, 0x40, 0x40)
-#define COLOR_BUTTON RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_BUTTON_ACTIVE RECON_RGB(0xA8, 0xA8, 0xB4)
-#define COLOR_MENU RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_MENU_BORDER RECON_RGB(0x30, 0x30, 0x30)
-#define COLOR_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
-#define COLOR_DIALOG_TITLE RECON_RGB(0x20, 0x2A, 0x44)
-#define COLOR_DIALOG_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
+#define COLOR_BAR THEME(BAR)
+/*
+ * The taskbar's ink and a menu's ink are different questions, even though
+ * every skin shipped answers them the same. Sharing one name here would mean
+ * a skin that wanted a dark bar with light menus could not have one.
+ */
+#define COLOR_TEXT THEME(BAR_TEXT)
+#define COLOR_TEXT_DIM THEME(BAR_TEXT_DIM)
+#define COLOR_MENU_TEXT THEME(MENU_TEXT)
+#define COLOR_MENU_TEXT_DISABLED THEME(MENU_TEXT_DISABLED)
+#define COLOR_BUTTON THEME(BUTTON)
+#define COLOR_BUTTON_ACTIVE THEME(BUTTON_ACTIVE)
+#define COLOR_MENU THEME(MENU)
+#define COLOR_MENU_BORDER THEME(MENU_BORDER)
+#define COLOR_ACCENT THEME(ACCENT)
+#define COLOR_DIALOG_TITLE THEME(DIALOG_TITLE)
+#define COLOR_DIALOG_TITLE_TEXT THEME(DIALOG_TITLE_TEXT)
 /* What the pointer is over, in a menu. */
-#define COLOR_MENU_HILITE RECON_RGB(0x30, 0x50, 0x90)
-#define COLOR_MENU_HILITE_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
+#define COLOR_MENU_HILITE THEME(MENU_HILITE)
+#define COLOR_MENU_HILITE_TEXT THEME(MENU_HILITE_TEXT)
 /* Half-transparent black. Alpha is what makes the desktop show through. */
-#define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x99)
+#define COLOR_DIM THEME(DIM)
 
 /* Hit-region ids. Window buttons use TASK_BASE + index. */
 #define HIT_APPS_BUTTON 1
@@ -382,7 +390,7 @@ static void draw_dialog(struct recon_shell *shell) {
     for (int i = 0; i < count; i++) {
         recon_draw_text(p, shell->font, DIALOG_PADDING,
             DIALOG_TITLE_HEIGHT + DIALOG_PADDING + ascent + i * line_height,
-            width - DIALOG_PADDING * 2, lines[i], COLOR_TEXT);
+            width - DIALOG_PADDING * 2, lines[i], COLOR_MENU_TEXT);
     }
 
     /* Buttons along the bottom right, in the order given, so the safe choice
@@ -408,7 +416,7 @@ static void draw_dialog(struct recon_shell *shell) {
         int text_w = recon_text_width(shell->font, shell->dialog_buttons[i]);
         recon_draw_text(p, shell->font, bx + (DIALOG_BUTTON_WIDTH - text_w) / 2,
             by + (DIALOG_BUTTON_HEIGHT + ascent) / 2 - 2, DIALOG_BUTTON_WIDTH,
-            shell->dialog_buttons[i], COLOR_TEXT);
+            shell->dialog_buttons[i], COLOR_MENU_TEXT);
 
         recon_hit_add(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
             HIT_DIALOG_BASE + i);
@@ -746,8 +754,8 @@ static void draw_context(struct recon_shell *shell) {
 
         recon_draw_text(p, shell->font, 14, y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
             width - 24, shell->context_items[i].label,
-            !shell->context_items[i].enabled ? COLOR_TEXT_DIM :
-            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
+            !shell->context_items[i].enabled ? COLOR_MENU_TEXT_DISABLED :
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
 
         /* Disabled entries are shown rather than hidden, so the menu keeps the
          * same shape and what is unavailable is visible. */
@@ -1073,7 +1081,7 @@ static void draw_menu(struct recon_shell *shell) {
         }
         recon_draw_text(menu, shell->font, label_x, baseline,
             width - label_x - MENU_PADDING, entry.label,
-            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
         recon_hit_add(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
             MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
     }
@@ -1101,7 +1109,7 @@ static void draw_security(struct recon_shell *shell) {
 
     recon_draw_text(p, shell->font, SEC_PADDING,
         SEC_TITLE_HEIGHT + SEC_PADDING + ascent,
-        width - SEC_PADDING * 2, "What would you like to do?", COLOR_TEXT);
+        width - SEC_PADDING * 2, "What would you like to do?", COLOR_MENU_TEXT);
 
     int y = SEC_TITLE_HEIGHT + SEC_PADDING * 2 + 20;
     for (int i = 0; i < SEC_COUNT; i++) {
@@ -1113,7 +1121,7 @@ static void draw_security(struct recon_shell *shell) {
         recon_draw_bevel(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, false);
         recon_draw_text(p, shell->font, SEC_PADDING + 12,
             y + (SEC_BUTTON_HEIGHT + ascent) / 2 - 2, bw - 24,
-            SEC_ITEMS[i], COLOR_TEXT);
+            SEC_ITEMS[i], COLOR_MENU_TEXT);
         recon_hit_add(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, HIT_SEC_BASE + i);
         y += SEC_BUTTON_HEIGHT + SEC_PADDING;
     }
@@ -1380,6 +1388,34 @@ void recon_shell_open_taskmgr(struct recon_shell *shell) {
      * opening it by name is what makes it possible for it to become a module
      * later without this having to change. */
     recon_shell_open_named(shell, "Task Manager");
+}
+
+void recon_shell_restyle(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+
+    /* Everything the shell draws itself. */
+    draw_taskbar(shell);
+    draw_menu(shell);
+    draw_context(shell);
+    draw_security(shell);
+    draw_dialog(shell);
+
+    if (shell->dim != NULL) {
+        recon_fill(shell->dim, COLOR_DIM);
+        recon_panel_commit(shell->dim);
+    }
+
+    /* Then every window, including the ones nobody is looking at: a window
+     * that is minimized now will be restored later, and should not come back
+     * wearing the old skin. */
+    for (int i = 0; i < shell->app_count; i++) {
+        recon_appwin_refresh(shell->apps[i]);
+    }
+
+    recon_desktop_reload(shell->desktop);
+    recon_damage_all(shell->server);
 }
 
 struct recon_font *recon_shell_font(struct recon_shell *shell) {

@@ -18,6 +18,7 @@
 #include "recon_icons.h"
 #include "recon_cmd.h"
 #include "recon_terminal.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 #define SCROLLBACK_LINES 400
@@ -27,10 +28,10 @@
 #define PADDING 6
 #define LINE_SPACING 2
 
-#define COLOR_BG RECON_RGB(0x0C, 0x10, 0x18)
-#define COLOR_TEXT RECON_RGB(0xC8, 0xD4, 0xC8)
-#define COLOR_PROMPT RECON_RGB(0x7C, 0xC8, 0x7C)
-#define COLOR_INPUT RECON_RGB(0xF0, 0xF0, 0xE8)
+#define COLOR_BG THEME(READOUT)
+#define COLOR_TEXT THEME(READOUT_TEXT)
+#define COLOR_PROMPT THEME(READOUT_ACCENT)
+#define COLOR_INPUT THEME(READOUT_INPUT)
 #define COLOR_CURSOR RECON_RGB(0x8B, 0x1A, 0x1A)
 
 struct recon_terminal {

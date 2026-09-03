@@ -42,6 +42,25 @@ differently. Shift+Delete skips it, after asking.
 **Dialogs.** Anything destructive asks in a window, with Cancel last so it is
 what both Enter and Escape choose. Clicking outside does not dismiss one.
 
+**Skins.** Every colour is asked for by what it means rather than what it looks
+like — `title.active`, not "dark blue" — so a skin is a set of answers and
+swapping one restyles the whole system without a drawing call changing. Four
+ship: **Recon** (the native look), **Classic** (the 95 era), **Aqua** (light),
+**Midnight** (dark). They live in `/System/Themes` as text.
+
+A skin file only says what it wants to change; everything else is inherited. A
+file containing three lines restyles just the taskbar:
+
+```
+name = OnlyBar
+bar = 802020
+```
+
+`theme` lists them, `theme <name>` puts one on and redraws everything, and
+`theme roles` prints all 46 roles with what they currently resolve to — which
+is what to start from when writing one. The choice is per-account and
+remembered.
+
 **A registry** — what the system remembers between runs. Two hives, for the
 reason Windows has two: `/System/Config/system.reg` belongs to the machine and
 `/Users/<name>/user.reg` to one account, because a theme is a person's and a

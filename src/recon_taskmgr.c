@@ -27,6 +27,7 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_taskmgr.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 /* --- Layout, relative to the content area --- */
@@ -51,20 +52,20 @@
 
 /* --- Colours --- */
 
-#define COLOR_FRAME RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_LIST_BG RECON_RGB(0xFF, 0xFF, 0xFF)
-#define COLOR_HEADER RECON_RGB(0xD4, 0xD4, 0xD4)
-#define COLOR_TEXT RECON_RGB(0x10, 0x10, 0x10)
-#define COLOR_ROW_ALT RECON_RGB(0xF2, 0xF2, 0xF6)
-#define COLOR_ROW_SELECTED RECON_RGB(0x30, 0x50, 0x90)
-#define COLOR_ROW_SELECTED_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
-#define COLOR_BUTTON RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_STATUS RECON_RGB(0x30, 0x30, 0x30)
-#define COLOR_MENUBAR RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_MENU_HILITE RECON_RGB(0x30, 0x50, 0x90)
-#define COLOR_MENU_HILITE_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
+#define COLOR_FRAME THEME(WINDOW_FRAME)
+#define COLOR_LIST_BG THEME(SURFACE)
+#define COLOR_HEADER THEME(SURFACE_HEADER)
+#define COLOR_TEXT THEME(SURFACE_TEXT)
+#define COLOR_ROW_ALT THEME(SURFACE_ALT)
+#define COLOR_ROW_SELECTED THEME(SELECTION)
+#define COLOR_ROW_SELECTED_TEXT THEME(SELECTION_TEXT)
+#define COLOR_BUTTON THEME(BUTTON)
+#define COLOR_STATUS THEME(SURFACE_TEXT_DIM)
+#define COLOR_MENUBAR THEME(MENU)
+#define COLOR_MENU_HILITE THEME(MENU_HILITE)
+#define COLOR_MENU_HILITE_TEXT THEME(MENU_HILITE_TEXT)
 /* For the one row in a list that wants acting on. */
-#define COLOR_ALERT RECON_RGB(0x8B, 0x1A, 0x1A)
+#define COLOR_ALERT THEME(WARNING)
 
 /* Application hit ids, above the framework's own. */
 #define HIT_END_TASK (RECON_APPWIN_HIT_USER + 1)

@@ -9,6 +9,7 @@
 
 #include "recon_filedlg.h"
 #include "recon_icons.h"
+#include "recon_theme.h"
 
 #define DIALOG_MARGIN 18
 /* An upper bound, so a big window does not get a dialog the size of a big
@@ -26,18 +27,18 @@
 
 /* Enough to say the window behind is not usable, not so much that it
  * looks switched off. */
-#define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x60)
-#define COLOR_BG RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_TITLE RECON_RGB(0x20, 0x2A, 0x44)
-#define COLOR_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
-#define COLOR_TEXT RECON_RGB(0x10, 0x10, 0x10)
-#define COLOR_DIR RECON_RGB(0x1A, 0x3A, 0x8B)
-#define COLOR_LIST_BG RECON_RGB(0xFF, 0xFF, 0xFF)
-#define COLOR_SELECTED RECON_RGB(0x30, 0x50, 0x90)
-#define COLOR_SELECTED_TEXT RECON_RGB(0xFF, 0xFF, 0xFF)
-#define COLOR_BUTTON RECON_RGB(0xC8, 0xC8, 0xC8)
-#define COLOR_BORDER RECON_RGB(0x30, 0x30, 0x30)
-#define COLOR_WARNING RECON_RGB(0x8B, 0x1A, 0x1A)
+#define COLOR_DIM THEME(DIM)
+#define COLOR_BG THEME(DIALOG)
+#define COLOR_TITLE THEME(DIALOG_TITLE)
+#define COLOR_TITLE_TEXT THEME(DIALOG_TITLE_TEXT)
+#define COLOR_TEXT THEME(SURFACE_TEXT)
+#define COLOR_DIR THEME(DIRECTORY)
+#define COLOR_LIST_BG THEME(SURFACE)
+#define COLOR_SELECTED THEME(SELECTION)
+#define COLOR_SELECTED_TEXT THEME(SELECTION_TEXT)
+#define COLOR_BUTTON THEME(BUTTON)
+#define COLOR_BORDER THEME(MENU_BORDER)
+#define COLOR_WARNING THEME(WARNING)
 
 #define HIT_UP (RECON_FILEDLG_HIT_BASE + 1)
 #define HIT_HOME (RECON_FILEDLG_HIT_BASE + 2)

@@ -18,6 +18,7 @@
 #include "recon_modules.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
+#include "recon_theme.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 
@@ -825,6 +826,51 @@ static void cmd_reg(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "'%s' is not something reg does.\n", action);
 }
 
+/* List the skins, or put one on. */
+static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Current skin: %s\n\n", recon_theme_current());
+
+        int count = recon_theme_count();
+        for (int i = 0; i < count; i++) {
+            struct recon_theme_info info;
+            if (!recon_theme_at(i, &info)) {
+                continue;
+            }
+            out(s, "  %-12s %-8s %s\n", info.name,
+                info.built_in ? "built in" : "file",
+                info.description);
+        }
+        out(s, "\n'theme <name>' puts one on. 'theme roles' lists what a skin "
+            "can colour.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "roles") == 0) {
+        /*
+         * Every role and what it currently resolves to. This is what somebody
+         * writing a skin needs: the list of questions, and the answers the
+         * current one gives, so a new file can start from something real.
+         */
+        for (int i = 0; i < RECON_THEME_ROLE_COUNT; i++) {
+            recon_color c = recon_theme_color((enum recon_theme_role)i);
+            out(s, "  %-22s %08X\n", recon_theme_role_name(i), c);
+        }
+        out(s, "\n  %d roles. Skins live in %s as %s files.\n",
+            RECON_THEME_ROLE_COUNT, RECON_DIR_THEMES, RECON_THEME_EXT);
+        return;
+    }
+
+    if (!recon_theme_set(argv[1])) {
+        out(s, "%s\n", recon_theme_last_error());
+        return;
+    }
+
+    /* The whole desktop, not just what is in front. */
+    recon_shell_restyle(s->server->shell);
+    out(s, "Skin is now '%s'.\n", recon_theme_current());
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -966,6 +1012,7 @@ static const struct command COMMANDS[] = {
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
+    { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },

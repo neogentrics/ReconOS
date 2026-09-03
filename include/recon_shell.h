@@ -32,6 +32,15 @@ void recon_shell_resize(struct recon_shell *shell, int screen_width, int screen_
 void recon_shell_refresh(struct recon_shell *shell);
 
 /*
+ * Redraw everything, because the colours changed.
+ *
+ * Separate from refresh: a refresh redraws what the shell owns, while this
+ * also reaches every window. A skin that only took effect on the windows you
+ * happened to touch afterwards would look like a bug rather than a setting.
+ */
+void recon_shell_restyle(struct recon_shell *shell);
+
+/*
  * Offer a click at layout coordinates to the shell.
  *
  * Returns true if the shell consumed it, in which case the compositor should

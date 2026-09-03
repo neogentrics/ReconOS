@@ -14,6 +14,7 @@
 #include "recon_icons.h"
 #include "recon_calc.h"
 #include "recon_module.h"
+#include "recon_theme.h"
 #include "recon_ui.h"
 
 #define DISPLAY_HEIGHT 44
@@ -24,14 +25,14 @@
 
 #define DIGITS_MAX 16
 
-#define COLOR_BG RECON_RGB(0xC0, 0xC0, 0xC0)
-#define COLOR_DISPLAY RECON_RGB(0x18, 0x1C, 0x24)
-#define COLOR_DISPLAY_TEXT RECON_RGB(0x9C, 0xE8, 0x9C)
-#define COLOR_KEY RECON_RGB(0xD0, 0xD0, 0xD0)
-#define COLOR_KEY_OP RECON_RGB(0xB8, 0xBC, 0xC8)
-#define COLOR_KEY_ACCENT RECON_RGB(0x8B, 0x1A, 0x1A)
-#define COLOR_KEY_TEXT RECON_RGB(0x10, 0x10, 0x10)
-#define COLOR_ACCENT_TEXT RECON_RGB(0xF4, 0xF4, 0xF4)
+#define COLOR_BG THEME(WINDOW_FRAME)
+#define COLOR_DISPLAY THEME(READOUT)
+#define COLOR_DISPLAY_TEXT THEME(READOUT_TEXT)
+#define COLOR_KEY THEME(BUTTON)
+#define COLOR_KEY_OP THEME(BUTTON_ACTIVE)
+#define COLOR_KEY_ACCENT THEME(ACCENT)
+#define COLOR_KEY_TEXT THEME(SURFACE_TEXT)
+#define COLOR_ACCENT_TEXT THEME(ACCENT_TEXT)
 
 enum key_kind {
     KEY_DIGIT,
