@@ -235,6 +235,9 @@ struct recon_explorer {
     bool places_open;
     struct place places[PLACES_MAX];
     int place_count;
+    /* Which entry the pointer is over, or -1. A list that does not say which
+     * row a click will take is a list you have to aim at twice. */
+    int place_hover;
 
     /*
      * What the pointer is over, in words. The toolbar is icons now, and an
@@ -1118,10 +1121,12 @@ static void build_places(struct recon_explorer *ex) {
     /* Then what is in this folder, which is the half that makes the
      * drop-down worth having: it is a way down as well as a way across. */
     int here = 0;
+    int folders = 0;
     for (int i = 0; i < ex->entry_count && ex->place_count < PLACES_MAX; i++) {
         if (ex->entries[i].kind != RECON_FILE_DIRECTORY) {
             continue;
         }
+        folders++;
 
         char path[RECON_PATH_MAX];
         snprintf(path, sizeof(path), "%s%s%s",
@@ -1161,12 +1166,51 @@ static void build_places(struct recon_explorer *ex) {
      */
     if (here == 0 && ex->place_count < PLACES_MAX) {
         struct place *note = &ex->places[ex->place_count++];
-        snprintf(note->label, sizeof(note->label),
-            "No folders inside this one");
+        /*
+         * Two different nothings. A folder with no folders in it, and a
+         * folder whose folders are all listed above already -- which is what
+         * your own home folder looks like. Saying "no folders inside this
+         * one" while standing in a folder with six of them is simply false.
+         */
+        snprintf(note->label, sizeof(note->label), "%s",
+            folders > 0 ? "All of them are listed above"
+                        : "No folders inside this one");
         note->path[0] = '\0';
         note->heading = "In this folder";
         note->is_note = true;
     }
+}
+
+/*
+ * How wide the open list is: as wide as its widest entry needs, and no wider.
+ *
+ * It used to be the width of the address bar, which on a wide window meant a
+ * panel of mostly empty grey with a column of short words down one edge. A
+ * menu should be the size of what is in it.
+ */
+static int places_width(struct recon_explorer *ex, int limit) {
+    int widest = 0;
+    for (int i = 0; i < ex->place_count; i++) {
+        int w = recon_text_width(ex->font, ex->places[i].label);
+        if (w > widest) {
+            widest = w;
+        }
+        if (ex->places[i].heading != NULL) {
+            w = recon_text_width(ex->font, ex->places[i].heading);
+            if (w > widest) {
+                widest = w;
+            }
+        }
+    }
+
+    int width = widest + 44;
+    if (width < 180) {
+        width = 180;   /* Narrower than this and it reads as a tooltip. */
+    }
+    if (width > limit) {
+        width = limit;
+    }
+    return width;
 }
 
 /* How tall the open list is, headings and rules included. */
@@ -1188,6 +1232,12 @@ static void draw_places(struct recon_explorer *ex, struct recon_panel *p,
     if (height > limit) {
         height = limit;
     }
+
+    /* Sized to its contents, and hung from the right-hand end of the address
+     * bar where the button that opened it is. */
+    int full = w;
+    w = places_width(ex, full);
+    x += full - w;
 
     recon_fill_rect(p, x, y, w, height, THEME(MENU));
     recon_stroke_rect(p, x, y, w, height, THEME(MENU_BORDER));
@@ -1225,13 +1275,19 @@ static void draw_places(struct recon_explorer *ex, struct recon_panel *p,
             continue;
         }
 
+        /* Marked when it is where you already are, and when the pointer is
+         * over it. Without the second, the list showed its entries and gave
+         * no sign which one a click would take. */
         bool current = strcmp(ex->places[i].path, ex->cwd) == 0;
-        if (current) {
-            recon_fill_rect(p, x + 1, iy, w - 2, PLACE_ROW, THEME(MENU_HILITE));
+        bool hovered = (ex->place_hover == i);
+        if (current || hovered) {
+            recon_fill_rect(p, x + 1, iy, w - 2, PLACE_ROW,
+                hovered ? THEME(SELECTION) : THEME(MENU_HILITE));
         }
         recon_draw_text(p, ex->font, x + 22, iy + (PLACE_ROW + ascent) / 2 - 2,
             w - 32, ex->places[i].label,
-            current ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT));
+            hovered ? THEME(SELECTION_TEXT)
+                    : (current ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT)));
 
         recon_hit_add(p, x, iy, w, PLACE_ROW, HIT_PLACE_BASE + i);
         iy += PLACE_ROW;
@@ -1241,6 +1297,7 @@ static void draw_places(struct recon_explorer *ex, struct recon_panel *p,
 static void close_places(struct recon_explorer *ex) {
     ex->places_open = false;
     ex->place_count = 0;
+    ex->place_hover = -1;
 }
 
 /* --- The address bar --- */
@@ -1763,6 +1820,21 @@ static void explorer_motion(void *user, uint32_t hit_id, int cx, int cy) {
     (void)cx;
     (void)cy;
 
+    /* An open list tracks what the pointer is over, and nothing else does
+     * while it is up: it covers what is underneath, so what is underneath is
+     * not what the pointer is on. */
+    if (ex->places_open) {
+        int hover = -1;
+        if (hit_id >= HIT_PLACE_BASE && hit_id < HIT_ROW_BASE) {
+            hover = (int)(hit_id - HIT_PLACE_BASE);
+        }
+        if (hover != ex->place_hover) {
+            ex->place_hover = hover;
+            recon_appwin_refresh(ex->win);
+        }
+        return;
+    }
+
     const char *hint = NULL;
     switch (hit_id) {
     case HIT_BACK:      hint = "Back"; break;
@@ -2025,6 +2097,7 @@ struct recon_appwin *recon_explorer_create(struct recon_server *server,
     ex->font = font;
     ex->selected = -1;
     ex->renaming = -1;
+    ex->place_hover = -1;
 
     /*
      * Where it was last, if that is still a folder. A remembered path can
