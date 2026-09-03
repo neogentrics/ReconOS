@@ -321,6 +321,19 @@ instead of the bar's -- sinking into the bar works while a skin's bar and its
 buttons are near-identical greys, which was true of every skin when the rule
 was written.
 
+### The splash
+
+Added in v0.2.3. The mark, two rings with arcs travelling round them at
+different speeds and in opposite directions, the name and version, a bar, and
+a line naming each part of the system as it is counted.
+
+The lines report a count of what was brought up rather than progress through
+work being done, because the startup work finishes before the screen can
+exist. A bar pretending to drive it would be a decoration in front of
+nothing, so it counts instead: real numbers read as each line appears, and a
+zero means something is genuinely missing. `RECONOS_NO_SPLASH` skips it,
+which is what the harnesses use.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -338,7 +351,8 @@ the clear; there is no TLS and no way to accept a connection.
 title bar and now ramp it, but not change its height, its corner radius, or
 where its buttons sit.
 
-**No boot splash.** The system appears without announcing itself.
+**No recovery, no advanced startup, no reinstall.** All three need a kernel
+and a bootloader, and all three have a Control Panel page saying so.
 
 **Relay is a name, not a language.** Modules are native code loaded by
 `dlopen` behind an ABI check, which is a real gate; the language and its

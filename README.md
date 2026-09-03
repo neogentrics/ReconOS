@@ -27,8 +27,8 @@ blunt about the difference. v0.2.1 added connections that carry data, the
 rule about which programs may open one, screen capture, installing and
 removing programs, and wallpapers the system draws for itself. v0.2.2 gave
 the Start menu an All Programs list and restricted the control socket to the
-account that owns it. v0.2.3 added gradients to the skin system, and fixed
-the unreadable labels that finding them turned up.
+account that owns it. v0.2.3 added gradients to the skin system, a boot
+splash, and fixed the unreadable labels that finding the gradients turned up.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -39,6 +39,13 @@ rather than by anything underneath it. What is here works and is tested; what
 is not here is listed at the end.
 
 ## What works right now
+
+**It announces itself.** A splash with the Recon Towers mark, two rings
+turning around it at different speeds, and a line naming each part of the
+system as it is counted — icons, skins, wallpapers, applications, accounts.
+Those are real numbers rather than a bar pretending to drive work that has
+already finished, so a zero means something is genuinely missing.
+`RECONOS_NO_SPLASH` skips it.
 
 **It sets itself up.** A system with no accounts walks through five short
 screens: welcome, who you are, what the machine is called, whether anything
@@ -432,6 +439,7 @@ tarball an "image" before then would be claiming something ReconOS cannot do.
 | `RECONOS_ASSETS` | Where the wallpaper is loaded from | the `assets/` dir at build time |
 | `RECONOS_CONTROL_SOCKET` | The control socket's path. Created readable and writable by its owner alone; refused if longer than 107 bytes, which is all a Unix socket address holds | `/tmp/reconos.sock` |
 | `RECONOS_CURSOR_THEME` | Cursor theme | the system default |
+| `RECONOS_NO_SPLASH` | Set to anything to start without the boot splash | unset |
 | `RECONOS_FONT` | Font file | the first system font found |
 
 ## Layout
