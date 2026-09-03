@@ -15,20 +15,38 @@ that counts as a usable desktop, and it is not reached yet.
 
 ## What works right now
 
-- Wayland compositor on wlroots, driven by a scene graph
-- **Real application windows** via `xdg-shell` — external clients connect and render
-- Wallpaper rendering from disk (JPEG/PNG via `stb_image`)
-- Mouse tracking with a click-target power button
-- Keyboard input with compositor-level shortcuts
-- Launches client applications from inside the session
+**A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
+right-click menus, and a Ctrl+Alt+Del box.
+
+**Windows the system owns** — minimize, maximize, close, dragging and resizing
+belong to the window framework rather than to each application, so a program
+supplies its contents and nothing else.
+
+**A filesystem** with one root it cannot see outside of: `/System`, `/Apps`,
+`/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
+the root is refused.
+
+**A command interpreter** — ReconOS commands acting on ReconOS. Not a Unix
+shell: nothing here reaches the host or runs host programs. Reachable from the
+terminal window, and over a local socket so a running system can be examined
+from outside.
+
+**Applications**, all native: Task Manager, File Explorer, Terminal, Notepad,
+Calculator.
+
+**Client windows** via `xdg-shell`, for programs written against Wayland.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| `Alt` + `Enter` | Launch a terminal |
-| `Alt` + `Q` | Quit the compositor |
-| Click the red square | Power button — quits |
+| `Alt` + `Enter` | Terminal |
+| `Alt` + `N` | Notepad |
+| `Alt` + `T` | Task Manager |
+| `Alt` + `Tab` | Cycle windows |
+| `Alt` + `C` | Close the focused window |
+| `Ctrl` + `Alt` + `Del` | Task Manager or shut down |
+| `Alt` + `Q` | Quit |
 
 ## Building
 
@@ -67,8 +85,11 @@ WLR_BACKENDS=headless WLR_RENDERER_ALLOW_SOFTWARE=1 ./build/ReconOS
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `RECONOS_ASSETS` | Directory to load wallpaper and icons from | the `assets/` dir at build time |
-| `RECONOS_TERMINAL` | Terminal launched by `Alt`+`Enter` | `weston-terminal` |
+| `RECONOS_ROOT` | Where the ReconOS filesystem lives | `/recon`, or `~/.reconos` if that is not writable |
+| `RECONOS_ASSETS` | Where the wallpaper is loaded from | the `assets/` dir at build time |
+| `RECONOS_CONTROL_SOCKET` | The control socket's path | `/tmp/reconos.sock` |
+| `RECONOS_CURSOR_THEME` | Cursor theme | the system default |
+| `RECONOS_FONT` | Font file | the first system font found |
 
 ## Layout
 

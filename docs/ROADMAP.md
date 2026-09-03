@@ -84,7 +84,7 @@ architected and a first-run setup flow in place.
 | 2 | Window management — focus, move, resize, close, alt-tab | **Done** |
 | 3 | Shell chrome — taskbar, drawn by the compositor itself | **Done** |
 | 4 | Apps menu and application launcher | **Done** |
-| 5 | A native first-party application — a terminal | Next |
+| 5 | Native first-party applications | **Done** — six of them |
 | 6 | Idle CPU/RAM baseline established and enforced | **Done** — 0.00% CPU, 17MB |
 | 7 | Skin system plumbing — chrome driven by data, not hardcoded | |
 | 8 | Minimal first-run setup flow | |
@@ -97,13 +97,51 @@ Linux-like arrangements. v0.1.0 ships only the native skin, but the chrome must
 be data-driven from the start — four hardcoded rendering paths would be a
 rewrite later.
 
+## What ReconOS has
+
+**The system**
+
+- A filesystem with one root it cannot see outside of, laid out as `/System`,
+  `/Apps`, `/Users`, `/Temp`. `/System` is protected from deletion, and a path
+  that would climb out of the root is refused rather than clamped.
+- User accounts, each with Desktop, Documents, Downloads, Music, Pictures and
+  Videos. The administrator is created on first run.
+- A command interpreter running ReconOS commands against ReconOS — not a Unix
+  shell, and with no way to reach the host or run host programs.
+- A control socket carrying those same commands, so a running system can be
+  examined from outside. No authentication: private only as far as its file
+  permissions, which is adequate locally and is not adequate over a network.
+- Icons loaded by name from `/System/Icons`, in `.ico` or `.png`.
+
+**The desktop**
+
+- Taskbar listing every window, client or built-in, with minimize and restore.
+- Apps menu, and a Ctrl+Alt+Del box that dims the desktop behind it.
+- Desktop icons, as a view of the user's Desktop folder rather than a separate
+  store, so anything writing a file there puts it on the desktop.
+- Right-click menus on the taskbar and the desktop.
+- Window frames owned by the system: minimize, maximize, close, dragging and
+  resizing belong to the window framework, so an application cannot ship them
+  broken because it does not implement them.
+
+**Applications**, all native, all built on that framework
+
+- Task Manager — processes with CPU and memory, Applications and Processes
+  views, End Task
+- File Explorer — browsing, folders, deletion with confirmation
+- Terminal — a view onto the command interpreter, emulating nothing
+- Notepad — text editing
+- Calculator — arithmetic by mouse or keyboard
+
 ## Known issues
 
 - `include/ReconOS.h` is unfinished scaffolding from an earlier iteration and is
   not currently part of the build.
-- Minimize is acknowledged but does nothing. Hiding a window needs the shell to
-  draw its own window frames first, so the taskbar can restore it.
-- Applications draw their own title bars, so every one looks like whatever
-  toolkit built it. The four-skin plan needs ReconOS to draw them instead.
-- On Hyper-V, a fragment sometimes persists near the pointer. Unconfirmed on
-  real hardware; the virtual display has no cursor plane to use.
+- Client windows draw their own title bars, so a client looks like whatever
+  toolkit built it. Built-in windows are framed by ReconOS; extending that to
+  clients needs the xdg-decoration protocol.
+- The control socket has no authentication.
+- There is no way to type a name, so New Folder and New Shortcut pick one.
+- Properties is in the context menu and disabled: there is no properties view
+  yet, and hiding the entry would suggest there never will be.
+- No login: the system starts as the administrator.
