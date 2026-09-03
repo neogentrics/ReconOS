@@ -182,6 +182,11 @@ struct recon_edit {
      */
     int anchor;
     bool active;
+
+    /* Draw dots instead of the characters. For a password, where the point is
+     * that somebody behind you cannot read it. The text itself is untouched --
+     * masking is about what is shown, not what is stored. */
+    bool masked;
 };
 
 /*

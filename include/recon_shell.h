@@ -41,6 +41,29 @@ void recon_shell_refresh(struct recon_shell *shell);
 void recon_shell_restyle(struct recon_shell *shell);
 
 /*
+ * Sign out: hide the desktop and put the login screen back up.
+ *
+ * Windows are left open rather than closed. Signing out is not shutting down,
+ * and a half-written note should still be there when the same person signs
+ * back in.
+ */
+void recon_shell_sign_out(struct recon_shell *shell);
+
+/*
+ * Put up setup or the login screen, whichever applies. Called once the rest of
+ * the system is running: the gate is the last thing built and the first thing
+ * seen.
+ */
+void recon_shell_begin_session(struct recon_shell *shell);
+
+/* Whether setup or the login screen is up, which is when nothing else is. */
+bool recon_shell_session_active(struct recon_shell *shell);
+
+/* What the gate is showing, for diagnosis from outside. */
+void recon_shell_describe_session(struct recon_shell *shell,
+    char *out, size_t size);
+
+/*
  * Offer a click at layout coordinates to the shell.
  *
  * Returns true if the shell consumed it, in which case the compositor should
@@ -174,6 +197,17 @@ struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell);
  * arithmetic of locating the entry is skipped, not the path being tested.
  */
 bool recon_shell_context_entry_at(struct recon_shell *shell, const char *label,
+    int *x, int *y);
+
+/*
+ * The middle of a named entry in the open Start menu, in screen coordinates.
+ *
+ * The menu is a shell panel rather than an application window, so the
+ * per-window instrument cannot see it. Without this the only way to press
+ * "Sign Out" from outside is to work out where the footer put it, which tests
+ * arithmetic rather than the menu.
+ */
+bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
     int *x, int *y);
 
 /* The middle of a named button in the open dialog, in screen coordinates. */

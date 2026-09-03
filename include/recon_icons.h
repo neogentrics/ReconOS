@@ -27,6 +27,8 @@
 #define RECON_ICON_CALCULATOR "calculator"
 #define RECON_ICON_EXPLORER "explorer"
 #define RECON_ICON_TASKMGR "taskmanager"
+#define RECON_ICON_SYSTEM "system"
+#define RECON_ICON_SHUTDOWN "shutdown"
 /* Two bins, so a full one looks different from an empty one at a glance --
  * which is the whole point of having it on the desktop. */
 #define RECON_ICON_TRASH "trash"

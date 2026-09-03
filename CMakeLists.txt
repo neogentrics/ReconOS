@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.0.8
+    VERSION 0.1.0
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -55,6 +55,7 @@ add_executable(ReconOS
     src/recon_appwin.c
     src/recon_cmd.c
     src/recon_control.c
+    src/recon_control_panel.c
     src/recon_desktop.c
     src/recon_explorer.c
     src/recon_fs.c
@@ -66,6 +67,7 @@ add_executable(ReconOS
     src/recon_registry.c
     src/recon_crypt.c
     src/recon_users.c
+    src/recon_session.c
     src/recon_access.c
     src/recon_theme.c
     src/recon_procinfo.c

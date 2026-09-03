@@ -20,6 +20,8 @@
 #include "recon_modules.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
+#include "recon_session.h"
+#include "recon_users.h"
 #include "recon_access.h"
 #include "recon_theme.h"
 #include "recon_server.h"
@@ -591,6 +593,36 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    if (strcasecmp(what, "start") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui start <label>\n");
+            return;
+        }
+
+        char label[64];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(label) - 1; i++) {
+            int w = snprintf(label + used, sizeof(label) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (w < 0) {
+                break;
+            }
+            used += (size_t)w;
+        }
+
+        int x = 0, y = 0;
+        if (!recon_shell_menu_entry_at(server->shell, label, &x, &y)) {
+            out(s, "The Start menu is not showing '%s'.\n", label);
+            return;
+        }
+
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "chose '%s' at %d,%d\n", label, x, y);
+        return;
+    }
+
     if (strcasecmp(what, "menu") == 0) {
         if (argc < 3) {
             out(s, "Usage: ui menu <label>\n");
@@ -984,6 +1016,105 @@ static void cmd_access(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "'%s' is not something access does.\n", action);
 }
 
+/* What the gate is showing, and who is signed in. */
+static void cmd_session(struct recon_cmd_session *s, int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    char buffer[512];
+    buffer[0] = '\0';
+    recon_shell_describe_session(s->server->shell, buffer, sizeof(buffer));
+    out(s, "%s", buffer);
+}
+
+/* The accounts on the system. */
+static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        int count = recon_users_count();
+        const char *current = recon_users_current();
+
+        out(s, "Signed in: %s\n\n", current != NULL ? current : "(nobody)");
+        for (int i = 0; i < count; i++) {
+            struct recon_user user;
+            if (!recon_users_at(i, &user)) {
+                continue;
+            }
+            out(s, "  %-20s %-14s %s\n", user.name,
+                user.role == RECON_ROLE_ADMINISTRATOR
+                    ? "administrator" : "limited",
+                user.has_password ? "password set" : "no password");
+        }
+        out(s, "\n  %d account%s\n", count, count == 1 ? "" : "s");
+        return;
+    }
+
+    /*
+     * Only an administrator may change accounts. The filesystem would refuse
+     * the write anyway -- the account list is in /System -- but saying so here
+     * is clearer than a failure that mentions a path.
+     */
+    if (!recon_users_may_administer()) {
+        out(s, "Only an administrator can change accounts.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "add") == 0 && argc >= 3) {
+        const char *password = argc > 3 ? argv[3] : NULL;
+        enum recon_user_role role = (argc > 4 &&
+            strcasecmp(argv[4], "administrator") == 0)
+            ? RECON_ROLE_ADMINISTRATOR : RECON_ROLE_LIMITED;
+
+        if (!recon_users_create(argv[2], password, role)) {
+            out(s, "%s\n", recon_users_last_error());
+            return;
+        }
+        out(s, "Created '%s'.\n", argv[2]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "remove") == 0 && argc >= 3) {
+        if (!recon_users_remove(argv[2])) {
+            out(s, "%s\n", recon_users_last_error());
+            return;
+        }
+        out(s, "Removed '%s'. Its files are still there.\n", argv[2]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "role") == 0 && argc >= 4) {
+        enum recon_user_role role =
+            (strcasecmp(argv[3], "administrator") == 0)
+            ? RECON_ROLE_ADMINISTRATOR : RECON_ROLE_LIMITED;
+
+        if (!recon_users_set_role(argv[2], role)) {
+            out(s, "%s\n", recon_users_last_error());
+            return;
+        }
+        out(s, "'%s' is now %s.\n", argv[2],
+            role == RECON_ROLE_ADMINISTRATOR ? "an administrator" : "limited");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "password") == 0 && argc >= 3) {
+        if (!recon_users_set_password(argv[2], argc > 3 ? argv[3] : NULL)) {
+            out(s, "%s\n", recon_users_last_error());
+            return;
+        }
+        out(s, "Password %s for '%s'.\n",
+            argc > 3 ? "changed" : "removed", argv[2]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "signout") == 0) {
+        recon_shell_sign_out(s->server->shell);
+        out(s, "Signed out.\n");
+        return;
+    }
+
+    out(s, "Usage: users [add <name> [password] [administrator]]\n");
+    out(s, "             [remove <name>] [role <name> <role>]\n");
+    out(s, "             [password <name> [password]] [signout]\n");
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -1126,6 +1257,8 @@ static const struct command COMMANDS[] = {
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
+    { "session",  "session",               "What the login screen shows",       cmd_session },
+    { "users",    "users [action] ...",    "List or change accounts",           cmd_users },
     { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },

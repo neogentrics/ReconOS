@@ -64,7 +64,9 @@
 #include "recon_registry.h"
 #include "recon_access.h"
 #include "recon_theme.h"
+#include "recon_session.h"
 #include "recon_shell.h"
+#include "recon_users.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
  * binary stays runnable when moved off the build machine. */
@@ -917,6 +919,12 @@ void recon_quit(struct recon_server *server) {
     wl_display_terminate(server->wl_display);
 }
 
+void recon_restart(struct recon_server *server) {
+    wlr_log(WLR_INFO, "ReconOS: restarting");
+    server->restarting = true;
+    wl_display_terminate(server->wl_display);
+}
+
 /* Launch a client. A NULL command means the configured terminal. */
 void recon_spawn(struct recon_server *server, const char *command) {
     const char *term = command;
@@ -1445,11 +1453,20 @@ static void server_new_output(struct wl_listener *listener, void *data) {
          * all, since they live in modules now. */
         recon_modules_install_shipped();
 
+        /*
+         * Accounts before the gate, so it knows whether to ask who you are or
+         * to set the system up.
+         */
+        recon_users_init();
+
         int loaded = recon_modules_load_all();
         if (loaded > 0) {
             wlr_log(WLR_INFO, "ReconOS: %d module%s loaded",
                 loaded, loaded == 1 ? "" : "s");
         }
+
+        /* Last: setup or the login screen, over everything else. */
+        recon_shell_begin_session(server->shell);
         raise_chrome(server);
     } else if (server->background_buffer != NULL) {
         wlr_scene_buffer_set_dest_size(server->background_buffer, width, height);
@@ -1646,10 +1663,19 @@ int main(int argc, char **argv) {
 
     recon_control_destroy(control);
     recon_shell_destroy(server.shell);
+    recon_users_finish();
     recon_theme_finish();
     recon_registry_finish();
     recon_fs_finish();
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);
-    return 0;
+
+    /*
+     * The status is how a restart is asked for. Whatever started ReconOS
+     * already knows how to start it; re-running ourselves in place would mean
+     * handing the display, the input devices and a Wayland socket to a fresh
+     * copy of this process, which is a great deal of machinery for something
+     * the launcher does trivially.
+     */
+    return server.restarting ? RECON_EXIT_RESTART : 0;
 }

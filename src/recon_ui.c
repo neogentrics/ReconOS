@@ -953,6 +953,27 @@ void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
         return;
     }
 
+    /*
+     * A masked field is drawn from a string of dots of the same length, so
+     * every measurement below -- the caret, the selection, the scrolling --
+     * works on what is actually on screen rather than on the hidden text.
+     * Measuring the real text and drawing dots would put the caret in the
+     * wrong place for any character that is not the width of a dot.
+     */
+    struct recon_edit shown;
+    if (edit->masked) {
+        shown = *edit;
+        int length = edit->length;
+        if (length > RECON_EDIT_MAX - 1) {
+            length = RECON_EDIT_MAX - 1;
+        }
+        for (int i = 0; i < length; i++) {
+            shown.text[i] = '*';
+        }
+        shown.text[length] = '\0';
+        edit = &shown;
+    }
+
     recon_fill_rect(panel, x, y, w, h, EDIT_BG);
     recon_stroke_rect(panel, x, y, w, h, EDIT_BORDER);
 

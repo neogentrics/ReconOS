@@ -158,7 +158,12 @@ Environment=XDG_RUNTIME_DIR=/run/user/$(id -u "$REAL_USER")
 ExecStart=$LAUNCHER
 # A compositor that has crashed leaves a machine with no way in. Coming back
 # gives the user a desktop again rather than a black screen.
+#
+# 42 is what ReconOS exits with when somebody chose Restart, so that counts as
+# a reason to start again rather than as a failure to report.
 Restart=on-failure
+RestartForceExitStatus=42
+SuccessExitStatus=42
 RestartSec=2
 
 [Install]

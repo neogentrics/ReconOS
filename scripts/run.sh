@@ -48,8 +48,20 @@ fi
 
 cd "$REPO_DIR"
 
-sudo "${PASS_ENV[@]}" XDG_RUNTIME_DIR="$RUNTIME_DIR" \
-    ./build/ReconOS "$@" 2>&1 | tee "$LOG_FILE"
+# Restarting from inside ReconOS exits with a status saying so, and this
+# starts it again. Anything else -- a normal shutdown, a crash -- stops here.
+RECON_EXIT_RESTART=42
+
+while true; do
+    sudo "${PASS_ENV[@]}" XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+        ./build/ReconOS "$@" 2>&1 | tee "$LOG_FILE"
+    STATUS=${PIPESTATUS[0]}
+
+    [ "$STATUS" = "$RECON_EXIT_RESTART" ] || break
+    echo
+    echo "Restarting ReconOS..."
+    sleep 1
+done
 
 sudo chown "$(id -u):$(id -g)" "$LOG_FILE" 2>/dev/null || true
 

@@ -8,12 +8,35 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.0.8 — pre-alpha.** It draws a desktop with a taskbar and an
-apps menu, hosts real application windows, and manages them. The version
-number tracks what works, not what is planned: v0.1.0 is the first milestone
-that counts as a usable desktop, and it is not reached yet.
+**Status: v0.1.0.** The version number tracks what works, not what is
+planned, and this is the milestone that was defined as "a usable desktop": it
+sets itself up on first run, asks who you are on every run after, and gives
+that person a desktop of their own.
+
+Still early. There is no kernel of its own, client windows draw their own
+decorations, and the account roles are enforced by ReconOS inside ReconOS
+rather than by anything underneath it. What is here works and is tested; what
+is not here is listed at the end.
 
 ## What works right now
+
+**It sets itself up.** A system with no accounts asks who is using it, offers a
+look, offers the reading and colour-vision settings up front rather than buried
+somewhere, and hands over a desktop. Every run after that asks which account
+you are. Signing out returns to that screen; signing in as a *different* person
+closes the previous one's windows, because the whole point of a login screen is
+that one account does not see another's open documents.
+
+**A Start menu** in two columns: applications on the left, places and the
+Control Panel on the right, who is signed in across the top, and Sign Out /
+Switch User / Restart / Shut Down along the bottom.
+
+**A Control Panel** with four pages -- Accounts, Appearance, Reading, System.
+Create and remove accounts, change passwords, promote and demote between
+administrator and limited, choose a skin, adjust spacing and text size. Built
+into ReconOS rather than shipped as a module, deliberately: this is where
+somebody goes to repair a system, and it should not be a thing that can fail to
+load.
 
 **A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
 right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a

@@ -18,6 +18,7 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_appwin.h"
+#include "recon_control_panel.h"
 #include "recon_desktop.h"
 #include "recon_explorer.h"
 #include "recon_notepad.h"
@@ -26,7 +27,11 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "ReconOS.h"
+#include "recon_access.h"
 #include "recon_registry.h"
+#include "recon_session.h"
+#include "recon_users.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 
@@ -40,9 +45,23 @@
 #define TASK_BUTTON_MIN_WIDTH 60
 #define TEXT_INSET 8
 
+/*
+ * The Start menu: two columns, the way one has looked since 95.
+ *
+ * Applications on the left, places and settings on the right, who is signed in
+ * across the top, and what to do with the machine along the bottom. The shape
+ * carries meaning -- everything on the right is somewhere to go, everything at
+ * the bottom ends your session -- so a menu of one long list would be shorter
+ * and worse.
+ */
 #define MENU_ITEM_HEIGHT 28
-#define MENU_WIDTH 190
+#define MENU_LEFT_WIDTH 210
+#define MENU_RIGHT_WIDTH 190
+#define MENU_WIDTH (MENU_LEFT_WIDTH + MENU_RIGHT_WIDTH)
 #define MENU_PADDING 4
+#define MENU_HEADER_HEIGHT 44
+#define MENU_FOOTER_HEIGHT 36
+#define MENU_DIVIDER 1
 
 #define FONT_HEIGHT 14
 
@@ -71,6 +90,7 @@
 #define COLOR_BUTTON_ACTIVE THEME(BUTTON_ACTIVE)
 #define COLOR_MENU THEME(MENU)
 #define COLOR_MENU_BORDER THEME(MENU_BORDER)
+#define COLOR_MENU_SEPARATOR THEME(MENU_SEPARATOR)
 #define COLOR_ACCENT THEME(ACCENT)
 #define COLOR_DIALOG_TITLE THEME(DIALOG_TITLE)
 #define COLOR_DIALOG_TITLE_TEXT THEME(DIALOG_TITLE_TEXT)
@@ -84,6 +104,10 @@
 #define HIT_APPS_BUTTON 1
 #define HIT_TASK_BASE 100
 #define HIT_MENU_BASE 200
+/* The right column and the footer have their own ranges, so a click resolves
+ * to the right column without any arithmetic about how many are in the other. */
+#define HIT_PLACE_BASE 250
+#define HIT_POWER_BASE 280
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
 #define HIT_DIALOG_BASE 500
@@ -136,7 +160,68 @@ enum context_action {
  *
  * Shut Down is not an application, so it is appended as an action after them.
  */
-#define MENU_ACTION_COUNT 1
+/*
+ * What the right column offers. Places first, then the things that configure
+ * the machine, which is the order somebody looks for them in.
+ */
+enum menu_place_kind {
+    PLACE_FOLDER,     /* one of the user's own folders */
+    PLACE_APP,        /* an application, by registered name */
+    PLACE_SEPARATOR,
+};
+
+struct menu_place {
+    const char *label;
+    const char *icon;
+    enum menu_place_kind kind;
+    /* A folder name under the user's directory, or an application name. */
+    const char *target;
+};
+
+static const struct menu_place MENU_PLACES[] = {
+    { "Documents", RECON_ICON_FOLDER, PLACE_FOLDER, "Documents" },
+    { "Pictures", RECON_ICON_FOLDER, PLACE_FOLDER, "Pictures" },
+    { "Downloads", RECON_ICON_FOLDER, PLACE_FOLDER, "Downloads" },
+    { "", NULL, PLACE_SEPARATOR, NULL },
+    /*
+     * Only things the left column does not already have. The Task Manager was
+     * here as well as there, which meant two entries with one name -- and
+     * anything looking one up by name found whichever came first, so the
+     * right-hand one could not be reached at all.
+     */
+    { "Control Panel", RECON_ICON_SYSTEM, PLACE_APP, "Control Panel" },
+};
+
+#define MENU_PLACE_COUNT \
+    ((int)(sizeof(MENU_PLACES) / sizeof(MENU_PLACES[0])))
+
+/*
+ * What to do with the machine, along the bottom.
+ *
+ * Sleep and hibernate are deliberately absent. They need power management
+ * ReconOS does not have -- as a hosted process it cannot suspend the machine
+ * -- and a button that does not do what it says is worse than one that is not
+ * there.
+ */
+enum menu_power {
+    POWER_SIGN_OUT,
+    POWER_SWITCH_USER,
+    POWER_RESTART,
+    POWER_SHUT_DOWN,
+};
+
+static const struct {
+    const char *label;
+    enum menu_power action;
+} MENU_POWER[] = {
+    { "Sign Out", POWER_SIGN_OUT },
+    { "Switch User", POWER_SWITCH_USER },
+    { "Restart", POWER_RESTART },
+    { "Shut Down", POWER_SHUT_DOWN },
+};
+
+#define MENU_POWER_COUNT \
+    ((int)(sizeof(MENU_POWER) / sizeof(MENU_POWER[0])))
 
 struct menu_entry {
     char label[64];
@@ -144,6 +229,7 @@ struct menu_entry {
     bool is_shutdown;
 };
 
+/* How many applications the left column shows. */
 static int menu_entry_count(void) {
     int count = 0;
     int installed = recon_installed_app_count();
@@ -153,7 +239,7 @@ static int menu_entry_count(void) {
             count++;
         }
     }
-    return count + MENU_ACTION_COUNT;
+    return count;
 }
 
 static bool menu_entry_at(int index, struct menu_entry *out) {
@@ -172,13 +258,6 @@ static bool menu_entry_at(int index, struct menu_entry *out) {
             return true;
         }
         seen++;
-    }
-
-    if (index == seen) {
-        snprintf(out->label, sizeof(out->label), "Shut Down");
-        snprintf(out->icon, sizeof(out->icon), "shutdown");
-        out->is_shutdown = true;
-        return true;
     }
     return false;
 }
@@ -204,6 +283,18 @@ static const char *const SEC_ITEMS[] = {
 struct recon_shell {
     struct recon_server *server;
     struct recon_font *font;
+
+    /* Setup and the login screen, which sit over everything until somebody
+     * is signed in. */
+    struct recon_session *session;
+
+    /*
+     * Who was signed in last. Windows survive a sign-out so a half-written
+     * note is still there when the same person comes back -- but they must
+     * not survive a change of person, or the next account sees the last
+     * one's work.
+     */
+    char last_user[64];
 
     struct recon_desktop *desktop;
     struct recon_panel *taskbar;
@@ -533,7 +624,14 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
 }
 
 static int menu_height(void) {
-    return menu_entry_count() * MENU_ITEM_HEIGHT + MENU_PADDING * 2;
+    /* As tall as whichever column needs more, plus the header and footer.
+     * Sizing to the left alone would clip the right when few applications are
+     * installed, which is exactly the state a new system is in. */
+    int left = menu_entry_count() * MENU_ITEM_HEIGHT;
+    int right = MENU_PLACE_COUNT * MENU_ITEM_HEIGHT;
+    int body = left > right ? left : right;
+
+    return MENU_HEADER_HEIGHT + body + MENU_PADDING * 2 + MENU_FOOTER_HEIGHT;
 }
 
 static int security_height(void) {
@@ -652,6 +750,67 @@ bool recon_shell_dialog_button_at(struct recon_shell *shell, const char *label,
     return false;
 }
 
+/*
+ * Find a Start menu entry by what it says.
+ *
+ * Asked of the panel's own regions rather than recomputed, so this cannot
+ * drift from where the entry was actually drawn -- which is the failure that
+ * makes a menu look like it does nothing.
+ */
+bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
+        int *x, int *y) {
+    if (shell == NULL || !shell->menu_open || shell->menu == NULL ||
+            label == NULL) {
+        return false;
+    }
+
+    /* Work out which id carries that label, then ask the panel where it is. */
+    uint32_t wanted = 0;
+    bool found = false;
+
+    int apps = menu_entry_count();
+    for (int i = 0; i < apps && !found; i++) {
+        struct menu_entry entry;
+        if (menu_entry_at(i, &entry) && strcasecmp(entry.label, label) == 0) {
+            wanted = HIT_MENU_BASE + i;
+            found = true;
+        }
+    }
+    for (int i = 0; i < MENU_PLACE_COUNT && !found; i++) {
+        if (MENU_PLACES[i].kind != PLACE_SEPARATOR &&
+                strcasecmp(MENU_PLACES[i].label, label) == 0) {
+            wanted = HIT_PLACE_BASE + i;
+            found = true;
+        }
+    }
+    for (int i = 0; i < MENU_POWER_COUNT && !found; i++) {
+        if (strcasecmp(MENU_POWER[i].label, label) == 0) {
+            wanted = HIT_POWER_BASE + i;
+            found = true;
+        }
+    }
+    if (!found) {
+        return false;
+    }
+
+    int px = 0, py = 0;
+    recon_panel_position(shell->menu, &px, &py);
+
+    for (size_t r = 0;; r++) {
+        int rx, ry, rw, rh;
+        uint32_t id;
+        if (!recon_hit_region(shell->menu, r, &rx, &ry, &rw, &rh, &id)) {
+            return false;
+        }
+        if (id != wanted) {
+            continue;
+        }
+        if (x != NULL) { *x = px + rx + rw / 2; }
+        if (y != NULL) { *y = py + ry + rh / 2; }
+        return true;
+    }
+}
+
 void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     if (shell == NULL || out == NULL || size == 0) {
         return;
@@ -693,6 +852,37 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     }
 
     EMIT("apps menu: %s\n", shell->menu_open ? "open" : "closed");
+
+    if (shell->menu_open) {
+        /* Everything in it, with where to click, so a test does not have to
+         * work out the layout for itself. */
+        int apps = menu_entry_count();
+        for (int i = 0; i < apps; i++) {
+            struct menu_entry entry;
+            int mx = 0, my = 0;
+            if (menu_entry_at(i, &entry) &&
+                    recon_shell_menu_entry_at(shell, entry.label, &mx, &my)) {
+                EMIT("  app    %-18s click at %d,%d\n", entry.label, mx, my);
+            }
+        }
+        for (int i = 0; i < MENU_PLACE_COUNT; i++) {
+            int mx = 0, my = 0;
+            if (MENU_PLACES[i].kind != PLACE_SEPARATOR &&
+                    recon_shell_menu_entry_at(shell, MENU_PLACES[i].label,
+                        &mx, &my)) {
+                EMIT("  place  %-18s click at %d,%d\n",
+                    MENU_PLACES[i].label, mx, my);
+            }
+        }
+        for (int i = 0; i < MENU_POWER_COUNT; i++) {
+            int mx = 0, my = 0;
+            if (recon_shell_menu_entry_at(shell, MENU_POWER[i].label,
+                    &mx, &my)) {
+                EMIT("  power  %-18s click at %d,%d\n",
+                    MENU_POWER[i].label, mx, my);
+            }
+        }
+    }
 
     if (!shell->dialog_open) {
         EMIT("dialog: closed\n");
@@ -1058,6 +1248,34 @@ static void draw_menu(struct recon_shell *shell) {
     recon_hit_clear(menu);
 
     int ascent = recon_font_ascent(shell->font);
+    int icon_size = MENU_ITEM_HEIGHT - 8;
+
+    /*
+     * The header: who is signed in. Across the top of both columns, because it
+     * is a fact about the whole menu rather than about either side.
+     */
+    recon_fill_rect(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT, COLOR_DIALOG_TITLE);
+
+    const char *who = recon_users_current();
+    int header_x = 12;
+    if (recon_icon_draw(menu, RECON_ICON_SYSTEM, 10, 8,
+            MENU_HEADER_HEIGHT - 16)) {
+        header_x = 10 + (MENU_HEADER_HEIGHT - 16) + 10;
+    }
+
+    recon_draw_text(menu, shell->font, header_x,
+        (MENU_HEADER_HEIGHT + ascent) / 2 - 1, width - header_x - 12,
+        who != NULL ? who : RECONOS_FULL_NAME, COLOR_DIALOG_TITLE_TEXT);
+
+    int body_y = MENU_HEADER_HEIGHT + MENU_PADDING;
+    int body_bottom = height - MENU_FOOTER_HEIGHT - MENU_PADDING;
+
+    /* The divider between the columns, which is what makes them read as two
+     * lists rather than one wide one. */
+    recon_fill_rect(menu, MENU_LEFT_WIDTH, body_y, MENU_DIVIDER,
+        body_bottom - body_y, COLOR_MENU_SEPARATOR);
+
+    /* --- Left: the applications --- */
     int count = menu_entry_count();
     for (int i = 0; i < count; i++) {
         struct menu_entry entry;
@@ -1065,25 +1283,91 @@ static void draw_menu(struct recon_shell *shell) {
             break;
         }
 
-        int y = MENU_PADDING + i * MENU_ITEM_HEIGHT;
+        int y = body_y + i * MENU_ITEM_HEIGHT;
+        if (y + MENU_ITEM_HEIGHT > body_bottom) {
+            break;
+        }
         int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
-        bool hovered = (i == shell->menu_hover);
+        bool hovered = (shell->menu_hover == HIT_MENU_BASE + i);
 
         if (hovered) {
-            recon_fill_rect(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
-                MENU_ITEM_HEIGHT, COLOR_MENU_HILITE);
+            recon_fill_rect(menu, MENU_PADDING, y,
+                MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
+                COLOR_MENU_HILITE);
         }
 
         int label_x = MENU_PADDING + TEXT_INSET;
-        int icon_size = MENU_ITEM_HEIGHT - 8;
         if (recon_icon_draw(menu, entry.icon, MENU_PADDING + 6, y + 4, icon_size)) {
             label_x = MENU_PADDING + 6 + icon_size + 8;
         }
         recon_draw_text(menu, shell->font, label_x, baseline,
-            width - label_x - MENU_PADDING, entry.label,
+            MENU_LEFT_WIDTH - label_x - MENU_PADDING, entry.label,
             hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
-        recon_hit_add(menu, MENU_PADDING, y, width - MENU_PADDING * 2,
-            MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
+        recon_hit_add(menu, MENU_PADDING, y,
+            MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
+            HIT_MENU_BASE + i);
+    }
+
+    /* --- Right: places, then the things that configure the machine --- */
+    int right_x = MENU_LEFT_WIDTH + MENU_DIVIDER + MENU_PADDING;
+    int right_w = width - right_x - MENU_PADDING;
+
+    for (int i = 0; i < MENU_PLACE_COUNT; i++) {
+        int y = body_y + i * MENU_ITEM_HEIGHT;
+        if (y + MENU_ITEM_HEIGHT > body_bottom) {
+            break;
+        }
+
+        if (MENU_PLACES[i].kind == PLACE_SEPARATOR) {
+            recon_fill_rect(menu, right_x + 6, y + MENU_ITEM_HEIGHT / 2,
+                right_w - 12, 1, COLOR_MENU_SEPARATOR);
+            continue;
+        }
+
+        int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
+        bool hovered = (shell->menu_hover == HIT_PLACE_BASE + i);
+
+        if (hovered) {
+            recon_fill_rect(menu, right_x, y, right_w, MENU_ITEM_HEIGHT,
+                COLOR_MENU_HILITE);
+        }
+
+        int label_x = right_x + TEXT_INSET;
+        if (MENU_PLACES[i].icon != NULL &&
+                recon_icon_draw(menu, MENU_PLACES[i].icon, right_x + 4,
+                    y + 4, icon_size)) {
+            label_x = right_x + 4 + icon_size + 8;
+        }
+        recon_draw_text(menu, shell->font, label_x, baseline,
+            right_x + right_w - label_x, MENU_PLACES[i].label,
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
+        recon_hit_add(menu, right_x, y, right_w, MENU_ITEM_HEIGHT,
+            HIT_PLACE_BASE + i);
+    }
+
+    /* --- Footer: what to do with the machine --- */
+    int fy = height - MENU_FOOTER_HEIGHT;
+    recon_fill_rect(menu, 1, fy, width - 2, MENU_FOOTER_HEIGHT - 1, COLOR_BAR);
+    recon_fill_rect(menu, 1, fy, width - 2, 1, COLOR_MENU_SEPARATOR);
+
+    int button_w = (width - 2 - MENU_PADDING * 2) / MENU_POWER_COUNT;
+    for (int i = 0; i < MENU_POWER_COUNT; i++) {
+        int bx = MENU_PADDING + i * button_w;
+        int by = fy + 5;
+        int bh = MENU_FOOTER_HEIGHT - 11;
+        bool hovered = (shell->menu_hover == HIT_POWER_BASE + i);
+
+        if (hovered) {
+            recon_fill_rect(menu, bx, by, button_w - 2, bh, COLOR_MENU_HILITE);
+        }
+
+        int text_w = recon_text_width(shell->font, MENU_POWER[i].label);
+        recon_draw_text(menu, shell->font,
+            bx + (button_w - 2 - text_w) / 2, by + (bh + ascent) / 2 - 2,
+            button_w - 4, MENU_POWER[i].label,
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
+
+        recon_hit_add(menu, bx, by, button_w - 2, bh, HIT_POWER_BASE + i);
     }
 
     recon_panel_commit(menu);
@@ -1161,6 +1445,8 @@ static void layout(struct recon_shell *shell) {
     }
     recon_desktop_resize(shell->desktop, shell->screen_width,
         shell->screen_height - TASKBAR_HEIGHT);
+    recon_session_resize(shell->session, shell->screen_width,
+        shell->screen_height);
 }
 
 /* --- Lifecycle --- */
@@ -1234,6 +1520,13 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true },
         { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
         { "Task Manager", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
+        /*
+         * Not in the applications column: it is reached from the right of the
+         * Start menu, where the things that configure the machine live. Listing
+         * it in both would put the same name in two places, and anything
+         * looking one up by name would find whichever came first.
+         */
+        { "Control Panel", RECON_ICON_SYSTEM, recon_control_panel_create, false },
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {
@@ -1286,11 +1579,19 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
 
     shell->context_button = -1;
     shell->context_app = -1;
+    /* Not an id, so nothing matches it. */
     shell->menu_hover = -1;
     shell->context_hover = -1;
     shell->security_hover = -1;
     shell->desktop = recon_desktop_create(server, shell->font,
         screen_width, screen_height - TASKBAR_HEIGHT);
+
+    /*
+     * Last, so it is above everything the shell has just made. It stays
+     * hidden until asked to show itself.
+     */
+    shell->session = recon_session_create(server, shell->font,
+        screen_width, screen_height);
 
     layout(shell);
     draw_taskbar(shell);
@@ -1319,6 +1620,7 @@ void recon_shell_destroy(struct recon_shell *shell) {
         recon_appwin_destroy(shell->apps[i]);
     }
     recon_desktop_destroy(shell->desktop);
+    recon_session_destroy(shell->session);
     recon_panel_destroy(shell->dialog);
     recon_panel_destroy(shell->context);
     recon_panel_destroy(shell->security);
@@ -1416,6 +1718,114 @@ void recon_shell_restyle(struct recon_shell *shell) {
 
     recon_desktop_reload(shell->desktop);
     recon_damage_all(shell->server);
+}
+
+/*
+ * Show or hide everything the desktop is made of.
+ *
+ * Called when the login screen goes up or comes down. The windows are left
+ * alone -- signing out is not shutting down, and a half-written note should
+ * still be there afterwards.
+ */
+static void set_desktop_visible(struct recon_shell *shell, bool visible) {
+    if (shell->taskbar != NULL) {
+        recon_panel_set_enabled(shell->taskbar, visible);
+    }
+    if (!visible) {
+        recon_shell_close_menu(shell);
+        recon_shell_close_context(shell);
+    }
+
+    struct wlr_scene_node *desktop = recon_desktop_node(shell->desktop);
+    if (desktop != NULL) {
+        wlr_scene_node_set_enabled(desktop, visible);
+    }
+
+    for (int i = 0; i < shell->app_count; i++) {
+        struct wlr_scene_node *node = recon_appwin_node(shell->apps[i]);
+        if (node == NULL) {
+            continue;
+        }
+        /* A window that was minimized stays hidden when the desktop comes
+         * back: signing in should not open things nobody opened. */
+        bool showing = visible && recon_appwin_is_open(shell->apps[i]) &&
+            !recon_appwin_is_minimized(shell->apps[i]);
+        wlr_scene_node_set_enabled(node, showing);
+    }
+
+    recon_damage_all(shell->server);
+}
+
+/*
+ * Everything that depends on *which* account signed in.
+ *
+ * The skin, the reading settings and the desktop folder all belong to a
+ * person, so they are read now rather than at startup -- at startup there is
+ * nobody to read them for.
+ */
+static void adopt_signed_in_user(struct recon_shell *shell) {
+    const char *who = recon_users_current();
+
+    /*
+     * A different person means a clean desktop. Leaving the windows would
+     * show one account the other's open documents, which is the one thing a
+     * login screen exists to prevent.
+     */
+    if (who != NULL && shell->last_user[0] != '\0' &&
+            strcmp(shell->last_user, who) != 0) {
+        for (int i = 0; i < shell->app_count; i++) {
+            recon_appwin_hide(shell->apps[i]);
+        }
+        set_focused_app(shell, -1);
+        recon_fs_clip_clear();
+    }
+    snprintf(shell->last_user, sizeof(shell->last_user), "%s",
+        who != NULL ? who : "");
+
+    recon_theme_init();
+    recon_access_apply(shell->font);
+
+    set_desktop_visible(shell, true);
+    recon_desktop_reload(shell->desktop);
+    recon_shell_restyle(shell);
+}
+
+void recon_shell_begin_session(struct recon_shell *shell) {
+    if (shell == NULL || shell->session == NULL) {
+        return;
+    }
+    /* Hidden first, so the desktop is not visible for a frame behind the
+     * thing meant to be covering it. */
+    set_desktop_visible(shell, false);
+    recon_session_begin(shell->session);
+}
+
+void recon_shell_sign_out(struct recon_shell *shell) {
+    if (shell == NULL || shell->session == NULL) {
+        return;
+    }
+    set_focused_app(shell, -1);
+    set_desktop_visible(shell, false);
+    recon_session_lock(shell->session);
+}
+
+bool recon_shell_session_active(struct recon_shell *shell) {
+    return shell != NULL && recon_session_active(shell->session);
+}
+
+void recon_shell_describe_session(struct recon_shell *shell,
+        char *out, size_t size) {
+    if (shell == NULL || out == NULL || size == 0) {
+        return;
+    }
+    if (!recon_session_active(shell->session)) {
+        const char *who = recon_users_current();
+        snprintf(out, size,
+            "session: done, the desktop has the screen\n  signed in: %s\n",
+            who != NULL ? who : "(nobody)");
+        return;
+    }
+    recon_session_describe(shell->session, out, size);
 }
 
 struct recon_font *recon_shell_font(struct recon_shell *shell) {
@@ -1852,6 +2262,11 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         return true;
     }
 
+    /* Nothing behind the login screen has a menu worth opening. */
+    if (recon_session_active(shell->session)) {
+        return true;
+    }
+
     recon_shell_close_menu(shell);
     recon_shell_close_context(shell);
     shell->context_item_count = 0;
@@ -2015,6 +2430,14 @@ bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
         return false;
     }
 
+    if (recon_session_active(shell->session)) {
+        bool handled = recon_session_handle_key(shell->session, sym, modifiers);
+        if (recon_session_take_signed_in(shell->session)) {
+            adopt_signed_in_user(shell);
+        }
+        return handled;
+    }
+
     /* A question owns the keyboard while it is up. */
     if (shell->dialog_open) {
         if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
@@ -2116,7 +2539,10 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         uint32_t hit = recon_hit_test(shell->menu, px, py);
         if (hit >= HIT_MENU_BASE) {
-            menu = (int)(hit - HIT_MENU_BASE);
+            /* The raw id, not an index. The menu has three ranges in it now --
+             * applications, places, and what to do with the machine -- and an
+             * index relative to one of them cannot say which. */
+            menu = (int)hit;
         }
     } else if (shell->security_open && shell->security != NULL &&
             point_in_panel(shell->security, lx, ly, &px, &py)) {
@@ -2151,6 +2577,9 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
 
 void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) {
     if (shell == NULL) {
+        return;
+    }
+    if (recon_session_handle_motion(shell->session, lx, ly)) {
         return;
     }
     update_hover(shell, lx, ly);
@@ -2263,6 +2692,18 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         return false;
     }
 
+    /*
+     * Setup and the login screen come before everything, a question
+     * included: there is no desktop behind them to have asked one.
+     */
+    if (recon_session_active(shell->session)) {
+        bool handled = recon_session_handle_click(shell->session, lx, ly, pressed);
+        if (recon_session_take_signed_in(shell->session)) {
+            adopt_signed_in_user(shell);
+        }
+        return handled;
+    }
+
     int px, py;
 
     /*
@@ -2348,6 +2789,56 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         }
         uint32_t hit = recon_hit_test(shell->menu, px, py);
         if (hit >= HIT_MENU_BASE) {
+            /* The right column: a place to go, or something that
+             * configures the machine. */
+            if (hit >= HIT_POWER_BASE) {
+                int which = (int)(hit - HIT_POWER_BASE);
+                recon_shell_close_menu(shell);
+
+                if (which >= 0 && which < MENU_POWER_COUNT) {
+                    switch (MENU_POWER[which].action) {
+                    case POWER_SIGN_OUT:
+                    case POWER_SWITCH_USER:
+                        /*
+                         * The same thing, honestly. With one session there is
+                         * nothing to switch *between* -- signing out and
+                         * signing in as somebody else is the whole of it, and
+                         * the windows are closed when the person changes.
+                         */
+                        recon_shell_sign_out(shell);
+                        break;
+                    case POWER_RESTART:
+                        recon_restart(shell->server);
+                        break;
+                    case POWER_SHUT_DOWN:
+                        recon_quit(shell->server);
+                        break;
+                    }
+                }
+                return true;
+            }
+
+            if (hit >= HIT_PLACE_BASE) {
+                int which = (int)(hit - HIT_PLACE_BASE);
+                recon_shell_close_menu(shell);
+
+                if (which < 0 || which >= MENU_PLACE_COUNT) {
+                    return true;
+                }
+
+                if (MENU_PLACES[which].kind == PLACE_APP) {
+                    recon_shell_open_named(shell, MENU_PLACES[which].target);
+                } else if (MENU_PLACES[which].kind == PLACE_FOLDER) {
+                    /* A place opens where it is, not wherever the explorer
+                     * happened to be left. */
+                    recon_shell_open_named(shell, "File Explorer");
+                    recon_explorer_open_at(
+                        recon_installed_app_existing("File Explorer"),
+                        recon_fs_user_dir(MENU_PLACES[which].target));
+                }
+                return true;
+            }
+
             int index = (int)(hit - HIT_MENU_BASE);
             struct menu_entry entry;
             if (index >= 0 && menu_entry_at(index, &entry)) {

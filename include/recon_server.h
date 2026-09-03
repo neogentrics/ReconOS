@@ -40,6 +40,9 @@ enum recon_cursor_mode {
 struct recon_toplevel;
 
 struct recon_server {
+    /* Set when a restart was asked for, so the exit status can say so. */
+    bool restarting;
+
     struct wl_display *wl_display;
     struct wlr_backend *backend;
     struct wlr_renderer *renderer;
@@ -138,6 +141,22 @@ struct recon_toplevel {
 void recon_focus_toplevel(struct recon_toplevel *toplevel);
 void recon_spawn(struct recon_server *server, const char *command);
 void recon_quit(struct recon_server *server);
+
+/*
+ * Stop, and ask whatever started ReconOS to start it again.
+ *
+ * Done by exiting with a status the launcher recognises rather than by
+ * re-running ourselves in place: the compositor holds the display, the input
+ * devices and a Wayland socket, and handing all of that to a fresh copy of
+ * itself is a great deal of machinery for something the thing that started us
+ * can do trivially.
+ *
+ * scripts/run.sh and the systemd unit both know the status.
+ */
+void recon_restart(struct recon_server *server);
+
+/* The status to exit with when a restart was asked for. */
+#define RECON_EXIT_RESTART 42
 
 /*
  * Report that something on screen changed and the next frame must repaint
