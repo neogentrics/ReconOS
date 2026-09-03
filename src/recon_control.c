@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -194,6 +195,22 @@ struct recon_control *recon_control_create(struct recon_server *server,
         path = RECON_CONTROL_DEFAULT_PATH;
     }
 
+    /*
+     * A Unix socket address is 108 bytes at most, and the kernel truncates
+     * anything longer without complaining. That would bind one path while
+     * every other operation here -- the unlink, the chmod that restricts it,
+     * the unlink on shutdown -- used the untruncated one, so the socket would
+     * come up unprotected under a name nothing could clean up. Refuse instead.
+     */
+    struct sockaddr_un addr = {0};
+    addr.sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof(addr.sun_path)) {
+        wlr_log(WLR_ERROR, "ReconOS: control socket path is too long "
+            "(%zu bytes, limit %zu): %s",
+            strlen(path), sizeof(addr.sun_path) - 1, path);
+        return NULL;
+    }
+
     struct recon_control *control = calloc(1, sizeof(*control));
     if (control == NULL) {
         return NULL;
@@ -211,14 +228,34 @@ struct recon_control *recon_control_create(struct recon_server *server,
     /* A socket left behind by a previous run would block binding. */
     unlink(control->path);
 
-    struct sockaddr_un addr = {0};
-    addr.sun_family = AF_UNIX;
-    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", control->path);
+    memcpy(addr.sun_path, control->path, strlen(control->path));
 
     if (bind(control->fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         wlr_log(WLR_ERROR, "ReconOS: cannot bind '%s': %s",
             control->path, strerror(errno));
         close(control->fd);
+        free(control);
+        return NULL;
+    }
+
+    /*
+     * Only the owner may connect.
+     *
+     * The socket carries no authentication -- anything that can connect can
+     * run any ReconOS command, including deleting a tree and shutting the
+     * system down -- so who may connect is decided entirely by this. Without
+     * it the mode came from the umask, which on a normal machine leaves a
+     * socket in /tmp that every other account on the box can drive.
+     *
+     * Set after bind, because the file does not exist until then, and before
+     * listen, so there is no window in which it is both connectable and
+     * open to everybody.
+     */
+    if (chmod(control->path, S_IRUSR | S_IWUSR) != 0) {
+        wlr_log(WLR_ERROR, "ReconOS: cannot restrict '%s': %s",
+            control->path, strerror(errno));
+        close(control->fd);
+        unlink(control->path);
         free(control);
         return NULL;
     }

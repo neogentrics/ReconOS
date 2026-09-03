@@ -1698,7 +1698,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
             recon_net_online() ? "up" : "down",
             recon_net_interface_count(),
             recon_net_interface_count() == 1 ? "" : "s",
-            recon_net_gateway()[0] != ' ' ? recon_net_gateway() : "(none)");
+            recon_net_gateway()[0] != '\0' ? recon_net_gateway() : "(none)");
 
         /* The reader's settings, once there is a font to apply them to. */
         recon_access_apply(recon_shell_font(server->shell));

@@ -10,10 +10,11 @@
  *     socat - UNIX-CONNECT:/tmp/reconos.sock
  *     nc -U /tmp/reconos.sock
  *
- * The socket carries no authentication, so it is only as private as its file
- * permissions. That is adequate for a development machine and is not adequate
- * for anything reachable from a network; exposing it beyond the local machine
- * needs authentication first.
+ * The socket carries no authentication. Anything that can connect can run any
+ * command, so the socket is created readable and writable by its owner alone
+ * and by nobody else on the machine. That is adequate for a development
+ * machine and is not adequate for anything reachable from a network; carrying
+ * this beyond the local machine needs authentication first.
  */
 
 #ifndef RECON_CONTROL_H

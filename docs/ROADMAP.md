@@ -303,7 +303,10 @@ rewrite later.
 - Client windows draw their own title bars, so a client looks like whatever
   toolkit built it. Built-in windows are framed by ReconOS; extending that to
   clients needs the xdg-decoration protocol.
-- The control socket has no authentication.
+- The control socket has no authentication. It is now created readable and
+  writable by its owner alone, so no other account on the machine can drive
+  ReconOS through it, but that is a file permission rather than a login and it
+  is not enough to carry the socket off the local machine.
 - Properties is in the context menu and disabled: there is no properties view
   yet, and hiding the entry would suggest there never will be.
 - The registry can be read from the Control Panel but not changed there. The
