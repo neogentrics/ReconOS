@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp */
 
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/log.h>

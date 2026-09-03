@@ -191,11 +191,11 @@ static enum recon_filedlg_result accept(struct recon_filedlg *dialog) {
         return RECON_FILEDLG_NOTHING;
     }
 
-    if (strcmp(dialog->cwd, "/") == 0) {
-        snprintf(dialog->result, sizeof(dialog->result), "/%s", trimmed);
-    } else {
-        snprintf(dialog->result, sizeof(dialog->result), "%s/%s",
-            dialog->cwd, trimmed);
+    if (!recon_fs_join(dialog->result, sizeof(dialog->result), dialog->cwd,
+            trimmed)) {
+        snprintf(dialog->message, sizeof(dialog->message),
+            "That would make a path too long to store.");
+        return RECON_FILEDLG_NOTHING;
     }
 
     dialog->open = false;

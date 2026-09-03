@@ -277,6 +277,13 @@ static void set_status(struct recon_explorer *ex, bool warning, const char *fmt,
     ex->status_is_warning = warning;
 }
 
+/* Nothing to say. Its own function because set_status carries a printf format
+ * attribute, and an empty format is a warning at every call site. */
+static void clear_status(struct recon_explorer *ex) {
+    ex->status[0] = '\0';
+    ex->status_is_warning = false;
+}
+
 static void reload(struct recon_explorer *ex) {
     ex->entry_count = recon_fs_list(ex->cwd, ".", ex->entries, ENTRIES_MAX);
     if (ex->entry_count < 0) {
@@ -794,10 +801,9 @@ static void do_paste(struct recon_explorer *ex) {
     }
 
     char target[RECON_PATH_MAX];
-    if (strcmp(ex->cwd, "/") == 0) {
-        snprintf(target, sizeof(target), "/%s", name);
-    } else {
-        snprintf(target, sizeof(target), "%s/%s", ex->cwd, name);
+    if (!recon_fs_join(target, sizeof(target), ex->cwd, name)) {
+        set_status(ex, true, "That would make a path too long to store.");
+        return;
     }
 
     bool ok = cut ? recon_fs_rename("/", source, target)
@@ -1786,7 +1792,7 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
     /* Typing a path is abandoned by clicking anywhere but the field itself. */
     if (ex->typing_path && hit_id != HIT_PATH) {
         stop_typing_path(ex);
-        set_status(ex, false, "");
+        clear_status(ex);
     }
 
     /*
@@ -1918,7 +1924,7 @@ static bool explorer_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         case RECON_EDIT_CANCEL:
             stop_typing_path(ex);
-            set_status(ex, false, "");
+            clear_status(ex);
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_IGNORED:

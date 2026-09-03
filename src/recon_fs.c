@@ -45,6 +45,35 @@ const char *recon_fs_last_error(void) {
     return g_error[0] != '\0' ? g_error : "no error";
 }
 
+/*
+ * A host path said back in ReconOS's own terms.
+ *
+ * The helpers below walk real directories and so hold host paths, and several
+ * of them put one into an error the user reads -- so deleting something that
+ * was not there said "cannot read '/tmp/lookroot/Users/Joshua/Documents/x'".
+ * That is a path which does not exist as far as anyone using ReconOS is
+ * concerned, and it breaks the one rule this file exists to keep: that ReconOS
+ * is the only thing on screen and Linux is underneath it.
+ *
+ * Returns a pointer into `host_path`, so it is for handing straight to
+ * set_error rather than for keeping.
+ */
+static const char *guest_path(const char *host_path) {
+    if (host_path == NULL) {
+        return "";
+    }
+
+    size_t root_len = strlen(g_host_root);
+    if (root_len == 0 || strncmp(host_path, g_host_root, root_len) != 0) {
+        /* Not under the root at all. Better to say the odd thing than to
+         * chop a path that was never a guest path to begin with. */
+        return host_path;
+    }
+
+    const char *rest = host_path + root_len;
+    return (*rest == '\0') ? "/" : rest;
+}
+
 const char *recon_fs_host_root(void) {
     return g_host_root;
 }
@@ -162,14 +191,14 @@ static bool make_tree(const char *host_path) {
         }
         *p = '\0';
         if (mkdir(work, 0755) != 0 && errno != EEXIST) {
-            set_error("cannot create '%s': %s", work, strerror(errno));
+            set_error("cannot create '%s': %s", guest_path(work), strerror(errno));
             return false;
         }
         *p = '/';
     }
 
     if (mkdir(work, 0755) != 0 && errno != EEXIST) {
-        set_error("cannot create '%s': %s", work, strerror(errno));
+        set_error("cannot create '%s': %s", guest_path(work), strerror(errno));
         return false;
     }
     return true;
@@ -469,6 +498,39 @@ bool recon_fs_stat(const char *cwd, const char *path, struct recon_dirent *out) 
     return true;
 }
 
+bool recon_fs_join(char *out, size_t size, const char *dir, const char *name) {
+    if (out == NULL || size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+
+    if (dir == NULL) {
+        dir = "";
+    }
+    if (name == NULL) {
+        name = "";
+    }
+
+    size_t dir_len = strlen(dir);
+    /* "/" joined to "x" is "/x", not "//x". */
+    bool need_slash = (dir_len > 0 && dir[dir_len - 1] != '/');
+    size_t total = dir_len + (need_slash ? 1 : 0) + strlen(name);
+
+    if (total >= size) {
+        return false;
+    }
+
+    memcpy(out, dir, dir_len);
+    size_t used = dir_len;
+    if (need_slash) {
+        out[used++] = '/';
+    }
+    size_t name_len = strlen(name);
+    memcpy(out + used, name, name_len);
+    out[used + name_len] = '\0';
+    return true;
+}
+
 bool recon_fs_exists(const char *cwd, const char *path) {
     return recon_fs_stat(cwd, path, NULL);
 }
@@ -758,13 +820,13 @@ bool recon_fs_remove(const char *cwd, const char *path) {
 static bool remove_tree_host(const char *host_path) {
     struct stat st;
     if (lstat(host_path, &st) != 0) {
-        set_error("cannot read '%s': %s", host_path, strerror(errno));
+        set_error("cannot read '%s': %s", guest_path(host_path), strerror(errno));
         return false;
     }
 
     if (!S_ISDIR(st.st_mode)) {
         if (unlink(host_path) != 0) {
-            set_error("cannot remove '%s': %s", host_path, strerror(errno));
+            set_error("cannot remove '%s': %s", guest_path(host_path), strerror(errno));
             return false;
         }
         return true;
@@ -772,7 +834,7 @@ static bool remove_tree_host(const char *host_path) {
 
     DIR *dir = opendir(host_path);
     if (dir == NULL) {
-        set_error("cannot open '%s': %s", host_path, strerror(errno));
+        set_error("cannot open '%s': %s", guest_path(host_path), strerror(errno));
         return false;
     }
 
@@ -792,7 +854,7 @@ static bool remove_tree_host(const char *host_path) {
         return false;
     }
     if (rmdir(host_path) != 0) {
-        set_error("cannot remove '%s': %s", host_path, strerror(errno));
+        set_error("cannot remove '%s': %s", guest_path(host_path), strerror(errno));
         return false;
     }
     return true;
@@ -883,13 +945,13 @@ bool recon_fs_rename(const char *cwd, const char *from, const char *to) {
 static bool copy_file_host(const char *src, const char *dst, mode_t mode) {
     FILE *in = fopen(src, "rb");
     if (in == NULL) {
-        set_error("cannot read '%s': %s", src, strerror(errno));
+        set_error("cannot read '%s': %s", guest_path(src), strerror(errno));
         return false;
     }
     FILE *out = fopen(dst, "wb");
     if (out == NULL) {
         fclose(in);
-        set_error("cannot write '%s': %s", dst, strerror(errno));
+        set_error("cannot write '%s': %s", guest_path(dst), strerror(errno));
         return false;
     }
 
@@ -898,7 +960,7 @@ static bool copy_file_host(const char *src, const char *dst, mode_t mode) {
     bool ok = true;
     while ((got = fread(buffer, 1, sizeof(buffer), in)) > 0) {
         if (fwrite(buffer, 1, got, out) != got) {
-            set_error("cannot write '%s': %s", dst, strerror(errno));
+            set_error("cannot write '%s': %s", guest_path(dst), strerror(errno));
             ok = false;
             break;
         }
@@ -906,7 +968,7 @@ static bool copy_file_host(const char *src, const char *dst, mode_t mode) {
 
     fclose(in);
     if (fclose(out) != 0 && ok) {
-        set_error("cannot write '%s': %s", dst, strerror(errno));
+        set_error("cannot write '%s': %s", guest_path(dst), strerror(errno));
         ok = false;
     }
 
@@ -924,7 +986,7 @@ static bool copy_file_host(const char *src, const char *dst, mode_t mode) {
 static bool copy_tree_host(const char *src, const char *dst) {
     struct stat st;
     if (lstat(src, &st) != 0) {
-        set_error("cannot read '%s': %s", src, strerror(errno));
+        set_error("cannot read '%s': %s", guest_path(src), strerror(errno));
         return false;
     }
 
@@ -937,13 +999,13 @@ static bool copy_tree_host(const char *src, const char *dst) {
     }
 
     if (mkdir(dst, st.st_mode & 0777) != 0 && errno != EEXIST) {
-        set_error("cannot create '%s': %s", dst, strerror(errno));
+        set_error("cannot create '%s': %s", guest_path(dst), strerror(errno));
         return false;
     }
 
     DIR *dir = opendir(src);
     if (dir == NULL) {
-        set_error("cannot open '%s': %s", src, strerror(errno));
+        set_error("cannot open '%s': %s", guest_path(src), strerror(errno));
         return false;
     }
 

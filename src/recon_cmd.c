@@ -999,12 +999,14 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
             used += (size_t)n;
         }
 
-        const char *resolved = path[0] == '/' ? path : NULL;
+        const char *resolved = path;
         char joined[RECON_PATH_MAX];
-        if (resolved == NULL) {
-            snprintf(joined, sizeof(joined), "%s/%s",
-                strcmp(recon_cmd_cwd(s), "/") == 0 ? "" : recon_cmd_cwd(s),
-                path);
+        if (path[0] != '/') {
+            if (!recon_fs_join(joined, sizeof(joined), recon_cmd_cwd(s),
+                    path)) {
+                out(s, "That path is too long.\n");
+                return;
+            }
             resolved = joined;
         }
 

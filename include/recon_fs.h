@@ -134,6 +134,19 @@ bool recon_fs_resolve(const char *cwd, const char *path,
 
 /* --- Queries --- */
 
+/*
+ * Join a folder and a name into `out`.
+ *
+ * False, with `out` emptied, when the result would not fit -- rather than
+ * writing as much as fits. A truncated path is not a shortened name for the
+ * same file, it is the name of a different one, and the operations that build
+ * paths this way go on to move, copy or delete what they name.
+ *
+ * A trailing slash on the folder is not doubled, so joining onto the root
+ * gives "/x" rather than "//x".
+ */
+bool recon_fs_join(char *out, size_t size, const char *dir, const char *name);
+
 bool recon_fs_exists(const char *cwd, const char *path);
 bool recon_fs_stat(const char *cwd, const char *path, struct recon_dirent *out);
 
