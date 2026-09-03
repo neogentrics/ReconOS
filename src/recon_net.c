@@ -35,6 +35,15 @@
 #define NAMESERVERS_MAX 4
 #define PROBES_MAX 8
 
+/*
+ * How many connections may be open at once, and how much may be queued on
+ * each. Both small on purpose: this is a desktop, not a server, and a limit
+ * that is reached is a bug worth noticing rather than memory worth growing.
+ */
+#define STREAMS_MAX 16
+#define STREAM_BUFFER 8192
+#define STREAM_CONNECT_MS 8000
+
 /* Where the machine's name is kept. The same key the setup flow writes. */
 #define MACHINE_NAME_KEY "system/machine-name"
 #define MACHINE_NAME_DEFAULT "recon-tower"
@@ -587,7 +596,479 @@ void recon_net_init(struct wl_event_loop *loop) {
      * was found. */
 }
 
+/* --- Who may use the network --- */
+
+/*
+ * Where one application's permission lives. Under a prefix of its own, so a
+ * settings page can list them by walking it rather than by keeping a second
+ * copy of what applications exist.
+ */
+static void permission_key(const char *application, char *out, size_t size) {
+    /*
+     * Spaces become dashes, the way window geometry keys already do it: a key
+     * is a path, not a sentence, and the registry refuses a segment with a
+     * space in it. Without this, every application whose name has a space --
+     * which is most of them -- silently failed to record a permission at all.
+     *
+     * Reversed for display, which means an application with a real dash in
+     * its name would show a space. None has one, and the alternative is
+     * storing the name twice.
+     */
+    char safe[96];
+    size_t used = 0;
+    for (const char *c = application != NULL ? application : "";
+            *c != ' ' && used < sizeof(safe) - 1; c++) {
+        safe[used++] = (*c == ' ' || *c == '/') ? '-' : *c;
+    }
+    safe[used] = ' ';
+
+    snprintf(out, size, "%s/%s", RECON_NET_PERMISSION_PREFIX, safe);
+}
+
+bool recon_net_may_use(const char *application) {
+    if (application == NULL || *application == '\0') {
+        return false;
+    }
+    char key[RECON_REGISTRY_KEY_MAX];
+    permission_key(application, key, sizeof(key));
+
+    /* Not allowed unless somebody said so. An application that appears and
+     * starts talking is what this exists to catch. */
+    return recon_registry_get_bool(RECON_REG_SYSTEM, key, false);
+}
+
+bool recon_net_set_allowed(const char *application, bool allowed) {
+    if (application == NULL || *application == '\0') {
+        set_error("no application named");
+        return false;
+    }
+    char key[RECON_REGISTRY_KEY_MAX];
+    permission_key(application, key, sizeof(key));
+
+    if (!recon_registry_set_bool(RECON_REG_SYSTEM, key, allowed)) {
+        set_error("%s", recon_registry_last_error());
+        return false;
+    }
+    return true;
+}
+
+void recon_net_note_application(const char *application) {
+    if (application == NULL || *application == '\0') {
+        return;
+    }
+    char key[RECON_REGISTRY_KEY_MAX];
+    permission_key(application, key, sizeof(key));
+
+    /* Only if it is not already recorded: writing every time would turn a
+     * deliberate "allowed" back into the default on the next start. */
+    if (recon_registry_get(RECON_REG_SYSTEM, key, NULL) == NULL) {
+        recon_registry_set_bool(RECON_REG_SYSTEM, key, false);
+    }
+}
+
+int recon_net_allowed_count(void) {
+    return recon_registry_count(RECON_REG_SYSTEM,
+        RECON_NET_PERMISSION_PREFIX);
+}
+
+bool recon_net_allowed_at(int index, char *name, size_t size, bool *allowed) {
+    const char *key = NULL;
+    const char *value = NULL;
+    if (!recon_registry_at(RECON_REG_SYSTEM, RECON_NET_PERMISSION_PREFIX,
+            index, &key, &value)) {
+        return false;
+    }
+
+    if (name != NULL && size > 0) {
+        /* What follows the prefix and its slash, with dashes read back as the
+         * spaces they stood in for. */
+        size_t prefix = strlen(RECON_NET_PERMISSION_PREFIX) + 1;
+        snprintf(name, size, "%s", strlen(key) > prefix ? key + prefix : key);
+
+        for (char *c = name; *c != ' '; c++) {
+            if (*c == '-') {
+                *c = ' ';
+            }
+        }
+    }
+    if (allowed != NULL) {
+        *allowed = (value != NULL) &&
+            (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+             strcmp(value, "yes") == 0);
+    }
+    return true;
+}
+
+/* --- Streams --- */
+
+/*
+ * One connection.
+ *
+ * The send buffer is fixed and small. A stream that lets a caller queue
+ * without limit turns a slow network into memory that grows until something
+ * dies; refusing is honest backpressure, and the caller is told so it can
+ * send less rather than retry harder.
+ */
+struct recon_net_stream {
+    bool used;
+    int fd;
+    bool connected;
+
+    char application[64];
+    char peer[192];
+
+    struct wl_event_source *source;
+    struct wl_event_source *deadline;
+
+    struct recon_net_stream_handlers handlers;
+    void *user;
+
+    char outgoing[STREAM_BUFFER];
+    size_t outgoing_used;
+
+    size_t sent;
+    size_t received;
+    struct timespec started;
+
+    /* Set while a handler is running, so a handler that closes its own
+     * stream does not free the thing it is standing on. */
+    bool in_handler;
+    bool close_wanted;
+};
+
+static struct recon_net_stream g_streams[STREAMS_MAX];
+
+int recon_net_stream_count(void) {
+    int count = 0;
+    for (int i = 0; i < STREAMS_MAX; i++) {
+        if (g_streams[i].used) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Take a stream down. `reason` is reported only when somebody else caused
+ * it -- a close the owner asked for is not news to the owner. */
+static void stream_end(struct recon_net_stream *stream,
+        enum recon_net_result reason, bool tell) {
+    if (!stream->used) {
+        return;
+    }
+
+    if (stream->in_handler) {
+        /* Deferred: a handler is on the stack and the stream is what it is
+         * standing on. Torn down when that handler returns. */
+        stream->close_wanted = true;
+        return;
+    }
+
+    void (*closed)(void *, struct recon_net_stream *, enum recon_net_result) =
+        tell ? stream->handlers.closed : NULL;
+    void *user = stream->user;
+
+    if (stream->source != NULL) {
+        wl_event_source_remove(stream->source);
+    }
+    if (stream->deadline != NULL) {
+        wl_event_source_remove(stream->deadline);
+    }
+    if (stream->fd >= 0) {
+        close(stream->fd);
+    }
+
+    /*
+     * Cleared before the callback rather than after. A handler that opens
+     * another stream would otherwise be handed this slot while it still
+     * looks occupied, and one that looks at the handle it was given would
+     * see a half-dismantled stream.
+     */
+    struct recon_net_stream copy = *stream;
+    memset(stream, 0, sizeof(*stream));
+
+    if (closed != NULL) {
+        closed(user, &copy, reason);
+    }
+}
+
+void recon_net_stream_close(struct recon_net_stream *stream) {
+    if (stream != NULL) {
+        stream_end(stream, RECON_NET_OK, false);
+    }
+}
+
+bool recon_net_stream_stats(struct recon_net_stream *stream, size_t *sent,
+        size_t *received, int *age_ms) {
+    if (stream == NULL || !stream->used) {
+        return false;
+    }
+    if (sent != NULL) {
+        *sent = stream->sent;
+    }
+    if (received != NULL) {
+        *received = stream->received;
+    }
+    if (age_ms != NULL) {
+        *age_ms = elapsed_since(&stream->started);
+    }
+    return true;
+}
+
+bool recon_net_stream_send(struct recon_net_stream *stream, const char *bytes,
+        size_t length) {
+    if (stream == NULL || !stream->used || bytes == NULL) {
+        set_error("nothing to send it on");
+        return false;
+    }
+    if (length == 0) {
+        return true;
+    }
+    if (stream->outgoing_used + length > sizeof(stream->outgoing)) {
+        set_error("the send buffer is full");
+        return false;
+    }
+
+    memcpy(stream->outgoing + stream->outgoing_used, bytes, length);
+    stream->outgoing_used += length;
+
+    /* Wanting to write means wanting to hear about writability again. */
+    if (stream->source != NULL) {
+        wl_event_source_fd_update(stream->source,
+            WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+    }
+    return true;
+}
+
+bool recon_net_stream_send_text(struct recon_net_stream *stream,
+        const char *text) {
+    if (text == NULL) {
+        return true;
+    }
+    return recon_net_stream_send(stream, text, strlen(text));
+}
+
+/* Push out whatever is queued that the socket will take. */
+static bool stream_flush(struct recon_net_stream *stream) {
+    while (stream->outgoing_used > 0) {
+        ssize_t written = send(stream->fd, stream->outgoing,
+            stream->outgoing_used, MSG_NOSIGNAL);
+
+        if (written > 0) {
+            stream->sent += (size_t)written;
+            stream->outgoing_used -= (size_t)written;
+            memmove(stream->outgoing, stream->outgoing + written,
+                stream->outgoing_used);
+            continue;
+        }
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return true;   /* Full for now; the loop will say when it is not. */
+        }
+        set_error("%s", strerror(errno));
+        return false;
+    }
+
+    /* Nothing left to write, so stop asking to be told about writability --
+     * a socket that is writable and has nothing to write would wake the loop
+     * on every turn forever. */
+    if (stream->source != NULL) {
+        wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+    }
+    return true;
+}
+
+static int stream_event(int fd, uint32_t mask, void *data) {
+    struct recon_net_stream *stream = data;
+    (void)fd;
+
+    if ((mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) != 0) {
+        stream_end(stream, RECON_NET_UNREACHABLE, true);
+        return 0;
+    }
+
+    /* The first writability is the connect finishing, not room to send. */
+    if (!stream->connected && (mask & WL_EVENT_WRITABLE) != 0) {
+        int error = 0;
+        socklen_t length = sizeof(error);
+        if (getsockopt(stream->fd, SOL_SOCKET, SO_ERROR, &error, &length) != 0) {
+            error = errno;
+        }
+        if (error != 0) {
+            set_error("%s", strerror(error));
+            stream_end(stream, RECON_NET_UNREACHABLE, true);
+            return 0;
+        }
+
+        stream->connected = true;
+        if (stream->deadline != NULL) {
+            /* Connected, so the connect timeout has nothing left to guard. */
+            wl_event_source_remove(stream->deadline);
+            stream->deadline = NULL;
+        }
+
+        if (stream->handlers.opened != NULL) {
+            stream->in_handler = true;
+            stream->handlers.opened(stream->user, stream);
+            stream->in_handler = false;
+            if (stream->close_wanted) {
+                stream->close_wanted = false;
+                stream_end(stream, RECON_NET_OK, false);
+                return 0;
+            }
+        }
+    }
+
+    if ((mask & WL_EVENT_WRITABLE) != 0 && !stream_flush(stream)) {
+        stream_end(stream, RECON_NET_UNREACHABLE, true);
+        return 0;
+    }
+
+    if ((mask & WL_EVENT_READABLE) != 0) {
+        char buffer[4096];
+        for (;;) {
+            ssize_t got = recv(stream->fd, buffer, sizeof(buffer), 0);
+
+            if (got == 0) {
+                /* The other end finished. Not a failure: a server that has
+                 * said everything it has to say closes. */
+                stream_end(stream, RECON_NET_OK, true);
+                return 0;
+            }
+            if (got < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    break;
+                }
+                set_error("%s", strerror(errno));
+                stream_end(stream, RECON_NET_UNREACHABLE, true);
+                return 0;
+            }
+
+            stream->received += (size_t)got;
+            if (stream->handlers.received != NULL) {
+                stream->in_handler = true;
+                stream->handlers.received(stream->user, stream, buffer,
+                    (size_t)got);
+                stream->in_handler = false;
+                if (stream->close_wanted) {
+                    stream->close_wanted = false;
+                    stream_end(stream, RECON_NET_OK, false);
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int stream_expired(void *data) {
+    stream_end(data, RECON_NET_TIMED_OUT, true);
+    return 0;
+}
+
+struct recon_net_stream *recon_net_stream_open(const char *application,
+        const char *host, int port,
+        const struct recon_net_stream_handlers *handlers, void *user) {
+    if (g_loop == NULL) {
+        set_error("networking is not up");
+        return NULL;
+    }
+    if (host == NULL || *host == '\0' || port <= 0 || port > 65535) {
+        set_error("a host and a port are needed");
+        return NULL;
+    }
+
+    /*
+     * The permission check, before anything is resolved or opened. Refusing
+     * after a connection exists would be a race with itself.
+     */
+    recon_net_note_application(application);
+    if (!recon_net_may_use(application)) {
+        set_error("'%s' is not allowed to use the network",
+            application != NULL ? application : "an unnamed application");
+        return NULL;
+    }
+
+    struct recon_net_stream *stream = NULL;
+    for (int i = 0; i < STREAMS_MAX; i++) {
+        if (!g_streams[i].used) {
+            stream = &g_streams[i];
+            break;
+        }
+    }
+    if (stream == NULL) {
+        set_error("too many connections already open");
+        return NULL;
+    }
+
+    char service[16];
+    snprintf(service, sizeof(service), "%d", port);
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *found = NULL;
+    int status = getaddrinfo(host, service, &hints, &found);
+    if (status != 0 || found == NULL) {
+        set_error("%s: %s", host, gai_strerror(status));
+        return NULL;
+    }
+
+    int fd = socket(found->ai_family, found->ai_socktype | SOCK_NONBLOCK,
+        found->ai_protocol);
+    if (fd < 0) {
+        set_error("cannot open a socket: %s", strerror(errno));
+        freeaddrinfo(found);
+        return NULL;
+    }
+
+    int connected = connect(fd, found->ai_addr, found->ai_addrlen);
+    int reason = errno;
+    freeaddrinfo(found);
+
+    if (connected != 0 && reason != EINPROGRESS) {
+        set_error("%s", strerror(reason));
+        close(fd);
+        return NULL;
+    }
+
+    memset(stream, 0, sizeof(*stream));
+    stream->used = true;
+    stream->fd = fd;
+    stream->user = user;
+    if (handlers != NULL) {
+        stream->handlers = *handlers;
+    }
+    snprintf(stream->application, sizeof(stream->application), "%s",
+        application != NULL ? application : "");
+    snprintf(stream->peer, sizeof(stream->peer), "%s:%d", host, port);
+    clock_gettime(CLOCK_MONOTONIC, &stream->started);
+
+    stream->source = wl_event_loop_add_fd(g_loop, fd,
+        WL_EVENT_READABLE | WL_EVENT_WRITABLE, stream_event, stream);
+    stream->deadline = wl_event_loop_add_timer(g_loop, stream_expired, stream);
+
+    if (stream->source == NULL || stream->deadline == NULL) {
+        set_error("cannot watch the connection");
+        stream_end(stream, RECON_NET_UNREACHABLE, false);
+        return NULL;
+    }
+
+    /* Guards the connect only; removed once there is something on the other
+     * end. A stream that is open and idle is not a stream that has failed. */
+    wl_event_source_timer_update(stream->deadline, STREAM_CONNECT_MS);
+    return stream;
+}
+
 void recon_net_finish(void) {
+    for (int i = 0; i < STREAMS_MAX; i++) {
+        if (g_streams[i].used) {
+            /* Without telling anybody: whoever owned it is going away too. */
+            g_streams[i].in_handler = false;
+            stream_end(&g_streams[i], RECON_NET_NO_NETWORK, false);
+        }
+    }
     for (int i = 0; i < PROBES_MAX; i++) {
         if (g_probes[i].used) {
             /* Taken down without calling back: whoever asked is going away

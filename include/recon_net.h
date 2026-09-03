@@ -23,10 +23,18 @@
  *   Reaching     resolving a name, and finding out whether a host answers,
  *                without blocking the desktop while it happens.
  *
- * What is deliberately not here yet: listening, sending or receiving. An
- * application that wants a connection needs a stream API and a policy about
- * which applications may open one, and neither exists. Reaching out to ask
- * "is anything there" is the smallest useful thing that does not need either.
+ *   Streams      opening a connection to somewhere and talking over it,
+ *                and the rule about which applications are allowed to.
+ *
+ * What is deliberately not here yet: listening. Accepting connections means
+ * deciding what may reach this machine from outside, which is a larger
+ * question than deciding what this machine may reach, and it should not be
+ * answered by accident while building the outgoing half.
+ *
+ * There is also no TLS. A stream carries what it is given; nothing here
+ * encrypts anything, and https:// does not work. That is a gap and is written
+ * down as one -- see docs/ROADMAP.md -- rather than being papered over with a
+ * plaintext connection to a port that expects otherwise.
  */
 
 #ifndef RECON_NET_H
@@ -169,5 +177,119 @@ bool recon_net_last_probe(char *host, size_t size,
     enum recon_net_result *result, int *elapsed_ms);
 
 const char *recon_net_last_error(void);
+
+/*
+ * --- Who may use the network ---
+ *
+ * Every stream is opened in the name of an application, and an application
+ * that has not been allowed cannot open one.
+ *
+ * This exists because "which programs may talk to the internet" is a decision
+ * a person should be able to see and change, and a system that never asks it
+ * has answered "all of them" without saying so. The rule is deliberately
+ * simple -- allowed or not, per application, remembered in the system hive --
+ * because a complicated rule nobody understands is worse protection than a
+ * plain one they do.
+ *
+ * The default is *not* allowed. An application that appears and starts
+ * talking is exactly what this is for, so a new one starts silent and
+ * somebody has to say otherwise.
+ *
+ * What this is not: isolation. ReconOS is one process, so an application that
+ * wanted to bypass this could call the host's socket() directly. It stops the
+ * ones that go through ReconOS, which is all of ours, and it is enforced the
+ * same way accounts are -- by ReconOS, inside ReconOS.
+ */
+/*
+ * Where the decisions are kept, so a settings page can walk them.
+ *
+ * No trailing slash: the registry compares prefixes by whole segment, so
+ * "network/allow/" matches nothing at all -- the character after the prefix
+ * has to be a slash or the end, and there it is a letter.
+ */
+#define RECON_NET_PERMISSION_PREFIX "network/allow"
+
+bool recon_net_may_use(const char *application);
+bool recon_net_set_allowed(const char *application, bool allowed);
+
+/*
+ * Every application that has been asked about, so a settings page can list
+ * them without inventing its own record of what exists.
+ */
+int recon_net_allowed_count(void);
+bool recon_net_allowed_at(int index, char *name, size_t size, bool *allowed);
+
+/* Note that an application exists, so it can be listed and decided about
+ * before it has tried anything. Harmless to call repeatedly. */
+void recon_net_note_application(const char *application);
+
+/* --- Streams --- */
+
+struct recon_net_stream;
+
+/*
+ * What a stream tells its owner.
+ *
+ * `opened` fires once, when there is something on the other end. `received`
+ * fires as bytes arrive, in whatever sizes they arrive in -- a stream is not
+ * a message boundary and anything wanting one has to find it itself.
+ * `closed` fires exactly once and is the last thing: after it the stream is
+ * gone, and touching the handle again is a mistake.
+ *
+ * Any of them may be NULL.
+ */
+struct recon_net_stream_handlers {
+    void (*opened)(void *user, struct recon_net_stream *stream);
+    void (*received)(void *user, struct recon_net_stream *stream,
+        const char *bytes, size_t length);
+    void (*closed)(void *user, struct recon_net_stream *stream,
+        enum recon_net_result reason);
+};
+
+/*
+ * Open a connection, in the name of an application.
+ *
+ * Returns NULL if the application may not use the network, if the name does
+ * not resolve, or if there is no room for another stream -- in which case no
+ * handler is ever called and recon_net_last_error says which.
+ *
+ * Otherwise it returns immediately with a stream that is not connected yet.
+ * Nothing has happened when this returns; `opened` or `closed` will say what
+ * did, later, from the event loop.
+ */
+struct recon_net_stream *recon_net_stream_open(const char *application,
+    const char *host, int port,
+    const struct recon_net_stream_handlers *handlers, void *user);
+
+/*
+ * Queue bytes to send.
+ *
+ * Copied, so the caller's buffer is theirs again immediately. Queued rather
+ * than written, because a socket that is not ready would otherwise make this
+ * block -- which is the thing the whole design is avoiding.
+ *
+ * False when there is no room, which is real backpressure and not an error:
+ * the right answer is to send less or wait, not to retry harder.
+ */
+bool recon_net_stream_send(struct recon_net_stream *stream,
+    const char *bytes, size_t length);
+
+/* Send a string, for the many callers whose protocol is text. */
+bool recon_net_stream_send_text(struct recon_net_stream *stream,
+    const char *text);
+
+/*
+ * Close it. `closed` is *not* called: the owner asked, so the owner knows.
+ * A handler that fires because you asked for it is a handler people write
+ * loops with.
+ */
+void recon_net_stream_close(struct recon_net_stream *stream);
+
+/* How many bytes this stream has carried each way, and how long it has been
+ * open. For showing what is happening rather than guessing. */
+bool recon_net_stream_stats(struct recon_net_stream *stream,
+    size_t *sent, size_t *received, int *age_ms);
+
+int recon_net_stream_count(void);
 
 #endif

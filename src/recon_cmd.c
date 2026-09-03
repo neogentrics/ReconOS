@@ -1331,8 +1331,53 @@ static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    if (argc > 1 && strcasecmp(argv[1], "apps") == 0) {
+        int count = recon_net_allowed_count();
+        if (count == 0) {
+            out(s, "No application has asked to use the network yet.\n");
+            return;
+        }
+        out(s, "Which applications may use the network:\n\n");
+        for (int i = 0; i < count; i++) {
+            char name[96];
+            bool allowed = false;
+            if (recon_net_allowed_at(i, name, sizeof(name), &allowed)) {
+                out(s, "  %-24s %s\n", name,
+                    allowed ? "allowed" : "not allowed");
+            }
+        }
+        out(s, "\n'net allow <name>' and 'net deny <name>' change these.\n");
+        return;
+    }
+
+    if (argc > 2 && (strcasecmp(argv[1], "allow") == 0 ||
+            strcasecmp(argv[1], "deny") == 0)) {
+        bool allow = strcasecmp(argv[1], "allow") == 0;
+
+        /* Join the rest, since application names have spaces in them. */
+        char name[96];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(name) - 1; i++) {
+            int written = snprintf(name + used, sizeof(name) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (written < 0) {
+                break;
+            }
+            used += (size_t)written;
+        }
+
+        if (!recon_net_set_allowed(name, allow)) {
+            out(s, "%s\n", recon_net_last_error());
+            return;
+        }
+        out(s, "'%s' %s use the network.\n", name,
+            allow ? "may now" : "may no longer");
+        return;
+    }
+
     if (argc > 1 && strcasecmp(argv[1], "interfaces") != 0) {
-        out(s, "Usage: net [interfaces|refresh|resolve <host>|reach <host> [port]]\n");
+        out(s, "Usage: net [interfaces|refresh|apps|allow <app>|deny <app>|\n");
+        out(s, "            resolve <host>|reach <host> [port]]\n");
         return;
     }
 
@@ -1406,6 +1451,144 @@ static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "reported through ReconOS -- see include/recon_net.h.\n");
 }
 
+/*
+ * `get` -- fetch a page, to prove a stream carries bytes both ways.
+ *
+ * A deliberately small HTTP client: send a request line and two headers,
+ * collect what comes back, stop. It parses nothing. The point is not to be a
+ * browser -- it is that opening a connection, writing to it, reading from it
+ * and having it close is a path somebody has walked end to end, and this is
+ * the shortest walk that touches all four.
+ *
+ * No TLS, so this is http:// only. Most of the web will answer with a
+ * redirect to https, which is itself a useful answer: it proves the request
+ * arrived and a real server replied.
+ */
+#define FETCH_MAX 8192
+
+static struct {
+    bool running;
+    bool have;
+    char host[128];
+    char path[256];
+    char body[FETCH_MAX];
+    size_t used;
+    enum recon_net_result result;
+} g_fetch;
+
+static void fetch_opened(void *user, struct recon_net_stream *stream) {
+    (void)user;
+
+    char request[512];
+    snprintf(request, sizeof(request),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: ReconOS/" RECONOS_VERSION "\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        g_fetch.path, g_fetch.host);
+
+    recon_net_stream_send_text(stream, request);
+}
+
+static void fetch_received(void *user, struct recon_net_stream *stream,
+        const char *bytes, size_t length) {
+    (void)user;
+    (void)stream;
+
+    size_t room = sizeof(g_fetch.body) - 1 - g_fetch.used;
+    if (room == 0) {
+        return;   /* Enough. This is a demonstration, not a download. */
+    }
+    if (length > room) {
+        length = room;
+    }
+    memcpy(g_fetch.body + g_fetch.used, bytes, length);
+    g_fetch.used += length;
+    g_fetch.body[g_fetch.used] = '\0';
+}
+
+static void fetch_closed(void *user, struct recon_net_stream *stream,
+        enum recon_net_result reason) {
+    (void)user;
+    (void)stream;
+
+    g_fetch.running = false;
+    g_fetch.have = true;
+    g_fetch.result = reason;
+}
+
+static void cmd_get(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        /* No arguments means "show me what came back", because the answer to
+         * a fetch arrives after the command that started it has returned. */
+        if (g_fetch.running) {
+            out(s, "Still fetching %s%s.\n", g_fetch.host, g_fetch.path);
+            return;
+        }
+        if (!g_fetch.have) {
+            out(s, "Usage: get <host>[:port] [path]\n");
+            return;
+        }
+
+        out(s, "%s%s: %s, %zu bytes\n\n", g_fetch.host, g_fetch.path,
+            recon_net_result_name(g_fetch.result), g_fetch.used);
+        out(s, "%s", g_fetch.body);
+        if (g_fetch.used > 0 && g_fetch.body[g_fetch.used - 1] != '\n') {
+            out(s, "\n");
+        }
+        return;
+    }
+
+    if (g_fetch.running) {
+        out(s, "One at a time. %s%s is still going.\n",
+            g_fetch.host, g_fetch.path);
+        return;
+    }
+
+    /* host[:port] */
+    char host[128];
+    snprintf(host, sizeof(host), "%s", argv[1]);
+
+    int port = 80;
+    char *colon = strrchr(host, ':');
+    if (colon != NULL) {
+        *colon = '\0';
+        port = atoi(colon + 1);
+        if (port <= 0) {
+            port = 80;
+        }
+    }
+
+    snprintf(g_fetch.host, sizeof(g_fetch.host), "%s", host);
+    snprintf(g_fetch.path, sizeof(g_fetch.path), "%s",
+        argc > 2 ? argv[2] : "/");
+    g_fetch.used = 0;
+    g_fetch.body[0] = '\0';
+    g_fetch.have = false;
+
+    static const struct recon_net_stream_handlers HANDLERS = {
+        .opened = fetch_opened,
+        .received = fetch_received,
+        .closed = fetch_closed,
+    };
+
+    /* In the Terminal's name, so the permission is the Terminal's and shows
+     * up under that name in the Control Panel. */
+    if (recon_net_stream_open("Terminal", g_fetch.host, port, &HANDLERS,
+            NULL) == NULL) {
+        out(s, "%s\n", recon_net_last_error());
+        if (!recon_net_may_use("Terminal")) {
+            out(s, "Allow it with: net allow Terminal\n");
+        }
+        return;
+    }
+
+    g_fetch.running = true;
+    out(s, "Fetching %s%s. 'get' with no arguments shows the answer.\n",
+        g_fetch.host, g_fetch.path);
+}
+
 static void cmd_echo(struct recon_cmd_session *s, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         out(s, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -1447,6 +1630,7 @@ static const struct command COMMANDS[] = {
     { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "net",      "net [action] ...",      "The network, and whether it answers", cmd_net },
+    { "get",      "get <host> [path]",     "Fetch a page over HTTP",             cmd_get },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },
     { "echo",     "echo <text>",           "Print text",                        cmd_echo },

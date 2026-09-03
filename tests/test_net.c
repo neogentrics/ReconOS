@@ -18,9 +18,12 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "recon_fs.h"
 #include "recon_net.h"
+#include "recon_registry.h"
 
 static int g_failures;
 static int g_checks;
@@ -183,8 +186,121 @@ static void test_resolve_refuses_nothing(void) {
         "resolving into nowhere fails");
 }
 
+/*
+ * The permission rule.
+ *
+ * Worth testing rather than eyeballing, because both of its failures are
+ * silent: a rule that says no to everything looks like a broken network, and
+ * a rule that says yes to everything looks like it is working.
+ */
+static void test_permission(void) {
+    printf("who may use the network\n");
+
+    check(!recon_net_may_use("Nobody Has Asked"),
+        "an application nobody decided about may not");
+    check(!recon_net_may_use(NULL), "and neither may a nameless one");
+    check(!recon_net_may_use(""), "nor an empty one");
+
+    check(recon_net_set_allowed("Terminal", true), "one can be allowed");
+    check(recon_net_may_use("Terminal"), "and then it may");
+
+    check(recon_net_set_allowed("Terminal", false), "and denied again");
+    check(!recon_net_may_use("Terminal"), "and then it may not");
+
+    /*
+     * A name with a space in it. The registry refuses a key segment
+     * containing one, so this silently recorded nothing at all until the
+     * name was made key-safe -- and silently recording nothing reads exactly
+     * like a permission that was set and ignored.
+     */
+    check(recon_net_set_allowed("File Explorer", true),
+        "a name with a space can be allowed");
+    check(recon_net_may_use("File Explorer"),
+        "and the permission is found again under the same name");
+
+    /* And it comes back out of the list spelled the way it went in. */
+    bool found = false;
+    int count = recon_net_allowed_count();
+    for (int i = 0; i < count; i++) {
+        char name[96];
+        bool allowed = false;
+        if (recon_net_allowed_at(i, name, sizeof(name), &allowed) &&
+                strcmp(name, "File Explorer") == 0) {
+            found = true;
+            check(allowed, "and is listed as allowed");
+        }
+    }
+    check(found, "a spaced name survives the round trip");
+
+    check(!recon_net_set_allowed(NULL, true), "a nameless one cannot be set");
+}
+
+static void test_noting(void) {
+    printf("noticing an application exists\n");
+
+    int before = recon_net_allowed_count();
+    recon_net_note_application("Something New");
+    check(recon_net_allowed_count() == before + 1,
+        "a new application appears in the list");
+    check(!recon_net_may_use("Something New"),
+        "not allowed, which is the default");
+
+    /* Noting again must not undo a decision. It used to be tempting to write
+     * the default every time, which would turn "allowed" back to "no" on
+     * every start. */
+    check(recon_net_set_allowed("Something New", true), "allow it");
+    recon_net_note_application("Something New");
+    check(recon_net_may_use("Something New"),
+        "noting it again leaves the decision alone");
+}
+
+static void test_streams_need_permission(void) {
+    printf("opening a stream\n");
+
+    /* No event loop, so nothing can be opened whatever the permission -- but
+     * the permission is checked first, and its message is the useful one. */
+    check(recon_net_stream_open("Not Allowed", "example.com", 80, NULL, NULL)
+        == NULL, "a stream for an unallowed application is refused");
+    check(recon_net_stream_count() == 0, "and nothing is left open");
+
+    check(recon_net_stream_open("Terminal", NULL, 80, NULL, NULL) == NULL,
+        "a stream to nowhere is refused");
+    check(recon_net_stream_open("Terminal", "example.com", 0, NULL, NULL)
+        == NULL, "port 0 is refused");
+
+    /* Sending on nothing is a mistake, not a crash. */
+    check(!recon_net_stream_send(NULL, "x", 1), "sending on no stream fails");
+    check(!recon_net_stream_send_text(NULL, "x"), "and so does sending text");
+    check(!recon_net_stream_stats(NULL, NULL, NULL, NULL),
+        "and asking it for figures");
+
+    /* Closing nothing is allowed, because a caller that has already lost its
+     * stream should not have to know that. */
+    recon_net_stream_close(NULL);
+    check(true, "closing nothing is harmless");
+}
+
 int main(void) {
-    printf("ReconOS network tests\n\n");
+    /*
+     * A throwaway root, because the permission rule lives in the registry and
+     * the registry writes into the filesystem. Without one these tests would
+     * fail for want of somewhere to write -- or, worse, write into a real
+     * installation.
+     */
+    char root[] = "/tmp/reconos-net-XXXXXX";
+    if (mkdtemp(root) == NULL) {
+        perror("mkdtemp");
+        return 1;
+    }
+
+    printf("ReconOS network tests, root %s\n\n", root);
+
+    if (!recon_fs_init(root)) {
+        printf("could not set up the test filesystem: %s\n",
+            recon_fs_last_error());
+        return 1;
+    }
+    recon_registry_init();
 
     test_interfaces();
     test_one_entry_per_interface();
@@ -193,6 +309,9 @@ int main(void) {
     test_names();
     test_probes_need_a_server();
     test_resolve_refuses_nothing();
+    test_permission();
+    test_noting();
+    test_streams_need_permission();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
