@@ -218,9 +218,127 @@ static void cmd_del(struct recon_cmd_session *s, int argc, char **argv) {
         out(s, "Usage: del <name>\n");
         return;
     }
-    if (!recon_fs_remove(s->cwd, argv[1])) {
-        out(s, "%s\n", recon_fs_last_error());
+    if (recon_fs_remove(s->cwd, argv[1])) {
+        return;
     }
+
+    /*
+     * A folder with things in it is not a failure, it is a bigger question.
+     * Say which one it is rather than reporting an error the user cannot act
+     * on.
+     */
+    struct recon_dirent info;
+    if (recon_fs_stat(s->cwd, argv[1], &info) &&
+            info.kind == RECON_FILE_DIRECTORY &&
+            !recon_fs_is_protected(s->cwd, argv[1])) {
+        out(s, "'%s' is not empty. Use 'deltree %s' to remove it and its "
+            "contents.\n", argv[1], argv[1]);
+        return;
+    }
+
+    out(s, "%s\n", recon_fs_last_error());
+}
+
+static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: deltree <name>\n");
+        return;
+    }
+
+    /*
+     * Named separately from del rather than being a flag on it. Losing a whole
+     * tree should take a different word, not a character somebody might not
+     * have meant to type.
+     */
+    if (!recon_fs_remove_tree(s->cwd, argv[1])) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+    out(s, "Removed '%s' and everything in it.\n", argv[1]);
+}
+
+static void cmd_rename(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 3) {
+        out(s, "Usage: rename <name> <new name>\n");
+        return;
+    }
+    if (strchr(argv[2], '/') != NULL) {
+        out(s, "A new name cannot contain '/'. Use 'move' to put it "
+            "somewhere else.\n");
+        return;
+    }
+    if (!recon_fs_rename(s->cwd, argv[1], argv[2])) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+    out(s, "Renamed '%s' to '%s'.\n", argv[1], argv[2]);
+}
+
+/* Work out where something lands when the destination is a folder. */
+static bool destination_for(struct recon_cmd_session *s, const char *from,
+        const char *to, char *out_path, size_t size) {
+    struct recon_dirent info;
+    if (!recon_fs_stat(s->cwd, to, &info) || info.kind != RECON_FILE_DIRECTORY) {
+        snprintf(out_path, size, "%s", to);
+        return true;
+    }
+
+    /* "move notes.txt /Temp" means into /Temp, keeping the name -- which is
+     * what anyone typing it expects. */
+    const char *leaf = strrchr(from, '/');
+    leaf = (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : from;
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(s->cwd, to, host, sizeof(host),
+            canonical, sizeof(canonical))) {
+        return false;
+    }
+
+    if (strcmp(canonical, "/") == 0) {
+        snprintf(out_path, size, "/%s", leaf);
+    } else {
+        snprintf(out_path, size, "%s/%s", canonical, leaf);
+    }
+    return true;
+}
+
+static void cmd_move(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 3) {
+        out(s, "Usage: move <name> <destination>\n");
+        return;
+    }
+
+    char target[RECON_PATH_MAX];
+    if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+
+    if (!recon_fs_rename(s->cwd, argv[1], target)) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+    out(s, "Moved '%s' to '%s'.\n", argv[1], target);
+}
+
+static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 3) {
+        out(s, "Usage: copy <name> <destination>\n");
+        return;
+    }
+
+    char target[RECON_PATH_MAX];
+    if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+
+    if (!recon_fs_copy(s->cwd, argv[1], target)) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+    out(s, "Copied '%s' to '%s'.\n", argv[1], target);
 }
 
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
@@ -324,6 +442,10 @@ static const struct command COMMANDS[] = {
     { "write",    "write <file> [text]",   "Write text to a file",              cmd_write },
     { "mkdir",    "mkdir <name>",          "Create a directory",                cmd_mkdir },
     { "del",      "del <name>",            "Delete a file or empty directory",  cmd_del },
+    { "deltree",  "deltree <name>",        "Delete a folder and its contents",  cmd_deltree },
+    { "rename",   "rename <name> <new>",   "Rename a file or folder",           cmd_rename },
+    { "move",     "move <name> <dest>",    "Move a file or folder",             cmd_move },
+    { "copy",     "copy <name> <dest>",    "Copy a file or folder",             cmd_copy },
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },

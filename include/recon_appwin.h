@@ -26,8 +26,49 @@ struct recon_font;
 struct recon_panel;
 struct recon_appwin;
 
+/*
+ * Keyboard modifiers, as the compositor reports them.
+ *
+ * Named here so an application can test for Ctrl without including wlroots
+ * headers for one constant, or -- worse -- writing the bit as a number and
+ * hoping. These match wlr_keyboard_modifier, which is what actually arrives.
+ */
+#define RECON_MOD_SHIFT (1u << 0)
+#define RECON_MOD_CAPS  (1u << 1)
+#define RECON_MOD_CTRL  (1u << 2)
+#define RECON_MOD_ALT   (1u << 3)
+#define RECON_MOD_LOGO  (1u << 6)
+
 /* Hit-region ids at or above this belong to the application. */
 #define RECON_APPWIN_HIT_USER 1000
+
+/*
+ * A menu an application offers for what is under the pointer.
+ *
+ * Right-clicking a file should offer things to do with the file, not with the
+ * window that happens to be showing it. The shell owns the drawing and the
+ * clicking -- a context menu is the same object wherever it is raised -- and
+ * the application only says what should be in it.
+ */
+
+#define RECON_MENU_MAX 16
+
+struct recon_menu_entry {
+    char label[48];
+    uint32_t id;
+    bool enabled;
+    bool separator_after;
+};
+
+struct recon_menu_spec {
+    struct recon_menu_entry items[RECON_MENU_MAX];
+    int count;
+};
+
+/* Append an entry. Silently ignored once full, because a menu losing its last
+ * item is better than an application failing to open one. */
+void recon_menu_add(struct recon_menu_spec *menu, const char *label,
+    uint32_t id, bool enabled, bool separator_after);
 
 /*
  * What an application must provide. Only `draw` is required; the rest may be
@@ -54,7 +95,27 @@ struct recon_appwin_impl {
     /* A key press while this window has focus. */
     bool (*key)(void *user, xkb_keysym_t sym, uint32_t modifiers);
 
+    /*
+     * The pointer moved over the window. `hit_id` is RECON_HIT_NONE when it is
+     * over nothing the application registered, or has left the window
+     * entirely -- which is how a highlight knows to switch off.
+     */
+    void (*motion)(void *user, uint32_t hit_id, int cx, int cy);
+
     void (*scroll)(void *user, double delta);
+
+    /*
+     * Offer a context menu for the point given, in content coordinates.
+     *
+     * Return true having filled `menu`, or false to let the shell offer the
+     * window's own Restore/Minimize/Maximize/Close instead -- which is the
+     * right answer for a right-click on a window's empty background.
+     */
+    bool (*context)(void *user, uint32_t hit_id, int cx, int cy,
+        struct recon_menu_spec *menu);
+
+    /* A choice made from the menu the application offered. */
+    void (*context_action)(void *user, uint32_t id);
 
     /* Shown or hidden, so an application can start and stop doing work. */
     void (*visibility)(void *user, bool visible);
@@ -83,6 +144,13 @@ bool recon_appwin_is_minimized(struct recon_appwin *win);
 bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
+
+/*
+ * Show something other than the application's name -- the file being edited,
+ * say. Pass NULL or "" to go back to impl->title. The taskbar and the title
+ * bar both read through recon_appwin_title, so they stay in step.
+ */
+void recon_appwin_set_title(struct recon_appwin *win, const char *title);
 const char *recon_appwin_icon(struct recon_appwin *win);
 
 /*
@@ -128,5 +196,15 @@ bool recon_appwin_handle_scroll(struct recon_appwin *win, double lx, double ly,
     double delta);
 bool recon_appwin_handle_key(struct recon_appwin *win, xkb_keysym_t sym,
     uint32_t modifiers);
+
+/*
+ * Ask the application what it offers at this point. False means it has nothing
+ * to say there, and the shell should offer window actions instead.
+ */
+bool recon_appwin_context_at(struct recon_appwin *win, double lx, double ly,
+    struct recon_menu_spec *menu);
+
+/* Tell the application which of its own entries was chosen. */
+void recon_appwin_context_action(struct recon_appwin *win, uint32_t id);
 
 #endif

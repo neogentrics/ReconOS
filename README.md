@@ -31,7 +31,14 @@ supplies its contents and nothing else.
 
 **A filesystem** with one root it cannot see outside of: `/System`, `/Apps`,
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
-the root is refused.
+the root is refused rather than quietly clamped.
+
+Files can be **renamed, moved, copied and deleted**, from the file explorer, the
+desktop, or the command line. Renaming happens in place — the row or the label
+becomes a text box. Deleting asks first, and emptying a folder is a separate
+question from deleting a file, so a tree is never lost to one stray click.
+Cut, copy and paste share a single clipboard, so something copied in the
+explorer pastes onto the desktop.
 
 **A command interpreter** — ReconOS commands acting on ReconOS. Not a Unix
 shell: nothing here reaches the host or runs host programs. Reachable from the
@@ -41,11 +48,18 @@ from outside.
 **Applications**, all native:
 
 - **File Explorer** — back and forward through where you have been, a sidebar
-  of places, folders and files with icons, deletion that asks first
+  of places, folders and files with icons, renaming in place, cut/copy/paste,
+  and deletion that asks first
 - **Task Manager** — processes with CPU and memory, and a view of open windows
 - **Terminal** — the command interpreter, emulating nothing
-- **Notepad** — text editing
+- **Notepad** — text editing, with a File menu and a file dialog for opening
+  and saving. Closing with unsaved work asks where to put it rather than
+  throwing it away
 - **Calculator** — arithmetic by mouse or keyboard
+
+**A file dialog** shared by the applications that need one. It is drawn inside
+the window that asked for it, so it cannot be dragged away from its own
+question or left behind its own parent.
 
 **Client windows** via `xdg-shell`, for programs written against Wayland.
 
@@ -61,6 +75,26 @@ from outside.
 | `Ctrl` + `Alt` + `Del` | Task Manager or shut down |
 | `Alt` + `Q` | Quit |
 
+Inside the file explorer:
+
+| Input | Action |
+| --- | --- |
+| `F2` | Rename the selected item |
+| `Delete` | Delete it (asks first) |
+| `Ctrl` + `X` / `C` / `V` | Cut, copy, paste |
+| `Left` / `Right` | Back and forward |
+| `Backspace` | Up one folder |
+| `F5` | Refresh |
+
+Inside Notepad:
+
+| Input | Action |
+| --- | --- |
+| `Ctrl` + `N` | New |
+| `Ctrl` + `O` | Open |
+| `Ctrl` + `S` | Save |
+| `Ctrl` + `Shift` + `S` | Save As |
+
 ## Building
 
 Requires a Linux system with wlroots 0.17 and its development headers.
@@ -73,6 +107,17 @@ sudo apt install -y build-essential cmake ninja-build pkg-config \
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
+```
+
+### Tests
+
+The filesystem operations have their own tests, because renaming, copying and
+deleting are what lose a user's work when they are wrong, and clicking through
+a desktop is a poor way to find that out. They run against a throwaway root and
+need no display:
+
+```bash
+./build/recon_fs_tests
 ```
 
 ## Running
@@ -94,6 +139,32 @@ To run without a display at all, useful for testing:
 WLR_BACKENDS=headless WLR_RENDERER_ALLOW_SOFTWARE=1 ./build/ReconOS
 ```
 
+### Installing it somewhere else
+
+To take a build off the machine it was compiled on:
+
+```bash
+scripts/package.sh
+```
+
+That writes `dist/reconos-<version>-<arch>.tar.gz` containing the compositor,
+its assets and an installer. On the target machine:
+
+```bash
+tar -xzf reconos-<version>-<arch>.tar.gz
+cd reconos-<version>-<arch>
+sudo ./install.sh
+```
+
+ReconOS lands in `/opt/reconos`, its filesystem at `/recon`, and a `reconos`
+launcher on the path. Add `--boot-into` to start it on tty1 at boot instead of
+a login prompt; `--uninstall` reverses everything except `/recon`, which is
+left alone because it holds your files.
+
+This installs onto a machine that already has a Linux kernel and wlroots. It is
+not yet a bootable disk image — that comes with the kernel work, and calling a
+tarball an "image" before then would be claiming something ReconOS cannot do.
+
 ### Configuration
 
 | Variable | Purpose | Default |
@@ -109,6 +180,8 @@ WLR_BACKENDS=headless WLR_RENDERER_ALLOW_SOFTWARE=1 ./build/ReconOS
 ```
 src/          compositor source
 include/      project headers
+tests/        tests that need no display
+scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
 third_party/  vendored dependencies (stb_image)
 docs/         roadmap and development notes

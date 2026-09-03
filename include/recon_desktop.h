@@ -16,6 +16,8 @@
 
 #include <stdbool.h>
 
+#include <xkbcommon/xkbcommon.h>
+
 #include "recon_fs.h"
 
 struct recon_server;
@@ -72,6 +74,25 @@ bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
 
 void recon_desktop_delete(struct recon_desktop *desktop, const char *name);
 void recon_desktop_new_folder(struct recon_desktop *desktop);
+void recon_desktop_new_file(struct recon_desktop *desktop);
 void recon_desktop_new_shortcut(struct recon_desktop *desktop);
+
+/* Hold an item for a move or a copy, and drop whatever is held onto the
+ * desktop. The clipboard is the system's, so this pastes what was copied in
+ * the file explorer just as readily. */
+void recon_desktop_clip(struct recon_desktop *desktop, const char *name, bool cut);
+void recon_desktop_paste(struct recon_desktop *desktop);
+
+/*
+ * Rename in place: the label under the icon becomes a text box.
+ *
+ * While one is open the desktop takes the keyboard, which is why the shell
+ * has to ask -- otherwise Escape and Enter would go somewhere else and the
+ * box would never close.
+ */
+void recon_desktop_begin_rename(struct recon_desktop *desktop, const char *name);
+bool recon_desktop_is_renaming(struct recon_desktop *desktop);
+bool recon_desktop_handle_key(struct recon_desktop *desktop, xkb_keysym_t sym,
+    uint32_t modifiers);
 
 #endif

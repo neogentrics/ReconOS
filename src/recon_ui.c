@@ -675,3 +675,169 @@ uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
     }
     return RECON_HIT_NONE;
 }
+
+/* --- Text entry --- */
+
+#define EDIT_BG RECON_RGB(0xFF, 0xFF, 0xFF)
+#define EDIT_TEXT RECON_RGB(0x10, 0x10, 0x10)
+#define EDIT_CARET RECON_RGB(0x10, 0x10, 0x10)
+#define EDIT_BORDER RECON_RGB(0x30, 0x50, 0x90)
+
+void recon_edit_begin(struct recon_edit *edit, const char *initial,
+        bool select_stem) {
+    if (edit == NULL) {
+        return;
+    }
+
+    snprintf(edit->text, sizeof(edit->text), "%s", initial != NULL ? initial : "");
+    edit->length = (int)strlen(edit->text);
+    edit->caret = edit->length;
+    edit->active = true;
+
+    if (select_stem) {
+        /* A leading dot is the whole name, not an extension, so "..config"
+         * does not lose its identity to a rule about file types. */
+        const char *dot = strrchr(edit->text, '.');
+        if (dot != NULL && dot != edit->text) {
+            edit->caret = (int)(dot - edit->text);
+        }
+    }
+}
+
+void recon_edit_end(struct recon_edit *edit) {
+    if (edit == NULL) {
+        return;
+    }
+    edit->active = false;
+    edit->text[0] = '\0';
+    edit->length = 0;
+    edit->caret = 0;
+}
+
+static void edit_insert(struct recon_edit *edit, char c) {
+    if (edit->length + 1 >= RECON_EDIT_MAX) {
+        return;
+    }
+    memmove(edit->text + edit->caret + 1, edit->text + edit->caret,
+        (size_t)(edit->length - edit->caret) + 1);
+    edit->text[edit->caret] = c;
+    edit->caret++;
+    edit->length++;
+}
+
+static void edit_delete_at(struct recon_edit *edit, int index) {
+    if (index < 0 || index >= edit->length) {
+        return;
+    }
+    memmove(edit->text + index, edit->text + index + 1,
+        (size_t)(edit->length - index));
+    edit->length--;
+}
+
+enum recon_edit_result recon_edit_key(struct recon_edit *edit,
+        xkb_keysym_t sym, uint32_t modifiers) {
+    if (edit == NULL || !edit->active) {
+        return RECON_EDIT_IGNORED;
+    }
+    (void)modifiers;
+
+    switch (sym) {
+    case XKB_KEY_Return:
+    case XKB_KEY_KP_Enter:
+        return RECON_EDIT_COMMIT;
+
+    case XKB_KEY_Escape:
+        return RECON_EDIT_CANCEL;
+
+    case XKB_KEY_BackSpace:
+        if (edit->caret > 0) {
+            edit_delete_at(edit, edit->caret - 1);
+            edit->caret--;
+        }
+        return RECON_EDIT_CHANGED;
+
+    case XKB_KEY_Delete:
+        edit_delete_at(edit, edit->caret);
+        return RECON_EDIT_CHANGED;
+
+    case XKB_KEY_Left:
+        if (edit->caret > 0) {
+            edit->caret--;
+        }
+        return RECON_EDIT_CHANGED;
+
+    case XKB_KEY_Right:
+        if (edit->caret < edit->length) {
+            edit->caret++;
+        }
+        return RECON_EDIT_CHANGED;
+
+    case XKB_KEY_Home:
+        edit->caret = 0;
+        return RECON_EDIT_CHANGED;
+
+    case XKB_KEY_End:
+        edit->caret = edit->length;
+        return RECON_EDIT_CHANGED;
+
+    default:
+        break;
+    }
+
+    /*
+     * Anything that produces a printable character is text. Control codes are
+     * not: a stray Tab or newline inside a filename would be legal on disk and
+     * impossible to see.
+     */
+    uint32_t code = xkb_keysym_to_utf32(sym);
+    if (code >= 0x20 && code < 0x7F) {
+        edit_insert(edit, (char)code);
+        return RECON_EDIT_CHANGED;
+    }
+
+    return RECON_EDIT_IGNORED;
+}
+
+void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
+        int x, int y, int w, int h, const struct recon_edit *edit) {
+    if (panel == NULL || edit == NULL || w <= 0 || h <= 0) {
+        return;
+    }
+
+    recon_fill_rect(panel, x, y, w, h, EDIT_BG);
+    recon_stroke_rect(panel, x, y, w, h, EDIT_BORDER);
+
+    int pad = 3;
+    int inner_w = w - pad * 2;
+    if (inner_w <= 0 || font == NULL) {
+        return;
+    }
+
+    /*
+     * Scroll so the caret stays in view. Without this, typing a long name
+     * silently continues past the right edge and the user is editing something
+     * they cannot see.
+     */
+    char before[RECON_EDIT_MAX];
+    int caret = edit->caret;
+    if (caret > edit->length) {
+        caret = edit->length;
+    }
+    memcpy(before, edit->text, (size_t)caret);
+    before[caret] = '\0';
+
+    int caret_x = recon_text_width(font, before);
+    int offset = 0;
+    if (caret_x > inner_w - 2) {
+        offset = caret_x - (inner_w - 2);
+    }
+
+    int baseline = y + (h + recon_font_ascent(font)) / 2 - 1;
+
+    /* Drawn without truncation so the ellipsis logic does not fight the
+     * scrolling; the panel clips whatever runs past its edge. */
+    recon_draw_text(panel, font, x + pad - offset, baseline,
+        inner_w + offset, edit->text, EDIT_TEXT);
+
+    recon_fill_rect(panel, x + pad + caret_x - offset, y + 3, 1, h - 6, EDIT_CARET);
+}

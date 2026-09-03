@@ -18,6 +18,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <xkbcommon/xkbcommon.h>
+
 struct wlr_scene_tree;
 struct wlr_scene_buffer;
 
@@ -120,6 +122,55 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
  */
 void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
     const unsigned char *rgba, int image_width, int image_height);
+
+/* --- Text entry --- */
+
+/*
+ * A single line of editable text.
+ *
+ * Renaming a file, naming one to save, typing a path: all the same thing, so
+ * they share one editor rather than each growing its own. The caller owns the
+ * struct and decides where it appears; this only knows about the text and the
+ * caret.
+ */
+
+#define RECON_EDIT_MAX 256
+
+struct recon_edit {
+    char text[RECON_EDIT_MAX];
+    int length;
+    int caret;
+    bool active;
+};
+
+/*
+ * Start editing `initial`.
+ *
+ * When `select_stem` is true the caret goes before the last dot rather than at
+ * the end, so renaming "notes.txt" and typing replaces the name and keeps the
+ * extension -- retyping ".txt" every time is the kind of small tax that makes
+ * a feature feel unfinished.
+ */
+void recon_edit_begin(struct recon_edit *edit, const char *initial,
+    bool select_stem);
+void recon_edit_end(struct recon_edit *edit);
+
+enum recon_edit_result {
+    RECON_EDIT_IGNORED,  /* Not a key the editor uses. */
+    RECON_EDIT_CHANGED,  /* Text or caret moved; redraw. */
+    RECON_EDIT_COMMIT,   /* Enter: the caller should apply edit->text. */
+    RECON_EDIT_CANCEL,   /* Escape: the caller should discard it. */
+};
+
+enum recon_edit_result recon_edit_key(struct recon_edit *edit,
+    xkb_keysym_t sym, uint32_t modifiers);
+
+/*
+ * Draw the field, sunken, with a caret. Long text scrolls so the caret stays
+ * visible rather than running off the end of the box.
+ */
+void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
+    int x, int y, int w, int h, const struct recon_edit *edit);
 
 /* --- Click targets --- */
 

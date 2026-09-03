@@ -76,6 +76,10 @@ struct recon_appwin {
     int resize_start_width, resize_start_height;
 
     int screen_w, screen_h, reserved_bottom;
+
+    /* Set by the application to override impl->title; empty means it has not
+     * asked for anything but its own name. */
+    char title[96];
 };
 
 /* --- Drawing --- */
@@ -412,7 +416,25 @@ bool recon_appwin_is_maximized(struct recon_appwin *win) {
 }
 
 const char *recon_appwin_title(struct recon_appwin *win) {
-    return win != NULL ? win->impl->title : "";
+    if (win == NULL) {
+        return "";
+    }
+    /* An application that has set one wins: the notepad naming the file it is
+     * editing is more use on a taskbar than five buttons all saying
+     * "Notepad". */
+    return win->title[0] != '\0' ? win->title : win->impl->title;
+}
+
+void recon_appwin_set_title(struct recon_appwin *win, const char *title) {
+    if (win == NULL) {
+        return;
+    }
+    if (title == NULL || *title == '\0') {
+        win->title[0] = '\0';  /* Back to the application's own name. */
+    } else {
+        snprintf(win->title, sizeof(win->title), "%s", title);
+    }
+    recon_appwin_refresh(win);
 }
 
 const char *recon_appwin_icon(struct recon_appwin *win) {
@@ -702,6 +724,21 @@ void recon_appwin_handle_motion(struct recon_appwin *win, double lx, double ly) 
         return;
     }
 
+    /*
+     * Tell the application where the pointer is, so it can highlight what is
+     * under it. Sent whether or not anything is being dragged: an application
+     * that tracks hover needs to know when the pointer leaves as much as when
+     * it arrives.
+     */
+    if (win->impl->motion != NULL && !win->dragging && win->resize_edges == 0) {
+        int px = (int)lx - win->x;
+        int py = (int)ly - win->y;
+        uint32_t hit = recon_appwin_contains_point(win, lx, ly)
+            ? recon_hit_test(win->panel, px, py) : RECON_HIT_NONE;
+
+        win->impl->motion(win->user, hit, px - BORDER, py - TITLE_HEIGHT);
+    }
+
     if (!win->dragging) {
         return;
     }
@@ -753,4 +790,55 @@ bool recon_appwin_handle_key(struct recon_appwin *win, xkb_keysym_t sym,
         return true;
     }
     return false;
+}
+
+/* --- Context menus --- */
+
+void recon_menu_add(struct recon_menu_spec *menu, const char *label,
+        uint32_t id, bool enabled, bool separator_after) {
+    if (menu == NULL || menu->count >= RECON_MENU_MAX) {
+        return;
+    }
+    struct recon_menu_entry *entry = &menu->items[menu->count++];
+    snprintf(entry->label, sizeof(entry->label), "%s", label);
+    entry->id = id;
+    entry->enabled = enabled;
+    entry->separator_after = separator_after;
+}
+
+bool recon_appwin_context_at(struct recon_appwin *win, double lx, double ly,
+        struct recon_menu_spec *menu) {
+    if (win == NULL || menu == NULL || win->impl == NULL ||
+            win->impl->context == NULL) {
+        return false;
+    }
+    if (!win->open || win->minimized ||
+            !recon_appwin_contains_point(win, lx, ly)) {
+        return false;
+    }
+
+    int px = (int)lx - win->x;
+    int py = (int)ly - win->y;
+
+    /* The title bar and the frame belong to the shell, which offers the
+     * window's own actions there. */
+    if (py < TITLE_HEIGHT) {
+        return false;
+    }
+
+    uint32_t hit = recon_hit_test(win->panel, px, py);
+
+    /* Content coordinates, so an application never has to know where its frame
+     * ends -- the same ones its click handler is given. */
+    menu->count = 0;
+    return win->impl->context(win->user, hit, px - BORDER, py - TITLE_HEIGHT,
+        menu) && menu->count > 0;
+}
+
+void recon_appwin_context_action(struct recon_appwin *win, uint32_t id) {
+    if (win == NULL || win->impl == NULL || win->impl->context_action == NULL) {
+        return;
+    }
+    win->impl->context_action(win->user, id);
+    recon_appwin_refresh(win);
 }

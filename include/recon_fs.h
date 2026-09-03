@@ -132,6 +132,51 @@ bool recon_fs_mkdir(const char *cwd, const char *path);
 /* Remove a file, or an empty directory. Refuses anything under /System. */
 bool recon_fs_remove(const char *cwd, const char *path);
 
+/*
+ * Remove a directory and everything in it. Separate from recon_fs_remove
+ * because losing a tree is a different act from losing a file, and should be
+ * asked for explicitly rather than happening because a path turned out to be
+ * a directory. Refuses anything under /System.
+ */
+bool recon_fs_remove_tree(const char *cwd, const char *path);
+
+/* Rename or move within the ReconOS filesystem. Refuses /System. */
+bool recon_fs_rename(const char *cwd, const char *from, const char *to);
+
+/*
+ * Copy a file, or a directory and its contents. Refuses to copy a directory
+ * into itself, which would otherwise recurse until the disk filled.
+ */
+bool recon_fs_copy(const char *cwd, const char *from, const char *to);
+
+/*
+ * A name not already taken in a directory, derived from `base` by adding a
+ * number. Used where something must be created without asking for a name.
+ */
+bool recon_fs_unique_name(const char *cwd, const char *directory,
+    const char *base, const char *extension, char *out, size_t size);
+
+/* True if the path is inside /System, which is protected. */
+bool recon_fs_is_protected(const char *cwd, const char *path);
+
+/* --- The file clipboard --- */
+
+/*
+ * What was cut or copied, held for the whole system rather than per-window:
+ * copying in one place and pasting in another is the point of a clipboard, and
+ * a per-application one could not do it.
+ *
+ * Only the path is kept. Holding the contents would mean a large file was
+ * copied at Ctrl+C rather than at paste, and a cut whose source moved before
+ * the paste should fail rather than write out a stale copy.
+ */
+void recon_fs_clip_set(const char *path, bool cut);
+void recon_fs_clip_clear(void);
+bool recon_fs_clip_empty(void);
+
+/* The held path, and whether it was a cut. False when the clipboard is empty. */
+bool recon_fs_clip_get(char *out, size_t size, bool *cut_out);
+
 /* The reason the last operation failed, for reporting. */
 const char *recon_fs_last_error(void);
 

@@ -68,8 +68,18 @@ struct recon_desktop {
     int item_count;
     int selected;
 
+    /* The item whose label is being edited, or -1. */
+    int renaming;
+    struct recon_edit rename_edit;
+
     int width, height;
 };
+
+/* The desktop folder, as a path. Written out often enough to be worth a
+ * name of its own. */
+static void desktop_path(char *out, size_t size, const char *name) {
+    snprintf(out, size, "%s/%s", recon_fs_user_dir("Desktop"), name);
+}
 
 /* --- Loading --- */
 
@@ -122,6 +132,12 @@ static void layout_items(struct recon_desktop *desktop) {
 }
 
 void recon_desktop_reload(struct recon_desktop *desktop) {
+    /* Indices are about to change, and a rename tied to one of them would
+     * follow the wrong icon. */
+    if (desktop != NULL && desktop->renaming >= 0) {
+        desktop->renaming = -1;
+        recon_edit_end(&desktop->rename_edit);
+    }
     if (desktop == NULL) {
         return;
     }
@@ -257,10 +273,18 @@ void recon_desktop_refresh(struct recon_desktop *desktop) {
         }
         int ly = item->y + 6 + ICON_IMAGE + LABEL_GAP + ascent;
 
-        recon_draw_text(p, desktop->font, lx + 1, ly + 1, ICON_WIDTH - 4,
-            item->label, COLOR_LABEL_SHADOW);
-        recon_draw_text(p, desktop->font, lx, ly, ICON_WIDTH - 4,
-            item->label, COLOR_LABEL);
+        if (i == desktop->renaming && desktop->rename_edit.active) {
+            /* Editing the name where the name already is leaves no doubt
+             * about which icon is being renamed. */
+            recon_edit_draw(p, desktop->font, item->x + 2,
+                item->y + 6 + ICON_IMAGE + LABEL_GAP - 2,
+                ICON_WIDTH - 4, ascent + 8, &desktop->rename_edit);
+        } else {
+            recon_draw_text(p, desktop->font, lx + 1, ly + 1, ICON_WIDTH - 4,
+                item->label, COLOR_LABEL_SHADOW);
+            recon_draw_text(p, desktop->font, lx, ly, ICON_WIDTH - 4,
+                item->label, COLOR_LABEL);
+        }
 
         recon_hit_add(p, item->x, item->y, ICON_WIDTH, ICON_HEIGHT,
             RECON_DESKTOP_HIT_BASE + i);
@@ -403,11 +427,28 @@ void recon_desktop_delete(struct recon_desktop *desktop, const char *name) {
     if (desktop == NULL || name == NULL) {
         return;
     }
+
     char path[RECON_PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"), name);
-    recon_fs_remove("/", path);
+    desktop_path(path, sizeof(path), name);
+
+    /* A folder with things in it needs the recursive form. The desktop asks
+     * before it gets here, so by this point the answer is already yes. */
+    if (!recon_fs_remove("/", path)) {
+        recon_fs_remove_tree("/", path);
+    }
+
     desktop->selected = -1;
     recon_desktop_reload(desktop);
+}
+
+/* Select a named item after the desktop has been re-read. */
+static int index_of(struct recon_desktop *desktop, const char *name) {
+    for (int i = 0; i < desktop->item_count; i++) {
+        if (strcmp(desktop->items[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void recon_desktop_new_folder(struct recon_desktop *desktop) {
@@ -415,17 +456,206 @@ void recon_desktop_new_folder(struct recon_desktop *desktop) {
         return;
     }
 
-    /* Pick an unused name, since there is nowhere to type one yet. */
-    char path[RECON_PATH_MAX];
-    for (int i = 1; i < 1000; i++) {
-        snprintf(path, sizeof(path), "%s/New Folder %d",
-            recon_fs_user_dir("Desktop"), i);
-        if (!recon_fs_exists("/", path)) {
-            recon_fs_mkdir("/", path);
-            break;
-        }
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", recon_fs_user_dir("Desktop"), "New Folder", "",
+            name, sizeof(name))) {
+        return;
     }
+
+    char path[RECON_PATH_MAX];
+    desktop_path(path, sizeof(path), name);
+    if (!recon_fs_mkdir("/", path)) {
+        return;
+    }
+
     recon_desktop_reload(desktop);
+    /* Open the name for editing straight away: a folder the system named is
+     * not a folder you named. */
+    recon_desktop_begin_rename(desktop, name);
+}
+
+void recon_desktop_new_file(struct recon_desktop *desktop) {
+    if (desktop == NULL) {
+        return;
+    }
+
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", recon_fs_user_dir("Desktop"), "New File", ".txt",
+            name, sizeof(name))) {
+        return;
+    }
+
+    char path[RECON_PATH_MAX];
+    desktop_path(path, sizeof(path), name);
+    if (!recon_fs_write("/", path, "", 0)) {
+        return;
+    }
+
+    recon_desktop_reload(desktop);
+    recon_desktop_begin_rename(desktop, name);
+}
+
+void recon_desktop_clip(struct recon_desktop *desktop, const char *name, bool cut) {
+    if (desktop == NULL || name == NULL) {
+        return;
+    }
+    char path[RECON_PATH_MAX];
+    desktop_path(path, sizeof(path), name);
+    recon_fs_clip_set(path, cut);
+}
+
+void recon_desktop_paste(struct recon_desktop *desktop) {
+    if (desktop == NULL) {
+        return;
+    }
+
+    char source[RECON_PATH_MAX];
+    bool cut = false;
+    if (!recon_fs_clip_get(source, sizeof(source), &cut)) {
+        return;
+    }
+    if (!recon_fs_exists("/", source)) {
+        recon_fs_clip_clear();
+        return;
+    }
+
+    const char *leaf = strrchr(source, '/');
+    leaf = (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : source;
+
+    /* Split at the extension, so a second copy of "notes.txt" becomes
+     * "notes 2.txt" rather than "notes.txt 2". */
+    char base[RECON_NAME_MAX];
+    char extension[RECON_NAME_MAX] = "";
+    snprintf(base, sizeof(base), "%s", leaf);
+    char *dot = strrchr(base, '.');
+    if (dot != NULL && dot != base) {
+        snprintf(extension, sizeof(extension), "%s", dot);
+        *dot = '\0';
+    }
+
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", recon_fs_user_dir("Desktop"), base, extension,
+            name, sizeof(name))) {
+        return;
+    }
+
+    char target[RECON_PATH_MAX];
+    desktop_path(target, sizeof(target), name);
+
+    bool ok = cut ? recon_fs_rename("/", source, target)
+                  : recon_fs_copy("/", source, target);
+    if (!ok) {
+        return;
+    }
+    if (cut) {
+        recon_fs_clip_clear(); /* A cut is spent; a copy can be pasted again. */
+    }
+
+    recon_desktop_reload(desktop);
+    desktop->selected = index_of(desktop, name);
+    recon_desktop_refresh(desktop);
+}
+
+/* --- Renaming --- */
+
+static void end_rename(struct recon_desktop *desktop) {
+    desktop->renaming = -1;
+    recon_edit_end(&desktop->rename_edit);
+}
+
+void recon_desktop_begin_rename(struct recon_desktop *desktop, const char *name) {
+    if (desktop == NULL || name == NULL) {
+        return;
+    }
+
+    int index = index_of(desktop, name);
+    if (index < 0) {
+        return;
+    }
+
+    desktop->selected = index;
+    desktop->renaming = index;
+    /*
+     * The whole filename is edited, extension included -- ".app" is what makes
+     * a shortcut a shortcut, so hiding it would let a rename quietly turn one
+     * into an ordinary file. The caret sits before the extension, so typing
+     * replaces the name and leaves the ending alone.
+     */
+    recon_edit_begin(&desktop->rename_edit, desktop->items[index].name,
+        desktop->items[index].kind != ITEM_FOLDER);
+    recon_desktop_refresh(desktop);
+}
+
+bool recon_desktop_is_renaming(struct recon_desktop *desktop) {
+    return desktop != NULL && desktop->renaming >= 0 && desktop->rename_edit.active;
+}
+
+static void commit_rename(struct recon_desktop *desktop) {
+    if (desktop->renaming < 0 || desktop->renaming >= desktop->item_count) {
+        end_rename(desktop);
+        return;
+    }
+
+    char from[RECON_NAME_MAX];
+    char to[RECON_NAME_MAX];
+    snprintf(from, sizeof(from), "%s", desktop->items[desktop->renaming].name);
+    snprintf(to, sizeof(to), "%s", desktop->rename_edit.text);
+    end_rename(desktop);
+
+    /* Trim the spaces a name picks up from typing: a file called "notes " is
+     * almost never what was meant and is invisible on the desktop. */
+    char *end = to + strlen(to);
+    while (end > to && end[-1] == ' ') {
+        *--end = '\0';
+    }
+    const char *start = to;
+    while (*start == ' ') {
+        start++;
+    }
+
+    if (*start == '\0' || strchr(start, '/') != NULL ||
+            strcmp(start, from) == 0) {
+        recon_desktop_refresh(desktop);
+        return;
+    }
+
+    char from_path[RECON_PATH_MAX];
+    char to_path[RECON_PATH_MAX];
+    desktop_path(from_path, sizeof(from_path), from);
+    desktop_path(to_path, sizeof(to_path), start);
+
+    char renamed[RECON_NAME_MAX];
+    snprintf(renamed, sizeof(renamed), "%s", start);
+
+    if (recon_fs_rename("/", from_path, to_path)) {
+        recon_desktop_reload(desktop);
+        desktop->selected = index_of(desktop, renamed);
+    }
+    recon_desktop_refresh(desktop);
+}
+
+bool recon_desktop_handle_key(struct recon_desktop *desktop, xkb_keysym_t sym,
+        uint32_t modifiers) {
+    if (!recon_desktop_is_renaming(desktop)) {
+        return false;
+    }
+
+    switch (recon_edit_key(&desktop->rename_edit, sym, modifiers)) {
+    case RECON_EDIT_COMMIT:
+        commit_rename(desktop);
+        return true;
+    case RECON_EDIT_CANCEL:
+        end_rename(desktop);
+        recon_desktop_refresh(desktop);
+        return true;
+    case RECON_EDIT_CHANGED:
+        recon_desktop_refresh(desktop);
+        return true;
+    case RECON_EDIT_IGNORED:
+        /* Swallowed while the box is open: nothing else should act on it. */
+        return true;
+    }
+    return true;
 }
 
 /*
@@ -438,17 +668,22 @@ void recon_desktop_new_shortcut(struct recon_desktop *desktop) {
         return;
     }
 
-    char path[RECON_PATH_MAX];
-    for (int i = 1; i < 1000; i++) {
-        snprintf(path, sizeof(path), "%s/New Shortcut %d.app",
-            recon_fs_user_dir("Desktop"), i);
-        if (!recon_fs_exists("/", path)) {
-            const char *body = "File Explorer\n";
-            recon_fs_write("/", path, body, strlen(body));
-            break;
-        }
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", recon_fs_user_dir("Desktop"), "New Shortcut",
+            ".app", name, sizeof(name))) {
+        return;
     }
+
+    char path[RECON_PATH_MAX];
+    desktop_path(path, sizeof(path), name);
+
+    const char *body = "File Explorer\n";
+    if (!recon_fs_write("/", path, body, strlen(body))) {
+        return;
+    }
+
     recon_desktop_reload(desktop);
+    recon_desktop_begin_rename(desktop, name);
 }
 
 /* --- Input --- */

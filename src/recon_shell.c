@@ -81,7 +81,16 @@
 enum context_action {
     CTX_OPEN,
     CTX_DELETE,
+    /* Deleting a folder with things in it is a bigger act than deleting a
+     * file, so it is asked for separately rather than happening because the
+     * first click landed on a directory. */
+    CTX_DELETE_TREE,
+    CTX_RENAME,
+    CTX_CUT,
+    CTX_COPY,
+    CTX_PASTE,
     CTX_NEW_FOLDER,
+    CTX_NEW_FILE,
     CTX_NEW_SHORTCUT,
     CTX_REFRESH,
     CTX_RESTORE,
@@ -95,7 +104,7 @@ enum context_action {
 #define CONTEXT_ITEM_HEIGHT 24
 #define CONTEXT_WIDTH 200
 #define CONTEXT_PADDING 3
-#define CONTEXT_ITEMS_MAX 10
+#define CONTEXT_ITEMS_MAX RECON_MENU_MAX
 
 /* --- Apps menu contents --- */
 
@@ -312,6 +321,25 @@ static void draw_context(struct recon_shell *shell) {
     recon_draw_bevel(p, 0, 0, width, height, false);
     recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
     recon_panel_commit(p);
+}
+
+/*
+ * Add an entry whose id means whatever the caller decided.
+ *
+ * Application menus carry the application's own ids, so the id cannot be an
+ * enum here; context_activate looks at the menu's kind to know how to read it.
+ */
+static void context_add_id(struct recon_shell *shell, const char *label,
+        uint32_t id, bool enabled, bool separator) {
+    if (shell->context_item_count >= CONTEXT_ITEMS_MAX) {
+        return;
+    }
+    int i = shell->context_item_count++;
+    snprintf(shell->context_items[i].label, sizeof(shell->context_items[i].label),
+        "%s", label);
+    shell->context_items[i].id = id;
+    shell->context_items[i].enabled = enabled;
+    shell->context_items[i].separator_after = separator;
 }
 
 static void context_add(struct recon_shell *shell, const char *label,
@@ -781,7 +809,14 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
             int length = snprintf(body, sizeof(body), "%s\n", DEFAULTS[i].target);
             recon_fs_write("/", path, body, (size_t)length);
         }
-        recon_fs_write("/", RECON_DIR_SYSTEM_CONFIG "/desktop-initialized", "1\n", 2);
+        /*
+         * The marker written must be the one checked, or "first run only"
+         * means "every run": deleted shortcuts came back on the next start
+         * because the flag was left somewhere nothing looked for it. It also
+         * belongs to the user rather than to the system, since the next
+         * account to log in has its own empty desktop to set up.
+         */
+        recon_fs_write("/", marker, "1\n", 2);
     }
 
     shell->context_button = -1;
@@ -944,7 +979,21 @@ static void open_desktop_item(struct recon_shell *shell, const char *name) {
 }
 
 /* Carry out what a context menu entry asked for. */
-static void context_activate(struct recon_shell *shell, enum context_action action) {
+static void context_activate(struct recon_shell *shell, uint32_t id) {
+    /*
+     * An application's entries are its own; the shell drew the menu but has no
+     * idea what the choices mean, so it hands the id straight back.
+     */
+    if (shell->context_kind == RECON_CONTEXT_APP) {
+        if (shell->context_app >= 0 && shell->context_app < shell->app_count) {
+            recon_appwin_context_action(shell->apps[shell->context_app], id);
+        }
+        recon_shell_refresh(shell);
+        return;
+    }
+
+    enum context_action action = (enum context_action)id;
+
     switch (shell->context_kind) {
     case RECON_CONTEXT_TASKBAR_WINDOW: {
         if (shell->context_button < 0 || shell->context_button >= shell->button_count) {
@@ -1016,18 +1065,50 @@ static void context_activate(struct recon_shell *shell, enum context_action acti
     }
 
     case RECON_CONTEXT_DESKTOP_ITEM:
-        if (action == CTX_OPEN) {
+        switch (action) {
+        case CTX_OPEN:
             open_desktop_item(shell, shell->context_target);
-        } else if (action == CTX_DELETE) {
+            break;
+
+        case CTX_RENAME:
+            /* The desktop takes the keyboard while a name is being typed, so
+             * nothing else may hold focus. */
+            set_focused_app(shell, -1);
+            recon_desktop_begin_rename(shell->desktop, shell->context_target);
+            break;
+
+        case CTX_CUT:
+            recon_desktop_clip(shell->desktop, shell->context_target, true);
+            break;
+        case CTX_COPY:
+            recon_desktop_clip(shell->desktop, shell->context_target, false);
+            break;
+
+        case CTX_DELETE:
+        case CTX_DELETE_TREE:
             recon_desktop_delete(shell->desktop, shell->context_target);
+            break;
+
+        default:
+            break;
         }
         break;
 
+    case RECON_CONTEXT_APP:
+        break; /* Handled above. */
+
     case RECON_CONTEXT_DESKTOP:
         if (action == CTX_NEW_FOLDER) {
+            set_focused_app(shell, -1);
             recon_desktop_new_folder(shell->desktop);
+        } else if (action == CTX_NEW_FILE) {
+            set_focused_app(shell, -1);
+            recon_desktop_new_file(shell->desktop);
         } else if (action == CTX_NEW_SHORTCUT) {
+            set_focused_app(shell, -1);
             recon_desktop_new_shortcut(shell->desktop);
+        } else if (action == CTX_PASTE) {
+            recon_desktop_paste(shell->desktop);
         } else if (action == CTX_REFRESH) {
             recon_desktop_reload(shell->desktop);
         }
@@ -1088,6 +1169,31 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
     int app_index = appwin_index_for_node(shell, node);
     if (app_index >= 0) {
         struct recon_appwin *win = shell->apps[app_index];
+
+        /*
+         * The application gets first refusal. Right-clicking a file should
+         * offer things to do with the file; only when the application has
+         * nothing to say there -- empty space, its own background -- does the
+         * window's own menu make sense.
+         */
+        struct recon_menu_spec spec;
+        if (recon_appwin_context_at(win, lx, ly, &spec)) {
+            /*
+             * Focus follows the menu. Choosing "Rename" opens a text box, and
+             * a text box in an unfocused window would sit there taking no
+             * keys -- the feature would look broken rather than unfocused.
+             */
+            set_focused_app(shell, app_index);
+            shell->context_kind = RECON_CONTEXT_APP;
+            shell->context_app = app_index;
+            for (int i = 0; i < spec.count; i++) {
+                context_add_id(shell, spec.items[i].label, spec.items[i].id,
+                    spec.items[i].enabled, spec.items[i].separator_after);
+            }
+            context_show(shell, lx, ly);
+            return true;
+        }
+
         shell->context_kind = RECON_CONTEXT_WINDOW;
         shell->context_app = app_index;
 
@@ -1107,15 +1213,41 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         if (name != NULL) {
             shell->context_kind = RECON_CONTEXT_DESKTOP_ITEM;
             snprintf(shell->context_target, sizeof(shell->context_target), "%s", name);
+
+            /*
+             * Emptying a folder is asked for by name, so the menu says what it
+             * is about to remove rather than offering a bare "Delete" that
+             * turns out to take a tree with it.
+             */
+            char path[RECON_PATH_MAX];
+            snprintf(path, sizeof(path), "%s/%s",
+                recon_fs_user_dir("Desktop"), name);
+
+            struct recon_dirent info;
+            bool is_dir = recon_fs_stat("/", path, &info) &&
+                info.kind == RECON_FILE_DIRECTORY;
+            bool has_contents = is_dir &&
+                recon_fs_list("/", path, NULL, 0) > 0;
+
             context_add(shell, "Open", CTX_OPEN, true, true);
-            context_add(shell, "Delete", CTX_DELETE, true, true);
+            context_add(shell, "Cut", CTX_CUT, true, false);
+            context_add(shell, "Copy", CTX_COPY, true, true);
+            context_add(shell, "Rename", CTX_RENAME, true, false);
+            if (has_contents) {
+                context_add(shell, "Delete and Contents", CTX_DELETE_TREE,
+                    true, true);
+            } else {
+                context_add(shell, "Delete", CTX_DELETE, true, true);
+            }
             /* Shown but unavailable: there is no properties view yet, and
              * hiding it would suggest there never will be. */
             context_add(shell, "Properties", CTX_PROPERTIES, false, false);
         } else {
             shell->context_kind = RECON_CONTEXT_DESKTOP;
             context_add(shell, "New Folder", CTX_NEW_FOLDER, true, false);
+            context_add(shell, "New File", CTX_NEW_FILE, true, false);
             context_add(shell, "New Shortcut", CTX_NEW_SHORTCUT, true, true);
+            context_add(shell, "Paste", CTX_PASTE, !recon_fs_clip_empty(), true);
             context_add(shell, "Refresh", CTX_REFRESH, true, false);
         }
         context_show(shell, lx, ly);
@@ -1127,7 +1259,22 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
 
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
         uint32_t modifiers) {
-    if (shell == NULL || shell->focused_app < 0) {
+    if (shell == NULL) {
+        return false;
+    }
+
+    /*
+     * A name being typed on the desktop takes the keyboard. It only exists
+     * because the user clicked the desktop, so nothing else is expecting these
+     * keys -- and without this, Enter and Escape would never reach the box and
+     * it could not be closed.
+     */
+    if (recon_desktop_is_renaming(shell->desktop) &&
+            recon_desktop_handle_key(shell->desktop, sym, modifiers)) {
+        return true;
+    }
+
+    if (shell->focused_app < 0) {
         return false;
     }
     /* Only the focused window, so a calculator sitting open in the background
@@ -1344,8 +1491,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             if (hit >= HIT_CONTEXT_BASE) {
                 int index = (int)(hit - HIT_CONTEXT_BASE);
                 if (index >= 0 && index < shell->context_item_count) {
-                    context_activate(shell,
-                        (enum context_action)shell->context_items[index].id);
+                    context_activate(shell, shell->context_items[index].id);
                 }
             }
         } else {

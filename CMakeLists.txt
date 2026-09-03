@@ -60,6 +60,7 @@ add_executable(ReconOS
     src/recon_ico.c
     src/recon_icon_gen.c
     src/recon_icons.c
+    src/recon_filedlg.c
     src/recon_notepad.c
     src/recon_procinfo.c
     src/recon_shell.c
@@ -88,3 +89,20 @@ target_link_libraries(ReconOS PRIVATE
     ${XKB_LIBRARIES}
     ${PIXMAN_LIBRARIES}
     m)
+
+# --- Tests ---
+#
+# The filesystem operations are tested on their own because they are the ones
+# that lose a user's work when they are wrong, and clicking through a desktop
+# is a poor way to find that out. recon_fs.c has no dependency on wlroots, so
+# the test binary needs nothing but the standard library.
+
+add_executable(recon_fs_tests
+    tests/test_fs.c
+    src/recon_fs.c)
+
+target_include_directories(recon_fs_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+enable_testing()
+add_test(NAME filesystem COMMAND recon_fs_tests)

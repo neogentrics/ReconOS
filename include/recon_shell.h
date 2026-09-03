@@ -103,6 +103,9 @@ enum recon_context_kind {
     RECON_CONTEXT_DESKTOP_ITEM,
     RECON_CONTEXT_TASKBAR_WINDOW,
     RECON_CONTEXT_WINDOW,
+    /* A menu the application under the pointer asked for. Its entry ids mean
+     * whatever that application decided they mean. */
+    RECON_CONTEXT_APP,
 };
 
 /* Offer a right click to the shell. Returns true if it opened a menu. */

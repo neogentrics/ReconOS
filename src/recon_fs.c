@@ -243,6 +243,26 @@ bool recon_fs_init(const char *host_root) {
         return false;
     }
 
+    /*
+     * An earlier layout put Desktop and Documents directly under /Users rather
+     * than under each user. Those are gone from the layout above, but a system
+     * created before the change still has them sitting next to the accounts,
+     * where they look like users who do not exist.
+     *
+     * They are only removed when empty. rmdir fails on a directory with
+     * anything in it, which is exactly the guarantee wanted here: if the user
+     * has put something in one of them, it stays, and they can deal with it
+     * themselves.
+     */
+    static const char *const RETIRED[] = { "Desktop", "Documents", NULL };
+    for (int i = 0; RETIRED[i] != NULL; i++) {
+        char host[RECON_PATH_MAX * 2];
+        snprintf(host, sizeof(host), "%s%s/%s", g_host_root, RECON_DIR_USERS, RETIRED[i]);
+        if (rmdir(host) == 0) {
+            /* Not an error either way; nothing depends on the outcome. */
+        }
+    }
+
     return true;
 }
 
@@ -376,8 +396,12 @@ int recon_fs_list(const char *cwd, const char *path,
     }
     closedir(dir);
 
+    /* Counting is a legitimate use: callers ask with max 0 and no buffer to
+     * find out whether a directory has anything in it. */
     int sorted = count < max ? count : max;
-    qsort(out, (size_t)sorted, sizeof(*out), compare_dirents);
+    if (out != NULL && sorted > 0) {
+        qsort(out, (size_t)sorted, sizeof(*out), compare_dirents);
+    }
     return count;
 }
 
@@ -466,6 +490,30 @@ bool recon_fs_mkdir(const char *cwd, const char *path) {
     return true;
 }
 
+/*
+ * Whether a canonical path is inside /System.
+ *
+ * Compared segment by segment rather than as a prefix: "/Systems" starts with
+ * "/System" without being under it, and a protection that catches unrelated
+ * names is a protection nobody trusts.
+ */
+static bool path_is_protected(const char *canonical) {
+    size_t len = strlen(RECON_DIR_SYSTEM);
+    if (strncmp(canonical, RECON_DIR_SYSTEM, len) != 0) {
+        return false;
+    }
+    return canonical[len] == '\0' || canonical[len] == '/';
+}
+
+bool recon_fs_is_protected(const char *cwd, const char *path) {
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return true; /* Cannot resolve it, so do not act on it. */
+    }
+    return path_is_protected(canonical);
+}
+
 bool recon_fs_remove(const char *cwd, const char *path) {
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
@@ -475,7 +523,7 @@ bool recon_fs_remove(const char *cwd, const char *path) {
 
     /* The system's own files are not something a stray command should be able
      * to delete. */
-    if (strncmp(canonical, RECON_DIR_SYSTEM, strlen(RECON_DIR_SYSTEM)) == 0) {
+    if (path_is_protected(canonical)) {
         set_error("'%s' is part of the system and is protected", canonical);
         return false;
     }
@@ -486,10 +534,328 @@ bool recon_fs_remove(const char *cwd, const char *path) {
         return false;
     }
 
-    int result = S_ISDIR(st.st_mode) ? rmdir(host) : unlink(host);
-    if (result != 0) {
+    if (S_ISDIR(st.st_mode)) {
+        if (rmdir(host) != 0) {
+            /*
+             * Say which problem it is. "Directory not empty" is a different
+             * situation from a permission error, and the caller can offer to
+             * delete the contents only if it knows that is what stopped it.
+             */
+            if (errno == ENOTEMPTY || errno == EEXIST) {
+                set_error("'%s' is not empty", canonical);
+            } else {
+                set_error("cannot remove '%s': %s", canonical, strerror(errno));
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (unlink(host) != 0) {
         set_error("cannot remove '%s': %s", canonical, strerror(errno));
         return false;
+    }
+    return true;
+}
+
+/* --- Removing, renaming and copying --- */
+
+/* Delete a host directory and its contents. Depth-first, so a directory is
+ * only removed once it is empty. */
+static bool remove_tree_host(const char *host_path) {
+    struct stat st;
+    if (lstat(host_path, &st) != 0) {
+        set_error("cannot read '%s': %s", host_path, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        if (unlink(host_path) != 0) {
+            set_error("cannot remove '%s': %s", host_path, strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    DIR *dir = opendir(host_path);
+    if (dir == NULL) {
+        set_error("cannot open '%s': %s", host_path, strerror(errno));
+        return false;
+    }
+
+    bool ok = true;
+    struct dirent *entry;
+    while (ok && (entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child[RECON_PATH_MAX * 2];
+        snprintf(child, sizeof(child), "%s/%s", host_path, entry->d_name);
+        ok = remove_tree_host(child);
+    }
+    closedir(dir);
+
+    if (!ok) {
+        return false;
+    }
+    if (rmdir(host_path) != 0) {
+        set_error("cannot remove '%s': %s", host_path, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool recon_fs_remove_tree(const char *cwd, const char *path) {
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return false;
+    }
+
+    if (path_is_protected(canonical)) {
+        set_error("'%s' is part of the system and is protected", canonical);
+        return false;
+    }
+    if (strcmp(canonical, "/") == 0) {
+        set_error("the root cannot be removed");
+        return false;
+    }
+
+    struct stat st;
+    if (stat(host, &st) != 0) {
+        set_error("'%s' not found", canonical);
+        return false;
+    }
+    return remove_tree_host(host);
+}
+
+/* True if `inner` is the same path as `outer`, or sits inside it. */
+static bool path_within(const char *outer, const char *inner) {
+    size_t len = strlen(outer);
+    if (strcmp(outer, "/") == 0) {
+        return true;
+    }
+    if (strncmp(inner, outer, len) != 0) {
+        return false;
+    }
+    return inner[len] == '\0' || inner[len] == '/';
+}
+
+bool recon_fs_rename(const char *cwd, const char *from, const char *to) {
+    char from_host[RECON_PATH_MAX], from_canonical[RECON_PATH_MAX];
+    char to_host[RECON_PATH_MAX], to_canonical[RECON_PATH_MAX];
+
+    if (!recon_fs_resolve(cwd, from, from_host, sizeof(from_host),
+            from_canonical, sizeof(from_canonical))) {
+        return false;
+    }
+    if (!recon_fs_resolve(cwd, to, to_host, sizeof(to_host),
+            to_canonical, sizeof(to_canonical))) {
+        return false;
+    }
+
+    if (path_is_protected(from_canonical) || path_is_protected(to_canonical)) {
+        set_error("system files are protected");
+        return false;
+    }
+    if (strcmp(from_canonical, to_canonical) == 0) {
+        return true; /* Renaming something to its own name is not a failure. */
+    }
+    /* Moving a directory into itself would leave it unreachable, so it is
+     * refused rather than attempted. */
+    if (path_within(from_canonical, to_canonical)) {
+        set_error("cannot move '%s' into itself", from_canonical);
+        return false;
+    }
+    if (access(to_host, F_OK) == 0) {
+        set_error("'%s' already exists", to_canonical);
+        return false;
+    }
+
+    if (rename(from_host, to_host) != 0) {
+        set_error("cannot rename '%s': %s", from_canonical, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+/* Copy one regular file, preserving its permission bits. */
+static bool copy_file_host(const char *src, const char *dst, mode_t mode) {
+    FILE *in = fopen(src, "rb");
+    if (in == NULL) {
+        set_error("cannot read '%s': %s", src, strerror(errno));
+        return false;
+    }
+    FILE *out = fopen(dst, "wb");
+    if (out == NULL) {
+        fclose(in);
+        set_error("cannot write '%s': %s", dst, strerror(errno));
+        return false;
+    }
+
+    char buffer[16384];
+    size_t got;
+    bool ok = true;
+    while ((got = fread(buffer, 1, sizeof(buffer), in)) > 0) {
+        if (fwrite(buffer, 1, got, out) != got) {
+            set_error("cannot write '%s': %s", dst, strerror(errno));
+            ok = false;
+            break;
+        }
+    }
+
+    fclose(in);
+    if (fclose(out) != 0 && ok) {
+        set_error("cannot write '%s': %s", dst, strerror(errno));
+        ok = false;
+    }
+
+    if (!ok) {
+        /* A half-written file is worse than none: it looks like a copy that
+         * worked. */
+        unlink(dst);
+        return false;
+    }
+
+    chmod(dst, mode & 0777);
+    return true;
+}
+
+static bool copy_tree_host(const char *src, const char *dst) {
+    struct stat st;
+    if (lstat(src, &st) != 0) {
+        set_error("cannot read '%s': %s", src, strerror(errno));
+        return false;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        if (!S_ISREG(st.st_mode)) {
+            set_error("'%s' is not something that can be copied", src);
+            return false;
+        }
+        return copy_file_host(src, dst, st.st_mode);
+    }
+
+    if (mkdir(dst, st.st_mode & 0777) != 0 && errno != EEXIST) {
+        set_error("cannot create '%s': %s", dst, strerror(errno));
+        return false;
+    }
+
+    DIR *dir = opendir(src);
+    if (dir == NULL) {
+        set_error("cannot open '%s': %s", src, strerror(errno));
+        return false;
+    }
+
+    bool ok = true;
+    struct dirent *entry;
+    while (ok && (entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child_src[RECON_PATH_MAX * 2];
+        char child_dst[RECON_PATH_MAX * 2];
+        snprintf(child_src, sizeof(child_src), "%s/%s", src, entry->d_name);
+        snprintf(child_dst, sizeof(child_dst), "%s/%s", dst, entry->d_name);
+        ok = copy_tree_host(child_src, child_dst);
+    }
+    closedir(dir);
+    return ok;
+}
+
+bool recon_fs_copy(const char *cwd, const char *from, const char *to) {
+    char from_host[RECON_PATH_MAX], from_canonical[RECON_PATH_MAX];
+    char to_host[RECON_PATH_MAX], to_canonical[RECON_PATH_MAX];
+
+    if (!recon_fs_resolve(cwd, from, from_host, sizeof(from_host),
+            from_canonical, sizeof(from_canonical))) {
+        return false;
+    }
+    if (!recon_fs_resolve(cwd, to, to_host, sizeof(to_host),
+            to_canonical, sizeof(to_canonical))) {
+        return false;
+    }
+
+    if (path_is_protected(to_canonical)) {
+        set_error("'%s' is part of the system and is protected", to_canonical);
+        return false;
+    }
+    /* Copying a directory into itself recurses until the disk is full. */
+    if (path_within(from_canonical, to_canonical)) {
+        set_error("cannot copy '%s' into itself", from_canonical);
+        return false;
+    }
+    if (access(to_host, F_OK) == 0) {
+        set_error("'%s' already exists", to_canonical);
+        return false;
+    }
+
+    return copy_tree_host(from_host, to_host);
+}
+
+bool recon_fs_unique_name(const char *cwd, const char *directory,
+        const char *base, const char *extension, char *out, size_t size) {
+    if (extension == NULL) {
+        extension = "";
+    }
+
+    for (int attempt = 1; attempt < 1000; attempt++) {
+        char candidate[RECON_NAME_MAX];
+        if (attempt == 1) {
+            snprintf(candidate, sizeof(candidate), "%s%s", base, extension);
+        } else {
+            snprintf(candidate, sizeof(candidate), "%s %d%s", base, attempt, extension);
+        }
+
+        char full[RECON_PATH_MAX];
+        if (strcmp(directory, "/") == 0) {
+            snprintf(full, sizeof(full), "/%s", candidate);
+        } else {
+            snprintf(full, sizeof(full), "%s/%s", directory, candidate);
+        }
+
+        if (!recon_fs_exists(cwd, full)) {
+            snprintf(out, size, "%s", candidate);
+            return true;
+        }
+    }
+
+    set_error("no free name for '%s'", base);
+    return false;
+}
+
+/* --- The file clipboard --- */
+
+static char g_clip_path[RECON_PATH_MAX];
+static bool g_clip_cut;
+
+void recon_fs_clip_set(const char *path, bool cut) {
+    if (path == NULL || *path == '\0') {
+        recon_fs_clip_clear();
+        return;
+    }
+    snprintf(g_clip_path, sizeof(g_clip_path), "%s", path);
+    g_clip_cut = cut;
+}
+
+void recon_fs_clip_clear(void) {
+    g_clip_path[0] = '\0';
+    g_clip_cut = false;
+}
+
+bool recon_fs_clip_empty(void) {
+    return g_clip_path[0] == '\0';
+}
+
+bool recon_fs_clip_get(char *out, size_t size, bool *cut_out) {
+    if (g_clip_path[0] == '\0') {
+        return false;
+    }
+    if (out != NULL) {
+        snprintf(out, size, "%s", g_clip_path);
+    }
+    if (cut_out != NULL) {
+        *cut_out = g_clip_cut;
     }
     return true;
 }
