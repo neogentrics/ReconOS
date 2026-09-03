@@ -193,9 +193,6 @@ static const struct pending_item STORAGE_ITEMS[] = {
 };
 
 static const struct pending_item MULTITASKING_ITEMS[] = {
-    { "Snap windows", "Drag a window to an edge to fill half the screen.",
-      "The compositor can move and size windows; nothing watches for the "
-      "gesture yet." },
     { "Desktops", "More than one desktop, switched between.",
       "Windows belong to one scene tree. Several desktops means several, and "
       "a way to move a window between them." },

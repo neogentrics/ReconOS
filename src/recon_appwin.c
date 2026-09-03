@@ -70,6 +70,9 @@ struct recon_appwin {
 
     bool dragging;
     double drag_offset_x, drag_offset_y;
+    /* Where the window was when the drag began. A snap restores to this
+     * rather than to wherever the drag ended, which is in the corner. */
+    int drag_from_x, drag_from_y, drag_from_w, drag_from_h;
 
     /* Edge drag in progress. Zero when not resizing. */
     uint32_t resize_edges;
@@ -879,6 +882,88 @@ bool recon_appwin_contains_point(struct recon_appwin *win, double lx, double ly)
         to_local(win, lx, ly, &px, &py);
 }
 
+/*
+ * --- Snapping ---
+ *
+ * Drag a window until the pointer touches an edge of the screen and let go:
+ * left or right fills that half, the top fills the whole screen.
+ *
+ * The pointer's position decides it, not the window's. A window dragged by
+ * the middle of a wide title bar has its own left edge far from the screen's
+ * while the hand is right against it, and the gesture people make is "put the
+ * mouse where I want the window to go".
+ */
+#define SNAP_MARGIN 8
+
+enum snap_edge {
+    SNAP_NONE,
+    SNAP_LEFT,
+    SNAP_RIGHT,
+    SNAP_TOP,
+};
+
+static enum snap_edge snap_for_pointer(struct recon_appwin *win,
+        double lx, double ly) {
+    if (win->screen_w <= 0 || win->screen_h <= 0) {
+        return SNAP_NONE;
+    }
+
+    /*
+     * The top is checked first. A pointer in a screen's top-left corner is
+     * touching both edges, and maximizing is the less surprising of the two
+     * -- a window that filled the left half when the hand was at the very top
+     * would look like the gesture had been misread.
+     */
+    if (ly <= SNAP_MARGIN) {
+        return SNAP_TOP;
+    }
+    if (lx <= SNAP_MARGIN) {
+        return SNAP_LEFT;
+    }
+    if (lx >= win->screen_w - 1 - SNAP_MARGIN) {
+        return SNAP_RIGHT;
+    }
+    return SNAP_NONE;
+}
+
+static void snap_window(struct recon_appwin *win, enum snap_edge edge) {
+    if (edge == SNAP_NONE) {
+        return;
+    }
+
+    if (edge == SNAP_TOP) {
+        recon_appwin_set_maximized(win, true);
+        return;
+    }
+
+    /*
+     * Where it was before the drag, not where the drag left it, so letting go
+     * at an edge and then unsnapping puts the window back where it started
+     * rather than in the corner it was dragged to.
+     */
+    win->restore_x = win->drag_from_x;
+    win->restore_y = win->drag_from_y;
+    win->restore_w = win->drag_from_w;
+    win->restore_h = win->drag_from_h;
+
+    int half = win->screen_w / 2;
+    win->x = (edge == SNAP_LEFT) ? 0 : win->screen_w - half;
+    win->y = 0;
+    win->width = half;
+    win->height = win->screen_h - win->reserved_bottom;
+
+    /*
+     * Snapped counts as maximized for the restore button, which is what makes
+     * it undoable: the button already means "put this back where it was", and
+     * a second way of saying the same thing would be a second thing to get
+     * wrong.
+     */
+    win->maximized = true;
+
+    apply_geometry(win);
+    recon_appwin_refresh(win);
+}
+
 bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
         bool pressed) {
     if (win == NULL || !win->open || win->minimized) {
@@ -887,8 +972,16 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
 
     if (!pressed) {
         bool was_dragging = win->dragging || win->resize_edges != 0;
+        bool was_moving = win->dragging;
         win->dragging = false;
         win->resize_edges = 0;
+
+        /* Let go at an edge of the screen and the window takes that edge.
+         * Only for a move: a resize that happens to end at an edge is
+         * somebody sizing a window against it, not asking for a half. */
+        if (was_moving) {
+            snap_window(win, snap_for_pointer(win, lx, ly));
+        }
 
         /* Once it has stopped moving, not while it moves: saving on every
          * pixel of a drag would write the file hundreds of times to record
@@ -944,6 +1037,10 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
         /* A maximized window has nowhere to be dragged to. */
         if (!win->maximized) {
             win->dragging = true;
+            win->drag_from_x = win->x;
+            win->drag_from_y = win->y;
+            win->drag_from_w = win->width;
+            win->drag_from_h = win->height;
             win->drag_offset_x = lx - win->x;
             win->drag_offset_y = ly - win->y;
         }
