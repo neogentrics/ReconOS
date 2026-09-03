@@ -57,6 +57,10 @@
 #define AVATAR_SMALL 40
 #define LOGIN_FIELD_WIDTH 280
 
+/* A tile on the account-picking screen: a face with a name and role under it. */
+#define PICK_TILE 130
+#define PICK_FACE 72
+
 #define ACCOUNTS_VISIBLE 6
 /*
  * An upper bound, not the number shown. Sizing the list to this rather than
@@ -75,6 +79,8 @@
 #define HIT_PASSWORD_FIELD 5
 #define HIT_CONFIRM_FIELD 6
 #define HIT_SHUTDOWN 7
+#define HIT_RESTART 8
+#define HIT_PICK_AGAIN 9
 #define HIT_ACCOUNT_BASE 100
 #define HIT_OPTION_BASE 200
 
@@ -174,6 +180,22 @@ struct recon_session {
      */
     char locked_to[RECON_USERS_NAME_MAX];
 
+    /*
+     * Whether the login screen is asking which account, rather than asking
+     * for one account's password.
+     *
+     * Two screens, not one. Putting the accounts on the same screen as the
+     * password box meant a stray click while typing changed who you were
+     * signing in as, and it named the way in -- "Password" -- to anybody
+     * looking at the machine before they had chosen anything. Choosing first
+     * fixes both, and is where a PIN or a fingerprint would be offered
+     * instead when there is one.
+     *
+     * A locked machine never asks: there is exactly one account it will
+     * accept, and offering a choice of one is not a choice.
+     */
+    bool picking_account;
+
     /* Which account the login screen has selected. */
     int account;
     int account_scroll;
@@ -271,11 +293,26 @@ static int card_height(struct recon_session *session) {
             ROW_HEIGHT * ACCESSIBILITY_COUNT + BUTTON_HEIGHT + GAP * 3;
     case STAGE_LOGIN:
     default: {
+        if (session->picking_account) {
+            int count = recon_users_count();
+            if (count > ACCOUNTS_VISIBLE) {
+                count = ACCOUNTS_VISIBLE;
+            }
+            int columns = (CARD_WIDTH - CARD_PADDING * 2) / PICK_TILE;
+            if (columns < 1) {
+                columns = 1;
+            }
+            int rows = (count + columns - 1) / columns;
+            if (rows < 1) {
+                rows = 1;
+            }
+            return base + TITLE_SIZE + rows * (PICK_TILE + line) +
+                BUTTON_HEIGHT + GAP * 3;
+        }
+
         bool locked = session->locked_to[0] != '\0';
-        int strip = (recon_users_count() > 1 && !locked)
-            ? AVATAR_SMALL + GAP : 0;
         return base + AVATAR_SIZE + line * (locked ? 4 : 3) + FIELD_HEIGHT +
-            strip + BUTTON_HEIGHT + GAP * 4;
+            BUTTON_HEIGHT + GAP * 4;
     }
     }
 }
@@ -401,6 +438,67 @@ static void draw_title(struct recon_session *session, struct recon_panel *p,
         recon_draw_text(p, session->font, x, y + TITLE_SIZE + ascent, w,
             subtitle, THEME(MENU_TEXT_DISABLED));
     }
+}
+
+/*
+ * --- What to do with the machine, on the login screen ---
+ *
+ * Two small round buttons in the bottom right, where every system that has
+ * them puts them. A full-width "Shut Down" button was the loudest thing on a
+ * screen whose job is to let somebody in, and there was no way to restart at
+ * all -- so a machine that needed restarting had to be shut down and started
+ * again by hand.
+ */
+#define POWER_BUTTON 30
+
+static void draw_power_glyph(struct recon_panel *p, int cx, int cy,
+        bool restart, recon_color ink) {
+    const int radius = 8;
+
+    for (int dy = -radius - 1; dy <= radius + 1; dy++) {
+        for (int dx = -radius - 1; dx <= radius + 1; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 > radius * radius || d2 < (radius - 2) * (radius - 2)) {
+                continue;
+            }
+            /*
+             * Power breaks the ring at the top, where its stem goes through.
+             * Restart breaks it at the top right, where its arrowhead goes.
+             */
+            if (restart) {
+                if (dx >= 0 && dy <= 0 && dy > -dx - 2) {
+                    continue;
+                }
+            } else if (dy < 0 && dx >= -2 && dx <= 2) {
+                continue;
+            }
+            recon_fill_rect(p, cx + dx, cy + dy, 1, 1, ink);
+        }
+    }
+
+    if (restart) {
+        for (int i = 0; i < 4; i++) {
+            recon_fill_rect(p, cx + 3 + i, cy - radius - 1 + i, 1,
+                (4 - i) * 2 - 1, ink);
+        }
+    } else {
+        recon_fill_rect(p, cx - 1, cy - radius - 2, 2, radius, ink);
+    }
+}
+
+static void draw_power_button(struct recon_session *session,
+        struct recon_panel *p, int x, int y, bool restart, uint32_t id) {
+    bool hovered = (id == (uint32_t)session->hover);
+
+    if (hovered) {
+        recon_fill_rect(p, x, y, POWER_BUTTON, POWER_BUTTON, THEME(BUTTON_ACTIVE));
+    }
+    recon_draw_bevel(p, x, y, POWER_BUTTON, POWER_BUTTON, false);
+
+    draw_power_glyph(p, x + POWER_BUTTON / 2, y + POWER_BUTTON / 2, restart,
+        THEME(MENU_TEXT));
+
+    recon_hit_add(p, x, y, POWER_BUTTON, POWER_BUTTON, id);
 }
 
 /*
@@ -684,6 +782,70 @@ static void draw(struct recon_session *session) {
 
     case STAGE_LOGIN: {
         /*
+         * Asking which account. A grid of faces with a name under each,
+         * and nothing about how any of them signs in -- that is the next
+         * screen's question, and only about the one that was chosen.
+         */
+        if (session->picking_account) {
+            draw_title(session, p, x, y, w, "Who is using this machine?", NULL);
+            y += TITLE_SIZE + GAP;
+
+            int count = recon_users_count();
+            if (count > ACCOUNTS_VISIBLE) {
+                count = ACCOUNTS_VISIBLE;
+            }
+
+            int step = PICK_TILE;
+            int columns = w / step;
+            if (columns < 1) {
+                columns = 1;
+            }
+            if (columns > count) {
+                columns = count;
+            }
+            int grid_w = columns * step;
+            int gx = x + (w - grid_w) / 2;
+
+            for (int i = 0; i < count; i++) {
+                struct recon_user user;
+                if (!recon_users_at(i, &user)) {
+                    break;
+                }
+
+                int tx = gx + (i % columns) * step;
+                int ty = y + (i / columns) * (PICK_TILE + line);
+                uint32_t id = HIT_ACCOUNT_BASE + i;
+                bool hovered = (id == (uint32_t)session->hover);
+
+                if (hovered) {
+                    recon_fill_rect(p, tx + 4, ty, step - 8,
+                        PICK_FACE + line * 2 + 12, THEME(MENU_HILITE));
+                }
+
+                recon_avatar_draw(p,
+                    session->heading != NULL ? session->heading : session->font,
+                    user.name, tx + (step - PICK_FACE) / 2, ty + 4, PICK_FACE);
+
+                int name_w = recon_text_width(session->font, user.name);
+                recon_draw_text(p, session->font, tx + (step - name_w) / 2,
+                    ty + PICK_FACE + 10 + ascent, step, user.name,
+                    hovered ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT));
+
+                const char *role = user.role == RECON_ROLE_ADMINISTRATOR
+                    ? "Administrator" : "Limited";
+                int role_w = recon_text_width(session->font, role);
+                recon_draw_text(p, session->font, tx + (step - role_w) / 2,
+                    ty + PICK_FACE + 10 + line + ascent, step, role,
+                    hovered ? THEME(MENU_HILITE_TEXT)
+                            : THEME(MENU_TEXT_DISABLED));
+
+                recon_hit_add(p, tx + 4, ty, step - 8,
+                    PICK_FACE + line * 2 + 12, id);
+            }
+            break;
+        }
+
+        /*
          * The name of the system used to be drawn here as well as in the band
          * above, so the login screen said "Recon Towers OS" twice and had
          * nothing to say about the person signing in. This is their screen:
@@ -757,45 +919,14 @@ static void draw(struct recon_session *session) {
         }
 
         /*
-         * Other accounts, as a row of faces rather than a list of names.
-         *
-         * Only when there is more than one: a strip offering the single
-         * account you are already looking at is a control with nothing to do.
-         *
-         * And never while locked. A locked machine has somebody's session
-         * running behind it; offering to sign in as somebody else from here
-         * would either abandon that session or pretend to protect it. Switch
-         * User ends the session first, and *that* screen offers everybody.
+         * The other accounts used to sit here as a strip of faces, under the
+         * password box. A stray click while typing changed who you were
+         * signing in as, which is a way to lose a password into the wrong
+         * field. Going back to the list is a deliberate act now, and it is
+         * not offered at all while locked -- a locked machine has somebody's
+         * session running behind it, and there is only one account it will
+         * accept.
          */
-        int count = recon_users_count();
-        if (count > 1 && session->locked_to[0] == '\0') {
-            int shown = count < ACCOUNTS_VISIBLE ? count : ACCOUNTS_VISIBLE;
-            int step = AVATAR_SMALL + 12;
-            int strip_w = shown * step - 12;
-            int sx = x + (w - strip_w) / 2;
-
-            y += GAP;
-            for (int i = 0; i < shown; i++) {
-                int index = session->account_scroll + i;
-                struct recon_user user;
-                if (!recon_users_at(index, &user)) {
-                    break;
-                }
-
-                int ax = sx + i * step;
-                if (index == session->account) {
-                    /* A ring rather than a fill, so the face is not tinted by
-                     * the thing marking it. */
-                    recon_stroke_rect(p, ax - 3, y - 3, AVATAR_SMALL + 6,
-                        AVATAR_SMALL + 6, THEME(ACCENT));
-                }
-                recon_avatar_draw(p, session->font, user.name, ax, y,
-                    AVATAR_SMALL);
-                recon_hit_add(p, ax - 3, y - 3, AVATAR_SMALL + 6,
-                    AVATAR_SMALL + 6, HIT_ACCOUNT_BASE + i);
-            }
-            y += AVATAR_SMALL + GAP;
-        }
         break;
     }
 
@@ -839,12 +970,39 @@ static void draw(struct recon_session *session) {
         break;
     }
 
-    case STAGE_LOGIN:
-        draw_button(session, p, x, by, BUTTON_WIDTH, "Shut Down",
-            HIT_SHUTDOWN, false, true);
-        draw_button(session, p, x + w - BUTTON_WIDTH, by, BUTTON_WIDTH,
+    case STAGE_LOGIN: {
+        /*
+         * Restart and shut down, bottom right, as two small round buttons.
+         * Restart was not offered at all, so a machine that needed one had to
+         * be shut down and started again by hand.
+         */
+        int px = x + w - POWER_BUTTON;
+        int py = by + (BUTTON_HEIGHT - POWER_BUTTON) / 2;
+
+        draw_power_button(session, p, px, py, false, HIT_SHUTDOWN);
+        draw_power_button(session, p, px - POWER_BUTTON - 8, py, true,
+            HIT_RESTART);
+
+        if (session->picking_account) {
+            break;
+        }
+
+        /*
+         * Going back to the list, bottom left. Not while locked: there is
+         * nowhere to go back to, because there is one account this screen
+         * will accept.
+         */
+        if (session->locked_to[0] == '\0' && recon_users_count() > 1) {
+            draw_button(session, p, x, by, BUTTON_WIDTH + 20,
+                "Back to accounts", HIT_PICK_AGAIN, false, true);
+        }
+
+        /* Sign In sits under the password box rather than in the corner, so
+         * it is next to the thing it acts on. */
+        draw_button(session, p, x + (w - BUTTON_WIDTH) / 2, by, BUTTON_WIDTH,
             "Sign In", HIT_PRIMARY, true, recon_users_count() > 0);
         break;
+    }
 
     default:
         break;
@@ -1028,6 +1186,19 @@ static void advance(struct recon_session *session) {
         }
 
         /*
+         * While choosing, Enter picks the account rather than trying to sign
+         * in as it. Otherwise the keyboard would skip the screen the mouse
+         * has to go through, and an empty password would be submitted for
+         * whichever account happened to be selected.
+         */
+        if (session->picking_account) {
+            session->picking_account = false;
+            session->hover = -1;
+            recon_session_refresh(session);
+            return;
+        }
+
+        /*
          * The lock is enforced here as well as drawn.
          *
          * Hiding the other accounts stops somebody choosing one; it does not
@@ -1161,6 +1332,14 @@ void recon_session_begin(struct recon_session *session) {
         /* Never set up. Ask who is using it. */
         go_to(session, STAGE_WELCOME);
     } else {
+        /*
+         * Starting up asks which account before it asks for anything else,
+         * even when there is only one. A single account with its password box
+         * already showing tells whoever is standing at the machine how to get
+         * in before they have chosen anything -- and once there is a PIN or a
+         * fingerprint, which of those it is varies per account.
+         */
+        session->picking_account = true;
         go_to(session, STAGE_LOGIN);
     }
 }
@@ -1176,8 +1355,9 @@ void recon_session_lock(struct recon_session *session) {
     session->account = 0;
     session->account_scroll = 0;
     /* Nobody is signed in any more, so there is no session to protect and
-     * every account is fair to offer. */
+     * every account is fair to offer -- starting by asking which. */
     session->locked_to[0] = '\0';
+    session->picking_account = true;
     go_to(session, STAGE_LOGIN);
 }
 
@@ -1202,9 +1382,11 @@ void recon_session_lock_screen(struct recon_session *session) {
     session->account_scroll = 0;
 
     /* Locked to whoever locked it: theirs is the only account this screen
-     * will offer, and their password is the only one that opens it. */
+     * will offer, and their password is the only one that opens it. There is
+     * nothing to choose between, so it does not ask. */
     session->account = 0;
     session->locked_to[0] = '\0';
+    session->picking_account = false;
     if (who != NULL) {
         snprintf(session->locked_to, sizeof(session->locked_to), "%s", who);
 
@@ -1302,6 +1484,9 @@ bool recon_session_handle_click(struct recon_session *session,
             session->password.masked = true;
             session->message[0] = '\0';
         }
+        /* Choosing an account is what takes you to its sign-in screen. */
+        session->picking_account = false;
+        session->hover = -1;
         recon_session_refresh(session);
         return true;
     }
@@ -1315,6 +1500,19 @@ bool recon_session_handle_click(struct recon_session *session,
         break;
     case HIT_SHUTDOWN:
         recon_quit(session->server);
+        break;
+    case HIT_RESTART:
+        recon_restart(session->server);
+        break;
+    case HIT_PICK_AGAIN:
+        /* Back to the list. The typed password goes with it: it was an
+         * attempt at one account and means nothing about another. */
+        session->picking_account = true;
+        recon_edit_begin(&session->password, "", false);
+        session->password.masked = true;
+        session->message[0] = '\0';
+        session->hover = -1;
+        recon_session_refresh(session);
         break;
     case HIT_NAME_FIELD:
         session->focus = FOCUS_NAME;
@@ -1373,15 +1571,36 @@ bool recon_session_handle_key(struct recon_session *session,
         return true;
     }
 
+    /*
+     * Escape on a sign-in screen goes back to the accounts, which is what
+     * Escape means everywhere else: undo the choice that got you here. Not
+     * while locked, where there is no choice to undo.
+     */
+    if (sym == XKB_KEY_Escape && session->stage == STAGE_LOGIN &&
+            !session->picking_account && session->locked_to[0] == '\0' &&
+            recon_users_count() > 1) {
+        session->picking_account = true;
+        recon_edit_begin(&session->password, "", false);
+        session->password.masked = true;
+        session->message[0] = '\0';
+        session->hover = -1;
+        recon_session_refresh(session);
+        return true;
+    }
+
     /* Up and Down walk a list, wherever there is one. */
     if (sym == XKB_KEY_Up || sym == XKB_KEY_Down) {
         int step = (sym == XKB_KEY_Down) ? 1 : -1;
 
         if (session->stage == STAGE_LOGIN) {
-            /* Not while locked: there is one account on offer, and stepping
-             * off it with the keyboard would be a way round the lock. */
-            int count = session->locked_to[0] != '\0'
-                ? 0 : recon_users_count();
+            /*
+             * Only while choosing. Once an account is picked the arrows have
+             * nothing to move between, and stepping off it would be both a
+             * surprise and -- while locked -- a way round the lock.
+             */
+            int count = (session->picking_account &&
+                    session->locked_to[0] == '\0')
+                ? recon_users_count() : 0;
             int next = session->account + step;
             if (next >= 0 && next < count) {
                 session->account = next;
@@ -1463,7 +1682,8 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
         "  signed in: %s\n"
         "  message: %s\n",
         STAGE_NAMES[session->stage],
-        session->locked_to[0] != '\0' ? " (locked)" : "",
+        session->locked_to[0] != '\0' ? " (locked)"
+            : (session->picking_account ? " (choosing an account)" : ""),
         recon_users_count(),
         session->stage == STAGE_LOGIN ? session->account : session->option,
         recon_users_current() != NULL ? recon_users_current() : "(nobody)",
