@@ -57,9 +57,35 @@ bar = 802020
 ```
 
 `theme` lists them, `theme <name>` puts one on and redraws everything, and
-`theme roles` prints all 46 roles with what they currently resolve to — which
+`theme roles` prints all 47 roles with what they currently resolve to — which
 is what to start from when writing one. The choice is per-account and
 remembered.
+
+**Accessibility.** Five more skins, and they are verified rather than eyeballed:
+**Deuteran**, **Protan** and **Tritan** for the three kinds of colour vision
+deficiency — which need different answers, since protan and tritan want
+opposite things — plus **Contrast** (black on white, nothing carried by hue)
+and **Reading** (warm off-white, softened contrast). The semantic colours come
+from the Okabe-Ito colour-universal set.
+
+`tests/test_access.c` simulates each deficiency with the Vienot dichromat
+projection in linear light and measures whether the pairs that must stay apart
+actually do. It found three real defects in skins written by eye: two where an
+active and an inactive title bar were a few units apart, so you could not tell
+which window had the keyboard, and one where an accent and a warning were
+nearly the same colour.
+
+Separately, `access` adjusts how text is *read* rather than coloured: letter
+spacing, line spacing, font and size, applied live and remembered.
+`access reading` sets the spacing that suits a dyslexic reader. Extra letter
+spacing is the best-supported single adjustment there; a typeface marketed for
+dyslexia is deliberately not built in as a fix, because controlled studies have
+not found it to beat an ordinary sans-serif — but the font is settable, so
+anyone who finds one helps them can use it.
+
+A palette is only half of accessibility. The other half is never encoding
+meaning in colour alone, which is why "Not responding" says so in words and a
+folder has an icon and a Type column as well as a colour.
 
 **A registry** — what the system remembers between runs. Two hives, for the
 reason Windows has two: `/System/Config/system.reg` belongs to the machine and

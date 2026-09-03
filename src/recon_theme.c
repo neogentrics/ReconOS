@@ -164,7 +164,11 @@ static const recon_color THEME_RECON[RECON_THEME_ROLE_COUNT] = {
 
     RGB(F0,F0,F0), RGBA(00,00,00,C0), RGBA(30,50,90,A0),
 
-    RGB(8B,1A,1A), RGB(F4,F4,F4), RGB(8B,1A,1A), RGB(1A,3A,8B),
+    /* Accent and warning were the same oxblood, which made "this is
+     * highlighted" and "this is a problem" the same colour for everybody, not
+     * only for someone who cannot separate reds. The warning is brighter and
+     * hotter now, and differs in luminance as well as hue. */
+    RGB(8B,1A,1A), RGB(F4,F4,F4), RGB(D0,42,1B), RGB(1A,3A,8B),
 };
 
 /* The 95-era look: brighter grey, the familiar navy, no softening. */
@@ -195,7 +199,10 @@ static const recon_color THEME_CLASSIC[RECON_THEME_ROLE_COUNT] = {
 
 /* Light and quiet: pale chrome, blue selection, thin edges. */
 static const recon_color THEME_AQUA[RECON_THEME_ROLE_COUNT] = {
-    RGB(EC,EC,EE), RGB(B8,B8,BC), RGB(DC,DC,E0), RGB(F0,F0,F2),
+    /* The active and inactive title bars were seven units apart, which is
+     * to say indistinguishable. A subtle look is not worth not knowing which
+     * window has the keyboard. */
+    RGB(EC,EC,EE), RGB(B8,B8,BC), RGB(8F,B4,DC), RGB(F2,F2,F4),
     RGB(1C,1C,20), RGB(90,90,96), RGB(E4,E4,E8), RGB(40,40,46),
 
     RGB(E8,E8,EC), RGB(1C,1C,20), RGB(88,88,90), RGB(E4,E4,E8),
@@ -221,7 +228,9 @@ static const recon_color THEME_AQUA[RECON_THEME_ROLE_COUNT] = {
 
 /* Dark and flat, the way a modern Linux desktop tends to look. */
 static const recon_color THEME_MIDNIGHT[RECON_THEME_ROLE_COUNT] = {
-    RGB(2E,32,38), RGB(1A,1C,20), RGB(24,28,2E), RGB(2A,2E,34),
+    /* Active and inactive were three units apart -- a flat look taken far
+     * enough to stop conveying anything. */
+    RGB(2E,32,38), RGB(1A,1C,20), RGB(2F,4F,7A), RGB(2A,2E,34),
     RGB(E8,E8,EC), RGB(90,94,9C), RGB(3A,3E,46), RGB(E0,E0,E4),
 
     RGB(24,28,2E), RGB(E0,E0,E4), RGB(90,94,9C), RGB(3A,3E,46),
@@ -242,7 +251,186 @@ static const recon_color THEME_MIDNIGHT[RECON_THEME_ROLE_COUNT] = {
 
     RGB(F0,F0,F2), RGBA(00,00,00,C0), RGBA(3E,7A,C8,A0),
 
-    RGB(C8,5A,3A), RGB(FF,FF,FF), RGB(E0,64,50), RGB(6E,A8,E8),
+    /* Accent was a burnt orange and warning a salmon: nine units apart, the
+     * same defect the default skin had. The accent is blue now, which also
+     * puts it in the same family as this skin's selection. */
+    RGB(5A,9C,E0), RGB(10,14,18), RGB(E0,64,50), RGB(6E,A8,E8),
+};
+
+/*
+ * --- Skins for colour vision deficiency ---
+ *
+ * "Colour blind" is not one thing, and a single mode for it would be wrong:
+ * protan and tritan need opposite decisions. There are four here because
+ * there are four problems.
+ *
+ * The chrome stays neutral grey in all of them, because grey is unambiguous
+ * for everyone. What changes is the handful of places where a colour carries
+ * meaning -- selection, folder names, warnings, the accent.
+ *
+ * The semantic colours are taken from the Okabe-Ito colour-universal set
+ * (Okabe & Ito, 2008), which was chosen for exactly this: hues that stay
+ * separable across the common deficiencies. They are verified rather than
+ * trusted -- tests/test_theme.c simulates each deficiency and checks the
+ * pairs that must stay apart really do.
+ *
+ * A palette is only half of it. The other half is not encoding meaning in
+ * colour alone, which is why "Not responding" says so in words and a folder
+ * has an icon and a Type column as well as a colour.
+ */
+
+/* Red-green, the common kind. Blue and orange are the reliable axis. */
+static const recon_color THEME_DEUTERAN[RECON_THEME_ROLE_COUNT] = {
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(00,54,8A), RGB(7A,7A,7A),
+    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+
+    RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
+    RGB(A8,B4,C4),
+
+    RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
+    RGB(00,72,B2), RGB(FF,FF,FF), RGB(90,90,90),
+
+    RGB(C8,C8,C8), RGB(00,54,8A), RGB(FF,FF,FF), RGBA(00,00,00,99),
+
+    RGB(FF,FF,FF), RGB(F0,F0,F0), RGB(10,10,10), RGB(4A,4A,4A),
+    RGB(DC,DC,DC), RGB(00,72,B2), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(00,72,B2), RGB(10,10,10), RGB(A8,D0,F0),
+    RGB(10,10,10),
+
+    RGB(10,14,18), RGB(E0,E0,E0), RGB(56,B4,E9), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(00,72,B2,A0),
+
+    RGB(E6,9F,00), RGB(10,10,10), RGB(9A,3A,00), RGB(00,72,B2),
+};
+
+/*
+ * Protan is red-green too, but red also looks darker, so a dark red reads as
+ * near-black rather than as a colour at all. Everything that has to be seen
+ * is lighter here than in the deuteran set.
+ */
+static const recon_color THEME_PROTAN[RECON_THEME_ROLE_COUNT] = {
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(00,4C,7A), RGB(7A,7A,7A),
+    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+
+    RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
+    RGB(A8,B4,C4),
+
+    RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
+    RGB(00,72,B2), RGB(FF,FF,FF), RGB(90,90,90),
+
+    RGB(C8,C8,C8), RGB(00,4C,7A), RGB(FF,FF,FF), RGBA(00,00,00,99),
+
+    RGB(FF,FF,FF), RGB(F0,F0,F0), RGB(10,10,10), RGB(4A,4A,4A),
+    RGB(DC,DC,DC), RGB(00,72,B2), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(00,72,B2), RGB(10,10,10), RGB(A8,D0,F0),
+    RGB(10,10,10),
+
+    RGB(10,14,18), RGB(E0,E0,E0), RGB(56,B4,E9), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(00,72,B2,A0),
+
+    RGB(F0,B4,20), RGB(10,10,10), RGB(B8,5C,00), RGB(00,72,B2),
+};
+
+/*
+ * Tritan confuses blue with green and yellow with pink, so the blue-orange
+ * axis the other two rely on is exactly the wrong choice. Red, green and
+ * magenta stay separable.
+ */
+static const recon_color THEME_TRITAN[RECON_THEME_ROLE_COUNT] = {
+    RGB(C8,C8,C8), RGB(30,30,30), RGB(7A,10,30), RGB(7A,7A,7A),
+    RGB(FF,FF,FF), RGB(DC,DC,DC), RGB(D0,D0,D0), RGB(10,10,10),
+
+    RGB(C8,C8,C8), RGB(10,10,10), RGB(55,55,55), RGB(D0,D0,D0),
+    RGB(C4,A8,B4),
+
+    RGB(D4,D4,D4), RGB(30,30,30), RGB(10,10,10), RGB(6E,6E,6E),
+    RGB(8A,0F,3C), RGB(FF,FF,FF), RGB(90,90,90),
+
+    RGB(C8,C8,C8), RGB(7A,10,30), RGB(FF,FF,FF), RGBA(00,00,00,99),
+
+    RGB(FF,FF,FF), RGB(F0,F0,F0), RGB(10,10,10), RGB(4A,4A,4A),
+    RGB(DC,DC,DC), RGB(8A,0F,3C), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(8A,0F,3C), RGB(10,10,10), RGB(F0,B8,CC),
+    RGB(10,10,10),
+
+    RGB(10,14,14), RGB(E0,E0,E0), RGB(00,C0,60), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGBA(00,00,00,C0), RGBA(8A,0F,3C,A0),
+
+    RGB(B0,00,6A), RGB(FF,FF,FF), RGB(D0,20,20), RGB(00,73,3C),
+};
+
+/*
+ * Maximum contrast: no mid tones, nothing conveyed by hue at all.
+ *
+ * For low vision, and for achromatopsia, where only luminance carries any
+ * information. Everything that must be told apart is told apart by black
+ * against white.
+ */
+static const recon_color THEME_CONTRAST[RECON_THEME_ROLE_COUNT] = {
+    RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00), RGB(FF,FF,FF),
+    RGB(FF,FF,FF), RGB(00,00,00), RGB(FF,FF,FF), RGB(00,00,00),
+
+    RGB(00,00,00), RGB(FF,FF,FF), RGB(B0,B0,B0), RGB(FF,FF,FF),
+    RGB(00,00,00),
+
+    RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00), RGB(70,70,70),
+    RGB(00,00,00), RGB(FF,FF,FF), RGB(00,00,00),
+
+    RGB(FF,FF,FF), RGB(00,00,00), RGB(FF,FF,FF), RGBA(00,00,00,C8),
+
+    RGB(FF,FF,FF), RGB(FF,FF,FF), RGB(00,00,00), RGB(40,40,40),
+    RGB(00,00,00), RGB(00,00,00), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00), RGB(B0,B0,B0),
+    RGB(00,00,00),
+
+    RGB(00,00,00), RGB(FF,FF,FF), RGB(FF,FF,FF), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGBA(00,00,00,FF), RGBA(00,00,00,C0),
+
+    RGB(00,00,00), RGB(FF,FF,FF), RGB(00,00,00), RGB(00,00,00),
+};
+
+/*
+ * Softened for reading.
+ *
+ * Pure black on pure white is the highest contrast available and, for a good
+ * number of dyslexic readers, uncomfortable with it -- text appears to shimmer
+ * or swim. A warm off-white with dark grey rather than black is the usual
+ * remedy, and costs nothing to anyone who does not need it.
+ *
+ * Meant to be worn together with `access reading`, which does the spacing.
+ * Colour and spacing are separate settings because they help separately.
+ */
+static const recon_color THEME_READING[RECON_THEME_ROLE_COUNT] = {
+    RGB(E4,DF,D4), RGB(58,52,46), RGB(4A,5A,6E), RGB(9A,94,88),
+    RGB(FB,F7,EE), RGB(E0,DA,CE), RGB(EA,E5,DA), RGB(3A,36,30),
+
+    RGB(E4,DF,D4), RGB(3A,36,30), RGB(6E,68,5E), RGB(EA,E5,DA),
+    RGB(C8,C2,B4),
+
+    RGB(EF,EA,DF), RGB(58,52,46), RGB(3A,36,30), RGB(8A,84,78),
+    RGB(4A,5A,6E), RGB(FB,F7,EE), RGB(C0,BA,AE),
+
+    RGB(E4,DF,D4), RGB(4A,5A,6E), RGB(FB,F7,EE), RGBA(2A,26,20,88),
+
+    RGB(FA,F4,E6), RGB(F4,EE,E0), RGB(3A,36,30), RGB(6E,68,5E),
+    RGB(EA,E5,DA), RGB(4A,5A,6E), RGB(FB,F7,EE),
+
+    RGB(FA,F4,E6), RGB(4A,5A,6E), RGB(3A,36,30), RGB(CC,D6,E4),
+    RGB(3A,36,30),
+
+    RGB(2A,28,24), RGB(E8,E2,D6), RGB(9C,C0,8C), RGB(FB,F7,EE),
+
+    RGB(FB,F7,EE), RGBA(00,00,00,C0), RGBA(4A,5A,6E,A0),
+
+    RGB(8A,5A,2A), RGB(FB,F7,EE), RGB(A8,3A,20), RGB(3A,5A,7A),
 };
 
 #undef RGB
@@ -258,6 +446,16 @@ static const struct {
     { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC },
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA },
     { "Midnight", "Dark and flat", THEME_MIDNIGHT },
+    { "Deuteran", "Red-green safe: blue and orange carry meaning",
+      THEME_DEUTERAN },
+    { "Protan", "Red-green safe, avoiding dark reds that read as black",
+      THEME_PROTAN },
+    { "Tritan", "Blue-yellow safe: red, green and magenta carry meaning",
+      THEME_TRITAN },
+    { "Contrast", "Black on white throughout; nothing depends on hue",
+      THEME_CONTRAST },
+    { "Reading", "Warm off-white and softened contrast, easier to read on",
+      THEME_READING },
 };
 
 #define BUILT_IN_COUNT ((int)(sizeof(BUILT_IN) / sizeof(BUILT_IN[0])))

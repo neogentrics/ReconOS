@@ -117,7 +117,8 @@ enum recon_theme_role {
 #define RECON_THEME_EXT ".theme"
 #define RECON_THEME_DEFAULT "Recon"
 
-/* The registry keys that decide which is in use. */
+/* Which skin is in use. Reading settings are a separate concern and live in
+ * recon_access.h, because spacing is not a colour. */
 #define RECON_THEME_KEY "theme"
 
 struct recon_theme_info {

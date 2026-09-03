@@ -64,6 +64,7 @@ add_executable(ReconOS
     src/recon_filedlg.c
     src/recon_notepad.c
     src/recon_registry.c
+    src/recon_access.c
     src/recon_theme.c
     src/recon_procinfo.c
     src/recon_shell.c
@@ -142,7 +143,22 @@ add_executable(recon_theme_tests
 target_include_directories(recon_theme_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# Whether the accessibility skins work is a question about people who are not
+# in the room. It is answered by simulating each deficiency and measuring, not
+# by looking at the palette and deciding it seems fine.
+add_executable(recon_access_tests
+    tests/test_access.c
+    src/recon_theme.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_access_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_access_tests PRIVATE m)
+
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
+add_test(NAME accessibility COMMAND recon_access_tests)

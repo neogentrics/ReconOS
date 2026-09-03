@@ -52,6 +52,28 @@ struct recon_font {
 };
 
 /* Searched in order when no font path is given. */
+/*
+ * Extra space between letters and lines. Global rather than per-font: it is a
+ * property of the person reading, not of the typeface.
+ */
+static int g_letter_spacing;
+static int g_line_spacing;
+
+void recon_text_set_spacing(int letter, int line) {
+    /* Clamped. Negative spacing would overlap glyphs into each other, and an
+     * enormous value would push every label off its own button. */
+    g_letter_spacing = letter < 0 ? 0 : (letter > 16 ? 16 : letter);
+    g_line_spacing = line < 0 ? 0 : (line > 32 ? 32 : line);
+}
+
+int recon_text_letter_spacing(void) {
+    return g_letter_spacing;
+}
+
+int recon_text_line_spacing(void) {
+    return g_line_spacing;
+}
+
 static const char *const FONT_SEARCH_PATHS[] = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
@@ -158,7 +180,8 @@ int recon_font_line_height(struct recon_font *font) {
     if (font == NULL) {
         return 0;
     }
-    return (int)((font->ascent - font->descent + font->line_gap) * font->scale);
+    return (int)((font->ascent - font->descent + font->line_gap) * font->scale)
+        + g_line_spacing;
 }
 
 /* Rasterize a character on first use; later calls reuse the cached mask. */
@@ -198,6 +221,32 @@ static struct recon_glyph *glyph_for(struct recon_font *font, unsigned char c) {
     return glyph;
 }
 
+bool recon_font_reload(struct recon_font *font, const char *path,
+        int pixel_height) {
+    if (font == NULL) {
+        return false;
+    }
+
+    struct recon_font *replacement = recon_font_load(path, pixel_height);
+    if (replacement == NULL) {
+        /* The old one is left alone. A desktop with no font is worse than one
+         * with the font the reader was trying to change. */
+        return false;
+    }
+
+    /* Everything the old one owned goes; then its contents are taken over, so
+     * every window still pointing at this struct now draws with the new
+     * typeface without knowing anything happened. */
+    for (int i = 0; i < GLYPH_COUNT; i++) {
+        free(font->glyphs[i].bitmap);
+    }
+    free(font->file_data);
+
+    *font = *replacement;
+    free(replacement);
+    return true;
+}
+
 int recon_text_width(struct recon_font *font, const char *text) {
     if (font == NULL || text == NULL) {
         return 0;
@@ -207,10 +256,13 @@ int recon_text_width(struct recon_font *font, const char *text) {
     for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; p++) {
         struct recon_glyph *glyph = glyph_for(font, *p);
         if (glyph != NULL) {
-            width += glyph->advance;
+            width += glyph->advance + g_letter_spacing;
         }
     }
-    return width;
+
+    /* The gap belongs between letters, not after the last one, or every
+     * measurement is one gap too wide and text centres slightly off. */
+    return width > 0 ? width - g_letter_spacing : 0;
 }
 
 /* --- Panel --- */
@@ -605,11 +657,12 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
         if (glyph == NULL) {
             continue;
         }
-        if (max_width > 0 && (pen - x) + glyph->advance > limit) {
+        if (max_width > 0 &&
+                (pen - x) + glyph->advance + g_letter_spacing > limit) {
             break;
         }
         draw_glyph(panel, glyph, pen, y, color);
-        pen += glyph->advance;
+        pen += glyph->advance + g_letter_spacing;
     }
 
     if (truncating) {
@@ -619,7 +672,7 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
                 continue;
             }
             draw_glyph(panel, glyph, pen, y, color);
-            pen += glyph->advance;
+            pen += glyph->advance + g_letter_spacing;
         }
     }
 }

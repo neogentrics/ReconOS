@@ -48,6 +48,36 @@ struct recon_font;
 struct recon_font *recon_font_load(const char *path, int pixel_height);
 void recon_font_destroy(struct recon_font *font);
 
+/* --- Reading --- */
+
+/*
+ * How text is spaced out, for readers who need it spaced out.
+ *
+ * Extra space between letters is the best-supported thing a system can do for
+ * a dyslexic reader -- more so than a special typeface, which is popular but
+ * whose advantage has not held up in controlled study. Extra space between
+ * lines and a font of the reader's choosing are here for the same reason: they
+ * are the adjustments with evidence behind them.
+ *
+ * Applied everywhere text is drawn or measured, so nothing has to opt in and
+ * nothing can forget. Measuring and drawing go through the same numbers, so a
+ * spaced-out label still truncates in the right place.
+ */
+void recon_text_set_spacing(int letter, int line);
+int recon_text_letter_spacing(void);
+int recon_text_line_spacing(void);
+
+/*
+ * Swap a loaded font for another, in place.
+ *
+ * The pointer stays valid, which is what lets the font change while the system
+ * is running: every window holds this pointer, and handing out a new one would
+ * mean finding all of them. False leaves the existing font untouched, because
+ * a desktop with no font is worse than one with the wrong font.
+ */
+bool recon_font_reload(struct recon_font *font, const char *path,
+    int pixel_height);
+
 /* Width in pixels the string would occupy. */
 int recon_text_width(struct recon_font *font, const char *text);
 

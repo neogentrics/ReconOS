@@ -61,6 +61,7 @@
 #include "recon_apps.h"
 #include "recon_modules.h"
 #include "recon_registry.h"
+#include "recon_access.h"
 #include "recon_theme.h"
 #include "recon_shell.h"
 
@@ -1428,6 +1429,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         /* The application table needs the shell to enumerate built-ins. */
         server->shell = recon_shell_create(server, width, height);
         recon_apps_init(server);
+
+        /* The reader's settings, once there is a font to apply them to. */
+        recon_access_apply(recon_shell_font(server->shell));
 
         /*
          * Modules load after the shell, because most of them register

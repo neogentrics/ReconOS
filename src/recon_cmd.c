@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> /* access */
 #include <strings.h> /* strcasecmp */
 
 #include "recon_appwin.h"
@@ -18,6 +19,7 @@
 #include "recon_modules.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
+#include "recon_access.h"
 #include "recon_theme.h"
 #include "recon_server.h"
 #include "recon_shell.h"
@@ -871,6 +873,116 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Skin is now '%s'.\n", recon_theme_current());
 }
 
+/* Reading settings: spacing, and the font. */
+static void cmd_access(struct recon_cmd_session *s, int argc, char **argv) {
+    struct recon_shell *shell = s->server->shell;
+
+    if (argc < 2) {
+        const char *font = recon_registry_get(RECON_REG_USER,
+            RECON_ACCESS_FONT_KEY, "");
+
+        out(s, "Letter spacing: %d\n", recon_text_letter_spacing());
+        out(s, "Line spacing:   %d\n", recon_text_line_spacing());
+        out(s, "Font:           %s\n", *font != '\0' ? font : "(the system's)");
+        out(s, "Font size:      %d\n",
+            recon_registry_get_int(RECON_REG_USER,
+                RECON_ACCESS_FONT_SIZE_KEY,
+                RECON_ACCESS_FONT_SIZE_DEFAULT));
+        out(s, "\n");
+        out(s, "  access spacing <n>   space between letters\n");
+        out(s, "  access lines <n>     space between lines\n");
+        out(s, "  access font <path>   a font file, or 'default'\n");
+        out(s, "  access size <n>      font height in pixels (8-24)\n");
+        out(s, "  access reading       spacing that suits a dyslexic reader\n");
+        out(s, "  access reset         back to the defaults\n");
+        return;
+    }
+
+    const char *action = argv[1];
+
+    if (strcasecmp(action, "reading") == 0) {
+        /*
+         * Wider letters and lines. Extra letter spacing is the adjustment
+         * with the best evidence behind it for dyslexic readers -- more than
+         * a special typeface, whose advantage has not held up in controlled
+         * study. The values are a starting point to adjust from, not a
+         * prescription.
+         */
+        recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_LETTER_KEY, 2);
+        recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_LINE_KEY, 6);
+        recon_access_apply(recon_shell_font(shell));
+        recon_shell_restyle(shell);
+        out(s, "Letters and lines are further apart.\n");
+        out(s, "The 'Reading' skin softens the contrast to go with it.\n");
+        return;
+    }
+
+    if (strcasecmp(action, "reset") == 0) {
+        recon_registry_remove(RECON_REG_USER, RECON_ACCESS_LETTER_KEY);
+        recon_registry_remove(RECON_REG_USER, RECON_ACCESS_LINE_KEY);
+        recon_registry_remove(RECON_REG_USER, RECON_ACCESS_FONT_KEY);
+        recon_registry_remove(RECON_REG_USER, RECON_ACCESS_FONT_SIZE_KEY);
+        recon_access_apply(recon_shell_font(shell));
+        recon_shell_restyle(shell);
+        out(s, "Back to the defaults.\n");
+        return;
+    }
+
+    if (argc < 3) {
+        out(s, "Usage: access %s <value>\n", action);
+        return;
+    }
+
+    if (strcasecmp(action, "spacing") == 0 || strcasecmp(action, "lines") == 0) {
+        bool letters = (strcasecmp(action, "spacing") == 0);
+        recon_registry_set_int(RECON_REG_USER,
+            letters ? RECON_ACCESS_LETTER_KEY : RECON_ACCESS_LINE_KEY,
+            atoi(argv[2]));
+
+        recon_access_apply(recon_shell_font(shell));
+        recon_shell_restyle(shell);
+        out(s, "%s spacing is now %d.\n", letters ? "Letter" : "Line",
+            letters ? recon_text_letter_spacing() : recon_text_line_spacing());
+        return;
+    }
+
+    if (strcasecmp(action, "font") == 0) {
+        bool clearing = (strcasecmp(argv[2], "default") == 0);
+        recon_registry_set(RECON_REG_USER, RECON_ACCESS_FONT_KEY,
+            clearing ? "" : argv[2]);
+
+        /* Applied immediately, and reported honestly if it did not take: a
+         * font file that cannot be read leaves the old one in place. */
+        recon_access_apply(recon_shell_font(shell));
+        recon_shell_restyle(shell);
+
+        if (!clearing && !recon_fs_exists("/", argv[2]) &&
+                access(argv[2], R_OK) != 0) {
+            out(s, "Set, but '%s' could not be read, so the font has not "
+                "changed.\n", argv[2]);
+            return;
+        }
+        out(s, "Font is now %s.\n", clearing ? "the system's" : argv[2]);
+        return;
+    }
+
+    if (strcasecmp(action, "size") == 0) {
+        recon_registry_set_int(RECON_REG_USER, RECON_ACCESS_FONT_SIZE_KEY,
+            atoi(argv[2]));
+        recon_access_apply(recon_shell_font(shell));
+        recon_shell_restyle(shell);
+        out(s, "Font size is now %d.\n",
+            recon_registry_get_int(RECON_REG_USER,
+                RECON_ACCESS_FONT_SIZE_KEY,
+                RECON_ACCESS_FONT_SIZE_DEFAULT));
+        out(s, "Note: the chrome is laid out in fixed pixels, so a large "
+            "size can crowd it.\n");
+        return;
+    }
+
+    out(s, "'%s' is not something access does.\n", action);
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -1013,6 +1125,7 @@ static const struct command COMMANDS[] = {
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
+    { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },
