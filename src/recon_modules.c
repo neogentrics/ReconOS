@@ -18,6 +18,7 @@
 #include "recon_appwin.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
+#include "recon_users.h"
 
 #define MODULES_MAX 32
 #define APPS_MAX 32
@@ -678,6 +679,140 @@ int recon_modules_install_shipped(void) {
     closedir(dir);
     return installed;
 #endif
+}
+
+/* --- Installing --- */
+
+bool recon_modules_path_of(const char *name, char *out, size_t size) {
+    struct module_slot *slot = module_slot_for(name);
+    if (slot == NULL || out == NULL || size == 0) {
+        return false;
+    }
+    snprintf(out, size, "%s", slot->state.path);
+    return true;
+}
+
+bool recon_modules_install(const char *reconos_path) {
+    if (reconos_path == NULL || *reconos_path == '\0') {
+        set_error("nothing to install");
+        return false;
+    }
+
+    /*
+     * An administrator's decision. A module runs inside ReconOS with
+     * everything ReconOS can do -- it is closer to installing a driver than
+     * to saving a file, and the account rules should say so.
+     */
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can install a program");
+        return false;
+    }
+
+    bool is_app = ends_with(reconos_path, RECON_APP_EXT);
+    if (!is_app && !ends_with(reconos_path, RECON_MODULE_EXT)) {
+        set_error("a program is a " RECON_APP_EXT " or a " RECON_MODULE_EXT);
+        return false;
+    }
+
+    struct recon_dirent info;
+    if (!recon_fs_stat("/", reconos_path, &info) ||
+            info.kind == RECON_FILE_DIRECTORY) {
+        set_error("there is no file at '%s'", reconos_path);
+        return false;
+    }
+
+    /* The name it will have where it is going. */
+    const char *leaf = strrchr(reconos_path, '/');
+    leaf = (leaf != NULL) ? leaf + 1 : reconos_path;
+
+    char target[RECON_PATH_MAX];
+    snprintf(target, sizeof(target), "%s/%s",
+        is_app ? RECON_DIR_APPS : RECON_DIR_MODULES, leaf);
+
+    /*
+     * Installing over itself is not an install, it is a load. Without this,
+     * installing something already in /Apps would copy a file onto itself and
+     * could truncate it before reading it.
+     */
+    if (strcmp(target, reconos_path) == 0) {
+        return recon_modules_load(target);
+    }
+
+    if (recon_fs_exists("/", target)) {
+        set_error("'%s' is already installed; remove it first", leaf);
+        return false;
+    }
+
+    /*
+     * Copied rather than pointed at. An application installed from somebody's
+     * Downloads folder must not stop working when they tidy up.
+     */
+    size_t size = 0;
+    char *bytes = recon_fs_read("/", reconos_path, &size);
+    if (bytes == NULL) {
+        set_error("%s", recon_fs_last_error());
+        return false;
+    }
+
+    bool written = recon_fs_write("/", target, bytes, size);
+    free(bytes);
+
+    if (!written) {
+        set_error("%s", recon_fs_last_error());
+        return false;
+    }
+
+    /* Code has to be executable to be loaded. */
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (recon_fs_resolve("/", target, host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        chmod(host, 0755);
+    }
+
+    if (!recon_modules_load(target)) {
+        /*
+         * It copied and would not load, so the copy is removed again. Leaving
+         * a file that fails on every start would turn one bad install into a
+         * permanent error message.
+         */
+        recon_fs_remove("/", target);
+        return false;
+    }
+
+    wlr_log(WLR_INFO, "ReconOS: installed %s", target);
+    return true;
+}
+
+bool recon_modules_uninstall(const char *name) {
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can remove a program");
+        return false;
+    }
+
+    char path[RECON_PATH_MAX];
+    if (!recon_modules_path_of(name, path, sizeof(path)) || path[0] == '\0') {
+        set_error("nothing installed is called '%s'",
+            name != NULL ? name : "");
+        return false;
+    }
+
+    /*
+     * Unloaded first. Deleting the file underneath running code turns a
+     * tidy-up into a crash on the next start, and unload already refuses when
+     * something the module registered is still in use.
+     */
+    if (!recon_modules_unload(name)) {
+        return false;
+    }
+
+    if (!recon_fs_remove("/", path)) {
+        set_error("unloaded, but the file stayed: %s", recon_fs_last_error());
+        return false;
+    }
+
+    wlr_log(WLR_INFO, "ReconOS: removed %s", path);
+    return true;
 }
 
 int recon_modules_load_all(void) {

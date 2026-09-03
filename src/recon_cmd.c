@@ -1634,6 +1634,62 @@ static void cmd_capture(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Capturing. 'capture' with no arguments says where it went.\n");
 }
 
+/*
+ * `install` and `uninstall` -- putting a program into the system and taking
+ * it out again.
+ *
+ * Separate from `modules load`, which runs something already in place. This
+ * copies it in first, so it is still there next time.
+ */
+static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: install <path to a %s or %s>\n",
+            RECON_APP_EXT, RECON_MODULE_EXT);
+        return;
+    }
+
+    /* Resolved against where the terminal is, so a relative path works the
+     * way it does for every other command here. */
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(s->cwd, argv[1], host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+
+    if (!recon_modules_install(canonical)) {
+        out(s, "%s\n", recon_modules_last_error());
+        return;
+    }
+    out(s, "Installed. It is loaded and will load again on every start.\n");
+}
+
+static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: uninstall <module name>\n");
+        out(s, "'modules' lists what is installed.\n");
+        return;
+    }
+
+    char name[64];
+    size_t used = 0;
+    for (int i = 1; i < argc && used < sizeof(name) - 1; i++) {
+        int written = snprintf(name + used, sizeof(name) - used, "%s%s",
+            i > 1 ? " " : "", argv[i]);
+        if (written < 0) {
+            break;
+        }
+        used += (size_t)written;
+    }
+
+    if (!recon_modules_uninstall(name)) {
+        out(s, "%s\n", recon_modules_last_error());
+        return;
+    }
+    out(s, "Removed '%s'.\n", name);
+}
+
 static void cmd_echo(struct recon_cmd_session *s, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         out(s, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -1668,6 +1724,8 @@ static const struct command COMMANDS[] = {
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
+    { "install",  "install <path>",        "Put a program into the system",      cmd_install },
+    { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles]",    "List skins, or put one on",         cmd_theme },
     { "session",  "session",               "What the login screen shows",       cmd_session },

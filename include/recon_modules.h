@@ -70,6 +70,37 @@ int recon_modules_install_shipped(void);
 bool recon_modules_load(const char *reconos_path);
 bool recon_modules_unload(const char *name);
 
+/*
+ * --- Installing ---
+ *
+ * Loading and installing are different acts and it is worth keeping them
+ * apart. Loading runs code that is already in the system; installing puts it
+ * there, so that it is still there next time.
+ *
+ * `recon_modules_install` takes a `.rex` or `.rts` anywhere in the ReconOS
+ * filesystem, copies it into `/Apps` or `/System/Modules` by its extension,
+ * and loads it. The copy is the point: an application installed from
+ * somebody's Downloads folder must not stop working when they tidy up.
+ *
+ * Refused for a limited account, because a module runs inside ReconOS with
+ * everything ReconOS can do. Installing one is closer to installing a driver
+ * than to saving a file, and the account rules should say so.
+ *
+ * `recon_modules_uninstall` unloads it and removes the file it came from, so
+ * removing something removes it rather than hiding it until the next start.
+ * It refuses when the module will not unload -- something it registered is
+ * still in use -- because deleting the file underneath running code would
+ * turn a tidy-up into a crash on the next start.
+ */
+bool recon_modules_install(const char *reconos_path);
+bool recon_modules_uninstall(const char *name);
+
+/*
+ * Where a loaded module's file is, so something can be said about it and it
+ * can be removed. Empty for one built into ReconOS.
+ */
+bool recon_modules_path_of(const char *name, char *out, size_t size);
+
 /* Why the last load or unload failed. */
 const char *recon_modules_last_error(void);
 

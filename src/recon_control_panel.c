@@ -71,6 +71,7 @@ enum action {
     /* Programs and modules */
     ACTION_INSTALL_PROGRAM,
     ACTION_REMOVE_PROGRAM,
+    ACTION_CONFIRM_INSTALL,
     ACTION_LOAD_MODULE,
     ACTION_UNLOAD_MODULE,
     /* Registry */
@@ -264,6 +265,7 @@ static const struct {
 enum question {
     QUESTION_NONE,
     QUESTION_REMOVE_USER,
+    QUESTION_REMOVE_PROGRAM,
 };
 
 struct control_panel {
@@ -300,6 +302,9 @@ struct control_panel {
      * is picked. A grid you look at, rather than a button you click until the
      * right one comes round. */
     bool picking_avatar;
+
+    /* Typing the path of something to install. */
+    bool installing;
 
     bool registry_unlocked;
     struct recon_edit unlock;
@@ -791,17 +796,42 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
 
     y += cp->list_h + PADDING;
 
+    bool admin = recon_users_may_administer();
+
     /*
-     * Neither of these works. Installing needs somewhere to install from --
-     * a package with a name, a version and something to check it against --
-     * and removing needs to know which files an application owns. Both are
-     * the same missing piece: applications arrive as files that were already
-     * there rather than as things that were installed.
+     * Installing is typing a path. A module runs inside ReconOS with
+     * everything ReconOS can do, so it is an administrator's decision --
+     * closer to installing a driver than to saving a file.
      */
+    if (cp->installing) {
+        recon_edit_draw(p, cp->font, x, y, w - 4, FIELD_HEIGHT, &cp->name);
+        recon_hit_add(p, x, y, w - 4, FIELD_HEIGHT, HIT_FIELD_BASE);
+        y += FIELD_HEIGHT + 8;
+
+        int bx = draw_button(cp, p, x, y, "Install",
+            HIT_ACTION_BASE + ACTION_CONFIRM_INSTALL, true);
+        draw_button(cp, p, bx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_NONE, true);
+        return;
+    }
+
+    struct recon_installed_app chosen;
+    bool have = recon_installed_app_at(cp->selected, &chosen);
+    bool removable = have && chosen.module[0] != '\0';
+
     int bx = draw_button(cp, p, x, y, "Install a Program",
-        HIT_ACTION_BASE + ACTION_INSTALL_PROGRAM, true);
+        HIT_ACTION_BASE + ACTION_INSTALL_PROGRAM, admin);
     draw_button(cp, p, bx, y, "Remove",
-        HIT_ACTION_BASE + ACTION_REMOVE_PROGRAM, true);
+        HIT_ACTION_BASE + ACTION_REMOVE_PROGRAM, admin && removable);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    int ascent = recon_font_ascent(cp->font);
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        have && !removable
+            ? "That one is part of ReconOS, so it cannot be removed."
+            : "Programs are .rex files. Installing copies one into /Apps.",
+        COLOR_DIM);
 }
 
 /* Modules: the ones that loaded, and the ones that would not. */
@@ -1272,11 +1302,30 @@ static void answered(void *user, int choice) {
 
     char name[RECON_USERS_NAME_MAX];
     snprintf(name, sizeof(name), "%s", cp->question_target);
+
+    enum question asked = cp->question;
     cp->question = QUESTION_NONE;
 
     if (choice != 0) {
         set_status(cp, false, "Nothing was changed.");
-    } else if (!recon_users_remove(name)) {
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_REMOVE_PROGRAM) {
+        if (!recon_modules_uninstall(name)) {
+            set_status(cp, true, "%s", recon_modules_last_error());
+        } else {
+            cp->selected = 0;
+            /* The Start menu listed it; it has to stop. */
+            recon_shell_restyle(cp->server->shell);
+            set_status(cp, false, "Removed '%s'.", name);
+        }
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (!recon_users_remove(name)) {
         set_status(cp, true, "%s", recon_users_last_error());
     } else {
         cp->selected = 0;
@@ -1292,6 +1341,7 @@ static void do_action(struct control_panel *cp, enum action action) {
     switch (action) {
     case ACTION_NONE:
         stop_editing(cp);
+        cp->installing = false;
         set_status(cp, false, "");
         break;
 
@@ -1387,16 +1437,63 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
 
     case ACTION_INSTALL_PROGRAM:
+        /*
+         * A path to type, rather than a file dialog. The dialog draws itself
+         * inside the window that asked for it and this page already has a
+         * list in that space; a field is the smaller change and does the same
+         * job. A browse button is worth having and is not this.
+         */
+        cp->installing = true;
+        recon_edit_begin(&cp->name, recon_fs_user_dir("Downloads"), false);
         set_status(cp, false,
-            "Not built yet: nothing to install from. A program would need a "
-            "package with a name and a version to arrive as.");
+            "The path to a %s or %s, then Enter.",
+            RECON_APP_EXT, RECON_MODULE_EXT);
         break;
 
-    case ACTION_REMOVE_PROGRAM:
-        set_status(cp, false,
-            "Not built yet: nothing records which files an application owns, "
-            "so nothing knows what removing it would remove.");
+    case ACTION_CONFIRM_INSTALL:
+        if (!recon_modules_install(cp->name.text)) {
+            set_status(cp, true, "%s", recon_modules_last_error());
+            break;
+        }
+        cp->installing = false;
+        recon_edit_end(&cp->name);
+        /* The Start menu lists applications, so it has to hear about a new
+         * one arriving. */
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "Installed, and loaded.");
         break;
+
+    case ACTION_REMOVE_PROGRAM: {
+        /*
+         * Only something that came from a module can be removed. The rest are
+         * compiled into ReconOS, and "remove the File Explorer" is a request
+         * to delete part of the system rather than a program.
+         */
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(cp->selected, &app)) {
+            set_status(cp, true, "Choose a program first.");
+            break;
+        }
+        if (app.module[0] == '\0') {
+            set_status(cp, true,
+                "'%s' is part of ReconOS, not something installed.", app.name);
+            break;
+        }
+
+        cp->question = QUESTION_REMOVE_PROGRAM;
+        snprintf(cp->question_target, sizeof(cp->question_target), "%s",
+            app.module);
+
+        char message[256];
+        snprintf(message, sizeof(message),
+            "Remove '%s'? Its file is deleted, and it will not come back on "
+            "the next start.", app.name);
+
+        const char *buttons[2] = { "Remove", "Cancel" };
+        recon_appwin_ask(cp->win, "Remove Program", message, buttons, 2,
+            answered);
+        break;
+    }
 
     case ACTION_LOAD_MODULE: {
         /* Real. Everything in /Apps that is not loaded already. */
@@ -1607,6 +1704,8 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             /* Leaving the registry page locks it again. Coming back to a page
              * that was left unlocked is how an unlock becomes permanent by
              * accident. */
+            cp->installing = false;
+
             if (page != PAGE_REGISTRY && cp->registry_unlocked) {
                 cp->registry_unlocked = false;
                 recon_edit_begin(&cp->unlock, "", false);
@@ -1620,6 +1719,24 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
 static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct control_panel *cp = user;
+
+    /* Typing the path of something to install. */
+    if (cp->installing) {
+        switch (recon_edit_key(&cp->name, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_CONFIRM_INSTALL);
+            return true;
+        case RECON_EDIT_CANCEL:
+            cp->installing = false;
+            recon_edit_end(&cp->name);
+            set_status(cp, false, "");
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
 
     /* The registry's password field has the keyboard while it is showing. */
     if (cp->page == PAGE_REGISTRY && !cp->registry_unlocked) {
