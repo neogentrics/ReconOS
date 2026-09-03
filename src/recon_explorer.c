@@ -885,22 +885,37 @@ static void draw_glyph(struct recon_panel *p, enum glyph glyph,
         recon_fill_rect(p, cx - 1, cy + 1, 3, 5, ink);
         break;
 
-    case GLYPH_REFRESH:
-        /* Three quarters of a ring, with an arrowhead where the fourth
-         * quarter would have been: a circle that is going somewhere. */
-        recon_fill_rect(p, cx - 5, cy - 2, 2, 5, ink);
-        recon_fill_rect(p, cx + 3, cy - 3, 2, 4, ink);
-        recon_fill_rect(p, cx - 4, cy - 5, 3, 2, ink);
-        recon_fill_rect(p, cx + 1, cy - 5, 3, 2, ink);
-        recon_fill_rect(p, cx - 2, cy - 6, 3, 2, ink);
-        recon_fill_rect(p, cx - 4, cy + 3, 3, 2, ink);
-        recon_fill_rect(p, cx - 1, cy + 4, 3, 2, ink);
-        recon_fill_rect(p, cx + 2, cy + 1, 2, 3, ink);
-        /* The arrowhead, top right. */
-        for (int i = 0; i < 3; i++) {
-            recon_fill_rect(p, cx + 2 + i, cy - 6 + i, 1, (3 - i) * 2, ink);
+    case GLYPH_REFRESH: {
+        /*
+         * A ring with a bite out of the top right, and an arrowhead at the
+         * open end: a circle that is going somewhere.
+         *
+         * Drawn as an arc rather than as a dozen hand-placed rectangles. The
+         * hand-placed version was assembled by eye and looked, accurately, as
+         * though it had been assembled by eye.
+         */
+        const int radius = 6;
+        for (int y = -radius - 1; y <= radius + 1; y++) {
+            for (int x = -radius - 1; x <= radius + 1; x++) {
+                int d2 = x * x + y * y;
+                /* A band two pixels thick, which is the ring itself. */
+                if (d2 > radius * radius || d2 < (radius - 2) * (radius - 2)) {
+                    continue;
+                }
+                /* The gap: the top-right eighth or so, where the arrow is. */
+                if (x >= 0 && y <= 0 && y > -x - 2) {
+                    continue;
+                }
+                recon_fill_rect(p, cx + x, cy + y, 1, 1, ink);
+            }
+        }
+        /* The arrowhead, pointing clockwise into the gap. */
+        for (int i = 0; i < 4; i++) {
+            recon_fill_rect(p, cx + 2 + i, cy - radius - 1 + i, 1,
+                (4 - i) * 2 - 1, ink);
         }
         break;
+    }
 
     case GLYPH_HOME:
         /* A roof over a box. */
@@ -1079,6 +1094,18 @@ static void build_places(struct recon_explorer *ex) {
         place->starts_group = SIDEBAR[i].starts_group;
     }
 
+    /*
+     * The Recycle Bin. Not in the sidebar, because it is already on the
+     * desktop and a bin is not somewhere you keep things -- but it is
+     * somewhere you go, and this list is everywhere you can go from here.
+     */
+    if (ex->place_count < PLACES_MAX) {
+        struct place *bin = &ex->places[ex->place_count++];
+        snprintf(bin->label, sizeof(bin->label), "Recycle Bin");
+        snprintf(bin->path, sizeof(bin->path), "%s", recon_fs_trash_dir());
+        bin->starts_group = false;
+    }
+
     /* Then what is in this folder, which is the half that makes the
      * drop-down worth having: it is a way down as well as a way across. */
     bool first = true;
@@ -1086,10 +1113,30 @@ static void build_places(struct recon_explorer *ex) {
         if (ex->entries[i].kind != RECON_FILE_DIRECTORY) {
             continue;
         }
+
+        char path[RECON_PATH_MAX];
+        snprintf(path, sizeof(path), "%s%s%s",
+            ex->cwd, strcmp(ex->cwd, "/") == 0 ? "" : "/", ex->entries[i].name);
+
+        /*
+         * Not if it is already up there among the known places.
+         *
+         * Standing in your own folder, the six folders inside it are exactly
+         * the six the list already offers, so the drop-down showed each of
+         * them twice -- and the second copy was in the section meant to show
+         * you what was *here*, telling you nothing you had not just read.
+         */
+        bool already = false;
+        for (int j = 0; j < ex->place_count && !already; j++) {
+            already = strcmp(ex->places[j].path, path) == 0;
+        }
+        if (already) {
+            continue;
+        }
+
         struct place *place = &ex->places[ex->place_count++];
         snprintf(place->label, sizeof(place->label), "%s", ex->entries[i].name);
-        snprintf(place->path, sizeof(place->path), "%s%s%s",
-            ex->cwd, strcmp(ex->cwd, "/") == 0 ? "" : "/", ex->entries[i].name);
+        snprintf(place->path, sizeof(place->path), "%s", path);
         place->starts_group = first;
         first = false;
     }
