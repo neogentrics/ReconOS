@@ -792,7 +792,7 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
         bool is_gradient = key_len > 3 &&
             strcasecmp(line + key_len - 3, ".to") == 0;
         if (is_gradient) {
-            line[key_len - 3] = ' ';
+            line[key_len - 3] = '\0';
         }
 
         int role = role_from_name(line);

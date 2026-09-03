@@ -274,12 +274,19 @@ every other account on the machine can drive. Set after bind and before
 listen, so there is no moment where it is both connectable and open to
 everybody. A file permission, not a login.
 
-Two things found while doing it. A socket path over 107 bytes was silently
+One real bug found while doing it: a socket path over 107 bytes was silently
 truncated by the kernel, so bind used one name while the unlink, the chmod and
 the shutdown cleanup used another -- the socket would have come up unprotected
-under a name nothing could remove. And the startup line reporting the network
-compared the gateway against a raw NUL *byte* written into the source instead
-of the escape, so a machine with no gateway did not say "(none)".
+under a name nothing could remove.
+
+**A correction to what this originally said.** It also claimed the startup
+line reporting the network was broken, because it compared the gateway
+against a raw NUL *byte* written into the source rather than the two-character
+escape. The source really was malformed and is fixed, but the claim about the
+behaviour was wrong: a character constant holding a single NUL byte has the
+value 0, exactly as `'\0'` does, so the comparison had always been correct and
+a machine with no gateway had always said "(none)". Checked afterwards by
+compiling both forms rather than by reading the warning and assuming.
 
 ## v0.2.3 — gradients, and the labels they showed were wrong
 

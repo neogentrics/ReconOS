@@ -617,10 +617,10 @@ static void permission_key(const char *application, char *out, size_t size) {
     char safe[96];
     size_t used = 0;
     for (const char *c = application != NULL ? application : "";
-            *c != ' ' && used < sizeof(safe) - 1; c++) {
+            *c != '\0' && used < sizeof(safe) - 1; c++) {
         safe[used++] = (*c == ' ' || *c == '/') ? '-' : *c;
     }
-    safe[used] = ' ';
+    safe[used] = '\0';
 
     snprintf(out, size, "%s/%s", RECON_NET_PERMISSION_PREFIX, safe);
 }
@@ -685,7 +685,7 @@ bool recon_net_allowed_at(int index, char *name, size_t size, bool *allowed) {
         size_t prefix = strlen(RECON_NET_PERMISSION_PREFIX) + 1;
         snprintf(name, size, "%s", strlen(key) > prefix ? key + prefix : key);
 
-        for (char *c = name; *c != ' '; c++) {
+        for (char *c = name; *c != '\0'; c++) {
             if (*c == '-') {
                 *c = ' ';
             }
