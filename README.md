@@ -42,6 +42,20 @@ differently. Shift+Delete skips it, after asking.
 **Dialogs.** Anything destructive asks in a window, with Cancel last so it is
 what both Enter and Escape choose. Clicking outside does not dismiss one.
 
+**A registry** — what the system remembers between runs. Two hives, for the
+reason Windows has two: `/System/Config/system.reg` belongs to the machine and
+`/Users/<name>/user.reg` to one account, because a theme is a person's and a
+module policy is not. Keys are paths (`apps/explorer/last-folder`,
+`windows/Notepad/x`), values are text, and the typed accessors give the
+fallback rather than zero when a value will not parse — a damaged file should
+look like missing settings, not like a real setting of 0 that puts every window
+in the corner.
+
+Windows reopen where they were left, at the size they were, maximized if they
+were — with the restore size kept separately, so unmaximizing gives back the
+window rather than a screen-sized one. The file explorer opens where you left
+it. Read and change any of it with `reg`.
+
 **Modules** — code ReconOS loads at runtime, so a feature can arrive without
 the core being rebuilt. `.rts` is a system module (a subsystem, driver or
 service); `.rex` is an application, which appears in the Apps menu. The

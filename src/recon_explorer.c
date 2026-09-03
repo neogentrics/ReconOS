@@ -20,6 +20,7 @@
 #include "recon_explorer.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_registry.h"
 #include "recon_ui.h"
 
 #define TOOLBAR_HEIGHT 30
@@ -265,6 +266,14 @@ static void navigate_to(struct recon_explorer *ex, const char *path, bool record
     }
 
     snprintf(ex->cwd, sizeof(ex->cwd), "%s", canonical);
+
+    /*
+     * Remembered, so the explorer opens where it was left rather than at the
+     * top every time. Written on arrival rather than on close, because a
+     * desktop that crashes should still remember where you were.
+     */
+    recon_registry_set(RECON_REG_USER, "apps/explorer/last-folder", canonical);
+
     ex->selected = -1;
     ex->scroll = 0;
     /* Leaving the folder abandons anything half-started in it. */
@@ -1394,7 +1403,22 @@ struct recon_appwin *recon_explorer_create(struct recon_server *server,
     ex->font = font;
     ex->selected = -1;
     ex->renaming = -1;
-    snprintf(ex->cwd, sizeof(ex->cwd), "%s", recon_fs_user_dir(NULL));
+
+    /*
+     * Where it was last, if that is still a folder. A remembered path can
+     * have been deleted since, and opening onto an error is a worse greeting
+     * than opening at home.
+     */
+    const char *remembered = recon_registry_get(RECON_REG_USER,
+        "apps/explorer/last-folder", NULL);
+
+    struct recon_dirent info;
+    if (remembered != NULL && recon_fs_stat("/", remembered, &info) &&
+            info.kind == RECON_FILE_DIRECTORY) {
+        snprintf(ex->cwd, sizeof(ex->cwd), "%s", remembered);
+    } else {
+        snprintf(ex->cwd, sizeof(ex->cwd), "%s", recon_fs_user_dir(NULL));
+    }
     history_push(ex, ex->cwd);
     reload(ex);
 

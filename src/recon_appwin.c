@@ -13,6 +13,7 @@
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_server.h"
+#include "recon_registry.h"
 #include "recon_shell.h"
 #include "recon_ui.h"
 
@@ -80,7 +81,18 @@ struct recon_appwin {
     /* Set by the application to override impl->title; empty means it has not
      * asked for anything but its own name. */
     char title[96];
+
+    /*
+     * Whether the remembered position has been applied yet. Done on first
+     * show rather than at construction, because a window does not know how
+     * big the screen is until the shell has told it, and a position cannot be
+     * checked as reachable without that.
+     */
+    bool geometry_restored;
 };
+
+static void save_geometry(struct recon_appwin *win);
+static void restore_geometry(struct recon_appwin *win);
 
 /* --- Drawing --- */
 
@@ -259,6 +271,11 @@ void recon_appwin_set_maximized(struct recon_appwin *win, bool maximized) {
     win->maximized = maximized;
     apply_geometry(win);
     recon_appwin_refresh(win);
+
+    /* Maximizing is a decision worth remembering, the same as a position. */
+    if (win->geometry_restored) {
+        save_geometry(win);
+    }
 }
 
 /* --- Lifecycle --- */
@@ -319,6 +336,13 @@ static void center(struct recon_appwin *win) {
 }
 
 void recon_appwin_show(struct recon_appwin *win) {
+    if (win != NULL && !win->geometry_restored) {
+        /* Set first: restoring may maximize the window, which saves, and
+         * there is no reason for that to come back through here. */
+        win->geometry_restored = true;
+        restore_geometry(win);
+    }
+
     if (win == NULL) {
         return;
     }
@@ -502,6 +526,100 @@ void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y) {
 
 void *recon_appwin_user(struct recon_appwin *win) {
     return win != NULL ? win->user : NULL;
+}
+
+/*
+ * Where a window's geometry is remembered.
+ *
+ * Keyed on the application's own name rather than its window title: the
+ * notepad's title becomes the file it is editing, and a window that remembers
+ * its position under one name and looks for it under another remembers
+ * nothing. Spaces become dashes because a key is a path, not a sentence.
+ */
+static void geometry_key(struct recon_appwin *win, const char *field,
+        char *out, size_t size) {
+    char name[64];
+    size_t used = 0;
+    for (const char *c = win->impl->title;
+            *c != '\0' && used < sizeof(name) - 1; c++) {
+        name[used++] = (*c == ' ') ? '-' : *c;
+    }
+    name[used] = '\0';
+
+    snprintf(out, size, "windows/%s/%s", name, field);
+}
+
+/* Remember where this window is, so it opens there next time. */
+static void save_geometry(struct recon_appwin *win) {
+    if (win == NULL || win->impl == NULL || win->impl->title == NULL) {
+        return;
+    }
+
+    char key[RECON_REGISTRY_KEY_MAX];
+
+    /*
+     * The restore geometry, not the current one. A maximized window's actual
+     * size is the screen, and remembering that would mean unmaximizing it next
+     * time gave you a window exactly the size of the screen.
+     */
+    int x = win->maximized ? win->restore_x : win->x;
+    int y = win->maximized ? win->restore_y : win->y;
+    int w = win->maximized ? win->restore_w : win->width;
+    int h = win->maximized ? win->restore_h : win->height;
+
+    geometry_key(win, "x", key, sizeof(key));
+    recon_registry_set_int(RECON_REG_USER, key, x);
+    geometry_key(win, "y", key, sizeof(key));
+    recon_registry_set_int(RECON_REG_USER, key, y);
+    geometry_key(win, "width", key, sizeof(key));
+    recon_registry_set_int(RECON_REG_USER, key, w);
+    geometry_key(win, "height", key, sizeof(key));
+    recon_registry_set_int(RECON_REG_USER, key, h);
+    geometry_key(win, "maximized", key, sizeof(key));
+    recon_registry_set_bool(RECON_REG_USER, key, win->maximized);
+}
+
+/* Put it back where it was, if it has been here before. */
+static void restore_geometry(struct recon_appwin *win) {
+    if (win == NULL || win->impl == NULL || win->impl->title == NULL) {
+        return;
+    }
+
+    char key[RECON_REGISTRY_KEY_MAX];
+
+    geometry_key(win, "width", key, sizeof(key));
+    int w = recon_registry_get_int(RECON_REG_USER, key, win->width);
+    geometry_key(win, "height", key, sizeof(key));
+    int h = recon_registry_get_int(RECON_REG_USER, key, win->height);
+
+    /* Never smaller than the application says it can work at: a remembered
+     * size from a different build could be unusable. */
+    if (w >= win->impl->min_width && h >= win->impl->min_height) {
+        win->width = w;
+        win->height = h;
+    }
+
+    geometry_key(win, "x", key, sizeof(key));
+    int x = recon_registry_get_int(RECON_REG_USER, key, win->x);
+    geometry_key(win, "y", key, sizeof(key));
+    int y = recon_registry_get_int(RECON_REG_USER, key, win->y);
+
+    /*
+     * Only if it still lands on screen. A position remembered from a larger
+     * monitor would otherwise put the window somewhere it cannot be reached,
+     * and a window you cannot reach is worse than one in the wrong place.
+     */
+    if (x > -(win->width - 80) && y >= 0 &&
+            win->screen_w > 0 && x < win->screen_w - 80 &&
+            win->screen_h > 0 && y < win->screen_h - TITLE_HEIGHT) {
+        win->x = x;
+        win->y = y;
+    }
+
+    geometry_key(win, "maximized", key, sizeof(key));
+    if (recon_registry_get_bool(RECON_REG_USER, key, false)) {
+        recon_appwin_set_maximized(win, true);
+    }
 }
 
 const char *recon_appwin_title(struct recon_appwin *win) {
@@ -736,6 +854,13 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
         bool was_dragging = win->dragging || win->resize_edges != 0;
         win->dragging = false;
         win->resize_edges = 0;
+
+        /* Once it has stopped moving, not while it moves: saving on every
+         * pixel of a drag would write the file hundreds of times to record
+         * one decision. */
+        if (was_dragging) {
+            save_geometry(win);
+        }
         if (win->impl->click != NULL) {
             int px, py;
             if (to_local(win, lx, ly, &px, &py)) {

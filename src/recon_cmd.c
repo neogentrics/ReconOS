@@ -17,6 +17,7 @@
 #include "recon_fs.h"
 #include "recon_modules.h"
 #include "recon_procinfo.h"
+#include "recon_registry.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 
@@ -722,6 +723,108 @@ static void cmd_modules(struct recon_cmd_session *s, int argc, char **argv) {
     }
 }
 
+/* Read and write what the system remembers. */
+static void cmd_reg(struct recon_cmd_session *s, int argc, char **argv) {
+    /*
+     * The hive is named rather than guessed. Which one a setting belongs in is
+     * a real decision -- a theme is a person's, a module policy is the
+     * machine's -- and defaulting would make it silently.
+     */
+    if (argc < 3) {
+        out(s, "Usage: reg <system|user> list [prefix]\n");
+        out(s, "       reg <system|user> get <key>\n");
+        out(s, "       reg <system|user> set <key> <value>\n");
+        out(s, "       reg <system|user> del <key>\n");
+        return;
+    }
+
+    enum recon_registry_scope scope;
+    if (strcasecmp(argv[1], "system") == 0) {
+        scope = RECON_REG_SYSTEM;
+    } else if (strcasecmp(argv[1], "user") == 0) {
+        scope = RECON_REG_USER;
+    } else {
+        out(s, "'%s' is not a hive. Use 'system' or 'user'.\n", argv[1]);
+        return;
+    }
+
+    const char *action = argv[2];
+
+    if (strcasecmp(action, "list") == 0) {
+        const char *prefix = argc > 3 ? argv[3] : "";
+        int count = recon_registry_count(scope, prefix);
+
+        if (count == 0) {
+            out(s, "Nothing is stored%s%s.\n",
+                *prefix != '\0' ? " under " : "", prefix);
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            const char *key = NULL;
+            const char *value = NULL;
+            if (recon_registry_at(scope, prefix, i, &key, &value)) {
+                out(s, "  %-38s %s\n", key, value);
+            }
+        }
+        out(s, "\n  %d setting%s\n", count, count == 1 ? "" : "s");
+        return;
+    }
+
+    if (argc < 4) {
+        out(s, "Usage: reg %s %s <key>%s\n", argv[1], action,
+            strcasecmp(action, "set") == 0 ? " <value>" : "");
+        return;
+    }
+
+    if (strcasecmp(action, "get") == 0) {
+        const char *value = recon_registry_get(scope, argv[3], NULL);
+        if (value == NULL) {
+            out(s, "'%s' is not set.\n", argv[3]);
+            return;
+        }
+        out(s, "%s\n", value);
+        return;
+    }
+
+    if (strcasecmp(action, "set") == 0) {
+        /* The rest of the line is the value, so a setting can contain
+         * spaces without needing quoting rules the interpreter does not
+         * have. */
+        char value[RECON_REGISTRY_VALUE_MAX];
+        size_t used = 0;
+        for (int i = 4; i < argc && used < sizeof(value) - 1; i++) {
+            int written = snprintf(value + used, sizeof(value) - used, "%s%s",
+                i > 4 ? " " : "", argv[i]);
+            if (written < 0) {
+                break;
+            }
+            used += (size_t)written;
+        }
+        if (argc == 4) {
+            value[0] = '\0';
+        }
+
+        if (!recon_registry_set(scope, argv[3], value)) {
+            out(s, "%s\n", recon_registry_last_error());
+            return;
+        }
+        out(s, "%s = %s\n", argv[3], value);
+        return;
+    }
+
+    if (strcasecmp(action, "del") == 0) {
+        if (!recon_registry_remove(scope, argv[3])) {
+            out(s, "%s\n", recon_registry_last_error());
+            return;
+        }
+        out(s, "Removed '%s'.\n", argv[3]);
+        return;
+    }
+
+    out(s, "'%s' is not something reg does.\n", action);
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -862,6 +965,7 @@ static const struct command COMMANDS[] = {
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
+    { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },

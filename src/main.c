@@ -60,6 +60,7 @@
 #include "recon_server.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
+#include "recon_registry.h"
 #include "recon_shell.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
@@ -1484,6 +1485,10 @@ int main(int argc, char **argv) {
     }
     wlr_log(WLR_INFO, "ReconOS: filesystem rooted at %s", recon_fs_host_root());
 
+    /* Settings come up next, since almost everything after this may want to
+     * know what was chosen last time. */
+    recon_registry_init();
+
     /* Draw the default icons if they are not already there. Replaced ones are
      * left alone, so the generated set is a starting point rather than
      * something reimposed on every start. */
@@ -1630,6 +1635,7 @@ int main(int argc, char **argv) {
 
     recon_control_destroy(control);
     recon_shell_destroy(server.shell);
+    recon_registry_finish();
     recon_fs_finish();
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);

@@ -63,6 +63,7 @@ add_executable(ReconOS
     src/recon_icons.c
     src/recon_filedlg.c
     src/recon_notepad.c
+    src/recon_registry.c
     src/recon_procinfo.c
     src/recon_shell.c
     src/recon_taskmgr.c
@@ -118,5 +119,17 @@ add_executable(recon_fs_tests
 target_include_directories(recon_fs_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# The registry's failures are quiet -- a value that reads back wrong makes the
+# desktop behave slightly oddly forever and nobody connects the two -- so it is
+# tested the same way, against a throwaway root.
+add_executable(recon_registry_tests
+    tests/test_registry.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_registry_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
+add_test(NAME registry COMMAND recon_registry_tests)

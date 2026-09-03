@@ -26,6 +26,7 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_registry.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -1246,9 +1247,24 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Terminal.app", "Terminal" },
         { "Notepad.app", "Notepad" },
     };
+    /*
+     * Whether this account's desktop has been set up is a fact about how the
+     * system is being used, which is what the registry is for. It was a
+     * hidden marker file, and a marker file is a setting with no name, no
+     * type and nowhere to look for it -- which is how the one that was
+     * written ended up somewhere nothing checked.
+     *
+     * The old file is still honoured, so an account set up before this
+     * change does not have its deleted shortcuts handed back.
+     */
     char marker[RECON_PATH_MAX];
     snprintf(marker, sizeof(marker), "%s/.desktop-set-up", recon_fs_user_dir(NULL));
-    if (!recon_fs_exists("/", marker)) {
+
+    bool already_set_up =
+        recon_registry_get_bool(RECON_REG_USER, "desktop/set-up", false) ||
+        recon_fs_exists("/", marker);
+
+    if (!already_set_up) {
         for (size_t i = 0; i < sizeof(DEFAULTS) / sizeof(DEFAULTS[0]); i++) {
             char path[RECON_PATH_MAX];
             snprintf(path, sizeof(path), "%s/%s", recon_fs_user_dir("Desktop"),
@@ -1257,14 +1273,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
             int length = snprintf(body, sizeof(body), "%s\n", DEFAULTS[i].target);
             recon_fs_write("/", path, body, (size_t)length);
         }
-        /*
-         * The marker written must be the one checked, or "first run only"
-         * means "every run": deleted shortcuts came back on the next start
-         * because the flag was left somewhere nothing looked for it. It also
-         * belongs to the user rather than to the system, since the next
-         * account to log in has its own empty desktop to set up.
-         */
-        recon_fs_write("/", marker, "1\n", 2);
+        recon_registry_set_bool(RECON_REG_USER, "desktop/set-up", true);
     }
 
     shell->context_button = -1;
