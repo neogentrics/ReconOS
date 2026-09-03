@@ -62,6 +62,7 @@
 #include "recon_server.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
+#include "recon_capture.h"
 #include "recon_net.h"
 #include "recon_registry.h"
 #include "recon_access.h"
@@ -1053,6 +1054,20 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         return true;
     }
 
+    /*
+     * Print Screen, with no modifier, because that is the key's whole job and
+     * every system that has one treats it that way. Handled before the Alt
+     * check for the same reason.
+     */
+    if (sym == XKB_KEY_Print) {
+        if (recon_capture_request(server, NULL)) {
+            wlr_log(WLR_INFO, "ReconOS: capturing the screen");
+        } else {
+            wlr_log(WLR_INFO, "ReconOS: %s", recon_capture_last_error());
+        }
+        return true;
+    }
+
     if (!(modifiers & WLR_MODIFIER_ALT)) {
         return false;
     }
@@ -1399,7 +1414,37 @@ static void output_frame(struct wl_listener *listener, void *data) {
         output->needs_full_redraw = false;
     }
 
-    if (!wlr_scene_output_commit(scene_output, NULL)) {
+    /*
+     * Capturing takes the long way round, and only when something asked.
+     *
+     * wlr_scene_output_commit renders and commits in one step, which leaves
+     * no moment at which the finished frame exists and can be read -- the
+     * pixels go to the display and the buffer comes back to be drawn over.
+     * Building the state separately renders into a buffer we are holding,
+     * which is the frame about to be shown, and *then* commits it.
+     *
+     * The ordinary path is untouched. This is the frame loop, it took four
+     * wrong theories to get right once already, and a screenshot is not worth
+     * risking it on every frame that nobody asked to photograph.
+     */
+    bool committed;
+    if (recon_capture_pending()) {
+        struct wlr_output_state state;
+        wlr_output_state_init(&state);
+
+        committed = wlr_scene_output_build_state(scene_output, &state, NULL);
+        if (committed) {
+            if ((state.committed & WLR_OUTPUT_STATE_BUFFER) != 0) {
+                recon_capture_take(state.buffer);
+            }
+            committed = wlr_output_commit_state(output->wlr_output, &state);
+        }
+        wlr_output_state_finish(&state);
+    } else {
+        committed = wlr_scene_output_commit(scene_output, NULL);
+    }
+
+    if (!committed) {
         if (!output->warned_commit_failed) {
             wlr_log(WLR_ERROR, "ReconOS: scene commit failed on '%s'",
                 output->wlr_output->name);

@@ -15,6 +15,7 @@
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_capture.h"
 #include "recon_cmd.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
@@ -1589,6 +1590,50 @@ static void cmd_get(struct recon_cmd_session *s, int argc, char **argv) {
         g_fetch.host, g_fetch.path);
 }
 
+/*
+ * `capture` -- a picture of the screen.
+ *
+ * Asynchronous like everything else that has to wait for something: a
+ * compositor keeps no copy of what it drew, so this asks for one more frame
+ * and reads that. `capture` with no arguments says where the last one went.
+ */
+static void cmd_capture(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        if (recon_capture_pending()) {
+            out(s, "Waiting for a frame.\n");
+            return;
+        }
+
+        char path[RECON_PATH_MAX];
+        bool ok = false;
+        if (!recon_capture_last(path, sizeof(path), &ok)) {
+            out(s, "Usage: capture [path]\n");
+            out(s, "Nothing has been captured yet.\n");
+            return;
+        }
+
+        if (ok) {
+            struct recon_dirent info;
+            if (recon_fs_stat("/", path, &info)) {
+                out(s, "%s  (%zu bytes)\n", path, info.size);
+            } else {
+                out(s, "%s\n", path);
+            }
+        } else {
+            out(s, "The last capture failed: %s\n",
+                recon_capture_last_error());
+        }
+        return;
+    }
+
+    const char *path = strcasecmp(argv[1], "here") == 0 ? NULL : argv[1];
+    if (!recon_capture_request(s->server, path)) {
+        out(s, "%s\n", recon_capture_last_error());
+        return;
+    }
+    out(s, "Capturing. 'capture' with no arguments says where it went.\n");
+}
+
 static void cmd_echo(struct recon_cmd_session *s, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         out(s, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -1631,6 +1676,7 @@ static const struct command COMMANDS[] = {
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "net",      "net [action] ...",      "The network, and whether it answers", cmd_net },
     { "get",      "get <host> [path]",     "Fetch a page over HTTP",             cmd_get },
+    { "capture",  "capture [path]",        "Save a picture of the screen",       cmd_capture },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
     { "state",    "state",                 "What the shell has open",           cmd_state },
     { "echo",     "echo <text>",           "Print text",                        cmd_echo },

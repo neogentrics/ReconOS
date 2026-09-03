@@ -53,7 +53,9 @@ add_executable(ReconOS
     src/recon_apps.c
     src/recon_avatar.c
     src/recon_modules.c
+    src/recon_capture.c
     src/recon_net.c
+    src/recon_png.c
     src/recon_appwin.c
     src/recon_cmd.c
     src/recon_control.c
@@ -104,11 +106,17 @@ target_include_directories(ReconOS PRIVATE
 # a module links but every ReconOS function it calls is undefined at load.
 set_target_properties(ReconOS PROPERTIES ENABLE_EXPORTS ON)
 
+# zlib for writing PNG. Already present as a wlroots dependency; named here
+# because ReconOS calls it directly now and a transitive dependency is not a
+# promise.
+pkg_check_modules(ZLIB REQUIRED zlib)
+
 target_link_libraries(ReconOS PRIVATE
     ${WLR_LIBRARIES}
     ${WAYLAND_LIBRARIES}
     ${XKB_LIBRARIES}
     ${PIXMAN_LIBRARIES}
+    ${ZLIB_LIBRARIES}
     ${CMAKE_DL_LIBS}
     m)
 
