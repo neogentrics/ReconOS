@@ -406,7 +406,7 @@ tarball an "image" before then would be claiming something ReconOS cannot do.
 | --- | --- | --- |
 | `RECONOS_ROOT` | Where the ReconOS filesystem lives | `/recon`, or `~/.reconos` if that is not writable |
 | `RECONOS_ASSETS` | Where the wallpaper is loaded from | the `assets/` dir at build time |
-| `RECONOS_CONTROL_SOCKET` | The control socket's path | `/tmp/reconos.sock` |
+| `RECONOS_CONTROL_SOCKET` | The control socket's path. Created readable and writable by its owner alone; refused if longer than 107 bytes, which is all a Unix socket address holds | `/tmp/reconos.sock` |
 | `RECONOS_CURSOR_THEME` | Cursor theme | the system default |
 | `RECONOS_FONT` | Font file | the first system font found |
 
