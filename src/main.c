@@ -54,6 +54,7 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "ReconOS.h"
 #include "recon_control.h"
 #include "recon_fs.h"
 #include "recon_icon_gen.h"
@@ -1637,7 +1638,7 @@ int main(int argc, char **argv) {
     struct recon_control *control = recon_control_create(&server, NULL);
 
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
-    printf("ReconOS v0.0.7 - Alt+Enter for a terminal, "
+    printf(RECONOS_NAME " v" RECONOS_VERSION " - Alt+Enter for a terminal, "
         "Ctrl+Alt+Del for the task manager, Alt+Q to quit.\n");
     fflush(stdout);
 

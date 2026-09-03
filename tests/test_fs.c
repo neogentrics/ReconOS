@@ -87,10 +87,24 @@ static void test_rename(void) {
     check(recon_fs_rename("/", "/Temp/after.txt", "/Temp/after.txt"),
         "renaming to the same name succeeds");
 
-    check(!recon_fs_rename("/", "/Temp/after.txt", "/System/after.txt"),
-        "refuses to move into /System");
+    /*
+     * These tests run with nobody signed in, which the filesystem treats as
+     * the system itself acting -- setup and the login screen have to be able
+     * to write. So /System is writable here, and what is refused is the
+     * *structure*: the directories the layout is made of.
+     *
+     * Who may write into /System is a question about roles, and lives in
+     * tests/test_users.c where there are accounts to sign in as.
+     */
+    check(recon_fs_rename("/", "/Temp/after.txt", "/System/after.txt"),
+        "an administrator may move a file into /System");
+    check(recon_fs_remove("/", "/System/after.txt"),
+        "and take it out again");
+
     check(!recon_fs_rename("/", "/System/Icons", "/Temp/Icons"),
-        "refuses to move /System out");
+        "but /System/Icons is part of the layout and cannot be moved");
+    check(!recon_fs_rename("/", "/Temp", "/Temp2"),
+        "and neither can /Temp");
 }
 
 static void test_copy(void) {
@@ -144,18 +158,42 @@ static void test_delete(void) {
     check(recon_fs_remove_tree("/", "/Temp/full"), "recursive remove works");
     check(!recon_fs_exists("/", "/Temp/full"), "the folder is gone");
 
-    check(!recon_fs_remove("/", "/System/Icons"), "refuses to remove /System");
-    check(!recon_fs_remove_tree("/", "/System"), "refuses to empty /System");
-    check(!recon_fs_remove_tree("/", "/"), "refuses to remove the root");
-    check(recon_fs_exists("/", "/System/Icons"), "/System is still there");
+    /*
+     * The layout cannot be removed by anybody. This is not a permission: there
+     * is no state ReconOS knows how to be in without /System/Icons, so an
+     * administrator deleting it has not exercised authority, they have broken
+     * their computer.
+     */
+    check(!recon_fs_remove("/", "/System/Icons"),
+        "the icons folder is part of the layout");
+    check(!recon_fs_remove_tree("/", "/System"), "and so is /System");
+    check(!recon_fs_remove_tree("/", "/"), "and the root");
+    check(!recon_fs_remove_tree("/", "/Users"), "and /Users");
+    check(recon_fs_exists("/", "/System/Icons"), "all still there");
+
+    /* A file inside one of them is not the layout, and may go. */
+    check(recon_fs_write("/", "/System/Config/scratch", "x", 1),
+        "write a file into /System");
+    check(recon_fs_remove("/", "/System/Config/scratch"),
+        "and remove it, which is what administering means");
 }
 
 static void test_protection(void) {
     printf("protection\n");
 
-    check(recon_fs_is_protected("/", "/System"), "/System is protected");
-    check(recon_fs_is_protected("/", "/System/Icons"), "inside /System is protected");
-    check(!recon_fs_is_protected("/", "/Users"), "/Users is not protected");
+    check(recon_fs_is_protected("/", "/System"), "/System is the system's");
+    check(recon_fs_is_protected("/", "/System/Icons"),
+        "and so is everything in it");
+    check(!recon_fs_is_protected("/", "/Users"), "/Users is not");
+
+    /* A different question: what the layout is made of. */
+    check(recon_fs_is_structural("/", "/System/Icons"),
+        "the icons folder is part of the layout");
+    check(!recon_fs_is_structural("/", "/System/Icons/folder.ico"),
+        "a file inside it is not");
+    check(recon_fs_is_structural("/", "/Users"), "/Users is");
+    check(!recon_fs_is_structural("/", "/Users/Administrator"),
+        "one account's folder is not");
 
     /*
      * A name that merely starts with "System" is not inside it. Compared as a

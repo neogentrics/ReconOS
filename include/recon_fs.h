@@ -83,6 +83,30 @@ void recon_fs_finish(void);
 const char *recon_fs_current_user(void);
 
 /*
+ * Say who is signed in, and whether they may administer the system.
+ *
+ * This is what makes a limited account limited: with `administrator` false,
+ * the filesystem refuses writes to /System and refuses to touch another
+ * account's folder at all. Pass NULL for nobody, which is the state during
+ * first-run setup and while the login screen is up.
+ *
+ * Enforced inside ReconOS only. A native program on the host underneath is
+ * not subject to it, and will not be until ReconOS owns the machine.
+ */
+void recon_fs_set_user(const char *name, bool administrator);
+
+/* Whether the signed-in account may write outside its own folder. */
+bool recon_fs_user_is_administrator(void);
+
+/*
+ * Why a path is refused, or NULL if it is not.
+ *
+ * Separate from doing the thing, so an application can grey out what will not
+ * work instead of offering it and reporting a failure afterwards.
+ */
+const char *recon_fs_refusal(const char *cwd, const char *path);
+
+/*
  * A folder belonging to the current user, as a ReconOS path -- pass NULL for
  * the user's own directory. The returned string is valid until the next call.
  */
@@ -157,8 +181,21 @@ bool recon_fs_copy(const char *cwd, const char *from, const char *to);
 bool recon_fs_unique_name(const char *cwd, const char *directory,
     const char *base, const char *extension, char *out, size_t size);
 
-/* True if the path is inside /System, which is protected. */
+/*
+ * True if the path is the system's own -- inside /System.
+ *
+ * What that permits depends on who is signed in: an administrator may change
+ * these, a limited account may not. Applications use it to grey out what will
+ * not work rather than to decide policy.
+ */
 bool recon_fs_is_protected(const char *cwd, const char *path);
+
+/*
+ * True if the path is one of the directories the layout is made of, which
+ * nobody may remove. Not a permission: /System/Icons not existing is not a
+ * state ReconOS knows how to be in.
+ */
+bool recon_fs_is_structural(const char *cwd, const char *path);
 
 /* --- The recycle bin --- */
 

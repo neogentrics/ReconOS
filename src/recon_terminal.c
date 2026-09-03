@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_cmd.h"
@@ -373,7 +374,7 @@ struct recon_appwin *recon_terminal_create(struct recon_server *server,
         return NULL;
     }
 
-    push_line(term, "ReconOS 0.0.7");
+    push_line(term, RECONOS_NAME " " RECONOS_VERSION);
     push_line(term, "Type 'help' for a list of commands.");
     push_line(term, "");
 

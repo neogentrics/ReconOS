@@ -25,6 +25,7 @@
 #include <wlr/util/log.h>
 
 #include "recon_cmd.h"
+#include "ReconOS.h"
 #include "recon_control.h"
 #include "recon_server.h"
 
@@ -174,7 +175,8 @@ static int on_connection(int fd, uint32_t mask, void *data) {
     control->clients[slot] = client;
 
     const char *greeting =
-        "ReconOS 0.0.7 control connection. Type 'help' for commands.\n";
+        RECONOS_NAME " " RECONOS_VERSION
+        " control connection. Type 'help' for commands.\n";
     send_all(client_fd, greeting, strlen(greeting));
     handle_line(client, "");
 

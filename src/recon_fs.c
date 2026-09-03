@@ -23,6 +23,15 @@ static char g_error[256];
 static char g_user[RECON_NAME_MAX] = RECON_USER_ADMIN;
 static char g_user_path[RECON_PATH_MAX];
 
+/*
+ * Whether the signed-in account may write outside its own folder.
+ *
+ * True by default because the filesystem comes up before anybody has signed
+ * in, and the setup that happens then has to be able to create the layout.
+ * recon_users_login sets it properly from that point on.
+ */
+static bool g_user_is_admin = true;
+
 static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 static void set_error(const char *fmt, ...) {
@@ -271,6 +280,89 @@ const char *recon_fs_current_user(void) {
     return g_user;
 }
 
+/* Defined with the rest of the protection rules, further down. */
+static bool path_is_protected(const char *canonical);
+
+void recon_fs_set_user(const char *name, bool administrator) {
+    if (name == NULL || *name == '\0') {
+        /*
+         * Nobody signed in, which means the only thing running is ReconOS
+         * itself: first-run setup, or the login screen. Those have to be able
+         * to create accounts and write the account list, so this is permitted
+         * rather than restricted.
+         *
+         * Restricting it looked cautious and was simply wrong: it made setup
+         * unable to write the file that setup exists to write.
+         */
+        snprintf(g_user, sizeof(g_user), "%s", RECON_USER_ADMIN);
+        g_user_is_admin = true;
+        return;
+    }
+    snprintf(g_user, sizeof(g_user), "%s", name);
+    g_user_is_admin = administrator;
+}
+
+bool recon_fs_user_is_administrator(void) {
+    return g_user_is_admin;
+}
+
+/*
+ * Whether a canonical path belongs to somebody other than the signed-in
+ * account.
+ *
+ * Compared by segment: "/Users/Bob" must not match "/Users/Bobby", or one
+ * person's folder becomes unreachable because another's name is a prefix of
+ * it.
+ */
+static bool belongs_to_another_user(const char *canonical) {
+    size_t users_length = strlen(RECON_DIR_USERS);
+    if (strncmp(canonical, RECON_DIR_USERS, users_length) != 0) {
+        return false;
+    }
+    if (canonical[users_length] != '/') {
+        return false; /* /Users itself, which anybody may list. */
+    }
+
+    const char *name = canonical + users_length + 1;
+    size_t own_length = strlen(g_user);
+
+    if (strncmp(name, g_user, own_length) != 0) {
+        return true;
+    }
+    return name[own_length] != '\0' && name[own_length] != '/';
+}
+
+const char *recon_fs_refusal(const char *cwd, const char *path) {
+    if (g_user_is_admin) {
+        return NULL;
+    }
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host),
+            canonical, sizeof(canonical))) {
+        return NULL; /* It will fail for its own reasons. */
+    }
+
+    if (path_is_protected(canonical)) {
+        return "only an administrator can change the system's own files";
+    }
+    if (belongs_to_another_user(canonical)) {
+        return "that belongs to another account";
+    }
+    return NULL;
+}
+
+/* Refuse a write the signed-in account is not entitled to make. */
+static bool permitted(const char *cwd, const char *path) {
+    const char *refusal = recon_fs_refusal(cwd, path);
+    if (refusal == NULL) {
+        return true;
+    }
+    set_error("%s", refusal);
+    return false;
+}
+
 const char *recon_fs_user_dir(const char *subdirectory) {
     if (subdirectory == NULL || *subdirectory == '\0') {
         snprintf(g_user_path, sizeof(g_user_path), "%s/%s", RECON_DIR_USERS, g_user);
@@ -451,6 +543,10 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
 
 static bool write_file(const char *cwd, const char *path, const char *data,
         size_t size, const char *mode) {
+    if (!permitted(cwd, path)) {
+        return false;
+    }
+
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
@@ -482,6 +578,10 @@ bool recon_fs_append(const char *cwd, const char *path, const char *data, size_t
 }
 
 bool recon_fs_mkdir(const char *cwd, const char *path) {
+    if (!permitted(cwd, path)) {
+        return false;
+    }
+
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
@@ -509,6 +609,51 @@ static bool path_is_protected(const char *canonical) {
     return canonical[len] == '\0' || canonical[len] == '/';
 }
 
+/*
+ * Whether a path is one of the directories the layout is made of.
+ *
+ * These cannot be removed by anybody, administrator or not. It is not a
+ * question of permission -- it is that /System/Icons not existing is not a
+ * state ReconOS knows how to be in, and an administrator deleting it has not
+ * exercised authority, they have broken their computer.
+ *
+ * Distinct from path_is_protected, which asks who may change the system's
+ * files. Conflating the two produced something incoherent: an administrator
+ * could write a file into /System and then not delete the file they had just
+ * written.
+ */
+static bool path_is_structural(const char *canonical) {
+    static const char *const STRUCTURE[] = {
+        "/",
+        RECON_DIR_SYSTEM,
+        RECON_DIR_SYSTEM_APPS,
+        RECON_DIR_SYSTEM_CONFIG,
+        RECON_DIR_SYSTEM_THEMES,
+        RECON_DIR_SYSTEM_ICONS,
+        RECON_DIR_SYSTEM_MODULES,
+        RECON_DIR_APPS,
+        RECON_DIR_USERS,
+        RECON_DIR_TEMP,
+        NULL,
+    };
+
+    for (int i = 0; STRUCTURE[i] != NULL; i++) {
+        if (strcmp(canonical, STRUCTURE[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool recon_fs_is_structural(const char *cwd, const char *path) {
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
+        return true; /* Cannot resolve it, so do not act on it. */
+    }
+    return path_is_structural(canonical);
+}
+
 bool recon_fs_is_protected(const char *cwd, const char *path) {
     char canonical[RECON_PATH_MAX];
     char host[RECON_PATH_MAX];
@@ -519,16 +664,24 @@ bool recon_fs_is_protected(const char *cwd, const char *path) {
 }
 
 bool recon_fs_remove(const char *cwd, const char *path) {
+    if (!permitted(cwd, path)) {
+        return false;
+    }
+
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
         return false;
     }
 
-    /* The system's own files are not something a stray command should be able
-     * to delete. */
-    if (path_is_protected(canonical)) {
-        set_error("'%s' is part of the system and is protected", canonical);
+    /*
+     * The layout itself cannot go. Its contents can, for an administrator --
+     * permitted() has already turned a limited account away, and replacing a
+     * theme or removing a module is exactly what administering means.
+     */
+    if (path_is_structural(canonical)) {
+        set_error("'%s' is part of the system's structure and cannot be removed",
+            canonical);
         return false;
     }
 
@@ -610,18 +763,19 @@ static bool remove_tree_host(const char *host_path) {
 }
 
 bool recon_fs_remove_tree(const char *cwd, const char *path) {
+    if (!permitted(cwd, path)) {
+        return false;
+    }
+
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical, sizeof(canonical))) {
         return false;
     }
 
-    if (path_is_protected(canonical)) {
-        set_error("'%s' is part of the system and is protected", canonical);
-        return false;
-    }
-    if (strcmp(canonical, "/") == 0) {
-        set_error("the root cannot be removed");
+    if (path_is_structural(canonical)) {
+        set_error("'%s' is part of the system's structure and cannot be removed",
+            canonical);
         return false;
     }
 
@@ -646,6 +800,12 @@ static bool path_within(const char *outer, const char *inner) {
 }
 
 bool recon_fs_rename(const char *cwd, const char *from, const char *to) {
+    /* Both ends: moving something out of a place you may not touch is as much
+     * a change to that place as writing into it. */
+    if (!permitted(cwd, from) || !permitted(cwd, to)) {
+        return false;
+    }
+
     char from_host[RECON_PATH_MAX], from_canonical[RECON_PATH_MAX];
     char to_host[RECON_PATH_MAX], to_canonical[RECON_PATH_MAX];
 
@@ -658,8 +818,8 @@ bool recon_fs_rename(const char *cwd, const char *from, const char *to) {
         return false;
     }
 
-    if (path_is_protected(from_canonical) || path_is_protected(to_canonical)) {
-        set_error("system files are protected");
+    if (path_is_structural(from_canonical) || path_is_structural(to_canonical)) {
+        set_error("the system's structure cannot be moved or replaced");
         return false;
     }
     if (strcmp(from_canonical, to_canonical) == 0) {
@@ -768,6 +928,14 @@ static bool copy_tree_host(const char *src, const char *dst) {
 }
 
 bool recon_fs_copy(const char *cwd, const char *from, const char *to) {
+    /* Only the destination. Reading somebody else's file to copy it is a
+     * separate question from writing into their folder, and reads are not
+     * restricted yet -- see the note in recon_users.h about what these roles
+     * do and do not promise. */
+    if (!permitted(cwd, to)) {
+        return false;
+    }
+
     char from_host[RECON_PATH_MAX], from_canonical[RECON_PATH_MAX];
     char to_host[RECON_PATH_MAX], to_canonical[RECON_PATH_MAX];
 
@@ -780,8 +948,8 @@ bool recon_fs_copy(const char *cwd, const char *from, const char *to) {
         return false;
     }
 
-    if (path_is_protected(to_canonical)) {
-        set_error("'%s' is part of the system and is protected", to_canonical);
+    if (path_is_structural(to_canonical)) {
+        set_error("'%s' is part of the system's structure", to_canonical);
         return false;
     }
     /* Copying a directory into itself recurses until the disk is full. */

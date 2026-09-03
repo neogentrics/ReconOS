@@ -13,6 +13,7 @@
 #include <unistd.h> /* access */
 #include <strings.h> /* strcasecmp */
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_cmd.h"
 #include "recon_fs.h"
@@ -152,7 +153,7 @@ static void cmd_help(struct recon_cmd_session *s, int argc, char **argv) {
 
 static void cmd_ver(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
-    out(s, "ReconOS 0.0.7\n");
+    out(s, "%s %s\n", RECONOS_NAME, RECONOS_VERSION);
     out(s, "Root: %s\n", recon_fs_host_root());
 }
 

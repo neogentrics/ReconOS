@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.0.7
+    VERSION 0.0.8
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -64,6 +64,8 @@ add_executable(ReconOS
     src/recon_filedlg.c
     src/recon_notepad.c
     src/recon_registry.c
+    src/recon_crypt.c
+    src/recon_users.c
     src/recon_access.c
     src/recon_theme.c
     src/recon_procinfo.c
@@ -73,6 +75,12 @@ add_executable(ReconOS
     src/recon_ui.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
+
+# The version, from the project declaration above, so the running system and
+# the packaged tarball cannot disagree about what they are. It was written out
+# by hand in five places and had not been touched in some time.
+target_compile_definitions(ReconOS PRIVATE
+    RECONOS_VERSION="${PROJECT_VERSION}")
 
 # Assets are looked up here at runtime; RECONOS_ASSETS overrides it.
 target_compile_definitions(ReconOS PRIVATE
@@ -157,8 +165,31 @@ target_include_directories(recon_access_tests PRIVATE
 
 target_link_libraries(recon_access_tests PRIVATE m)
 
+# Hashing is checked against published vectors rather than against itself. A
+# hash that is merely self-consistent is wrong in a way nobody notices, and
+# passwords would still appear to work.
+add_executable(recon_crypt_tests
+    tests/test_crypt.c
+    src/recon_crypt.c)
+
+target_include_directories(recon_crypt_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Accounts, and what a limited one may do. The refusals are the part worth
+# proving: letting people in is easy, keeping the right people out is not.
+add_executable(recon_users_tests
+    tests/test_users.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_fs.c)
+
+target_include_directories(recon_users_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
+add_test(NAME hashing COMMAND recon_crypt_tests)
+add_test(NAME accounts COMMAND recon_users_tests)
