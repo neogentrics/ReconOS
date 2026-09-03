@@ -55,6 +55,7 @@
 #define HIT_ACTION_BASE (RECON_APPWIN_HIT_USER + 200)
 #define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 300)
 #define HIT_PENDING_BASE (RECON_APPWIN_HIT_USER + 400)
+#define HIT_AVATAR_BASE (RECON_APPWIN_HIT_USER + 500)
 
 /* What the buttons on each page do. */
 enum action {
@@ -65,6 +66,7 @@ enum action {
     ACTION_TOGGLE_ROLE,
     ACTION_SET_PASSWORD,
     ACTION_NEXT_AVATAR,
+    ACTION_CHOOSE_AVATAR,
     /* Programs and modules */
     ACTION_INSTALL_PROGRAM,
     ACTION_REMOVE_PROGRAM,
@@ -288,6 +290,11 @@ struct control_panel {
      * a deliberate act rather than a click made while looking for something
      * else. The unlock does not outlive the window.
      */
+    /* Choosing a picture: the set is laid out over the account list until one
+     * is picked. A grid you look at, rather than a button you click until the
+     * right one comes round. */
+    bool picking_avatar;
+
     bool registry_unlocked;
     struct recon_edit unlock;
     int registry_hive;    /* 0 system, 1 user */
@@ -387,9 +394,81 @@ static void draw_row(struct control_panel *cp, struct recon_panel *p,
 
 /* --- The pages --- */
 
+/*
+ * The pictures, laid out as a grid to choose from.
+ *
+ * The first tile is "no picture", which puts the account back to a coloured
+ * disc with its initial. That has to be reachable or a choice made once could
+ * never be undone.
+ */
+#define AVATAR_TILE 56
+#define AVATAR_FACE 40
+
+static void draw_avatar_picker(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+
+    char title[128];
+    snprintf(title, sizeof(title), "A picture for %s", cp->question_target);
+    y = draw_heading(cp, p, x, y, w, title,
+        "Or drop a file called avatar-something into /System/Icons.");
+
+    int columns = w / AVATAR_TILE;
+    if (columns < 1) {
+        columns = 1;
+    }
+
+    int total = recon_avatar_count() + 1;   /* the first is "none" */
+    for (int i = 0; i < total; i++) {
+        int tx = x + (i % columns) * AVATAR_TILE;
+        int ty = y + (i / columns) * AVATAR_TILE;
+        if (ty + AVATAR_TILE > y + h) {
+            break;
+        }
+
+        char name[64] = "";
+        if (i > 0 && !recon_avatar_at(i - 1, name, sizeof(name))) {
+            continue;
+        }
+
+        const char *current = recon_avatar_of(cp->question_target);
+        bool chosen = strcmp(current, name) == 0;
+        if (chosen) {
+            recon_fill_rect(p, tx, ty, AVATAR_TILE - 4, AVATAR_TILE - 4,
+                COLOR_SELECTED);
+        }
+
+        int fx = tx + (AVATAR_TILE - 4 - AVATAR_FACE) / 2;
+        int fy = ty + 4;
+
+        if (i == 0) {
+            /* The account's own initial, which is what "none" means. */
+            recon_avatar_draw(p, cp->font, cp->question_target, fx, fy,
+                AVATAR_FACE);
+            recon_draw_text(p, cp->font, tx + 8, fy + AVATAR_FACE + ascent + 2,
+                AVATAR_TILE - 12, "None",
+                chosen ? COLOR_SELECTED_TEXT : COLOR_DIM);
+        } else if (!recon_icon_draw(p, name, fx, fy, AVATAR_FACE)) {
+            continue;
+        }
+
+        recon_hit_add(p, tx, ty, AVATAR_TILE - 4, AVATAR_TILE - 4,
+            HIT_AVATAR_BASE + i);
+    }
+
+    int rows = (total + columns - 1) / columns;
+    draw_button(cp, p, x, y + rows * AVATAR_TILE + PADDING, "Done",
+        HIT_ACTION_BASE + ACTION_CHOOSE_AVATAR, true);
+}
+
 static void draw_accounts(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     bool admin = recon_users_may_administer();
+
+    if (cp->picking_avatar) {
+        draw_avatar_picker(cp, p, x, y, w, h);
+        return;
+    }
 
     y = draw_heading(cp, p, x, y, w, "Accounts",
         admin ? "Who can use this system."
@@ -1140,47 +1219,27 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
     }
 
-    case ACTION_NEXT_AVATAR: {
-        if (!have) {
-            break;
-        }
-
+    case ACTION_NEXT_AVATAR:
         /*
-         * Step to the next picture, wrapping back round to the drawn initial.
+         * Show the pictures rather than cycling through them.
          *
-         * A grid of pictures would be better and is a window of its own. This
-         * is one button that walks the whole set, including the "none" that
-         * comes back to the letter on a disc, so nothing is unreachable.
+         * A button that steps to the next one asks somebody to click it
+         * repeatedly and watch a thumbnail change, which is a way of choosing
+         * that shows you one option at a time and never the set. Choosing
+         * from a picture is the whole point of having pictures.
          */
-        int count = recon_avatar_count();
-        const char *current = recon_avatar_of(chosen.name);
-
-        int index = -1;   /* -1 is the drawn initial. */
-        for (int i = 0; i < count; i++) {
-            char name[64];
-            if (recon_avatar_at(i, name, sizeof(name)) &&
-                    strcmp(name, current) == 0) {
-                index = i;
-                break;
-            }
+        if (have) {
+            cp->picking_avatar = true;
+            snprintf(cp->question_target, sizeof(cp->question_target), "%s",
+                chosen.name);
+            set_status(cp, false, "Choose a picture for %s.", chosen.name);
         }
-
-        index++;
-        char wanted[64] = "";
-        if (index < count) {
-            recon_avatar_at(index, wanted, sizeof(wanted));
-        }
-
-        if (!recon_avatar_set(chosen.name, wanted)) {
-            set_status(cp, true, "Could not change the picture.");
-            break;
-        }
-        /* The Start menu shows it too, so it has to hear about this. */
-        recon_shell_restyle(cp->server->shell);
-        set_status(cp, false, "%s's picture is now %s.", chosen.name,
-            wanted[0] != '\0' ? wanted : "their initial");
         break;
-    }
+
+    case ACTION_CHOOSE_AVATAR:
+        cp->picking_avatar = false;
+        set_status(cp, false, "");
+        break;
 
     case ACTION_INSTALL_PROGRAM:
         set_status(cp, false,
@@ -1309,6 +1368,26 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
     if (!pressed) {
         return false;
+    }
+
+    /* A picture chosen from the grid. */
+    if (hit_id >= HIT_AVATAR_BASE) {
+        int index = (int)(hit_id - HIT_AVATAR_BASE);
+
+        char wanted[64] = "";
+        if (index > 0 && !recon_avatar_at(index - 1, wanted, sizeof(wanted))) {
+            return true;
+        }
+
+        if (!recon_avatar_set(cp->question_target, wanted)) {
+            set_status(cp, true, "Could not change the picture.");
+            return true;
+        }
+        cp->picking_avatar = false;
+        /* The Start menu and the login screen show it too. */
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "%s's picture is set.", cp->question_target);
+        return true;
     }
 
     /* A row on a page of things that are not built: say what is missing. */

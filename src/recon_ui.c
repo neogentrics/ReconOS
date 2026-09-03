@@ -684,13 +684,31 @@ void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
         return;
     }
 
+    /*
+     * Shrinking averages the source pixels that fall inside each destination
+     * pixel; growing takes the nearest one.
+     *
+     * Taking the nearest when shrinking throws away most of the image and
+     * keeps an arbitrary sample of what is left, which is why a 32-pixel icon
+     * drawn at 22 looked speckled: whole features landed between samples and
+     * simply vanished. Averaging is what makes a small icon look like a small
+     * icon rather than a damaged one. Growing is left alone -- these are
+     * pixel art, and blurring them upward would be worse than the steps.
+     */
+    bool shrinking = (image_width > w || image_height > h);
+
     for (int row = 0; row < h; row++) {
         int py = y + row;
         if (py < 0 || py >= panel->height) {
             continue;
         }
-        int sy = row * image_height / h;
-        const unsigned char *src_row = rgba + (size_t)sy * image_width * 4;
+
+        int sy0 = row * image_height / h;
+        int sy1 = shrinking ? (row + 1) * image_height / h : sy0 + 1;
+        if (sy1 <= sy0) {
+            sy1 = sy0 + 1;
+        }
+
         uint32_t *dst_row = panel->pixels + (size_t)py * panel->width;
 
         for (int col = 0; col < w; col++) {
@@ -698,16 +716,43 @@ void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
             if (px < 0 || px >= panel->width) {
                 continue;
             }
-            int sx = col * image_width / w;
-            const unsigned char *src = src_row + (size_t)sx * 4;
 
-            unsigned char alpha = src[3];
-            if (alpha == 0) {
+            int sx0 = col * image_width / w;
+            int sx1 = shrinking ? (col + 1) * image_width / w : sx0 + 1;
+            if (sx1 <= sx0) {
+                sx1 = sx0 + 1;
+            }
+
+            /*
+             * Colour weighted by alpha, so a transparent pixel contributes
+             * nothing to the colour rather than dragging it towards whatever
+             * happens to be stored in an invisible pixel -- which is usually
+             * black, and is what puts a dark fringe around a scaled icon.
+             */
+            unsigned red = 0, green = 0, blue = 0, alpha = 0, count = 0;
+            for (int sy = sy0; sy < sy1; sy++) {
+                const unsigned char *src_row =
+                    rgba + (size_t)sy * image_width * 4;
+                for (int sx = sx0; sx < sx1; sx++) {
+                    const unsigned char *src = src_row + (size_t)sx * 4;
+                    unsigned a = src[3];
+                    red += src[0] * a;
+                    green += src[1] * a;
+                    blue += src[2] * a;
+                    alpha += a;
+                    count++;
+                }
+            }
+
+            if (count == 0 || alpha == 0) {
                 continue;
             }
+
             /* blend_pixel takes one colour and a coverage, which is exactly
              * what a pixel and its alpha are. */
-            blend_pixel(&dst_row[px], RECON_RGB(src[0], src[1], src[2]), alpha);
+            blend_pixel(&dst_row[px],
+                RECON_RGB(red / alpha, green / alpha, blue / alpha),
+                (unsigned char)(alpha / count));
         }
     }
 }
