@@ -11,6 +11,11 @@
 #include "recon_icons.h"
 
 #define DIALOG_MARGIN 18
+/* An upper bound, so a big window does not get a dialog the size of a big
+ * window. A file picker is a fixed-size thing everywhere else for the same
+ * reason. */
+#define DIALOG_MAX_WIDTH 460
+#define DIALOG_MAX_HEIGHT 340
 #define TITLE_HEIGHT 24
 #define PATH_HEIGHT 22
 #define ROW_HEIGHT 18
@@ -19,7 +24,9 @@
 #define BUTTON_WIDTH 84
 #define PADDING 8
 
-#define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x88)
+/* Enough to say the window behind is not usable, not so much that it
+ * looks switched off. */
+#define COLOR_DIM RECON_RGBA(0x00, 0x00, 0x00, 0x60)
 #define COLOR_BG RECON_RGB(0xC0, 0xC0, 0xC0)
 #define COLOR_TITLE RECON_RGB(0x20, 0x2A, 0x44)
 #define COLOR_TITLE_TEXT RECON_RGB(0xF0, 0xF0, 0xF0)
@@ -201,6 +208,20 @@ static void dialog_rect(int x, int y, int w, int h,
         int *dx, int *dy, int *dw, int *dh) {
     int width = w - DIALOG_MARGIN * 2;
     int height = h - DIALOG_MARGIN * 2;
+
+    /*
+     * Capped, so some of the window is still visible around it. Filling the
+     * whole content area made the window underneath look like it had vanished
+     * and left its frame behind -- which is what it looked like to a user, and
+     * a dialog should read as being *over* something rather than as having
+     * replaced it.
+     */
+    if (width > DIALOG_MAX_WIDTH) {
+        width = DIALOG_MAX_WIDTH;
+    }
+    if (height > DIALOG_MAX_HEIGHT) {
+        height = DIALOG_MAX_HEIGHT;
+    }
 
     /* Small windows still get a usable dialog: it fills what there is rather
      * than being clipped down to nothing. */
