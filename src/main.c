@@ -939,11 +939,32 @@ void recon_inject_button(struct recon_server *server, uint32_t button, bool pres
     recon_damage_all(server);
 }
 
+/* Defined below with the rest of the input handling; the injection path
+ * needs it above, so that a key sent from outside takes the same route a key
+ * from a keyboard does. */
+static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
+    xkb_keysym_t sym);
+
 void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers) {
     if (server == NULL) {
         return;
     }
-    recon_shell_handle_key(server->shell, sym, modifiers);
+
+    /*
+     * The same order a real key takes: the system's shortcuts first, then the
+     * focused window.
+     *
+     * This went straight to the shell, which meant no system shortcut could
+     * be driven from outside at all -- not Alt+Tab, not Alt+Q, not
+     * Ctrl+Alt+Delete, not Print Screen. So none of them were ever tested,
+     * and Alt+Tab had quietly stopped working: it cycled the compositor's
+     * *client* windows, and once ReconOS drew its own there were usually no
+     * clients to cycle. A shortcut nothing can press is a shortcut nothing
+     * notices the loss of.
+     */
+    if (!handle_shortcut(server, modifiers, sym)) {
+        recon_shell_handle_key(server->shell, sym, modifiers);
+    }
     recon_damage_all(server);
 }
 
@@ -1136,7 +1157,14 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         return true;
     case XKB_KEY_Tab:
     case XKB_KEY_ISO_Left_Tab:
-        cycle_focus(server);
+        /*
+         * Over what the taskbar lists, not over the compositor's client
+         * windows. cycle_focus walked the latter, which was right when the
+         * only windows were clients and became a shortcut that did nothing
+         * once ReconOS drew its own -- a desktop with a Notepad and a
+         * Terminal on it has no clients in that list at all.
+         */
+        recon_shell_cycle_windows(server->shell);
         return true;
     case XKB_KEY_t:
     case XKB_KEY_T:

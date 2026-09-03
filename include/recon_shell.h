@@ -142,6 +142,15 @@ void recon_shell_open_named(struct recon_shell *shell, const char *title);
 /* Open a built-in window by its registration index. */
 void recon_shell_open_app(struct recon_shell *shell, int index);
 
+/*
+ * Move the keyboard to the next window, over everything the taskbar lists.
+ *
+ * What Alt+Tab does. Minimized windows are skipped rather than restored:
+ * Alt+Tab moves between what is in front of you, and a cycle that reopens
+ * windows makes it impossible to get past them.
+ */
+void recon_shell_cycle_windows(struct recon_shell *shell);
+
 /* Take focus away from every built-in window, when it goes elsewhere. */
 void recon_shell_clear_app_focus(struct recon_shell *shell);
 

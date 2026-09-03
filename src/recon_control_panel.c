@@ -199,9 +199,6 @@ static const struct pending_item MULTITASKING_ITEMS[] = {
     { "Desktops", "More than one desktop, switched between.",
       "Windows belong to one scene tree. Several desktops means several, and "
       "a way to move a window between them." },
-    { "Switch with the keyboard", "Hold a key and step through what is open.",
-      "The window order the taskbar keeps is the right list; there is no "
-      "shortcut bound to it." },
     { "Title bar buttons", "Which buttons a window's title bar carries.",
       "Real, but not settable: they are drawn from a fixed set." },
 };

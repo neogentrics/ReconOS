@@ -1055,6 +1055,20 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
         }
     }
 
+    /*
+     * The Ctrl+Alt+Delete box. Worth reporting now that it can be opened
+     * from outside: injected keys used to bypass the shortcut handler, so
+     * nothing could reach it and there was nothing to describe.
+     */
+    if (shell->security_open) {
+        EMIT("security box: open\n");
+        for (int i = 0; i < SEC_COUNT; i++) {
+            EMIT("  [%d] %s\n", i, SEC_ITEMS[i]);
+        }
+    } else {
+        EMIT("security box: closed\n");
+    }
+
     if (!shell->context_open) {
         EMIT("context menu: closed\n");
     } else {
@@ -2261,6 +2275,52 @@ const char *recon_shell_icon_for_app(struct recon_shell *shell, const char *titl
         }
     }
     return NULL;
+}
+
+/*
+ * Move the keyboard to the next window, the way Alt+Tab is expected to.
+ *
+ * Over everything the taskbar lists, because that is what somebody looking at
+ * the screen thinks of as "what is open". The old Alt+Tab walked the
+ * compositor's list of *client* windows, which was right when the only
+ * windows were clients -- and became a shortcut that did nothing at all once
+ * ReconOS drew its own, since a desktop with a Notepad and a Terminal on it
+ * has no clients in that list.
+ *
+ * Minimized windows are skipped rather than restored. Alt+Tab is for moving
+ * between what is in front of you; bringing back something put away is what
+ * the taskbar button is for, and a cycle that reopens windows makes it
+ * impossible to get past them.
+ */
+void recon_shell_cycle_windows(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+
+    /* Start after whichever is focused, so repeated presses walk forward
+     * rather than flipping between the same two. */
+    int start = shell->focused_app;
+    if (start < 0 || start >= shell->app_count) {
+        start = -1;
+    }
+
+    for (int step = 1; step <= shell->app_count; step++) {
+        int index = (start + step) % shell->app_count;
+        struct recon_appwin *win = shell->apps[index];
+
+        if (!recon_appwin_is_open(win) || recon_appwin_is_minimized(win)) {
+            continue;
+        }
+        if (index == shell->focused_app) {
+            continue;    /* Only one is showing; leave it where it is. */
+        }
+
+        raise_app_order(shell, index);
+        set_focused_app(shell, index);
+        recon_appwin_focus(win);
+        recon_shell_refresh(shell);
+        return;
+    }
 }
 
 void recon_shell_open_app(struct recon_shell *shell, int index) {
