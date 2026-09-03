@@ -207,6 +207,9 @@ struct recon_taskmgr {
     /* Which account's applications are shown expanded on the Users tab. */
     int expanded_user;     /* -1 for none. */
 
+    /* Which dropdown entry the pointer is over, or -1. */
+    int menu_hover;
+
     struct wl_event_source *timer;
     char status[128];
 };
@@ -339,14 +342,29 @@ static int collect_apps(struct recon_taskmgr *tm, struct app_row *rows, int max)
         if (!recon_apps_at(i, &rows[count].info)) {
             continue;
         }
-        rows[count].info.memory_kb = memory_for_pid(tm, rows[count].info.pid);
+        /* Only where there is a process to look up. A built-in application
+         * already carries the size of its own window, and overwriting that
+         * with the zero a missing pid produces was what left the column
+         * empty. */
+        if (rows[count].info.pid > 0) {
+            rows[count].info.memory_kb = memory_for_pid(tm, rows[count].info.pid);
+        }
         count++;
     }
     return count;
 }
 
+/*
+ * What kind of thing this is.
+ *
+ * "ReconOS" named where it came from and said nothing about what it is. A
+ * column headed Type should answer "what type of application is this",
+ * and the two types that exist are the ones the system ships and the ones
+ * that connect to it.
+ */
 static const char *app_kind_name(const struct recon_app_info *info) {
-    return info->kind == RECON_APP_KIND_BUILTIN ? "ReconOS" : "Client";
+    return info->kind == RECON_APP_KIND_BUILTIN
+        ? "System app" : "Client app";
 }
 
 static const char *app_state_name(const struct recon_app_info *info) {
@@ -555,9 +573,7 @@ static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         /* Applications built into ReconOS share its process, so they have no
          * memory figure of their own to report. */
         char memory[32];
-        if (info->kind == RECON_APP_KIND_BUILTIN) {
-            snprintf(memory, sizeof(memory), "in ReconOS");
-        } else if (info->memory_kb >= 1024) {
+        if (info->memory_kb >= 1024) {
             snprintf(memory, sizeof(memory), "%.1f MB", info->memory_kb / 1024.0);
         } else if (info->memory_kb > 0) {
             snprintf(memory, sizeof(memory), "%zu KB", info->memory_kb);
@@ -691,7 +707,9 @@ static void draw_user_rows(struct recon_taskmgr *tm, struct recon_panel *p,
                 recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
             }
 
-            char child[RECON_USERS_NAME_MAX + 16];
+            /* Sized for an application's name, not an account's: this row
+             * carries what the account is running. */
+            char child[128];
             snprintf(child, sizeof(child), "        %s", apps[a].info.name);
 
             const char *cells[COLUMNS_MAX] = {
@@ -784,9 +802,24 @@ static void draw_dropdown(struct recon_taskmgr *tm, struct recon_panel *p,
 
     for (int i = 0; i < count; i++) {
         int iy = dy + 2 + i * DROPDOWN_ITEM_HEIGHT;
+
+        /*
+         * The entry under the pointer is marked. Without this the menu showed
+         * its entries and gave no sign which one a click would take, which is
+         * the one thing a menu has to say. Every other menu in the system
+         * already does it; this one was written before there was a
+         * convention to follow.
+         */
+        bool hovered = (tm->menu_hover == i);
+        if (hovered) {
+            recon_fill_rect(p, dx + 1, iy, DROPDOWN_WIDTH - 2,
+                DROPDOWN_ITEM_HEIGHT, COLOR_MENU_HILITE);
+        }
+
         recon_draw_text(p, tm->font, dx + 12,
             iy + (DROPDOWN_ITEM_HEIGHT + ascent) / 2 - 2,
-            DROPDOWN_WIDTH - 24, items[i], COLOR_TEXT);
+            DROPDOWN_WIDTH - 24, items[i],
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
         recon_hit_add(p, dx, iy, DROPDOWN_WIDTH, DROPDOWN_ITEM_HEIGHT,
             HIT_DROP_BASE + i);
     }
@@ -952,13 +985,51 @@ static void drag_column_to(struct recon_taskmgr *tm, int cx) {
     tm->columns[tm->tab][tm->dragging_column].width = width;
 }
 
+/* A menu left open on a window that is no longer in front belongs to
+ * nothing, so it closes when the window stops being in front. */
+static void taskmgr_focus_changed(void *user, bool focused) {
+    struct recon_taskmgr *tm = user;
+    if (!focused && tm->menu != MENU_NONE) {
+        tm->menu = MENU_NONE;
+        tm->menu_hover = -1;
+        recon_appwin_refresh(tm->win);
+    }
+}
+
+/* Say that a column boundary can be dragged, by changing the pointer over it.
+ * It could be dragged before this; nothing on screen said so. */
+static const char *taskmgr_cursor(void *user, uint32_t hit_id) {
+    struct recon_taskmgr *tm = user;
+
+    if (tm->dragging_column >= 0) {
+        return "col-resize";
+    }
+    if (hit_id >= HIT_DIVIDER_BASE && hit_id < HIT_EXPAND_BASE) {
+        return "col-resize";
+    }
+    return NULL;
+}
+
 static void taskmgr_motion(void *user, uint32_t hit_id, int cx, int cy) {
     struct recon_taskmgr *tm = user;
-    (void)hit_id;
     (void)cy;
 
     if (tm->dragging_column >= 0) {
         drag_column_to(tm, cx);
+        recon_appwin_refresh(tm->win);
+        return;
+    }
+
+    /* Track the dropdown entry under the pointer, and redraw only when it
+     * changes: repainting the window on every step across a menu would be a
+     * lot of work to show the same picture. */
+    int hover = -1;
+    if (tm->menu != MENU_NONE && hit_id >= HIT_DROP_BASE &&
+            hit_id < HIT_TAB_BASE) {
+        hover = (int)(hit_id - HIT_DROP_BASE);
+    }
+    if (hover != tm->menu_hover) {
+        tm->menu_hover = hover;
         recon_appwin_refresh(tm->win);
     }
 }
@@ -1195,6 +1266,8 @@ static const struct recon_appwin_impl TASKMGR_IMPL = {
     .draw = taskmgr_draw,
     .click = taskmgr_click,
     .motion = taskmgr_motion,
+    .cursor = taskmgr_cursor,
+    .focus_changed = taskmgr_focus_changed,
     .scroll = taskmgr_scroll,
     .describe = taskmgr_describe,
     .visibility = taskmgr_visibility,
@@ -1216,6 +1289,7 @@ struct recon_appwin *recon_taskmgr_create(struct recon_server *server,
     tm->own_session = (int)getsid(0);
     tm->dragging_column = -1;
     tm->expanded_user = -1;
+    tm->menu_hover = -1;
     memcpy(tm->columns, DEFAULT_COLUMNS, sizeof(tm->columns));
     snprintf(tm->status, sizeof(tm->status), "Reading processes...");
 

@@ -103,6 +103,26 @@ struct recon_appwin_impl {
      */
     void (*motion)(void *user, uint32_t hit_id, int cx, int cy);
 
+    /*
+     * The cursor to show over one of this window's own regions, or NULL to
+     * leave it alone.
+     *
+     * The frame already changes the cursor on its resize edges. Without this,
+     * anything draggable *inside* a window had no way to say so -- a column
+     * boundary in the task manager could be dragged and looked exactly like
+     * a column boundary that could not.
+     */
+    const char *(*cursor)(void *user, uint32_t hit_id);
+
+    /*
+     * The window gained or lost the keyboard.
+     *
+     * For putting away anything that only made sense while it was in front:
+     * an open menu, a half-typed thing. A menu standing open on a window
+     * behind another window belongs to nothing.
+     */
+    void (*focus_changed)(void *user, bool focused);
+
     void (*scroll)(void *user, double delta);
 
     /*
@@ -190,6 +210,18 @@ void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size
 /* Where the window is and how big, so it can be found from outside without
  * a second copy of the geometry. */
 void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y, int *w, int *h);
+
+/*
+ * What this window costs in memory, in KB.
+ *
+ * Its pixels, which is nearly all of it: a window holds one buffer of its own
+ * size, and everything else it keeps is small beside that. Built-in
+ * applications share ReconOS's process, so there is no per-application figure
+ * to read from the system -- but "this window's buffer" is a real number,
+ * attributable to exactly one application, and it changes when the window is
+ * resized, which is the truthful thing to report.
+ */
+size_t recon_appwin_memory_kb(struct recon_appwin *win);
 
 /* The top-left of the content area, inside the frame -- what an application's
  * own coordinates are relative to. */

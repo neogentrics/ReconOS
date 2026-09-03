@@ -223,6 +223,22 @@ static void describe(const struct app_entry *entry, struct recon_app_info *out) 
     out->close_requested = entry->close_requested_ms != 0;
     snprintf(out->name, sizeof(out->name), "%s", entry->name);
 
+    /*
+     * What a built-in application costs, rather than nothing at all.
+     *
+     * These share ReconOS's process, so no per-application figure can be read
+     * from the system. The window's own pixel buffer can: it is real, belongs
+     * to exactly this application, and changes when the window is resized.
+     * The column used to say "in ReconOS", which was true and answered a
+     * different question than the one the column asks.
+     *
+     * A client's memory is filled in by whoever has the process list, since
+     * that is where a pid can be looked up.
+     */
+    if (entry->kind == RECON_APP_KIND_BUILTIN) {
+        out->memory_kb = recon_appwin_memory_kb(entry->window);
+    }
+
     bool minimized = (entry->kind == RECON_APP_KIND_BUILTIN)
         ? recon_appwin_is_minimized(entry->window)
         : recon_toplevel_is_minimized(entry->toplevel);

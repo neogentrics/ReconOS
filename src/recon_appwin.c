@@ -517,6 +517,16 @@ void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y,
     if (h != NULL) { *h = win->height; }
 }
 
+size_t recon_appwin_memory_kb(struct recon_appwin *win) {
+    if (win == NULL || win->panel == NULL) {
+        return 0;
+    }
+    /* Four bytes a pixel, which is what the panel allocates. */
+    size_t bytes = (size_t)recon_panel_width(win->panel) *
+        (size_t)recon_panel_height(win->panel) * 4;
+    return bytes / 1024;
+}
+
 void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y) {
     if (win == NULL) {
         return;
@@ -672,6 +682,16 @@ void recon_appwin_set_focused(struct recon_appwin *win, bool focused) {
         return;
     }
     win->focused = focused;
+
+    /*
+     * The window is told, so it can put away anything that only made sense
+     * while it had the keyboard. A menu left standing open on a window that
+     * is no longer in front is a menu belonging to nothing.
+     */
+    if (win->impl->focus_changed != NULL) {
+        win->impl->focus_changed(win->user, focused);
+    }
+
     /* The title bar shows focus, so it has to be repainted either way. */
     recon_appwin_refresh(win);
 }
@@ -836,7 +856,21 @@ const char *recon_appwin_cursor_at(struct recon_appwin *win, double lx, double l
     if (!to_local(win, lx, ly, &px, &py)) {
         return NULL;
     }
-    return cursor_for_edges(edges_at(win, px, py));
+
+    const char *edge = cursor_for_edges(edges_at(win, px, py));
+    if (edge != NULL) {
+        return edge;
+    }
+
+    /* Then whatever the window itself wants over the region under the
+     * pointer. The edges win, because a resize edge is part of the frame and
+     * the frame is not the application's to override. */
+    if (win->impl->cursor != NULL && win->panel != NULL) {
+        uint32_t hit = recon_hit_test(win->panel,
+            px - BORDER, py - TITLE_HEIGHT);
+        return win->impl->cursor(win->user, hit);
+    }
+    return NULL;
 }
 
 bool recon_appwin_contains_point(struct recon_appwin *win, double lx, double ly) {

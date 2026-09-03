@@ -29,6 +29,9 @@
 #define RECON_ICON_TASKMGR "taskmanager"
 #define RECON_ICON_SYSTEM "system"
 #define RECON_ICON_SHUTDOWN "shutdown"
+/* The Recon Towers mark. Copied in from the assets rather than drawn: it is
+ * artwork, not a generated glyph. */
+#define RECON_ICON_LOGO "recon-towers"
 /* Two bins, so a full one looks different from an empty one at a glance --
  * which is the whole point of having it on the desktop. */
 #define RECON_ICON_TRASH "trash"

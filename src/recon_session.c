@@ -14,6 +14,7 @@
 #include "ReconOS.h"
 #include "recon_access.h"
 #include "recon_appwin.h"
+#include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_server.h"
 #include "recon_theme.h"
@@ -22,7 +23,7 @@
 
 /* --- Layout --- */
 
-#define CARD_WIDTH 460
+#define CARD_WIDTH 640
 #define CARD_PADDING 28
 #define TITLE_SIZE 30
 #define ROW_HEIGHT 34
@@ -30,6 +31,20 @@
 #define BUTTON_HEIGHT 32
 #define BUTTON_WIDTH 130
 #define GAP 14
+
+/*
+ * A band across the top of the card carrying the mark and the system's name.
+ *
+ * The card used to open straight onto body text on grey, which said nothing
+ * about what the machine was. The first thing a person sees when they turn on
+ * a computer should tell them whose computer it is.
+ */
+#define BANNER_HEIGHT 76
+#define BANNER_LOGO 48
+
+/* A row in the skin list carries a picture of the skin, not only its name. */
+#define PREVIEW_WIDTH 84
+#define PREVIEW_HEIGHT 26
 
 #define ACCOUNTS_VISIBLE 6
 /*
@@ -52,19 +67,53 @@
 #define HIT_ACCOUNT_BASE 100
 #define HIT_OPTION_BASE 200
 
-/* Where in the flow we are. */
+/*
+ * Where in the flow we are.
+ *
+ * The order matters and changed once. Reading and colour used to come after
+ * the skin, and before that it was shown to everybody -- so a person with no
+ * difficulty reading was asked to rule out six conditions before they were
+ * allowed to use their computer. That is the wrong shape for a question that
+ * most people answer "none of these" to.
+ *
+ * It is one question now: does anything need adjusting? Whoever says no never
+ * sees the list. Whoever says yes is asked before the skin is chosen, because
+ * the answer picks a skin, and being offered the choice afterwards would
+ * quietly undo it.
+ */
 enum stage {
     /* Setup, in order. */
     STAGE_WELCOME,
     STAGE_ACCOUNT,
-    STAGE_LOOK,
+    STAGE_MACHINE,
+    STAGE_HELP,
     STAGE_READING,
+    STAGE_LOOK,
     STAGE_FINISHED,
     /* Not part of setup. */
     STAGE_LOGIN,
     /* Nothing showing; the desktop has it. */
     STAGE_DONE,
 };
+
+/* The one question that decides whether the reading and colour list is shown
+ * at all. */
+static const struct {
+    const char *label;
+    const char *detail;
+} HELP_CHOICES[] = {
+    { "No, everything is fine",
+      "Go straight on. This can be changed later in the Control Panel." },
+    { "Yes, show me the options",
+      "Spacing, contrast, and colour vision." },
+};
+
+#define HELP_COUNT ((int)(sizeof(HELP_CHOICES) / sizeof(HELP_CHOICES[0])))
+
+/* Where the machine's own name is kept, so the login screen and the Control
+ * Panel can say whose machine this is. */
+#define MACHINE_NAME_KEY "system/machine-name"
+#define MACHINE_NAME_DEFAULT "recon-tower"
 
 /* Which field the keyboard is going to. */
 enum focus {
@@ -76,6 +125,16 @@ enum focus {
 struct recon_session {
     struct recon_server *server;
     struct recon_font *font;
+    /*
+     * A second, larger font for headings.
+     *
+     * The whole system draws in one size, which is fine for a taskbar and
+     * wrong for the first screen anybody sees: with no difference between a
+     * heading and a sentence, every screen read as a paragraph of grey text
+     * and none of them said what they were asking. This is the one place that
+     * matters enough to carry a font of its own.
+     */
+    struct recon_font *heading;
     struct recon_panel *panel;
 
     int width, height;
@@ -86,7 +145,11 @@ struct recon_session {
     struct recon_edit name;
     struct recon_edit password;
     struct recon_edit confirm;
+    struct recon_edit machine;
     enum focus focus;
+
+    /* Whether the reading and colour list was asked for. */
+    bool wants_help;
 
     /* Which account the login screen has selected. */
     int account;
@@ -155,27 +218,37 @@ static int card_height(struct recon_session *session) {
         line = 18;
     }
 
+    /* Every screen carries the band across the top. */
+    int base = BANNER_HEIGHT + CARD_PADDING * 2;
+
     switch (session->stage) {
     case STAGE_WELCOME:
+        return base + TITLE_SIZE + line * 5 + BUTTON_HEIGHT + GAP * 2;
     case STAGE_FINISHED:
-        return CARD_PADDING * 2 + TITLE_SIZE + line * 4 + BUTTON_HEIGHT + GAP * 2;
+        return base + TITLE_SIZE + line * 3 + BUTTON_HEIGHT + GAP * 2;
     case STAGE_ACCOUNT:
-        return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
+        return base + TITLE_SIZE + line * 2 +
             (FIELD_HEIGHT + line + GAP) * 3 + BUTTON_HEIGHT + GAP * 2;
+    case STAGE_MACHINE:
+        return base + TITLE_SIZE + line * 2 + FIELD_HEIGHT + line * 3 +
+            BUTTON_HEIGHT + GAP * 3;
+    case STAGE_HELP:
+        return base + TITLE_SIZE + line * 2 + ROW_HEIGHT * HELP_COUNT +
+            BUTTON_HEIGHT + GAP * 3;
     case STAGE_LOOK: {
         int count = recon_theme_count();
         if (count > OPTIONS_MAX) {
             count = OPTIONS_MAX;
         }
-        return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
+        return base + TITLE_SIZE + line * 2 +
             ROW_HEIGHT * count + BUTTON_HEIGHT + GAP * 3;
     }
     case STAGE_READING:
-        return CARD_PADDING * 2 + TITLE_SIZE + line * 2 +
+        return base + TITLE_SIZE + line * 2 +
             ROW_HEIGHT * ACCESSIBILITY_COUNT + BUTTON_HEIGHT + GAP * 3;
     case STAGE_LOGIN:
     default:
-        return CARD_PADDING * 2 + TITLE_SIZE + line +
+        return base + TITLE_SIZE + line +
             ROW_HEIGHT * ACCOUNTS_VISIBLE + FIELD_HEIGHT + line +
             BUTTON_HEIGHT + GAP * 4;
     }
@@ -246,8 +319,15 @@ static int draw_field(struct recon_session *session, struct recon_panel *p,
 }
 
 /* One row of a list. */
-static void draw_row(struct recon_session *session, struct recon_panel *p,
-        int x, int y, int w, const char *label, const char *detail,
+/*
+ * A row, with the text starting `indent` from the left edge.
+ *
+ * The indent is for the skin list, where a picture of the skin occupies the
+ * left of the row. The highlight still covers the whole row, so the picture
+ * is part of what is selected rather than something beside it.
+ */
+static void draw_row_at(struct recon_session *session, struct recon_panel *p,
+        int x, int y, int w, int indent, const char *label, const char *detail,
         uint32_t id, bool selected) {
     int ascent = recon_font_ascent(session->font);
     bool hovered = (id == (uint32_t)session->hover);
@@ -264,33 +344,148 @@ static void draw_row(struct recon_session *session, struct recon_panel *p,
         ? THEME(SELECTION_TEXT) : THEME(MENU_TEXT_DISABLED);
 
     int label_w = recon_text_width(session->font, label);
-    recon_draw_text(p, session->font, x + 12, y + (ROW_HEIGHT + ascent) / 2 - 2,
-        w - 24, label, ink);
+    recon_draw_text(p, session->font, x + indent,
+        y + (ROW_HEIGHT + ascent) / 2 - 2, w - indent - 12, label, ink);
 
     if (detail != NULL && *detail != '\0') {
-        recon_draw_text(p, session->font, x + 24 + label_w,
+        recon_draw_text(p, session->font, x + indent + 12 + label_w,
             y + (ROW_HEIGHT + ascent) / 2 - 2,
-            w - 36 - label_w, detail, faint);
+            w - indent - 24 - label_w, detail, faint);
     }
 
     recon_hit_add(p, x, y, w, ROW_HEIGHT, id);
 }
 
+static void draw_row(struct recon_session *session, struct recon_panel *p,
+        int x, int y, int w, const char *label, const char *detail,
+        uint32_t id, bool selected) {
+    draw_row_at(session, p, x, y, w, 12, label, detail, id, selected);
+}
+
 static void draw_title(struct recon_session *session, struct recon_panel *p,
         int x, int y, int w, const char *title, const char *subtitle) {
+    struct recon_font *big = session->heading != NULL
+        ? session->heading : session->font;
     int ascent = recon_font_ascent(session->font);
-    int line = recon_font_line_height(session->font);
-    if (line <= 0) {
-        line = 18;
-    }
 
-    recon_draw_text(p, session->font, x, y + ascent + 6, w, title,
+    recon_draw_text(p, big, x, y + recon_font_ascent(big) + 2, w, title,
         THEME(MENU_TEXT));
 
     if (subtitle != NULL && *subtitle != '\0') {
         recon_draw_text(p, session->font, x, y + TITLE_SIZE + ascent, w,
             subtitle, THEME(MENU_TEXT_DISABLED));
     }
+}
+
+/*
+ * The band across the top of the card: the mark, the system's name, and
+ * where you are in the flow.
+ *
+ * Drawn in the readout colours rather than the dialog's, so it reads as part
+ * of the machine rather than part of the form -- and so the mark, which has
+ * its own bright palette, sits on something dark enough to hold it.
+ */
+static void draw_banner(struct recon_session *session, struct recon_panel *p,
+        int x, int y, int w) {
+    int ascent = recon_font_ascent(session->font);
+    int line = recon_font_line_height(session->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    /*
+     * The dialog's title colour, not the readout's. The readout is what the
+     * screen behind the card is filled with, so a band in it was invisible --
+     * the mark appeared to be floating on the backdrop above a card that
+     * started below it.
+     */
+    recon_fill_rect(p, x, y, w, BANNER_HEIGHT, THEME(DIALOG_TITLE));
+    /* A rule in the accent along the bottom edge, so the band ends
+     * deliberately rather than just stopping. */
+    recon_fill_rect(p, x, y + BANNER_HEIGHT - 2, w, 2, THEME(ACCENT));
+
+    int text_x = x + 20;
+    int logo = BANNER_LOGO;
+    if (recon_icon_draw(p, RECON_ICON_LOGO, x + 18,
+            y + (BANNER_HEIGHT - 2 - logo) / 2, logo)) {
+        text_x = x + 18 + logo + 18;
+    }
+
+    struct recon_font *big = session->heading != NULL
+        ? session->heading : session->font;
+
+    int block = recon_font_line_height(big) + line;
+    int top = y + (BANNER_HEIGHT - 2 - block) / 2;
+
+    recon_draw_text(p, big, text_x, top + recon_font_ascent(big),
+        w - (text_x - x) - 20, RECONOS_FULL_NAME, THEME(DIALOG_TITLE_TEXT));
+    top += recon_font_line_height(big) - line;
+
+    /*
+     * The step, on the right of the band. Welcome and the finish are not
+     * numbered: they are the ends of the flow rather than steps through it.
+     */
+    static const char *const STEP_OF[] = {
+        [STAGE_ACCOUNT] = "Step 1 of 4",
+        [STAGE_MACHINE] = "Step 2 of 4",
+        [STAGE_HELP]    = "Step 3 of 4",
+        [STAGE_READING] = "Step 3 of 4",
+        [STAGE_LOOK]    = "Step 4 of 4",
+    };
+
+    const char *step = NULL;
+    if (session->stage < (int)(sizeof(STEP_OF) / sizeof(STEP_OF[0]))) {
+        step = STEP_OF[session->stage];
+    }
+
+    recon_draw_text(p, session->font, text_x, top + line + ascent,
+        w - (text_x - x) - 20, "Version " RECONOS_VERSION,
+        THEME(DIALOG_TITLE_TEXT));
+
+    if (step != NULL) {
+        int step_w = recon_text_width(session->font, step);
+        recon_draw_text(p, session->font, x + w - 20 - step_w,
+            top + line + ascent, step_w + 4, step, THEME(DIALOG_TITLE_TEXT));
+    }
+}
+
+/*
+ * A picture of a skin: a window over a desktop with a taskbar, an inch across.
+ *
+ * A list of names told you nothing about what choosing one would do, and the
+ * obvious answer -- screenshots -- would mean running the system to take them
+ * and keeping them current afterwards. This is drawn from the palette itself,
+ * so it cannot go out of date and a skin added tomorrow gets one for free.
+ */
+static void draw_theme_preview(struct recon_panel *p, int index,
+        int x, int y) {
+    int w = PREVIEW_WIDTH;
+    int h = PREVIEW_HEIGHT;
+
+#define SKIN(role) recon_theme_color_of(index, RECON_THEME_##role)
+
+    /* The desktop behind it. */
+    recon_fill_rect(p, x, y, w, h, SKIN(READOUT));
+
+    /* A window: title bar, body, and a line of selected text in it. */
+    int win_x = x + 6;
+    int win_y = y + 4;
+    int win_w = w - 20;
+    int win_h = h - 12;
+
+    recon_fill_rect(p, win_x, win_y, win_w, 6, SKIN(TITLE_ACTIVE));
+    recon_fill_rect(p, win_x, win_y + 6, win_w, win_h - 6, SKIN(SURFACE));
+    recon_fill_rect(p, win_x + 3, win_y + 9, win_w - 6, 3, SKIN(SELECTION));
+    recon_fill_rect(p, win_x + 3, win_y + 14, win_w - 12, 2,
+        SKIN(SURFACE_TEXT));
+
+    /* The taskbar along the bottom, with the accent on it. */
+    recon_fill_rect(p, x, y + h - 6, w, 6, SKIN(BAR));
+    recon_fill_rect(p, x + 2, y + h - 5, 10, 4, SKIN(ACCENT));
+
+    recon_stroke_rect(p, x, y, w, h, SKIN(WINDOW_EDGE));
+
+#undef SKIN
 }
 
 static void draw(struct recon_session *session) {
@@ -317,21 +512,33 @@ static void draw(struct recon_session *session) {
     recon_draw_bevel(p, cx, cy, cw, ch, false);
     recon_stroke_rect(p, cx, cy, cw, ch, THEME(MENU_BORDER));
 
+    /* Every screen but the login carries the band; the login screen has its
+     * own, drawn larger, because it is the one people see every day. */
+    draw_banner(session, p, cx, cy, cw);
+
     int x = cx + CARD_PADDING;
-    int y = cy + CARD_PADDING;
+    int y = cy + BANNER_HEIGHT + CARD_PADDING - 6;
     int w = cw - CARD_PADDING * 2;
 
     switch (session->stage) {
     case STAGE_WELCOME:
-        draw_title(session, p, x, y, w, RECONOS_FULL_NAME,
-            "Version " RECONOS_VERSION);
-        y += TITLE_SIZE + line + GAP;
+        draw_title(session, p, x, y, w, "Welcome", NULL);
+        y += TITLE_SIZE + GAP;
 
         recon_draw_text(p, session->font, x, y + ascent, w,
-            "Nobody has used this system yet.", THEME(MENU_TEXT));
+            "This machine has not been set up yet.", THEME(MENU_TEXT));
+        y += line + 4;
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "Four short questions and it is yours: who you are, what to call",
+            THEME(MENU_TEXT_DISABLED));
         y += line;
         recon_draw_text(p, session->font, x, y + ascent, w,
-            "A few questions, and it is yours.", THEME(MENU_TEXT));
+            "the machine, whether anything needs adjusting, and how it should",
+            THEME(MENU_TEXT_DISABLED));
+        y += line;
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "look. Nothing here is permanent; all of it can be changed later.",
+            THEME(MENU_TEXT_DISABLED));
         y += line + GAP;
         break;
 
@@ -350,6 +557,40 @@ static void draw(struct recon_session *session) {
             session->focus == FOCUS_CONFIRM);
         break;
 
+    case STAGE_MACHINE:
+        draw_title(session, p, x, y, w, "What is this machine called?",
+            "Its name, not yours. Somewhere to put it when there is more "
+            "than one.");
+        y += TITLE_SIZE + line + GAP;
+
+        y = draw_field(session, p, x, y, w, "Name", &session->machine,
+            HIT_NAME_FIELD, true);
+        y += 4;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "Networking is not built yet, so nothing else can see this name",
+            THEME(MENU_TEXT_DISABLED));
+        y += line;
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "yet. It is asked for now so it is already right when they can.",
+            THEME(MENU_TEXT_DISABLED));
+        y += line;
+        break;
+
+    case STAGE_HELP:
+        draw_title(session, p, x, y, w,
+            "Does anything need adjusting?",
+            "Text size, spacing, contrast, or colour vision.");
+        y += TITLE_SIZE + line + GAP;
+
+        for (int i = 0; i < HELP_COUNT; i++) {
+            draw_row(session, p, x, y, w, HELP_CHOICES[i].label,
+                HELP_CHOICES[i].detail, HIT_OPTION_BASE + i,
+                i == session->option);
+            y += ROW_HEIGHT;
+        }
+        break;
+
     case STAGE_LOOK: {
         draw_title(session, p, x, y, w, "How should it look?",
             "Choose one to see it. This can be changed later.");
@@ -364,8 +605,17 @@ static void draw(struct recon_session *session) {
             if (!recon_theme_at(i, &info)) {
                 continue;
             }
-            draw_row(session, p, x, y, w, info.name, info.description,
-                HIT_OPTION_BASE + i, i == session->option);
+            /*
+             * The row first, then the picture over it. The other way round
+             * meant the selected row's highlight was painted across its own
+             * preview -- the one row you most wanted to see was the one with
+             * no picture on it.
+             */
+            draw_row_at(session, p, x, y, w, PREVIEW_WIDTH + 18,
+                info.name, info.description, HIT_OPTION_BASE + i,
+                i == session->option);
+            draw_theme_preview(p, i, x + 8,
+                y + (ROW_HEIGHT - PREVIEW_HEIGHT) / 2);
             y += ROW_HEIGHT;
         }
         break;
@@ -373,7 +623,7 @@ static void draw(struct recon_session *session) {
 
     case STAGE_READING:
         draw_title(session, p, x, y, w, "Reading and colour",
-            "For anyone who needs it. Skip if you do not.");
+            "Choose whichever fits. It sets a skin you can change afterwards.");
         y += TITLE_SIZE + line + GAP;
 
         for (int i = 0; i < ACCESSIBILITY_COUNT; i++) {
@@ -384,19 +634,27 @@ static void draw(struct recon_session *session) {
         }
         break;
 
-    case STAGE_FINISHED:
-        draw_title(session, p, x, y, w, "Ready",
-            NULL);
-        y += TITLE_SIZE + line + GAP;
+    case STAGE_FINISHED: {
+        const char *who = session->name.text;
+
+        char greeting[128];
+        snprintf(greeting, sizeof(greeting), "%s%s.",
+            *who != '\0' ? "The tower is yours, " : "The tower is yours",
+            *who != '\0' ? who : "");
+
+        draw_title(session, p, x, y, w, greeting, NULL);
+        y += TITLE_SIZE + GAP;
 
         recon_draw_text(p, session->font, x, y + ascent, w,
-            "Everything is set up.", THEME(MENU_TEXT));
+            "Everything you chose is saved and can be changed again from the",
+            THEME(MENU_TEXT));
         y += line;
         recon_draw_text(p, session->font, x, y + ascent, w,
-            "Alt+Enter opens a terminal; the Apps button is bottom left.",
-            THEME(MENU_TEXT_DISABLED));
+            "Control Panel, which is in the Apps menu at the bottom left.",
+            THEME(MENU_TEXT));
         y += line + GAP;
         break;
+    }
 
     case STAGE_LOGIN: {
         draw_title(session, p, x, y, w, RECONOS_FULL_NAME, NULL);
@@ -471,6 +729,8 @@ static void draw(struct recon_session *session) {
         break;
 
     case STAGE_ACCOUNT:
+    case STAGE_MACHINE:
+    case STAGE_HELP:
     case STAGE_LOOK:
     case STAGE_READING:
         draw_button(session, p, x, by, BUTTON_WIDTH, "Back", HIT_BACK,
@@ -479,10 +739,15 @@ static void draw(struct recon_session *session) {
             "Continue", HIT_PRIMARY, true, true);
         break;
 
-    case STAGE_FINISHED:
-        draw_button(session, p, x + w - BUTTON_WIDTH, by, BUTTON_WIDTH,
-            "Start", HIT_PRIMARY, true, true);
+    case STAGE_FINISHED: {
+        /* "Start" is what the button did, not what it means. This is the
+         * moment the machine becomes theirs, and the button should say so. */
+        const char *label = "Enter the Tower";
+        int width = recon_text_width(session->font, label) + 48;
+        draw_button(session, p, x + w - width, by, width, label,
+            HIT_PRIMARY, true, true);
         break;
+    }
 
     case STAGE_LOGIN:
         draw_button(session, p, x, by, BUTTON_WIDTH, "Shut Down",
@@ -596,6 +861,15 @@ static void go_to(struct recon_session *session, enum stage stage) {
         }
     } else if (stage == STAGE_READING) {
         session->option = 0;
+    } else if (stage == STAGE_HELP) {
+        /* "No" first and selected: it is the answer most people give, and a
+         * question whose default is the rare answer is a question that costs
+         * everybody something. */
+        session->option = 0;
+    } else if (stage == STAGE_MACHINE) {
+        recon_edit_begin(&session->machine,
+            recon_registry_get(RECON_REG_SYSTEM, MACHINE_NAME_KEY,
+                MACHINE_NAME_DEFAULT), false);
     }
 
     if (stage == STAGE_DONE) {
@@ -617,18 +891,34 @@ static void advance(struct recon_session *session) {
 
     case STAGE_ACCOUNT:
         if (finish_account(session)) {
-            go_to(session, STAGE_LOOK);
+            go_to(session, STAGE_MACHINE);
         } else {
             recon_session_refresh(session);
         }
         break;
 
-    case STAGE_LOOK:
-        go_to(session, STAGE_READING);
+    case STAGE_MACHINE: {
+        /* Empty is allowed and means the default: a machine with no name is
+         * still a machine, and refusing to continue over it would be a
+         * gate in front of something nobody can see the effect of yet. */
+        const char *wanted = session->machine.length > 0
+            ? session->machine.text : MACHINE_NAME_DEFAULT;
+        recon_registry_set(RECON_REG_SYSTEM, MACHINE_NAME_KEY, wanted);
+        go_to(session, STAGE_HELP);
+        break;
+    }
+
+    case STAGE_HELP:
+        session->wants_help = (session->option == 1);
+        go_to(session, session->wants_help ? STAGE_READING : STAGE_LOOK);
         break;
 
     case STAGE_READING:
         apply_accessibility(session, session->option);
+        go_to(session, STAGE_LOOK);
+        break;
+
+    case STAGE_LOOK:
         go_to(session, STAGE_FINISHED);
         break;
 
@@ -676,7 +966,7 @@ static void go_back(struct recon_session *session) {
     case STAGE_ACCOUNT:
         go_to(session, STAGE_WELCOME);
         break;
-    case STAGE_LOOK:
+    case STAGE_MACHINE:
         /*
          * Not back to the account screen: the account has been created and
          * signed into by then, and going back would offer to create it again.
@@ -685,8 +975,17 @@ static void go_back(struct recon_session *session) {
         set_message(session, false, "The account is made; carry on.");
         recon_session_refresh(session);
         break;
+    case STAGE_HELP:
+        go_to(session, STAGE_MACHINE);
+        break;
     case STAGE_READING:
-        go_to(session, STAGE_LOOK);
+        go_to(session, STAGE_HELP);
+        break;
+    case STAGE_LOOK:
+        /* Back to whichever screen was actually shown, not to the one that
+         * would have been next in a list: somebody who skipped the reading
+         * options should not be shown them on the way back. */
+        go_to(session, session->wants_help ? STAGE_READING : STAGE_HELP);
         break;
     default:
         break;
@@ -716,6 +1015,15 @@ struct recon_session *recon_session_create(struct recon_server *server,
     }
     recon_panel_set_position(session->panel, 0, 0);
     recon_panel_set_enabled(session->panel, false);
+
+    /*
+     * A larger font for headings. NULL is coped with everywhere it is used:
+     * a heading in the body size is worse-looking and still readable, which
+     * is the right trade for something that can fail to load.
+     */
+    session->heading = recon_font_load(getenv("RECONOS_FONT"),
+        recon_font_line_height(font) + 10);
+
     return session;
 }
 
@@ -723,6 +1031,7 @@ void recon_session_destroy(struct recon_session *session) {
     if (session == NULL) {
         return;
     }
+    recon_font_destroy(session->heading);
     recon_panel_destroy(session->panel);
     free(session);
 }
@@ -917,6 +1226,9 @@ static struct recon_edit *focused_edit(struct recon_session *session) {
     if (session->stage == STAGE_LOGIN) {
         return &session->password;
     }
+    if (session->stage == STAGE_MACHINE) {
+        return &session->machine;
+    }
     if (session->stage != STAGE_ACCOUNT) {
         return NULL;
     }
@@ -971,6 +1283,11 @@ bool recon_session_handle_key(struct recon_session *session,
             if (next >= 0 && next < ACCESSIBILITY_COUNT) {
                 session->option = next;
                 apply_accessibility(session, next);
+            }
+        } else if (session->stage == STAGE_HELP) {
+            int next = session->option + step;
+            if (next >= 0 && next < HELP_COUNT) {
+                session->option = next;
             }
         }
         recon_session_refresh(session);

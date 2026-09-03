@@ -58,6 +58,7 @@
 #include "recon_control.h"
 #include "recon_fs.h"
 #include "recon_icon_gen.h"
+#include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
@@ -265,6 +266,54 @@ static char *asset_path(const char *name) {
     }
     snprintf(path, len, "%s/%s", dir, name);
     return path;
+}
+
+/*
+ * Copy an image out of the asset directory and into the icon set, if it is
+ * not already there.
+ *
+ * Everything else in /System/Icons is generated. This one is a file somebody
+ * drew, and it goes through the same door as the rest so that it is asked for
+ * by name, cached the same way, and replaceable by dropping another file over
+ * it. Doing nothing when it is already there is what makes a replacement
+ * stay replaced.
+ */
+static void install_asset_icon(const char *asset, const char *icon_name) {
+    char destination[RECON_PATH_MAX];
+    snprintf(destination, sizeof(destination), "%s/%s.png",
+        RECON_DIR_SYSTEM_ICONS, icon_name);
+    if (recon_fs_exists("/", destination)) {
+        return;
+    }
+
+    char *path = asset_path(asset);
+    if (path == NULL) {
+        return;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        wlr_log(WLR_INFO, "ReconOS: no '%s' to install", path);
+        free(path);
+        return;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    if (size > 0 && size < 4 * 1024 * 1024) {
+        char *bytes = malloc((size_t)size);
+        if (bytes != NULL && fread(bytes, 1, (size_t)size, f) == (size_t)size) {
+            if (recon_fs_write("/", destination, bytes, (size_t)size)) {
+                wlr_log(WLR_INFO, "ReconOS: installed %s", destination);
+            }
+        }
+        free(bytes);
+    }
+
+    fclose(f);
+    free(path);
 }
 
 /*
@@ -1524,6 +1573,18 @@ int main(int argc, char **argv) {
     if (icons > 0) {
         wlr_log(WLR_INFO, "ReconOS: wrote %d default icons", icons);
     }
+
+    /*
+     * The Recon Towers mark, copied into the icon set on first run.
+     *
+     * Copied rather than drawn, because unlike the rest of the icons this one
+     * is artwork somebody made, and unlike the wallpaper it belongs to the
+     * system rather than to a screen. Copied rather than read from the asset
+     * directory every time, so it lives inside the ReconOS filesystem, is
+     * asked for by name like every other icon, and can be replaced by dropping
+     * a different file over it.
+     */
+    install_asset_icon("logo.png", RECON_ICON_LOGO);
 
     wl_list_init(&server.toplevels);
     wl_list_init(&server.outputs);
