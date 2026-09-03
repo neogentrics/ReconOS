@@ -29,6 +29,9 @@ struct recon_font;
 /* Where modules are looked for, as ReconOS paths. */
 #define RECON_DIR_MODULES "/System/Modules"
 
+/* Long enough for a sentence saying why a module would not load. */
+#define RECON_MODULES_PROBLEM_MAX 160
+
 struct recon_module_state {
     char name[64];
     char version[32];
@@ -38,7 +41,7 @@ struct recon_module_state {
     bool is_app;
     bool loaded;
     /* Why it is not loaded, when it is not. */
-    char problem[160];
+    char problem[RECON_MODULES_PROBLEM_MAX];
 };
 
 void recon_modules_init(struct recon_server *server, struct recon_font *font);

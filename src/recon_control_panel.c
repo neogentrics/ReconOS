@@ -80,6 +80,11 @@ enum action {
     ACTION_UNLOCK_REGISTRY,
     ACTION_LOCK_REGISTRY,
     ACTION_REGISTRY_HIVE,
+    ACTION_REGISTRY_EDIT,
+    ACTION_REGISTRY_ADD,
+    ACTION_REGISTRY_SAVE,
+    ACTION_REGISTRY_CANCEL,
+    ACTION_REGISTRY_REMOVE,
     /* Network */
     ACTION_TEST_NETWORK,
     ACTION_REFRESH_NETWORK,
@@ -268,6 +273,7 @@ enum question {
     QUESTION_NONE,
     QUESTION_REMOVE_USER,
     QUESTION_REMOVE_PROGRAM,
+    QUESTION_REMOVE_KEY,
 };
 
 struct control_panel {
@@ -289,7 +295,12 @@ struct control_panel {
     bool password_focused;
 
     enum question question;
-    char question_target[RECON_USERS_NAME_MAX];
+    /*
+     * Long enough for the longest thing it carries, which is a registry key.
+     * It used to be an account name's length and silently truncated module
+     * names, which the compiler had been pointing out for a while.
+     */
+    char question_target[RECON_REGISTRY_KEY_MAX];
 
     /*
      * The registry page is locked until an administrator says who they are.
@@ -313,6 +324,21 @@ struct control_panel {
     int registry_hive;    /* 0 system, 1 user */
     int registry_scroll;
 
+    /*
+     * Changing a setting, or adding one.
+     *
+     * The key being changed is copied out rather than read from the list on
+     * the way past: adding or removing anything renumbers the hive, so an
+     * index captured when the field opened would not still mean the same key
+     * when Save is pressed.
+     */
+    bool registry_editing;
+    bool registry_adding;
+    char registry_key[RECON_REGISTRY_KEY_MAX];
+    struct recon_edit reg_key;
+    struct recon_edit reg_value;
+    bool reg_key_focused;
+
     char status[192];
     bool status_is_warning;
 
@@ -330,6 +356,18 @@ static void set_status(struct control_panel *cp, bool warning, const char *fmt, 
     vsnprintf(cp->status, sizeof(cp->status), fmt, args);
     va_end(args);
     cp->status_is_warning = warning;
+}
+
+/*
+ * Nothing to say.
+ *
+ * Its own function rather than set_status(cp, false, "") because set_status
+ * carries a printf format attribute, and an empty format is a warning at
+ * every call site -- six of them, which is enough noise to hide a real one.
+ */
+static void clear_status(struct control_panel *cp) {
+    cp->status[0] = '\0';
+    cp->status_is_warning = false;
 }
 
 /* --- Small drawing helpers --- */
@@ -421,7 +459,10 @@ static void draw_avatar_picker(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
 
-    char title[128];
+    /* Sized for what goes in it. question_target now holds a registry key,
+     * which is longer than an account name, and this heading was the one
+     * place that silently shortened it. */
+    char title[RECON_REGISTRY_KEY_MAX + 32];
     snprintf(title, sizeof(title), "A picture for %s", cp->question_target);
     y = draw_heading(cp, p, x, y, w, title,
         "Or drop a file called avatar-something into /System/Icons.");
@@ -922,7 +963,10 @@ static void draw_modules(struct control_panel *cp, struct recon_panel *p,
         /* A module that refused to load says why, in the place where a
          * working one says what it is. A silent failure is the thing a
          * module list exists to prevent. */
-        char detail[160];
+        /* Long enough for the longer of the two things it shows: the reason
+         * a module refused to load, which is a sentence rather than a
+         * version number. */
+        char detail[RECON_MODULES_PROBLEM_MAX + 32];
         snprintf(detail, sizeof(detail), "%s   %s",
             module.is_app ? "application" : "system",
             module.loaded ? module.version : module.problem);
@@ -1144,7 +1188,23 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
     y += BUTTON_HEIGHT + PADDING;
 
     int count = recon_registry_count(scope, "");
-    int rows = (h - y - PADDING) / ROW_HEIGHT;
+
+    /*
+     * Room kept below the list for the buttons, and for the fields when one
+     * of them is open. Taken off before the rows are counted rather than
+     * after, so the list never draws over its own controls -- which it would
+     * do on a short window, and the controls are the half that changes
+     * things.
+     */
+    int reserved = BUTTON_HEIGHT + PADDING * 2;
+    if (cp->registry_editing || cp->registry_adding) {
+        reserved += FIELD_HEIGHT + 8;
+    }
+    if (cp->registry_adding) {
+        reserved += FIELD_HEIGHT + 8;
+    }
+
+    int rows = (h - y - reserved) / ROW_HEIGHT;
     if (rows < 1) {
         rows = 1;
     }
@@ -1155,6 +1215,21 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
     cp->list_h = rows * ROW_HEIGHT;
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
+    if (cp->selected >= count) {
+        cp->selected = count - 1;
+    }
+    if (cp->selected < 0) {
+        cp->selected = 0;
+    }
+
+    /* Follow the selection, so a key chosen and then scrolled past does not
+     * leave the buttons acting on something nobody can see. */
+    if (cp->selected < cp->registry_scroll) {
+        cp->registry_scroll = cp->selected;
+    }
+    if (cp->selected >= cp->registry_scroll + rows) {
+        cp->registry_scroll = cp->selected - rows + 1;
+    }
     if (cp->registry_scroll > count - rows) {
         cp->registry_scroll = count - rows;
     }
@@ -1171,19 +1246,85 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
         }
 
         int ry = y + i * ROW_HEIGHT;
-        if (i % 2 == 1) {
+        bool chosen = (cp->registry_scroll + i == cp->selected);
+
+        if (chosen) {
+            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+        } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
+
         recon_draw_text(p, cp->font, x + 10, ry + (ROW_HEIGHT + ascent) / 2 - 2,
-            w / 2, key != NULL ? key : "", COLOR_TEXT);
+            w / 2, key != NULL ? key : "",
+            chosen ? THEME(SELECTION_TEXT) : COLOR_TEXT);
         recon_draw_text(p, cp->font, x + w / 2, ry + (ROW_HEIGHT + ascent) / 2 - 2,
-            w / 2 - 10, value != NULL ? value : "", COLOR_DIM);
+            w / 2 - 10, value != NULL ? value : "",
+            chosen ? THEME(SELECTION_TEXT) : COLOR_DIM);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
     }
 
     if (count == 0) {
         recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
             w - 20, "This hive is empty.", COLOR_DIM);
     }
+
+    y += cp->list_h + PADDING;
+
+    /*
+     * Adding takes two fields, changing takes one.
+     *
+     * The key is not editable when changing an existing setting: a key that
+     * can be typed over is a rename, and a rename here is a delete and an add
+     * that look like one act -- which is how somebody ends up with the old
+     * key still in the file and no idea it is there.
+     */
+    if (cp->registry_adding) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Key, then value. Keys are paths and cannot contain spaces.",
+            COLOR_DIM);
+        y += line;
+
+        recon_edit_draw(p, cp->font, x, y, w - 4, FIELD_HEIGHT, &cp->reg_key);
+        recon_hit_add(p, x, y, w - 4, FIELD_HEIGHT, HIT_FIELD_BASE + 2);
+        y += FIELD_HEIGHT + 8;
+
+        recon_edit_draw(p, cp->font, x, y, w - 4, FIELD_HEIGHT, &cp->reg_value);
+        recon_hit_add(p, x, y, w - 4, FIELD_HEIGHT, HIT_FIELD_BASE + 3);
+        y += FIELD_HEIGHT + 8;
+
+        int abx = draw_button(cp, p, x, y, "Add",
+            HIT_ACTION_BASE + ACTION_REGISTRY_SAVE, true);
+        draw_button(cp, p, abx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_REGISTRY_CANCEL, true);
+        return;
+    }
+
+    if (cp->registry_editing) {
+        char label[RECON_REGISTRY_KEY_MAX + 32];
+        snprintf(label, sizeof(label), "New value for %s", cp->registry_key);
+        recon_draw_text(p, cp->font, x, y + ascent, w, label, COLOR_DIM);
+        y += line;
+
+        recon_edit_draw(p, cp->font, x, y, w - 4, FIELD_HEIGHT, &cp->reg_value);
+        recon_hit_add(p, x, y, w - 4, FIELD_HEIGHT, HIT_FIELD_BASE + 3);
+        y += FIELD_HEIGHT + 8;
+
+        int ebx = draw_button(cp, p, x, y, "Save",
+            HIT_ACTION_BASE + ACTION_REGISTRY_SAVE, true);
+        draw_button(cp, p, ebx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_REGISTRY_CANCEL, true);
+        return;
+    }
+
+    bool have = (count > 0 && cp->selected >= 0 && cp->selected < count);
+
+    int cbx = draw_button(cp, p, x, y, "Change",
+        HIT_ACTION_BASE + ACTION_REGISTRY_EDIT, have);
+    cbx = draw_button(cp, p, cbx, y, "Add",
+        HIT_ACTION_BASE + ACTION_REGISTRY_ADD, true);
+    draw_button(cp, p, cbx, y, "Remove",
+        HIT_ACTION_BASE + ACTION_REGISTRY_REMOVE, have);
 }
 
 static void draw_system(struct control_panel *cp, struct recon_panel *p,
@@ -1346,7 +1487,7 @@ static void stop_editing(struct control_panel *cp) {
 static void answered(void *user, int choice) {
     struct control_panel *cp = user;
 
-    char name[RECON_USERS_NAME_MAX];
+    char name[RECON_REGISTRY_KEY_MAX];
     snprintf(name, sizeof(name), "%s", cp->question_target);
 
     enum question asked = cp->question;
@@ -1354,6 +1495,19 @@ static void answered(void *user, int choice) {
 
     if (choice != 0) {
         set_status(cp, false, "Nothing was changed.");
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_REMOVE_KEY) {
+        enum recon_registry_scope scope =
+            cp->registry_hive == 0 ? RECON_REG_SYSTEM : RECON_REG_USER;
+
+        if (!recon_registry_remove(scope, name)) {
+            set_status(cp, true, "%s", recon_registry_last_error());
+        } else {
+            set_status(cp, false, "Removed '%s'.", name);
+        }
         recon_appwin_refresh(cp->win);
         return;
     }
@@ -1388,7 +1542,7 @@ static void do_action(struct control_panel *cp, enum action action) {
     case ACTION_NONE:
         stop_editing(cp);
         cp->installing = false;
-        set_status(cp, false, "");
+        clear_status(cp);
         break;
 
     case ACTION_ADD_USER:
@@ -1479,7 +1633,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     case ACTION_CHOOSE_AVATAR:
         cp->picking_avatar = false;
-        set_status(cp, false, "");
+        clear_status(cp);
         break;
 
     case ACTION_INSTALL_PROGRAM:
@@ -1596,14 +1750,152 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     case ACTION_LOCK_REGISTRY:
         cp->registry_unlocked = false;
+        cp->registry_editing = false;
+        cp->registry_adding = false;
+        recon_edit_end(&cp->reg_key);
+        recon_edit_end(&cp->reg_value);
         recon_edit_begin(&cp->unlock, "", false);
         cp->unlock.masked = true;
         set_status(cp, false, "Locked again.");
         break;
 
+    case ACTION_REGISTRY_EDIT: {
+        enum recon_registry_scope scope =
+            cp->registry_hive == 0 ? RECON_REG_SYSTEM : RECON_REG_USER;
+
+        const char *key = NULL;
+        const char *value = NULL;
+        if (!recon_registry_at(scope, "", cp->selected, &key, &value)) {
+            set_status(cp, true, "Choose a setting first.");
+            break;
+        }
+
+        /* Copied out, because adding or removing anything renumbers the hive
+         * and the index would then point at a different key. */
+        snprintf(cp->registry_key, sizeof(cp->registry_key), "%s", key);
+        cp->registry_editing = true;
+        cp->registry_adding = false;
+        recon_edit_begin(&cp->reg_value, value != NULL ? value : "", false);
+        set_status(cp, false, "Changing '%s'.", cp->registry_key);
+        break;
+    }
+
+    case ACTION_REGISTRY_ADD:
+        cp->registry_adding = true;
+        cp->registry_editing = false;
+        cp->reg_key_focused = true;
+        recon_edit_begin(&cp->reg_key, "", false);
+        recon_edit_begin(&cp->reg_value, "", false);
+        set_status(cp, false, "A key, then what it should say.");
+        break;
+
+    case ACTION_REGISTRY_CANCEL:
+        cp->registry_editing = false;
+        cp->registry_adding = false;
+        recon_edit_end(&cp->reg_key);
+        recon_edit_end(&cp->reg_value);
+        set_status(cp, false, "Nothing was changed.");
+        break;
+
+    case ACTION_REGISTRY_SAVE: {
+        enum recon_registry_scope scope =
+            cp->registry_hive == 0 ? RECON_REG_SYSTEM : RECON_REG_USER;
+
+        /*
+         * Copied out, not pointed at. The edit fields are closed further
+         * down before the status line is written, and recon_edit_end
+         * clears the text -- so a pointer into the field left the status
+         * saying Saved '' by the time anybody read it.
+         */
+        const char *typed = cp->registry_adding
+            ? cp->reg_key.text : cp->registry_key;
+
+        if (cp->registry_adding && typed[0] == '\0') {
+            set_status(cp, true, "A setting needs a key.");
+            break;
+        }
+
+        /*
+         * Refused rather than shortened. The edit field holds more than a
+         * key can, and quietly storing the first 127 characters would put
+         * a setting in the registry under a name nobody typed -- which
+         * then looks like the one that was typed simply did not save.
+         */
+        size_t typed_len = strlen(typed);
+        if (typed_len >= RECON_REGISTRY_KEY_MAX) {
+            set_status(cp, true,
+                "That key is too long: %d characters at most.",
+                RECON_REGISTRY_KEY_MAX - 1);
+            break;
+        }
+
+        /* Copied by the length just checked, so the bound is the one
+         * the refusal above enforces rather than a second guess at
+         * it. */
+        char key[RECON_REGISTRY_KEY_MAX];
+        memcpy(key, typed, typed_len);
+        key[typed_len] = '\0';
+
+        if (!recon_registry_set(scope, key, cp->reg_value.text)) {
+            /* The registry says why -- a space in the key, a value too long,
+             * a full hive -- and its sentence is better than a general one. */
+            set_status(cp, true, "%s", recon_registry_last_error());
+            break;
+        }
+
+        cp->registry_editing = false;
+        cp->registry_adding = false;
+        recon_edit_end(&cp->reg_key);
+        recon_edit_end(&cp->reg_value);
+
+        /*
+         * Everything drawn, because a setting here is a setting something is
+         * already using: the skin, the spacing, where a window opens. Writing
+         * one and leaving the screen as it was would make the registry look
+         * like it does not do anything.
+         */
+        recon_theme_init();
+        recon_access_apply(recon_shell_font(cp->server->shell));
+        recon_shell_restyle(cp->server->shell);
+
+        set_status(cp, false, "Saved '%s'.", key);
+        break;
+    }
+
+    case ACTION_REGISTRY_REMOVE: {
+        enum recon_registry_scope scope =
+            cp->registry_hive == 0 ? RECON_REG_SYSTEM : RECON_REG_USER;
+
+        const char *key = NULL;
+        const char *value = NULL;
+        if (!recon_registry_at(scope, "", cp->selected, &key, &value)) {
+            set_status(cp, true, "Choose a setting first.");
+            break;
+        }
+
+        cp->question = QUESTION_REMOVE_KEY;
+        snprintf(cp->question_target, sizeof(cp->question_target), "%s", key);
+
+        char message[RECON_REGISTRY_KEY_MAX + 160];
+        snprintf(message, sizeof(message),
+            "Remove '%s'? Whatever reads it goes back to its default, which "
+            "may not be what is on screen now.", key);
+
+        const char *buttons[2] = { "Remove", "Cancel" };
+        recon_appwin_ask(cp->win, "Remove Setting", message, buttons, 2,
+            answered);
+        break;
+    }
+
     case ACTION_REGISTRY_HIVE:
         cp->registry_hive = cp->registry_hive == 0 ? 1 : 0;
         cp->registry_scroll = 0;
+        cp->selected = 0;
+        /* A field open on the other hive's key would save into this one. */
+        cp->registry_editing = false;
+        cp->registry_adding = false;
+        recon_edit_end(&cp->reg_key);
+        recon_edit_end(&cp->reg_value);
         break;
 
     case ACTION_TEST_NETWORK: {
@@ -1728,6 +2020,16 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     if (hit_id >= HIT_FIELD_BASE) {
+        /* The registry's two fields are numbered above the account page's,
+         * so a click lands on the one that was drawn there. */
+        if (hit_id == HIT_FIELD_BASE + 2) {
+            cp->reg_key_focused = true;
+            return true;
+        }
+        if (hit_id == HIT_FIELD_BASE + 3) {
+            cp->reg_key_focused = false;
+            return true;
+        }
         cp->password_focused = (hit_id > HIT_FIELD_BASE);
         return true;
     }
@@ -1748,6 +2050,13 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             return true;
         }
 
+        if (cp->page == PAGE_REGISTRY) {
+            /* The rows are numbered from the first one showing, and the
+             * selection is an index into the whole hive. */
+            cp->selected = cp->registry_scroll + index;
+            return true;
+        }
+
         cp->selected = index;
         return true;
     }
@@ -1757,7 +2066,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             cp->page = (enum page)page;
             cp->selected = 0;
             stop_editing(cp);
-            set_status(cp, false, "");
+            clear_status(cp);
 
             /* Leaving the registry page locks it again. Coming back to a page
              * that was left unlocked is how an unlock becomes permanent by
@@ -1787,7 +2096,36 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case RECON_EDIT_CANCEL:
             cp->installing = false;
             recon_edit_end(&cp->name);
-            set_status(cp, false, "");
+            clear_status(cp);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
+    /*
+     * Changing or adding a setting. Tab moves between the two fields while
+     * adding; there is only one to type in when changing, because the key of
+     * an existing setting is not editable.
+     */
+    if (cp->page == PAGE_REGISTRY &&
+            (cp->registry_editing || cp->registry_adding)) {
+        if (cp->registry_adding && sym == XKB_KEY_Tab) {
+            cp->reg_key_focused = !cp->reg_key_focused;
+            return true;
+        }
+
+        struct recon_edit *edit = (cp->registry_adding && cp->reg_key_focused)
+            ? &cp->reg_key : &cp->reg_value;
+
+        switch (recon_edit_key(edit, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_REGISTRY_SAVE);
+            return true;
+        case RECON_EDIT_CANCEL:
+            do_action(cp, ACTION_REGISTRY_CANCEL);
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_IGNORED:
@@ -1805,7 +2143,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case RECON_EDIT_CANCEL:
             recon_edit_begin(&cp->unlock, "", false);
             cp->unlock.masked = true;
-            set_status(cp, false, "");
+            clear_status(cp);
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_IGNORED:
@@ -1841,7 +2179,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             return true;
         case RECON_EDIT_CANCEL:
             stop_editing(cp);
-            set_status(cp, false, "");
+            clear_status(cp);
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_IGNORED:
