@@ -189,20 +189,20 @@ static const struct {
     const char *summary;
 } PAGES[PAGE_COUNT] = {
     { "Accounts", RECON_ICON_APP, "Who may sign in" },
-    { "Appearance", RECON_ICON_SYSTEM, "Skins and wallpaper" },
+    { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
     { "Reading", RECON_ICON_NOTEPAD, "Text, spacing, colour" },
 
-    { "Programs", RECON_ICON_APP, "What is installed" },
+    { "Programs", RECON_ICON_PROGRAMS, "What is installed" },
     { "Modules", RECON_ICON_SYSTEM, "Code the system loads" },
 
-    { "Network", RECON_ICON_SYSTEM, "Connections and names" },
+    { "Network", RECON_ICON_SYSTEM, "What it talks to" },
     { "Firewall", RECON_ICON_SYSTEM, "What may be opened" },
     { "Power", RECON_ICON_SHUTDOWN, "Left alone, and asleep" },
     { "Storage", RECON_ICON_EXPLORER, "Where the room went" },
     { "Update", RECON_ICON_SYSTEM, "What version this is" },
 
-    { "Troubleshoot", RECON_ICON_TERMINAL, "When something is wrong" },
-    { "Recovery", RECON_ICON_SYSTEM, "Getting back to working" },
+    { "Troubleshoot", RECON_ICON_TERMINAL, "When it goes wrong" },
+    { "Recovery", RECON_ICON_SYSTEM, "Back to what worked" },
     { "Registry", RECON_ICON_NOTEPAD, "Every setting, raw" },
 
     { "About", RECON_ICON_TASKMGR, "This machine" },

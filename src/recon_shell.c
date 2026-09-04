@@ -276,6 +276,9 @@ static const struct {
     { "Shut Down", POWER_SHUT_DOWN },
 };
 
+/* The search box in the footer. */
+#define HIT_MENU_SEARCH (HIT_POWER_BASE - 1)
+
 #define MENU_POWER_COUNT \
     ((int)(sizeof(MENU_POWER) / sizeof(MENU_POWER[0])))
 
@@ -1813,24 +1816,14 @@ static void draw_menu(struct recon_shell *shell) {
     /* --- Left: the applications --- */
 
     /*
-     * What is being looked for, above the list, only once something has been
-     * typed. A search box standing empty in a menu of seven applications is
-     * furniture; a line that appears when it has something to say is not.
+     * What is being looked for is drawn in the box in the footer rather than
+     * on a row above the list.
+     *
+     * The row was there because there was no box: typing narrowed the menu
+     * and nothing on screen said that typing would do anything, so a line had
+     * to appear afterwards to explain what had just happened. A box that is
+     * always there says it beforehand, which is the part that matters.
      */
-    if (shell->menu_filter[0] != '\0') {
-        char looking[80];
-        snprintf(looking, sizeof(looking), "Finding: %s", shell->menu_filter);
-
-        recon_fill_role(menu, MENU_PADDING, body_y,
-            MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
-            RECON_THEME_SELECTION);
-        recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET,
-            body_y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2,
-            MENU_LEFT_WIDTH - MENU_PADDING * 2 - TEXT_INSET, looking,
-            THEME(SELECTION_TEXT));
-
-        body_y += MENU_ITEM_HEIGHT;
-    }
 
     int count = menu_entry_count(shell->menu_show_all, shell->menu_filter);
 
@@ -2011,6 +2004,64 @@ static void draw_menu(struct recon_shell *shell) {
     int start_x = width - MENU_PADDING - row_w - 1;
     int by = fy + 6;
 
+    /*
+     * --- The search box ---
+     *
+     * Typing in this menu has narrowed it since v0.2.15 and nothing on screen
+     * said so, which meant nobody found out. A box is not decoration here: it
+     * is the only thing that tells somebody the menu can be searched at all.
+     *
+     * Along the bottom left, where there is room, and it holds whatever has
+     * been typed -- so it is the box that shows the search rather than a line
+     * that appears afterwards to explain it.
+     */
+    int box_x = MENU_PADDING + 4;
+    int box_h = size;
+    int box_w = start_x - box_x - 10;
+    if (box_w > 150) {
+        box_w = 150;
+    }
+
+    if (box_w > 40) {
+        recon_fill_role(menu, box_x, by, box_w, box_h, RECON_THEME_FIELD);
+        recon_stroke_rect(menu, box_x, by, box_w, box_h,
+            THEME(FIELD_BORDER));
+
+        /*
+         * A small magnifier, so the box reads as a search rather than as a
+         * place to type a file name. Drawn as a ring and a handle out of
+         * rectangles: there is no circle to stroke here, and at eight pixels
+         * across a square ring reads as a lens anyway.
+         */
+        int gx = box_x + 8;
+        int gy = by + box_h / 2 - 4;
+        recon_stroke_rect(menu, gx, gy, 8, 8, THEME(FIELD_TEXT));
+        recon_fill_rect(menu, gx + 8, gy + 8, 4, 2, THEME(FIELD_TEXT));
+
+        int tx = box_x + 22;
+        int tw = box_w - 22 - 6;
+
+        if (shell->menu_filter[0] != '\0') {
+            recon_draw_text(menu, shell->font, tx,
+                by + (box_h + ascent) / 2 - 2, tw, shell->menu_filter,
+                THEME(FIELD_TEXT));
+
+            /* A caret, because this is a field somebody is typing into and a
+             * field with no caret looks like a label. */
+            int caret = tx + recon_text_width(shell->font, shell->menu_filter);
+            if (caret < box_x + box_w - 4) {
+                recon_fill_rect(menu, caret + 1, by + 4, 1, box_h - 8,
+                    THEME(FIELD_TEXT));
+            }
+        } else {
+            recon_draw_text(menu, shell->font, tx,
+                by + (box_h + ascent) / 2 - 2, tw, "Search programs",
+                THEME(MENU_TEXT_DISABLED));
+        }
+
+        recon_hit_add(menu, box_x, by, box_w, box_h, HIT_MENU_SEARCH);
+    }
+
     for (int i = 0; i < MENU_POWER_COUNT; i++) {
         int bx = start_x + i * (size + gap);
         bool hovered = (shell->menu_hover == HIT_POWER_BASE + i);
@@ -2027,10 +2078,17 @@ static void draw_menu(struct recon_shell *shell) {
 
         recon_hit_add(menu, bx, by, size, size, HIT_POWER_BASE + i);
 
+        /*
+         * The name of whatever the pointer is over, just above the footer
+         * rather than beside the icons -- the search box has that space now,
+         * and a name drawn over a box somebody is typing into would replace
+         * what they had typed with something they did not.
+         */
         if (hovered) {
-            recon_draw_text(menu, shell->font, MENU_PADDING + 4,
-                by + (size + ascent) / 2 - 2, start_x - MENU_PADDING - 8,
-                MENU_POWER[i].label, COLOR_MENU_TEXT);
+            int lw = recon_text_width(shell->font, MENU_POWER[i].label);
+            int lx = width - MENU_PADDING - lw - 1;
+            recon_draw_text(menu, shell->font, lx, fy - 5,
+                MENU_LEFT_WIDTH, MENU_POWER[i].label, COLOR_MENU_TEXT);
         }
     }
 

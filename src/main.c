@@ -2498,6 +2498,8 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/control-panel.png", RECON_ICON_CONTROL_PANEL);
     install_asset_icon("icons/apps.png", RECON_ICON_APPS);
     install_asset_icon("icons/help.png", RECON_ICON_HELP);
+    install_asset_icon("icons/appearance.png", RECON_ICON_APPEARANCE);
+    install_asset_icon("icons/programs.png", RECON_ICON_PROGRAMS);
 
     /*
      * The help and the change log, rewritten every start rather than only
