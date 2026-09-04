@@ -52,6 +52,10 @@
 #define COLOR_WARNING THEME(WARNING)
 #define COLOR_ROW_ALT THEME(SURFACE_ALT)
 
+/* How many folders the Storage page will account for: the fixed few, plus
+ * one for each account, plus the bin. */
+#define STORAGE_ROWS_MAX 24
+
 /* Hit ids. */
 #define HIT_PAGE_BASE (RECON_APPWIN_HIT_USER + 10)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
@@ -97,6 +101,9 @@ enum action {
     ACTION_SIZE_LESS,
     ACTION_SIZE_MORE,
     ACTION_RESET_READING,
+    /* Storage */
+    ACTION_MEASURE_STORAGE,
+    ACTION_EMPTY_BIN,
 };
 
 enum page {
@@ -180,14 +187,19 @@ static const struct pending_item POWER_ITEMS[] = {
       "Nothing to trade yet: no governor, and no battery to read." },
 };
 
+/*
+ * What Storage still cannot do. "Clean up" left this list in v0.2.15: the
+ * page now measures what is here and can empty the bin, which is what that
+ * item was asking for. The three that remain are all the same missing thing
+ * said three ways -- there is one filesystem, hosted in a folder, and no
+ * volume layer under it.
+ */
 static const struct pending_item STORAGE_ITEMS[] = {
     { "Volumes", "The disks and partitions the system can see.",
       "ReconOS has one filesystem, hosted in a folder. There is no volume "
       "layer to list." },
     { "Where new files go", "Which volume documents and programs are put on.",
       "Needs more than one volume for the choice to mean anything." },
-    { "Clean up", "Find what is taking room and offer to remove it.",
-      "Needs the Recycle Bin and temporary files accounted for by size." },
     { "Format and partition", "Prepare a disk for use.",
       "Writing partition tables is a kernel's job, and would be dangerous "
       "from here." },
@@ -245,8 +257,6 @@ static const struct {
 } PENDING[PAGE_COUNT] = {
     [PAGE_POWER] = { "What the machine does when it is left alone.",
         POWER_ITEMS, (int)(sizeof(POWER_ITEMS) / sizeof(POWER_ITEMS[0])) },
-    [PAGE_STORAGE] = { "Where things are kept, and how much room is left.",
-        STORAGE_ITEMS, (int)(sizeof(STORAGE_ITEMS) / sizeof(STORAGE_ITEMS[0])) },
     [PAGE_MULTITASKING] = { "How windows and desktops behave together.",
         MULTITASKING_ITEMS,
         (int)(sizeof(MULTITASKING_ITEMS) / sizeof(MULTITASKING_ITEMS[0])) },
@@ -266,6 +276,7 @@ enum question {
     QUESTION_REMOVE_USER,
     QUESTION_REMOVE_PROGRAM,
     QUESTION_REMOVE_KEY,
+    QUESTION_EMPTY_BIN,
 };
 
 struct control_panel {
@@ -337,6 +348,27 @@ struct control_panel {
     /* Where the list was drawn, so a right click can tell a row from the
      * space under the last one. */
     int list_x, list_y, list_w, list_h;
+
+    /*
+     * What the Storage page last measured.
+     *
+     * Held rather than recomputed on every draw: measuring walks the whole
+     * tree, and a page that walks the disk sixty times a second is a page
+     * that makes the desktop feel broken. It is measured when the page is
+     * opened and when somebody asks again.
+     */
+    struct {
+        char label[48];
+        char detail[96];
+        unsigned long long bytes;
+        int files;
+        /* False for the Recycle Bin, whose bytes are already counted inside
+         * the account folder above it. Two rows, one lot of bytes. */
+        bool in_total;
+    } storage[STORAGE_ROWS_MAX];
+    int storage_count;
+    unsigned long long storage_total;
+    bool storage_measured;
 };
 
 static void set_status(struct control_panel *cp, bool warning, const char *fmt, ...)
@@ -840,6 +872,236 @@ static void draw_pending_page(struct control_panel *cp, struct recon_panel *p,
 
         recon_hit_add(p, x, y, w, row_h, HIT_PENDING_BASE + i);
         y += row_h + 2;
+    }
+}
+
+/* --- Storage --- */
+
+/* A size a person can read, rather than a number of bytes. */
+static void storage_size(unsigned long long bytes, char *out, size_t size) {
+    if (bytes >= 1024ULL * 1024ULL * 1024ULL) {
+        snprintf(out, size, "%.1f GB",
+            (double)bytes / (1024.0 * 1024.0 * 1024.0));
+    } else if (bytes >= 1024ULL * 1024ULL) {
+        snprintf(out, size, "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    } else if (bytes >= 1024ULL) {
+        snprintf(out, size, "%.1f KB", (double)bytes / 1024.0);
+    } else {
+        snprintf(out, size, "%llu bytes", bytes);
+    }
+}
+
+/* Add one measured folder to the page's list. */
+static void storage_add(struct control_panel *cp, const char *label,
+        const char *path, const char *detail) {
+    if (cp->storage_count >= STORAGE_ROWS_MAX) {
+        return;
+    }
+
+    unsigned long long bytes = 0;
+    int files = 0;
+    if (!recon_fs_usage(NULL, path, &bytes, &files)) {
+        /*
+         * A folder that is not there is left out rather than shown as empty.
+         * Zero and absent look the same on a bar chart and are not the same
+         * fact, and only one of them is worth a row.
+         */
+        return;
+    }
+
+    int i = cp->storage_count++;
+    snprintf(cp->storage[i].label, sizeof(cp->storage[i].label), "%s", label);
+    snprintf(cp->storage[i].detail, sizeof(cp->storage[i].detail), "%s",
+        detail != NULL ? detail : path);
+    cp->storage[i].bytes = bytes;
+    cp->storage[i].files = files;
+    cp->storage[i].in_total = true;
+    cp->storage_total += bytes;
+}
+
+/*
+ * Walk what ReconOS owns.
+ *
+ * The accounts are listed one by one rather than as a single /Users row,
+ * because "the accounts take most of the room" is not an answer anybody can
+ * act on and "this account takes most of the room" is.
+ */
+static void measure_storage(struct control_panel *cp) {
+    cp->storage_count = 0;
+    cp->storage_total = 0;
+
+    storage_add(cp, "The system", RECON_DIR_SYSTEM,
+        "Settings, skins, icons, help and modules.");
+    storage_add(cp, "Programs", RECON_DIR_APPS,
+        "Installed applications and the packages they came in.");
+
+    int count = recon_users_count();
+    for (int i = 0; i < count; i++) {
+        struct recon_user user;
+        if (!recon_users_at(i, &user)) {
+            continue;
+        }
+
+        char path[RECON_PATH_MAX];
+        if (!recon_fs_join(path, sizeof(path), RECON_DIR_USERS, user.name)) {
+            continue;
+        }
+
+        char label[48];
+        snprintf(label, sizeof(label), "%s", user.name);
+        storage_add(cp, label, path, "This account's own files.");
+    }
+
+    storage_add(cp, "Temporary", RECON_DIR_TEMP,
+        "Scratch space. Screen captures land here when no path is given.");
+
+    /*
+     * The bin last, and only the signed-in account's -- it lives inside
+     * their folder, so its bytes are already counted in the row above. It is
+     * listed anyway because it is the one row somebody can act on, and a
+     * cleanup page that does not mention the bin is not a cleanup page.
+     */
+    const char *trash = recon_fs_trash_dir();
+    if (trash != NULL) {
+        unsigned long long bytes = 0;
+        int files = 0;
+        if (recon_fs_usage(NULL, trash, &bytes, &files) &&
+                cp->storage_count < STORAGE_ROWS_MAX) {
+            int i = cp->storage_count++;
+            snprintf(cp->storage[i].label, sizeof(cp->storage[i].label),
+                "Recycle Bin");
+            snprintf(cp->storage[i].detail, sizeof(cp->storage[i].detail),
+                "Deleted files, still inside your folder and counted there.");
+            cp->storage[i].bytes = bytes;
+            cp->storage[i].files = files;
+            cp->storage[i].in_total = false;
+        }
+    }
+
+    cp->storage_measured = true;
+}
+
+static void draw_storage(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    y = draw_heading(cp, p, x, y, w, "Storage",
+        "Where the room is going. How much is left is the host's to answer.");
+
+    if (!cp->storage_measured) {
+        measure_storage(cp);
+    }
+
+    char total[32];
+    storage_size(cp->storage_total, total, sizeof(total));
+
+    int counted = 0;
+    for (int i = 0; i < cp->storage_count; i++) {
+        if (cp->storage[i].in_total) {
+            counted++;
+        }
+    }
+
+    char summary[96];
+    snprintf(summary, sizeof(summary), "%s in all, across %d folder%s.",
+        total, counted, counted == 1 ? "" : "s");
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, summary,
+        COLOR_TEXT);
+    y += line + 8;
+
+    /* The rows. */
+    int bar_w = w / 4;
+    int size_w = 90;
+    int row_h = line * 2 + 8;
+
+    for (int i = 0; i < cp->storage_count; i++) {
+        if (y + row_h > h - BUTTON_HEIGHT - PADDING * 2) {
+            break;
+        }
+
+        if (i % 2 == 1) {
+            recon_fill_rect(p, x, y, w, row_h, COLOR_ROW_ALT);
+        }
+
+        char size[32];
+        storage_size(cp->storage[i].bytes, size, sizeof(size));
+
+        char count[48];
+        snprintf(count, sizeof(count), "%d file%s", cp->storage[i].files,
+            cp->storage[i].files == 1 ? "" : "s");
+
+        recon_draw_text(p, cp->font, x + 8, y + 4 + ascent,
+            w - bar_w - size_w - 40, cp->storage[i].label, COLOR_TEXT);
+        recon_draw_text(p, cp->font, x + 8, y + 4 + line + ascent,
+            w - bar_w - size_w - 40, cp->storage[i].detail, COLOR_DIM);
+
+        /*
+         * A share of the whole rather than of a disk. Without a volume layer
+         * there is no capacity to be a fraction of, and drawing one anyway
+         * would be inventing the number the page opens by saying it does not
+         * have.
+         */
+        int bar_x = x + w - bar_w - size_w - 16;
+        recon_fill_rect(p, bar_x, y + 6, bar_w, line, COLOR_PANEL);
+        if (cp->storage_total > 0) {
+            int filled = (int)((cp->storage[i].bytes * (unsigned long long)bar_w)
+                / cp->storage_total);
+            if (filled > bar_w) {
+                filled = bar_w;    /* The bin, which is counted twice. */
+            }
+            if (filled < 1 && cp->storage[i].bytes > 0) {
+                filled = 1;        /* Present, however little. */
+            }
+            recon_fill_rect(p, bar_x, y + 6, filled, line, THEME(ACCENT));
+        }
+
+        recon_draw_text(p, cp->font, x + w - size_w - 8, y + 4 + ascent,
+            size_w, size, COLOR_TEXT);
+        recon_draw_text(p, cp->font, x + w - size_w - 8,
+            y + 4 + line + ascent, size_w, count, COLOR_DIM);
+
+        y += row_h + 2;
+    }
+
+    y += PADDING;
+
+    int bx = draw_button(cp, p, x, y, "Measure Again",
+        HIT_ACTION_BASE + ACTION_MEASURE_STORAGE, true);
+    draw_button(cp, p, bx, y, "Empty Recycle Bin",
+        HIT_ACTION_BASE + ACTION_EMPTY_BIN, recon_fs_trash_count() > 0);
+    y += BUTTON_HEIGHT + PADDING * 2;
+
+    /*
+     * What this page still cannot do, kept in sight.
+     *
+     * The page used to be nothing but this list. Now that most of it works,
+     * the temptation is to drop the remainder -- and a gap nobody can see is
+     * a gap nobody remembers. Drawn smaller than the rows above, because it
+     * is a note about the system rather than a control.
+     */
+    if (y + line * 2 > h) {
+        return;
+    }
+
+    recon_fill_rect(p, x, y, w, 1, COLOR_SEPARATOR);
+    y += PADDING;
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "Not built yet:", COLOR_DIM);
+    y += line + 4;
+
+    int count = (int)(sizeof(STORAGE_ITEMS) / sizeof(STORAGE_ITEMS[0]));
+    for (int i = 0; i < count && y + line <= h; i++) {
+        char text[192];
+        snprintf(text, sizeof(text), "%s -- %s", STORAGE_ITEMS[i].label,
+            STORAGE_ITEMS[i].blocked);
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, text,
+            COLOR_DIM);
+        y += line + 2;
     }
 }
 
@@ -1429,6 +1691,7 @@ static void panel_draw(void *user, struct recon_panel *p,
     case PAGE_PROGRAMS:   draw_programs(cp, p, cx, cy, cw, chh); break;
     case PAGE_MODULES:    draw_modules(cp, p, cx, cy, cw, chh); break;
     case PAGE_NETWORK:    draw_network(cp, p, cx, cy, cw, chh); break;
+    case PAGE_STORAGE:    draw_storage(cp, p, cx, cy, cw, chh); break;
     case PAGE_REGISTRY:   draw_registry(cp, p, cx, cy, cw, chh); break;
     case PAGE_ABOUT:      draw_system(cp, p, cx, cy, cw, chh); break;
     default:
@@ -1494,6 +1757,19 @@ static void answered(void *user, int choice) {
     int button_count = (asked == QUESTION_REMOVE_USER) ? 3 : 2;
     if (choice < 0 || choice >= button_count - 1) {
         set_status(cp, false, "Nothing was changed.");
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_EMPTY_BIN) {
+        if (!recon_fs_trash_empty()) {
+            set_status(cp, true, "%s", recon_fs_last_error());
+        } else {
+            /* The numbers on the page are now wrong by exactly what was just
+             * thrown away, which is the whole reason somebody pressed it. */
+            measure_storage(cp);
+            set_status(cp, false, "The bin is empty.");
+        }
         recon_appwin_refresh(cp->win);
         return;
     }
@@ -2005,6 +2281,35 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_shell_restyle(cp->server->shell);
         set_status(cp, false, "Back to the defaults.");
         break;
+
+    case ACTION_MEASURE_STORAGE:
+        measure_storage(cp);
+        set_status(cp, false, "Measured %d folders.", cp->storage_count);
+        break;
+
+    case ACTION_EMPTY_BIN: {
+        int count = recon_fs_trash_count();
+        if (count == 0) {
+            set_status(cp, false, "The bin is already empty.");
+            break;
+        }
+
+        /*
+         * Asked about, because this is the one button on the page that
+         * destroys anything. Emptying the bin is what the bin is for and is
+         * still not undoable.
+         */
+        char message[192];
+        snprintf(message, sizeof(message),
+            "Permanently delete %d item%s in the Recycle Bin?\n"
+            "This cannot be undone.", count, count == 1 ? "" : "s");
+
+        static const char *const buttons[] = { "Empty", "Cancel" };
+        cp->question = QUESTION_EMPTY_BIN;
+        recon_appwin_ask(cp->win, "Empty Recycle Bin", message, buttons, 2,
+            answered);
+        break;
+    }
     }
 }
 
@@ -2104,6 +2409,10 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     if (hit_id >= HIT_PAGE_BASE) {
         int page = (int)(hit_id - HIT_PAGE_BASE);
         if (page >= 0 && page < PAGE_COUNT) {
+            /* Measured on the way in, so the page is never showing what the
+             * disk looked like some minutes ago. */
+            cp->storage_measured = false;
+
             cp->page = (enum page)page;
             cp->selected = 0;
             stop_editing(cp);

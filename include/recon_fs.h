@@ -162,6 +162,22 @@ bool recon_fs_stat(const char *cwd, const char *path, struct recon_dirent *out);
 int recon_fs_list(const char *cwd, const char *path,
     struct recon_dirent *out, int max);
 
+/*
+ * How much room everything under a path takes, and how many files that is.
+ * Either out parameter may be NULL.
+ *
+ * Bytes as the files themselves report them, not as the host allocates them:
+ * a page reporting where the room went is answering "what have I put here",
+ * and block sizes are a fact about the disk rather than about the work.
+ *
+ * Walks the tree, so it is not free on a large folder. False when the path
+ * cannot be read at all; a subfolder that cannot be read is skipped rather
+ * than failing the whole count, because a partial answer is worth more than
+ * none when the question is which folder is large.
+ */
+bool recon_fs_usage(const char *cwd, const char *path,
+    unsigned long long *bytes_out, int *files_out);
+
 /* --- Contents --- */
 
 /* Read a whole file. Caller frees. Returns NULL if it cannot be read. */

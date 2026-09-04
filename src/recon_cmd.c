@@ -308,6 +308,114 @@ static void cmd_del(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "%s\n", recon_fs_last_error());
 }
 
+/*
+ * The Recycle Bin.
+ *
+ * The bin existed and could only be reached from the File Explorer, which
+ * meant nothing outside a window could look at it, put anything back, or
+ * empty it -- and nothing could test that emptying it works. A thing the
+ * system does that the system cannot be asked about is a thing that quietly
+ * stops working.
+ *
+ * Note that `del` is not this: it removes a file, it does not bin it. That is
+ * deliberate -- `del` has meant "gone" since DOS, and a word that has meant
+ * one thing for forty years is a poor place to put a surprise -- but it does
+ * mean the two ways of removing a file behave differently, which is worth
+ * knowing before reaching for either.
+ */
+static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2 || strcasecmp(argv[1], "list") == 0) {
+        int count = recon_fs_trash_count();
+        if (count == 0) {
+            out(s, "The bin is empty.\n");
+            return;
+        }
+
+        struct recon_dirent entries[128];
+        int got = recon_fs_list(NULL, recon_fs_trash_dir(), entries,
+            (int)(sizeof(entries) / sizeof(entries[0])));
+        if (got > (int)(sizeof(entries) / sizeof(entries[0]))) {
+            got = (int)(sizeof(entries) / sizeof(entries[0]));
+        }
+
+        for (int i = 0; i < got; i++) {
+            char origin[RECON_PATH_MAX];
+            if (!recon_fs_trash_origin(entries[i].name, origin,
+                    sizeof(origin))) {
+                snprintf(origin, sizeof(origin), "(where it came from is not "
+                    "recorded)");
+            }
+            out(s, "  %-28s %s\n", entries[i].name, origin);
+        }
+
+        out(s, "\n  %d item%s. 'bin restore <name>' puts one back, "
+            "'bin empty' takes them all.\n", count, count == 1 ? "" : "s");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "empty") == 0) {
+        int count = recon_fs_trash_count();
+        if (count == 0) {
+            out(s, "The bin is already empty.\n");
+            return;
+        }
+        if (!recon_fs_trash_empty()) {
+            out(s, "%s\n", recon_fs_last_error());
+            return;
+        }
+        out(s, "Removed %d item%s permanently.\n", count,
+            count == 1 ? "" : "s");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "restore") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: bin restore <name>\n");
+            return;
+        }
+        if (!recon_fs_trash_restore(argv[2])) {
+            out(s, "%s\n", recon_fs_last_error());
+            return;
+        }
+        out(s, "Put '%s' back.\n", argv[2]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "purge") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: bin purge <name>\n");
+            return;
+        }
+        if (!recon_fs_trash_purge(argv[2])) {
+            out(s, "%s\n", recon_fs_last_error());
+            return;
+        }
+        out(s, "Removed '%s' permanently.\n", argv[2]);
+        return;
+    }
+
+    /*
+     * Anything else is read as a file to put in the bin, so the common case
+     * is one word rather than two: `bin notes.txt`.
+     */
+    char path[RECON_PATH_MAX];
+    size_t used = 0;
+    for (int i = 1; i < argc && used < sizeof(path) - 1; i++) {
+        int n = snprintf(path + used, sizeof(path) - used, "%s%s",
+            used > 0 ? " " : "", argv[i]);
+        if (n < 0 || (size_t)n >= sizeof(path) - used) {
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    if (!recon_fs_trash(s->cwd, path)) {
+        out(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+    out(s, "'%s' is in the bin. 'bin restore' puts it back.\n", path);
+}
+
 static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "Usage: deltree <name>\n");
@@ -1931,6 +2039,8 @@ static const struct command COMMANDS[] = {
     { "mkdir",    "mkdir <name>",          "Create a directory",                cmd_mkdir },
     { "del",      "del <name>",            "Delete a file or empty directory",  cmd_del },
     { "deltree",  "deltree <name>",        "Delete a folder and its contents",  cmd_deltree },
+    { "bin",      "bin [<name>|list|restore <name>|purge <name>|empty]",
+                                               "The Recycle Bin",                   cmd_bin },
     { "rename",   "rename <name> <new>",   "Rename a file or folder",           cmd_rename },
     { "move",     "move <name> <dest>",    "Move a file or folder",             cmd_move },
     { "copy",     "copy <name> <dest>",    "Copy a file or folder",             cmd_copy },

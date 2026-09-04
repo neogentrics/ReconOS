@@ -599,6 +599,87 @@ int recon_fs_list(const char *cwd, const char *path,
     return count;
 }
 
+/*
+ * How deep the walk will go.
+ *
+ * Not a limit anybody should reach -- the deepest thing here is a package's
+ * own folder -- but a walk with no floor under it is one loop away from
+ * hanging the desktop, and the desktop is what is asking.
+ */
+#define USAGE_DEPTH_MAX 32
+
+/* One level, adding to the running totals. */
+static void usage_walk(const char *path, int depth,
+        unsigned long long *bytes, int *files) {
+    if (depth > USAGE_DEPTH_MAX) {
+        return;
+    }
+
+    int count = recon_fs_list(NULL, path, NULL, 0);
+    if (count <= 0) {
+        return;
+    }
+
+    struct recon_dirent *entries = calloc((size_t)count, sizeof(*entries));
+    if (entries == NULL) {
+        return;
+    }
+
+    int got = recon_fs_list(NULL, path, entries, count);
+    if (got > count) {
+        got = count;
+    }
+
+    for (int i = 0; i < got; i++) {
+        char child[RECON_PATH_MAX];
+        if (!recon_fs_join(child, sizeof(child), path, entries[i].name)) {
+            continue;
+        }
+
+        if (entries[i].kind == RECON_FILE_DIRECTORY) {
+            usage_walk(child, depth + 1, bytes, files);
+        } else {
+            *bytes += (unsigned long long)entries[i].size;
+            (*files)++;
+        }
+    }
+
+    free(entries);
+}
+
+bool recon_fs_usage(const char *cwd, const char *path,
+        unsigned long long *bytes_out, int *files_out) {
+    if (bytes_out != NULL) {
+        *bytes_out = 0;
+    }
+    if (files_out != NULL) {
+        *files_out = 0;
+    }
+
+    struct recon_dirent info;
+    if (!recon_fs_stat(cwd, path, &info)) {
+        return false;
+    }
+
+    unsigned long long bytes = 0;
+    int files = 0;
+
+    if (info.kind == RECON_FILE_DIRECTORY) {
+        usage_walk(path, 0, &bytes, &files);
+    } else {
+        bytes = (unsigned long long)info.size;
+        files = 1;
+    }
+
+    if (bytes_out != NULL) {
+        *bytes_out = bytes;
+    }
+    if (files_out != NULL) {
+        *files_out = files;
+    }
+    return true;
+}
+
 /* --- Contents --- */
 
 char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
