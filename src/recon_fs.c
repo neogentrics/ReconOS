@@ -494,6 +494,7 @@ bool recon_fs_stat(const char *cwd, const char *path, struct recon_dirent *out) 
             (name != NULL && name[1] != '\0') ? name + 1 : "/");
         out->kind = kind_of(&st);
         out->size = (size_t)st.st_size;
+        out->modified = st.st_mtime;
     }
     return true;
 }
@@ -578,9 +579,11 @@ int recon_fs_list(const char *cwd, const char *path,
             if (stat(child, &st) == 0) {
                 out[count].kind = kind_of(&st);
                 out[count].size = (size_t)st.st_size;
+                out[count].modified = st.st_mtime;
             } else {
                 out[count].kind = RECON_FILE_OTHER;
                 out[count].size = 0;
+                out[count].modified = 0;
             }
         }
         count++;

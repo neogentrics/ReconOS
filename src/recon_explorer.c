@@ -19,6 +19,7 @@
 #include "recon_icons.h"
 #include "recon_explorer.h"
 #include "recon_fs.h"
+#include "recon_props.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
@@ -651,6 +652,29 @@ static void ask_about(struct recon_explorer *ex, enum pending_question question,
     recon_appwin_ask(ex->win, title, message, buttons, 2, explorer_answer);
 }
 
+/*
+ * What the selected thing is, in a box.
+ *
+ * The description comes from recon_props, which the desktop's identical menu
+ * entry also uses -- two answers to "how big is this and when did it change"
+ * is two places for them to disagree.
+ */
+static void do_properties(struct recon_explorer *ex) {
+    const struct recon_dirent *entry = selection(ex);
+    if (entry == NULL) {
+        set_status(ex, true, "Select something first");
+        return;
+    }
+
+    char text[512];
+    /* Either way: when there is nothing there the reason goes in the text,
+     * and a box saying why is more use than no box. */
+    recon_props_describe(ex->cwd, entry->name, text, sizeof(text));
+
+    const char *close[1] = { "Close" };
+    recon_appwin_ask(ex->win, "Properties", text, close, 1, NULL);
+}
+
 static void do_delete(struct recon_explorer *ex) {
     const struct recon_dirent *entry = selection(ex);
     if (entry == NULL) {
@@ -831,7 +855,9 @@ static void do_open_selected(struct recon_explorer *ex) {
     if (entry->kind == RECON_FILE_DIRECTORY) {
         navigate(ex, entry->name);
     } else {
-        set_status(ex, false, "'%s' - %zu bytes", entry->name, entry->size);
+        char size[32];
+        recon_props_size(entry->size, size, sizeof(size));
+        set_status(ex, false, "'%s' - %s", entry->name, size);
     }
 }
 
@@ -1623,22 +1649,24 @@ static void explorer_draw(void *user, struct recon_panel *p,
                     lw - COL_TYPE - 8, origin, text);
             } else {
                 recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 120,
-                    is_dir ? "Folder" : "File", text);
+                    recon_props_kind(entry, entry->name), text);
             }
         } else {
-            recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 80,
-                is_dir ? "Folder" : "File", text);
+            /* The same name the properties box gives it. This said "File"
+             * for everything that was not a folder, so a listing called
+             * something a File while its own properties called it a Text
+             * file. */
+            recon_draw_text(p, ex->font, lx + COL_TYPE, baseline, 90,
+                recon_props_kind(entry, entry->name), text);
         }
 
         if (!is_dir) {
+            /* The same phrasing the properties box uses. This had its own
+             * rounding, so a file could say "2.4 KB" in the listing and
+             * "2441 bytes" in its properties -- which reads as two different
+             * files rather than as two ways of saying one number. */
             char size[32];
-            if (entry->size >= 1024 * 1024) {
-                snprintf(size, sizeof(size), "%.1f MB", entry->size / (1024.0 * 1024.0));
-            } else if (entry->size >= 1024) {
-                snprintf(size, sizeof(size), "%.1f KB", entry->size / 1024.0);
-            } else {
-                snprintf(size, sizeof(size), "%zu B", entry->size);
-            }
+            recon_props_size(entry->size, size, sizeof(size));
             recon_draw_text(p, ex->font, lx + COL_SIZE, baseline, 80, size, text);
         }
 
@@ -1883,7 +1911,9 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
         if (entry->kind == RECON_FILE_DIRECTORY) {
             set_status(ex, false, "'%s' - click again to open", entry->name);
         } else {
-            set_status(ex, false, "'%s' - %zu bytes", entry->name, entry->size);
+            char size[32];
+        recon_props_size(entry->size, size, sizeof(size));
+        set_status(ex, false, "'%s' - %s", entry->name, size);
         }
         return true;
     }
@@ -2187,9 +2217,7 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         recon_menu_add(menu, "Rename", EXCTX_RENAME, !protectedd, false);
         recon_menu_add(menu, "Delete", EXCTX_DELETE, !protectedd, false);
         recon_menu_add(menu, "Delete Permanently", EXCTX_PURGE, !protectedd, true);
-        /* Shown but unavailable: there is no properties view yet, and hiding
-         * it would suggest there never will be. */
-        recon_menu_add(menu, "Properties", EXCTX_PROPERTIES, false, false);
+        recon_menu_add(menu, "Properties", EXCTX_PROPERTIES, true, false);
         return true;
     }
 
@@ -2234,7 +2262,7 @@ static void explorer_context_action(void *user, uint32_t id) {
     case EXCTX_NEW_FOLDER:  do_new_folder(ex); break;
     case EXCTX_NEW_FILE:    do_new_file(ex); break;
     case EXCTX_REFRESH:     reload(ex); break;
-    case EXCTX_PROPERTIES:  break; /* Offered as disabled; never chosen. */
+    case EXCTX_PROPERTIES:  do_properties(ex); break;
     case EXCTX_PURGE:       do_purge(ex); break;
     case EXCTX_RESTORE:     do_restore(ex); break;
     case EXCTX_EMPTY_BIN:   do_empty_bin(ex); break;

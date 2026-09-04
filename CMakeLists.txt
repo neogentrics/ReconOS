@@ -74,6 +74,7 @@ add_executable(ReconOS
     src/recon_users.c
     src/recon_session.c
     src/recon_access.c
+    src/recon_props.c
     src/recon_theme.c
     src/recon_procinfo.c
     src/recon_shell.c

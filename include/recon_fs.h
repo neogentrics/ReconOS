@@ -17,6 +17,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <time.h>
 #include <sys/types.h>
 
 #define RECON_PATH_MAX 1024
@@ -64,6 +65,10 @@ struct recon_dirent {
     char name[RECON_NAME_MAX];
     enum recon_file_kind kind;
     size_t size;
+    /* When it last changed, as the host counts seconds. Zero when the entry
+     * could not be read -- a listing still names what it found, because a
+     * file whose details are unreadable is more useful shown than hidden. */
+    time_t modified;
 };
 
 /*

@@ -30,6 +30,7 @@
 #include "recon_modules.h"
 #include "ReconOS.h"
 #include "recon_access.h"
+#include "recon_props.h"
 #include "recon_registry.h"
 #include "recon_session.h"
 #include "recon_users.h"
@@ -569,7 +570,14 @@ struct recon_shell {
 #define DIALOG_BUTTON_HEIGHT 26
 #define DIALOG_BUTTON_WIDTH 96
 #define DIALOG_BUTTON_GAP 8
-#define DIALOG_LINE_MAX 3
+/*
+ * Six, because a properties box is four facts and a question that needs
+ * saying carefully is three or four lines of prose. It was three, which was
+ * enough for every question there was at the time and silently dropped the
+ * last line of anything longer -- the properties box lost "Changed ..." and
+ * looked complete without it.
+ */
+#define DIALOG_LINE_MAX 6
 
 /* How many lines the message needs, wrapped to the dialog's width. */
 static int dialog_wrap(struct recon_shell *shell, const char *message,
@@ -581,8 +589,29 @@ static int dialog_wrap(struct recon_shell *shell, const char *message,
     lines[0][0] = '\0';
 
     while (*word != '\0' && count < DIALOG_LINE_MAX) {
-        const char *end = strchr(word, ' ');
-        size_t length = (end != NULL) ? (size_t)(end - word) : strlen(word);
+        /*
+         * A newline breaks the line where it is asked to.
+         *
+         * This wrapped on width alone, which is right for a sentence and
+         * wrong for anything with a shape -- a properties box is four
+         * short facts, and run together into a paragraph they read as one
+         * long one.
+         */
+        if (*word == '\n') {
+            count++;
+            word++;
+            if (count >= DIALOG_LINE_MAX) {
+                break;
+            }
+            lines[count][0] = '\0';
+            continue;
+        }
+
+        size_t length = 0;
+        while (word[length] != '\0' && word[length] != ' ' &&
+                word[length] != '\n') {
+            length++;
+        }
 
         char candidate[128];
         snprintf(candidate, sizeof(candidate), "%s%s%.*s",
@@ -2756,6 +2785,27 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
             ask_desktop(shell, DESKTOP_ASK_EMPTY_BIN, NULL);
             break;
 
+        case CTX_PROPERTIES: {
+            char text[512];
+            const char *folder = recon_fs_user_dir("Desktop");
+            char path[RECON_PATH_MAX];
+            if (!recon_fs_join(path, sizeof(path), folder,
+                    shell->context_target)) {
+                break;
+            }
+
+            /*
+             * The same box either way. When there is nothing there,
+             * recon_props_describe puts the reason in the text, and a box
+             * saying why is more use than no box at all.
+             */
+            recon_props_describe("/", path, text, sizeof(text));
+
+            const char *close[1] = { "Close" };
+            recon_shell_ask(shell, "Properties", text, close, 1, NULL, NULL);
+            break;
+        }
+
         default:
             break;
         }
@@ -2964,9 +3014,7 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
             context_add(shell, "Delete", CTX_DELETE, true, false);
             context_add(shell, "Delete Permanently", CTX_PURGE, true, true);
             (void)has_contents;
-            /* Shown but unavailable: there is no properties view yet, and
-             * hiding it would suggest there never will be. */
-            context_add(shell, "Properties", CTX_PROPERTIES, false, false);
+            context_add(shell, "Properties", CTX_PROPERTIES, true, false);
         } else {
             shell->context_kind = RECON_CONTEXT_DESKTOP;
             context_add(shell, "New Folder", CTX_NEW_FOLDER, true, false);
