@@ -206,6 +206,70 @@ Features, patches and releases are tracked the same way: see
 - **Note** the register exists to show that faults get found and fixed. A
   tool that fills it with noise is worth an entry of its own.
 
+### BG-070 — Nothing in the Help window was clickable
+
+[#212](https://github.com/neogentrics/ReconOS/issues/212)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"now nothing in the window is
+  clickable. You can't even scroll."*
+- **Was** the region that lets the sidebar take the mouse wheel covers every
+  row in it, and was registered *after* them. The last region added wins, so
+  it swallowed every click on the list: the topics were drawn, highlighted
+  under the pointer, and could not be chosen. The window frame kept working,
+  which is what made it look like only the inside was broken.
+- **Fixed in** v0.2.17, `b9745f9`. A region that exists to catch what the
+  others miss goes down before them, not after.
+- **Note** introduced by the fix for BG-047, which added the scrolling. The
+  fix for one fault is where the next one comes from more often than is
+  comfortable.
+
+### BG-071 — Markdown subheadings appeared with their hashes
+
+[#213](https://github.com/neogentrics/ReconOS/issues/213)
+
+- **Found in** v0.2.16. **Found by** screen capture, while confirming BG-070:
+  the page read `### Making a skin of your own`.
+- **Was** the help is written as Markdown and read from it, and the reader
+  drew every line as plain text. Nobody writing the help asked for the hashes
+  to appear on screen.
+- **Fixed in** v0.2.17, `b9745f9`. A line beginning with hashes is drawn as a
+  subheading, in the accent colour, with the hashes taken off.
+
+### BG-072 — "Scroll for the rest" above a list that could not scroll
+
+[#214](https://github.com/neogentrics/ReconOS/issues/214)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"under appearance or colors, it
+  says scroll for the rest, but you can't scroll."*
+- **Was** `panel_scroll` handled the skin editor and the registry and nothing
+  else. The Colours section printed a line telling somebody to do something
+  the page would not let them do, which is worse than not offering it.
+- **Fixed in** v0.2.17, `b9745f9`. Every list in Appearance takes the wheel,
+  clamps where it is drawn rather than where the wheel is turned, and shows a
+  bar when there is more than fits. Themes and Wallpapers got it at the same
+  time: neither overflows today and both will.
+- **Note** it survived because nothing could turn the wheel from outside, so
+  nothing tested it. `ui scroll` exists now. This is BG-038 again.
+
+### BG-073 — An application's icon did not follow its windows
+
+[#215](https://github.com/neogentrics/ReconOS/issues/215)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"Control panel's icon isn't
+  system wide. It's only in the start menu."*
+- **Was** two separate faults with one shape. The Control Panel was registered
+  with `RECON_ICON_CONTROL_PANEL` in the Start menu's table and
+  `RECON_ICON_SYSTEM` in its own window description, so the menu drew the
+  sliders and the title bar and taskbar drew a generic square. And a window
+  opened for a Control Panel item carried the Control Panel's icon rather than
+  the item's — fourteen taskbar buttons nobody could tell apart.
+- **Fixed in** v0.2.17, `b9745f9`. `recon_appwin_set_icon` alongside
+  `recon_appwin_set_title`, each page window carries its own, and the title
+  bar and taskbar both read through `recon_appwin_icon` so there is one answer
+  rather than two that can disagree.
+- **Note** the same shape as BG-067, a day apart: a thing with two names is a
+  thing that will eventually be two different things.
+
 ### BG-001 — The screen stayed blank
 
 [#3](https://github.com/neogentrics/ReconOS/issues/3)
