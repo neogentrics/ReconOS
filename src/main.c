@@ -49,12 +49,14 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/edges.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include "ReconOS.h"
+#include "recon_decor.h"
 #include "recon_control.h"
 #include "recon_fs.h"
 #include "recon_help.h"
@@ -557,8 +559,16 @@ static void toplevel_apply_visibility(struct recon_toplevel *toplevel) {
     if (toplevel == NULL || toplevel->scene_tree == NULL) {
         return;
     }
-    wlr_scene_node_set_enabled(&toplevel->scene_tree->node,
-        !toplevel->minimized && !toplevel->desktop_hidden);
+    bool visible = !toplevel->minimized && !toplevel->desktop_hidden;
+
+    wlr_scene_node_set_enabled(&toplevel->scene_tree->node, visible);
+
+    /*
+     * The title bar goes with the window. It is a separate node in the scene,
+     * so without this a minimized client leaves its own title bar behind --
+     * floating on the desktop, naming a window that is not there.
+     */
+    recon_decor_set_visible(toplevel->decor, visible);
 }
 
 bool recon_toplevel_is_minimized(struct recon_toplevel *toplevel) {
@@ -778,8 +788,19 @@ static void set_maximized(struct recon_toplevel *toplevel, bool maximized) {
             .height = geometry.height,
         };
 
-        wlr_scene_node_set_position(&toplevel->scene_tree->node, screen.x, screen.y);
-        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, screen.width, screen.height);
+        /*
+         * Below the title bar ReconOS draws for it, not over it. Filling the
+         * screen outright put the window at the top and its own title bar at
+         * minus its height, which is to say nowhere -- a maximized client
+         * window could not be moved, minimized or closed except from the
+         * taskbar.
+         */
+        int reserved = recon_decor_reserved_top(toplevel->decor);
+
+        wlr_scene_node_set_position(&toplevel->scene_tree->node, screen.x,
+            screen.y + reserved);
+        wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, screen.width,
+            screen.height - reserved);
     } else {
         wlr_scene_node_set_position(&toplevel->scene_tree->node,
             toplevel->restore_geometry.x, toplevel->restore_geometry.y);
@@ -911,6 +932,30 @@ static void process_resize(struct recon_server *server) {
  * Wayland clients receive no pointer events until the compositor tells them
  * the pointer has entered their surface, so this has to run on every motion.
  */
+/*
+ * A title bar being dragged owns the pointer until it is let go.
+ *
+ * Its own function because both the real motion path and the injected one
+ * have to run it. A test harness that goes around the thing it is testing
+ * proves nothing, and dragging a client window is exactly the sort of thing
+ * that is easier to reason about than to watch.
+ *
+ * Checked before the shell, because a window dragged over the taskbar must
+ * not hand the drag to whatever is under the pointer down there.
+ */
+static bool drag_decoration(struct recon_server *server) {
+    struct recon_toplevel *dragged;
+    wl_list_for_each(dragged, &server->toplevels, link) {
+        if (recon_decor_dragging(dragged->decor)) {
+            recon_decor_motion(dragged->decor, server->cursor->x,
+                server->cursor->y);
+            recon_damage_all(server);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void process_cursor_motion(struct recon_server *server, uint32_t time) {
     if (server->cursor_mode == RECON_CURSOR_MOVE) {
         process_move(server);
@@ -918,6 +963,11 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
     }
     if (server->cursor_mode == RECON_CURSOR_RESIZE) {
         process_resize(server);
+        return;
+    }
+
+    if (drag_decoration(server)) {
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
         return;
     }
 
@@ -976,6 +1026,15 @@ static bool dispatch_button(struct recon_server *server, uint32_t button,
         /* Any drag or resize ends when the button comes up. */
         server->cursor_mode = RECON_CURSOR_PASSTHROUGH;
         server->grabbed = NULL;
+
+        /* Including a title bar being dragged, which is its own kind of grab
+         * and would otherwise carry on following the pointer. */
+        struct recon_toplevel *dragged;
+        wl_list_for_each(dragged, &server->toplevels, link) {
+            recon_decor_click(dragged->decor, server->cursor->x,
+                server->cursor->y, false);
+        }
+
         recon_shell_handle_click(server->shell, server->cursor->x, server->cursor->y,
             false);
         return false;
@@ -1004,6 +1063,18 @@ static bool dispatch_button(struct recon_server *server, uint32_t button,
             return true;
         }
 
+        /*
+         * Then the title bars ReconOS draws above client windows, most
+         * recently focused first -- the same order the windows themselves are
+         * in, so two overlapping bars are answered by the one in front.
+         */
+        struct recon_toplevel *decorated;
+        wl_list_for_each(decorated, &server->toplevels, link) {
+            if (recon_decor_click(decorated->decor, x, y, true)) {
+                return true;
+            }
+        }
+
         /* Clicking a window focuses it. */
         double sx, sy;
         struct wlr_surface *surface = NULL;
@@ -1022,7 +1093,13 @@ void recon_inject_pointer(struct recon_server *server, int x, int y) {
         return;
     }
     wlr_cursor_warp_closest(server->cursor, NULL, (double)x, (double)y);
-    recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
+
+    /* The same order the real path takes: a drag in progress owns the
+     * pointer, and only otherwise does the shell hear about it. */
+    if (!drag_decoration(server)) {
+        recon_shell_handle_motion(server->shell, server->cursor->x,
+            server->cursor->y);
+    }
     recon_damage_all(server);
 }
 
@@ -1166,7 +1243,35 @@ void recon_spawn(struct recon_server *server, const char *command) {
         /* Point the child at our compositor socket. XDG_RUNTIME_DIR is
          * inherited, so it resolves the socket in the same place we created it. */
         setenv("WAYLAND_DISPLAY", server->socket_name, 1);
-        execlp(term, term, (char *)NULL);
+
+        /*
+         * Split on spaces, so a command can carry arguments.
+         *
+         * This passed the whole string as the program name, which was right
+         * while the only thing it ever launched was a terminal named in a
+         * setting -- and silently wrong the moment anything wanted to say
+         * `decor_client --client-side`: exec looked for a program whose name
+         * contained the flags, and failed. No quoting: this is a development
+         * facility, and a path with a space in it can be reached through a
+         * link.
+         */
+        char copy[512];
+        snprintf(copy, sizeof(copy), "%s", term);
+
+        char *argv[32];
+        int count = 0;
+        char *save = NULL;
+        for (char *word = strtok_r(copy, " ", &save);
+                word != NULL &&
+                    count < (int)(sizeof(argv) / sizeof(argv[0])) - 1;
+                word = strtok_r(NULL, " ", &save)) {
+            argv[count++] = word;
+        }
+        argv[count] = NULL;
+
+        if (count > 0) {
+            execvp(argv[0], argv);
+        }
         /* Only reached if exec failed. */
         fprintf(stderr, "ReconOS: failed to exec '%s'\n", term);
         _exit(127);
@@ -1553,6 +1658,14 @@ static void place_window(struct recon_toplevel *toplevel) {
 
     int x = CASCADE_STEP + server->next_window_x;
     int y = CASCADE_STEP + server->next_window_y;
+
+    /* Far enough down that the title bar has somewhere to be, however tall
+     * the skin makes it. */
+    int reserved = recon_theme_metric(RECON_METRIC_TITLE_HEIGHT);
+    if (y < reserved) {
+        y = reserved;
+    }
+
     wlr_scene_node_set_position(&toplevel->scene_tree->node, x, y);
 
     server->next_window_x += CASCADE_STEP;
@@ -1580,7 +1693,18 @@ static void toplevel_map(struct wl_listener *listener, void *data) {
     recon_toplevel_set_desktop_showing(toplevel, true);
 
     place_window(toplevel);
+
+    /*
+     * After placing, so the bar is built knowing where the window is rather
+     * than at the origin and then jumping.
+     */
+    if (toplevel->wants_server_decoration) {
+        toplevel->decor = recon_decor_create(toplevel->server,
+            recon_shell_font(toplevel->server->shell), toplevel);
+    }
+
     recon_focus_toplevel(toplevel);
+    recon_decor_update(toplevel->decor);
 
     const char *title = toplevel->xdg_toplevel->title;
     wlr_log(WLR_INFO, "ReconOS: window mapped: %s", title != NULL ? title : "(untitled)");
@@ -1588,12 +1712,22 @@ static void toplevel_map(struct wl_listener *listener, void *data) {
 
 static void toplevel_commit(struct wl_listener *listener, void *data) {
     struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, commit);
+
+    /*
+     * A client resizes itself and nothing else says so, so the title bar is
+     * checked against the window on every commit. The check is cheap and the
+     * redraw only happens when something moved -- otherwise a terminal
+     * printing would repaint its own title bar sixty times a second.
+     */
+    recon_decor_update(toplevel->decor);
+
     recon_damage_all(toplevel->server);
 }
 
 /* The taskbar shows window titles, so it follows title changes. */
 static void toplevel_set_title(struct wl_listener *listener, void *data) {
     struct recon_toplevel *toplevel = wl_container_of(listener, toplevel, set_title);
+    recon_decor_update(toplevel->decor);
     recon_shell_refresh(toplevel->server->shell);
 }
 
@@ -1608,6 +1742,7 @@ static void toplevel_unmap(struct wl_listener *listener, void *data) {
     }
 
     wl_list_remove(&toplevel->link);
+    recon_decor_set_visible(toplevel->decor, false);
 
     /* Hand focus to whatever was most recently used before this one. */
     if (!wl_list_empty(&server->toplevels)) {
@@ -1637,7 +1772,46 @@ static void toplevel_destroy(struct wl_listener *listener, void *data) {
     wl_list_remove(&toplevel->request_minimize.link);
     wl_list_remove(&toplevel->set_title.link);
     wl_list_remove(&toplevel->commit.link);
+
+    /* Before the memory goes: the decoration holds a pointer back to this. */
+    recon_decor_destroy(toplevel->decor);
     free(toplevel);
+}
+
+/*
+ * A client asking who draws its title bar.
+ *
+ * ReconOS answers "I do", always. The alternative -- letting each client
+ * decide -- is what the screen looked like before this: a Wayland client
+ * arriving with a grey frame of its own, its own close button, and nothing
+ * about it in the skin anybody chose. Two window managers in one screen.
+ *
+ * A client may refuse, and some do. That is the protocol's answer and not a
+ * failure; the window is then undecorated as far as ReconOS is concerned and
+ * is still reachable from the taskbar and from Alt+Tab.
+ */
+static void handle_new_decoration(struct wl_listener *listener, void *data) {
+    (void)listener;
+    struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
+
+    wlr_xdg_toplevel_decoration_v1_set_mode(decoration,
+        WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+
+    /*
+     * And remember that this one asked, because only the ones that asked get
+     * a bar drawn for them. Reached through the scene tree the surface was
+     * tagged with, which is the same route a click takes from a surface back
+     * to its window.
+     */
+    struct wlr_xdg_surface *base = decoration->toplevel->base;
+    if (base == NULL || base->data == NULL) {
+        return;
+    }
+    struct wlr_scene_tree *tree = base->data;
+    struct recon_toplevel *toplevel = tree->node.data;
+    if (toplevel != NULL) {
+        toplevel->wants_server_decoration = true;
+    }
 }
 
 static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
@@ -2060,6 +2234,17 @@ int main(int argc, char **argv) {
 
     /* xdg-shell is how clients create ordinary application windows. Without
      * this global they cannot open one at all and abort on startup. */
+    /*
+     * Server-side decorations, declared before the shell so a client asking
+     * at its first commit finds the answer already there.
+     */
+    server.xdg_decoration = wlr_xdg_decoration_manager_v1_create(server.wl_display);
+    if (server.xdg_decoration != NULL) {
+        server.new_decoration.notify = handle_new_decoration;
+        wl_signal_add(&server.xdg_decoration->events.new_toplevel_decoration,
+            &server.new_decoration);
+    }
+
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
     server.new_xdg_surface.notify = server_new_xdg_surface;
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);

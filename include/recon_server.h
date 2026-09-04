@@ -38,6 +38,8 @@ enum recon_cursor_mode {
 };
 
 struct recon_toplevel;
+struct recon_decor;
+struct wlr_xdg_decoration_manager_v1;
 
 struct recon_server {
     /* Set when a restart was asked for, so the exit status can say so. */
@@ -75,6 +77,10 @@ struct recon_server {
 
     struct wlr_xdg_shell *xdg_shell;
     struct wl_listener new_xdg_surface;
+
+    /* Server-side decorations: ReconOS draws every client's title bar. */
+    struct wlr_xdg_decoration_manager_v1 *xdg_decoration;
+    struct wl_listener new_decoration;
 
     /* Open windows, most recently focused first. */
     struct wl_list toplevels;
@@ -149,6 +155,23 @@ struct recon_toplevel {
      * back. A window with nowhere to return from would simply be lost.
      */
     bool minimized;
+
+    /*
+     * The ReconOS title bar drawn above this window. NULL for a client that
+     * draws its own.
+     */
+    struct recon_decor *decor;
+
+    /*
+     * Whether this client asked ReconOS who draws its title bar.
+     *
+     * Only clients that use xdg-decoration are decorated. A client that never
+     * asks -- weston-terminal is one -- is drawing its own frame and cannot be
+     * told to stop, and giving it a second title bar above the one it drew is
+     * worse than the mismatch this feature exists to fix. That was not a
+     * guess: it is what the screen looked like the first time this worked.
+     */
+    bool wants_server_decoration;
 };
 
 /* Implemented in main.c, used by the shell. */

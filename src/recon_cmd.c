@@ -416,6 +416,52 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "'%s' is in the bin. 'bin restore' puts it back.\n", path);
 }
 
+/*
+ * Start a program on the host, on ReconOS's Wayland socket.
+ *
+ * This is the one command that reaches the machine underneath, and the help
+ * says plainly that nothing here does -- so it is only present when
+ * RECONOS_ALLOW_SPAWN is set in the environment ReconOS was started from. It
+ * exists for one reason: there is no Wayland client written for ReconOS, so
+ * the only way to find out what ReconOS does with somebody else's window is to
+ * start somebody else's window.
+ *
+ * `recon_spawn` had been in main.c since the compositor could host a client
+ * and nothing had ever called it. A capability nothing exercises is a
+ * capability nobody knows the state of.
+ */
+static void cmd_spawn(struct recon_cmd_session *s, int argc, char **argv) {
+    struct recon_server *server = s->server;
+    if (server == NULL) {
+        out(s, "Nothing to launch onto.\n");
+        return;
+    }
+
+    if (getenv("RECONOS_ALLOW_SPAWN") == NULL) {
+        out(s, "'spawn' runs a program on the machine underneath, which is\n"
+               "not something ReconOS does. It is here for testing what this\n"
+               "compositor does with a window it did not draw, and is only\n"
+               "available when RECONOS_ALLOW_SPAWN is set.\n");
+        return;
+    }
+
+    /* Joined, so a command with a space in it works without quoting. */
+    char command[RECON_PATH_MAX];
+    size_t used = 0;
+    for (int i = 1; i < argc && used < sizeof(command) - 1; i++) {
+        int n = snprintf(command + used, sizeof(command) - used, "%s%s",
+            i > 1 ? " " : "", argv[i]);
+        if (n < 0 || (size_t)n >= sizeof(command) - used) {
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    recon_spawn(server, used > 0 ? command : NULL);
+    out(s, "Started '%s'. It appears when it has drawn something.\n",
+        used > 0 ? command : "the configured terminal");
+}
+
 static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "Usage: deltree <name>\n");
@@ -2072,6 +2118,7 @@ static const struct command COMMANDS[] = {
     { "mkdir",    "mkdir <name>",          "Create a directory",                cmd_mkdir },
     { "del",      "del <name>",            "Delete a file or empty directory",  cmd_del },
     { "deltree",  "deltree <name>",        "Delete a folder and its contents",  cmd_deltree },
+    { "spawn",    "spawn [command]",       "Start a Wayland client (testing)",  cmd_spawn },
     { "bin",      "bin [<name>|list|restore <name>|purge <name>|empty]",
                                                "The Recycle Bin",                   cmd_bin },
     { "rename",   "rename <name> <new>",   "Rename a file or folder",           cmd_rename },

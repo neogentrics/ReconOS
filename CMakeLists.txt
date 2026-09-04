@@ -61,6 +61,7 @@ add_executable(ReconOS
     src/recon_cmd.c
     src/recon_control.c
     src/recon_control_panel.c
+    src/recon_decor.c
     src/recon_desktop.c
     src/recon_explorer.c
     src/recon_fs.c
@@ -238,3 +239,57 @@ add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)
 add_test(NAME network COMMAND recon_net_tests)
+
+# --- A Wayland client, for testing what ReconOS does with somebody else's
+#     window ---
+#
+# ReconOS has hosted client windows since v0.1.0 and there has never been a
+# client written against it, so everything on that path was reasoned about and
+# nothing was watched. Server-side decorations made that untenable: the whole
+# feature is "the client stops drawing its title bar and we draw it instead",
+# and the clients to hand -- weston's own demos -- do not use the protocol and
+# draw their frames regardless.
+#
+# Not registered with ctest: it needs a compositor to connect to, which is the
+# thing under test rather than something the test can arrange.
+
+pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
+
+set(XDG_DECORATION_XML
+    "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
+
+foreach(SPEC "xdg-shell:${XDG_SHELL_XML}" "xdg-decoration:${XDG_DECORATION_XML}")
+    string(REPLACE ":" ";" PARTS "${SPEC}")
+    list(GET PARTS 0 PROTO_NAME)
+    list(GET PARTS 1 PROTO_XML)
+
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROTO_NAME}-client-protocol.h"
+        COMMAND "${WAYLAND_SCANNER_EXEC}" client-header
+                "${PROTO_XML}"
+                "${CMAKE_CURRENT_BINARY_DIR}/${PROTO_NAME}-client-protocol.h"
+        DEPENDS "${PROTO_XML}"
+        COMMENT "Generating ${PROTO_NAME} client header"
+        VERBATIM)
+
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${PROTO_NAME}-client-protocol.c"
+        COMMAND "${WAYLAND_SCANNER_EXEC}" private-code
+                "${PROTO_XML}"
+                "${CMAKE_CURRENT_BINARY_DIR}/${PROTO_NAME}-client-protocol.c"
+        DEPENDS "${PROTO_XML}"
+        COMMENT "Generating ${PROTO_NAME} client code"
+        VERBATIM)
+endforeach()
+
+add_executable(decor_client
+    tests/decor_client.c
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-decoration-client-protocol.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-decoration-client-protocol.h")
+
+target_include_directories(decor_client PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}"
+    ${WAYLAND_CLIENT_INCLUDE_DIRS})
+target_link_libraries(decor_client PRIVATE ${WAYLAND_CLIENT_LIBRARIES} rt)
