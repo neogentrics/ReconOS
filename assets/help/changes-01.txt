@@ -1,3 +1,12 @@
+The screen blanks when nothing is happening. A timeout on the Power page
+-- never, 1, 2, 5, 10, 15, 30 minutes or an hour -- and an option to ask for
+your password when it wakes. It covers the screen rather than switching the
+display off, which would need a kernel, and the page says so.
+
+The key or click that wakes it is spent on waking: somebody coming back to
+their desk presses a key to see what is there, and typing that key into a
+document they cannot see yet is not what they asked for.
+
 The firewall can be changed from its page. Add Rule offers nine presets --
 web server, mail, a database, a run of the ports games take, and the two blunt
 ones that refuse everything in or out -- because most people adding a rule want

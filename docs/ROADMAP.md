@@ -848,6 +848,42 @@ Customize Skin and offers to make the change on a copy. Being told "you cannot
 edit this" and left to work out that copying it first is the way round is the
 system making its own limitation into the reader's problem.
 
+### The screen blanks
+
+The one thing on the Power page that never needed a kernel, which Joshua said
+while looking at it:
+
+> Screen blanking should work with a timeout and a login-on-wake option. Power
+> mode needs the kernel.
+
+Both right. A timer, reset by any input, that raises a black panel over
+everything; and a setting saying whether coming back asks who you are.
+
+Stepped through a short list rather than typed. The values anybody wants are
+never, one, two, five, ten, fifteen, thirty and an hour, and a field that
+accepts 7 is a field somebody has to be told 7 is allowed in.
+
+It is described as covering the screen, not as switching the display off.
+ReconOS is a process on somebody else's kernel and has no way to touch a
+panel's power state; saying otherwise would be a claim about hardware, on the
+page whose whole character is saying plainly what it cannot do. What this
+saves is the picture rather than the watt, which is still worth having: nobody
+walking past reads a document that is not on screen.
+
+The input that wakes it is spent on waking -- for a key or a click, not for
+pointer motion. Somebody coming back to their desk presses a key to see what
+is there, and typing that key into a document they cannot see yet is not what
+they asked for; a mouse move, on the other hand, does nothing on its own, and
+a pointer that refused to move until the second nudge would feel broken.
+
+Injected input takes the same route, which is not a detail: without it,
+blanking could not be driven from outside, and a thing that cannot be driven
+from outside is a thing that stops working without anybody noticing. That is
+BG-038, and the lesson held.
+
+`blank`, `blank now` and `blank wake` in the Terminal, because a test that has
+to wait a minute to find out whether blanking works is a test nobody runs.
+
 ### The firewall, from its own page
 
 Joshua, on seeing it: *"Oh, wow. Firewall looks nice. I like that... I don't
