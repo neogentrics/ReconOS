@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_filedlg.h"
 #include "recon_clip.h"
@@ -261,7 +262,7 @@ static void update_title(struct recon_notepad *np) {
      * room for a name, not for a path, and a long one should lose its middle
      * rather than its " - Notepad". */
     char shown[64];
-    snprintf(shown, sizeof(shown), "%s", leaf);
+    recon_text_copy(shown, sizeof(shown), leaf);
 
     char title[96];
     snprintf(title, sizeof(title), "%s%s - Notepad", shown,

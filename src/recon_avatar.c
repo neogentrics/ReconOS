@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_avatar.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
@@ -54,7 +55,13 @@ static void scan(void) {
 
         /* Stored without its extension, because that is how an icon is asked
          * for -- the icon layer tries .ico and .png itself. */
-        snprintf(g_names[g_count], AVATAR_NAME_MAX, "%s", entries[i].name);
+        /* Too long to hold is left out rather than cut down: this name is
+         * what the picture is asked for by, and a shortened one names
+         * nothing. */
+        if (strlen(entries[i].name) >= AVATAR_NAME_MAX) {
+            continue;
+        }
+        recon_text_copy(g_names[g_count], AVATAR_NAME_MAX, entries[i].name);
         char *dot = strrchr(g_names[g_count], '.');
         if (dot != NULL) {
             *dot = '\0';

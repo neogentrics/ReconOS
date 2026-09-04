@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_fs.h"
 #include "recon_png.h"
 #include "recon_registry.h"
@@ -195,8 +196,17 @@ static void scan(void) {
         if (entries[i].kind == RECON_FILE_DIRECTORY) {
             continue;
         }
-        snprintf(g_names[g_count], NAME_MAX_LEN, "%s", entries[i].name);
-        g_count++;
+        /*
+          * A name too long to hold is left out rather than cut down. This
+          * name is what the file is asked for by later, so a shortened one
+          * is not a wallpaper with a shorter name -- it is an entry in the
+          * list that cannot be loaded, offered to somebody who will click it.
+          */
+         if (strlen(entries[i].name) >= NAME_MAX_LEN) {
+             continue;
+         }
+         recon_text_copy(g_names[g_count], NAME_MAX_LEN, entries[i].name);
+         g_count++;
     }
 }
 

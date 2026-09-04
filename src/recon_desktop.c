@@ -18,6 +18,7 @@
 
 #include <wlr/types/wlr_scene.h>
 
+#include "ReconOS.h"
 #include "recon_desktop.h"
 #include "recon_fs.h"
 #include "recon_registry.h"
@@ -824,7 +825,7 @@ void recon_desktop_paste(struct recon_desktop *desktop) {
      * "notes 2.txt" rather than "notes.txt 2". */
     char base[RECON_NAME_MAX];
     char extension[RECON_NAME_MAX] = "";
-    snprintf(base, sizeof(base), "%s", leaf);
+    recon_text_copy(base, sizeof(base), leaf);
     char *dot = strrchr(base, '.');
     if (dot != NULL && dot != base) {
         snprintf(extension, sizeof(extension), "%s", dot);

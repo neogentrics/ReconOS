@@ -1169,7 +1169,7 @@ static void draw(struct recon_session *session) {
         const char *who = session->name.text;
 
         char greeting[128];
-        snprintf(greeting, sizeof(greeting), "%s%s.",
+        recon_text_printf(greeting, sizeof(greeting), "%s%s.",
             *who != '\0' ? "The tower is yours, " : "The tower is yours",
             *who != '\0' ? who : "");
 

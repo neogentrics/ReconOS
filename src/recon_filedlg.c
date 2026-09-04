@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_filedlg.h"
 #include "recon_icons.h"
 #include "recon_theme.h"
@@ -79,7 +80,7 @@ static void go_to(struct recon_filedlg *dialog, const char *path) {
     struct recon_dirent info;
     if (!recon_fs_stat(dialog->cwd, path, &info) ||
             info.kind != RECON_FILE_DIRECTORY) {
-        snprintf(dialog->message, sizeof(dialog->message),
+        recon_text_printf(dialog->message, sizeof(dialog->message),
             "'%s' is not a folder", canonical);
         return;
     }
@@ -186,7 +187,7 @@ static enum recon_filedlg_result accept(struct recon_filedlg *dialog) {
 
     if (dialog->mode == RECON_FILEDLG_OPEN &&
             !recon_fs_exists(dialog->cwd, trimmed)) {
-        snprintf(dialog->message, sizeof(dialog->message),
+        recon_text_printf(dialog->message, sizeof(dialog->message),
             "'%s' does not exist", trimmed);
         return RECON_FILEDLG_NOTHING;
     }

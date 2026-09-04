@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "ReconOS.h"
 #include "recon_fs.h"
 
 #define DEFAULT_HOST_ROOT "/recon"
@@ -1272,7 +1273,7 @@ bool recon_fs_trash(const char *cwd, const char *path) {
      * the name in the bin is made unique rather than assumed to be. */
     char base[RECON_NAME_MAX];
     char extension[RECON_NAME_MAX] = "";
-    snprintf(base, sizeof(base), "%s", leaf);
+    recon_text_copy(base, sizeof(base), leaf);
     char *dot = strrchr(base, '.');
     if (dot != NULL && dot != base) {
         snprintf(extension, sizeof(extension), "%s", dot);
@@ -1287,8 +1288,13 @@ bool recon_fs_trash(const char *cwd, const char *path) {
         return false;
     }
 
+    /* Joined rather than pasted: this path is where the file is about to be
+     * moved to, and a truncated one is a different place. */
     char target[RECON_PATH_MAX];
-    snprintf(target, sizeof(target), "%s/%s", files_dir, name);
+    if (!recon_fs_join(target, sizeof(target), files_dir, name)) {
+        set_error("that name is too long to put in the bin");
+        return false;
+    }
 
     if (!recon_fs_rename("/", canonical, target)) {
         return false;

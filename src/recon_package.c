@@ -10,6 +10,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "ReconOS.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
@@ -431,7 +432,7 @@ bool recon_package_uninstall(const char *name) {
         leaf = (leaf != NULL) ? leaf + 1 : placed[i];
 
         char module_name[RECON_NAME_MAX];
-        snprintf(module_name, sizeof(module_name), "%s", leaf);
+        recon_text_copy(module_name, sizeof(module_name), leaf);
         char *dot = strrchr(module_name, '.');
         if (dot != NULL) {
             *dot = '\0';

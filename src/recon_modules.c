@@ -15,6 +15,7 @@
 
 #include <wlr/util/log.h>
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
@@ -470,7 +471,7 @@ bool recon_modules_load(const char *reconos_path) {
         descriptor->version != NULL ? descriptor->version : "");
     snprintf(slot->state.description, sizeof(slot->state.description), "%s",
         descriptor->description != NULL ? descriptor->description : "");
-    snprintf(slot->state.path, sizeof(slot->state.path), "%s", canonical);
+    recon_text_copy(slot->state.path, sizeof(slot->state.path), canonical);
 
     if (descriptor->load != NULL) {
         g_loading = slot->state.name;
@@ -486,8 +487,8 @@ bool recon_modules_load(const char *reconos_path) {
             if (descriptor->unload != NULL) {
                 descriptor->unload();
             }
-            snprintf(slot->state.problem, sizeof(slot->state.problem),
-                "%s", g_error[0] != '\0' ? g_error : "the module declined to load");
+            recon_text_copy(slot->state.problem, sizeof(slot->state.problem),
+                g_error[0] != '\0' ? g_error : "the module declined to load");
             slot->state.loaded = false;
             slot->handle = NULL;
             slot->descriptor = NULL;

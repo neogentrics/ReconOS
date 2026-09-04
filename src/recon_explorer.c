@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_explorer.h"
@@ -812,7 +813,7 @@ static void do_paste(struct recon_explorer *ex) {
      * rather than "notes.txt 2". */
     char base[RECON_NAME_MAX];
     char extension[RECON_NAME_MAX] = "";
-    snprintf(base, sizeof(base), "%s", leaf);
+    recon_text_copy(base, sizeof(base), leaf);
     char *dot = strrchr(base, '.');
     if (dot != NULL && dot != base) {
         snprintf(extension, sizeof(extension), "%s", dot);
@@ -1302,9 +1303,17 @@ static void build_places(struct recon_explorer *ex) {
         }
         folders++;
 
+        /*
+         * Joined rather than pasted. A path built by hand and cut short is a
+         * path to somewhere else, and this one is compared against the known
+         * places and then navigated to -- so a deep folder with a long name
+         * would have put a wrong destination in the drop-down.
+         */
         char path[RECON_PATH_MAX];
-        snprintf(path, sizeof(path), "%s%s%s",
-            ex->cwd, strcmp(ex->cwd, "/") == 0 ? "" : "/", ex->entries[i].name);
+        if (!recon_fs_join(path, sizeof(path), ex->cwd,
+                ex->entries[i].name)) {
+            continue;
+        }
 
         /*
          * Not if it is already up there among the known places.

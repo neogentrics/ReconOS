@@ -20,6 +20,7 @@
 #include <wayland-server-core.h>
 #include <wlr/util/log.h>
 
+#include "ReconOS.h"
 #include "recon_apps.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
@@ -1029,7 +1030,7 @@ static void run_typed_task(struct recon_taskmgr *tm) {
      */
     const char *found = recon_installed_app_resolve(name);
     if (found == NULL) {
-        snprintf(tm->status, sizeof(tm->status),
+        recon_text_printf(tm->status, sizeof(tm->status),
             "Nothing installed is called '%s'.", name);
         return;
     }
