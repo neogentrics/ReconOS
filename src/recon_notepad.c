@@ -56,6 +56,9 @@
 #define HIT_TEXT (RECON_APPWIN_HIT_USER + 2)
 /* The find bar's field. Its own id, in the gap before the menu entries. */
 #define HIT_FIND (RECON_APPWIN_HIT_USER + 3)
+#define HIT_REPLACEMENT (RECON_APPWIN_HIT_USER + 4)
+#define HIT_REPLACE_ONE (RECON_APPWIN_HIT_USER + 5)
+#define HIT_REPLACE_ALL (RECON_APPWIN_HIT_USER + 6)
 /* The entries inside whichever menu is down. */
 #define HIT_MENU_BASE (RECON_APPWIN_HIT_USER + 10)
 /*
@@ -83,6 +86,7 @@ enum file_command {
     EDIT_SELECT_ALL,
     EDIT_FIND,
     EDIT_FIND_NEXT,
+    EDIT_REPLACE,
 };
 
 struct menu_item {
@@ -111,6 +115,7 @@ static const struct menu_item EDIT_MENU[] = {
     { "Select All", "Ctrl+A", EDIT_SELECT_ALL, true  },
     { "Find...",    "Ctrl+F", EDIT_FIND,       false },
     { "Find Next",  "F3",     EDIT_FIND_NEXT,  false },
+    { "Replace...", "Ctrl+H", EDIT_REPLACE,    false },
 };
 
 /*
@@ -222,6 +227,19 @@ struct recon_notepad {
     /* The find bar, and what is in it. */
     bool finding;
     struct recon_edit find;
+
+    /*
+     * And what to put in its place, when the bar is open for replacing.
+     *
+     * One bar rather than two, because Find and Replace are the same act with
+     * one more field: everything about locating the text is identical, and a
+     * separate bar would be the same code twice with a second place for the
+     * two to disagree about what "next" means.
+     */
+    bool replacing;
+    struct recon_edit replacement;
+    /* Which of the two fields the keyboard is in. */
+    bool replacement_focused;
 
     struct recon_filedlg dialog;
     enum pending_action pending;
@@ -707,6 +725,91 @@ static void do_find_next(struct recon_notepad *np) {
     np->message[0] = '\0';
 }
 
+/*
+ * Replace what is selected, if it is what was searched for, then find the
+ * next one.
+ *
+ * The order matters. Replacing first and searching second is what makes
+ * pressing the button repeatedly walk the document: each press deals with the
+ * match in front of you and puts the next one there. Searching first would
+ * leave the last match unreplaced and require one more press than there are
+ * matches, which nobody would count correctly.
+ */
+static void do_replace_one(struct recon_notepad *np) {
+    const char *needle = np->find.text;
+    if (needle[0] == '\0') {
+        set_message(np, false, "Type something to look for.");
+        return;
+    }
+
+    size_t needle_len = strlen(needle);
+    bool replaced = false;
+
+    if (has_selection(np)) {
+        size_t a, b;
+        selection_range(np, &a, &b);
+        if (b - a == needle_len && matches_at(np, a, needle, needle_len)) {
+            delete_range(np, a, b);
+            insert_run(np, np->replacement.text,
+                strlen(np->replacement.text));
+            replaced = true;
+        }
+    }
+
+    do_find_next(np);
+
+    if (replaced) {
+        set_message(np, false, "Replaced one.");
+    }
+}
+
+/*
+ * Every match, from the top.
+ *
+ * From the top rather than from the cursor, because "all" means all and a
+ * count that depends on where the cursor happened to be is not a count of
+ * anything. One pass forward, stepping over what was just written: replacing
+ * "a" with "aa" otherwise finds its own output and never stops.
+ */
+static void do_replace_all(struct recon_notepad *np) {
+    const char *needle = np->find.text;
+    size_t needle_len = strlen(needle);
+
+    if (needle_len == 0) {
+        set_message(np, false, "Type something to look for.");
+        return;
+    }
+
+    size_t replacement_len = strlen(np->replacement.text);
+    int count = 0;
+
+    size_t at = 0;
+    while (at + needle_len <= np->length) {
+        if (!matches_at(np, at, needle, needle_len)) {
+            at++;
+            continue;
+        }
+
+        np->anchor = NO_ANCHOR;
+        np->cursor = at;
+        delete_range(np, at, at + needle_len);
+        np->cursor = at;
+        insert_run(np, np->replacement.text, replacement_len);
+
+        at += replacement_len;
+        count++;
+    }
+
+    np->anchor = NO_ANCHOR;
+    scroll_to_cursor(np);
+
+    if (count == 0) {
+        set_message(np, true, "'%s' is not in this document.", needle);
+    } else {
+        set_message(np, false, "Replaced %d.", count);
+    }
+}
+
 static void open_find(struct recon_notepad *np) {
     np->finding = true;
 
@@ -730,12 +833,32 @@ static void open_find(struct recon_notepad *np) {
     }
 
     recon_edit_begin(&np->find, initial, false);
+    recon_edit_begin(&np->replacement, "", false);
+    np->replacement_focused = false;
     np->message[0] = '\0';
+}
+
+/* The same bar with the second field showing. */
+static void open_replace(struct recon_notepad *np) {
+    bool was_open = np->finding;
+
+    open_find(np);
+    np->replacing = true;
+
+    /*
+     * The keyboard starts in the field that is new. Somebody who pressed
+     * Ctrl+H with the bar already open and something to find in it wants to
+     * type the replacement, not retype the search.
+     */
+    np->replacement_focused = was_open && np->find.text[0] != '\0';
 }
 
 static void close_find(struct recon_notepad *np) {
     np->finding = false;
+    np->replacing = false;
+    np->replacement_focused = false;
     recon_edit_end(&np->find);
+    recon_edit_end(&np->replacement);
     np->message[0] = '\0';
 }
 
@@ -1077,6 +1200,10 @@ static void run_command(struct recon_notepad *np, enum file_command command) {
         do_find_next(np);
         break;
 
+    case EDIT_REPLACE:
+        open_replace(np);
+        break;
+
     case FILE_CLOSE:
         /*
          * Unsaved work is not thrown away on a click. Closing asks where to
@@ -1332,14 +1459,71 @@ static void notepad_draw(void *user, struct recon_panel *panel,
             fy + (FIND_HEIGHT + ascent) / 2 - 2, label_w, label, COLOR_TEXT);
 
         int field_x = x + PADDING + label_w + 8;
-        int field_w = w - (field_x - x) - PADDING;
-        if (field_w > 260) {
-            field_w = 260;
+
+        /*
+         * Narrower when there is a second field and two buttons to fit
+         * beside it. A find bar that pushed its own buttons off the end of
+         * the window would be a bar with nothing to press.
+         */
+        int field_w = np->replacing ? 130 : 260;
+        int room = w - (field_x - x) - PADDING;
+        if (field_w > room) {
+            field_w = room;
         }
+
         recon_edit_draw(panel, np->font, field_x, fy + 2, field_w,
             FIND_HEIGHT - 4, &np->find);
         recon_hit_add(panel, field_x, fy + 2, field_w, FIND_HEIGHT - 4,
             HIT_FIND);
+
+        if (np->replacing) {
+            const char *with = "With:";
+            int with_w = recon_text_width(np->font, with);
+            int wx = field_x + field_w + 10;
+
+            recon_draw_text(panel, np->font, wx,
+                fy + (FIND_HEIGHT + ascent) / 2 - 2, with_w, with, COLOR_TEXT);
+
+            int rx = wx + with_w + 8;
+            recon_edit_draw(panel, np->font, rx, fy + 2, field_w,
+                FIND_HEIGHT - 4, &np->replacement);
+            recon_hit_add(panel, rx, fy + 2, field_w, FIND_HEIGHT - 4,
+                HIT_REPLACEMENT);
+
+            /*
+             * Which field the keyboard is in, said with an outline. Two text
+             * boxes and no way to tell which one is typing into is a bar that
+             * eats what you type.
+             */
+            int focused_x = np->replacement_focused ? rx : field_x;
+            recon_stroke_rect(panel, focused_x - 1, fy + 1, field_w + 2,
+                FIND_HEIGHT - 2, THEME(ACCENT));
+
+            int bx = rx + field_w + 10;
+            const struct { const char *label; uint32_t id; } BUTTONS[] = {
+                { "Replace", HIT_REPLACE_ONE },
+                { "All", HIT_REPLACE_ALL },
+            };
+
+            for (size_t i = 0; i < sizeof(BUTTONS) / sizeof(BUTTONS[0]); i++) {
+                int bw = recon_text_width(np->font, BUTTONS[i].label) + 16;
+                if (bx + bw > x + w - PADDING) {
+                    break;
+                }
+
+                recon_fill_role(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
+                    RECON_THEME_BUTTON);
+                recon_draw_button_edge(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
+                    false, COLOR_MENUBAR);
+                recon_draw_text(panel, np->font, bx + 8,
+                    fy + (FIND_HEIGHT + ascent) / 2 - 2, bw - 12,
+                    BUTTONS[i].label, THEME(BUTTON_TEXT));
+                recon_hit_add(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
+                    BUTTONS[i].id);
+
+                bx += bw + 6;
+            }
+        }
     }
 
     recon_fill_rect(panel, x, sy, w, STATUS_HEIGHT, COLOR_STATUS_BG);
@@ -1421,6 +1605,26 @@ static bool notepad_click(void *user, uint32_t hit_id, int cx, int cy,
         if (index >= 0 && index < MENUS[np->menu_open].count) {
             run_command(np, MENUS[np->menu_open].items[index].command);
         }
+        return true;
+    }
+
+    /* The find bar's own controls. Clicking a field is also how the keyboard
+     * moves between the two, so a click on one is a click away from the
+     * other. */
+    if (hit_id == HIT_FIND) {
+        np->replacement_focused = false;
+        return true;
+    }
+    if (hit_id == HIT_REPLACEMENT) {
+        np->replacement_focused = true;
+        return true;
+    }
+    if (hit_id == HIT_REPLACE_ONE) {
+        do_replace_one(np);
+        return true;
+    }
+    if (hit_id == HIT_REPLACE_ALL) {
+        do_replace_all(np);
         return true;
     }
 
@@ -1529,6 +1733,10 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case XKB_KEY_V:
             do_paste(np);
             return true;
+        case XKB_KEY_h:
+        case XKB_KEY_H:
+            open_replace(np);
+            return true;
         case XKB_KEY_f:
         case XKB_KEY_F:
             open_find(np);
@@ -1552,9 +1760,29 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             do_find_next(np);
             return true;
         }
-        switch (recon_edit_key(&np->find, sym, modifiers)) {
+
+        /* Tab moves between the two fields, which is the gesture a form of
+         * any kind teaches. */
+        if (np->replacing && sym == XKB_KEY_Tab) {
+            np->replacement_focused = !np->replacement_focused;
+            return true;
+        }
+
+        struct recon_edit *edit = (np->replacing && np->replacement_focused)
+            ? &np->replacement : &np->find;
+
+        switch (recon_edit_key(edit, sym, modifiers)) {
         case RECON_EDIT_COMMIT:
-            do_find_next(np);
+            /*
+             * Enter means the thing the bar is open for: find the next one,
+             * or replace this one and find the next. Somebody who opened the
+             * replace bar and pressed Enter meant to replace something.
+             */
+            if (np->replacing) {
+                do_replace_one(np);
+            } else {
+                do_find_next(np);
+            }
             return true;
         case RECON_EDIT_CANCEL:
             close_find(np);
