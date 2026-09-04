@@ -1020,11 +1020,10 @@ list, a text field and a menu are all still square whatever the skin says.
 **No paint program.** The control socket still has no authentication, only
 file permissions.
 
-**Client windows cannot be resized by dragging an edge.** They are framed by
-ReconOS now (v0.2.15) and dragged, minimized, maximized and closed like any
-other window, but the frame is a title bar and not a border: resizing needs
-hit regions outside the client's own surface, which is its own piece of work.
-Until then a client window is whatever size it asks to be, or maximized.
+**A client window's title bar carries a generic icon.** A Wayland client
+hands its compositor an `app_id`, not a picture; guessing an icon from a
+reverse-DNS string would be wrong more often than right, and looking one up
+against `/System/Icons` needs a mapping nothing writes yet.
 
 **Help has no search, and no way in from where you are.** The topic list is
 short enough to read, but the change log makes it thirty entries and neither

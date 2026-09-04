@@ -476,12 +476,14 @@ question or left behind its own parent.
 **framed by ReconOS**, not by the toolkit that built them. A client used to
 arrive with a frame of its own in somebody else's colours; it now gets the
 same title bar every other window has, reading the same skin metrics, and
-drags, minimizes, maximizes and closes the same way. A client that insists on
-drawing its own frame still may, and is not given a second one on top of it.
+drags, resizes, minimizes, maximizes and closes the same way. A client that
+insists on drawing its own frame still may, and is not given a second one on
+top of it.
 
-It cannot yet be resized by dragging an edge: the frame is a title bar rather
-than a border, and resizing needs hit regions outside the client's own
-surface.
+Resizing is by a six-pixel margin *outside* the window rather than a border
+inside it: inside belongs to the client, and a terminal's last column of text
+is not a resize handle. The cursor changes over the margin, because an
+invisible grab region nobody can see is one nobody finds.
 
 `tests/decor_client.c` is the smallest Wayland client that uses
 xdg-decoration, built alongside ReconOS. It exists because weston's demos do

@@ -42,9 +42,9 @@ The three buttons at the right of a title bar are minimize, maximize and
 close.
 
 A program written for Wayland rather than for ReconOS gets the same title bar
-as everything else, so it drags, minimizes, maximizes and closes the same way.
-It cannot yet be resized by dragging its edges — that is still up to the
-program.
+as everything else, so it drags, resizes, minimizes, maximizes and closes the
+same way. Its edges are grabbed from just **outside** the window, where the
+cursor changes to show which way it will move.
 
 A program that insists on drawing its own frame is left alone rather than
 given a second one.

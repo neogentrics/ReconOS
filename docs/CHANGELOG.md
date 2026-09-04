@@ -38,8 +38,8 @@ it. Before this the bin could only be reached from the File Explorer.
 was not written for ReconOS used to arrive with a frame of its own, in
 somebody else's colours, with its own buttons. Now it is framed the way every
 other window is — same colours, same buttons, same corners — and can be
-dragged, minimized, maximized and closed like one. A program that insists on
-drawing its own frame still may; it is not given a second one.
+dragged, resized, minimized, maximized and closed like one. A program that
+insists on drawing its own frame still may; it is not given a second one.
 
 **F1 opens the help about whatever you are looking at.** From Notepad it opens
 Writing; from a Control Panel page it opens the page about that page.
