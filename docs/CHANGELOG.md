@@ -34,6 +34,9 @@ there is one filesystem and no volume layer under it.
 something in, `bin restore <name>` takes it back out, and `bin empty` clears
 it. Before this the bin could only be reached from the File Explorer.
 
+**F1 opens the help about whatever you are looking at.** From Notepad it opens
+Writing; from a Control Panel page it opens the page about that page.
+
 **Three quiet bugs, found by clearing the compiler's warnings.** The File
 Explorer's folder drop-down could point at the wrong place for a deeply nested
 folder; a wallpaper or account picture with a very long file name was listed

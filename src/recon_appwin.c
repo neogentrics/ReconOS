@@ -10,6 +10,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/log.h>
 
+#include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_server.h"
@@ -110,6 +111,11 @@ struct recon_appwin {
     /* Set by the application to override impl->title; empty means it has not
      * asked for anything but its own name. */
     char title[96];
+
+    /* Which page of the help is about what this window is showing, from the
+     * implementation and then from whatever the application says as it moves
+     * between its own views. */
+    char help_topic[64];
 
     /*
      * Whether the remembered position has been applied yet. Done on first
@@ -354,6 +360,8 @@ struct recon_appwin *recon_appwin_create(struct recon_server *server,
     win->font = font;
     win->impl = impl;
     win->user = user;
+    recon_text_copy(win->help_topic, sizeof(win->help_topic),
+        impl->help != NULL ? impl->help : "");
 
     win->width = impl->default_width > 0 ? impl->default_width : 400;
     win->height = impl->default_height > 0 ? impl->default_height : 300;
@@ -736,6 +744,19 @@ static void restore_geometry(struct recon_appwin *win) {
     if (recon_registry_get_bool(RECON_REG_USER, key, false)) {
         recon_appwin_set_maximized(win, true);
     }
+}
+
+void recon_appwin_set_help_topic(struct recon_appwin *win,
+        const char *topic) {
+    if (win == NULL) {
+        return;
+    }
+    recon_text_copy(win->help_topic, sizeof(win->help_topic),
+        topic != NULL ? topic : "");
+}
+
+const char *recon_appwin_help_topic(struct recon_appwin *win) {
+    return (win != NULL) ? win->help_topic : "";
 }
 
 const char *recon_appwin_title(struct recon_appwin *win) {

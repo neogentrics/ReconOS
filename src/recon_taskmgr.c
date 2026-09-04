@@ -1350,6 +1350,7 @@ static const struct recon_appwin_impl TASKMGR_IMPL = {
      * the rename keeps working.
      */
     .title = "Watchtower",
+    .help = "Programs",
     .icon = RECON_ICON_TASKMGR,
     .default_width = 560,
     .default_height = 440,

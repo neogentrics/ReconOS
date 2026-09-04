@@ -904,6 +904,27 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_SKIN_DONE, true);
 }
 
+/*
+ * Which page of the help answers a question asked from this page.
+ *
+ * Not every page has one, and the ones that do not say so with NULL rather
+ * than with a page that is nearly right -- being sent somewhere unrelated is
+ * worse than being sent to the front of the help.
+ */
+static const char *help_topic_for(enum page page) {
+    switch (page) {
+    case PAGE_ACCOUNTS:   return "Accounts";
+    case PAGE_APPEARANCE: return "How it looks";
+    case PAGE_READING:    return "How it looks";
+    case PAGE_PROGRAMS:   return "Programs";
+    case PAGE_MODULES:    return "Programs";
+    case PAGE_STORAGE:    return "Files";
+    case PAGE_MULTITASKING: return "Desktops";
+    case PAGE_REGISTRY:   return "The Terminal";
+    default:              return "What is not built yet";
+    }
+}
+
 static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     if (cp->skin_editing) {
@@ -2907,6 +2928,13 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
             cp->page = (enum page)page;
             cp->selected = 0;
+
+            /*
+             * F1 follows the page rather than the window. Somebody on the
+             * Appearance page pressing it is asking about skins, not about
+             * the Control Panel.
+             */
+            recon_appwin_set_help_topic(cp->win, help_topic_for(cp->page));
             stop_editing(cp);
             clear_status(cp);
 
@@ -3151,6 +3179,7 @@ static void panel_destroy(void *user) {
 
 static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .title = "Control Panel",
+    .help = "Accounts",
     .icon = RECON_ICON_SYSTEM,
     /* Tall enough for the whole page list without scrolling it: a settings
      * window whose own list of settings does not fit is a poor advertisement

@@ -864,6 +864,27 @@ Not done: the ramps and the frame metrics can be removed from the editor but
 not set there, and a skin cannot be renamed or deleted from it. The file is
 still editable by hand, which is the way to do any of those today.
 
+### F1
+
+`recon_help_show_topic` had existed since the help did and nothing called it:
+the help could be opened at a page and there was no way to ask it to be, so
+somebody stuck in the Control Panel had to find Help and then find the right
+page in it.
+
+An application declares its page in its `recon_appwin_impl`, and one with views
+of its own moves it with `recon_appwin_set_help_topic` as it moves between
+them. Declared rather than worked out by the shell from a window's title,
+because the two are not the same thing and should not be made to look like it:
+"Watchtower" is a window, "Programs" is a page.
+
+Wiring it up found that `recon_help_show_topic` chose the page and did not ask
+the window to redraw, so it went on showing the one before — which looks
+exactly like the topic not being found. It was found by asking the window what
+it thought it was showing (`ui app`), not by looking at the screen: the screen
+had nothing to say about the difference. The refresh is inside
+`recon_help_show_topic` now, because every caller of it wants the window to
+show what it has just been told to.
+
 ### A build with no warnings in it
 
 Twenty-six warnings across fourteen sites, all `-Wformat-truncation`, all of

@@ -373,6 +373,7 @@ static void terminal_destroy(void *user) {
 
 static const struct recon_appwin_impl TERMINAL_IMPL = {
     .title = "ReconOS Terminal",
+    .help = "The Terminal",
     .icon = RECON_ICON_TERMINAL,
     .default_width = 640,
     .default_height = 400,

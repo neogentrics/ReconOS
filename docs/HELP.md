@@ -186,7 +186,11 @@ it.
 **Print Screen** saves a picture of the whole screen into your Pictures
 folder. So does the **capture** command, which can also be given a path.
 
-## This help, and what changed
+## Help and updates
+
+**F1** opens this help at the page about whatever you are looking at. From
+Notepad it opens Writing; from a Control Panel page it opens the one about
+that page. With nothing in front it opens at the beginning.
 
 **Help** is in the Start menu, under the Control Panel. The list down the left
 is these pages; under the rule at the bottom of it is the change log, one

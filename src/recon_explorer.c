@@ -2359,6 +2359,7 @@ static void explorer_destroy(void *user) {
 
 static const struct recon_appwin_impl EXPLORER_IMPL = {
     .title = "File Explorer",
+    .help = "Files",
     .icon = RECON_ICON_EXPLORER,
     .default_width = 720,
     .default_height = 460,

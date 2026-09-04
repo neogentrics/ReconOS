@@ -152,6 +152,17 @@ struct recon_appwin_impl {
 
     /* Free whatever `user` points at. */
     void (*destroy)(void *user);
+
+    /*
+     * The help topic about this application, by the title it has in the help
+     * index. Optional; without one, F1 opens the help at its first page.
+     *
+     * Here rather than worked out by the shell from a window's title, because
+     * the two are not the same thing and should not be made to look like it:
+     * "Watchtower" is a window, "Programs" is a page, and an application can
+     * be about more than one page as it moves between its own views.
+     */
+    const char *help;
 };
 
 struct recon_appwin *recon_appwin_create(struct recon_server *server,
@@ -193,6 +204,16 @@ bool recon_appwin_is_minimized(struct recon_appwin *win);
 bool recon_appwin_is_maximized(struct recon_appwin *win);
 
 const char *recon_appwin_title(struct recon_appwin *win);
+
+/*
+ * Which page of the help is about what this window is currently showing.
+ *
+ * An application with pages of its own -- the Control Panel -- moves this as
+ * it moves between them, so F1 answers the question actually on screen rather
+ * than the one the application is called after.
+ */
+void recon_appwin_set_help_topic(struct recon_appwin *win, const char *topic);
+const char *recon_appwin_help_topic(struct recon_appwin *win);
 
 /* The application's own state pointer, so an application's public functions
  * can be given the window and find themselves from it. */

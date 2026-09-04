@@ -603,6 +603,7 @@ static void help_destroy(void *user) {
 
 static const struct recon_appwin_impl HELP_IMPL = {
     .title = "Help",
+    .help = "Getting around",
     .icon = RECON_ICON_HELP,
     .default_width = 640,
     .default_height = 460,
@@ -651,6 +652,17 @@ void recon_help_show_topic(struct recon_appwin *win, const char *title) {
     for (int i = 0; i < help->topic_count; i++) {
         if (strcasecmp(help->topics[i].title, title) == 0) {
             choose(help, i);
+
+            /*
+             * And redraw. Without this the page was chosen and the window
+             * went on showing the one before it -- which looked exactly like
+             * the topic not being found, and was found only by asking the
+             * window what it thought it was showing.
+             *
+             * Here rather than at the call sites, because every caller of
+             * this wants the window to show what it has just been told to.
+             */
+            recon_appwin_refresh(win);
             return;
         }
     }

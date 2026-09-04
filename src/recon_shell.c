@@ -2662,6 +2662,31 @@ static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
     return index;
 }
 
+void recon_shell_open_help(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+
+    /*
+     * Whatever is in front decides which page. `recon_help_show_topic` had
+     * existed since the help did and nothing called it: the help could be
+     * opened at a page and there was no way to ask it to be, so somebody
+     * stuck in the Control Panel had to find Help and then find the right
+     * page in it.
+     */
+    const char *topic = NULL;
+    if (shell->focused_app >= 0 && shell->focused_app < shell->app_count) {
+        topic = recon_appwin_help_topic(shell->apps[shell->focused_app]);
+    }
+
+    recon_shell_close_menu(shell);
+    recon_shell_open_named(shell, "Help");
+
+    if (topic != NULL && topic[0] != '\0') {
+        recon_help_show_topic(recon_installed_app_existing("Help"), topic);
+    }
+}
+
 void recon_shell_open_named(struct recon_shell *shell, const char *title) {
     if (shell == NULL || title == NULL) {
         return;

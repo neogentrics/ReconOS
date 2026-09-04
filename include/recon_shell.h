@@ -139,6 +139,15 @@ int recon_shell_app_index(struct recon_shell *shell, const char *title);
 /* Open a built-in application by name. Does nothing if there is no such one. */
 void recon_shell_open_named(struct recon_shell *shell, const char *title);
 
+/*
+ * Open the help at whatever the window in front is about, or at its first
+ * page when nothing is in front or nothing says.
+ *
+ * What F1 does. An application declares its page in its `recon_appwin_impl`,
+ * and one with views of its own moves it as it moves between them.
+ */
+void recon_shell_open_help(struct recon_shell *shell);
+
 /* Open a built-in window by its registration index. */
 void recon_shell_open_app(struct recon_shell *shell, int index);
 

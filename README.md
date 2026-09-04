@@ -452,6 +452,11 @@ here means the thing a user touches works.
 - **Help** — a page for each part of the system, and under a rule, the change
   log back to the first version
 
+**F1 opens the help at the page about whatever is in front.** An application
+declares which page is about it, and one with views of its own -- the Control
+Panel -- moves that as it moves between them, so F1 from the Appearance page
+opens the skins page rather than the front of the help.
+
 **Help that stays true.** The pages and the log are one document each in
 `docs/`, split into topics by a script and written into `/System/Help` every
 time ReconOS starts. Prose about a feature lives beside the prose about every
@@ -481,6 +486,8 @@ question or left behind its own parent.
 | `Alt` + `C` | Close the focused window |
 | `Ctrl` + `Alt` + `Del` | Task Manager or shut down |
 | `Alt` + `Q` | Quit |
+| `F1` | Help, at the page about whatever is in front |
+| `Print Screen` | A picture of the screen |
 
 Inside the file explorer:
 

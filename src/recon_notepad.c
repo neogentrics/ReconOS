@@ -1717,6 +1717,7 @@ static void notepad_destroy(void *user) {
 
 static const struct recon_appwin_impl NOTEPAD_IMPL = {
     .title = "Notepad",
+    .help = "Writing",
     .icon = RECON_ICON_NOTEPAD,
     .default_width = 520,
     .default_height = 400,

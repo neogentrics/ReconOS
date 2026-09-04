@@ -1236,6 +1236,15 @@ static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
         return true;
     }
 
+    /*
+     * F1, with no modifier, because that is what F1 has meant on every system
+     * that has one. Before the Alt check for the same reason Print Screen is.
+     */
+    if (sym == XKB_KEY_F1) {
+        recon_shell_open_help(server->shell);
+        return true;
+    }
+
     if (!(modifiers & WLR_MODIFIER_ALT)) {
         return false;
     }
