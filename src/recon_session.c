@@ -490,6 +490,9 @@ struct recon_session {
     char stop_summary[96];
     char stop_detail[512];
     char stop_advice[256];
+    /* How far the "collecting" counter has got, 0 to 100. */
+    int stop_progress;
+    struct wl_event_source *stop_timer;
     bool signed_in_flag;
 
     /* Setup and login share these; only one is showing at a time. */
@@ -1082,11 +1085,21 @@ static void draw_ring(struct recon_panel *p, int cx, int cy, int radius,
  * nobody anything.
  */
 static void draw_stopped(struct recon_session *session, struct recon_panel *p) {
-    const recon_color BACKGROUND = RECON_RGB(0x0E, 0x1B, 0x33);
+    /*
+     * Purple, because Recon Towers is purple. A system that has stopped is
+     * still that system, and the one screen everybody remembers about an
+     * operating system should not be the one screen that looks like somebody
+     * else's.
+     *
+     * Fixed rather than from the skin: the one fault this screen has to
+     * survive is the one where the colours are the problem.
+     */
+    const recon_color BACKGROUND = RECON_RGB(0x2A, 0x14, 0x4A);
     const recon_color HEADING    = RECON_RGB(0xFF, 0xFF, 0xFF);
     const recon_color CODE       = RECON_RGB(0xFF, 0xC8, 0x50);
-    const recon_color BODY       = RECON_RGB(0xC8, 0xD4, 0xE8);
-    const recon_color QUIET      = RECON_RGB(0x84, 0x96, 0xB4);
+    const recon_color BODY       = RECON_RGB(0xDA, 0xD0, 0xF0);
+    const recon_color QUIET      = RECON_RGB(0xA0, 0x90, 0xC4);
+    const recon_color BAR        = RECON_RGB(0x4A, 0x2C, 0x7A);
 
     int line = recon_font_line_height(session->font);
     if (line <= 0) {
@@ -1171,13 +1184,49 @@ static void draw_stopped(struct recon_session *session, struct recon_panel *p) {
     }
 
     /*
-     * What to do now, at the bottom, where a person looks after they have
-     * finished reading rather than before they have started.
+     * What is being done about it, and how far along.
+     *
+     * The record is already on disk before this screen is drawn, so the
+     * counter is not the writing -- it is the reading. Somebody looking at a
+     * stopped machine needs a moment to take the code in, and a screen that
+     * offered a key immediately would be a screen people dismiss before they
+     * have read the one thing on it worth reading. The count is what buys
+     * that moment and says what it is for.
      */
-    recon_draw_text(p, session->font, x,
-        session->height - line * 2 + ascent, w,
-        "Press any key to shut down. The code and the time are in "
-        "/System/Logs.", QUIET);
+    int bar_w = w / 2;
+    if (bar_w > 320) {
+        bar_w = 320;
+    }
+    int bar_y = session->height - line * 5;
+
+    int done = session->stop_progress;
+    if (done > 100) {
+        done = 100;
+    }
+
+    recon_fill_rect(p, x, bar_y, bar_w, 6, BAR);
+    recon_fill_rect(p, x, bar_y, bar_w * done / 100, 6, CODE);
+
+    char note[96];
+    if (done < 100) {
+        snprintf(note, sizeof(note),
+            "Collecting what happened -- %d%% complete", done);
+    } else {
+        recon_text_copy(note, sizeof(note),
+            "Collected. The code and the time are in /System/Logs.");
+    }
+    recon_draw_text(p, session->font, x, bar_y + 6 + line + ascent - 4, w,
+        note, QUIET);
+
+    /*
+     * And only then the way out. Offered when there is nothing left to wait
+     * for, so the key is an answer rather than an interruption.
+     */
+    if (done >= 100) {
+        recon_draw_text(p, session->font, x,
+            session->height - line * 2 + ascent, w,
+            "Press any key to shut down.", HEADING);
+    }
 }
 
 static void draw_splash(struct recon_session *session, struct recon_panel *p) {
@@ -2117,6 +2166,34 @@ static void after_update(struct recon_session *session) {
     }
 }
 
+/*
+ * The counter on the stop screen.
+ *
+ * Slow enough to be read and short enough not to be a wait: a hundred steps
+ * of twenty-five milliseconds is two and a half seconds, which is about how
+ * long it takes somebody to find the code, read it, and decide whether to
+ * write it down.
+ */
+#define STOP_TICK_MS 25
+
+static int stop_tick(void *data) {
+    struct recon_session *session = data;
+
+    if (session->stage != STAGE_STOPPED) {
+        return 0;
+    }
+
+    if (session->stop_progress < 100) {
+        session->stop_progress += 2;
+        if (session->stop_progress > 100) {
+            session->stop_progress = 100;
+        }
+        recon_session_refresh(session);
+        wl_event_source_timer_update(session->stop_timer, STOP_TICK_MS);
+    }
+    return 0;
+}
+
 static int boot_tick(void *data) {
     struct recon_session *session = data;
 
@@ -2561,7 +2638,14 @@ bool recon_session_handle_key(struct recon_session *session,
      * nothing else this screen could mean by a keypress.
      */
     if (session->stage == STAGE_STOPPED) {
-        recon_quit(session->server);
+        /*
+         * Ignored until the counter has finished, which is the whole point
+         * of having one: a key pressed in the first half-second is somebody
+         * reacting to the screen appearing, not somebody who has read it.
+         */
+        if (session->stop_progress >= 100) {
+            recon_quit(session->server);
+        }
         return true;
     }
 
@@ -2806,6 +2890,20 @@ static void show_stop_screen(struct recon_server *server,
     }
 
     session->stage = STAGE_STOPPED;
+    session->stop_progress = 0;
+
+    struct wl_event_loop *loop =
+        wl_display_get_event_loop(session->server->wl_display);
+    session->stop_timer = wl_event_loop_add_timer(loop, stop_tick, session);
+    if (session->stop_timer != NULL) {
+        wl_event_source_timer_update(session->stop_timer, STOP_TICK_MS);
+    } else {
+        /* No timer means nothing would ever finish the count, and a screen
+         * stuck at nought per cent with no way out is worse than one that
+         * skips straight to offering the key. */
+        session->stop_progress = 100;
+    }
+
     recon_panel_set_enabled(session->panel, true);
     recon_panel_raise_to_top(session->panel);
     recon_session_refresh(session);
