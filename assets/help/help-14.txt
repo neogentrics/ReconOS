@@ -1,28 +1,19 @@
-ReconOS names its faults so you can look one up. A code reads like this:
+Control Panel → Firewall decides what ReconOS may open and what may be
+opened to it. It is not the firewall of the machine underneath and does not
+touch that one.
 
+Outgoing connections are allowed by default and incoming ones are blocked,
+which is right almost always. Under that is a numbered list of rules, and
+the first rule that matches decides — so the order is part of the rule,
+and moving one changes what it does.
 
-VT-A001
+Nine rules ship. The incoming ones are written down and switched off: the
+useful state for a rule about remote access is there, correct, and not in
+force until you want remote access. Turning one on is a switch rather than
+having to remember a port number.
 
+A rule that is off is drawn dim. That is deliberate: written down and not in
+force is the most important thing about such a rule.
 
-VT is the system. The letter says which part of it — A is startup, B is
-storage, C is accounts, and so on. The number says which fault.
-
-errors VT-A001 in the Terminal says what a code means. errors on
-its own lists every code there is, and errors log is what has actually
-happened on this machine.
-
-There are three kinds:
-
-- STOP — the system cannot continue. It shows a screen with the code on it
-  and writes the code and the time into /System/Logs. The next start says
-  what happened.
-- fault — something failed and the rest carried on. Reported where it
-  happened.
-- note — written down, and nothing broke.
-
-If the last run stopped, the first screen after the startup screen says so
-once, with the code. The machine in front of you is working; the message is
-about the run before it.
-
-The full list is also in docs/ERRORS.md in the repository, for when you have
-a code and not a working machine.
+Adding and removing rules is firewall in the Terminal for now. The rules are
+a plain text file in /System/Config, so they can be read without ReconOS.

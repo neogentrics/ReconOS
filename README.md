@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.15.** The version number tracks what works, not what is
+**Status: v0.2.16.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -51,7 +51,10 @@ first time an account reaches the desktop on a new version. It also made
 Storage work, gave the Recycle Bin a command so it can be reached from
 outside a window, settled on one button shape for the whole system, let the
 Start menu be typed into, and -- at last -- let a skin be written from
-inside ReconOS rather than only installed into it.
+inside ReconOS rather than only installed into it. v0.2.16 gave the system a
+way to say what went wrong and a boundary around what it opens: error codes
+with a screen and a log, a firewall, a startup screen that checks rather
+than counts, and remote access two ways.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -485,6 +488,56 @@ The first time an account reaches the desktop on a new version, a window says
 what that version brought, with an OK button. The version is recorded against
 that account, so each person is told once and nobody is told twice.
 
+**Error codes.** Every fault ReconOS can report has a name of the form
+`VT-A001` -- `VT` for Void Tower, a letter for the area of the system, a
+number for the fault. The letter is the *area* rather than the severity,
+because the same area produces faults of every kind and a code that changed
+when a fault was reclassified would be a code nobody could look up. `I` and
+`O` are not area letters: this is read off a screen and typed into a search
+box, and there `I` is `1` and `O` is `0`.
+
+Three severities, and they decide what happens rather than only how it
+reads. A **STOP** draws a screen with the code on it, in fixed colours rather
+than the skin's -- the one fault that screen has to survive is the one where
+the colours are the problem. The record is written to disk *before* the screen
+is drawn, because the screen is the part most likely to fail when what failed
+is the drawing, so the next start can say what happened to the last one. A
+crash cannot be drawn at all, so the signal handler writes the record with
+`write(2)` and hands back to the default.
+
+The list lives in `include/recon_errors.def`, once: the header builds an
+enumeration from it, `errors` reads it, the screen quotes it, and
+`scripts/make-errors.sh` writes [docs/ERRORS.md](docs/ERRORS.md) from it.
+
+**A firewall.** It cannot filter packets -- ReconOS has no network stack of
+its own -- and saying it could would be the same lie as a network page that
+pretended to implement one. What it does is decide what ReconOS itself opens
+and accepts, which is a real boundary: every outgoing connection asks first,
+and the remote listener cannot open a port the firewall has not been told to
+allow.
+
+The shape most systems have, because that is the shape people already know: a
+switch, a default per direction, and a numbered list where the first match
+decides -- not the most specific, because reading top to bottom is the only
+way a person can work out what it does. Nine rules ship, the incoming ones
+written down and off. The rules are a text file in `/System/Config`, because
+a firewall whose rules cannot be read outside the program that wrote them is
+a firewall nobody can audit.
+
+**A startup screen that checks.** It used to count what had been brought up.
+Now each line looks at the part of the system it names -- every folder the
+system needs, the skins, the accounts, the programs, the firewall -- says what
+it found, and raises a code when what it found is wrong. A missing folder is
+rebuilt rather than only reported. A failure does not stop the start: a
+machine that refuses to boot because one icon folder is unreadable is worse
+than one that says so and carries on.
+
+**Remote access, two ways, and they are not equivalent.** SSH can forward the
+control socket, which is encrypted and needs nothing from ReconOS. Or TCP
+7420 with a key, off by default, which says plainly that the key crosses the
+network in the clear because there is no TLS yet. Only the key's hash is kept,
+stretched with PBKDF2; the key is shown once when it is made.
+
 **A file dialog** shared by the applications that need one. It is drawn inside
 the window that asked for it, so it cannot be dragged away from its own
 question or left behind its own parent.
@@ -520,6 +573,7 @@ difference between this working and this not existing.
 | `Alt` + `Q` | Quit |
 | `F1` | Help, at the page about whatever is in front |
 | `Print Screen` | A picture of the screen |
+| Any key on the stop screen | Shut down |
 
 Inside the file explorer:
 

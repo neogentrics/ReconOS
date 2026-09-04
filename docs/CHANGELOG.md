@@ -9,6 +9,36 @@ way for the two to disagree.
 
 ---
 
+## v0.2.16
+
+**Errors have codes now.** When something goes wrong ReconOS names it —
+`VT-A001`, `VT-G005` — so it can be written down and looked up. `errors` in
+the Terminal says what a code means, `errors log` is what has happened on this
+machine, and `docs/ERRORS.md` is the whole list for when you have a code and
+not a working machine.
+
+Three kinds: **STOP** (the system cannot continue and shows a screen with the
+code on it), **fault** (something failed and the rest carried on), and **note**
+(written down, nothing broke). If a run stops, the next start says so once,
+with the code.
+
+**A firewall.** Control Panel → Firewall, and `firewall` in the Terminal. It
+decides what ReconOS itself opens and accepts: outgoing allowed, incoming
+blocked, and a list of rules where the first match decides. Nine rules ship —
+the incoming ones written down and switched off, so opening one is a switch
+rather than remembering a port number. It is not the host's firewall and does
+not touch it.
+
+**The startup screen checks the system** instead of only counting it. Every
+folder the system needs, the skins, the accounts, the programs, the firewall —
+each line says what it found, and says the code when what it found is wrong.
+Missing folders are rebuilt rather than only reported.
+
+**Remote access, two ways.** Over SSH by forwarding the control socket, which
+is encrypted and needs nothing from ReconOS; or over TCP 7420 with a key, which
+is off by default and says plainly that the key crosses the network in the
+clear. The firewall has to allow it either way.
+
 ## v0.2.15
 
 **Help.** A new application, beside the Control Panel in the Start menu, with

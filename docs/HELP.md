@@ -233,6 +233,52 @@ A keyboard laid out for a language with accents in it types them, and the
 arrow keys and Backspace step over a whole character rather than a byte of
 one.
 
+## The firewall
+
+**Control Panel → Firewall** decides what ReconOS may open and what may be
+opened to it. It is not the firewall of the machine underneath and does not
+touch that one.
+
+Outgoing connections are allowed by default and incoming ones are blocked,
+which is right almost always. Under that is a numbered list of rules, and
+**the first rule that matches decides** — so the order is part of the rule,
+and moving one changes what it does.
+
+Nine rules ship. The incoming ones are written down and switched **off**: the
+useful state for a rule about remote access is there, correct, and not in
+force until you want remote access. Turning one on is a switch rather than
+having to remember a port number.
+
+A rule that is off is drawn dim. That is deliberate: written down and not in
+force is the most important thing about such a rule.
+
+Adding and removing rules is `firewall` in the Terminal for now. The rules are
+a plain text file in `/System/Config`, so they can be read without ReconOS.
+
+## Reaching this machine from elsewhere
+
+Two ways, and they are not equally safe.
+
+**Over SSH.** ReconOS listens on a socket that cannot leave the machine, and
+SSH can carry it:
+
+```
+ssh -L /tmp/recon-there.sock:/tmp/reconos.sock user@this-machine
+```
+
+Then `nc -U /tmp/recon-there.sock` from the other end. SSH does the encryption
+and decides who you are, both of which it is much better at than ReconOS.
+
+**Over the network.** `remote key` makes a key and shows it once. `remote on`
+opens TCP 7420, and every connection is asked for that key before it can run
+anything. The firewall rule has to be on as well — turning remote access on is
+not enough, and the refusal says which rule to turn on.
+
+**The key crosses the network in the clear.** There is no encryption yet. On a
+network you trust that is a reasonable trade; across anything else, use SSH.
+
+`remote` on its own says which way in is open.
+
 ## When something goes wrong
 
 ReconOS names its faults so you can look one up. A code reads like this:

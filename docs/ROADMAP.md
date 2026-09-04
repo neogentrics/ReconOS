@@ -729,6 +729,197 @@ above the cursor, which reads as "not here" and is wrong. Searching starts one
 past the selection rather than at the cursor, because a match is left
 selected and searching from the cursor would find the same one for ever.
 
+## v0.2.16 — saying what went wrong, and a boundary around what opens
+
+Four things, and three of them were asked for together because they belong
+together: a system that can be reached from elsewhere needs something deciding
+what may be reached, and a system doing either needs a way to say what went
+wrong.
+
+### Error codes
+
+    VT-A001
+    ^^ ^ ^^^
+    |  | +--- which fault, 001 upward within that area
+    |  +----- which area of the system
+    +-------- Void Tower
+
+**The letter is the area, not the severity.** The same area produces faults of
+every kind — the filesystem can fail to read a file (recoverable) and fail to
+open at all (not) — so severity in the letter would scatter one subsystem
+across the alphabet. Worse, a code would have to change if a fault were ever
+reclassified, and *a code that changes is a code nobody can look up*. Severity
+is a field on the entry.
+
+**`I` and `O` are not area letters.** This is a code somebody reads off a
+screen and types into a search box, and in that setting `I` is `1` and `O` is
+`0`. Losing two letters costs nothing; a support answer about the wrong fault
+costs everything.
+
+**A hundred per letter**, continuing at a second letter when an area fills
+rather than renumbering, because the old codes are already written down
+somewhere. A number is never reused. Twenty-four letters at a hundred each is
+two thousand four hundred, a long way past anywhere this is going.
+
+Forty-two codes to start, across twelve areas — the faults the system can
+actually reach today, not a guess at the ones it might.
+
+**One list.** `include/recon_errors.def` is included by the header to build an
+enumeration, by the source to build the table, read by `errors`, quoted by the
+stop screen, and turned into `docs/ERRORS.md` by `scripts/make-errors.sh`. A
+`_Static_assert` checks the enumeration and the table are the same length,
+because a mistake there would make every code read as its neighbour.
+
+**Three severities, and they decide what happens** rather than only how it
+reads: STOP draws the screen and ends the session, fault is reported where it
+happened, note is written down.
+
+The stop screen is drawn in **fixed colours rather than the skin's**, because
+the one fault it has to survive is the one where the colours are the problem.
+The code is the largest thing on it: somebody reading it is not going to debug
+it, they are going to write it down, restart, and look it up.
+
+The record is written to disk **before** the screen is drawn — the screen is
+the part most likely to fail when what failed is the drawing — so the next
+start can say what happened to the last one. It does, on a card after the
+startup screen, once. A card and not a full screen: the machine in front of
+them is working, and saying otherwise would be a lie told in a large font.
+
+A crash cannot be drawn at all, so `SIGSEGV` and its neighbours write the
+record with `write(2)` — one of the few things a signal handler may do — and
+hand back to the default so a core file still happens.
+
+`recon_error.c` does not depend on the thing that draws. The session
+*registers* the screen. That is not tidiness: recording a fault has to work
+where the compositor does not exist — a test binary, and the moment before the
+display comes up, which is exactly when the worst faults happen.
+
+### The firewall
+
+It cannot filter packets, and saying it could would be the same lie as a
+network page that pretended to implement a stack. What it does is decide
+**what ReconOS itself opens and accepts**, which is a real boundary with real
+teeth: every outgoing connection asks first, and the remote listener cannot
+open a port the firewall has not been told to allow.
+
+The shape most systems have, because that is the shape people already know: a
+switch, a default per direction, and a numbered list of rules. **First match
+wins**, not most-specific — reading the list top to bottom is the only way a
+person can work out what it does, and the page shows the numbers because the
+order is part of the rule.
+
+Nine rules ship. The incoming ones are written down and **off**: the useful
+state for a rule about remote access is there, correct, and not in force until
+somebody wants remote access, so turning it on is a switch rather than an
+exercise in remembering a port number. The outgoing ones are on even though
+the default would allow them anyway — so a machine whose outgoing default is
+changed to block still works, and what has to keep working is visible in one
+place.
+
+It comes up on its built-in defaults whatever happens to its file. **A
+firewall that fails open because its file is missing is worse than no
+firewall, because it looks like one.**
+
+Its own Control Panel page rather than a section of Network, because it is the
+page somebody comes to the Control Panel for — and because it is meant to be
+replaced. A firewall with per-program rules, profiles and its own history
+belongs in an application; when that application arrives it takes this page's
+place, which is a cleaner thing to replace than half of another page.
+
+Rules that are off are drawn dim whether or not they are selected: being
+written down and not in force is the single most important thing about such a
+rule, and a row that looks the same either way is a row that gets misread.
+
+Not done: adding and removing a rule from the page. Five fields and a name is
+a form, and a form is a bigger piece of work than the page it would sit on —
+so the page says plainly that it is the Terminal's job for now.
+
+### The startup screen checks
+
+It reported a count of what had been brought up and nothing else, because the
+startup work was finished before the screen could exist and a bar pretending
+to drive it would have been a decoration in front of nothing.
+
+Now each line looks at the part of the system it names: every folder the
+system cannot do without, both settings hives, the icon folder, the skins and
+whether the one in use is still among them, the wallpapers, the programs and
+how many refused to load, each account and whether it still has somewhere to
+keep files, and what the firewall is doing.
+
+A failure raises its code, shows it on the line in the warning colour, and
+carries on. Almost everything here is survivable, and **a machine that refuses
+to boot because one icon folder is unreadable is worse than one that says so
+and keeps going.** What it cannot survive raises a STOP and never reaches this
+screen.
+
+The programs are **not** loaded and unloaded to test them. They are already
+loaded by this point, so "did it load" is a question the module layer has
+answered and this reports; loading them again to test them would run their
+startup code twice, which is a worse thing to do to a program than not testing
+it.
+
+Missing things are repaired where repairing is obvious — a system folder is
+recreated, and so is an account's folder, because the account is what the
+login screen offers and offering one that cannot be signed into is worse than
+an empty Documents.
+
+The screen takes a moment longer than it did, and the moment is the checking
+rather than a delay added to look like checking.
+
+### Remote access, both ways
+
+Two transports, and they are not equivalent — so both are described everywhere
+either is, because a command that mentioned only the network port would be
+recommending the worse option by omission.
+
+**The Unix socket** carries no authentication of its own and does not need
+any: it is created readable and writable by its owner alone, so the filesystem
+*is* the authentication. SSH can carry it across a network, which is the
+secure route and needs nothing from ReconOS at all — SSH does the encryption
+and the identity, both of which it is much better at than anything written
+here would be.
+
+**The network port** is off by default, listens on TCP 7420, and asks each
+connection for a key. It exists because it is what people expect a system to
+be able to do, and because the SSH route needs an account on the host
+underneath — which a machine ReconOS owns will not have.
+
+It is honest about what it is: **the key crosses the network in the clear.**
+There is no TLS yet. `remote` says so every time and `remote on` says it
+again.
+
+Three things must be true before the port opens, and each refusal says which
+one and what to do: there is a key, the firewall allows incoming TCP on that
+port, and the port can be bound. The firewall is asked **again for every
+connection**, not only when the port was opened — a rule turned off while the
+listener is up should take effect, not take effect after a restart. And the
+"remote access was on" setting is re-checked against the firewall at startup,
+because a setting that outranked the firewall would make the firewall a
+suggestion.
+
+Only the key's hash is kept, salted and stretched with PBKDF2 — a short secret
+somebody typed is exactly the thing a plain hash of is worth guessing at. The
+key is shown once. Losing it costs one command; a key that can be read back is
+a key sitting in a file.
+
+Turning remote access off shuts the port and leaves connections already up
+alone. Closing the door is not throwing out whoever is inside, and somebody
+turning it off while using it remotely would otherwise cut themselves off
+mid-command with no way back.
+
+**Two faults found by connecting rather than by reading.** The authentication
+step closed the connection from inside `handle_line`, which freed the client
+the read loop was standing on — the loop went on to touch it, corrupting the
+heap quietly, and the process aborted on the *next* connection. That is the
+shape of fault that takes a day to find from the symptom. `handle_line` returns
+a verdict now and the caller does the closing, which is the only place that
+may.
+
+And the accepted key was then run as a command, which failed and said so —
+quoting the key back into the output, where it would sit in whatever scrollback
+the other end keeps. A secret that has been checked has done its job; it should
+not then be repeated.
+
 ## v0.2.15 — help, and telling people what changed
 
 Every version so far shipped with no way for the system to explain itself.
@@ -1085,8 +1276,19 @@ editing the file by hand.
 read by the window frame and `metric.button-corner` by every button, and a
 list, a text field and a menu are all still square whatever the skin says.
 
-**No paint program.** The control socket still has no authentication, only
-file permissions.
+**No paint program.** Nothing in ReconOS draws a picture; the icons and
+avatars it ships are drawn by code rather than by anybody.
+
+**No TLS.** Remote access over the network sends its key in the clear, which
+is why it is off by default and why every place that offers it also offers the
+SSH-forwarded socket. The forwarded socket is not a workaround — it is the
+right answer for reaching a machine across a network somebody else can see —
+but a system that owns its own machine will not have an SSH to lean on, and
+then this has to exist.
+
+**The firewall cannot filter packets**, and will not until ReconOS has a
+network stack of its own. What it governs is what ReconOS itself opens and
+accepts, which is a real boundary and is not the same boundary.
 
 **A client window's title bar carries a generic icon.** A Wayland client
 hands its compositor an `app_id`, not a picture; guessing an icon from a
@@ -1177,11 +1379,12 @@ rewrite later.
 
 - Client windows draw their own title bars, so a client looks like whatever
   toolkit built it. Built-in windows are framed by ReconOS; extending that to
-  clients needs the xdg-decoration protocol.
-- The control socket has no authentication. It is now created readable and
-  writable by its owner alone, so no other account on the machine can drive
-  ReconOS through it, but that is a file permission rather than a login and it
-  is not enough to carry the socket off the local machine.
+  clients needs the xdg-decoration protocol. *(Done in v0.2.15.)*
+- The control socket has no authentication of its own, and does not need
+  any: it is readable and writable by its owner alone, so the filesystem is
+  the authentication for something that cannot leave the machine. Carrying it
+  further is SSH's job (forwarding) or the network listener's (a key), both
+  added in v0.2.16.
 - Properties tells you what something is, not what it is for. There is no way
   to change anything from it — no read-only flag, no "open with", because
   neither exists to be changed.
