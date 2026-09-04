@@ -742,6 +742,91 @@ static void begin_interactive(struct recon_toplevel *toplevel,
     }
 }
 
+/*
+ * How far outside a window an edge can still be grabbed.
+ *
+ * Outside rather than inside, because inside belongs to the client: a
+ * terminal's last column of text is not a resize handle. Six pixels is enough
+ * to hit without aiming and small enough that it does not swallow clicks
+ * meant for whatever the window is sitting on.
+ */
+#define RESIZE_MARGIN 6
+
+/*
+ * The window whose edge the pointer is on, and which edge.
+ *
+ * Only windows ReconOS draws the frame for. A client drawing its own frame
+ * has its own resize handles inside its own surface, and a second set of
+ * ours around the outside would fight with them.
+ *
+ * Most recently focused first, which is the order `toplevels` is already in,
+ * so two overlapping margins are answered by the window in front.
+ */
+static struct recon_toplevel *edge_at(struct recon_server *server,
+        double lx, double ly, uint32_t *edges_out) {
+    *edges_out = 0;
+
+    struct recon_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        if (toplevel->decor == NULL || toplevel->minimized ||
+                toplevel->desktop_hidden || toplevel->maximized) {
+            continue;
+        }
+
+        struct wlr_box geometry;
+        wlr_xdg_surface_get_geometry(toplevel->xdg_toplevel->base, &geometry);
+
+        int left = toplevel->scene_tree->node.x;
+        int top = toplevel->scene_tree->node.y -
+            recon_decor_reserved_top(toplevel->decor);
+        int right = left + geometry.width;
+        int bottom = toplevel->scene_tree->node.y + geometry.height;
+
+        /* Outside the window and its title bar, but within the margin. */
+        if (lx < left - RESIZE_MARGIN || lx > right + RESIZE_MARGIN ||
+                ly < top - RESIZE_MARGIN || ly > bottom + RESIZE_MARGIN) {
+            continue;
+        }
+
+        uint32_t edges = 0;
+        if (lx <= left) {
+            edges |= WLR_EDGE_LEFT;
+        } else if (lx >= right) {
+            edges |= WLR_EDGE_RIGHT;
+        }
+        if (ly <= top) {
+            edges |= WLR_EDGE_TOP;
+        } else if (ly >= bottom) {
+            edges |= WLR_EDGE_BOTTOM;
+        }
+
+        if (edges == 0) {
+            /* Inside the window. Not an edge, and nothing behind this one
+             * can be either -- it is covered. */
+            return NULL;
+        }
+
+        *edges_out = edges;
+        return toplevel;
+    }
+    return NULL;
+}
+
+/* The cursor that says which way an edge will move. */
+static const char *resize_cursor(uint32_t edges) {
+    switch (edges) {
+    case WLR_EDGE_TOP:    return "n-resize";
+    case WLR_EDGE_BOTTOM: return "s-resize";
+    case WLR_EDGE_LEFT:   return "w-resize";
+    case WLR_EDGE_RIGHT:  return "e-resize";
+    case WLR_EDGE_TOP | WLR_EDGE_LEFT:     return "nw-resize";
+    case WLR_EDGE_TOP | WLR_EDGE_RIGHT:    return "ne-resize";
+    case WLR_EDGE_BOTTOM | WLR_EDGE_LEFT:  return "sw-resize";
+    case WLR_EDGE_BOTTOM | WLR_EDGE_RIGHT: return "se-resize";
+    default: return "default";
+    }
+}
+
 /* The area of the screen windows may use, excluding shell chrome. */
 static bool output_box_for(struct recon_toplevel *toplevel, struct wlr_box *box) {
     struct recon_server *server = toplevel->server;
@@ -875,6 +960,7 @@ static void process_move(struct recon_server *server) {
     wlr_scene_node_set_position(&toplevel->scene_tree->node,
         server->cursor->x - server->grab_x,
         server->cursor->y - server->grab_y);
+    recon_decor_update(toplevel->decor);
     recon_damage_all(server);
 }
 
@@ -923,6 +1009,13 @@ static void process_resize(struct recon_server *server) {
     wlr_scene_node_set_position(&toplevel->scene_tree->node,
         left - geometry.x, top - geometry.y);
     wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, right - left, bottom - top);
+
+    /* The bar moves with the window now rather than when the client next
+     * draws: the position changes immediately and the new size arrives a
+     * frame or two later, so waiting would leave the title bar trailing
+     * behind the window it belongs to. */
+    recon_decor_update(toplevel->decor);
+
     recon_damage_all(server);
 }
 
@@ -968,6 +1061,19 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
 
     if (drag_decoration(server)) {
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
+        return;
+    }
+
+    /*
+     * On the edge of a window ReconOS frames. Said with the cursor before the
+     * click, because an invisible grab region nobody can see is one nobody
+     * finds.
+     */
+    uint32_t edges = 0;
+    if (edge_at(server, server->cursor->x, server->cursor->y, &edges) != NULL) {
+        wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr,
+            resize_cursor(edges));
+        wlr_seat_pointer_clear_focus(server->seat);
         return;
     }
 
@@ -1051,6 +1157,44 @@ static bool dispatch_button(struct recon_server *server, uint32_t button,
         double y = server->cursor->y;
 
         /*
+         * A window's edge, before the shell.
+         *
+         * The margin that can be grabbed is *outside* the window, which puts
+         * it over the desktop -- and the desktop answers a click nothing else
+         * wanted, so going through the shell first meant the backdrop
+         * swallowed every resize before anything could see it. That is not
+         * theory: it is what happened, and it looked exactly like the edge
+         * detection not working.
+         *
+         * Guarded so the shell still wins where the shell is: over the
+         * taskbar, a menu, a built-in window, or while a question is up. A
+         * resize handle floating over a dialog would be a click that does
+         * something other than answer the question in front of you.
+         */
+        if (!recon_shell_dialog_open(server->shell) &&
+                !recon_shell_contains_point(server->shell, x, y)) {
+            uint32_t edges = 0;
+            struct recon_toplevel *edged = edge_at(server, x, y, &edges);
+            if (edged != NULL) {
+                recon_focus_toplevel(edged);
+
+                server->grabbed = edged;
+                server->cursor_mode = RECON_CURSOR_RESIZE;
+                server->grab_x = x;
+                server->grab_y = y;
+
+                struct wlr_box geometry;
+                wlr_xdg_surface_get_geometry(edged->xdg_toplevel->base,
+                    &geometry);
+                server->grab_geometry = geometry;
+                server->grab_geometry.x += edged->scene_tree->node.x;
+                server->grab_geometry.y += edged->scene_tree->node.y;
+                server->resize_edges = edges;
+                return true;
+            }
+        }
+
+        /*
          * The shell sits above windows, so it sees clicks first.
          *
          * The context menu is deliberately NOT closed here. Closing it first
@@ -1094,9 +1238,20 @@ void recon_inject_pointer(struct recon_server *server, int x, int y) {
     }
     wlr_cursor_warp_closest(server->cursor, NULL, (double)x, (double)y);
 
-    /* The same order the real path takes: a drag in progress owns the
-     * pointer, and only otherwise does the shell hear about it. */
-    if (!drag_decoration(server)) {
+    /*
+     * The same order the real path takes.
+     *
+     * A move or a resize in progress owns the pointer, then a title bar being
+     * dragged, and only otherwise does the shell hear about it. This used to
+     * go straight to the shell, so a window being moved or resized simply did
+     * not follow injected motion -- the modes were reachable from a test and
+     * did nothing, which is the worst state for a thing to be in.
+     */
+    if (server->cursor_mode == RECON_CURSOR_MOVE) {
+        process_move(server);
+    } else if (server->cursor_mode == RECON_CURSOR_RESIZE) {
+        process_resize(server);
+    } else if (!drag_decoration(server)) {
         recon_shell_handle_motion(server->shell, server->cursor->x,
             server->cursor->y);
     }
