@@ -672,7 +672,7 @@ static void draw_service_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         }
 
         recon_color text = selected ? COLOR_ROW_SELECTED_TEXT : COLOR_TEXT;
-        int ty = ry + (ROW_HEIGHT - ascent) / 2;
+        int ty = ry + (ROW_HEIGHT + ascent) / 2 - 2;
 
         recon_draw_text(p, tm->font, x + column_x(tm, 0) + 6, ty,
             column_width(tm, 0) - 12, svc.name, text);
@@ -716,7 +716,8 @@ static void draw_service_rows(struct recon_taskmgr *tm, struct recon_panel *p,
     }
 
     if (count == 0) {
-        recon_draw_text(p, tm->font, x + 12, y + 10, w - 24,
+        recon_draw_text(p, tm->font, x + 12,
+            y + (ROW_HEIGHT + ascent) / 2 - 2, w - 24,
             "No services are registered.", COLOR_STATUS);
     }
 
@@ -1420,7 +1421,8 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
         return true;
     }
 
-    if (hit_id >= HIT_ROW_BASE && tm->tab == TAB_APPLICATIONS) {
+    if (hit_id >= HIT_ROW_BASE &&
+            (tm->tab == TAB_APPLICATIONS || tm->tab == TAB_SERVICES)) {
         tm->selected_row = tm->scroll + (int)(hit_id - HIT_ROW_BASE);
         return true;
     }

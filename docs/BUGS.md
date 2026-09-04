@@ -99,6 +99,32 @@ Features, patches and releases are tracked the same way: see
 
 ## Fixed
 
+### BG-063 — The first row on the Services tab was drawn through the header rule
+
+[#81](https://github.com/neogentrics/ReconOS/issues/81)
+
+- **Found in** v0.2.17. **Found by** screen capture: the tab had been built and
+  never looked at.
+- **Was** `recon_draw_text` takes a **baseline**, not a top edge.
+  `draw_service_rows` computed `ry + (ROW_HEIGHT - ascent) / 2`, which is a top
+  edge, so every row sat about ten pixels high and the first one had the column
+  header's rule through the middle of it. Every other row-drawing function in
+  the file already used `ry + (ROW_HEIGHT + ascent) / 2 - 2`.
+- **Fixed in** v0.2.17. The same formula as its neighbours.
+
+### BG-064 — Clicking a row on the Services tab selected nothing
+
+[#82](https://github.com/neogentrics/ReconOS/issues/82)
+
+- **Found in** v0.2.17. **Found by** injected input, in the same look as
+  BG-063: the row did not highlight and the button stayed on Start.
+- **Was** the row-click handler has a branch per tab and Services had none, so
+  a click fell through to the process branch. That looked the row up in the
+  process list -- the wrong list -- and set `selected_pid` rather than
+  `selected_row`, which is what the Services tab reads. With nothing ever
+  selected, Start, Stop and Restart could not act on anything.
+- **Fixed in** v0.2.17.
+
 ### BG-001 — The screen stayed blank
 
 [#3](https://github.com/neogentrics/ReconOS/issues/3)
@@ -818,8 +844,18 @@ Areas, matching the [error code](ERRORS.md) letters where they apply:
 1. Take the next number. The highest in this file is the last one used.
 2. Write the entry — **Found in**, **Found by**, **Was**, and either
    **Fixed in** or **Open** and why.
-3. Open the GitHub issue with the same title and the same body.
-4. Reference the number in the commit that fixes it.
+3. Add its area to the `AREA` table in `scripts/make-issues.py`.
+4. Run the script, which opens the issue with the same title and body:
+
+   ```
+   python scripts/make-issues.py --dry-run
+   python scripts/make-issues.py
+   ```
+
+   Entries that already have an issue are left alone, so running it again is
+   safe. One with a **Fixed in** line is created and then closed.
+5. Paste the issue link under the heading, and reference the number in the
+   commit that fixes it.
 
 The **Was** field is the one that matters. A register full of symptoms is a
 list of complaints; a register full of causes is something to learn from.
