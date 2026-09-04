@@ -691,6 +691,43 @@ wallpaper through the middle of a title bar.
 one. It went past faster than it could be read, which is the wrong failure
 for a screen whose job is to say the machine is starting.
 
+## v0.2.14 — packages, and Find
+
+**Installing was `install <file.rex>`**: copy one shared object into /Apps and
+load it. That works for a program which is only code, and every program is
+more than that — an icon, a default setting, a file it ships alongside
+itself. There was nowhere to put any of it, which is why the Calculator's icon
+is drawn by ReconOS rather than supplied by the Calculator. There was also no
+record of what an install had placed, so uninstalling deleted the one file it
+knew about.
+
+A package is a folder with a manifest, named `.rpk`. A folder rather than an
+archive because ReconOS cannot read one, and writing a container format buys
+nothing yet: nothing here is sent over a network, and a folder can be copied,
+inspected and repaired with the tools the system already has. A single-file
+form can wrap this later without the manifest changing.
+
+Installing writes a **receipt** naming every path it placed; removing deletes
+exactly those. A receipt rather than rederiving it at removal time — what an
+install placed is a fact about that install, and working it out again from a
+manifest that may have been edited is guessing about somebody else's disk.
+
+The receipt is written **before** the module is loaded, because loading is
+the step that can fail unpredictably and the files are already on disk when
+it does. That failure path is the one this was tested on first: a module that
+would not load rolled the whole install back and left nothing behind.
+
+An icon already present is left alone and not recorded, so uninstalling one
+package cannot take away an icon belonging to another. A file the receipt
+names but which is gone is not an error either.
+
+**Find, in a bar rather than a dialog.** A find dialog covers the thing being
+searched. Case-insensitive always, wrapping once — without wrapping, a search
+started halfway down a file reports nothing for a word that only appears
+above the cursor, which reads as "not here" and is wrong. Searching starts one
+past the selection rather than at the cursor, because a match is left
+selected and searching from the cursor would find the same one for ever.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -711,8 +748,14 @@ development environment to test it against**, and shipping window management
 that has never been driven is how Alt+Tab came to be dead for months without
 anybody noticing.
 
-**Notepad has no find.** It can select, cut, copy, paste and undo; it cannot
-search, and Calculator is still deliberately shallow.
+**Notepad has no replace, and Calculator is still deliberately shallow.**
+Notepad can select, cut, copy, paste, undo and find.
+
+**A package cannot ship a setting or a data file.** The manifest understands
+a module and an icon; anything else a program wants to place has nowhere to
+be declared. And there is no signing, no dependency between packages, and no
+upgrade -- installing over an existing package is refused rather than
+replacing it.
 
 **Only text files open.** `recon_props_opener` maps a name to an application
 and knows about text; a picture has nowhere to go because nothing views one,

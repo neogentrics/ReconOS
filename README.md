@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.13.** The version number tracks what works, not what is
+**Status: v0.2.14.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -42,7 +42,9 @@ skin set the *shape* of a window frame and not only its colours, and v0.2.11
 gave Notepad undo and a menu to find it in. v0.2.12 added a text clipboard,
 which the system did not have at all. v0.2.13 came out of watching it run:
 removing an account can now take its files, and the Start menu's footer is
-icons rather than five words.
+icons rather than five words. v0.2.14 gave programs a way to arrive: a
+package format with a manifest and a receipt, so an install can place more
+than one file and removing it takes back exactly what it placed.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -334,6 +336,26 @@ extension names the ReconOS contract rather than the machine code inside it, so
 a wrapped foreign binary can present the same interface later without the
 format changing. The Calculator is the first thing to go through this path: it
 is no longer in the core binary at all. See [docs/MODULES.md](docs/MODULES.md).
+
+**Packages** are how a program arrives when it is more than code. A `.rpk` is
+a folder with a manifest in it:
+
+```
+Notes.rpk/
+    package.txt          name, version, publisher, module, icon
+    Notes.rex            the code
+    notes.png            an icon
+```
+
+A folder rather than an archive, because ReconOS cannot read one and writing
+a container format buys nothing yet — a folder can be copied, inspected and
+repaired with the tools the system already has.
+
+Installing writes a **receipt** into `/System/Installed` naming every path it
+placed, and removing deletes exactly those. The receipt is written before the
+module is loaded, so a module that refuses to load leaves an install that can
+be rolled back rather than files nothing knows about. `install` takes a
+package folder or a bare module; `packages` lists what is installed.
 
 Applications are built the first time somebody opens one. An application nobody
 touches costs an entry in a list rather than a window's worth of pixels, which
