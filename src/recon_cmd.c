@@ -19,6 +19,7 @@
 #include "recon_cmd.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
+#include "recon_package.h"
 #include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
@@ -1766,6 +1767,31 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    /*
+     * A folder is a package; a file is a bare module.
+     *
+     * The same verb for both, because from where somebody is standing they
+     * are the same act -- "put this program into the system" -- and making
+     * them two commands would mean knowing which kind of thing you have
+     * before you can install it.
+     */
+    struct recon_dirent entry;
+    if (recon_fs_stat("/", canonical, &entry) &&
+            entry.kind == RECON_FILE_DIRECTORY) {
+        struct recon_package_info info;
+        if (!recon_package_install(canonical)) {
+            out(s, "%s\n", recon_package_last_error());
+            return;
+        }
+        if (recon_package_read(canonical, &info)) {
+            out(s, "Installed %s %s.\n", info.name, info.version);
+        } else {
+            out(s, "Installed.\n");
+        }
+        recon_shell_restyle(s->server->shell);
+        return;
+    }
+
     if (!recon_modules_install(canonical)) {
         out(s, "%s\n", recon_modules_last_error());
         return;
@@ -1773,10 +1799,49 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Installed. It is loaded and will load again on every start.\n");
 }
 
+/* What is installed as a package, with what it says about itself. */
+static void cmd_packages(struct recon_cmd_session *s, int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    int count = recon_package_count();
+    if (count == 0) {
+        out(s, "Nothing is installed as a package.\n\n"
+            "A package is a folder with a " RECON_PACKAGE_MANIFEST " in it.\n"
+            "'install <folder>' puts one in; 'uninstall <name>' takes it out.\n");
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        struct recon_package_info info;
+        if (!recon_package_at(i, &info)) {
+            continue;
+        }
+        out(s, "  %-16s %-10s %s\n", info.name, info.version,
+            info.description);
+    }
+    out(s, "\n  %d package%s\n", count, count == 1 ? "" : "s");
+}
+
 static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "Usage: uninstall <module name>\n");
         out(s, "'modules' lists what is installed.\n");
+        return;
+    }
+
+    /*
+     * A package first, because a package's module is only part of what its
+     * install placed. Removing the module alone would leave its icon and its
+     * receipt behind -- and the receipt would then claim a program is
+     * installed which is not.
+     */
+    if (recon_package_installed(argv[1])) {
+        if (!recon_package_uninstall(argv[1])) {
+            out(s, "%s\n", recon_package_last_error());
+            return;
+        }
+        out(s, "Removed '%s' and everything it installed.\n", argv[1]);
+        recon_shell_restyle(s->server->shell);
         return;
     }
 
@@ -1874,6 +1939,7 @@ static const struct command COMMANDS[] = {
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "install",  "install <path>",        "Put a program into the system",      cmd_install },
     { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
+    { "packages", "packages",              "What is installed as a package",     cmd_packages },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles|install|remove]",
                                        "List skins, put one on, add or remove",

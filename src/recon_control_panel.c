@@ -21,6 +21,7 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_package.h"
 #include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
@@ -1661,7 +1662,34 @@ static void do_action(struct control_panel *cp, enum action action) {
             RECON_APP_EXT, RECON_MODULE_EXT);
         break;
 
-    case ACTION_CONFIRM_INSTALL:
+    case ACTION_CONFIRM_INSTALL: {
+        /*
+         * A folder is a package and a file is a bare module, the same rule
+         * the terminal uses. Typing a path and being told the wrong thing
+         * about it because this page only understood one of the two would be
+         * a difference with no reason behind it.
+         */
+        struct recon_dirent entry;
+        bool is_package = recon_fs_stat("/", cp->name.text, &entry) &&
+            entry.kind == RECON_FILE_DIRECTORY;
+
+        if (is_package) {
+            struct recon_package_info info;
+            bool named = recon_package_read(cp->name.text, &info);
+
+            if (!recon_package_install(cp->name.text)) {
+                set_status(cp, true, "%s", recon_package_last_error());
+                break;
+            }
+            cp->installing = false;
+            recon_edit_end(&cp->name);
+            recon_shell_restyle(cp->server->shell);
+            set_status(cp, false, named
+                ? "Installed %s %s." : "Installed.",
+                info.name, info.version);
+            break;
+        }
+
         if (!recon_modules_install(cp->name.text)) {
             set_status(cp, true, "%s", recon_modules_last_error());
             break;
@@ -1673,6 +1701,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_shell_restyle(cp->server->shell);
         set_status(cp, false, "Installed, and loaded.");
         break;
+    }
 
     case ACTION_REMOVE_PROGRAM: {
         /*
