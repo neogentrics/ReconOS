@@ -21,6 +21,7 @@
 #include "recon_fs.h"
 #include "recon_props.h"
 #include "recon_server.h"
+#include "recon_shell.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
@@ -889,7 +890,8 @@ static int draw_button(struct recon_explorer *ex, struct recon_panel *p,
     int width = recon_text_width(ex->font, label) + 22;
 
     recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
+        COLOR_BG);
     recon_draw_text(p, ex->font, x + 11, y + (BUTTON_HEIGHT + ascent) / 2 - 2,
         width - 16, label, warning ? COLOR_WARNING : COLOR_BUTTON_TEXT);
     recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
@@ -1055,7 +1057,8 @@ static int draw_tool(struct recon_explorer *ex, struct recon_panel *p,
     (void)ex;
 
     recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
+        COLOR_BG);
 
     draw_glyph(p, glyph, x + width / 2, y + BUTTON_HEIGHT / 2,
         enabled ? COLOR_TEXT : THEME(MENU_TEXT_DISABLED));

@@ -818,6 +818,31 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
     recon_fill_rect(panel, x + w - 1, y, 1, h, bottom_right);
 }
 
+/*
+ * The edge treatment every button in the system shares.
+ *
+ * The bevel is drawn first and the corners are then rounded off it, rather
+ * than one or the other: the bevel is what says pressed from raised, and a
+ * skin asking for round corners is not asking to give that up. Rounding
+ * after leaves the straight edges carrying the light and the shadow, which is
+ * where they were being read anyway.
+ *
+ * This exists because the rounding was written three times -- once in the
+ * taskbar, once in the window frame, once in the notice after an update --
+ * and every button that had not been rewritten stayed square. One skin
+ * producing two shapes of button inside one window is not a theme, it is a
+ * list of the files somebody remembered to change.
+ */
+void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
+        int h, bool pressed, recon_color behind) {
+    recon_draw_bevel(panel, x, y, w, h, pressed);
+
+    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    if (radius > 0) {
+        recon_round_rect(panel, x, y, w, h, radius, behind);
+    }
+}
+
 /* Blend a coverage value of `color` over one pixel. */
 static void blend_pixel(uint32_t *dst, recon_color color, unsigned char coverage) {
     if (coverage == 0) {

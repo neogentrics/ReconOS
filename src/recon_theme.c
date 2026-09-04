@@ -684,7 +684,10 @@ static const struct metric_spec SHAPE_BEACON[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_CORNER,        7 },
     { RECON_METRIC_BUTTON_SIZE,  18 },
-    { RECON_METRIC_BUTTON_CORNER, 3 },
+    /* Five rather than three. At three the corner was there but had to be
+     * looked for, which is the worst of both: the cost of rounding without
+     * the difference it was meant to make. */
+    { RECON_METRIC_BUTTON_CORNER, 5 },
     { RECON_METRIC_COUNT, 0 },
 };
 

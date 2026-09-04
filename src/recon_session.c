@@ -516,7 +516,8 @@ static void draw_button(struct recon_session *session, struct recon_panel *p,
     }
 
     recon_fill_rect(p, x, y, w, BUTTON_HEIGHT, fill);
-    recon_draw_bevel(p, x, y, w, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(p, x, y, w, BUTTON_HEIGHT, false,
+        THEME(DIALOG));
 
     recon_color ink = !enabled ? THEME(MENU_TEXT_DISABLED)
         : (primary ? THEME(ACCENT_TEXT) : THEME(MENU_TEXT));
@@ -667,7 +668,8 @@ static void draw_power_button(struct recon_session *session,
     if (hovered) {
         recon_fill_rect(p, x, y, POWER_BUTTON, POWER_BUTTON, THEME(BUTTON_ACTIVE));
     }
-    recon_draw_bevel(p, x, y, POWER_BUTTON, POWER_BUTTON, false);
+    recon_draw_button_edge(p, x, y, POWER_BUTTON, POWER_BUTTON, false,
+        THEME(DIALOG));
 
     draw_power_glyph(p, x + POWER_BUTTON / 2, y + POWER_BUTTON / 2, restart,
         THEME(MENU_TEXT));

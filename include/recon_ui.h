@@ -183,6 +183,18 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
     bool pressed);
 
 /*
+ * The edge every button shares: the bevel, then the skin's corner radius
+ * rounded off it, filled back to `behind`.
+ *
+ * Use this rather than recon_draw_bevel wherever the rectangle is a button a
+ * person can press. A bevel on its own is right for a sunken text field or a
+ * panel's own outline, and those should keep calling the bevel directly --
+ * they are not buttons and do not round.
+ */
+void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
+    int h, bool pressed, recon_color behind);
+
+/*
  * Draw text with its left edge at x and its baseline at y.
  *
  * Clipped to max_width, with a trailing ellipsis when it doesn't fit, so long

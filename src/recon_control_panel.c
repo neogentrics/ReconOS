@@ -371,7 +371,8 @@ static int draw_button(struct control_panel *cp, struct recon_panel *p,
 
     recon_fill_rect(p, x, y, width, BUTTON_HEIGHT,
         enabled ? COLOR_BUTTON : COLOR_BG);
-    recon_draw_bevel(p, x, y, width, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
+        COLOR_BG);
     recon_draw_text(p, cp->font, x + 11, y + (BUTTON_HEIGHT + ascent) / 2 - 2,
         width - 16, label, enabled ? COLOR_TEXT : COLOR_DIM);
 

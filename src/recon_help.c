@@ -765,14 +765,8 @@ static int notice_button(struct recon_notice *notice, struct recon_panel *p,
     int x = right - width;
 
     recon_fill_role(p, x, y, width, NOTICE_BUTTON_HEIGHT, RECON_THEME_BUTTON);
-
-    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
-    if (radius > 0) {
-        recon_round_rect(p, x, y, width, NOTICE_BUTTON_HEIGHT, radius,
-            COLOR_BG);
-    } else {
-        recon_draw_bevel(p, x, y, width, NOTICE_BUTTON_HEIGHT, false);
-    }
+    recon_draw_button_edge(p, x, y, width, NOTICE_BUTTON_HEIGHT, false,
+        COLOR_BG);
 
     recon_draw_text(p, notice->font, x + 13,
         y + (NOTICE_BUTTON_HEIGHT + ascent) / 2 - 2, width - 20, label,

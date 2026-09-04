@@ -363,7 +363,8 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
         dialog->mode == RECON_FILEDLG_SAVE ? "Save" : "Open";
 
     recon_fill_rect(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_bevel(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT,
+        false, COLOR_BG);
     recon_draw_text(panel, font,
         accept_x + (BUTTON_WIDTH - recon_text_width(font, accept_label)) / 2,
         by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, accept_label,
@@ -371,7 +372,8 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
     recon_hit_add(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, HIT_ACCEPT);
 
     recon_fill_rect(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_bevel(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, false);
+    recon_draw_button_edge(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT,
+        false, COLOR_BG);
     recon_draw_text(panel, font,
         cancel_x + (BUTTON_WIDTH - recon_text_width(font, "Cancel")) / 2,
         by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, "Cancel",

@@ -773,7 +773,8 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         bx -= width;
 
         recon_fill_rect(p, bx, by, width, BUTTON_HEIGHT, COLOR_BUTTON);
-        recon_draw_bevel(p, bx, by, width, BUTTON_HEIGHT, false);
+        recon_draw_button_edge(p, bx, by, width, BUTTON_HEIGHT, false,
+            COLOR_FRAME);
 
         int label_w = recon_text_width(tm->font, buttons[i].label);
         recon_draw_text(p, tm->font, bx + (width - label_w) / 2,

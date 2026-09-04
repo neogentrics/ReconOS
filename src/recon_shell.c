@@ -706,14 +706,29 @@ static void draw_dialog(struct recon_shell *shell) {
     for (int i = 0; i < shell->dialog_button_count; i++) {
         bool hovered = (i == shell->dialog_hover);
 
+        recon_color face = hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON;
+
         recon_fill_rect(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
-            hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
-        recon_draw_bevel(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT, false);
+            face);
+        recon_draw_button_edge(p, bx, by, DIALOG_BUTTON_WIDTH,
+            DIALOG_BUTTON_HEIGHT, false, COLOR_BAR);
 
         /* The default is outlined, so Enter's meaning is visible. */
         if (i == shell->dialog_default) {
             recon_stroke_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
                 DIALOG_BUTTON_HEIGHT - 4, COLOR_ACCENT);
+
+            /*
+             * The ring follows the button. Left square inside a rounded
+             * button it read as a second, sharper button drawn on top of the
+             * first -- which is what it looked like, and the wrong thing to
+             * say about the answer Enter gives.
+             */
+            int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER) - 2;
+            if (radius > 0) {
+                recon_round_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
+                    DIALOG_BUTTON_HEIGHT - 4, radius, face);
+            }
         }
 
         int text_w = recon_text_width(shell->font, shell->dialog_buttons[i]);
@@ -1353,16 +1368,10 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
     (void)minimized;
 
     recon_fill_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
-    recon_draw_bevel(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, active || minimized);
-
-    /* Rounded to whatever the skin asks for, filled back to the bar behind
-     * rather than cleared -- a hole here would show the wallpaper through the
-     * taskbar. */
-    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
-    if (radius > 0) {
-        recon_round_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, radius,
-            THEME(BAR));
-    }
+    /* Filled back to the bar behind rather than cleared -- a hole here would
+     * show the wallpaper through the taskbar. */
+    recon_draw_button_edge(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
+        active || minimized, THEME(BAR));
 
     /* The icon comes first, so a bar of buttons can be read at a glance
      * without depending on the titles fitting. */
@@ -1974,7 +1983,8 @@ static void draw_security(struct recon_shell *shell) {
 
         recon_fill_rect(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT,
             hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
-        recon_draw_bevel(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, false);
+        recon_draw_button_edge(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT,
+            false, COLOR_MENU);
         recon_draw_text(p, shell->font, SEC_PADDING + 12,
             y + (SEC_BUTTON_HEIGHT + ascent) / 2 - 2, bw - 24,
             SEC_ITEMS[i], COLOR_MENU_TEXT);
