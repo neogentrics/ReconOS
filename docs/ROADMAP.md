@@ -822,6 +822,34 @@ The three things still blocked are listed underneath. The page used to be
 nothing but that list, and dropping it now that most of the page works is how
 a gap stops being visible.
 
+### Typing in the Start menu
+
+The menu never took a key — not even Escape — so the only way to reach an
+application was to find its name with the mouse, in a list whose only order is
+alphabetical. Backlog item 3 asked for categories and a search box; what it
+actually needed was for the menu to hear the keyboard at all.
+
+Typing narrows to names containing what has been typed, and forces the
+alphabetical order whatever mode the column was in: somebody typing letters is
+looking for a name, and most-used is not an order you can look a name up in.
+The line saying what is being looked for appears only once something has been
+typed — a search box standing empty in a menu of seven applications is
+furniture.
+
+The arrows move the highlight and Enter opens it, falling back to the first
+match when nothing is highlighted, so three letters and Enter is enough. The
+highlight is the same `menu_hover` the pointer sets, so a menu driven from the
+keyboard looks like one driven from the mouse and the mouse takes over without
+a fight.
+
+Escape steps back one thing at a time — what was typed, then the long list,
+then the menu — because closing outright throws away a search somebody is
+halfway through correcting.
+
+Categories are still not done. With seven applications there is nothing to
+categorise, and a taxonomy invented before there is anything to sort is a
+taxonomy that will be wrong.
+
 ### The bin, from outside a window
 
 Building the above needed a `bin` command, because the Recycle Bin could only

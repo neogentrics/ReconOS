@@ -16,6 +16,11 @@ is the programs you open most; **All Programs** at the foot of it lists
 everything installed. The right column is your folders, the Control Panel, and
 this help.
 
+**Type with the menu open** to narrow the list to names containing what you
+typed. The arrow keys move the highlight and **Enter** opens it — three
+letters and Enter is usually enough. **Escape** steps back: first what you
+typed, then the long list, then the menu itself.
+
 Along the bottom of the menu are five buttons: lock the screen, sign out,
 switch user, restart, and shut down. Point at one and its name appears on the
 left.

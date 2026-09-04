@@ -116,6 +116,12 @@ installed, alphabetically. The two are not the same list truncated: the column
 answers what you use, All Programs answers what is here, and only one of those
 is in an order you can search by name.
 
+**Typing narrows it.** The menu took no keys at all before v0.2.15 -- not even
+Escape -- so the only way to reach an application was to find its name with the
+mouse. Now typing filters the list, the arrows move the highlight, Enter opens
+it, and Escape steps back one thing at a time: what was typed, then the long
+list, then the menu.
+
 **A Control Panel** with thirteen pages. Eight do something: Accounts,
 Appearance, Reading, Programs, Modules, Storage, Registry, About. Modules
 loads and unloads code in the running system and says why anything refused to

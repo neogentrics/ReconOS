@@ -21,6 +21,11 @@ The Recycle Bin from the Terminal. bin lists it, bin <name> puts
 something in, bin restore <name> takes it back out, and bin empty clears
 it. Before this the bin could only be reached from the File Explorer.
 
+Type in the Start menu to find something. The list narrows to names
+containing what you typed; the arrows move the highlight and Enter opens it.
+Escape steps back one thing at a time. The menu took no keys at all before
+this, not even Escape.
+
 Every button is the same shape. The rounded corners a skin asks for were
 written in three places and every button that had not been rewritten stayed
 square. On Beacon that meant two shapes of button in one window.
