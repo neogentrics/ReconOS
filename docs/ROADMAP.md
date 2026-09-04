@@ -864,6 +864,50 @@ Not done: the ramps and the frame metrics can be removed from the editor but
 not set there, and a skin cannot be renamed or deleted from it. The file is
 still editable by hand, which is the way to do any of those today.
 
+### Client windows, framed by ReconOS
+
+The claim in the known-missing list was that this was not started because
+there was no Wayland client in the development environment to test against.
+The first half of that was untrue: `weston-terminal` was installed the whole
+time and nobody had looked. The second half — that shipping window management
+nothing has driven is how Alt+Tab came to be dead for months — is why this
+work is mostly instruments.
+
+Three of them, and each found something:
+
+- **`spawn`**, which wires up `recon_spawn`. That function had been in
+  `main.c` since the compositor could host a client and had *never been
+  called*: a capability nothing exercises is a capability nobody knows the
+  state of. It reaches the machine underneath, which the help says plainly
+  that nothing here does, so it exists only when `RECONOS_ALLOW_SPAWN` is
+  set. It also passed the whole command line as the program name, so it could
+  never have launched anything with an argument.
+- **`tests/decor_client.c`**, the smallest Wayland client that uses
+  xdg-decoration. weston's own demos do not use the protocol at all and draw
+  their frames regardless, so nothing on hand could have told the difference
+  between this working and this not existing.
+- **Running the drag through the injected-input path** as well as the real
+  one, so dragging a client window is something that can be watched.
+
+What they found:
+
+**Forcing SERVER_SIDE on every client gave weston-terminal a ReconOS title
+bar above its own.** Two bars, one window — worse than the mismatch the
+feature exists to fix. Only clients that actually use the protocol are
+decorated now; one that draws its own frame cannot be told to stop and is
+left alone.
+
+**A maximized window filled the screen from y=0**, putting its own title bar
+at minus its height, which is to say nowhere. A maximized client could not be
+moved, minimized or closed except from the taskbar.
+
+The bar reads the same skin metrics a built-in window's frame does — title
+height, button size, corner radius — so a client window and a ReconOS window
+are the same window. Not done: resizing by an edge, which needs hit regions
+outside the client's surface, and an icon that means anything (a Wayland
+client hands its compositor an app_id, not a picture, and guessing an icon
+from a reverse-DNS string would be wrong more often than right).
+
 ### F1
 
 `recon_help_show_topic` had existed since the help did and nothing called it:
@@ -976,14 +1020,11 @@ list, a text field and a menu are all still square whatever the skin says.
 **No paint program.** The control socket still has no authentication, only
 file permissions.
 
-**Client windows draw their own decorations.** ReconOS now frames its own
-windows to whatever shape the skin asks for, and a Wayland client is framed
-by whatever toolkit built it. Doing this needs the xdg-decoration protocol
-and a decoration panel per client -- the same machinery `recon_appwin`
-already has. It is not started because **there is no Wayland client in the
-development environment to test it against**, and shipping window management
-that has never been driven is how Alt+Tab came to be dead for months without
-anybody noticing.
+**Client windows cannot be resized by dragging an edge.** They are framed by
+ReconOS now (v0.2.15) and dragged, minimized, maximized and closed like any
+other window, but the frame is a title bar and not a border: resizing needs
+hit regions outside the client's own surface, which is its own piece of work.
+Until then a client window is whatever size it asks to be, or maximized.
 
 **Help has no search, and no way in from where you are.** The topic list is
 short enough to read, but the change log makes it thirty entries and neither

@@ -56,9 +56,8 @@ inside ReconOS rather than only installed into it.
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
 
-Still early. There is no kernel of its own, client windows draw their own
-decorations, and the account roles are enforced by ReconOS inside ReconOS
-rather than by anything underneath it. What is here works and is tested; what
+Still early. There is no kernel of its own, and the account roles are
+enforced by ReconOS inside ReconOS rather than by anything underneath it. What is here works and is tested; what
 is not here is listed at the end.
 
 ## What works right now
@@ -473,7 +472,21 @@ that account, so each person is told once and nobody is told twice.
 the window that asked for it, so it cannot be dragged away from its own
 question or left behind its own parent.
 
-**Client windows** via `xdg-shell`, for programs written against Wayland.
+**Client windows** via `xdg-shell`, for programs written against Wayland --
+**framed by ReconOS**, not by the toolkit that built them. A client used to
+arrive with a frame of its own in somebody else's colours; it now gets the
+same title bar every other window has, reading the same skin metrics, and
+drags, minimizes, maximizes and closes the same way. A client that insists on
+drawing its own frame still may, and is not given a second one on top of it.
+
+It cannot yet be resized by dragging an edge: the frame is a title bar rather
+than a border, and resizing needs hit regions outside the client's own
+surface.
+
+`tests/decor_client.c` is the smallest Wayland client that uses
+xdg-decoration, built alongside ReconOS. It exists because weston's demos do
+not use the protocol at all -- so without it, nothing on hand could tell the
+difference between this working and this not existing.
 
 ## Controls
 

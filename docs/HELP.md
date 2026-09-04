@@ -41,6 +41,14 @@ the screen. The middle button in the title bar puts it back where it was.
 The three buttons at the right of a title bar are minimize, maximize and
 close.
 
+A program written for Wayland rather than for ReconOS gets the same title bar
+as everything else, so it drags, minimizes, maximizes and closes the same way.
+It cannot yet be resized by dragging its edges — that is still up to the
+program.
+
+A program that insists on drawing its own frame is left alone rather than
+given a second one.
+
 ## Desktops
 
 There are four. The numbers at the right of the taskbar say which you are on,
