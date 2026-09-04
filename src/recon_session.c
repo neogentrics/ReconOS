@@ -1858,6 +1858,12 @@ static void go_back(struct recon_session *session) {
 
 /* --- Lifecycle --- */
 
+/* The screen that says the system has stopped. Registered with the error
+ * layer as soon as there is a session to draw it on, and defined at the
+ * bottom of this file with the rest of the stop handling. */
+static void show_stop_screen(struct recon_server *server,
+    const struct recon_error_info *info, const char *detail);
+
 struct recon_session *recon_session_create(struct recon_server *server,
         struct recon_font *font, int width, int height) {
     struct recon_session *session = calloc(1, sizeof(*session));
@@ -1879,6 +1885,13 @@ struct recon_session *recon_session_create(struct recon_server *server,
     }
     recon_panel_set_position(session->panel, 0, 0);
     recon_panel_set_enabled(session->panel, false);
+
+    /*
+     * From here on there is something to draw a stop on. Before this point a
+     * stop goes to stderr, which is the honest answer for a fault that
+     * happens before the display exists.
+     */
+    recon_error_set_screen(server, show_stop_screen);
 
     /*
      * A larger font for headings. NULL is coped with everywhere it is used:
@@ -1913,6 +1926,7 @@ void recon_session_destroy(struct recon_session *session) {
 /* What the splash hands off to. Defined below, with the login screen it leads
  * into. */
 static void begin_after_splash(struct recon_session *session);
+
 
 /* Where the login screen would have gone, once the update screen is done. */
 static void after_update(struct recon_session *session) {
@@ -2555,7 +2569,7 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
  * any way to say so on screen. Then stderr is what is left, and it is better
  * than a blank display.
  */
-void recon_error_show_stop(struct recon_server *server,
+static void show_stop_screen(struct recon_server *server,
         const struct recon_error_info *info, const char *detail) {
     struct recon_session *session =
         (server != NULL) ? recon_shell_session(server->shell) : NULL;

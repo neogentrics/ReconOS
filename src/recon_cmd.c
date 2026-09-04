@@ -18,6 +18,7 @@
 #include "recon_capture.h"
 #include "recon_cmd.h"
 #include "recon_error.h"
+#include "recon_firewall.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
 #include "recon_package.h"
@@ -580,6 +581,273 @@ static void cmd_raise(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "Raising %s.\n", info->code);
     recon_error_raise(s->server, (enum recon_error_code)which,
         "Raised on purpose from the terminal.");
+}
+
+/* One rule, as a line somebody can read. */
+static void show_rule(struct recon_cmd_session *s, int index,
+        const struct recon_fw_rule *rule) {
+    char ports[48];
+    if (rule->port_from == 0 && rule->port_to == 0) {
+        recon_text_copy(ports, sizeof(ports), "any");
+    } else if (rule->port_from == rule->port_to) {
+        snprintf(ports, sizeof(ports), "%d", rule->port_from);
+    } else {
+        snprintf(ports, sizeof(ports), "%d-%d", rule->port_from,
+            rule->port_to);
+    }
+
+    out(s, "  %2d  %-3s %-5s %-4s %-9s %-5s %s\n", index + 1,
+        rule->enabled ? "on" : "off",
+        recon_fw_action_name(rule->action),
+        recon_fw_direction_name(rule->direction),
+        ports,
+        recon_fw_protocol_name(rule->protocol),
+        rule->name);
+}
+
+/*
+ * The firewall.
+ *
+ * Reads like the firewall command on any other system, because the shape is
+ * the shape people already know: a switch, a default per direction, and a
+ * numbered list where the first match decides.
+ */
+static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "\nFirewall: %s\n", recon_firewall_is_on() ? "on" : "off");
+        out(s, "  incoming, by default: %s\n",
+            recon_fw_action_name(recon_firewall_default(RECON_FW_IN)));
+        out(s, "  outgoing, by default: %s\n\n",
+            recon_fw_action_name(recon_firewall_default(RECON_FW_OUT)));
+
+        int count = recon_firewall_count();
+        if (count == 0) {
+            out(s, "  No rules. The defaults above decide everything.\n");
+        } else {
+            out(s, "   #   on  what  dir  ports     proto name\n");
+            for (int i = 0; i < count; i++) {
+                struct recon_fw_rule rule;
+                if (recon_firewall_at(i, &rule)) {
+                    show_rule(s, i, &rule);
+                }
+            }
+        }
+
+        out(s, "\n  The first rule that matches decides, so the order is part\n"
+               "  of the rule. 'firewall help' lists what can be changed.\n");
+        return;
+    }
+
+    const char *what = argv[1];
+
+    if (strcasecmp(what, "help") == 0) {
+        out(s,
+            "  firewall                      what it is doing\n"
+            "  firewall on|off               the switch\n"
+            "  firewall default in|out allow|block\n"
+            "  firewall allow|block <n>      change what rule n does\n"
+            "  firewall enable|disable <n>   put rule n in or out of force\n"
+            "  firewall up|down <n>          move rule n, which changes order\n"
+            "  firewall remove <n>\n"
+            "  firewall add in|out tcp|udp|any <port>[-<port>] allow|block "
+            "<name>\n"
+            "  firewall test in|out tcp|udp <port> [program]\n"
+            "\n  Ports have names: 'firewall ports' lists the ones it "
+            "knows.\n");
+        return;
+    }
+
+    if (strcasecmp(what, "ports") == 0) {
+        /* Walked rather than listed, because the table lives in the firewall
+         * and a second copy here would be a second thing to update. */
+        for (int port = 1; port <= 65535; port++) {
+            const char *name = recon_fw_port_name(port);
+            if (name != NULL) {
+                out(s, "  %5d  %s\n", port, name);
+            }
+        }
+        return;
+    }
+
+    if (strcasecmp(what, "on") == 0 || strcasecmp(what, "off") == 0) {
+        bool on = (strcasecmp(what, "on") == 0);
+        if (!recon_firewall_set_on(on)) {
+            out(s, "%s\n", recon_firewall_last_error());
+            return;
+        }
+        out(s, "The firewall is %s.\n", on ? "on" : "off");
+        return;
+    }
+
+    if (strcasecmp(what, "default") == 0) {
+        if (argc < 4) {
+            out(s, "Usage: firewall default in|out allow|block\n");
+            return;
+        }
+        enum recon_fw_direction direction =
+            (strcasecmp(argv[2], "in") == 0) ? RECON_FW_IN : RECON_FW_OUT;
+        enum recon_fw_action action =
+            (strcasecmp(argv[3], "allow") == 0) ? RECON_FW_ALLOW
+                                                : RECON_FW_BLOCK;
+
+        if (!recon_firewall_set_default(direction, action)) {
+            out(s, "%s\n", recon_firewall_last_error());
+            return;
+        }
+        out(s, "%s traffic is %s by default now.\n",
+            direction == RECON_FW_IN ? "Incoming" : "Outgoing",
+            recon_fw_action_name(action));
+        return;
+    }
+
+    if (strcasecmp(what, "test") == 0) {
+        if (argc < 5) {
+            out(s, "Usage: firewall test in|out tcp|udp <port> [program]\n");
+            return;
+        }
+        enum recon_fw_direction direction =
+            (strcasecmp(argv[2], "in") == 0) ? RECON_FW_IN : RECON_FW_OUT;
+        enum recon_fw_protocol protocol =
+            (strcasecmp(argv[3], "udp") == 0) ? RECON_FW_UDP : RECON_FW_TCP;
+        int port = atoi(argv[4]);
+        const char *program = (argc > 5) ? argv[5] : NULL;
+
+        char why[96];
+        bool allowed = recon_firewall_allows(direction, protocol, port,
+            program, why, sizeof(why));
+
+        const char *name = recon_fw_port_name(port);
+        out(s, "  %s %s %d%s%s%s for %s: %s (%s)\n",
+            recon_fw_direction_name(direction),
+            recon_fw_protocol_name(protocol), port,
+            name != NULL ? " (" : "", name != NULL ? name : "",
+            name != NULL ? ")" : "",
+            program != NULL ? program : "the system",
+            allowed ? "allowed" : "blocked", why);
+        return;
+    }
+
+    /* The rest take a rule number, counted from one as it is displayed. */
+    if (strcasecmp(what, "allow") == 0 || strcasecmp(what, "block") == 0 ||
+            strcasecmp(what, "enable") == 0 ||
+            strcasecmp(what, "disable") == 0 ||
+            strcasecmp(what, "remove") == 0 ||
+            strcasecmp(what, "up") == 0 || strcasecmp(what, "down") == 0) {
+
+        if (argc < 3) {
+            out(s, "Usage: firewall %s <rule number>\n", what);
+            return;
+        }
+
+        int index = atoi(argv[2]) - 1;
+        struct recon_fw_rule rule;
+        if (!recon_firewall_at(index, &rule)) {
+            out(s, "There is no rule %s. 'firewall' lists them.\n", argv[2]);
+            return;
+        }
+
+        bool done = false;
+        if (strcasecmp(what, "enable") == 0) {
+            done = recon_firewall_set_rule_on(index, true);
+        } else if (strcasecmp(what, "disable") == 0) {
+            done = recon_firewall_set_rule_on(index, false);
+        } else if (strcasecmp(what, "remove") == 0) {
+            done = recon_firewall_remove(index);
+        } else if (strcasecmp(what, "up") == 0) {
+            done = recon_firewall_move(index, -1);
+        } else if (strcasecmp(what, "down") == 0) {
+            done = recon_firewall_move(index, 1);
+        } else {
+            /* allow or block: the rule is rewritten with the other action,
+             * which keeps its place in the order. */
+            rule.action = (strcasecmp(what, "allow") == 0)
+                ? RECON_FW_ALLOW : RECON_FW_BLOCK;
+            done = recon_firewall_remove(index);
+            if (done) {
+                done = recon_firewall_add(&rule);
+                if (done) {
+                    /* Back where it was: order decides, so an edit must not
+                     * quietly move a rule to the end of the list. */
+                    recon_firewall_move(recon_firewall_count() - 1,
+                        index - (recon_firewall_count() - 1));
+                }
+            }
+        }
+
+        if (!done) {
+            out(s, "%s\n", recon_firewall_last_error());
+            return;
+        }
+        out(s, "Done. '%s' is now:\n", rule.name);
+        if (recon_firewall_at(index, &rule)) {
+            show_rule(s, index, &rule);
+        }
+        return;
+    }
+
+    if (strcasecmp(what, "add") == 0) {
+        if (argc < 7) {
+            out(s, "Usage: firewall add in|out tcp|udp|any "
+                   "<port>[-<port>] allow|block <name>\n");
+            return;
+        }
+
+        struct recon_fw_rule rule;
+        memset(&rule, 0, sizeof(rule));
+
+        rule.direction = (strcasecmp(argv[2], "in") == 0)
+            ? RECON_FW_IN : RECON_FW_OUT;
+
+        if (strcasecmp(argv[3], "tcp") == 0) {
+            rule.protocol = RECON_FW_TCP;
+        } else if (strcasecmp(argv[3], "udp") == 0) {
+            rule.protocol = RECON_FW_UDP;
+        } else {
+            rule.protocol = RECON_FW_ANY_PROTOCOL;
+        }
+
+        const char *ports = argv[4];
+        const char *dash = strchr(ports, '-');
+        rule.port_from = atoi(ports);
+        rule.port_to = (dash != NULL) ? atoi(dash + 1) : rule.port_from;
+
+        rule.action = (strcasecmp(argv[5], "allow") == 0)
+            ? RECON_FW_ALLOW : RECON_FW_BLOCK;
+
+        /* The name is the tail, joined: it has spaces in it and is the thing
+         * the log says when the rule fires. */
+        size_t used = 0;
+        for (int i = 6; i < argc && used < sizeof(rule.name) - 1; i++) {
+            int n = snprintf(rule.name + used, sizeof(rule.name) - used,
+                "%s%s", i > 6 ? " " : "", argv[i]);
+            if (n < 0 || (size_t)n >= sizeof(rule.name) - used) {
+                break;
+            }
+            used += (size_t)n;
+        }
+
+        /* A rule somebody just wrote is in force. Adding one off would be a
+         * rule that does nothing and looks like it does. */
+        rule.enabled = true;
+
+        if (!recon_firewall_add(&rule)) {
+            out(s, "%s\n", recon_firewall_last_error());
+            return;
+        }
+
+        out(s, "Added, at the end of the list:\n");
+        int index = recon_firewall_count() - 1;
+        struct recon_fw_rule added;
+        if (recon_firewall_at(index, &added)) {
+            show_rule(s, index, &added);
+        }
+        out(s, "\n  The first match decides, so 'firewall up %d' if it has to\n"
+               "  come before something else.\n", index + 1);
+        return;
+    }
+
+    out(s, "'firewall %s' is not something it does. 'firewall help' lists "
+        "what is.\n", what);
 }
 
 static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
@@ -2240,6 +2508,7 @@ static const struct command COMMANDS[] = {
     { "deltree",  "deltree <name>",        "Delete a folder and its contents",  cmd_deltree },
     { "spawn",    "spawn [command]",       "Start a Wayland client (testing)",  cmd_spawn },
     { "errors",   "errors [<code>|log]",   "What an error code means",          cmd_errors },
+    { "firewall", "firewall [...]",        "What may open and be opened",       cmd_firewall },
     { "raise",    "raise <code>",          "Report an error on purpose (testing)",
                                                                                 cmd_raise },
     { "bin",      "bin [<name>|list|restore <name>|purge <name>|empty]",

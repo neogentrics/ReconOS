@@ -28,6 +28,8 @@
 
 #include <wayland-server-core.h>
 
+#include "recon_error.h"
+#include "recon_firewall.h"
 #include "recon_net.h"
 #include "recon_registry.h"
 
@@ -985,6 +987,22 @@ struct recon_net_stream *recon_net_stream_open(const char *application,
     if (!recon_net_may_use(application)) {
         set_error("'%s' is not allowed to use the network",
             application != NULL ? application : "an unnamed application");
+        return NULL;
+    }
+
+    /*
+     * Then the firewall, which is a different question.
+     *
+     * The check above asks whether this program may use the network at all;
+     * this one asks whether *this* connection is one the machine allows. A
+     * program can be permitted and the port still shut.
+     */
+    char why[96];
+    if (!recon_firewall_allows(RECON_FW_OUT, RECON_FW_TCP, port, application,
+            why, sizeof(why))) {
+        recon_error_raisef(NULL, RECON_ERR_G001, "out, tcp %d, %s -- %s",
+            port, application != NULL ? application : "the system", why);
+        set_error("the firewall blocked that (%s)", why);
         return NULL;
     }
 

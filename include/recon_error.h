@@ -123,16 +123,25 @@ void recon_error_raisef(struct recon_server *server,
     __attribute__((format(printf, 3, 4)));
 
 /*
- * Draw the screen that says the system has stopped, and end the session.
+ * Who draws the screen that says the system has stopped.
  *
- * Drawn by the session, which is the thing that already owns a panel covering
- * the whole screen -- and which is the only part of the system that has to
- * keep working when everything above it has not.
+ * Registered rather than called directly, so this layer does not depend on
+ * the thing that draws. That is not tidiness: recording a fault has to work
+ * in places the compositor does not exist -- a test binary, a module built on
+ * its own, and the moment before the display comes up, which is exactly when
+ * the worst faults happen.
  *
- * Does not return. Everything that could be written down already has been.
+ * With nothing registered, a stop writes its record, says so on stderr and
+ * ends the process. That is the honest behaviour for "there is nothing to
+ * draw with", which is a real state and not a failure of this design: "no
+ * usable font" is a stop, and it is a stop that happens before there is any
+ * way to say so on a screen.
  */
-void recon_error_show_stop(struct recon_server *server,
+typedef void (*recon_error_screen_fn)(struct recon_server *server,
     const struct recon_error_info *info, const char *detail);
+
+void recon_error_set_screen(struct recon_server *server,
+    recon_error_screen_fn show);
 
 /* --- What happened last time --- */
 

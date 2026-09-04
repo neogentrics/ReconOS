@@ -18,7 +18,6 @@
 #include "ReconOS.h"
 #include "recon_error.h"
 #include "recon_fs.h"
-#include "recon_server.h"
 
 /* --- The table --- */
 
@@ -184,6 +183,19 @@ static void write_last_stop(const struct recon_error_info *info,
     recon_fs_write("/", RECON_ERROR_LAST, text, (size_t)length);
 }
 
+/*
+ * Who draws a stop, and for whom. Both set together, because a screen
+ * without the server it draws on is half an answer.
+ */
+static recon_error_screen_fn g_screen;
+static struct recon_server *g_screen_server;
+
+void recon_error_set_screen(struct recon_server *server,
+        recon_error_screen_fn show) {
+    g_screen_server = server;
+    g_screen = show;
+}
+
 void recon_error_raise(struct recon_server *server,
         enum recon_error_code code, const char *detail) {
     const struct recon_error_info *info = recon_error_at(code);
@@ -198,7 +210,23 @@ void recon_error_raise(struct recon_server *server,
     }
 
     write_last_stop(info, detail);
-    recon_error_show_stop(server, info, detail);
+
+    if (g_screen != NULL) {
+        /*
+         * The caller's server if it gave one, otherwise whoever registered.
+         * Most callers are deep enough in the system that they do not hold a
+         * server pointer, and requiring one would mean threading it through
+         * a dozen files for the sake of the one case that needs it.
+         */
+        g_screen((server != NULL) ? server : g_screen_server, info, detail);
+        return;
+    }
+
+    fprintf(stderr, "\nReconOS has stopped.\n\n  %s  %s\n\n%s\n%s%s\n\n",
+        info->code, info->summary, info->detail,
+        (detail != NULL && detail[0] != '\0') ? "\n" : "",
+        (detail != NULL) ? detail : "");
+    exit(1);
 }
 
 void recon_error_raisef(struct recon_server *server,

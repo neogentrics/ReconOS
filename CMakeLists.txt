@@ -65,6 +65,7 @@ add_executable(ReconOS
     src/recon_desktop.c
     src/recon_error.c
     src/recon_explorer.c
+    src/recon_firewall.c
     src/recon_fs.c
     src/recon_ico.c
     src/recon_icon_gen.c
@@ -221,6 +222,11 @@ add_executable(recon_net_tests
     tests/test_net.c
     src/recon_net.c
     src/recon_registry.c
+    # Opening a connection asks the firewall, and a refusal is an error with
+    # a code. Neither needs a compositor, which is the property these test
+    # targets exist to protect.
+    src/recon_firewall.c
+    src/recon_error.c
     src/recon_fs.c)
 
 target_include_directories(recon_net_tests PRIVATE

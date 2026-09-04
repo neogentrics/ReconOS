@@ -59,6 +59,7 @@
 #include "recon_decor.h"
 #include "recon_control.h"
 #include "recon_error.h"
+#include "recon_firewall.h"
 #include "recon_fs.h"
 #include "recon_help.h"
 #include "recon_icon_gen.h"
@@ -2284,6 +2285,19 @@ int main(int argc, char **argv) {
     /* Settings come up next, since almost everything after this may want to
      * know what was chosen last time. */
     recon_registry_init();
+
+    /*
+     * The firewall before anything that could open a connection.
+     *
+     * It comes up on its built-in defaults whatever happens to the file, so
+     * there is no window in which the rules are unknown -- a firewall that
+     * fails open because its file is missing is worse than no firewall,
+     * because it looks like one.
+     */
+    if (!recon_firewall_init()) {
+        recon_error_raisef(NULL, RECON_ERR_G002, "%s",
+            recon_firewall_last_error());
+    }
 
     /* Skins come next: they read a setting to know which one is wanted, and
      * everything that draws needs colours before it draws anything. */

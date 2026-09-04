@@ -18,6 +18,7 @@
 #include "recon_appwin.h"
 #include "recon_avatar.h"
 #include "recon_control_panel.h"
+#include "recon_firewall.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_help.h"
@@ -105,6 +106,14 @@ enum action {
     /* Storage */
     ACTION_MEASURE_STORAGE,
     ACTION_EMPTY_BIN,
+    /* Firewall */
+    ACTION_FIREWALL_TOGGLE,
+    ACTION_FIREWALL_DEFAULT_IN,
+    ACTION_FIREWALL_DEFAULT_OUT,
+    ACTION_FIREWALL_RULE_TOGGLE,
+    ACTION_FIREWALL_RULE_ACTION,
+    ACTION_FIREWALL_RULE_UP,
+    ACTION_FIREWALL_RULE_DOWN,
     /* Skins */
     ACTION_COPY_SKIN,
     ACTION_CONFIRM_COPY_SKIN,
@@ -126,6 +135,15 @@ enum page {
     PAGE_MODULES,
 
     PAGE_NETWORK,
+    /*
+     * Its own page rather than a section of Network, because it is the page
+     * somebody comes to the Control Panel *for* -- and because it is meant to
+     * be replaced. A firewall with per-program rules and its own history
+     * belongs in an application; when that application arrives it takes this
+     * page's place, and a page is a cleaner thing to replace than half of
+     * another one.
+     */
+    PAGE_FIREWALL,
     PAGE_POWER,
     PAGE_STORAGE,
     PAGE_MULTITASKING,
@@ -152,6 +170,7 @@ static const struct {
     { "Modules", RECON_ICON_SYSTEM, false },
 
     { "Network", RECON_ICON_SYSTEM, true },
+    { "Firewall", RECON_ICON_SYSTEM, false },
     { "Power", RECON_ICON_SHUTDOWN, false },
     { "Storage", RECON_ICON_EXPLORER, false },
     { "Multitasking", RECON_ICON_TASKMGR, false },
@@ -1557,6 +1576,198 @@ static void draw_update(struct control_panel *cp, struct recon_panel *p,
     }
 }
 
+/* --- The firewall --- */
+
+/*
+ * What may open and what may be opened.
+ *
+ * The shape most systems have, because that is the shape people already know:
+ * a switch, a default per direction, and a numbered list where the first
+ * match decides. The numbers are shown because the order is part of the rule
+ * and a list whose order matters has to say what the order is.
+ */
+static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    y = draw_heading(cp, p, x, y, w, "Firewall",
+        "What ReconOS may open, and what may be opened to it. Not the "
+        "host's firewall.");
+
+    bool on = recon_firewall_is_on();
+
+    /* The switch, and what happens when nothing matches. */
+    char state[96];
+    snprintf(state, sizeof(state), "The firewall is %s.", on ? "on" : "off");
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, state,
+        on ? COLOR_TEXT : COLOR_WARNING);
+    y += line + 4;
+
+    if (!on) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "Nothing below is being enforced while it is off.", COLOR_DIM);
+        y += line;
+    }
+    y += PADDING;
+
+    int bx = draw_button(cp, p, x, y, on ? "Turn Off" : "Turn On",
+        HIT_ACTION_BASE + ACTION_FIREWALL_TOGGLE, true);
+
+    char in_label[64];
+    char out_label[64];
+    snprintf(in_label, sizeof(in_label), "Incoming: %s",
+        recon_fw_action_name(recon_firewall_default(RECON_FW_IN)));
+    snprintf(out_label, sizeof(out_label), "Outgoing: %s",
+        recon_fw_action_name(recon_firewall_default(RECON_FW_OUT)));
+
+    bx = draw_button(cp, p, bx, y, in_label,
+        HIT_ACTION_BASE + ACTION_FIREWALL_DEFAULT_IN, on);
+    draw_button(cp, p, bx, y, out_label,
+        HIT_ACTION_BASE + ACTION_FIREWALL_DEFAULT_OUT, on);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "Rules, in the order they are consulted. The first one that matches "
+        "decides.", COLOR_DIM);
+    y += line + 4;
+
+    /* Room for the buttons under the list, always, so choosing the last rule
+     * does not push the controls off the page. */
+    int footer = BUTTON_HEIGHT + PADDING * 2 + line;
+    int count = recon_firewall_count();
+    int rows = (h - y - footer) / ROW_HEIGHT;
+    if (rows < 1) {
+        rows = 1;
+    }
+    if (rows > count) {
+        rows = count;
+    }
+
+    if (cp->selected < 0) {
+        cp->selected = 0;
+    }
+    if (count > 0 && cp->selected >= count) {
+        cp->selected = count - 1;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    for (int i = 0; i < rows; i++) {
+        struct recon_fw_rule rule;
+        if (!recon_firewall_at(i, &rule)) {
+            break;
+        }
+
+        int ry = y + i * ROW_HEIGHT;
+        bool chosen = (i == cp->selected);
+
+        if (chosen) {
+            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+        } else if (i % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color ink = chosen ? THEME(SELECTION_TEXT) : COLOR_TEXT;
+        recon_color faint = chosen ? THEME(SELECTION_TEXT) : COLOR_DIM;
+
+        /*
+         * A rule that is off is drawn dim whether or not it is selected: its
+         * being written down and not in force is the single most important
+         * thing about it, and a row that looks the same either way is a row
+         * that gets misread.
+         */
+        if (!rule.enabled) {
+            ink = faint;
+        }
+
+        int baseline = ry + (ROW_HEIGHT + ascent) / 2 - 2;
+
+        /* Wide enough for any rule number the list can hold, so the compiler
+         * can see it will fit as well as the reader. */
+        char number[16];
+        snprintf(number, sizeof(number), "%d", i + 1);
+        recon_draw_text(p, cp->font, x + 8, baseline, 24, number, faint);
+
+        recon_draw_text(p, cp->font, x + 34, baseline, 34,
+            rule.enabled ? "on" : "off", faint);
+
+        recon_draw_text(p, cp->font, x + 70, baseline, 44,
+            recon_fw_action_name(rule.action),
+            rule.action == RECON_FW_BLOCK && rule.enabled
+                ? COLOR_WARNING : ink);
+
+        recon_draw_text(p, cp->font, x + 118, baseline, 30,
+            recon_fw_direction_name(rule.direction), faint);
+
+        char ports[48];
+        if (rule.port_from == 0 && rule.port_to == 0) {
+            recon_text_copy(ports, sizeof(ports), "any");
+        } else if (rule.port_from == rule.port_to) {
+            snprintf(ports, sizeof(ports), "%d", rule.port_from);
+        } else {
+            snprintf(ports, sizeof(ports), "%d-%d", rule.port_from,
+                rule.port_to);
+        }
+        recon_draw_text(p, cp->font, x + 152, baseline, 70, ports, faint);
+
+        recon_draw_text(p, cp->font, x + 226, baseline, 36,
+            recon_fw_protocol_name(rule.protocol), faint);
+
+        recon_draw_text(p, cp->font, x + 268, baseline, w - 276, rule.name,
+            ink);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10,
+            y + (ROW_HEIGHT + ascent) / 2 - 2, w - 20,
+            "No rules. The defaults above decide everything.", COLOR_DIM);
+    }
+
+    y += cp->list_h + PADDING;
+
+    struct recon_fw_rule chosen;
+    bool have = recon_firewall_at(cp->selected, &chosen);
+
+    bx = draw_button(cp, p, x, y,
+        have && chosen.enabled ? "Turn Rule Off" : "Turn Rule On",
+        HIT_ACTION_BASE + ACTION_FIREWALL_RULE_TOGGLE, have && on);
+    bx = draw_button(cp, p, bx, y,
+        have && chosen.action == RECON_FW_ALLOW ? "Make It Block"
+                                                : "Make It Allow",
+        HIT_ACTION_BASE + ACTION_FIREWALL_RULE_ACTION, have && on);
+    bx = draw_button(cp, p, bx, y, "Move Up",
+        HIT_ACTION_BASE + ACTION_FIREWALL_RULE_UP,
+        have && cp->selected > 0);
+    draw_button(cp, p, bx, y, "Move Down",
+        HIT_ACTION_BASE + ACTION_FIREWALL_RULE_DOWN,
+        have && cp->selected < count - 1);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    /*
+     * What this page cannot do, said here rather than left to be discovered.
+     * Adding and removing a rule is the Terminal's for now: it needs five
+     * fields and a name, and a form for that is a bigger piece of work than
+     * the page it would sit on.
+     */
+    if (y + line <= h) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "Adding and removing rules is 'firewall' in the Terminal. The "
+            "rules are a text file in /System/Config.", COLOR_DIM);
+    }
+}
+
 /* What is installed, and what could be done about it. */
 static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
@@ -2143,6 +2354,7 @@ static void panel_draw(void *user, struct recon_panel *p,
     case PAGE_PROGRAMS:   draw_programs(cp, p, cx, cy, cw, chh); break;
     case PAGE_MODULES:    draw_modules(cp, p, cx, cy, cw, chh); break;
     case PAGE_NETWORK:    draw_network(cp, p, cx, cy, cw, chh); break;
+    case PAGE_FIREWALL:   draw_firewall(cp, p, cx, cy, cw, chh); break;
     case PAGE_STORAGE:    draw_storage(cp, p, cx, cy, cw, chh); break;
     case PAGE_UPDATE:     draw_update(cp, p, cx, cy, cw, chh); break;
     case PAGE_REGISTRY:   draw_registry(cp, p, cx, cy, cw, chh); break;
@@ -2936,6 +3148,111 @@ static void do_action(struct control_panel *cp, enum action action) {
         clear_status(cp);
         break;
 
+    /* --- Firewall --- */
+
+    case ACTION_FIREWALL_TOGGLE: {
+        bool on = !recon_firewall_is_on();
+        if (!recon_firewall_set_on(on)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+        /*
+         * Said plainly, both ways. Turning a firewall off is not a neutral
+         * act and the sentence should not read like one.
+         */
+        if (on) {
+            set_status(cp, false, "The firewall is on. The rules apply.");
+        } else {
+            set_status(cp, true,
+                "The firewall is off. Nothing is being enforced.");
+        }
+        break;
+    }
+
+    case ACTION_FIREWALL_DEFAULT_IN:
+    case ACTION_FIREWALL_DEFAULT_OUT: {
+        enum recon_fw_direction direction =
+            (action == ACTION_FIREWALL_DEFAULT_IN) ? RECON_FW_IN
+                                                   : RECON_FW_OUT;
+        enum recon_fw_action was = recon_firewall_default(direction);
+        enum recon_fw_action now =
+            (was == RECON_FW_ALLOW) ? RECON_FW_BLOCK : RECON_FW_ALLOW;
+
+        if (!recon_firewall_set_default(direction, now)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+
+        set_status(cp, now == RECON_FW_BLOCK && direction == RECON_FW_OUT,
+            "%s traffic that no rule matches is %s now.",
+            direction == RECON_FW_IN ? "Incoming" : "Outgoing",
+            recon_fw_action_name(now));
+        break;
+    }
+
+    case ACTION_FIREWALL_RULE_TOGGLE: {
+        struct recon_fw_rule rule;
+        if (!recon_firewall_at(cp->selected, &rule)) {
+            set_status(cp, true, "Choose a rule first.");
+            break;
+        }
+        if (!recon_firewall_set_rule_on(cp->selected, !rule.enabled)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+        set_status(cp, false, "'%s' is %s.", rule.name,
+            rule.enabled ? "off" : "on");
+        break;
+    }
+
+    case ACTION_FIREWALL_RULE_ACTION: {
+        struct recon_fw_rule rule;
+        if (!recon_firewall_at(cp->selected, &rule)) {
+            set_status(cp, true, "Choose a rule first.");
+            break;
+        }
+
+        int index = cp->selected;
+        rule.action = (rule.action == RECON_FW_ALLOW) ? RECON_FW_BLOCK
+                                                     : RECON_FW_ALLOW;
+
+        /*
+         * Removed and re-added, then moved back to where it was. The rule
+         * store has no "change this one" and does not need one -- but the
+         * order is part of the rule, so an edit that quietly moved it to the
+         * end of the list would change what it does.
+         */
+        if (!recon_firewall_remove(index) || !recon_firewall_add(&rule)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+        int last = recon_firewall_count() - 1;
+        if (last != index) {
+            recon_firewall_move(last, index - last);
+        }
+
+        set_status(cp, false, "'%s' now says %s.", rule.name,
+            recon_fw_action_name(rule.action));
+        break;
+    }
+
+    case ACTION_FIREWALL_RULE_UP:
+    case ACTION_FIREWALL_RULE_DOWN: {
+        int by = (action == ACTION_FIREWALL_RULE_UP) ? -1 : 1;
+        if (!recon_firewall_move(cp->selected, by)) {
+            break;
+        }
+        cp->selected += by;
+
+        struct recon_fw_rule rule;
+        if (recon_firewall_at(cp->selected, &rule)) {
+            set_status(cp, false, "'%s' is rule %d now. The first match "
+                "decides, so this changes what it does.", rule.name,
+                cp->selected + 1);
+        }
+        break;
+    }
+
     case ACTION_SHOW_CHANGES: {
         /* Help, at this version's entry. The whole log is under it, back to
          * the first version, which is what "all changes" means. */
@@ -3030,6 +3347,11 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
     if (hit_id >= HIT_ROW_BASE) {
         int index = (int)(hit_id - HIT_ROW_BASE);
+
+        if (cp->page == PAGE_FIREWALL) {
+            cp->selected = index;
+            return true;
+        }
 
         if (cp->page == PAGE_APPEARANCE && cp->skin_editing) {
             /* The rows are numbered from the first one showing, so a click
