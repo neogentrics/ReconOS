@@ -662,8 +662,20 @@ Collected from using it. Nothing here is started.
 `theme install` takes a file and `theme remove` takes it away; there is no
 editor for one, so writing a skin still means writing a text file.
 
-**No paint program.** Client windows still draw their own decorations. The
-control socket still has no authentication, only file permissions.
+**No paint program.** The control socket still has no authentication, only
+file permissions.
+
+**Client windows draw their own decorations.** ReconOS now frames its own
+windows to whatever shape the skin asks for, and a Wayland client is framed
+by whatever toolkit built it. Doing this needs the xdg-decoration protocol
+and a decoration panel per client -- the same machinery `recon_appwin`
+already has. It is not started because **there is no Wayland client in the
+development environment to test it against**, and shipping window management
+that has never been driven is how Alt+Tab came to be dead for months without
+anybody noticing.
+
+**Notepad has no find.** It can select, cut, copy, paste and undo; it cannot
+search, and Calculator is still deliberately shallow.
 
 **Only text files open.** `recon_props_opener` maps a name to an application
 and knows about text; a picture has nowhere to go because nothing views one,
