@@ -32,6 +32,15 @@ enum recon_desktop_action_kind {
     RECON_DESKTOP_ACTION_NONE,
     RECON_DESKTOP_ACTION_OPEN_APP,  /* target names a built-in application */
     RECON_DESKTOP_ACTION_OPEN_PATH, /* target is a ReconOS path */
+    /*
+     * target is a file to open in whatever handles it.
+     *
+     * Distinct from OPEN_PATH, which shows a folder. A file used to be an
+     * OPEN_PATH pointing at the folder it was in, so double-clicking a
+     * document opened the Desktop -- which is not nothing, and is not opening
+     * the document.
+     */
+    RECON_DESKTOP_ACTION_OPEN_FILE,
 };
 
 /* The name the recycle bin appears under. Fixed, because it is the same thing
@@ -73,6 +82,17 @@ struct wlr_scene_node *recon_desktop_node(struct recon_desktop *desktop);
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,
     bool pressed, struct recon_desktop_action *action);
+
+/*
+ * Move whichever icon is being dragged. Does nothing when none is.
+ *
+ * Icons follow the pointer freely while the button is down and snap to a
+ * cell when it is let go, so the icon goes where the hand goes and what gets
+ * remembered is a grid position -- which survives a change of screen size in
+ * a way pixels would not.
+ */
+void recon_desktop_handle_motion(struct recon_desktop *desktop,
+    double lx, double ly);
 
 /* --- Operations, for the context menu --- */
 

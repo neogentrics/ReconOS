@@ -53,4 +53,19 @@ void recon_props_size(size_t bytes, char *out, size_t size);
 const char *recon_props_kind(const struct recon_dirent *entry,
     const char *name);
 
+/*
+ * Which application opens a file of this name, or NULL if none does.
+ *
+ * Nothing in ReconOS opened a file by clicking it: the explorer put its size
+ * in the status bar and the desktop opened the folder the file was in.
+ * Notepad could open one, but only through its own File menu -- so a document
+ * on the desktop was something you could see and not something you could
+ * read.
+ *
+ * By extension, beside the type name, because the two answer the same
+ * question and keeping them together is what stops a file being called a Text
+ * file by one and handed to nothing by the other.
+ */
+const char *recon_props_opener(const char *name);
+
 #endif

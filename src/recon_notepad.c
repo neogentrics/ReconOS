@@ -867,6 +867,32 @@ static const struct recon_appwin_impl NOTEPAD_IMPL = {
     .destroy = notepad_destroy,
 };
 
+bool recon_notepad_open_path(struct recon_appwin *win, const char *path) {
+    if (win == NULL || path == NULL) {
+        return false;
+    }
+
+    struct recon_notepad *np = recon_appwin_user(win);
+    if (np == NULL) {
+        return false;
+    }
+
+    /*
+     * Work in progress wins.
+     *
+     * Opening from the File menu asks what to do about unsaved text, because
+     * the person asking is looking at it. This is somebody double-clicking a
+     * file somewhere else on the screen, quite possibly having forgotten this
+     * window is open at all -- and silently replacing what they were writing
+     * is the one outcome that cannot be undone.
+     */
+    if (np->modified) {
+        return false;
+    }
+
+    return load_from(np, path);
+}
+
 struct recon_appwin *recon_notepad_create(struct recon_server *server,
         struct recon_font *font) {
     struct recon_notepad *np = calloc(1, sizeof(*np));

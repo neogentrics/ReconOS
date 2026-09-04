@@ -20,6 +20,7 @@
 
 #include "recon_desktop.h"
 #include "recon_fs.h"
+#include "recon_registry.h"
 #include "recon_icons.h"
 #include "recon_shell.h"
 #include "recon_server.h"
@@ -66,6 +67,10 @@ struct desktop_item {
     char target[RECON_NAME_MAX]; /* for shortcuts: the application named */
     enum item_kind kind;
     int x, y;
+    /* True when somebody put it here, as against the grid having. Only these
+     * are written down: saving every position would fill the layout with
+     * places nobody chose. */
+    bool placed;
 };
 
 struct recon_desktop {
@@ -76,6 +81,19 @@ struct recon_desktop {
     struct desktop_item items[ITEMS_MAX];
     int item_count;
     int selected;
+
+    /*
+     * The icon being dragged, or -1.
+     *
+     * `moved` is what separates a drag from a click: pressing an icon and
+     * letting go without going anywhere has to keep meaning "select", and
+     * pressing an already-selected icon has to keep meaning "open". Without
+     * it, every click would end as a drag of zero distance and nothing would
+     * ever open.
+     */
+    int dragging;
+    int drag_offset_x, drag_offset_y;
+    bool moved;
 
     /* The item whose label is being edited, or -1. */
     int renaming;
@@ -120,6 +138,134 @@ static bool read_shortcut(const char *name, char *target, size_t size) {
     return target[0] != '\0';
 }
 
+/*
+ * --- Where the icons are ---
+ *
+ * A desktop somebody has arranged is a thing they made, and it used to be
+ * thrown away on every start: the icons were laid out in a fixed grid every
+ * time, and there was no way to move one anyway.
+ *
+ * The whole arrangement is one registry value rather than a key per icon,
+ * because a key per icon would have to be named after the file, and registry
+ * keys cannot contain spaces -- so "My Notes" and "My-Notes" would have
+ * collided on the one thing a layout must not get wrong, which is which icon
+ * goes where.
+ *
+ * Positions are stored as a grid column and row, not as pixels. A layout
+ * saved on one screen and restored on a smaller one would otherwise put half
+ * the icons off the edge; a column and row can be clamped into whatever
+ * space there is and still keep the arrangement's shape.
+ */
+#define DESKTOP_LAYOUT_KEY "desktop/icons"
+
+/* Where an icon sits, in columns and rows from the top left. */
+static void cell_of(const struct recon_desktop *desktop, int x, int y,
+        int *column, int *row) {
+    int step_x = ICON_WIDTH + ICON_MARGIN;
+    int step_y = ICON_HEIGHT + ICON_MARGIN;
+    (void)desktop;
+
+    *column = (x - ICON_MARGIN + step_x / 2) / step_x;
+    *row = (y - ICON_MARGIN + step_y / 2) / step_y;
+    if (*column < 0) { *column = 0; }
+    if (*row < 0) { *row = 0; }
+}
+
+static void place_at_cell(struct recon_desktop *desktop, int index,
+        int column, int row) {
+    int columns = (desktop->width - ICON_MARGIN) / (ICON_WIDTH + ICON_MARGIN);
+    int rows = (desktop->height - ICON_MARGIN) / (ICON_HEIGHT + ICON_MARGIN);
+    if (columns < 1) { columns = 1; }
+    if (rows < 1) { rows = 1; }
+
+    /* Clamped rather than refused: a screen that shrank should bring its
+     * icons in, not lose them off the edge. */
+    if (column > columns - 1) { column = columns - 1; }
+    if (row > rows - 1) { row = rows - 1; }
+    if (column < 0) { column = 0; }
+    if (row < 0) { row = 0; }
+
+    desktop->items[index].x = ICON_MARGIN + column * (ICON_WIDTH + ICON_MARGIN);
+    desktop->items[index].y = ICON_MARGIN + row * (ICON_HEIGHT + ICON_MARGIN);
+}
+
+/*
+ * Write the arrangement down.
+ *
+ * Only the icons that have been moved. Saving every one would fill the value
+ * with positions nobody chose, and then a new icon arriving would have
+ * nowhere to go that was not already claimed by a position the grid had
+ * picked for something else.
+ */
+static void save_layout(struct recon_desktop *desktop) {
+    char value[RECON_REGISTRY_VALUE_MAX];
+    size_t used = 0;
+    value[0] = '\0';
+
+    for (int i = 0; i < desktop->item_count; i++) {
+        if (!desktop->items[i].placed) {
+            continue;
+        }
+
+        int column, row;
+        cell_of(desktop, desktop->items[i].x, desktop->items[i].y,
+            &column, &row);
+
+        /*
+         * A name with an equals or a semicolon in it would break the format
+         * it is being written into, so such a name is left out rather than
+         * corrupting everything after it. Not a real limitation today --
+         * ReconOS refuses those in file names -- and the check costs nothing.
+         */
+        if (strchr(desktop->items[i].name, '=') != NULL ||
+                strchr(desktop->items[i].name, ';') != NULL) {
+            continue;
+        }
+
+        int written = snprintf(value + used, sizeof(value) - used,
+            "%s%s=%d,%d", used > 0 ? ";" : "",
+            desktop->items[i].name, column, row);
+        if (written < 0 || (size_t)written >= sizeof(value) - used) {
+            /* Out of room. What fits is kept; the rest keep the grid, which
+             * is better than losing the whole arrangement to one long name. */
+            value[used] = '\0';
+            break;
+        }
+        used += (size_t)written;
+    }
+
+    recon_registry_set(RECON_REG_USER, DESKTOP_LAYOUT_KEY, value);
+}
+
+/* Read the arrangement back, if there is one for this icon. */
+static bool saved_cell(const char *name, int *column, int *row) {
+    const char *value = recon_registry_get(RECON_REG_USER,
+        DESKTOP_LAYOUT_KEY, "");
+    if (value == NULL || *value == '\0' || name == NULL) {
+        return false;
+    }
+
+    size_t name_len = strlen(name);
+    for (const char *entry = value; entry != NULL && *entry != '\0';) {
+        const char *end = strchr(entry, ';');
+        size_t length = (end != NULL) ? (size_t)(end - entry) : strlen(entry);
+
+        if (length > name_len && entry[name_len] == '=' &&
+                strncmp(entry, name, name_len) == 0) {
+            int c = 0, r = 0;
+            if (sscanf(entry + name_len + 1, "%d,%d", &c, &r) == 2) {
+                *column = c;
+                *row = r;
+                return true;
+            }
+            return false;
+        }
+
+        entry = (end != NULL) ? end + 1 : NULL;
+    }
+    return false;
+}
+
 static void layout_items(struct recon_desktop *desktop) {
     int columns = (desktop->width - ICON_MARGIN) / (ICON_WIDTH + ICON_MARGIN);
     if (columns < 1) {
@@ -130,13 +276,55 @@ static void layout_items(struct recon_desktop *desktop) {
         rows = 1;
     }
 
-    /* Fill down a column before starting the next, which is how desktops
-     * arrange icons and keeps them out of the middle of the screen. */
+    (void)columns;
+
+    /*
+     * Anything somebody put somewhere goes back there first, so the icons
+     * that have not been moved can fill in around them.
+     */
     for (int i = 0; i < desktop->item_count; i++) {
-        int column = i / rows;
-        int row = i % rows;
-        desktop->items[i].x = ICON_MARGIN + column * (ICON_WIDTH + ICON_MARGIN);
-        desktop->items[i].y = ICON_MARGIN + row * (ICON_HEIGHT + ICON_MARGIN);
+        int column, row;
+        desktop->items[i].placed = saved_cell(desktop->items[i].name,
+            &column, &row);
+        if (desktop->items[i].placed) {
+            place_at_cell(desktop, i, column, row);
+        }
+    }
+
+    /*
+     * Fill down a column before starting the next, which is how desktops
+     * arrange icons and keeps them out of the middle of the screen. Cells
+     * already claimed are stepped over, so an unplaced icon never lands on
+     * top of one somebody arranged.
+     */
+    int next = 0;
+    for (int i = 0; i < desktop->item_count; i++) {
+        if (desktop->items[i].placed) {
+            continue;
+        }
+
+        for (;;) {
+            int column = next / rows;
+            int row = next % rows;
+            next++;
+
+            bool taken = false;
+            for (int other = 0; other < desktop->item_count && !taken; other++) {
+                if (!desktop->items[other].placed) {
+                    continue;
+                }
+                int oc, orow;
+                cell_of(desktop, desktop->items[other].x,
+                    desktop->items[other].y, &oc, &orow);
+                taken = (oc == column && orow == row);
+            }
+            if (taken && next < desktop->item_count * 2 + rows) {
+                continue;
+            }
+
+            place_at_cell(desktop, i, column, row);
+            break;
+        }
     }
 }
 
@@ -391,6 +579,8 @@ struct recon_desktop *recon_desktop_create(struct recon_server *server,
     desktop->width = width;
     desktop->height = height;
     desktop->selected = -1;
+    /* Nothing is being dragged yet. Zero would mean the first icon. */
+    desktop->dragging = -1;
 
     desktop->panel = recon_panel_create(&server->scene->tree, width, height);
     if (desktop->panel == NULL) {
@@ -505,9 +695,9 @@ bool recon_desktop_action_for(struct recon_desktop *desktop, const char *name,
             snprintf(action->target, sizeof(action->target), "%s/%s",
                 recon_fs_user_dir("Desktop"), item->name);
         } else {
-            action->kind = RECON_DESKTOP_ACTION_OPEN_PATH;
-            snprintf(action->target, sizeof(action->target), "%s",
-                recon_fs_user_dir("Desktop"));
+            action->kind = RECON_DESKTOP_ACTION_OPEN_FILE;
+            snprintf(action->target, sizeof(action->target), "%s/%s",
+                recon_fs_user_dir("Desktop"), item->name);
         }
         return true;
     }
@@ -742,6 +932,43 @@ static void commit_rename(struct recon_desktop *desktop) {
     recon_desktop_refresh(desktop);
 }
 
+/*
+ * Move the icon under the pointer, if one is being dragged.
+ *
+ * Free while the pointer is down and snapped to a cell when it is let go, so
+ * the icon follows the hand rather than jumping between cells under it --
+ * and so what ends up saved is a grid position, which survives a change of
+ * screen size.
+ */
+void recon_desktop_handle_motion(struct recon_desktop *desktop,
+        double lx, double ly) {
+    if (desktop == NULL || desktop->dragging < 0 ||
+            desktop->dragging >= desktop->item_count) {
+        return;
+    }
+
+    int x = (int)lx - desktop->drag_offset_x;
+    int y = (int)ly - desktop->drag_offset_y;
+
+    if (!desktop->moved &&
+            x == desktop->items[desktop->dragging].x &&
+            y == desktop->items[desktop->dragging].y) {
+        return;    /* Still exactly where it was; not a drag yet. */
+    }
+
+    /* Kept on the desktop. An icon dragged off the edge would be somewhere
+     * nobody could reach it to drag it back. */
+    if (x < 0) { x = 0; }
+    if (y < 0) { y = 0; }
+    if (x > desktop->width - ICON_WIDTH) { x = desktop->width - ICON_WIDTH; }
+    if (y > desktop->height - ICON_HEIGHT) { y = desktop->height - ICON_HEIGHT; }
+
+    desktop->items[desktop->dragging].x = x;
+    desktop->items[desktop->dragging].y = y;
+    desktop->moved = true;
+    recon_desktop_refresh(desktop);
+}
+
 bool recon_desktop_handle_key(struct recon_desktop *desktop, xkb_keysym_t sym,
         uint32_t modifiers) {
     if (!recon_desktop_is_renaming(desktop)) {
@@ -798,8 +1025,36 @@ void recon_desktop_new_shortcut(struct recon_desktop *desktop) {
 
 bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double ly,
         bool pressed, struct recon_desktop_action *action) {
-    if (desktop == NULL || !pressed) {
+    if (desktop == NULL) {
         return false;
+    }
+
+    if (!pressed) {
+        /*
+         * Letting go. An icon that went somewhere lands in the nearest cell
+         * and the arrangement is written down; one that did not is left
+         * alone, because that press was a click.
+         */
+        bool was_dragging = (desktop->dragging >= 0 && desktop->moved);
+        int index = desktop->dragging;
+        desktop->dragging = -1;
+        desktop->moved = false;
+
+        if (!was_dragging) {
+            return false;
+        }
+
+        int column, row;
+        cell_of(desktop, desktop->items[index].x, desktop->items[index].y,
+            &column, &row);
+        place_at_cell(desktop, index, column, row);
+        desktop->items[index].placed = true;
+
+        /* Written when it stops, not while it moves: saving on every pixel
+         * would write the file hundreds of times to record one decision. */
+        save_layout(desktop);
+        recon_desktop_refresh(desktop);
+        return true;
     }
 
     int px = (int)lx;
@@ -826,6 +1081,13 @@ bool recon_desktop_handle_click(struct recon_desktop *desktop, double lx, double
     }
 
     const struct desktop_item *item = &desktop->items[index];
+
+    /* Ready to move it, in case the pointer goes anywhere before it is let
+     * go. Nothing has happened yet if it does not. */
+    desktop->dragging = index;
+    desktop->drag_offset_x = px - item->x;
+    desktop->drag_offset_y = py - item->y;
+    desktop->moved = false;
 
     if (desktop->selected == index) {
         /*

@@ -143,6 +143,12 @@ void recon_shell_open_named(struct recon_shell *shell, const char *title);
 void recon_shell_open_app(struct recon_shell *shell, int index);
 
 /*
+ * Open a file with whatever handles it. False when nothing does, or when the
+ * application refused -- Notepad refuses while it holds unsaved work.
+ */
+bool recon_shell_open_file(struct recon_shell *shell, const char *path);
+
+/*
  * Move the keyboard to the next window, over everything the taskbar lists.
  *
  * What Alt+Tab does. Minimized windows are skipped rather than restored:

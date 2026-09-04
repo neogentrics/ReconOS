@@ -198,6 +198,11 @@ const char *recon_appwin_title(struct recon_appwin *win);
  * can be given the window and find themselves from it. */
 void *recon_appwin_user(struct recon_appwin *win);
 
+/* The server this window belongs to, and through it the shell. An application
+ * that needs the shell has a window; making it carry a second pointer to the
+ * same place is a second thing to keep in step. */
+struct recon_server *recon_appwin_server(struct recon_appwin *win);
+
 /*
  * The middle of the region with this id, in screen coordinates. False when the
  * window has no such region.

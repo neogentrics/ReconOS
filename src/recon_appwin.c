@@ -607,6 +607,10 @@ void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y) {
     if (y != NULL) { *y = win->y + TITLE_HEIGHT; }
 }
 
+struct recon_server *recon_appwin_server(struct recon_appwin *win) {
+    return win != NULL ? win->server : NULL;
+}
+
 void *recon_appwin_user(struct recon_appwin *win) {
     return win != NULL ? win->user : NULL;
 }

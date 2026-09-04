@@ -20,6 +20,7 @@
 #include "recon_explorer.h"
 #include "recon_fs.h"
 #include "recon_props.h"
+#include "recon_server.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
@@ -854,11 +855,30 @@ static void do_open_selected(struct recon_explorer *ex) {
     }
     if (entry->kind == RECON_FILE_DIRECTORY) {
         navigate(ex, entry->name);
-    } else {
-        char size[32];
-        recon_props_size(entry->size, size, sizeof(size));
-        set_status(ex, false, "'%s' - %s", entry->name, size);
+        return;
     }
+
+    /*
+     * Open it, if anything opens it. This used to put the file's size in the
+     * status bar, which is what a file manager says when it has nothing to
+     * offer -- and it had nothing to offer, because nothing in ReconOS opened
+     * a file by being clicked.
+     */
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), ex->cwd, entry->name)) {
+        set_status(ex, true, "That path is too long to open.");
+        return;
+    }
+
+    struct recon_server *server = recon_appwin_server(ex->win);
+    if (server != NULL && recon_shell_open_file(server->shell, path)) {
+        return;
+    }
+
+    char size[32];
+    recon_props_size(entry->size, size, sizeof(size));
+    set_status(ex, false, "Nothing here opens a %s. '%s' - %s",
+        recon_props_kind(entry, entry->name), entry->name, size);
 }
 
 /* --- Drawing --- */
@@ -1898,11 +1918,17 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
             return true;
         }
 
-        if (ex->selected == index &&
-                ex->entries[index].kind == RECON_FILE_DIRECTORY) {
-            /* A second click on an already-selected folder opens it, which is
-             * how a double click behaves without needing to time one. */
-            navigate(ex, ex->entries[index].name);
+        if (ex->selected == index) {
+            /*
+             * A second click on an already-selected row opens it, which is
+             * how a double click behaves without needing to time one.
+             *
+             * This tested for a folder, so a second click on a file only
+             * re-selected it -- which was consistent with there being nothing
+             * that opened a file, and stopped being consistent the moment
+             * there was.
+             */
+            do_open_selected(ex);
             return true;
         }
 
@@ -1912,8 +1938,8 @@ static bool explorer_click(void *user, uint32_t hit_id, int cx, int cy, bool pre
             set_status(ex, false, "'%s' - click again to open", entry->name);
         } else {
             char size[32];
-        recon_props_size(entry->size, size, sizeof(size));
-        set_status(ex, false, "'%s' - %s", entry->name, size);
+            recon_props_size(entry->size, size, sizeof(size));
+            set_status(ex, false, "'%s' - %s", entry->name, size);
         }
         return true;
     }

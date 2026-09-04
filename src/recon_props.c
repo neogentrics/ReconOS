@@ -93,6 +93,38 @@ const char *recon_props_kind(const struct recon_dirent *entry,
     return "File";
 }
 
+const char *recon_props_opener(const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+
+    const char *dot = strrchr(name, '.');
+    if (dot == NULL || dot == name || dot[1] == '\0') {
+        return NULL;
+    }
+
+    /*
+     * Text and things that are text underneath. A skin and a settings file
+     * are both editable by hand on purpose -- that is most of why they are
+     * text -- so opening one should put it in front of somebody rather than
+     * refusing because the extension is unfamiliar.
+     */
+    if (strcasecmp(dot, ".txt") == 0 ||
+            strcasecmp(dot, ".theme") == 0 ||
+            strcasecmp(dot, ".reg") == 0 ||
+            strcasecmp(dot, ".md") == 0 ||
+            strcasecmp(dot, ".log") == 0) {
+        return "Notepad";
+    }
+
+    /*
+     * A picture has nowhere to go yet, and a module is not a document. Both
+     * return NULL rather than being handed to Notepad, which would show a
+     * screen of binary and look like the file was damaged.
+     */
+    return NULL;
+}
+
 bool recon_props_describe(const char *cwd, const char *path,
         char *out, size_t size) {
     if (out == NULL || size == 0) {

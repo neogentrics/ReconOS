@@ -2526,6 +2526,44 @@ void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop) {
     recon_shell_refresh(shell);
 }
 
+/*
+ * Open a file with whatever handles it.
+ *
+ * False when nothing does, so the caller can say so rather than opening
+ * something unhelpful. Handing an unknown file to Notepad would fill a window
+ * with binary and look like the file was damaged, which is worse than being
+ * told plainly that ReconOS has nothing to open it with.
+ */
+bool recon_shell_open_file(struct recon_shell *shell, const char *path) {
+    if (shell == NULL || path == NULL) {
+        return false;
+    }
+
+    const char *leaf = strrchr(path, '/');
+    leaf = (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : path;
+
+    const char *opener = recon_props_opener(leaf);
+    if (opener == NULL) {
+        return false;
+    }
+
+    recon_shell_open_named(shell, opener);
+
+    struct recon_appwin *win = recon_installed_app_existing(opener);
+    if (win == NULL) {
+        return false;
+    }
+
+    /* Only Notepad opens anything so far. When a second application does,
+     * this becomes a question the application answers rather than one the
+     * shell decides -- but inventing that interface for one caller would be
+     * inventing it before it is understood. */
+    if (strcmp(opener, "Notepad") == 0) {
+        return recon_notepad_open_path(win, path);
+    }
+    return false;
+}
+
 void recon_shell_open_app(struct recon_shell *shell, int index) {
     if (shell == NULL || index < 0 || index >= shell->app_count) {
         return;
@@ -2576,6 +2614,11 @@ static void perform_desktop_action(struct recon_shell *shell,
         const struct recon_desktop_action *action) {
     if (action->kind == RECON_DESKTOP_ACTION_OPEN_APP) {
         recon_shell_open_named(shell, action->target);
+        return;
+    }
+
+    if (action->kind == RECON_DESKTOP_ACTION_OPEN_FILE) {
+        recon_shell_open_file(shell, action->target);
         return;
     }
 
@@ -3192,6 +3235,7 @@ void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) 
         return;
     }
     update_hover(shell, lx, ly);
+    recon_desktop_handle_motion(shell->desktop, lx, ly);
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_handle_motion(shell->apps[i], lx, ly);
     }
