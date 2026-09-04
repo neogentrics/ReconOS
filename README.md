@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.9.** The version number tracks what works, not what is
+**Status: v0.2.10.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -37,7 +37,8 @@ its own windows. v0.2.7 added four desktops, which was the last thing the
 Multitasking page said was missing. v0.2.8 made Properties work, and made the
 explorer and the properties box agree about how big a file is and what it
 is. v0.2.9 let desktop icons be moved and remembered, and made a file open
-when you click it — which nothing in the system did before.
+when you click it — which nothing in the system did before. v0.2.10 let a
+skin set the *shape* of a window frame and not only its colours.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -262,7 +263,22 @@ title.active.to = 1B429E
 ```
 
 A skin that says nothing ramps nothing, which is why this is not a role of its
-own — most surfaces do not want one. Beacon, Recon and Aqua ship with a few;
+own — most surfaces do not want one.
+
+**Frame shapes** are numbers rather than colours, and also optional:
+
+```
+metric.title-height = 30
+metric.corner       = 7
+metric.button-size  = 18
+metric.border       = 3
+```
+
+They are clamped, because a skin is a text file somebody edits and a title bar
+of 4000 pixels is not a look — it is a window you cannot close by pointing at
+it. Beacon and Aqua round their top corners; Reading and Contrast get a taller
+bar and bigger buttons and stay square, because somebody who turned on the
+reading settings wants a bigger target rather than a softer edge. Beacon, Recon and Aqua ship with a few;
 Classic does not, because the era it comes from filled flat, and Contrast
 cannot, because a ramp behind text is a range of contrast ratios where that
 skin promises a number.

@@ -554,6 +554,43 @@ what to do about that, because the person asking is looking at it; this is
 somebody double-clicking a file elsewhere on the screen, quite possibly
 having forgotten the window is open.
 
+## v0.2.10 — a skin can say what shape a window is
+
+Colours were the whole of a skin. It could recolour a title bar and not
+change its height, its corner radius or how big its buttons were — so every
+skin, from the 95 one to the early-2000s one, drew a frame of exactly the
+same proportions in different colours. That is most of why Beacon read as
+"blue" rather than as the era it reaches for.
+
+Four measurements — title height, border, corner radius, button size — as
+numbers rather than roles, and optional. A skin that says nothing gets the
+shape ReconOS has always had. That is deliberately unlike the colours, where
+every skin answers every role: a colour nobody chose should be obvious on
+screen, and a measurement nobody chose should simply be the usual one.
+
+**Clamped**, because a skin is a text file somebody edits and the failure
+mode of an unchecked number here is not an ugly window — it is a title bar
+taller than the screen, or a border of zero with no edge to grab, and either
+way a window that cannot be closed by pointing at it. The test writes a skin
+asking for a 4000-pixel title bar and a negative button and checks what comes
+back.
+
+Beacon gets a taller bar, rounded corners and bigger buttons; Aqua rounds
+further on a thinner border. Reading and Contrast get a taller bar and bigger
+buttons and stay square — somebody who turned on the reading settings has
+said things are hard to see, and a bigger target follows from that while a
+rounded corner does not. Classic stays square because 95 was square, and the
+three colour-vision skins keep the default because they differ from each
+other only in palette.
+
+The corner is anti-aliased by sampling coverage. The first version cleared
+whole pixels and gave a staircase, which is worse than a square corner: a
+rounded corner is the one shape people read as smooth, so steps look like a
+fault rather than a decision. What it clears goes fully transparent rather
+than being filled, because a window sits over the wallpaper and over other
+windows — there is no one colour a corner could be painted that would be
+right anywhere but where it was chosen.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -573,9 +610,9 @@ register itself with.
 **Nothing can listen, and nothing is encrypted.** Streams connect outwards in
 the clear; there is no TLS and no way to accept a connection.
 
-**Window frame shapes and chrome geometry are fixed.** A skin can recolour a
-title bar and now ramp it, but not change its height, its corner radius, or
-where its buttons sit.
+**Where a title bar's buttons sit is fixed.** A skin can set the frame's
+height, border, corner radius and button size; it cannot move the buttons to
+the left, or ask for fewer of them.
 
 **No recovery, no advanced startup, no reinstall.** All three need a kernel
 and a bootloader, and all three have a Control Panel page saying so.
