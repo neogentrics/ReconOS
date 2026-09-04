@@ -519,6 +519,41 @@ width alone, which is right for a sentence and wrong for four short facts,
 and the line limit was three, which quietly dropped "Changed ..." and left a
 box that looked complete without it.
 
+## v0.2.9 — a desktop you can arrange, and files that open
+
+Two things a desktop is expected to do that this one did not.
+
+**Icons could not be dragged at all.** They were laid out in a grid on every
+start and stayed there. They move now, and where they were put is remembered
+— the whole arrangement as one registry value rather than a key per icon,
+because a key per icon would be named after the file and registry keys cannot
+contain spaces, so "My Notes" and "My-Notes" would collide on the one thing a
+layout must not get wrong. Positions are a grid column and row rather than
+pixels, so an arrangement saved on one screen and restored on a smaller one
+comes in rather than falling off the edge.
+
+Only icons that were moved are written down: saving every position would fill
+the layout with places nobody chose, and a new icon would then have nowhere
+to go that was not already claimed. The grid fills in around what has been
+placed.
+
+**Nothing opened a file by being clicked.** The explorer put its size in the
+status bar; the desktop opened the *folder the file was in*, so
+double-clicking a document opened the Desktop. Notepad could open one, but
+only through its own File menu — so a document on the desktop was something
+you could see and not something you could read.
+
+`recon_props_opener` says which application opens a name, beside the type
+name, because they answer the same question. A picture or a module returns
+nothing rather than being handed to Notepad, which would fill a window with
+binary and look like damage — the explorer says "Nothing here opens a
+Picture" instead.
+
+Notepad refuses while it holds unsaved work. Opening from its File menu asks
+what to do about that, because the person asking is looking at it; this is
+somebody double-clicking a file elsewhere on the screen, quite possibly
+having forgotten the window is open.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
