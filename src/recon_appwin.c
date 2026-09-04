@@ -20,9 +20,19 @@
 
 /* --- Frame metrics --- */
 
-#define TITLE_HEIGHT 24
-#define BORDER 3
-#define BUTTON_SIZE 16
+/*
+ * The frame's shape, asked of the skin rather than fixed.
+ *
+ * Macros so that every place already written in terms of these keeps working
+ * unchanged, and so a skin change takes effect on the next redraw without
+ * anything having to be told. They are function calls now rather than
+ * constants; these are drawing paths, not inner loops, and the alternative is
+ * threading a measurement through eighteen call sites.
+ */
+#define TITLE_HEIGHT recon_theme_metric(RECON_METRIC_TITLE_HEIGHT)
+#define BORDER recon_theme_metric(RECON_METRIC_BORDER)
+#define BUTTON_SIZE recon_theme_metric(RECON_METRIC_BUTTON_SIZE)
+#define CORNER recon_theme_metric(RECON_METRIC_CORNER)
 #define BUTTON_GAP 3
 #define BUTTON_TOP 4
 #define TITLE_INSET 8
@@ -212,6 +222,11 @@ static void draw_frame(struct recon_appwin *win) {
 
     recon_draw_bevel(p, 0, 0, win->width, win->height, false);
     recon_stroke_rect(p, 0, 0, win->width, win->height, COLOR_EDGE);
+
+    /* Last, because anything drawn into a corner afterwards puts the square
+     * back. The contents are drawn below the title bar and inside the
+     * border, so they never reach up here. */
+    recon_round_top_corners(p, CORNER, COLOR_EDGE);
 }
 
 void recon_appwin_refresh(struct recon_appwin *win) {

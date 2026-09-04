@@ -142,6 +142,24 @@ void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
 void recon_fill_gradient(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color from, recon_color to);
 
+/*
+ * Round the top two corners of a panel, clearing what falls outside the curve
+ * and redrawing the outline along it.
+ *
+ * Only the top two: the bottom corners of a window sit against whatever is
+ * below them, and rounding those reads as a gap rather than as a shape.
+ *
+ * The cleared pixels are fully transparent rather than filled with a
+ * background colour, because a window sits over the wallpaper and over other
+ * windows -- there is no one colour a corner could be painted that would be
+ * right anywhere but where it was chosen.
+ *
+ * Call it last. Anything drawn into the corner afterwards puts the square
+ * back.
+ */
+void recon_round_top_corners(struct recon_panel *panel, int radius,
+    recon_color edge);
+
 /* A one-pixel outline just inside the given rectangle. */
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);

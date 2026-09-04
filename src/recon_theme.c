@@ -32,6 +32,10 @@ struct theme {
     recon_color gradient[RECON_THEME_ROLE_COUNT];
     bool has_gradient[RECON_THEME_ROLE_COUNT];
 
+    /* What shape the frame is, where the skin has an opinion. */
+    int metrics[RECON_METRIC_COUNT];
+    bool has_metric[RECON_METRIC_COUNT];
+
     bool used;
 };
 
@@ -45,6 +49,12 @@ struct theme {
 struct gradient_spec {
     enum recon_theme_role role;
     recon_color to;
+};
+
+/* A measurement a built-in skin sets, in the same sparse form. */
+struct metric_spec {
+    enum recon_theme_metric metric;
+    int value;
 };
 
 static struct theme g_themes[THEMES_MAX];
@@ -547,6 +557,68 @@ CHECK_SKIN(THEME_READING);
 
 #undef CHECK_SKIN
 
+/* --- Metrics --- */
+
+/*
+ * The shape ReconOS has always had, and the range a skin may move it within.
+ *
+ * Clamped rather than trusted: a skin is a text file somebody edits, and a
+ * title bar of height 4000 is not a look, it is a window with no contents.
+ * The floors matter as much as the ceilings -- a border of zero leaves a
+ * window with no edge to grab, and a title bar shorter than its own buttons
+ * leaves nothing to drag it by.
+ */
+static const struct {
+    const char *name;
+    int fallback;
+    int least;
+    int most;
+} METRICS[] = {
+    { "metric.title-height", 24, 18, 48 },
+    { "metric.border",        3,  1,  12 },
+    { "metric.corner",        0,  0,  16 },
+    { "metric.button-size",  16, 10,  32 },
+};
+
+_Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
+    "every metric needs a name and a range");
+
+const char *recon_theme_metric_name(enum recon_theme_metric metric) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT) {
+        return NULL;
+    }
+    return METRICS[metric].name;
+}
+
+static int metric_from_name(const char *name) {
+    for (int i = 0; i < RECON_METRIC_COUNT; i++) {
+        if (strcasecmp(METRICS[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int recon_theme_metric(enum recon_theme_metric metric) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT) {
+        return 0;
+    }
+
+    int value = METRICS[metric].fallback;
+    if (g_current >= 0 && g_themes[g_current].used &&
+            g_themes[g_current].has_metric[metric]) {
+        value = g_themes[g_current].metrics[metric];
+    }
+
+    if (value < METRICS[metric].least) {
+        value = METRICS[metric].least;
+    }
+    if (value > METRICS[metric].most) {
+        value = METRICS[metric].most;
+    }
+    return value;
+}
+
 /* --- Gradients --- */
 
 /*
@@ -599,6 +671,65 @@ static const struct gradient_spec GRAD_AQUA[] = {
     { RECON_THEME_ROLE_COUNT, 0 },
 };
 
+/* --- Frame shapes --- */
+
+/*
+ * Beacon is the reason this exists. The era it reaches for had a taller title
+ * bar with rounded top corners and larger buttons, and until now it drew the
+ * same square 24-pixel frame as the 95 skin in different colours -- which is
+ * most of why it read as "blue" rather than as that era.
+ */
+static const struct metric_spec SHAPE_BEACON[] = {
+    { RECON_METRIC_TITLE_HEIGHT, 30 },
+    { RECON_METRIC_CORNER,        7 },
+    { RECON_METRIC_BUTTON_SIZE,  18 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Aqua rounds further and sits thinner. A light skin has little contrast
+ * between its own surfaces, so the shape has to do work the colours cannot.
+ */
+static const struct metric_spec SHAPE_AQUA[] = {
+    { RECON_METRIC_TITLE_HEIGHT, 28 },
+    { RECON_METRIC_BORDER,        1 },
+    { RECON_METRIC_CORNER,        9 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Reading gets a taller bar and bigger buttons and stays square. Somebody who
+ * has turned on the reading settings has told the system that things are hard
+ * to see; a bigger target to close a window with follows from that, and a
+ * rounded corner does not.
+ */
+static const struct metric_spec SHAPE_READING[] = {
+    { RECON_METRIC_TITLE_HEIGHT, 30 },
+    { RECON_METRIC_BUTTON_SIZE,  20 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Contrast the same, and for a related reason: at low vision the thing that
+ * helps is a larger target with a hard edge, and a rounded corner is a soft
+ * edge drawn in a colour between the two the skin promises.
+ */
+static const struct metric_spec SHAPE_CONTRAST[] = {
+    { RECON_METRIC_TITLE_HEIGHT, 30 },
+    { RECON_METRIC_BORDER,        4 },
+    { RECON_METRIC_BUTTON_SIZE,  20 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Classic, Recon, Midnight and the three colour-vision skins keep the
+ * default shape. Classic because 95 was square and this is that decade;
+ * Recon because it is the native look and the default *is* its shape; and
+ * the dichromat skins because they differ from each other only in palette,
+ * and giving them different frames would make them three looks rather than
+ * three answers to the same question.
+ */
+
 /*
  * Classic, Midnight, Reading, Contrast and the three colour-vision skins get
  * none, each for its own reason.
@@ -629,26 +760,28 @@ static const struct {
     const char *wallpaper;
     /* NULL for a skin that fills flat, which is most of them. */
     const struct gradient_spec *gradients;
+    /* NULL for a skin that keeps the default frame shape. */
+    const struct metric_spec *shape;
 } BUILT_IN[] = {
     { "Recon", "The native look: grey chrome, navy titles, oxblood accent",
-      THEME_RECON, "Night Sky.png", GRAD_RECON },
+      THEME_RECON, "Night Sky.png", GRAD_RECON, NULL },
     { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC,
-      "Daybreak.png", NULL },
+      "Daybreak.png", NULL, NULL },
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
-      "Daybreak.png", GRAD_AQUA },
-    { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL },
+      "Daybreak.png", GRAD_AQUA, SHAPE_AQUA },
+    { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL, NULL },
     { "Beacon", "Bright blue chrome and a green accent, early 2000s",
-      THEME_BEACON, "Daybreak.png", GRAD_BEACON },
+      THEME_BEACON, "Daybreak.png", GRAD_BEACON, SHAPE_BEACON },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
-      THEME_DEUTERAN, "Night Sky.png", NULL },
+      THEME_DEUTERAN, "Night Sky.png", NULL, NULL },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",
-      THEME_PROTAN, "Night Sky.png", NULL },
+      THEME_PROTAN, "Night Sky.png", NULL, NULL },
     { "Tritan", "Blue-yellow safe: red, green and magenta carry meaning",
-      THEME_TRITAN, "Deep Field.png", NULL },
+      THEME_TRITAN, "Deep Field.png", NULL, NULL },
     { "Contrast", "Black on white throughout; nothing depends on hue",
-      THEME_CONTRAST, "Daybreak.png", NULL },
+      THEME_CONTRAST, "Daybreak.png", NULL, SHAPE_CONTRAST },
     { "Reading", "Warm off-white and softened contrast, easier to read on",
-      THEME_READING, "Ember.png", NULL },
+      THEME_READING, "Ember.png", NULL, SHAPE_READING },
 };
 
 #define BUILT_IN_COUNT ((int)(sizeof(BUILT_IN) / sizeof(BUILT_IN[0])))
@@ -741,6 +874,9 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
     recon_color gradient[RECON_THEME_ROLE_COUNT] = {0};
     bool has_gradient[RECON_THEME_ROLE_COUNT] = {0};
 
+    int metrics[RECON_METRIC_COUNT] = {0};
+    bool has_metric[RECON_METRIC_COUNT] = {0};
+
     char *saveptr = NULL;
     for (char *line = strtok_r(text, "\n", &saveptr);
             line != NULL;
@@ -780,6 +916,22 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
         }
         if (strcasecmp(line, "description") == 0) {
             snprintf(description, sizeof(description), "%s", value);
+            continue;
+        }
+
+        /*
+         * A measurement rather than a colour. Checked first because these
+         * names begin with "metric." and would otherwise fall through the
+         * role lookup as unknown.
+         */
+        int metric = metric_from_name(line);
+        if (metric >= 0) {
+            char *stop = NULL;
+            long parsed = strtol(value, &stop, 10);
+            if (stop != value) {
+                metrics[metric] = (int)parsed;
+                has_metric[metric] = true;
+            }
             continue;
         }
 
@@ -825,6 +977,8 @@ static bool load_theme_file(const char *path, const char *fallback_name) {
     memcpy(theme->colors, colors, sizeof(colors));
     memcpy(theme->gradient, gradient, sizeof(gradient));
     memcpy(theme->has_gradient, has_gradient, sizeof(has_gradient));
+    memcpy(theme->metrics, metrics, sizeof(metrics));
+    memcpy(theme->has_metric, has_metric, sizeof(has_metric));
     return true;
 }
 
@@ -1090,6 +1244,26 @@ int recon_theme_write_defaults(void) {
             used += (size_t)n;
         }
 
+        /*
+         * And the shape, where this skin asks for one.
+         *
+         * Only what it sets, unlike the colours: a metric a skin says nothing
+         * about takes the default, so writing all four into every file would
+         * turn "no opinion" into four opinions that happen to match, and
+         * somebody editing the file would have no way to tell which was
+         * which.
+         */
+        for (const struct metric_spec *m = BUILT_IN[i].shape;
+                m != NULL && m->metric != RECON_METRIC_COUNT &&
+                used < capacity; m++) {
+            int n = snprintf(text + used, capacity - used, "%-22s = %d\n",
+                METRICS[m->metric].name, m->value);
+            if (n < 0) {
+                break;
+            }
+            used += (size_t)n;
+        }
+
         if (recon_fs_write("/", path, text, used)) {
             written++;
         }
@@ -1127,6 +1301,15 @@ void recon_theme_init(void) {
             }
             theme->gradient[g->role] = g->to;
             theme->has_gradient[g->role] = true;
+        }
+
+        for (const struct metric_spec *m = BUILT_IN[i].shape;
+                m != NULL && m->metric != RECON_METRIC_COUNT; m++) {
+            if (m->metric < 0 || m->metric >= RECON_METRIC_COUNT) {
+                continue;
+            }
+            theme->metrics[m->metric] = m->value;
+            theme->has_metric[m->metric] = true;
         }
     }
 

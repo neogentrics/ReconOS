@@ -11,6 +11,7 @@
 #include "stb_truetype.h"
 
 #include <drm_fourcc.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -588,6 +589,78 @@ void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
         return;
     }
     recon_fill_rect(panel, x, y, w, h, recon_theme_color(role));
+}
+
+void recon_round_top_corners(struct recon_panel *panel, int radius,
+        recon_color edge) {
+    (void)edge;
+    if (panel == NULL || radius <= 0) {
+        return;
+    }
+
+    int width = recon_panel_width(panel);
+    int height = recon_panel_height(panel);
+    if (radius * 2 > width || radius > height) {
+        return;    /* Rounder than the window is wide; leave it square. */
+    }
+
+    /*
+     * How much of each pixel falls inside the curve, by sampling it in a grid.
+     *
+     * The first version simply cleared whole pixels, which gave a staircase --
+     * and a staircase is worse than a square corner, because a rounded corner
+     * is the one shape people read as smooth, so the steps look like a fault
+     * in the drawing rather than a decision.
+     *
+     * Four by four is enough: seventeen levels of coverage across two or three
+     * pixels of boundary, at a size nobody is looking at closely.
+     */
+    const int SAMPLES = 4;
+
+    for (int y = 0; y < radius; y++) {
+        uint32_t *row = panel->pixels + (size_t)y * panel->width;
+
+        for (int x = 0; x < radius; x++) {
+            int inside = 0;
+
+            for (int sy = 0; sy < SAMPLES; sy++) {
+                for (int sx = 0; sx < SAMPLES; sx++) {
+                    /* The corner's circle is centred at (radius, radius), so
+                     * a point is in the frame when it is no further from that
+                     * centre than the radius. */
+                    double px = x + (sx + 0.5) / SAMPLES;
+                    double py = y + (sy + 0.5) / SAMPLES;
+                    double dx = radius - px;
+                    double dy = radius - py;
+                    if (dx * dx + dy * dy <= (double)radius * radius) {
+                        inside++;
+                    }
+                }
+            }
+
+            if (inside == SAMPLES * SAMPLES) {
+                continue;    /* Fully inside; leave the pixel alone. */
+            }
+
+            /*
+             * Scaled rather than replaced. The pixel already holds whatever
+             * the frame drew there, and thinning its alpha is what makes the
+             * boundary fade into the wallpaper instead of into a colour
+             * chosen here -- which would be the wrong colour over any other
+             * window.
+             */
+            int coverage = (inside * 255) / (SAMPLES * SAMPLES);
+
+            uint32_t *left = &row[x];
+            uint32_t *right = &row[width - 1 - x];
+
+            unsigned alpha_l = ((*left >> 24) & 0xFF) * (unsigned)coverage / 255;
+            unsigned alpha_r = ((*right >> 24) & 0xFF) * (unsigned)coverage / 255;
+
+            *left = (*left & 0x00FFFFFFu) | (alpha_l << 24);
+            *right = (*right & 0x00FFFFFFu) | (alpha_r << 24);
+        }
+    }
 }
 
 void recon_fill_gradient(struct recon_panel *panel, int x, int y, int w, int h,

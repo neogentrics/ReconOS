@@ -149,6 +149,71 @@ static void test_remembered(void) {
         "and it comes back after a restart");
 }
 
+/*
+ * A skin can say what shape a window frame is, within limits.
+ *
+ * The limits are the point. A skin is a text file somebody edits, and the
+ * failure mode of an unchecked number here is not an ugly window -- it is a
+ * title bar taller than the screen, or a border of zero with no edge left to
+ * grab, and either way a window that cannot be closed by pointing at it.
+ */
+static void test_metrics(void) {
+    printf("frame shapes\n");
+
+    check(recon_theme_set("Classic"), "a skin that keeps the default shape");
+    check(recon_theme_metric(RECON_METRIC_TITLE_HEIGHT) == 24,
+        "a skin with no opinion gets the default height");
+    check(recon_theme_metric(RECON_METRIC_CORNER) == 0,
+        "and square corners");
+
+    check(recon_theme_set("Beacon"), "a skin that asks for its own shape");
+    check(recon_theme_metric(RECON_METRIC_TITLE_HEIGHT) == 30,
+        "the height it asked for");
+    check(recon_theme_metric(RECON_METRIC_CORNER) == 7,
+        "the corner it asked for");
+
+    /* Written out and read back: a file is how anybody else would set these. */
+    const char *shaped =
+        "name = Shaped\n"
+        "description = Nothing but a shape\n"
+        "metric.title-height = 40\n"
+        "metric.corner = 5\n";
+    check(recon_fs_write("/", RECON_DIR_THEMES "/Shaped" RECON_THEME_EXT,
+        shaped, strlen(shaped)), "write a skin that only sets a shape");
+
+    /* Numbers no window could survive. */
+    const char *absurd =
+        "name = Absurd\n"
+        "description = Numbers nobody should be able to ask for\n"
+        "metric.title-height = 4000\n"
+        "metric.border = 0\n"
+        "metric.button-size = -20\n";
+    check(recon_fs_write("/", RECON_DIR_THEMES "/Absurd" RECON_THEME_EXT,
+        absurd, strlen(absurd)), "write a skin with impossible numbers");
+
+    recon_theme_finish();
+    recon_theme_init();
+
+    check(recon_theme_set("Shaped"), "the shape-only skin loaded");
+    check(recon_theme_metric(RECON_METRIC_TITLE_HEIGHT) == 40,
+        "a file can set a height");
+    check(recon_theme_metric(RECON_METRIC_CORNER) == 5,
+        "and a corner");
+    check(recon_theme_metric(RECON_METRIC_BORDER) == 3,
+        "what it did not set stays the default");
+    check(recon_theme_color(RECON_THEME_BAR) ==
+        recon_theme_color_of(0, RECON_THEME_BAR),
+        "and its colours are the default's, since it named none");
+
+    check(recon_theme_set("Absurd"), "the impossible skin loaded too");
+    check(recon_theme_metric(RECON_METRIC_TITLE_HEIGHT) == 48,
+        "a title bar of 4000 is clamped to something a window can hold");
+    check(recon_theme_metric(RECON_METRIC_BORDER) == 1,
+        "a border of zero is clamped to something there is to grab");
+    check(recon_theme_metric(RECON_METRIC_BUTTON_SIZE) == 10,
+        "a negative button is clamped to one that can be clicked");
+}
+
 static void test_files(void) {
     printf("skins from files\n");
 
@@ -240,6 +305,7 @@ int main(void) {
     test_switching();
     test_remembered();
     test_files();
+    test_metrics();
     test_damaged_file();
 
     recon_theme_finish();

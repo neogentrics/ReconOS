@@ -131,6 +131,50 @@ enum recon_theme_role {
     RECON_THEME_ROLE_COUNT,
 };
 
+/*
+ * What shape a window frame is.
+ *
+ * Colours were the whole of a skin: a skin could recolour a title bar and not
+ * change its height, its corner radius or how big its buttons were -- so
+ * every skin, from the 95 one to the early-2000s one, drew a frame of exactly
+ * the same proportions in different colours.
+ *
+ * These are numbers rather than roles, and they are optional: a skin that
+ * says nothing gets the default, which is the shape ReconOS has always had.
+ * That is deliberately unlike the colours, where every skin answers every
+ * role -- a colour nobody chose should be obvious on screen, and a measurement
+ * nobody chose should simply be the usual one.
+ */
+enum recon_theme_metric {
+    /* The title bar's height, and so where a window's contents begin. */
+    RECON_METRIC_TITLE_HEIGHT,
+    /* The frame around the contents. */
+    RECON_METRIC_BORDER,
+    /*
+     * How far the top corners are rounded. Zero is square.
+     *
+     * Only the top two: the bottom corners of a window sit against whatever
+     * is below them, and rounding those reads as a gap rather than as a
+     * shape.
+     */
+    RECON_METRIC_CORNER,
+    /* The minimize, maximize and close buttons. */
+    RECON_METRIC_BUTTON_SIZE,
+
+    RECON_METRIC_COUNT,
+};
+
+/*
+ * What the current skin says, or the default when it says nothing.
+ *
+ * Clamped, because a skin is a text file somebody edits and a title bar of
+ * height 4000 is not a look, it is a window with no contents.
+ */
+int recon_theme_metric(enum recon_theme_metric metric);
+
+/* The name a skin file uses for a metric, for writing the defaults out. */
+const char *recon_theme_metric_name(enum recon_theme_metric metric);
+
 /* Where skins live, and how they are named. */
 #define RECON_DIR_THEMES "/System/Themes"
 #define RECON_THEME_EXT ".theme"
