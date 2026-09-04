@@ -2557,6 +2557,7 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/network.png", RECON_ICON_NETWORK);
     install_asset_icon("icons/modules.png", RECON_ICON_MODULES);
     install_asset_icon("icons/recovery.png", RECON_ICON_RECOVERY);
+    install_asset_icon("icons/update.png", RECON_ICON_UPDATE);
 
     /*
      * The help and the change log, rewritten every start rather than only

@@ -223,7 +223,7 @@ static const struct {
     { "Power", RECON_ICON_SHUTDOWN, "Left alone, and asleep" },
     { "Storage", RECON_ICON_EXPLORER, "Where the room went" },
     { "Disk Cleanup", RECON_ICON_TRASH, "Free some of it up" },
-    { "Update", RECON_ICON_SYSTEM, "What version this is" },
+    { "Update", RECON_ICON_UPDATE, "What version this is" },
 
     { "Troubleshoot", RECON_ICON_TERMINAL, "When it goes wrong" },
     { "Recovery", RECON_ICON_RECOVERY, "Back to what worked" },

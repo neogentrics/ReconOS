@@ -47,6 +47,7 @@
 #define RECON_ICON_NETWORK "network"
 #define RECON_ICON_MODULES "modules"
 #define RECON_ICON_RECOVERY "recovery"
+#define RECON_ICON_UPDATE "update"
 #define RECON_ICON_SHUTDOWN "shutdown"
 /* The Recon Towers mark. Copied in from the assets rather than drawn: it is
  * artwork, not a generated glyph. */
