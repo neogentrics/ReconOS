@@ -361,7 +361,7 @@ bool recon_users_create(const char *name, const char *password,
     return true;
 }
 
-bool recon_users_remove(const char *name) {
+bool recon_users_remove(const char *name, bool delete_files) {
     struct account *account = find(name);
     if (account == NULL) {
         set_error("there is no account called '%s'", name != NULL ? name : "");
@@ -390,9 +390,24 @@ bool recon_users_remove(const char *name) {
         return false;
     }
 
-    /* Their files stay. Removing a login is not a decision to destroy
-     * somebody's documents, and an administrator who wants them gone can
-     * delete the folder deliberately. */
+    if (delete_files) {
+        /*
+         * Asked for, so done -- and reported through the error if it fails,
+         * without putting the account back. The login is what was removed;
+         * whether the folder went with it is a second fact, and an
+         * administrator who is told "removed, but the files are still there"
+         * knows exactly where they stand.
+         */
+        char home[RECON_PATH_MAX];
+        snprintf(home, sizeof(home), "%s/%s", RECON_DIR_USERS, removed.info.name);
+
+        if (recon_fs_exists("/", home) && !recon_fs_remove_tree("/", home)) {
+            set_error("'%s' is gone, but its files could not be removed: %s",
+                removed.info.name, recon_fs_last_error());
+            return false;
+        }
+    }
+
     return true;
 }
 

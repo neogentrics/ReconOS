@@ -8,6 +8,15 @@
 
 #define _POSIX_C_SOURCE 200112L
 
+#include <math.h>
+/*
+ * M_PI is not in the C standard, and this file asks for POSIX rather than
+ * GNU, so math.h does not offer it. Written out rather than reached for
+ * through a feature macro, which would change what else the file sees.
+ */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp */
@@ -1549,6 +1558,136 @@ static void draw_taskbar(struct recon_shell *shell) {
     recon_panel_commit(bar);
 }
 
+/*
+ * --- The footer's glyphs ---
+ *
+ * Drawn rather than loaded, for the same reason the window buttons are: these
+ * are five small marks that have to sit inside a button and follow the skin's
+ * ink colour, and a file would be a file to keep in step with ten skins.
+ *
+ * Each is drawn around a centre, so the caller places the button and the
+ * glyph puts itself in the middle of it.
+ */
+
+/* A ring, optionally broken where something else passes through it. */
+static void glyph_ring(struct recon_panel *p, int cx, int cy, int radius,
+        int thickness, recon_color ink, int gap_from, int gap_to) {
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            int d2 = dx * dx + dy * dy;
+            int inner = radius - thickness;
+            if (d2 > radius * radius || d2 < inner * inner) {
+                continue;
+            }
+
+            /* Degrees clockwise from straight up, so a gap can be described
+             * the way somebody would point at it. */
+            if (gap_to > gap_from) {
+                double angle = atan2((double)dx, (double)-dy) * 180.0 / M_PI;
+                if (angle < 0) {
+                    angle += 360.0;
+                }
+                if (angle >= gap_from && angle <= gap_to) {
+                    continue;
+                }
+            }
+
+            recon_fill_rect(p, cx + dx, cy + dy, 1, 1, ink);
+        }
+    }
+}
+
+/* The power symbol: a broken ring with a stem through the break. */
+static void glyph_power(struct recon_panel *p, int cx, int cy,
+        recon_color ink) {
+    glyph_ring(p, cx, cy + 1, 7, 2, ink, 340, 360);
+    glyph_ring(p, cx, cy + 1, 7, 2, ink, 0, 20);
+    recon_fill_rect(p, cx - 1, cy - 8, 2, 7, ink);
+}
+
+/* Restart: a ring open at the top right, with an arrowhead closing it. */
+static void glyph_restart(struct recon_panel *p, int cx, int cy,
+        recon_color ink) {
+    glyph_ring(p, cx, cy, 7, 2, ink, 20, 90);
+    for (int i = 0; i < 4; i++) {
+        recon_fill_rect(p, cx + 2 + i, cy - 7 + i, 1, (4 - i) * 2 - 1, ink);
+    }
+}
+
+/* A padlock: a shackle over a body. */
+static void glyph_lock(struct recon_panel *p, int cx, int cy,
+        recon_color ink, recon_color back) {
+    /* The shackle is the top half of a ring, so it meets the body squarely
+     * rather than floating above it. */
+    glyph_ring(p, cx, cy - 2, 5, 2, ink, 100, 260);
+    recon_fill_rect(p, cx - 6, cy - 2, 12, 9, ink);
+
+    /* The keyhole, punched back out in the button's own colour. */
+    recon_fill_rect(p, cx - 1, cy + 1, 2, 3, back);
+}
+
+/*
+ * Sign out: a door with an arrow leaving it.
+ *
+ * The arrow points out of the frame rather than into it, because the two
+ * readings are opposite and "out" is the one that matches the word.
+ */
+static void glyph_signout(struct recon_panel *p, int cx, int cy,
+        recon_color ink) {
+    /* The door frame, open on the side the arrow leaves by. */
+    recon_fill_rect(p, cx - 7, cy - 7, 2, 15, ink);
+    recon_fill_rect(p, cx - 7, cy - 7, 7, 2, ink);
+    recon_fill_rect(p, cx - 7, cy + 6, 7, 2, ink);
+
+    recon_fill_rect(p, cx - 2, cy - 1, 7, 2, ink);
+    for (int i = 0; i < 4; i++) {
+        recon_fill_rect(p, cx + 3 + i, cy - 3 + i, 1, (4 - i) * 2 + 1, ink);
+    }
+}
+
+/*
+ * Switch user: two heads and shoulders, one behind the other.
+ *
+ * The one behind is drawn first and then cut back by a gap in the footer's
+ * own colour before the front one goes on top. Without the gap the two
+ * overlap into a single lumpy shape that reads as neither one person nor two.
+ */
+static void glyph_people(struct recon_panel *p, int cx, int cy,
+        recon_color ink, recon_color back) {
+    /* Behind, up and to the right. */
+    glyph_ring(p, cx + 4, cy - 4, 3, 3, ink, 0, 0);
+    recon_fill_rect(p, cx + 1, cy - 1, 8, 4, ink);
+
+    /* The gap. Wider than the shape it protects, so there is a clear line
+     * between the two rather than them merely not touching. */
+    glyph_ring(p, cx - 2, cy - 2, 5, 5, back, 0, 0);
+    recon_fill_rect(p, cx - 8, cy + 1, 12, 7, back);
+
+    /* In front. */
+    glyph_ring(p, cx - 2, cy - 2, 3, 3, ink, 0, 0);
+    recon_fill_rect(p, cx - 6, cy + 2, 9, 5, ink);
+}
+
+/*
+ * `back` is what a gap inside a glyph is cut back to -- the keyhole in the
+ * padlock, the space between the two people.
+ *
+ * Passed in rather than read from the skin, because the button is a different
+ * colour when the pointer is over it: a gap cut in the menu's colour on top
+ * of a highlighted button fills back in, and the two people become one blob
+ * exactly when somebody is looking closely at them.
+ */
+static void draw_power_glyph(struct recon_panel *p, enum menu_power action,
+        int cx, int cy, recon_color ink, recon_color back) {
+    switch (action) {
+    case POWER_LOCK:        glyph_lock(p, cx, cy, ink, back); break;
+    case POWER_SIGN_OUT:    glyph_signout(p, cx, cy, ink); break;
+    case POWER_SWITCH_USER: glyph_people(p, cx, cy, ink, back); break;
+    case POWER_RESTART:     glyph_restart(p, cx, cy, ink); break;
+    case POWER_SHUT_DOWN:   glyph_power(p, cx, cy, ink); break;
+    }
+}
+
 static void draw_menu(struct recon_shell *shell) {
     struct recon_panel *menu = shell->menu;
     if (menu == NULL) {
@@ -1719,29 +1858,65 @@ static void draw_menu(struct recon_shell *shell) {
 
     /* --- Footer: what to do with the machine --- */
     int fy = height - MENU_FOOTER_HEIGHT;
+
+    /*
+     * The menu's own colour, not the taskbar's.
+     *
+     * It was filled with the bar, which looked deliberate and left its ink
+     * with no role that is guaranteed to read on it: menu.text is measured
+     * against the menu and bar.text against a taskbar button, and the footer
+     * is neither. On a skin whose bar is a deep blue that is not a subtlety
+     * -- the glyphs came out dark on dark.
+     *
+     * The line above it is what separates the footer from the list, and it
+     * was already there.
+     */
     recon_fill_role(menu, 1, fy, width - 2, MENU_FOOTER_HEIGHT - 1,
-        RECON_THEME_BAR);
+        RECON_THEME_MENU);
     recon_fill_rect(menu, 1, fy, width - 2, 1, COLOR_MENU_SEPARATOR);
 
-    int button_w = (width - 2 - MENU_PADDING * 2) / MENU_POWER_COUNT;
+    /*
+     * Five icons in the bottom right, rather than five words across the whole
+     * footer.
+     *
+     * Spelled out, they were five labels of different lengths in buttons of
+     * identical width, which reads as a row of text and not as a row of
+     * controls -- and "Sign Out" beside "Switch User" is two phrases that
+     * have to be read before either can be told apart. A mark can be
+     * recognised without being read.
+     *
+     * The name of whichever the pointer is over is drawn on the left of the
+     * footer, which is space nothing else uses. Icons alone would be a
+     * guessing game the first time; icons with the name under the pointer is
+     * how somebody learns them once.
+     */
+    int size = MENU_FOOTER_HEIGHT - 12;
+    int gap = 4;
+    int row_w = MENU_POWER_COUNT * size + (MENU_POWER_COUNT - 1) * gap;
+    int start_x = width - MENU_PADDING - row_w - 1;
+    int by = fy + 6;
+
     for (int i = 0; i < MENU_POWER_COUNT; i++) {
-        int bx = MENU_PADDING + i * button_w;
-        int by = fy + 5;
-        int bh = MENU_FOOTER_HEIGHT - 11;
+        int bx = start_x + i * (size + gap);
         bool hovered = (shell->menu_hover == HIT_POWER_BASE + i);
 
         if (hovered) {
-            recon_fill_role(menu, bx, by, button_w - 2, bh,
+            recon_fill_role(menu, bx, by, size, size,
                 RECON_THEME_MENU_HILITE);
         }
 
-        int text_w = recon_text_width(shell->font, MENU_POWER[i].label);
-        recon_draw_text(menu, shell->font,
-            bx + (button_w - 2 - text_w) / 2, by + (bh + ascent) / 2 - 2,
-            button_w - 4, MENU_POWER[i].label,
-            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
+        draw_power_glyph(menu, MENU_POWER[i].action,
+            bx + size / 2, by + size / 2,
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT,
+            hovered ? COLOR_MENU_HILITE : COLOR_MENU);
 
-        recon_hit_add(menu, bx, by, button_w - 2, bh, HIT_POWER_BASE + i);
+        recon_hit_add(menu, bx, by, size, size, HIT_POWER_BASE + i);
+
+        if (hovered) {
+            recon_draw_text(menu, shell->font, MENU_PADDING + 4,
+                by + (size + ascent) / 2 - 2, start_x - MENU_PADDING - 8,
+                MENU_POWER[i].label, COLOR_MENU_TEXT);
+        }
     }
 
     recon_panel_commit(menu);

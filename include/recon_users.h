@@ -91,7 +91,20 @@ bool recon_users_create(const char *name, const char *password,
  * The account's files are left alone. Removing somebody's login is not a
  * decision to destroy their documents.
  */
-bool recon_users_remove(const char *name);
+/*
+ * Remove an account, and decide what happens to its folder.
+ *
+ * `delete_files` is a separate answer from removing the login because they
+ * are separate decisions: closing somebody's account is an administrative
+ * act, and destroying their documents is not something that should follow
+ * from it silently. Whoever asks has to say which they meant.
+ *
+ * The account goes first and the folder second. If the folder cannot be
+ * removed the account is still gone -- the login is what was asked about, and
+ * leaving it in place because a file was locked would be answering a
+ * different question.
+ */
+bool recon_users_remove(const char *name, bool delete_files);
 
 bool recon_users_set_role(const char *name, enum recon_user_role role);
 

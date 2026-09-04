@@ -1484,7 +1484,13 @@ static void answered(void *user, int choice) {
     enum question asked = cp->question;
     cp->question = QUESTION_NONE;
 
-    if (choice != 0) {
+    /*
+     * The last button is always Cancel, and dismissing gives -1. Removing an
+     * account offers two ways of saying yes, so "anything but the first" is
+     * no longer the same as "no".
+     */
+    int button_count = (asked == QUESTION_REMOVE_USER) ? 3 : 2;
+    if (choice < 0 || choice >= button_count - 1) {
         set_status(cp, false, "Nothing was changed.");
         recon_appwin_refresh(cp->win);
         return;
@@ -1516,11 +1522,16 @@ static void answered(void *user, int choice) {
         return;
     }
 
-    if (!recon_users_remove(name)) {
+    /* Button 1 was "Delete Files"; button 0 was "Keep Files". */
+    bool delete_files = (choice == 1);
+
+    if (!recon_users_remove(name, delete_files)) {
         set_status(cp, true, "%s", recon_users_last_error());
     } else {
         cp->selected = 0;
-        set_status(cp, false, "Removed '%s'. Its files are still there.", name);
+        set_status(cp, false, delete_files
+            ? "Removed '%s' and its files."
+            : "Removed '%s'. Its files are still there.", name);
     }
     recon_appwin_refresh(cp->win);
 }
@@ -1596,11 +1607,20 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         char message[256];
         snprintf(message, sizeof(message),
-            "Remove the account '%s'? Its files are kept.", chosen.name);
+            "Remove the account '%s'?\n"
+            "Its folder can be kept or deleted. Deleting cannot be undone.",
+            chosen.name);
 
-        /* Cancel last: it is what Enter and Escape both choose. */
-        const char *buttons[2] = { "Remove", "Cancel" };
-        recon_appwin_ask(cp->win, "Remove Account", message, buttons, 2,
+        /*
+         * Three answers, because there are three. Closing an account and
+         * destroying somebody's documents are separate decisions, and a
+         * dialog offering only "Remove" has already made the second one on
+         * their behalf.
+         *
+         * Cancel last, as everywhere: it is what Enter and Escape choose.
+         */
+        const char *buttons[3] = { "Keep Files", "Delete Files", "Cancel" };
+        recon_appwin_ask(cp->win, "Remove Account", message, buttons, 3,
             answered);
         break;
     }

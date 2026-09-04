@@ -1223,11 +1223,20 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (strcasecmp(argv[1], "remove") == 0 && argc >= 3) {
-        if (!recon_users_remove(argv[2])) {
+        /*
+          * `users remove <name> files` takes the folder too. Spelled out
+          * rather than a flag, because which of the two you meant is a
+          * decision and a flag reads like a detail.
+          */
+         bool delete_files = (argc > 3 && strcasecmp(argv[3], "files") == 0);
+
+        if (!recon_users_remove(argv[2], delete_files)) {
             out(s, "%s\n", recon_users_last_error());
             return;
         }
-        out(s, "Removed '%s'. Its files are still there.\n", argv[2]);
+        out(s, delete_files
+            ? "Removed '%s' and its files.\n"
+            : "Removed '%s'. Its files are still there.\n", argv[2]);
         return;
     }
 

@@ -227,7 +227,7 @@ static void test_the_last_administrator(void) {
      */
     check(!recon_users_set_role("Joshua", RECON_ROLE_LIMITED),
         "the only administrator cannot demote itself");
-    check(!recon_users_remove("Joshua"),
+    check(!recon_users_remove("Joshua", false),
         "and cannot be removed");
 
     check(recon_users_set_role("Sam", RECON_ROLE_ADMINISTRATOR),
@@ -244,10 +244,10 @@ static void test_removing(void) {
     printf("removing accounts\n");
 
     check(recon_users_login("Joshua", "a better one"), "sign in");
-    check(!recon_users_remove("Joshua"),
+    check(!recon_users_remove("Joshua", false),
         "the account signed in cannot be removed");
 
-    check(recon_users_remove("Sammy"), "another one can");
+    check(recon_users_remove("Sammy", false), "another one can");
     check(!recon_users_find("Sammy", NULL), "and is gone");
 
     /* Removing a login is not a decision to destroy somebody's documents. */
