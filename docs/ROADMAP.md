@@ -848,6 +848,52 @@ Customize Skin and offers to make the change on a copy. Being told "you cannot
 edit this" and left to work out that copying it first is the way round is the
 system making its own limitation into the reader's problem.
 
+### Storage, decided
+
+Joshua asked directly, and was owed an answer:
+
+> Have we decided on the storage system? You haven't told me anything, or at
+> least I haven't seen you give me an artifact or anything to look at. System
+> storage should be separated from program storage, and system storage should
+> be separated from the user storage. There should be, like, recycling bin for
+> system storage and recycling bin for users.
+
+**System**, **Programs** and **User** are separate spaces. Real partitions need
+a kernel and are Phase 2; what is here is the layer above them -- the one that
+decides what a space *means* -- and it is worth having first, because it is the
+part that has to be right before anything can be moved onto a partition later.
+
+The separation is real in the ways that matter without a kernel:
+
+- Each space is measured on its own. "How much room have my files taken" and
+  "how much room has the system taken" are different questions with different
+  things to do about them, and a single number answers neither.
+- Each has its own bin, living **inside** it. A bin outside its own space would
+  mean deleting a system file put bytes into somebody's account, and the number
+  on the Storage page would move for the wrong space.
+- Deleting routes itself. `recon_fs_trash` puts a file in the bin belonging to
+  the space it came from, so nothing that deletes has to know there is more
+  than one bin. Every existing caller got the new behaviour without changing.
+
+The user's bin stays per account rather than per space. One bin for `/Users`
+would be one account's deleted documents sitting where another account can read
+them, which is exactly what the account boundary exists to prevent (BG-026).
+
+The Storage page is a selector across the top -- each space with its own size
+on the button -- and then that space's parts and that space's bin. Emptying
+names the space it is emptying: one button for all three would be a button
+nobody could press safely.
+
+The total shown is the space's own, not the sum of the rows. They are different
+numbers, and printing the smaller one beside a button showing the larger would
+be dishonest; where they differ the page says by how much.
+
+Two claims the page was making are no longer true and are gone: that ReconOS
+has no volume layer to list, and that choosing where new files go needs more
+than one volume to mean anything. What is left on its not-built list is Disk
+Cleanup, moving a space onto its own disk, and formatting -- the last two
+genuinely needing the kernel.
+
 ### The screen blanks
 
 The one thing on the Power page that never needed a kernel, which Joshua said

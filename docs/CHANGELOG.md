@@ -11,6 +11,16 @@ way for the two to disagree.
 
 ## v0.2.17
 
+**Storage is three spaces**: System, Programs and User, each measured on its
+own and each with its own recycle bin. Deleting routes itself -- a file goes to
+the bin belonging to the space it came from -- and emptying one names the space
+it is emptying, because deleting a document and deleting a system file are not
+the same act.
+
+Real partitions still need a kernel. This is the layer above them, and it is
+the part that has to be right before anything can be moved onto a partition
+later.
+
 **The screen blanks when nothing is happening.** A timeout on the Power page
 -- never, 1, 2, 5, 10, 15, 30 minutes or an hour -- and an option to ask for
 your password when it wakes. It covers the screen rather than switching the
