@@ -1,3 +1,17 @@
+The firewall can be changed from its page. Add Rule offers nine presets --
+web server, mail, a database, a run of the ports games take, and the two blunt
+ones that refuse everything in or out -- because most people adding a rule want
+one of those. "Something Else" takes a name, a port or a range, and three
+buttons that cycle through direction, protocol and what to do. Remove Rule too.
+
+A search box in the Start menu. Typing there has narrowed the list since
+v0.2.15 and nothing said so, which meant nobody found out. There is a box in
+the footer now with "Search programs" in it when it is empty.
+
+Icons for Appearance, Programs, Modules, Network, Firewall and Recovery,
+which had been sharing one generic red square. Update is the last one without
+its own.
+
 The Control Panel is icons. Fourteen of them, each with a line under it
 saying what it is for. Clicking one opens it in a window of its own, named for
 the item and stepped clear of whatever opened it -- so a wallpaper and a set of

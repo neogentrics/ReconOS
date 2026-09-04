@@ -848,6 +848,57 @@ Customize Skin and offers to make the change on a copy. Being told "you cannot
 edit this" and left to work out that copying it first is the way round is the
 system making its own limitation into the reader's problem.
 
+### The firewall, from its own page
+
+Joshua, on seeing it: *"Oh, wow. Firewall looks nice. I like that... I don't
+see a button to add new rules or to create a custom firewall template. They
+should be presets. And then they should do the option to create a custom
+one."*
+
+So Add Rule is two steps. Nine presets first -- web server, web server over
+TLS, mail sending, mail collecting, file transfer, a database, a run of the
+ports games take, and the two blunt ones that refuse everything in or
+everything out. Then "Something Else" for the rest: a name, a port or a range
+written the way somebody would say it (`80`, or `27015-27030`, or nothing for
+every port), and three buttons that cycle through direction, protocol and
+action. Each button says which value it is on, so the control and its readout
+are one object rather than two that can fall out of step.
+
+A preset arrives switched on. The nine shipped rules are written down and off
+because they exist to be found rather than to be in force; one somebody has
+just picked out of a list is the opposite -- they asked for it, and adding it
+switched off would be adding nothing.
+
+A port that is not a port is refused with the reason. A name too long for the
+rule is refused rather than shortened, for the reason the skin copy refuses
+one: the name is what the log says when the rule fires, and half a name in a
+log is a rule nobody can find again.
+
+The page used to end with a note saying that adding and removing rules was the
+Terminal's job because a form for five fields was a bigger piece of work than
+the page it would sit on. That was true and is not now.
+
+### A search box in the Start menu
+
+Typing in the Start menu has narrowed it since v0.2.15. Nothing on screen said
+so, so nobody found out -- and the only acknowledgement was a "Finding: x" row
+that appeared *after* the first keystroke to explain what had just happened.
+
+A box in the footer, bottom left, where Joshua circled it. "Search programs"
+when it is empty, what has been typed when it is not, and a caret. The row
+above the list is gone: a box that is always there says beforehand what the
+row could only say afterwards, and beforehand is the part that matters.
+
+### Icons
+
+Six generated, on Joshua's Ideogram credits and at his direction, in the navy
+and oxblood the existing three use: Appearance, which had none, Programs,
+which had one he did not like, and Modules, Network, Firewall and Recovery,
+which had all been drawing the same generic red square. Update is the last one
+without its own.
+
+Not from his photo library, which he has ruled out.
+
 ### Services
 
 Watchtower has a Services tab. Five entries: the desktop shell, the control
