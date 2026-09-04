@@ -1198,6 +1198,417 @@ bool recon_theme_uninstall(const char *name) {
     return true;
 }
 
+/*
+ * A skin, as the text of a file.
+ *
+ * One writer, so what a copied skin contains is exactly what a shipped one
+ * contains. It was two before this -- the shipped files were written by a
+ * loop inside write_defaults that emitted colours and metrics and nothing
+ * else -- which meant every gradient was silently dropped on the way to
+ * disk. Nothing broke, because a file cannot shadow a built-in and so those
+ * files were never read back; but anybody copying Beacon.rts to start their
+ * own skin from got a Beacon with the ramps quietly missing.
+ *
+ * Returns bytes written, or 0. Caller frees `*out`.
+ */
+static size_t theme_to_text(const char *name, const char *description,
+        const char *wallpaper,
+        const recon_color *colors,
+        const recon_color *gradient, const bool *has_gradient,
+        const int *metrics, const bool *has_metric,
+        char **out) {
+    *out = NULL;
+
+    /* Room for every role at full width twice over -- once as a colour, once
+     * as the far end of a ramp -- plus the header and the metrics. */
+    size_t capacity = RECON_THEME_ROLE_COUNT * 128 + 1024;
+    char *text = malloc(capacity);
+    if (text == NULL) {
+        return 0;
+    }
+
+    size_t used = (size_t)snprintf(text, capacity,
+        "# ReconOS theme.\n"
+        "#\n"
+        "# Colours are RRGGBB, or AARRGGBB where transparency matters.\n"
+        "# Anything left out keeps the default, so a theme that only\n"
+        "# changes the accent colour need only say that.\n"
+        "\n"
+        "name = %s\n"
+        "description = %s\n",
+        name, description);
+
+    if (wallpaper != NULL && wallpaper[0] != '\0' && used < capacity) {
+        int n = snprintf(text + used, capacity - used, "wallpaper = %s\n",
+            wallpaper);
+        if (n > 0) {
+            used += (size_t)n;
+        }
+    }
+
+    if (used < capacity) {
+        int n = snprintf(text + used, capacity - used, "\n");
+        if (n > 0) {
+            used += (size_t)n;
+        }
+    }
+
+    for (int role = 0; role < RECON_THEME_ROLE_COUNT && used < capacity;
+            role++) {
+        recon_color c = colors[role];
+        int n;
+
+        /* Six digits when it is opaque, which is most of them, and eight only
+         * where the alpha is doing something. */
+        if ((c >> 24) == 0xFF) {
+            n = snprintf(text + used, capacity - used, "%-22s = %06X\n",
+                ROLE_NAMES[role], c & 0xFFFFFFu);
+        } else {
+            n = snprintf(text + used, capacity - used, "%-22s = %08X\n",
+                ROLE_NAMES[role], c);
+        }
+        if (n < 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    /*
+     * The ramps, where there are any. Only the roles that have one: a `.to`
+     * written for every role would turn "flat" into forty-eight gradients
+     * that happen to end where they start.
+     */
+    bool any_gradient = false;
+    for (int role = 0; role < RECON_THEME_ROLE_COUNT && used < capacity;
+            role++) {
+        if (has_gradient == NULL || !has_gradient[role]) {
+            continue;
+        }
+        if (!any_gradient) {
+            int n = snprintf(text + used, capacity - used, "\n");
+            if (n > 0) {
+                used += (size_t)n;
+            }
+            any_gradient = true;
+        }
+
+        char key[80];
+        snprintf(key, sizeof(key), "%s.to", ROLE_NAMES[role]);
+
+        recon_color c = gradient[role];
+        int n;
+        if ((c >> 24) == 0xFF) {
+            n = snprintf(text + used, capacity - used, "%-22s = %06X\n", key,
+                c & 0xFFFFFFu);
+        } else {
+            n = snprintf(text + used, capacity - used, "%-22s = %08X\n", key,
+                c);
+        }
+        if (n < 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    /*
+     * And the shape, where this skin asks for one.
+     *
+     * Only what it sets, for the same reason as the ramps: a metric a skin
+     * says nothing about takes the default, and writing all five into every
+     * file would turn "no opinion" into five opinions that happen to match.
+     */
+    bool any_metric = false;
+    for (int m = 0; m < RECON_METRIC_COUNT && used < capacity; m++) {
+        if (has_metric == NULL || !has_metric[m]) {
+            continue;
+        }
+        if (!any_metric) {
+            int n = snprintf(text + used, capacity - used, "\n");
+            if (n > 0) {
+                used += (size_t)n;
+            }
+            any_metric = true;
+        }
+
+        int n = snprintf(text + used, capacity - used, "%-22s = %d\n",
+            METRICS[m].name, metrics[m]);
+        if (n < 0) {
+            break;
+        }
+        used += (size_t)n;
+    }
+
+    *out = text;
+    return used;
+}
+
+bool recon_theme_copy(const char *source, const char *name,
+        const char *description) {
+    if (name == NULL || *name == '\0') {
+        set_error("a skin needs a name");
+        return false;
+    }
+
+    /*
+     * The name becomes a file name, so it cannot carry a separator. A skin
+     * calling itself "../Config/system" would write itself over the machine's
+     * settings.
+     */
+    for (const char *c = name; *c != '\0'; c++) {
+        if (*c == '/' || *c == '\\') {
+            set_error("a skin's name cannot contain a slash");
+            return false;
+        }
+    }
+
+    /* Which skin is being copied: the one named, or the one in use. */
+    int index = -1;
+    if (source != NULL && *source != '\0') {
+        for (int i = 0; i < g_count; i++) {
+            if (g_themes[i].used &&
+                    strcasecmp(g_themes[i].info.name, source) == 0) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            set_error("there is no skin called '%s'", source);
+            return false;
+        }
+    } else {
+        index = g_current;
+    }
+
+    if (index < 0 || index >= g_count || !g_themes[index].used) {
+        set_error("there is no skin to copy");
+        return false;
+    }
+
+    for (int i = 0; i < g_count; i++) {
+        if (g_themes[i].used &&
+                strcasecmp(g_themes[i].info.name, name) == 0) {
+            set_error("there is already a skin called '%s'", name);
+            return false;
+        }
+    }
+
+    char path[RECON_PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s%s", RECON_DIR_THEMES, name,
+        RECON_THEME_EXT);
+    if (recon_fs_exists("/", path)) {
+        set_error("there is already a file at '%s'", path);
+        return false;
+    }
+
+    struct theme *from = &g_themes[index];
+
+    char about[96];
+    if (description != NULL && *description != '\0') {
+        snprintf(about, sizeof(about), "%s", description);
+    } else {
+        snprintf(about, sizeof(about), "Started from %s", from->info.name);
+    }
+
+    char *text = NULL;
+    size_t used = theme_to_text(name, about, from->info.wallpaper,
+        from->colors, from->gradient, from->has_gradient,
+        from->metrics, from->has_metric, &text);
+    if (text == NULL || used == 0) {
+        free(text);
+        set_error("cannot write the skin out");
+        return false;
+    }
+
+    bool written = recon_fs_write("/", path, text, used);
+    free(text);
+
+    if (!written) {
+        set_error("cannot write to %s", RECON_DIR_THEMES);
+        return false;
+    }
+
+    /* Read back rather than registered from memory: what the system now has
+     * is what the file says, and if the two disagree it is the file that is
+     * about to be edited. */
+    if (!load_theme_file(path, name)) {
+        recon_fs_remove("/", path);
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
+/* Write a loaded skin back to its file. */
+static bool write_theme_file(struct theme *theme) {
+    char path[RECON_PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s%s", RECON_DIR_THEMES,
+        theme->info.name, RECON_THEME_EXT);
+
+    char *text = NULL;
+    size_t used = theme_to_text(theme->info.name, theme->info.description,
+        theme->info.wallpaper, theme->colors,
+        theme->gradient, theme->has_gradient,
+        theme->metrics, theme->has_metric, &text);
+    if (text == NULL || used == 0) {
+        free(text);
+        set_error("cannot write the skin out");
+        return false;
+    }
+
+    bool written = recon_fs_write("/", path, text, used);
+    free(text);
+
+    if (!written) {
+        set_error("cannot write to '%s'", path);
+        return false;
+    }
+    return true;
+}
+
+/* The skin by that name, if it is one that can be changed. */
+static struct theme *editable(const char *name) {
+    if (name == NULL || *name == '\0') {
+        set_error("no skin named");
+        return NULL;
+    }
+
+    for (int i = 0; i < g_count; i++) {
+        if (!g_themes[i].used ||
+                strcasecmp(g_themes[i].info.name, name) != 0) {
+            continue;
+        }
+
+        /*
+         * A built-in is compiled in. Writing over its file would change
+         * nothing -- a file cannot shadow a built-in, so the edit would be
+         * saved, ignored, and lost on the next start, which is worse than a
+         * refusal because it looks like it worked.
+         */
+        if (g_themes[i].info.built_in) {
+            set_error("'%s' is built in. Copy it first, then edit the copy.",
+                g_themes[i].info.name);
+            return NULL;
+        }
+        return &g_themes[i];
+    }
+
+    set_error("there is no skin called '%s'", name);
+    return NULL;
+}
+
+bool recon_theme_set_role(const char *name, enum recon_theme_role role,
+        recon_color color) {
+    if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        set_error("there is no such role");
+        return false;
+    }
+
+    struct theme *theme = editable(name);
+    if (theme == NULL) {
+        return false;
+    }
+
+    recon_color was = theme->colors[role];
+    theme->colors[role] = color;
+
+    if (!write_theme_file(theme)) {
+        theme->colors[role] = was;    /* The file is what is real. */
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
+bool recon_theme_set_gradient(const char *name, enum recon_theme_role role,
+        bool on, recon_color to) {
+    if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        set_error("there is no such role");
+        return false;
+    }
+
+    struct theme *theme = editable(name);
+    if (theme == NULL) {
+        return false;
+    }
+
+    bool had = theme->has_gradient[role];
+    recon_color was = theme->gradient[role];
+
+    theme->has_gradient[role] = on;
+    theme->gradient[role] = to;
+
+    if (!write_theme_file(theme)) {
+        theme->has_gradient[role] = had;
+        theme->gradient[role] = was;
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
+bool recon_theme_set_metric(const char *name, enum recon_theme_metric metric,
+        bool on, int value) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT) {
+        set_error("there is no such measurement");
+        return false;
+    }
+
+    struct theme *theme = editable(name);
+    if (theme == NULL) {
+        return false;
+    }
+
+    /*
+     * Clamped here as well as on the way out, so a skin file cannot be
+     * written with a number the system would then refuse to use -- an edit
+     * that saves and does nothing is the confusing kind.
+     */
+    if (value < METRICS[metric].least) {
+        value = METRICS[metric].least;
+    } else if (value > METRICS[metric].most) {
+        value = METRICS[metric].most;
+    }
+
+    bool had = theme->has_metric[metric];
+    int was = theme->metrics[metric];
+
+    theme->has_metric[metric] = on;
+    theme->metrics[metric] = value;
+
+    if (!write_theme_file(theme)) {
+        theme->has_metric[metric] = had;
+        theme->metrics[metric] = was;
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
+bool recon_theme_describe(const char *name, const char *description) {
+    struct theme *theme = editable(name);
+    if (theme == NULL) {
+        return false;
+    }
+
+    char was[sizeof(theme->info.description)];
+    snprintf(was, sizeof(was), "%s", theme->info.description);
+    snprintf(theme->info.description, sizeof(theme->info.description), "%s",
+        description != NULL ? description : "");
+
+    if (!write_theme_file(theme)) {
+        snprintf(theme->info.description, sizeof(theme->info.description),
+            "%s", was);
+        return false;
+    }
+
+    g_generation++;
+    return true;
+}
+
 int recon_theme_write_defaults(void) {
     int written = 0;
 
@@ -1211,63 +1622,41 @@ int recon_theme_write_defaults(void) {
             continue;
         }
 
-        /* Room for every role at full width, plus the header. */
-        size_t capacity = RECON_THEME_ROLE_COUNT * 64 + 512;
-        char *text = malloc(capacity);
+        /*
+         * The built-in table stores gradients and metrics as sparse spec
+         * lists rather than as arrays, so they are unpacked into the shape a
+         * loaded skin has. That shape is what the writer takes, because that
+         * is what everything else in the file has.
+         */
+        struct theme scratch;
+        memset(&scratch, 0, sizeof(scratch));
+        memcpy(scratch.colors, BUILT_IN[i].colors, sizeof(scratch.colors));
+
+        for (const struct gradient_spec *g = BUILT_IN[i].gradients;
+                g != NULL && g->role != RECON_THEME_ROLE_COUNT; g++) {
+            if (g->role < 0 || g->role >= RECON_THEME_ROLE_COUNT) {
+                continue;
+            }
+            scratch.gradient[g->role] = g->to;
+            scratch.has_gradient[g->role] = true;
+        }
+
+        for (const struct metric_spec *m = BUILT_IN[i].shape;
+                m != NULL && m->metric != RECON_METRIC_COUNT; m++) {
+            if (m->metric < 0 || m->metric >= RECON_METRIC_COUNT) {
+                continue;
+            }
+            scratch.metrics[m->metric] = m->value;
+            scratch.has_metric[m->metric] = true;
+        }
+
+        char *text = NULL;
+        size_t used = theme_to_text(BUILT_IN[i].name, BUILT_IN[i].description,
+            BUILT_IN[i].wallpaper, scratch.colors,
+            scratch.gradient, scratch.has_gradient,
+            scratch.metrics, scratch.has_metric, &text);
         if (text == NULL) {
             break;
-        }
-
-        size_t used = (size_t)snprintf(text, capacity,
-            "# ReconOS theme.\n"
-            "#\n"
-            "# Colours are RRGGBB, or AARRGGBB where transparency matters.\n"
-            "# Anything left out keeps the default, so a theme that only\n"
-            "# changes the accent colour need only say that.\n"
-            "\n"
-            "name = %s\n"
-            "description = %s\n"
-            "\n",
-            BUILT_IN[i].name, BUILT_IN[i].description);
-
-        for (int role = 0; role < RECON_THEME_ROLE_COUNT && used < capacity;
-                role++) {
-            recon_color c = BUILT_IN[i].colors[role];
-            int n;
-
-            /* Six digits when it is opaque, which is most of them, and eight
-             * only where the alpha is doing something. */
-            if ((c >> 24) == 0xFF) {
-                n = snprintf(text + used, capacity - used, "%-22s = %06X\n",
-                    ROLE_NAMES[role], c & 0xFFFFFFu);
-            } else {
-                n = snprintf(text + used, capacity - used, "%-22s = %08X\n",
-                    ROLE_NAMES[role], c);
-            }
-            if (n < 0) {
-                break;
-            }
-            used += (size_t)n;
-        }
-
-        /*
-         * And the shape, where this skin asks for one.
-         *
-         * Only what it sets, unlike the colours: a metric a skin says nothing
-         * about takes the default, so writing all four into every file would
-         * turn "no opinion" into four opinions that happen to match, and
-         * somebody editing the file would have no way to tell which was
-         * which.
-         */
-        for (const struct metric_spec *m = BUILT_IN[i].shape;
-                m != NULL && m->metric != RECON_METRIC_COUNT &&
-                used < capacity; m++) {
-            int n = snprintf(text + used, capacity - used, "%-22s = %d\n",
-                METRICS[m->metric].name, m->value);
-            if (n < 0) {
-                break;
-            }
-            used += (size_t)n;
         }
 
         if (recon_fs_write("/", path, text, used)) {

@@ -304,6 +304,59 @@ unsigned recon_theme_generation(void);
  */
 int recon_theme_write_defaults(void);
 
+/*
+ * Copy a skin under a new name, and register it.
+ *
+ * The way to start writing one from inside ReconOS. A skin could be installed
+ * and removed since v0.2.4, and there was still no way to make one here:
+ * authoring meant writing a text file somewhere else and bringing it in.
+ * Copying an existing skin gives a complete file -- every role answered, the
+ * ramps and the frame shape included -- which is a far better starting point
+ * than a blank one, because the questions a skin has to answer are the part
+ * nobody knows in advance.
+ *
+ * `source` is the skin to copy, or NULL for the one in use. `description` is
+ * optional; without one it says which skin it was started from.
+ *
+ * The copy is written to /System/Themes and read back, so what the system has
+ * is what the file says. False with recon_theme_last_error() explaining why.
+ */
+bool recon_theme_copy(const char *source, const char *name,
+    const char *description);
+
+/* --- Editing one --- */
+
+/*
+ * Change one answer in a skin that came from a file, and write the file back.
+ *
+ * Built-in skins are refused rather than written over: a file cannot shadow a
+ * built-in, so the edit would be saved, ignored, and lost on the next start.
+ * That is worse than a refusal, because it looks like it worked. Copy first,
+ * then edit the copy.
+ *
+ * The change is live: the palette everything draws from is the loaded skin,
+ * so a colour set here is on screen before the file is closed. The file is
+ * still what is real -- if the write fails the change is put back.
+ */
+bool recon_theme_set_role(const char *name, enum recon_theme_role role,
+    recon_color color);
+
+/* The far end of a ramp, or `on` false to make the role flat again. */
+bool recon_theme_set_gradient(const char *name, enum recon_theme_role role,
+    bool on, recon_color to);
+
+/*
+ * A frame measurement, or `on` false to hand it back to the default.
+ *
+ * Clamped to what the system will accept before it is written, so a file
+ * cannot hold a number the system would then refuse to use.
+ */
+bool recon_theme_set_metric(const char *name, enum recon_theme_metric metric,
+    bool on, int value);
+
+/* What the skin says about itself in the list. */
+bool recon_theme_describe(const char *name, const char *description);
+
 /* --- Installing --- */
 
 /*

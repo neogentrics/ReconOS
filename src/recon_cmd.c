@@ -1070,7 +1070,8 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
                 info.description);
         }
         out(s, "\n'theme <name>' puts one on. 'theme roles' lists what a skin "
-            "can colour.\n");
+            "can colour.\n'theme copy <new name>' starts one from the one you "
+            "are using.\n");
         return;
     }
 
@@ -1086,6 +1087,38 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
         }
         out(s, "\n  %d roles. Skins live in %s as %s files.\n",
             RECON_THEME_ROLE_COUNT, RECON_DIR_THEMES, RECON_THEME_EXT);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "copy") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: theme copy <new name>\n\n"
+                "Copies the skin in use into %s as a file you can edit.\n",
+                RECON_DIR_THEMES);
+            return;
+        }
+
+        /* Joined, so a name with a space in it works without quoting. */
+        char name[64];
+        size_t used = 0;
+        for (int i = 2; i < argc && used < sizeof(name) - 1; i++) {
+            int n = snprintf(name + used, sizeof(name) - used, "%s%s",
+                i > 2 ? " " : "", argv[i]);
+            if (n < 0 || (size_t)n >= sizeof(name) - used) {
+                break;
+            }
+            used += (size_t)n;
+        }
+
+        const char *from = recon_theme_current();
+        if (!recon_theme_copy(NULL, name, NULL)) {
+            out(s, "%s\n", recon_theme_last_error());
+            return;
+        }
+
+        out(s, "Copied '%s' to '%s'. The file is %s/%s%s -- edit it, then "
+            "'theme %s' to see it.\n", from, name, RECON_DIR_THEMES, name,
+            RECON_THEME_EXT, name);
         return;
     }
 

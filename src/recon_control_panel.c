@@ -104,6 +104,14 @@ enum action {
     /* Storage */
     ACTION_MEASURE_STORAGE,
     ACTION_EMPTY_BIN,
+    /* Skins */
+    ACTION_COPY_SKIN,
+    ACTION_CONFIRM_COPY_SKIN,
+    ACTION_EDIT_SKIN,
+    ACTION_SKIN_DONE,
+    ACTION_SKIN_SET,
+    ACTION_SKIN_CANCEL,
+    ACTION_SKIN_FLAT,
 };
 
 enum page {
@@ -321,6 +329,26 @@ struct control_panel {
 
     /* Typing the path of something to install. */
     bool installing;
+
+    /*
+     * --- Writing a skin ---
+     *
+     * A skin could be installed and removed since v0.2.4 and still could not
+     * be written here: authoring one meant editing a text file somewhere else
+     * and bringing it in. Two states, because they are two acts -- naming a
+     * copy, and then changing what the copy says.
+     */
+    bool naming_skin;
+    struct recon_edit skin_new_name;
+
+    bool skin_editing;
+    char skin_name[48];
+    int skin_row;            /* Which role is selected. */
+    int skin_scroll;
+    /* True while typing a colour into the field, which is the only time the
+     * field exists -- a row is chosen first, then changed. */
+    bool skin_value_editing;
+    struct recon_edit skin_value;
 
     bool registry_unlocked;
     struct recon_edit unlock;
@@ -655,8 +683,234 @@ static void draw_accounts(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_REMOVE_USER, admin && have);
 }
 
+/* --- Writing a skin --- */
+
+/* A colour as a person types it: six digits, or eight when the alpha matters. */
+static void colour_text(recon_color c, char *out, size_t size) {
+    if ((c >> 24) == 0xFF) {
+        snprintf(out, size, "%06X", c & 0xFFFFFFu);
+    } else {
+        snprintf(out, size, "%08X", c);
+    }
+}
+
+/*
+ * Read a colour somebody typed.
+ *
+ * Six digits are opaque and eight carry an alpha, the same as a skin file --
+ * so what is typed here and what is in the file are the same notation, and
+ * somebody who has read one can write the other.
+ */
+static bool colour_parse(const char *text, recon_color *out) {
+    while (*text == ' ' || *text == '#') {
+        text++;
+    }
+
+    unsigned long value = 0;
+    int digits = 0;
+    for (; *text != '\0'; text++) {
+        if (*text == ' ') {
+            break;
+        }
+        int digit;
+        if (*text >= '0' && *text <= '9') {
+            digit = *text - '0';
+        } else if (*text >= 'a' && *text <= 'f') {
+            digit = *text - 'a' + 10;
+        } else if (*text >= 'A' && *text <= 'F') {
+            digit = *text - 'A' + 10;
+        } else {
+            return false;
+        }
+        value = value * 16 + (unsigned long)digit;
+        digits++;
+        if (digits > 8) {
+            return false;
+        }
+    }
+
+    if (digits == 6) {
+        *out = (recon_color)(0xFF000000u | value);
+        return true;
+    }
+    if (digits == 8) {
+        *out = (recon_color)value;
+        return true;
+    }
+    return false;
+}
+
+/*
+ * Every colour the chosen skin answers, and what it answers.
+ *
+ * The whole list rather than a chosen few. Which roles matter depends
+ * entirely on what somebody is trying to change, and a shortened list is a
+ * guess about that made by whoever wrote the page.
+ */
+static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    char title[80];
+    snprintf(title, sizeof(title), "Editing %s", cp->skin_name);
+
+    y = draw_heading(cp, p, x, y, w, title,
+        "Colours are RRGGBB, or AARRGGBB where transparency matters. "
+        "Saving is immediate.");
+
+    /* Room for the field and the buttons under the list, always, so choosing
+     * a row near the bottom does not push the Save button off the page. */
+    int footer = FIELD_HEIGHT + BUTTON_HEIGHT + line + PADDING * 3;
+    int rows = (h - y - footer) / ROW_HEIGHT;
+    if (rows < 1) {
+        rows = 1;
+    }
+    if (rows > RECON_THEME_ROLE_COUNT) {
+        rows = RECON_THEME_ROLE_COUNT;
+    }
+
+    if (cp->skin_row < 0) {
+        cp->skin_row = 0;
+    }
+    if (cp->skin_row >= RECON_THEME_ROLE_COUNT) {
+        cp->skin_row = RECON_THEME_ROLE_COUNT - 1;
+    }
+    /* Keep the chosen row in sight, so the arrow keys and a click agree about
+     * where the list is. */
+    if (cp->skin_row < cp->skin_scroll) {
+        cp->skin_scroll = cp->skin_row;
+    } else if (cp->skin_row >= cp->skin_scroll + rows) {
+        cp->skin_scroll = cp->skin_row - rows + 1;
+    }
+    if (cp->skin_scroll > RECON_THEME_ROLE_COUNT - rows) {
+        cp->skin_scroll = RECON_THEME_ROLE_COUNT - rows;
+    }
+    if (cp->skin_scroll < 0) {
+        cp->skin_scroll = 0;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    int swatch = ROW_HEIGHT - 8;
+
+    for (int i = 0; i < rows; i++) {
+        int role = cp->skin_scroll + i;
+        if (role >= RECON_THEME_ROLE_COUNT) {
+            break;
+        }
+
+        int ry = y + i * ROW_HEIGHT;
+        bool chosen = (role == cp->skin_row);
+
+        if (chosen) {
+            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+        } else if (i % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color c = recon_theme_color((enum recon_theme_role)role);
+
+        /*
+         * The colour itself, beside its name. A list of hex numbers is not a
+         * list of colours to anybody, and the whole point of the page is
+         * choosing how something looks.
+         */
+        recon_fill_rect(p, x + 6, ry + 4, swatch, swatch, c);
+        recon_stroke_rect(p, x + 6, ry + 4, swatch, swatch, COLOR_SEPARATOR);
+
+        recon_color from, to;
+        bool ramped = recon_theme_gradient((enum recon_theme_role)role,
+            &from, &to);
+        if (ramped) {
+            /* The far end of the ramp, in the same square, so a role that is
+             * two colours does not look like one. */
+            recon_fill_rect(p, x + 6 + swatch / 2, ry + 4, swatch - swatch / 2,
+                swatch, to);
+            recon_stroke_rect(p, x + 6, ry + 4, swatch, swatch,
+                COLOR_SEPARATOR);
+        }
+
+        char value[16];
+        colour_text(c, value, sizeof(value));
+
+        recon_color ink = chosen ? THEME(SELECTION_TEXT) : COLOR_TEXT;
+        recon_color faint = chosen ? THEME(SELECTION_TEXT) : COLOR_DIM;
+
+        int text_x = x + 6 + swatch + 10;
+        recon_draw_text(p, cp->font, text_x,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w - (text_x - x) - 210,
+            recon_theme_role_name((enum recon_theme_role)role), ink);
+
+        recon_draw_text(p, cp->font, x + w - 200,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, 80, value, faint);
+
+        if (ramped) {
+            char ramp[16];
+            colour_text(to, ramp, sizeof(ramp));
+            char both[24];
+            snprintf(both, sizeof(both), "to %s", ramp);
+            recon_draw_text(p, cp->font, x + w - 110,
+                ry + (ROW_HEIGHT + ascent) / 2 - 2, 100, both, faint);
+        }
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+    }
+
+    y += cp->list_h + PADDING;
+
+    if (cp->skin_value_editing) {
+        char label[96];
+        snprintf(label, sizeof(label), "%s. Empty leaves it alone.",
+            recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+        recon_draw_text(p, cp->font, x, y + ascent, w, label, COLOR_DIM);
+        y += line;
+
+        recon_edit_draw(p, cp->font, x, y, 200, FIELD_HEIGHT, &cp->skin_value);
+        recon_hit_add(p, x, y, 200, FIELD_HEIGHT, HIT_FIELD_BASE + 6);
+        y += FIELD_HEIGHT + 8;
+
+        int bx = draw_button(cp, p, x, y, "Set",
+            HIT_ACTION_BASE + ACTION_SKIN_SET, true);
+        draw_button(cp, p, bx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_SKIN_CANCEL, true);
+        return;
+    }
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Pick a colour to change it. A skin is a file; this writes to it.",
+        COLOR_DIM);
+    y += line + PADDING;
+
+    int bx = draw_button(cp, p, x, y, "Change Colour",
+        HIT_ACTION_BASE + ACTION_EDIT_SKIN, true);
+
+    /* Flattening is its own button rather than a value you can type, because
+     * "no gradient" is not a colour and there is nothing to type for it. */
+    recon_color from, to;
+    bool ramped = recon_theme_gradient((enum recon_theme_role)cp->skin_row,
+        &from, &to);
+    bx = draw_button(cp, p, bx, y, "Remove Ramp",
+        HIT_ACTION_BASE + ACTION_SKIN_FLAT, ramped);
+
+    draw_button(cp, p, bx, y, "Done",
+        HIT_ACTION_BASE + ACTION_SKIN_DONE, true);
+}
+
 static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
+    if (cp->skin_editing) {
+        draw_skin_editor(cp, p, x, y, w, h);
+        return;
+    }
+
     y = draw_heading(cp, p, x, y, w, "Appearance",
         "Choose one to see it. Yours alone; other accounts keep theirs.");
 
@@ -718,17 +972,57 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
     }
 
-    /*
-     * And the wallpaper, under the skins, because it is the other half of how
-     * the desktop looks. Choosing a skin puts its wallpaper on; choosing a
-     * wallpaper here keeps it until the skin changes again.
-     */
     y += cp->list_h + PADDING;
 
     int line = recon_font_line_height(cp->font);
     if (line <= 0) {
         line = 18;
     }
+
+    /*
+     * --- Making one of your own ---
+     *
+     * A built-in skin cannot be edited: it is compiled in, and a file cannot
+     * shadow one, so writing over its file would save the change, ignore it,
+     * and lose it on the next start. Copying first is not a formality, it is
+     * the only thing that works -- so the button says Copy for a built-in and
+     * Edit for a file, rather than offering both and refusing one.
+     */
+    struct recon_theme_info chosen;
+    bool have_chosen = recon_theme_at(cp->selected, &chosen);
+
+    if (cp->naming_skin) {
+        char asking[120];
+        snprintf(asking, sizeof(asking), "A name for the copy of %s:",
+            have_chosen ? chosen.name : recon_theme_current());
+        recon_draw_text(p, cp->font, x, y + ascent, w, asking, COLOR_DIM);
+        y += line + 2;
+
+        recon_edit_draw(p, cp->font, x, y, 240, FIELD_HEIGHT,
+            &cp->skin_new_name);
+        recon_hit_add(p, x, y, 240, FIELD_HEIGHT, HIT_FIELD_BASE + 5);
+        y += FIELD_HEIGHT + 8;
+
+        int nbx = draw_button(cp, p, x, y, "Make Copy",
+            HIT_ACTION_BASE + ACTION_CONFIRM_COPY_SKIN, true);
+        draw_button(cp, p, nbx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_SKIN_CANCEL, true);
+        return;
+    }
+
+    int sbx = draw_button(cp, p, x, y, "Copy This Skin",
+        HIT_ACTION_BASE + ACTION_COPY_SKIN, have_chosen);
+    draw_button(cp, p, sbx, y, "Edit This Skin",
+        HIT_ACTION_BASE + ACTION_EDIT_SKIN,
+        have_chosen && !chosen.built_in);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    /*
+     * And the wallpaper, under the skins, because it is the other half of how
+     * the desktop looks. Choosing a skin puts its wallpaper on; choosing a
+     * wallpaper here keeps it until the skin changes again.
+     */
 
     recon_draw_text(p, cp->font, x, y + ascent, w, "Wallpaper", COLOR_TEXT);
     y += line + 4;
@@ -2310,6 +2604,186 @@ static void do_action(struct control_panel *cp, enum action action) {
             answered);
         break;
     }
+
+    /* --- Skins --- */
+
+    case ACTION_COPY_SKIN: {
+        struct recon_theme_info info;
+        if (!recon_theme_at(cp->selected, &info)) {
+            set_status(cp, true, "Choose a skin first.");
+            break;
+        }
+
+        /* Suggested rather than empty: a name is wanted, and "Beacon 2" is a
+         * better thing to correct than a blank field is to fill. */
+        char suggestion[sizeof(info.name) + 4];
+        snprintf(suggestion, sizeof(suggestion), "%s 2", info.name);
+
+        cp->naming_skin = true;
+        recon_edit_begin(&cp->skin_new_name, suggestion, false);
+        set_status(cp, false, "A copy of %s, under a name of your own.",
+            info.name);
+        break;
+    }
+
+    case ACTION_CONFIRM_COPY_SKIN: {
+        struct recon_theme_info info;
+        if (!recon_theme_at(cp->selected, &info)) {
+            set_status(cp, true, "Choose a skin first.");
+            break;
+        }
+
+        /*
+         * Refused rather than shortened. A skin quietly saved under half the
+         * name somebody typed is a file they will not find again, and the
+         * name is also the file name.
+         */
+        char name[sizeof(info.name)];
+        size_t length = strlen(cp->skin_new_name.text);
+        if (length >= sizeof(name)) {
+            set_status(cp, true, "That name is too long -- %zu characters at "
+                "most.", sizeof(name) - 1);
+            break;
+        }
+        /* Copied by the length just checked rather than by a formatter, so
+         * the bound is one the compiler can see too. */
+        memcpy(name, cp->skin_new_name.text, length + 1);
+
+        if (!recon_theme_copy(info.name, name, NULL)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+
+        cp->naming_skin = false;
+        recon_edit_end(&cp->skin_new_name);
+
+        /*
+         * Put the copy on and open it for editing. Somebody who has just
+         * copied a skin is about to change it, and looking at the thing you
+         * are changing is the point of doing it here rather than in a text
+         * file.
+         */
+        recon_theme_set(name);
+        recon_access_apply(cp->font);
+        recon_shell_restyle(cp->server->shell);
+
+        snprintf(cp->skin_name, sizeof(cp->skin_name), "%s", name);
+        cp->skin_editing = true;
+        cp->skin_row = 0;
+        cp->skin_scroll = 0;
+        cp->skin_value_editing = false;
+
+        set_status(cp, false, "'%s' is yours. Pick a colour to change it.",
+            name);
+        break;
+    }
+
+    case ACTION_EDIT_SKIN:
+        if (cp->skin_editing) {
+            /* Inside the editor this button changes the chosen colour. */
+            cp->skin_value_editing = true;
+
+            char current[16];
+            colour_text(recon_theme_color((enum recon_theme_role)cp->skin_row),
+                current, sizeof(current));
+            recon_edit_begin(&cp->skin_value, current, false);
+            set_status(cp, false, "%s, as RRGGBB or AARRGGBB.",
+                recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+            break;
+        }
+
+        {
+            struct recon_theme_info info;
+            if (!recon_theme_at(cp->selected, &info)) {
+                set_status(cp, true, "Choose a skin first.");
+                break;
+            }
+            if (info.built_in) {
+                set_status(cp, true,
+                    "'%s' is built in. Copy it first, then edit the copy.",
+                    info.name);
+                break;
+            }
+
+            /* Editing a skin means looking at it. Changing one you cannot see
+             * is guessing at hex numbers. */
+            recon_theme_set(info.name);
+            recon_access_apply(cp->font);
+            recon_shell_restyle(cp->server->shell);
+
+            snprintf(cp->skin_name, sizeof(cp->skin_name), "%s", info.name);
+            cp->skin_editing = true;
+            cp->skin_row = 0;
+            cp->skin_scroll = 0;
+            cp->skin_value_editing = false;
+            clear_status(cp);
+        }
+        break;
+
+    case ACTION_SKIN_SET: {
+        recon_color colour;
+        const char *typed = cp->skin_value.text;
+
+        if (!colour_parse(typed, &colour)) {
+            set_status(cp, true,
+                "'%s' is not a colour. Six digits, or eight with an alpha.",
+                typed);
+            break;
+        }
+
+        if (!recon_theme_set_role(cp->skin_name,
+                (enum recon_theme_role)cp->skin_row, colour)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+
+        /* Said before the field is closed, because closing it clears the text
+         * this sentence is quoting -- which is how it came out as "bar is
+         * now ." the first time. */
+        set_status(cp, false, "%s is now %s.",
+            recon_theme_role_name((enum recon_theme_role)cp->skin_row), typed);
+
+        cp->skin_value_editing = false;
+        recon_edit_end(&cp->skin_value);
+
+        /* Everything on screen is drawn from this palette, so the change is
+         * visible before the sentence saying it happened. */
+        recon_shell_restyle(cp->server->shell);
+        break;
+    }
+
+    case ACTION_SKIN_FLAT:
+        if (!recon_theme_set_gradient(cp->skin_name,
+                (enum recon_theme_role)cp->skin_row, false, 0)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "%s is flat now.",
+            recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+        break;
+
+    case ACTION_SKIN_CANCEL:
+        /* One button for both, because it means the same thing in both: put
+         * away whatever is half-typed and leave what is saved alone. */
+        if (cp->skin_value_editing) {
+            cp->skin_value_editing = false;
+            recon_edit_end(&cp->skin_value);
+        }
+        if (cp->naming_skin) {
+            cp->naming_skin = false;
+            recon_edit_end(&cp->skin_new_name);
+        }
+        clear_status(cp);
+        break;
+
+    case ACTION_SKIN_DONE:
+        cp->skin_editing = false;
+        cp->skin_value_editing = false;
+        recon_edit_end(&cp->skin_value);
+        set_status(cp, false, "'%s' is saved. It is a file in %s.",
+            cp->skin_name, RECON_DIR_THEMES);
+        break;
     }
 }
 
@@ -2386,10 +2860,21 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     if (hit_id >= HIT_ROW_BASE) {
         int index = (int)(hit_id - HIT_ROW_BASE);
 
+        if (cp->page == PAGE_APPEARANCE && cp->skin_editing) {
+            /* The rows are numbered from the first one showing, so a click
+             * on the third row means the third *visible* role. */
+            cp->skin_row = cp->skin_scroll + index;
+            cp->skin_value_editing = false;
+            return true;
+        }
+
         if (cp->page == PAGE_APPEARANCE) {
             /* Choosing a skin shows it rather than describing it. */
             struct recon_theme_info info;
             if (recon_theme_at(index, &info) && recon_theme_set(info.name)) {
+                /* Remembered as well as applied, because the Copy and Edit
+                 * buttons under the list act on whichever is chosen. */
+                cp->selected = index;
                 recon_shell_restyle(cp->server->shell);
                 set_status(cp, false, "Skin is now '%s'.", info.name);
             }
@@ -2412,6 +2897,13 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             /* Measured on the way in, so the page is never showing what the
              * disk looked like some minutes ago. */
             cp->storage_measured = false;
+
+            /* Leaving Appearance leaves the skin editor. Coming back to a
+             * page that was left mid-edit is how a half-typed colour becomes
+             * a surprise three pages later. */
+            cp->skin_editing = false;
+            cp->skin_value_editing = false;
+            cp->naming_skin = false;
 
             cp->page = (enum page)page;
             cp->selected = 0;
@@ -2453,6 +2945,67 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             return true;
         }
         return true;
+    }
+
+    /* Naming a copy of a skin. */
+    if (cp->naming_skin) {
+        switch (recon_edit_key(&cp->skin_new_name, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_CONFIRM_COPY_SKIN);
+            return true;
+        case RECON_EDIT_CANCEL:
+            do_action(cp, ACTION_SKIN_CANCEL);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
+    /* Typing a colour into the skin editor. */
+    if (cp->skin_value_editing) {
+        switch (recon_edit_key(&cp->skin_value, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_SKIN_SET);
+            return true;
+        case RECON_EDIT_CANCEL:
+            do_action(cp, ACTION_SKIN_CANCEL);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
+    /*
+     * Walking the roles. Forty-eight of them is more than anybody wants to
+     * click through, and Enter opening the field is what makes changing
+     * several in a row bearable.
+     */
+    if (cp->skin_editing) {
+        switch (sym) {
+        case XKB_KEY_Up:
+            if (cp->skin_row > 0) {
+                cp->skin_row--;
+            }
+            return true;
+        case XKB_KEY_Down:
+            if (cp->skin_row < RECON_THEME_ROLE_COUNT - 1) {
+                cp->skin_row++;
+            }
+            return true;
+        case XKB_KEY_Return:
+        case XKB_KEY_KP_Enter:
+            do_action(cp, ACTION_EDIT_SKIN);
+            return true;
+        case XKB_KEY_Escape:
+            do_action(cp, ACTION_SKIN_DONE);
+            return true;
+        default:
+            return false;
+        }
     }
 
     /*
@@ -2552,6 +3105,28 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 }
 
+static void panel_scroll(void *user, double delta) {
+    struct control_panel *cp = user;
+
+    /* Forty-eight roles do not fit, and reaching for the arrow keys to see
+     * the rest of a list you are looking at with a mouse is a small
+     * indignity. */
+    if (cp->page == PAGE_APPEARANCE && cp->skin_editing) {
+        cp->skin_scroll += (delta > 0) ? 3 : -3;
+        if (cp->skin_scroll < 0) {
+            cp->skin_scroll = 0;
+        }
+        return;
+    }
+
+    if (cp->page == PAGE_REGISTRY && cp->registry_unlocked) {
+        cp->registry_scroll += (delta > 0) ? 3 : -3;
+        if (cp->registry_scroll < 0) {
+            cp->registry_scroll = 0;
+        }
+    }
+}
+
 static void panel_describe(void *user, char *out, size_t size) {
     struct control_panel *cp = user;
 
@@ -2587,6 +3162,7 @@ static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .draw = panel_draw,
     .click = panel_click,
     .key = panel_key,
+    .scroll = panel_scroll,
     .describe = panel_describe,
     .destroy = panel_destroy,
 };
