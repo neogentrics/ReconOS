@@ -36,7 +36,11 @@
 #define LINE_SPACING 3
 
 #define HIT_TOPIC_BASE (RECON_APPWIN_HIT_USER + 1)
+#define HIT_SIDEBAR (RECON_APPWIN_HIT_USER + 199)
 #define HIT_BODY (RECON_APPWIN_HIT_USER + 200)
+
+/* A scrollbar wide enough to see and narrow enough not to be a column. */
+#define BAR_WIDTH 6
 
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
@@ -82,8 +86,55 @@ struct recon_help {
     int topic_count;
     int selected;
 
+    /*
+     * How far down the topic list is.
+     *
+     * There was no such thing, and the list is one page of help topics plus
+     * one entry per version -- forty-odd rows in a window that shows
+     * eighteen. Everything past the fifth or sixth version was drawn off the
+     * bottom and could not be reached at all, which is a change log that
+     * exists and cannot be read.
+     */
+    int topic_scroll;
+    int topic_rows;
+
+    /*
+     * Which pane the pointer is over.
+     *
+     * The scroll callback is given a direction and nothing else, so without
+     * this the wheel could only ever move one of the two lists -- and it
+     * moved the wrong one, because the list somebody is pointing at is the
+     * list they mean.
+     */
+    uint32_t hover;
+
     struct page page;
 };
+
+/* A slim bar showing how far down a list is, and how much of it there is. */
+static void draw_scrollbar(struct recon_panel *panel, int x, int y, int h,
+        int first, int shown, int total) {
+    if (total <= shown || h <= 0) {
+        return;
+    }
+
+    recon_fill_rect(panel, x, y, BAR_WIDTH, h, COLOR_SEPARATOR);
+
+    int height = h * shown / total;
+    if (height < 12) {
+        height = 12;
+    }
+    if (height > h) {
+        height = h;
+    }
+
+    int room = h - height;
+    int most = total - shown;
+    int offset = (most > 0) ? room * first / most : 0;
+
+    recon_fill_role(panel, x, y + offset, BAR_WIDTH, height,
+        RECON_THEME_SURFACE_TEXT_DIM);
+}
 
 /* --- Writing the shipped copy out --- */
 
@@ -421,31 +472,78 @@ static void help_draw(void *user, struct recon_panel *panel,
     }
 
     recon_fill_rect(panel, x, y, w, h, COLOR_BG);
-    recon_hit_clear(panel);
+
+    /*
+     * No recon_hit_clear here.
+     *
+     * The window clears the panel's hit regions itself and then draws the
+     * frame -- close, maximize, minimize and the draggable title bar -- and
+     * only afterwards calls this. Clearing again wiped all four, so the Help
+     * window could not be closed or moved: the only two windows in the
+     * system that did this were the two written last, and both were broken
+     * the same way for the same reason.
+     */
 
     /* --- The topics --- */
     recon_fill_rect(panel, x, y, SIDEBAR_WIDTH, h, COLOR_SIDEBAR);
     recon_fill_rect(panel, x + SIDEBAR_WIDTH, y, 1, h, COLOR_SEPARATOR);
 
+    /*
+     * How many rows fit, and keeping the chosen one among them.
+     *
+     * Chased rather than merely clamped: the arrow keys walk the list, and a
+     * selection that walked off the bottom would move the highlight to
+     * somewhere nobody can see while the page beside it changed.
+     */
+    help->topic_rows = (h - PADDING) / ROW_HEIGHT;
+    if (help->topic_rows < 1) {
+        help->topic_rows = 1;
+    }
+
+    if (help->selected >= 0) {
+        if (help->selected < help->topic_scroll) {
+            help->topic_scroll = help->selected;
+        } else if (help->selected >= help->topic_scroll + help->topic_rows) {
+            help->topic_scroll = help->selected - help->topic_rows + 1;
+        }
+    }
+    if (help->topic_scroll > help->topic_count - help->topic_rows) {
+        help->topic_scroll = help->topic_count - help->topic_rows;
+    }
+    if (help->topic_scroll < 0) {
+        help->topic_scroll = 0;
+    }
+
     int ty = y + PADDING / 2;
     bool divided = false;
 
-    for (int i = 0; i < help->topic_count; i++) {
+    for (int row = 0; row < help->topic_rows; row++) {
+        int i = help->topic_scroll + row;
+        if (i >= help->topic_count) {
+            break;
+        }
+
         /*
          * A rule where the change log begins. The two halves are read
          * differently -- one is looked up, the other is read through -- and a
          * single unbroken list of thirty entries hides that.
+         *
+         * Only drawn when the boundary is actually on screen: scrolled past,
+         * it is a rule with nothing above it.
          */
         if (help->topics[i].is_change && !divided) {
             divided = true;
-            ty += 6;
-            recon_fill_rect(panel, x + PADDING, ty, SIDEBAR_WIDTH - PADDING * 2,
-                1, COLOR_SEPARATOR);
-            ty += 4;
+            if (i > help->topic_scroll) {
+                ty += 6;
+                recon_fill_rect(panel, x + PADDING, ty,
+                    SIDEBAR_WIDTH - PADDING * 2 - BAR_WIDTH, 1,
+                    COLOR_SEPARATOR);
+                ty += 4;
 
-            recon_draw_text(panel, help->font, x + PADDING, ty + ascent,
-                SIDEBAR_WIDTH - PADDING * 2, "What changed", COLOR_DIM);
-            ty += line_height + 2;
+                recon_draw_text(panel, help->font, x + PADDING, ty + ascent,
+                    SIDEBAR_WIDTH - PADDING * 2, "What changed", COLOR_DIM);
+                ty += line_height + 2;
+            }
         }
 
         if (ty + ROW_HEIGHT > y + h) {
@@ -454,19 +552,28 @@ static void help_draw(void *user, struct recon_panel *panel,
 
         bool chosen = (i == help->selected);
         if (chosen) {
-            recon_fill_role(panel, x + 2, ty, SIDEBAR_WIDTH - 4, ROW_HEIGHT,
-                RECON_THEME_SELECTION);
+            recon_fill_role(panel, x + 2, ty, SIDEBAR_WIDTH - 4 - BAR_WIDTH,
+                ROW_HEIGHT, RECON_THEME_SELECTION);
         }
 
         recon_draw_text(panel, help->font, x + PADDING,
             ty + (ROW_HEIGHT + ascent) / 2 - 2,
-            SIDEBAR_WIDTH - PADDING * 2, help->topics[i].title,
+            SIDEBAR_WIDTH - PADDING * 2 - BAR_WIDTH, help->topics[i].title,
             chosen ? COLOR_SELECTION_TEXT : COLOR_TEXT);
 
-        recon_hit_add(panel, x + 2, ty, SIDEBAR_WIDTH - 4, ROW_HEIGHT,
-            HIT_TOPIC_BASE + i);
+        recon_hit_add(panel, x + 2, ty, SIDEBAR_WIDTH - 4 - BAR_WIDTH,
+            ROW_HEIGHT, HIT_TOPIC_BASE + i);
         ty += ROW_HEIGHT;
     }
+
+    draw_scrollbar(panel, x + SIDEBAR_WIDTH - BAR_WIDTH - 2, y + PADDING / 2,
+        h - PADDING, help->topic_scroll, help->topic_rows,
+        help->topic_count);
+
+    /* The whole sidebar takes the wheel, not only the rows: a list is
+     * scrolled by pointing at it, and the gap under the last row is still
+     * pointing at it. */
+    recon_hit_add(panel, x, y, SIDEBAR_WIDTH, h, HIT_SIDEBAR);
 
     /* --- The page --- */
     int body_x = x + SIDEBAR_WIDTH + 1 + PADDING * 2;
@@ -480,15 +587,25 @@ static void help_draw(void *user, struct recon_panel *panel,
     }
 
     int body_y = y + PADDING;
-    help->page.visible_lines = (h - PADDING * 2 - line_height) / line_height;
-    if (help->page.visible_lines < 1) {
-        help->page.visible_lines = 1;
-    }
 
     if (help->selected >= 0 && help->selected < help->topic_count) {
         recon_draw_text(panel, help->font, body_x, body_y + ascent, body_w,
             help->topics[help->selected].title, COLOR_HEADING);
         body_y += line_height + 4;
+    }
+
+    /*
+     * Counted after the heading has taken its room, and with a line left for
+     * the "more below" note.
+     *
+     * It was counted before both, so the page drew one line too many and the
+     * note landed on top of it -- two sentences in the same place, which
+     * reads as the text being broken rather than as the window being full.
+     */
+    help->page.visible_lines =
+        (y + h - PADDING - line_height - body_y) / line_height;
+    if (help->page.visible_lines < 1) {
+        help->page.visible_lines = 1;
     }
 
     if (help->page.scroll > help->page.line_count - help->page.visible_lines) {
@@ -507,6 +624,10 @@ static void help_draw(void *user, struct recon_panel *panel,
             body_y + i * line_height + ascent, body_w,
             help->page.lines[index], COLOR_TEXT);
     }
+
+    draw_scrollbar(panel, x + w - BAR_WIDTH - 2, y + PADDING,
+        h - PADDING * 2, help->page.scroll, help->page.visible_lines,
+        help->page.line_count);
 
     recon_hit_add(panel, x + SIDEBAR_WIDTH + 1, y, w - SIDEBAR_WIDTH - 1, h,
         HIT_BODY);
@@ -542,9 +663,39 @@ static bool help_click(void *user, uint32_t hit_id, int cx, int cy,
     return hit_id == HIT_BODY;
 }
 
+static void help_motion(void *user, uint32_t hit_id, int cx, int cy) {
+    struct recon_help *help = user;
+    (void)cx; (void)cy;
+    help->hover = hit_id;
+}
+
 static void help_scroll(void *user, double delta) {
     struct recon_help *help = user;
-    help->page.scroll += (delta > 0) ? 3 : -3;
+    int by = (delta > 0) ? 3 : -3;
+
+    /* The topic list when the pointer is on it, the page otherwise. */
+    bool on_topics = (help->hover == HIT_SIDEBAR) ||
+        (help->hover >= HIT_TOPIC_BASE && help->hover < HIT_SIDEBAR);
+
+    if (on_topics) {
+        help->topic_scroll += by;
+
+        /*
+         * Clamped here as well as in the drawing, because the drawing also
+         * chases the selection -- and scrolling past the end and being pulled
+         * back by the selection would make the wheel feel like it was
+         * fighting the mouse.
+         */
+        if (help->topic_scroll > help->topic_count - help->topic_rows) {
+            help->topic_scroll = help->topic_count - help->topic_rows;
+        }
+        if (help->topic_scroll < 0) {
+            help->topic_scroll = 0;
+        }
+        return;
+    }
+
+    help->page.scroll += by;
     if (help->page.scroll < 0) {
         help->page.scroll = 0;
     }
@@ -612,6 +763,7 @@ static const struct recon_appwin_impl HELP_IMPL = {
     .draw = help_draw,
     .click = help_click,
     .key = help_key,
+    .motion = help_motion,
     .scroll = help_scroll,
     .describe = help_describe,
     .destroy = help_destroy,
@@ -797,8 +949,10 @@ static void notice_draw(void *user, struct recon_panel *panel,
         line_height = 16;
     }
 
+    /* No recon_hit_clear: see the note in help_draw. Clearing here wiped the
+     * frame's own buttons, so this window could not be closed or moved
+     * either. */
     recon_fill_rect(panel, x, y, w, h, COLOR_BG);
-    recon_hit_clear(panel);
 
     int text_x = x + NOTICE_PADDING;
     int text_w = w - NOTICE_PADDING * 2;

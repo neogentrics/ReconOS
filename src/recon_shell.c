@@ -2678,6 +2678,28 @@ void recon_shell_open_help(struct recon_shell *shell) {
      * stuck in the Control Panel had to find Help and then find the right
      * page in it.
      */
+    struct recon_appwin *existing = recon_installed_app_existing("Help");
+
+    /*
+     * F1 with the help already in front puts it away.
+     *
+     * It used to open it again, which for an already-open window meant
+     * jumping it back to the first page -- so the key that had just been
+     * pressed to get help destroyed the reader's place in it, and pressing it
+     * again did the same thing rather than the obvious opposite.
+     *
+     * Only when it is the window in front. F1 from behind a Notepad means
+     * "help about this", and closing the help would be answering a question
+     * nobody asked.
+     */
+    if (existing != NULL && recon_appwin_is_open(existing) &&
+            !recon_appwin_is_minimized(existing) &&
+            recon_appwin_is_focused(existing)) {
+        recon_appwin_hide(existing);
+        recon_shell_refresh(shell);
+        return;
+    }
+
     const char *topic = NULL;
     if (shell->focused_app >= 0 && shell->focused_app < shell->app_count) {
         topic = recon_appwin_help_topic(shell->apps[shell->focused_app]);
