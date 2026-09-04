@@ -49,7 +49,9 @@ gave the system a way to explain itself: a Help application holding both the
 written help and the change log, and a window that says what changed the
 first time an account reaches the desktop on a new version. It also made
 Storage work, gave the Recycle Bin a command so it can be reached from
-outside a window, and settled on one button shape for the whole system.
+outside a window, settled on one button shape for the whole system, let the
+Start menu be typed into, and -- at last -- let a skin be written from
+inside ReconOS rather than only installed into it.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -263,6 +265,15 @@ meant "gone" since DOS.
 
 **Dialogs.** Anything destructive asks in a window, with Cancel last so it is
 what both Enter and Escape choose. Clicking outside does not dismiss one.
+
+**Skins you can write here.** *Copy This Skin* on the Appearance page writes
+the chosen skin out under a name of your own and opens it for editing; the
+editor lists every role with a swatch of what it currently is, and a colour
+changed there is on screen and in the file at the same moment. A copy rather
+than a blank file, because the questions a skin has to answer are the part
+nobody knows in advance. The ten that ship are compiled in and are refused
+rather than written over -- a file cannot shadow a built-in, so the edit
+would be saved, ignored, and lost on the next start.
 
 **Skins.** Every colour is asked for by what it means rather than what it looks
 like — `title.active`, not "dark blue" — so a skin is a set of answers and

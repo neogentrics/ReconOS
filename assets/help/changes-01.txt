@@ -21,6 +21,12 @@ The Recycle Bin from the Terminal. bin lists it, bin <name> puts
 something in, bin restore <name> takes it back out, and bin empty clears
 it. Before this the bin could only be reached from the File Explorer.
 
+Skins can be written here. *Copy This Skin* on the Appearance page writes
+the chosen one out under a name of your own; *Edit This Skin* lists every
+colour with a swatch and lets you change it. The change is immediate and is
+saved as you make it. The ten that ship are built in and cannot be edited —
+copy one first. theme copy <name> does the same from the Terminal.
+
 Type in the Start menu to find something. The list narrows to names
 containing what you typed; the arrows move the highlight and Enter opens it.
 Escape steps back one thing at a time. The menu took no keys at all before

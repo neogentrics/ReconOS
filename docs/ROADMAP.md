@@ -822,6 +822,47 @@ The three things still blocked are listed underneath. The page used to be
 nothing but that list, and dropping it now that most of the page works is how
 a gap stops being visible.
 
+### Writing a skin from inside ReconOS
+
+Backlog item 2, and the last thing on that list nothing outside was blocking.
+A skin could be installed and removed since v0.2.4 and still could not be
+*made* here: authoring one meant editing a text file somewhere else and
+bringing it in.
+
+**Copy first.** A copy rather than a blank file, because the questions a skin
+has to answer — forty-eight roles, the ramps, the frame shape — are the part
+nobody knows in advance, and a complete file to change is a far better
+starting point than an empty one to fill.
+
+**The whole list of roles**, with a swatch showing what each currently is. A
+list of hex numbers is not a list of colours to anybody. The whole list rather
+than a chosen few: which roles matter depends entirely on what somebody is
+trying to change, and a shortened list is a guess about that made by whoever
+wrote the page.
+
+**Editing puts the skin on first.** Changing colours you cannot see is
+guessing at hex numbers. Every change is live, because the palette everything
+draws from *is* the loaded skin — the taskbar changes colour while the button
+that changed it is still under the pointer — and it is written to the file at
+the same moment, so there is no save to forget.
+
+**Built-ins are refused rather than written over.** A file cannot shadow a
+built-in, so the edit would be saved, ignored, and lost on the next start:
+worse than a refusal, because it looks like it worked. The button says Copy
+for a built-in and Edit for a file rather than offering both and refusing one.
+
+The file writer turned up a defect. `recon_theme_write_defaults` emitted
+colours and metrics and **not gradients**, so every shipped skin file on disk
+was missing its ramps. Nothing broke — those files are never read back,
+because a file cannot shadow a built-in — but anybody copying `Beacon.theme`
+to start their own from got a Beacon with the ramps quietly gone. There is one
+writer now, so a copied skin contains exactly what a shipped one does. It was
+found by reading the file, which needed `theme copy` in the Terminal to exist.
+
+Not done: the ramps and the frame metrics can be removed from the editor but
+not set there, and a skin cannot be renamed or deleted from it. The file is
+still editable by hand, which is the way to do any of those today.
+
 ### Typing in the Start menu
 
 The menu never took a key — not even Escape — so the only way to reach an
@@ -867,9 +908,14 @@ being able to see rather than worth hiding.
 
 Collected from using it. Nothing here is started.
 
-**Custom skins can be installed but not written from inside ReconOS.**
-`theme install` takes a file and `theme remove` takes it away; there is no
-editor for one, so writing a skin still means writing a text file.
+**The skin editor sets colours and nothing else.** A ramp can be removed but
+not set, a frame measurement cannot be touched at all, and a skin cannot be
+renamed or deleted from the page it is edited on. Those are still done by
+editing the file by hand.
+
+**Buttons in applications round off; nothing else does.** `metric.corner` is
+read by the window frame and `metric.button-corner` by every button, and a
+list, a text field and a menu are all still square whatever the skin says.
 
 **No paint program.** The control socket still has no authentication, only
 file permissions.

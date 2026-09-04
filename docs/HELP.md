@@ -128,8 +128,28 @@ background.
 typeface and its size. Extra space between letters is the single adjustment
 with the most evidence behind it for a dyslexic reader.
 
+### Making a skin of your own
+
 A skin is a text file in `/System/Themes`. `theme install` adds one somebody
 else wrote.
+
+**Copy This Skin**, under the list, writes the chosen skin out under a name of
+your own and opens it for editing. A copy rather than a blank file: a skin
+answers forty-eight questions about colour, and having them all answered
+already is a much easier place to start than an empty file.
+
+**Edit This Skin** lists every colour with a swatch of what it currently is.
+Pick one, press **Change Colour**, and type a colour as RRGGBB — or AARRGGBB
+where it needs to be see-through. The change is immediate and is written to the
+file straight away; there is no separate save.
+
+Some colours are a *ramp* from one to another, shown as two halves of the
+swatch and a second value. **Remove Ramp** makes one flat.
+
+The ten skins that ship cannot be edited — they are built into ReconOS, so a
+change to their files would be ignored. Copy one first; the copy is yours.
+
+From the Terminal, `theme copy <name>` does the same thing.
 
 ## Programs
 
