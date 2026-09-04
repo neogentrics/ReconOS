@@ -903,10 +903,29 @@ moved, minimized or closed except from the taskbar.
 
 The bar reads the same skin metrics a built-in window's frame does — title
 height, button size, corner radius — so a client window and a ReconOS window
-are the same window. Not done: resizing by an edge, which needs hit regions
-outside the client's surface, and an icon that means anything (a Wayland
-client hands its compositor an app_id, not a picture, and guessing an icon
-from a reverse-DNS string would be wrong more often than right).
+are the same window.
+
+**Resizing by an edge** followed, in the same version. The grab region is a
+six-pixel margin *outside* the window rather than a border inside it, because
+inside belongs to the client: a terminal's last column of text is not a resize
+handle. The cursor changes over the margin, since an invisible grab region
+nobody can see is one nobody finds.
+
+Two more paths that existed and had never been taken:
+
+- The margin is outside the window, which puts it over the desktop -- and the
+  desktop answers a click nothing else wanted, so going through the shell
+  first meant the backdrop swallowed every resize before anything could see
+  it. It looked exactly like the edge detection not working. The edge is
+  checked first now, guarded so the shell still wins where the shell is.
+- **Injected pointer motion never ran the move or resize modes at all.** They
+  were reachable from a test and did nothing, so `ui move` while dragging an
+  edge moved the pointer and left the window where it was. Injected motion
+  takes the same order the real path does now, which is the property the
+  injection exists to have.
+
+Not done: an icon that means anything. A Wayland client hands its compositor
+an `app_id`, not a picture.
 
 ### F1
 
