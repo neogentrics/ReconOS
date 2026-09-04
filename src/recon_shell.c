@@ -534,14 +534,14 @@ struct recon_shell {
 
     /* Built-in windows. Listed on the taskbar beside client windows, and
      * offered input in front-to-back order. */
-    struct recon_appwin *apps[8];
+    struct recon_appwin *apps[RECON_SHELL_WINDOWS_MAX];
     int app_count;
     /*
      * Indices into apps[], front-most first. Input must be offered in the
      * order things are drawn, not the order they were created, or a window
      * underneath answers for the one on top of it.
      */
-    int app_order[8];
+    int app_order[RECON_SHELL_WINDOWS_MAX];
     /*
      * Which built-in window holds focus, or -1 for none. Exactly one window
      * may hold it, which is a fact about all of them and so cannot be left to
@@ -2301,7 +2301,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * whole point: the taskbar comes back listing the windows that were open
      * before, because they never closed.
      */
-    struct recon_appwin *existing[8];
+    struct recon_appwin *existing[RECON_SHELL_WINDOWS_MAX];
     int found = recon_installed_app_windows(existing,
         (int)(sizeof(existing) / sizeof(existing[0])));
     for (int i = 0; i < found; i++) {
@@ -2692,6 +2692,84 @@ int recon_shell_app_index(struct recon_shell *shell, const char *title) {
  * the applications that could exist. A window joins it the first time its
  * application is opened.
  */
+/*
+ * Public wrappers. The index adopt_window returns is a shell-internal thing
+ * and no caller outside has any use for it.
+ */
+bool recon_shell_adopt_window(struct recon_shell *shell,
+        struct recon_appwin *win) {
+    if (shell == NULL || win == NULL) {
+        return false;
+    }
+    return adopt_window(shell, win) >= 0;
+}
+
+void recon_shell_focus_window(struct recon_shell *shell,
+        struct recon_appwin *win) {
+    if (shell == NULL || win == NULL) {
+        return;
+    }
+    for (int i = 0; i < shell->app_count; i++) {
+        if (shell->apps[i] == win) {
+            recon_shell_open_app(shell, i);
+            return;
+        }
+    }
+}
+
+void recon_shell_forget_window(struct recon_shell *shell,
+        struct recon_appwin *win) {
+    if (shell == NULL || win == NULL) {
+        return;
+    }
+
+    int at = -1;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (shell->apps[i] == win) {
+            at = i;
+            break;
+        }
+    }
+    if (at < 0) {
+        return;
+    }
+
+    /*
+     * Close the gap rather than leaving a hole. Everything that walks this
+     * array stops at app_count, so a NULL in the middle would end the walk
+     * early and hide every window after it from the taskbar.
+     */
+    for (int i = at; i < shell->app_count - 1; i++) {
+        shell->apps[i] = shell->apps[i + 1];
+    }
+    shell->app_count--;
+    shell->apps[shell->app_count] = NULL;
+
+    /*
+     * The order array holds indices into apps[], so every index above the
+     * one that went has just shifted down by one, and the entry for the
+     * window itself has to come out.
+     */
+    int keep = 0;
+    for (int i = 0; i < shell->app_count + 1; i++) {
+        int index = shell->app_order[i];
+        if (index == at) {
+            continue;
+        }
+        shell->app_order[keep++] = index > at ? index - 1 : index;
+    }
+
+    if (shell->focused_app == at) {
+        set_focused_app(shell, shell->app_count > 0 ?
+            shell->app_order[0] : -1);
+    } else if (shell->focused_app > at) {
+        shell->focused_app--;
+    }
+
+    layout(shell);
+    draw_taskbar(shell);
+}
+
 static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
     if (win == NULL) {
         return -1;
@@ -4150,8 +4228,31 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     struct wlr_scene_node *node = topmost_node(shell, lx, ly);
     int index = appwin_index_for_node(shell, node);
     if (index >= 0) {
+        /*
+         * Which window held focus before the click was offered, by identity
+         * rather than by index -- the application may adopt a window while
+         * handling this, and adopting appends, so an index taken now still
+         * means the same window afterwards while the count does not.
+         */
+        struct recon_appwin *was = shell->focused_app >= 0 &&
+            shell->focused_app < shell->app_count
+            ? shell->apps[shell->focused_app] : NULL;
+
         if (recon_appwin_handle_click(shell->apps[index], lx, ly, pressed)) {
-            if (pressed) {
+            struct recon_appwin *now = shell->focused_app >= 0 &&
+                shell->focused_app < shell->app_count
+                ? shell->apps[shell->focused_app] : NULL;
+
+            /*
+             * Focus the window that was clicked -- unless handling the click
+             * moved focus somewhere else on purpose.
+             *
+             * A Control Panel tile opens a window and focuses it, and this
+             * used to take the focus straight back to the tile that opened
+             * it: the new window arrived in front, and the keyboard was still
+             * talking to the one behind it.
+             */
+            if (pressed && now == was) {
                 raise_app_order(shell, index);
                 set_focused_app(shell, index);
             }

@@ -34,7 +34,22 @@
 #include "recon_users.h"
 #include "recon_wallpaper.h"
 
-#define SIDEBAR_WIDTH 150
+/*
+ * --- The front page ---
+ *
+ * Icons with their names under them, the way the desktop does it, because
+ * that is what somebody arriving at a Control Panel is looking for: not a
+ * list of words down the side of something already open, but a set of things
+ * to go into. Clicking one opens it in a window of its own, so the wallpaper
+ * and the colours can be worked on at the same time.
+ */
+/* The Themes / Colours / Wallpapers bar. */
+#define SECTION_HEIGHT 26
+
+#define TILE_W 150
+#define TILE_H 96
+#define TILE_ICON 32
+#define TILE_GAP 6
 #define ROW_HEIGHT 26
 #define HEADER_HEIGHT 34
 #define PADDING 12
@@ -66,6 +81,11 @@
 #define HIT_PENDING_BASE (RECON_APPWIN_HIT_USER + 400)
 #define HIT_AVATAR_BASE (RECON_APPWIN_HIT_USER + 500)
 #define HIT_WALLPAPER_BASE (RECON_APPWIN_HIT_USER + 600)
+/* The icons on the front page. Separate from HIT_PAGE_BASE, which belonged to
+ * a sidebar a page window does not have. */
+#define HIT_TILE_BASE (RECON_APPWIN_HIT_USER + 700)
+/* The Themes / Colours / Wallpapers bar across the top of Appearance. */
+#define HIT_SECTION_BASE (RECON_APPWIN_HIT_USER + 800)
 
 /* What the buttons on each page do. */
 enum action {
@@ -115,7 +135,9 @@ enum action {
     ACTION_FIREWALL_RULE_UP,
     ACTION_FIREWALL_RULE_DOWN,
     /* Skins */
+    ACTION_USE_SKIN,
     ACTION_COPY_SKIN,
+    ACTION_BEGIN_NAMING_SKIN,
     ACTION_CONFIRM_COPY_SKIN,
     ACTION_EDIT_SKIN,
     ACTION_SKIN_DONE,
@@ -159,26 +181,31 @@ enum page {
 static const struct {
     const char *label;
     const char *icon;
-    bool starts_group;   /* Draw a dividing rule above this one. */
+    /*
+     * Three or four words under the name on the front page. Not the page's
+     * own heading repeated -- that says what the page is called, and this has
+     * to say what it is for, to somebody who does not already know.
+     */
+    const char *summary;
 } PAGES[PAGE_COUNT] = {
-    { "Accounts", RECON_ICON_APP, false },
-    { "Appearance", RECON_ICON_SYSTEM, false },
-    { "Reading", RECON_ICON_NOTEPAD, false },
+    { "Accounts", RECON_ICON_APP, "Who may sign in" },
+    { "Appearance", RECON_ICON_SYSTEM, "Skins and wallpaper" },
+    { "Reading", RECON_ICON_NOTEPAD, "Text, spacing, colour" },
 
-    { "Programs", RECON_ICON_APP, true },
-    { "Modules", RECON_ICON_SYSTEM, false },
+    { "Programs", RECON_ICON_APP, "What is installed" },
+    { "Modules", RECON_ICON_SYSTEM, "Code the system loads" },
 
-    { "Network", RECON_ICON_SYSTEM, true },
-    { "Firewall", RECON_ICON_SYSTEM, false },
-    { "Power", RECON_ICON_SHUTDOWN, false },
-    { "Storage", RECON_ICON_EXPLORER, false },
-    { "Update", RECON_ICON_SYSTEM, false },
+    { "Network", RECON_ICON_SYSTEM, "Connections and names" },
+    { "Firewall", RECON_ICON_SYSTEM, "What may be opened" },
+    { "Power", RECON_ICON_SHUTDOWN, "Left alone, and asleep" },
+    { "Storage", RECON_ICON_EXPLORER, "Where the room went" },
+    { "Update", RECON_ICON_SYSTEM, "What version this is" },
 
-    { "Troubleshoot", RECON_ICON_TERMINAL, true },
-    { "Recovery", RECON_ICON_SYSTEM, false },
-    { "Registry", RECON_ICON_NOTEPAD, false },
+    { "Troubleshoot", RECON_ICON_TERMINAL, "When something is wrong" },
+    { "Recovery", RECON_ICON_SYSTEM, "Getting back to working" },
+    { "Registry", RECON_ICON_NOTEPAD, "Every setting, raw" },
 
-    { "About", RECON_ICON_TASKMGR, true },
+    { "About", RECON_ICON_TASKMGR, "This machine" },
 };
 
 /*
@@ -292,18 +319,51 @@ static const struct {
 };
 
 /* What a pending question is about, since the answer arrives later. */
+/*
+ * --- Appearance, in three parts ---
+ *
+ * It used to be one page with the skins at the top, the buttons under them
+ * and the wallpapers under those. With ten skins installed there was room for
+ * two wallpapers out of five, and the other three were drawn off the bottom
+ * edge where nothing could see them.
+ *
+ * Splitting it fixes that by construction rather than by arithmetic: each
+ * section has the whole window, so neither list can be squeezed by the other
+ * growing.
+ */
+enum appearance_section {
+    APPEARANCE_THEMES,
+    APPEARANCE_COLOURS,
+    APPEARANCE_WALLPAPERS,
+    APPEARANCE_SECTIONS,
+};
+
+static const char *const APPEARANCE_SECTION_NAMES[APPEARANCE_SECTIONS] = {
+    "Themes", "Colours", "Wallpapers",
+};
+
 enum question {
     QUESTION_NONE,
     QUESTION_REMOVE_USER,
     QUESTION_REMOVE_PROGRAM,
     QUESTION_REMOVE_KEY,
     QUESTION_EMPTY_BIN,
+    QUESTION_CUSTOMIZE_SKIN,
 };
 
 struct control_panel {
     struct recon_server *server;
     struct recon_font *font;
     struct recon_appwin *win;
+
+    /*
+     * True for the front page, which shows the icons and no page at all.
+     *
+     * A field rather than another value in `enum page`, because a dozen
+     * tables here are indexed by page and a value that must never index them
+     * would be a trap laid for whoever writes the next one.
+     */
+    bool home;
 
     enum page page;
     int selected;
@@ -351,8 +411,18 @@ struct control_panel {
      * and bringing it in. Two states, because they are two acts -- naming a
      * copy, and then changing what the copy says.
      */
+    /* Which of Themes, Colours, Wallpapers is showing. */
+    enum appearance_section section;
+
     bool naming_skin;
     struct recon_edit skin_new_name;
+    /*
+     * And a line saying what it is for. The built-in skins each have one and
+     * it is the only thing distinguishing them in a list of names; a skin of
+     * your own with a blank one is the odd entry out.
+     */
+    struct recon_edit skin_new_desc;
+    bool skin_desc_focused;
 
     bool skin_editing;
     char skin_name[48];
@@ -411,6 +481,54 @@ struct control_panel {
     unsigned long long storage_total;
     bool storage_measured;
 };
+
+/*
+ * --- One window per item ---
+ *
+ * The front page opens each item in a window of its own. They are still the
+ * Control Panel -- one application, one entry in the menus -- and they are
+ * separate windows so that a wallpaper and a set of colours can be looked at
+ * side by side, which is the whole reason for asking.
+ *
+ * One window per page and no more. Two windows both editing the registry
+ * would be two views of one file, each unaware the other had written to it,
+ * and the second one to save would quietly undo the first. So a second click
+ * on a tile brings the existing window forward.
+ *
+ * The windows are not destroyed when closed, only hidden -- which is what
+ * closing means for every other window in ReconOS. They are built the first
+ * time they are asked for and last as long as the session.
+ */
+static struct control_panel *g_pages[PAGE_COUNT];
+
+/* How many have been built, so each new one is stepped clear of the last. */
+static int g_page_windows;
+
+/*
+ * The skin editor.
+ *
+ * Its own window rather than a state the Appearance window goes into, because
+ * changing a colour is something you do while looking at the result: the
+ * editor covering the very thing it is changing was the worst possible place
+ * to put it. Now the desktop, the Appearance window and the editor are all on
+ * screen at once, and a colour changes under all three.
+ *
+ * One editor, not one per skin. Two would be two writers to one file.
+ */
+static struct control_panel *g_skin_editor;
+
+static void open_skin_editor(struct control_panel *cp, const char *skin);
+
+/* Defined after the window description it builds windows from. */
+static void open_page_window(struct control_panel *cp, enum page page);
+
+static bool page_window_open(enum page page) {
+    if (page < 0 || page >= PAGE_COUNT) {
+        return false;
+    }
+    return g_pages[page] != NULL && g_pages[page]->win != NULL &&
+        recon_appwin_is_open(g_pages[page]->win);
+}
 
 static void set_status(struct control_panel *cp, bool warning, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
@@ -937,18 +1055,73 @@ static const char *help_topic_for(enum page page) {
     }
 }
 
-static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
-        int x, int y, int w, int h) {
-    if (cp->skin_editing) {
-        draw_skin_editor(cp, p, x, y, w, h);
-        return;
+/*
+ * The bar of sections across the top. Drawn like the tabs in Watchtower
+ * because they do the same job, and two things that behave alike should not
+ * look like two different inventions.
+ */
+static int draw_sections(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w) {
+    int ascent = recon_font_ascent(cp->font);
+    int bx = x;
+
+    for (int i = 0; i < APPEARANCE_SECTIONS; i++) {
+        const char *label = APPEARANCE_SECTION_NAMES[i];
+        int width = recon_text_width(cp->font, label) + 28;
+        if (bx + width > x + w) {
+            break;
+        }
+
+        bool on = (int)cp->section == i;
+        recon_fill_rect(p, bx, y, width, SECTION_HEIGHT,
+            on ? COLOR_PANEL : COLOR_BG);
+        recon_stroke_rect(p, bx, y, width, SECTION_HEIGHT, COLOR_SEPARATOR);
+
+        int tw = recon_text_width(cp->font, label);
+        recon_draw_text(p, cp->font, bx + (width - tw) / 2,
+            y + (SECTION_HEIGHT + ascent) / 2 - 2, width - 8, label,
+            on ? COLOR_TEXT : COLOR_DIM);
+
+        recon_hit_add(p, bx, y, width, SECTION_HEIGHT, HIT_SECTION_BASE + i);
+        bx += width;
     }
 
-    y = draw_heading(cp, p, x, y, w, "Appearance",
-        "Choose one to see it. Yours alone; other accounts keep theirs.");
+    /* A rule under the whole bar, so the chosen tab reads as joined to what
+     * is under it and the others as sitting behind. */
+    recon_fill_rect(p, x, y + SECTION_HEIGHT - 1, w, 1, COLOR_SEPARATOR);
+    return y + SECTION_HEIGHT + PADDING;
+}
+
+/* --- Themes --- */
+
+static void draw_appearance_themes(struct control_panel *cp,
+        struct recon_panel *p, int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+
+    /*
+     * The buttons are laid out from the bottom up, and the list takes what is
+     * left. The other way round -- list first, buttons after -- is what left
+     * the wallpapers with two rows out of five: whatever grows squeezes
+     * whatever is drawn after it, and a list grows.
+     */
+    int controls = BUTTON_HEIGHT + PADDING;
+    if (cp->naming_skin) {
+        controls = line + 2 + (FIELD_HEIGHT + 6) * 2 + BUTTON_HEIGHT + PADDING;
+    }
+
+    int list_h = bottom - y - controls;
+    if (list_h < ROW_HEIGHT) {
+        list_h = ROW_HEIGHT;
+    }
 
     int count = recon_theme_count();
-    int rows = (h - y - PADDING) / ROW_HEIGHT;
+    int rows = list_h / ROW_HEIGHT;
     if (rows > count) {
         rows = count;
     }
@@ -961,7 +1134,6 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
     const char *current = recon_theme_current();
-    int ascent = recon_font_ascent(cp->font);
 
     for (int i = 0; i < rows; i++) {
         struct recon_theme_info info;
@@ -970,63 +1142,72 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
         }
 
         int ry = y + i * ROW_HEIGHT;
-        bool selected = strcmp(info.name, current) == 0;
+        bool showing = strcmp(info.name, current) == 0;
+        bool picked = cp->selected == i;
 
         /*
          * Each row is drawn in the colours of the skin it offers, not in the
          * ones currently on screen. A list of skins painted entirely in the
-         * present skin shows nothing about any of the others -- and since
-         * several of these share a selection blue, half of them looked
-         * identical. Now the row is a sample of what choosing it does.
+         * present skin shows nothing about any of the others.
          */
         recon_color row_bg = recon_theme_color_of(i, RECON_THEME_SELECTION);
         recon_color row_ink = recon_theme_color_of(i, RECON_THEME_SELECTION_TEXT);
 
-        if (selected) {
+        if (picked) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, row_bg);
         } else {
-            /* Unselected rows keep the surface, with a swatch of the skin's
-             * own selection colour down the left edge: the whole list in nine
-             * different backgrounds would be a mess to read. */
             if (i % 2 == 1) {
                 recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
             }
+            /* A swatch of the skin's own selection colour down the left edge:
+             * the whole list in ten different backgrounds would be a mess to
+             * read. */
             recon_fill_rect(p, x, ry + 3, 5, ROW_HEIGHT - 6, row_bg);
         }
 
-        recon_color ink = selected ? row_ink : COLOR_TEXT;
-        recon_color faint = selected ? row_ink : COLOR_DIM;
+        recon_color ink = picked ? row_ink : COLOR_TEXT;
+        recon_color faint = picked ? row_ink : COLOR_DIM;
 
-        recon_draw_text(p, cp->font, x + 14, ry + (ROW_HEIGHT + ascent) / 2 - 2,
-            w / 2, info.name, ink);
-        recon_draw_text(p, cp->font, x + w / 2, ry + (ROW_HEIGHT + ascent) / 2 - 2,
-            w / 2 - 10, info.description, faint);
+        /*
+         * Which one is on, said in words. The row used to be highlighted for
+         * the skin in use and for the skin you had clicked, which are two
+         * different facts wearing one appearance -- so choosing a skin to
+         * copy looked like changing the skin.
+         */
+        char name[80];
+        if (showing) {
+            snprintf(name, sizeof(name), "%s  (in use)", info.name);
+        } else {
+            snprintf(name, sizeof(name), "%s", info.name);
+        }
+
+        recon_draw_text(p, cp->font, x + 14,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2, name, ink);
+        recon_draw_text(p, cp->font, x + w / 2,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 10, info.description,
+            faint);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
     }
 
     y += cp->list_h + PADDING;
 
-    int line = recon_font_line_height(cp->font);
-    if (line <= 0) {
-        line = 18;
-    }
+    struct recon_theme_info chosen;
+    bool have_chosen = recon_theme_at(cp->selected, &chosen);
 
     /*
      * --- Making one of your own ---
      *
-     * A built-in skin cannot be edited: it is compiled in, and a file cannot
-     * shadow one, so writing over its file would save the change, ignore it,
-     * and lose it on the next start. Copying first is not a formality, it is
-     * the only thing that works -- so the button says Copy for a built-in and
-     * Edit for a file, rather than offering both and refusing one.
+     * "Customize", not "Copy". Copying is what happens underneath, and it is
+     * not what anybody came here to do: they came to change how the system
+     * looks and are told, correctly, that changing a built-in is not
+     * possible. Naming the button after the thing they want rather than after
+     * the mechanism they have to use is the difference between a system that
+     * helps and one that explains itself.
      */
-    struct recon_theme_info chosen;
-    bool have_chosen = recon_theme_at(cp->selected, &chosen);
-
     if (cp->naming_skin) {
-        char asking[120];
-        snprintf(asking, sizeof(asking), "A name for the copy of %s:",
+        char asking[140];
+        snprintf(asking, sizeof(asking), "A name for your version of %s:",
             have_chosen ? chosen.name : recon_theme_current());
         recon_draw_text(p, cp->font, x, y + ascent, w, asking, COLOR_DIM);
         y += line + 2;
@@ -1034,59 +1215,244 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
         recon_edit_draw(p, cp->font, x, y, 240, FIELD_HEIGHT,
             &cp->skin_new_name);
         recon_hit_add(p, x, y, 240, FIELD_HEIGHT, HIT_FIELD_BASE + 5);
-        y += FIELD_HEIGHT + 8;
+        y += FIELD_HEIGHT + 6;
 
-        int nbx = draw_button(cp, p, x, y, "Make Copy",
+        recon_edit_draw(p, cp->font, x, y, w - 20, FIELD_HEIGHT,
+            &cp->skin_new_desc);
+        recon_hit_add(p, x, y, w - 20, FIELD_HEIGHT, HIT_FIELD_BASE + 7);
+        y += FIELD_HEIGHT + 6;
+
+        int nbx = draw_button(cp, p, x, y, "Create",
             HIT_ACTION_BASE + ACTION_CONFIRM_COPY_SKIN, true);
         draw_button(cp, p, nbx, y, "Cancel",
             HIT_ACTION_BASE + ACTION_SKIN_CANCEL, true);
         return;
     }
 
-    int sbx = draw_button(cp, p, x, y, "Copy This Skin",
+    int sbx = draw_button(cp, p, x, y, "Use This Skin",
+        HIT_ACTION_BASE + ACTION_USE_SKIN, have_chosen);
+    sbx = draw_button(cp, p, sbx, y, "Customize Skin",
         HIT_ACTION_BASE + ACTION_COPY_SKIN, have_chosen);
-    draw_button(cp, p, sbx, y, "Edit This Skin",
+    draw_button(cp, p, sbx, y, "Edit Colours",
         HIT_ACTION_BASE + ACTION_EDIT_SKIN,
         have_chosen && !chosen.built_in);
+}
 
-    y += BUTTON_HEIGHT + PADDING;
+/* --- Colours --- */
 
-    /*
-     * And the wallpaper, under the skins, because it is the other half of how
-     * the desktop looks. Choosing a skin puts its wallpaper on; choosing a
-     * wallpaper here keeps it until the skin changes again.
-     */
+/*
+ * The colours of whichever skin is on, and a way to change one.
+ *
+ * Changing a colour on a built-in skin cannot write to it -- a built-in is
+ * compiled in, and a file cannot shadow one -- so rather than refusing, this
+ * offers to make the change on a copy under a name of your own. That is what
+ * somebody wanted in the first place; being told "you cannot edit this" and
+ * left to work out that copying it first is the way round is the system
+ * making its own limitation into the reader's problem.
+ */
+static void draw_appearance_colours(struct control_panel *cp,
+        struct recon_panel *p, int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
 
-    recon_draw_text(p, cp->font, x, y + ascent, w, "Wallpaper", COLOR_TEXT);
-    y += line + 4;
+    const char *current = recon_theme_current();
+
+    /* Whether the skin on screen is one that can be written to. */
+    bool editable = false;
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+        if (recon_theme_at(i, &info) && strcmp(info.name, current) == 0) {
+            editable = !info.built_in;
+            break;
+        }
+    }
+
+    char heading[160];
+    if (editable) {
+        snprintf(heading, sizeof(heading),
+            "The colours of %s. Changing one writes to it.", current);
+    } else {
+        snprintf(heading, sizeof(heading),
+            "The colours of %s, which is built in. Changing one makes a copy "
+            "under your own name.", current);
+    }
+    recon_draw_text(p, cp->font, x, y + ascent, w, heading, COLOR_DIM);
+    y += line + PADDING;
+
+    int bottom = y + h - (line + PADDING);
+    int controls = BUTTON_HEIGHT + PADDING;
+    int list_h = bottom - y - controls;
+    if (list_h < ROW_HEIGHT) {
+        list_h = ROW_HEIGHT;
+    }
+
+    int rows = list_h / ROW_HEIGHT;
+    int roles = RECON_THEME_ROLE_COUNT;
+    if (rows > roles - cp->skin_scroll) {
+        rows = roles - cp->skin_scroll;
+    }
+    if (rows < 0) {
+        rows = 0;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    int swatch = ROW_HEIGHT - 8;
+
+    for (int i = 0; i < rows; i++) {
+        int role = cp->skin_scroll + i;
+        int ry = y + i * ROW_HEIGHT;
+        bool picked = cp->skin_row == role;
+
+        if (picked) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
+        } else if (i % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color c = recon_theme_color((enum recon_theme_role)role);
+        recon_fill_rect(p, x + 6, ry + 4, swatch, swatch, c);
+        recon_stroke_rect(p, x + 6, ry + 4, swatch, swatch, COLOR_SEPARATOR);
+
+        recon_color from, to;
+        if (recon_theme_gradient((enum recon_theme_role)role, &from, &to)) {
+            /* The far end of the ramp, in the same square, so a role that is
+             * two colours does not look like one. */
+            recon_fill_rect(p, x + 6 + swatch / 2, ry + 4,
+                swatch - swatch / 2, swatch, to);
+            recon_stroke_rect(p, x + 6, ry + 4, swatch, swatch,
+                COLOR_SEPARATOR);
+        }
+
+        char value[16];
+        colour_text(c, value, sizeof(value));
+
+        recon_color ink = picked ? COLOR_SELECTED_TEXT : COLOR_TEXT;
+        recon_color faint = picked ? COLOR_SELECTED_TEXT : COLOR_DIM;
+
+        int text_x = x + 6 + swatch + 10;
+        recon_draw_text(p, cp->font, text_x,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w - (text_x - x) - 110,
+            recon_theme_role_name((enum recon_theme_role)role), ink);
+        recon_draw_text(p, cp->font, x + w - 100,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, 90, value, faint);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+    }
+
+    y += cp->list_h + PADDING;
+
+    if (roles > rows) {
+        char more[64];
+        snprintf(more, sizeof(more), "%d of %d. Scroll for the rest.",
+            rows, roles);
+        recon_draw_text(p, cp->font, x + w - 200, y + ascent, 190, more,
+            COLOR_DIM);
+    }
+
+    draw_button(cp, p, x, y, editable ? "Change Colour" : "Customize Skin",
+        HIT_ACTION_BASE + (editable ? ACTION_EDIT_SKIN : ACTION_COPY_SKIN),
+        true);
+}
+
+/* --- Wallpapers --- */
+
+static void draw_appearance_wallpapers(struct control_panel *cp,
+        struct recon_panel *p, int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Choosing a skin puts its own wallpaper on. One chosen here stays "
+        "until the skin changes again.", COLOR_DIM);
+    y += line + PADDING;
 
     int papers = recon_wallpaper_count();
-    int room = (h - y - PADDING) / ROW_HEIGHT;
-    if (room < 0) {
-        room = 0;
+    int list_h = h - (line + PADDING);
+    int rows = list_h / ROW_HEIGHT;
+    if (rows > papers) {
+        rows = papers;
     }
+    if (rows < 0) {
+        rows = 0;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
     const char *showing = recon_wallpaper_current();
 
-    for (int i = 0; i < papers && i < room; i++) {
+    for (int i = 0; i < rows; i++) {
         char name[96];
         if (!recon_wallpaper_at(i, name, sizeof(name))) {
             break;
         }
 
         int ry = y + i * ROW_HEIGHT;
-        bool chosen = strcmp(name, showing) == 0;
+        bool on = strcmp(name, showing) == 0;
 
-        if (chosen) {
+        if (on) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
 
-        recon_draw_text(p, cp->font, x + 14, ry + (ROW_HEIGHT + ascent) / 2 - 2,
-            w - 28, name, chosen ? COLOR_SELECTED_TEXT : COLOR_TEXT);
+        recon_draw_text(p, cp->font, x + 14,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w - 28, name,
+            on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_WALLPAPER_BASE + i);
+    }
+
+    if (papers > rows) {
+        recon_draw_text(p, cp->font, x, y + cp->list_h + 4 + ascent, w,
+            "The window is too short to show them all.", COLOR_DIM);
+    }
+}
+
+static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    if (cp->skin_editing) {
+        draw_skin_editor(cp, p, x, y, w, h);
+        return;
+    }
+
+    int bottom = y + h;
+    y = draw_heading(cp, p, x, y, w, "Appearance",
+        "Yours alone; other accounts keep theirs.");
+    y = draw_sections(cp, p, x, y, w);
+
+    int room = bottom - y;
+    if (room < ROW_HEIGHT) {
+        room = ROW_HEIGHT;
+    }
+
+    switch (cp->section) {
+    case APPEARANCE_COLOURS:
+        draw_appearance_colours(cp, p, x, y, w, room);
+        break;
+    case APPEARANCE_WALLPAPERS:
+        draw_appearance_wallpapers(cp, p, x, y, w, room);
+        break;
+    case APPEARANCE_THEMES:
+    default:
+        draw_appearance_themes(cp, p, x, y, w, room);
+        break;
     }
 }
 
@@ -2289,6 +2655,110 @@ static void draw_system(struct control_panel *cp, struct recon_panel *p,
 
 /* --- The window --- */
 
+/*
+ * --- The front page ---
+ *
+ * How many tiles fit across, and where one of them sits. Worked out from the
+ * width the window happens to be rather than fixed, so widening the window
+ * puts more on a row instead of leaving a margin down the side.
+ */
+static int tiles_across(int w) {
+    int across = (w + TILE_GAP) / (TILE_W + TILE_GAP);
+    return across < 1 ? 1 : across;
+}
+
+static void tile_rect(int index, int x, int y, int w, int *tx, int *ty) {
+    int across = tiles_across(w);
+
+    /* Centred as a block. A grid pinned left with a wide gap down the right
+     * reads as a mistake rather than as a layout. */
+    int used = across * TILE_W + (across - 1) * TILE_GAP;
+    int left = x + (w - used) / 2;
+
+    *tx = left + (index % across) * (TILE_W + TILE_GAP);
+    *ty = y + (index / across) * (TILE_H + TILE_GAP);
+}
+
+static void draw_home(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+    y = draw_heading(cp, p, x, y, w, "Control Panel",
+        "Each one opens in a window of its own, so two can be open at once.");
+
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        int tx, ty;
+        tile_rect(i, x, y, w, &tx, &ty);
+        if (ty + TILE_H > bottom) {
+            break;
+        }
+
+        /*
+         * A tile whose window is already open says so, because clicking it
+         * again brings that window forward rather than making a second one,
+         * and a control that does something other than what it looks like it
+         * will do is worth a mark on screen.
+         */
+        if (page_window_open((enum page)i)) {
+            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_ROW_ALT);
+        }
+
+        int icon_x = tx + (TILE_W - TILE_ICON) / 2;
+        if (!recon_icon_draw(p, PAGES[i].icon, icon_x, ty + 10, TILE_ICON)) {
+            recon_fill_rect(p, icon_x, ty + 10, TILE_ICON, TILE_ICON,
+                COLOR_SELECTED);
+        }
+
+        int label_y = ty + 10 + TILE_ICON + 8 + ascent;
+        int label_w = recon_text_width(cp->font, PAGES[i].label);
+        int label_x = tx + (TILE_W - label_w) / 2;
+        if (label_x < tx + 4) {
+            label_x = tx + 4;
+        }
+        recon_draw_text(p, cp->font, label_x, label_y, TILE_W - 8,
+            PAGES[i].label, COLOR_TEXT);
+
+        if (PAGES[i].summary != NULL) {
+            int sw = recon_text_width(cp->font, PAGES[i].summary);
+            int sx = tx + (TILE_W - sw) / 2;
+            if (sx < tx + 4) {
+                sx = tx + 4;
+            }
+            recon_draw_text(p, cp->font, sx, label_y + line, TILE_W - 8,
+                PAGES[i].summary, COLOR_DIM);
+        }
+
+        recon_hit_add(p, tx, ty, TILE_W, TILE_H, HIT_TILE_BASE + i);
+    }
+}
+
+/* Whichever page this window is about. Shared by both kinds of window, so
+ * there is one switch rather than two that can fall out of step. */
+static void draw_page(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    switch (cp->page) {
+    case PAGE_ACCOUNTS:   draw_accounts(cp, p, x, y, w, h); break;
+    case PAGE_APPEARANCE: draw_appearance(cp, p, x, y, w, h); break;
+    case PAGE_READING:    draw_reading(cp, p, x, y, w, h); break;
+    case PAGE_PROGRAMS:   draw_programs(cp, p, x, y, w, h); break;
+    case PAGE_MODULES:    draw_modules(cp, p, x, y, w, h); break;
+    case PAGE_NETWORK:    draw_network(cp, p, x, y, w, h); break;
+    case PAGE_FIREWALL:   draw_firewall(cp, p, x, y, w, h); break;
+    case PAGE_STORAGE:    draw_storage(cp, p, x, y, w, h); break;
+    case PAGE_UPDATE:     draw_update(cp, p, x, y, w, h); break;
+    case PAGE_REGISTRY:   draw_registry(cp, p, x, y, w, h); break;
+    case PAGE_ABOUT:      draw_system(cp, p, x, y, w, h); break;
+    default:
+        draw_pending_page(cp, p, x, y, w, h, cp->page);
+        break;
+    }
+}
+
 static void panel_draw(void *user, struct recon_panel *p,
         int x, int y, int w, int h) {
     struct control_panel *cp = user;
@@ -2296,68 +2766,28 @@ static void panel_draw(void *user, struct recon_panel *p,
 
     recon_fill_rect(p, x, y, w, h, COLOR_BG);
 
-    /* The pages, down the left. */
-    recon_fill_rect(p, x, y, SIDEBAR_WIDTH, h, COLOR_BG);
-    recon_fill_rect(p, x + SIDEBAR_WIDTH - 1, y, 1, h, COLOR_SEPARATOR);
-
-    int py = y + PADDING;
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        bool selected = (i == (int)cp->page);
-
-        /* A rule between groups: thirteen pages in one undivided column is a
-         * list nobody can find anything in. */
-        if (PAGES[i].starts_group && i > 0) {
-            recon_fill_rect(p, x + 10, py + 4, SIDEBAR_WIDTH - 24, 1,
-                COLOR_SEPARATOR);
-            py += 9;
-        }
-
-        if (selected) {
-            recon_fill_rect(p, x + 4, py, SIDEBAR_WIDTH - 10, ROW_HEIGHT,
-                COLOR_SELECTED);
-        }
-
-        int label_x = x + 12;
-        if (recon_icon_draw(p, PAGES[i].icon, x + 8, py + 4, ROW_HEIGHT - 8)) {
-            label_x = x + 8 + (ROW_HEIGHT - 8) + 8;
-        }
-        recon_draw_text(p, cp->font, label_x, py + (ROW_HEIGHT + ascent) / 2 - 2,
-            SIDEBAR_WIDTH - (label_x - x) - 8, PAGES[i].label,
-            selected ? COLOR_SELECTED_TEXT : COLOR_TEXT);
-
-        recon_hit_add(p, x + 4, py, SIDEBAR_WIDTH - 10, ROW_HEIGHT,
-            HIT_PAGE_BASE + i);
-        py += ROW_HEIGHT + 2;
-    }
-
-    /* Whichever page is chosen, to the right of it. */
-    int cx = x + SIDEBAR_WIDTH + PADDING;
+    int cx = x + PADDING;
     int cy = y + PADDING;
-    int cw = w - SIDEBAR_WIDTH - PADDING * 2;
-    int chh = h - PADDING * 2 - STATUS_HEIGHT;
+    int cw = w - PADDING * 2;
+    int ch = h - PADDING * 2 - STATUS_HEIGHT;
 
-    switch (cp->page) {
-    case PAGE_ACCOUNTS:   draw_accounts(cp, p, cx, cy, cw, chh); break;
-    case PAGE_APPEARANCE: draw_appearance(cp, p, cx, cy, cw, chh); break;
-    case PAGE_READING:    draw_reading(cp, p, cx, cy, cw, chh); break;
-    case PAGE_PROGRAMS:   draw_programs(cp, p, cx, cy, cw, chh); break;
-    case PAGE_MODULES:    draw_modules(cp, p, cx, cy, cw, chh); break;
-    case PAGE_NETWORK:    draw_network(cp, p, cx, cy, cw, chh); break;
-    case PAGE_FIREWALL:   draw_firewall(cp, p, cx, cy, cw, chh); break;
-    case PAGE_STORAGE:    draw_storage(cp, p, cx, cy, cw, chh); break;
-    case PAGE_UPDATE:     draw_update(cp, p, cx, cy, cw, chh); break;
-    case PAGE_REGISTRY:   draw_registry(cp, p, cx, cy, cw, chh); break;
-    case PAGE_ABOUT:      draw_system(cp, p, cx, cy, cw, chh); break;
-    default:
-        draw_pending_page(cp, p, cx, cy, cw, chh, cp->page);
-        break;
+    /*
+     * A page window has no sidebar. It is a window about one thing, opened
+     * from the front page, and a list of the other thirteen down its left
+     * edge would be thirteen ways to turn it into a window you did not ask
+     * for.
+     */
+    if (cp->home) {
+        draw_home(cp, p, cx, cy, cw, ch);
+    } else {
+        draw_page(cp, p, cx, cy, cw, ch);
     }
 
     /* Status, along the bottom. */
     int sy = y + h - STATUS_HEIGHT;
     recon_fill_rect(p, x, sy, w, STATUS_HEIGHT, COLOR_BG);
-    recon_draw_text(p, cp->font, x + PADDING, sy + (STATUS_HEIGHT + ascent) / 2 - 2,
-        w - PADDING * 2, cp->status,
+    recon_draw_text(p, cp->font, x + PADDING,
+        sy + (STATUS_HEIGHT + ascent) / 2 - 2, w - PADDING * 2, cp->status,
         cp->status_is_warning ? COLOR_WARNING : COLOR_DIM);
 }
 
@@ -2394,6 +2824,9 @@ static void stop_editing(struct control_panel *cp) {
 }
 
 /* The answer to "remove this account?". */
+/* Defined below; the answer to a question is usually an action. */
+static void do_action(struct control_panel *cp, enum action action);
+
 static void answered(void *user, int choice) {
     struct control_panel *cp = user;
 
@@ -2411,6 +2844,12 @@ static void answered(void *user, int choice) {
     int button_count = (asked == QUESTION_REMOVE_USER) ? 3 : 2;
     if (choice < 0 || choice >= button_count - 1) {
         set_status(cp, false, "Nothing was changed.");
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_CUSTOMIZE_SKIN) {
+        do_action(cp, ACTION_BEGIN_NAMING_SKIN);
         recon_appwin_refresh(cp->win);
         return;
     }
@@ -2967,6 +3406,30 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     /* --- Skins --- */
 
+    case ACTION_USE_SKIN: {
+        struct recon_theme_info info;
+        if (!recon_theme_at(cp->selected, &info)) {
+            set_status(cp, true, "Choose a skin first.");
+            break;
+        }
+        if (!recon_theme_set(info.name)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "Skin is now '%s'.", info.name);
+        break;
+    }
+
+    /*
+     * --- Customize Skin ---
+     *
+     * Asked about before anything happens. Making a skin leaves a file behind
+     * with a name in it, and a button that quietly creates something on a
+     * single click is a button people learn to be careful of. One question,
+     * then a name and a line describing it, then the editor in its own
+     * window.
+     */
     case ACTION_COPY_SKIN: {
         struct recon_theme_info info;
         if (!recon_theme_at(cp->selected, &info)) {
@@ -2974,15 +3437,40 @@ static void do_action(struct control_panel *cp, enum action action) {
             break;
         }
 
-        /* Suggested rather than empty: a name is wanted, and "Beacon 2" is a
+        char message[240];
+        snprintf(message, sizeof(message),
+            "This makes your own copy of %s that you can change. %s stays as "
+            "it is.\n\nYou will be asked for a name for it.", info.name,
+            info.name);
+
+        static const char *const buttons[] = { "Customize", "Cancel" };
+        cp->question = QUESTION_CUSTOMIZE_SKIN;
+        recon_appwin_ask(cp->win, "Customize Skin", message, buttons, 2,
+            answered);
+        break;
+    }
+
+    case ACTION_BEGIN_NAMING_SKIN: {
+        struct recon_theme_info info;
+        if (!recon_theme_at(cp->selected, &info)) {
+            set_status(cp, true, "Choose a skin first.");
+            break;
+        }
+
+        /* Suggested rather than empty: a name is wanted, and "My Beacon" is a
          * better thing to correct than a blank field is to fill. */
-        char suggestion[sizeof(info.name) + 4];
-        snprintf(suggestion, sizeof(suggestion), "%s 2", info.name);
+        char suggestion[sizeof(info.name) + 8];
+        snprintf(suggestion, sizeof(suggestion), "My %s", info.name);
+
+        char about[96];
+        snprintf(about, sizeof(about), "%s, with my own colours", info.name);
 
         cp->naming_skin = true;
+        cp->skin_desc_focused = false;
+        cp->section = APPEARANCE_THEMES;
         recon_edit_begin(&cp->skin_new_name, suggestion, false);
-        set_status(cp, false, "A copy of %s, under a name of your own.",
-            info.name);
+        recon_edit_begin(&cp->skin_new_desc, about, false);
+        set_status(cp, false, "A name, and a line saying what it is.");
         break;
     }
 
@@ -3009,13 +3497,19 @@ static void do_action(struct control_panel *cp, enum action action) {
          * the bound is one the compiler can see too. */
         memcpy(name, cp->skin_new_name.text, length + 1);
 
-        if (!recon_theme_copy(info.name, name, NULL)) {
+        /* The line describing it, if one was typed. Empty is allowed and
+         * means the copy carries the original's own description. */
+        const char *about = cp->skin_new_desc.text[0] != '\0'
+            ? cp->skin_new_desc.text : NULL;
+
+        if (!recon_theme_copy(info.name, name, about)) {
             set_status(cp, true, "%s", recon_theme_last_error());
             break;
         }
 
         cp->naming_skin = false;
         recon_edit_end(&cp->skin_new_name);
+        recon_edit_end(&cp->skin_new_desc);
 
         /*
          * Put the copy on and open it for editing. Somebody who has just
@@ -3027,18 +3521,43 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_access_apply(cp->font);
         recon_shell_restyle(cp->server->shell);
 
-        snprintf(cp->skin_name, sizeof(cp->skin_name), "%s", name);
-        cp->skin_editing = true;
-        cp->skin_row = 0;
-        cp->skin_scroll = 0;
-        cp->skin_value_editing = false;
-
+        open_skin_editor(cp, name);
         set_status(cp, false, "'%s' is yours. Pick a colour to change it.",
             name);
         break;
     }
 
     case ACTION_EDIT_SKIN:
+        /*
+         * From the Appearance window this opens the editor; inside the editor
+         * the same action changes the chosen colour. One name for one idea --
+         * "edit this colour" -- reached from two places that mean it at two
+         * different scales.
+         */
+        if (!cp->skin_editing) {
+            struct recon_theme_info info;
+            if (!recon_theme_at(cp->selected, &info)) {
+                set_status(cp, true, "Choose a skin first.");
+                break;
+            }
+            if (info.built_in) {
+                set_status(cp, true, "%s is built in. Customize it first.",
+                    info.name);
+                break;
+            }
+
+            /* The colours shown are the ones on screen, so the skin being
+             * edited has to be the skin in use. */
+            if (strcmp(info.name, recon_theme_current()) != 0) {
+                recon_theme_set(info.name);
+                recon_access_apply(cp->font);
+                recon_shell_restyle(cp->server->shell);
+            }
+
+            open_skin_editor(cp, info.name);
+            break;
+        }
+
         if (cp->skin_editing) {
             /* Inside the editor this button changes the chosen colour. */
             cp->skin_value_editing = true;
@@ -3275,6 +3794,32 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_SECTION_BASE) {
+        int section = (int)(hit_id - HIT_SECTION_BASE);
+        if (section >= 0 && section < APPEARANCE_SECTIONS) {
+            cp->section = (enum appearance_section)section;
+            /* Leaving a section leaves whatever was half-done in it. Coming
+             * back to a half-typed colour three sections later is a
+             * surprise, not a convenience. */
+            cp->naming_skin = false;
+            cp->skin_value_editing = false;
+            cp->selected = 0;
+            clear_status(cp);
+        }
+        return true;
+    }
+
+    /*
+     * The tiles next, because this is a ladder of unbounded `>=` tests and
+     * the highest base has to be asked about before every lower one. Tile 1
+     * is 1701, which is also "row 601" and "wallpaper 1101" to any test that
+     * runs before this one -- the click went to the row branch and vanished.
+     */
+    if (hit_id >= HIT_TILE_BASE) {
+        open_page_window(cp, (enum page)(hit_id - HIT_TILE_BASE));
+        return true;
+    }
+
     if (hit_id >= HIT_WALLPAPER_BASE) {
         int index = (int)(hit_id - HIT_WALLPAPER_BASE);
         char name[96];
@@ -3327,6 +3872,15 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             cp->reg_key_focused = false;
             return true;
         }
+        /* Naming a skin: the name, then the line describing it. */
+        if (hit_id == HIT_FIELD_BASE + 5) {
+            cp->skin_desc_focused = false;
+            return true;
+        }
+        if (hit_id == HIT_FIELD_BASE + 7) {
+            cp->skin_desc_focused = true;
+            return true;
+        }
         cp->password_focused = (hit_id > HIT_FIELD_BASE);
         return true;
     }
@@ -3350,15 +3904,28 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             return true;
         }
 
+        if (cp->page == PAGE_APPEARANCE &&
+                cp->section == APPEARANCE_COLOURS) {
+            /* The rows are numbered from the first one showing, so a click on
+             * the third row means the third *visible* role. */
+            cp->skin_row = cp->skin_scroll + index;
+            cp->skin_value_editing = false;
+            return true;
+        }
+
         if (cp->page == PAGE_APPEARANCE) {
-            /* Choosing a skin shows it rather than describing it. */
+            /*
+             * Choosing a skin picks it out; Use This Skin puts it on.
+             *
+             * It used to apply on the click, which made choosing one to copy
+             * indistinguishable from changing the whole desktop -- somebody
+             * clicking down a list to read the descriptions restyled the
+             * system nine times on the way.
+             */
             struct recon_theme_info info;
-            if (recon_theme_at(index, &info) && recon_theme_set(info.name)) {
-                /* Remembered as well as applied, because the Copy and Edit
-                 * buttons under the list act on whichever is chosen. */
+            if (recon_theme_at(index, &info)) {
                 cp->selected = index;
-                recon_shell_restyle(cp->server->shell);
-                set_status(cp, false, "Skin is now '%s'.", info.name);
+                set_status(cp, false, "%s. %s", info.name, info.description);
             }
             return true;
         }
@@ -3371,45 +3938,6 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         }
 
         cp->selected = index;
-        return true;
-    }
-    if (hit_id >= HIT_PAGE_BASE) {
-        int page = (int)(hit_id - HIT_PAGE_BASE);
-        if (page >= 0 && page < PAGE_COUNT) {
-            /* Measured on the way in, so the page is never showing what the
-             * disk looked like some minutes ago. */
-            cp->storage_measured = false;
-
-            /* Leaving Appearance leaves the skin editor. Coming back to a
-             * page that was left mid-edit is how a half-typed colour becomes
-             * a surprise three pages later. */
-            cp->skin_editing = false;
-            cp->skin_value_editing = false;
-            cp->naming_skin = false;
-
-            cp->page = (enum page)page;
-            cp->selected = 0;
-
-            /*
-             * F1 follows the page rather than the window. Somebody on the
-             * Appearance page pressing it is asking about skins, not about
-             * the Control Panel.
-             */
-            recon_appwin_set_help_topic(cp->win, help_topic_for(cp->page));
-            stop_editing(cp);
-            clear_status(cp);
-
-            /* Leaving the registry page locks it again. Coming back to a page
-             * that was left unlocked is how an unlock becomes permanent by
-             * accident. */
-            cp->installing = false;
-
-            if (page != PAGE_REGISTRY && cp->registry_unlocked) {
-                cp->registry_unlocked = false;
-                recon_edit_begin(&cp->unlock, "", false);
-                cp->unlock.masked = true;
-            }
-        }
         return true;
     }
     return true;
@@ -3438,7 +3966,17 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     /* Naming a copy of a skin. */
     if (cp->naming_skin) {
-        switch (recon_edit_key(&cp->skin_new_name, sym, modifiers)) {
+        /* Tab moves between the name and the line describing it, which is
+         * what Tab does in every other pair of fields here. */
+        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+            cp->skin_desc_focused = !cp->skin_desc_focused;
+            return true;
+        }
+
+        struct recon_edit *field = cp->skin_desc_focused
+            ? &cp->skin_new_desc : &cp->skin_new_name;
+
+        switch (recon_edit_key(field, sym, modifiers)) {
         case RECON_EDIT_COMMIT:
             do_action(cp, ACTION_CONFIRM_COPY_SKIN);
             return true;
@@ -3657,6 +4195,180 @@ static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .destroy = panel_destroy,
 };
 
+/*
+ * Open the window for one item, building it the first time.
+ *
+ * Handed to the shell rather than merely shown: a window the shell has not
+ * been told about is drawn and reachable by nothing -- no taskbar button, no
+ * clicks, no Alt+Tab. It looks like a window and behaves like a picture.
+ */
+static void open_page_window(struct control_panel *cp, enum page page) {
+    if (page < 0 || page >= PAGE_COUNT) {
+        return;
+    }
+
+    bool built = false;
+
+    if (g_pages[page] == NULL) {
+        struct control_panel *sub = calloc(1, sizeof(*sub));
+        if (sub == NULL) {
+            set_status(cp, true, "Out of memory opening %s.",
+                PAGES[page].label);
+            return;
+        }
+
+        sub->server = cp->server;
+        sub->font = cp->font;
+        sub->home = false;
+        sub->page = page;
+
+        recon_edit_begin(&sub->unlock, "", false);
+        sub->unlock.masked = true;
+
+        sub->win = recon_appwin_create(cp->server, cp->font,
+            &CONTROL_PANEL_IMPL, sub);
+        if (sub->win == NULL) {
+            free(sub);
+            set_status(cp, true, "Could not open %s.", PAGES[page].label);
+            return;
+        }
+
+        /*
+         * Named for the item rather than "Control Panel". Fourteen taskbar
+         * buttons all saying Control Panel would be fourteen buttons nobody
+         * can tell apart, which is the same as no taskbar.
+         */
+        recon_appwin_set_title(sub->win, PAGES[page].label);
+        recon_appwin_set_help_topic(sub->win, help_topic_for(page));
+
+        g_pages[page] = sub;
+        built = true;
+    }
+
+    struct control_panel *sub = g_pages[page];
+
+    /* Measured on the way in, so the page never shows what the disk looked
+     * like some minutes ago. */
+    sub->storage_measured = false;
+
+    if (!recon_shell_adopt_window(cp->server->shell, sub->win)) {
+        set_status(cp, true, "No room for another window.");
+        return;
+    }
+
+    recon_appwin_show(sub->win);
+
+    /*
+     * Focused, not merely raised. Raising puts it in front; focusing is what
+     * decides where typing goes and which title bar is drawn as the active
+     * one. Only raising it handed somebody a window on top that their
+     * keyboard was not talking to.
+     */
+    recon_shell_focus_window(cp->server->shell, sub->win);
+
+    /*
+     * Placed after it is shown, not before.
+     *
+     * A window does not know how big the screen is until it has been handed
+     * to the shell, and showing it for the first time restores whatever
+     * position it had last time -- so a position set before either of those
+     * is a position that gets clamped to nothing and then overwritten. Every
+     * item opened exactly on top of the one before it, which is the opposite
+     * of the point of opening them separately.
+     *
+     * Only on the first open. After that the window remembers where it was
+     * put, and moving it back every time would undo that.
+     */
+    if (built) {
+        int px, py, pw, ph;
+        recon_appwin_geometry(cp->win, &px, &py, &pw, &ph);
+        (void)pw;
+        (void)ph;
+
+        /* Wrapping after six: a seventh step would be off the bottom of a
+         * small screen and would be clamped back onto the sixth anyway. */
+        int step = g_page_windows % 6;
+        recon_appwin_set_origin(sub->win, px + 30 + step * 28,
+            py + 30 + step * 26);
+        g_page_windows++;
+    }
+
+    set_status(cp, false, "%s is open.", PAGES[page].label);
+}
+
+/*
+ * Open the skin editor, on the skin named.
+ *
+ * Built once and reused. Reopening it on a different skin points it at the
+ * new one rather than making a second editor: two windows writing to two
+ * skin files from one list of forty-eight roles is a way to save a colour
+ * into the wrong file.
+ */
+static void open_skin_editor(struct control_panel *cp, const char *skin) {
+    if (cp == NULL || skin == NULL) {
+        return;
+    }
+
+    if (g_skin_editor == NULL) {
+        struct control_panel *ed = calloc(1, sizeof(*ed));
+        if (ed == NULL) {
+            set_status(cp, true, "Out of memory opening the editor.");
+            return;
+        }
+
+        ed->server = cp->server;
+        ed->font = cp->font;
+        ed->home = false;
+        ed->page = PAGE_APPEARANCE;
+        ed->skin_editing = true;
+
+        recon_edit_begin(&ed->unlock, "", false);
+        ed->unlock.masked = true;
+
+        ed->win = recon_appwin_create(cp->server, cp->font,
+            &CONTROL_PANEL_IMPL, ed);
+        if (ed->win == NULL) {
+            free(ed);
+            set_status(cp, true, "Could not open the editor.");
+            return;
+        }
+
+        recon_appwin_set_title(ed->win, "Skin Editor");
+        recon_appwin_set_help_topic(ed->win, "How it looks");
+        g_skin_editor = ed;
+    }
+
+    struct control_panel *ed = g_skin_editor;
+
+    /* Pointed at this skin, and back to the top of the list: the row that was
+     * chosen in another skin means a different colour in this one. */
+    snprintf(ed->skin_name, sizeof(ed->skin_name), "%s", skin);
+    ed->skin_editing = true;
+    ed->skin_row = 0;
+    ed->skin_scroll = 0;
+    ed->skin_value_editing = false;
+    clear_status(ed);
+
+    if (!recon_shell_adopt_window(cp->server->shell, ed->win)) {
+        set_status(cp, true, "No room for another window.");
+        return;
+    }
+
+    recon_appwin_show(ed->win);
+
+    /*
+     * Beside the window that opened it rather than on top of it. The whole
+     * reason the editor is its own window is so the skin list and the colours
+     * can be seen together.
+     */
+    int px, py, pw, ph;
+    recon_appwin_geometry(cp->win, &px, &py, &pw, &ph);
+    (void)ph;
+    recon_appwin_set_origin(ed->win, px + pw / 3, py + 40);
+
+    recon_shell_focus_window(cp->server->shell, ed->win);
+}
+
 struct recon_appwin *recon_control_panel_create(struct recon_server *server,
         struct recon_font *font) {
     struct control_panel *cp = calloc(1, sizeof(*cp));
@@ -3666,7 +4378,10 @@ struct recon_appwin *recon_control_panel_create(struct recon_server *server,
 
     cp->server = server;
     cp->font = font;
-    cp->page = PAGE_ACCOUNTS;
+
+    /* The window the menus open is the front page: the icons, and no page.
+     * Every other one is built by open_page_window when a tile is clicked. */
+    cp->home = true;
 
     recon_edit_begin(&cp->unlock, "", false);
     cp->unlock.masked = true;

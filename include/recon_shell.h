@@ -207,6 +207,62 @@ void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop);
 /* Take focus away from every built-in window, when it goes elsewhere. */
 void recon_shell_clear_app_focus(struct recon_shell *shell);
 
+/*
+ * The most windows ReconOS will draw its own frames around at once.
+ *
+ * Named rather than left as a number in one array declaration, because
+ * several places have to agree on it and the one that did not agree was the
+ * one that silently dropped a window.
+ *
+ * Thirty-two rather than eight: an application that opens a window per thing
+ * you are working on -- which the Control Panel now does -- reaches eight
+ * with the built-ins alone.
+ */
+#define RECON_SHELL_WINDOWS_MAX 32
+
+/*
+ * Take on a window an application built for itself.
+ *
+ * Most windows arrive through the application registry, one per installed
+ * application, and the shell finds them on its own. This is for the other
+ * kind: an application that opens a window per thing you are looking at, so
+ * that two of them can be open side by side. The Control Panel does this --
+ * a wallpaper and a set of colours are two windows, and both are still the
+ * Control Panel.
+ *
+ * Without this the window exists and is drawn and is reachable by nothing:
+ * the taskbar does not list it, clicks are not offered to it, and Alt+Tab
+ * steps straight past. Returns false only when there is no room left.
+ *
+ * Adopting the same window twice is harmless and does nothing.
+ */
+bool recon_shell_adopt_window(struct recon_shell *shell,
+    struct recon_appwin *win);
+
+/*
+ * Let go of one, without ending it.
+ *
+ * For an application closing a window it opened. The shell stops listing it
+ * and stops offering it input; whoever adopted it still owns it and must
+ * destroy it. Call this *before* destroying, or the shell is left holding a
+ * pointer to freed memory and the next taskbar draw reads it.
+ */
+void recon_shell_forget_window(struct recon_shell *shell,
+    struct recon_appwin *win);
+
+/*
+ * Bring one to the front and give it the keyboard.
+ *
+ * Raising a window and focusing one are two different things: raising puts it
+ * in front, focusing decides where typing goes and which title bar is drawn
+ * as the active one. An application that opens a window and only raises it
+ * hands somebody a window on top that their keyboard is not talking to.
+ *
+ * Does nothing for a window the shell has not adopted.
+ */
+void recon_shell_focus_window(struct recon_shell *shell,
+    struct recon_appwin *win);
+
 /* Offer a key to whichever built-in window has focus. */
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
     uint32_t modifiers);

@@ -232,8 +232,14 @@ static void draw_frame(struct recon_appwin *win) {
      * fine, which is why it survived; on Beacon it is white on a light blue
      * bar, and the window's own name had vanished from its title.
      */
+    /*
+     * The window's own name, not the application's -- the same one the
+     * taskbar draws. A window that answers to "Firewall" on the taskbar and
+     * "Control Panel" in its own title bar is two windows as far as anybody
+     * reading the screen is concerned.
+     */
     recon_draw_text(p, win->font, text_x, (TITLE_HEIGHT + ascent) / 2 - 1,
-        win->width - buttons_width - text_x, win->impl->title,
+        win->width - buttons_width - text_x, recon_appwin_title(win),
         win->focused ? COLOR_TITLE_TEXT : COLOR_TITLE_TEXT_INACTIVE);
     recon_hit_add(p, 0, 0, win->width - buttons_width + TITLE_INSET, TITLE_HEIGHT,
         HIT_TITLEBAR);
@@ -308,6 +314,32 @@ void recon_appwin_screen_changed(struct recon_appwin *win, int screen_w, int scr
     if (win->y < 0) {
         win->y = 0;
     }
+    apply_geometry(win);
+}
+
+void recon_appwin_set_origin(struct recon_appwin *win, int x, int y) {
+    if (win == NULL || win->maximized) {
+        return;
+    }
+
+    win->x = x;
+    win->y = y;
+
+    /* The same clamping a screen resize does, for the same reason: a window
+     * whose title bar is off the bottom cannot be dragged back. */
+    if (win->x + win->width > win->screen_w) {
+        win->x = win->screen_w - win->width;
+    }
+    if (win->y + win->height > win->screen_h - win->reserved_bottom) {
+        win->y = win->screen_h - win->reserved_bottom - win->height;
+    }
+    if (win->x < 0) {
+        win->x = 0;
+    }
+    if (win->y < 0) {
+        win->y = 0;
+    }
+
     apply_geometry(win);
 }
 
@@ -662,10 +694,21 @@ void *recon_appwin_user(struct recon_appwin *win) {
  */
 static void geometry_key(struct recon_appwin *win, const char *field,
         char *out, size_t size) {
+    /*
+     * The window's own title, not the application's.
+     *
+     * They are the same thing for an application with one window, which is
+     * most of them. They are not the same for one that opens a window per
+     * thing you are looking at: every Control Panel item is built from a
+     * single impl, so keying on that gave all fourteen one remembered
+     * position. They opened exactly on top of each other, and moving any one
+     * of them wrote that position for all the rest.
+     */
+    const char *from = win->title[0] != '\0' ? win->title : win->impl->title;
+
     char name[64];
     size_t used = 0;
-    for (const char *c = win->impl->title;
-            *c != '\0' && used < sizeof(name) - 1; c++) {
+    for (const char *c = from; *c != '\0' && used < sizeof(name) - 1; c++) {
         name[used++] = (*c == ' ') ? '-' : *c;
     }
     name[used] = '\0';

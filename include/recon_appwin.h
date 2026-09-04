@@ -257,6 +257,20 @@ void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size
 void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y, int *w, int *h);
 
 /*
+ * Put a window somewhere.
+ *
+ * For an application opening a second window: without this every one lands
+ * where the first did, exactly covering it, and a pair of windows meant to be
+ * read side by side is one window with another hidden underneath. The Control
+ * Panel steps each item it opens down and across from the last.
+ *
+ * Kept on screen and clear of the taskbar, so a step too far comes back
+ * rather than putting a title bar somewhere nobody can reach it. Does nothing
+ * to a maximized window, which has no position to have.
+ */
+void recon_appwin_set_origin(struct recon_appwin *win, int x, int y);
+
+/*
  * What this window costs in memory, in KB.
  *
  * Its pixels, which is nearly all of it: a window holds one buffer of its own
