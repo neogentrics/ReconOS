@@ -2500,6 +2500,10 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/help.png", RECON_ICON_HELP);
     install_asset_icon("icons/appearance.png", RECON_ICON_APPEARANCE);
     install_asset_icon("icons/programs.png", RECON_ICON_PROGRAMS);
+    install_asset_icon("icons/firewall.png", RECON_ICON_FIREWALL);
+    install_asset_icon("icons/network.png", RECON_ICON_NETWORK);
+    install_asset_icon("icons/modules.png", RECON_ICON_MODULES);
+    install_asset_icon("icons/recovery.png", RECON_ICON_RECOVERY);
 
     /*
      * The help and the change log, rewritten every start rather than only

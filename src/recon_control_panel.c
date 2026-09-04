@@ -86,6 +86,8 @@
 #define HIT_TILE_BASE (RECON_APPWIN_HIT_USER + 700)
 /* The Themes / Colours / Wallpapers bar across the top of Appearance. */
 #define HIT_SECTION_BASE (RECON_APPWIN_HIT_USER + 800)
+/* The firewall's preset rules, on the Add Rule page. */
+#define HIT_PRESET_BASE (RECON_APPWIN_HIT_USER + 900)
 
 /* What the buttons on each page do. */
 enum action {
@@ -132,6 +134,14 @@ enum action {
     ACTION_FIREWALL_DEFAULT_OUT,
     ACTION_FIREWALL_RULE_TOGGLE,
     ACTION_FIREWALL_RULE_ACTION,
+    ACTION_FIREWALL_ADD,
+    ACTION_FIREWALL_ADD_CUSTOM,
+    ACTION_FIREWALL_ADD_CANCEL,
+    ACTION_FIREWALL_CUSTOM_DIRECTION,
+    ACTION_FIREWALL_CUSTOM_PROTOCOL,
+    ACTION_FIREWALL_CUSTOM_ACTION,
+    ACTION_FIREWALL_CUSTOM_CONFIRM,
+    ACTION_FIREWALL_REMOVE,
     ACTION_FIREWALL_RULE_UP,
     ACTION_FIREWALL_RULE_DOWN,
     /* Skins */
@@ -193,16 +203,16 @@ static const struct {
     { "Reading", RECON_ICON_NOTEPAD, "Text, spacing, colour" },
 
     { "Programs", RECON_ICON_PROGRAMS, "What is installed" },
-    { "Modules", RECON_ICON_SYSTEM, "Code the system loads" },
+    { "Modules", RECON_ICON_MODULES, "Code the system loads" },
 
-    { "Network", RECON_ICON_SYSTEM, "What it talks to" },
-    { "Firewall", RECON_ICON_SYSTEM, "What may be opened" },
+    { "Network", RECON_ICON_NETWORK, "What it talks to" },
+    { "Firewall", RECON_ICON_FIREWALL, "What may be opened" },
     { "Power", RECON_ICON_SHUTDOWN, "Left alone, and asleep" },
     { "Storage", RECON_ICON_EXPLORER, "Where the room went" },
     { "Update", RECON_ICON_SYSTEM, "What version this is" },
 
     { "Troubleshoot", RECON_ICON_TERMINAL, "When it goes wrong" },
-    { "Recovery", RECON_ICON_SYSTEM, "Back to what worked" },
+    { "Recovery", RECON_ICON_RECOVERY, "Back to what worked" },
     { "Registry", RECON_ICON_NOTEPAD, "Every setting, raw" },
 
     { "About", RECON_ICON_TASKMGR, "This machine" },
@@ -342,6 +352,51 @@ static const char *const APPEARANCE_SECTION_NAMES[APPEARANCE_SECTIONS] = {
     "Themes", "Colours", "Wallpapers",
 };
 
+/*
+ * --- Firewall presets ---
+ *
+ * The rules people actually want, written out so nobody has to know that
+ * "secure shell" means tcp 22.
+ *
+ * Nothing here duplicates a default rule: the shipped set already covers web,
+ * name lookups, time, and the four incoming services worth naming. These are
+ * the next ones people reach for, and the last two are the blunt instruments
+ * -- there is no way to say "nothing in" from a page of individual rules
+ * unless somebody writes the rule that says it.
+ */
+struct fw_preset {
+    const char *name;
+    const char *detail;
+    enum recon_fw_direction direction;
+    enum recon_fw_protocol protocol;
+    int port_from;
+    int port_to;
+    enum recon_fw_action action;
+};
+
+static const struct fw_preset FW_PRESETS[] = {
+    { "Web server", "Somebody else's browser reaching a site on this machine",
+      RECON_FW_IN, RECON_FW_TCP, 80, 80, RECON_FW_ALLOW },
+    { "Web server (secure)", "The same, over TLS",
+      RECON_FW_IN, RECON_FW_TCP, 443, 443, RECON_FW_ALLOW },
+    { "Mail, sending", "Handing a message to a mail server",
+      RECON_FW_OUT, RECON_FW_TCP, 587, 587, RECON_FW_ALLOW },
+    { "Mail, collecting", "Reading a mailbox on another machine",
+      RECON_FW_OUT, RECON_FW_TCP, 993, 993, RECON_FW_ALLOW },
+    { "File transfer", "Old-style FTP, out",
+      RECON_FW_OUT, RECON_FW_TCP, 20, 21, RECON_FW_ALLOW },
+    { "Database", "PostgreSQL, in",
+      RECON_FW_IN, RECON_FW_TCP, 5432, 5432, RECON_FW_ALLOW },
+    { "Game server", "A run of the ports games usually take",
+      RECON_FW_IN, RECON_FW_UDP, 27015, 27030, RECON_FW_ALLOW },
+    { "Local network only", "Anything arriving from anywhere: refused",
+      RECON_FW_IN, RECON_FW_ANY_PROTOCOL, 0, 0, RECON_FW_BLOCK },
+    { "Nothing out", "Every outgoing connection: refused",
+      RECON_FW_OUT, RECON_FW_ANY_PROTOCOL, 0, 0, RECON_FW_BLOCK },
+};
+
+#define FW_PRESET_COUNT ((int)(sizeof(FW_PRESETS) / sizeof(FW_PRESETS[0])))
+
 enum question {
     QUESTION_NONE,
     QUESTION_REMOVE_USER,
@@ -413,6 +468,27 @@ struct control_panel {
      */
     /* Which of Themes, Colours, Wallpapers is showing. */
     enum appearance_section section;
+
+    /*
+     * --- Adding a firewall rule ---
+     *
+     * Two steps, because they are two decisions. First which kind of rule,
+     * from a list of the ones people want; then, only for somebody who wants
+     * something not on that list, the five fields a rule actually has.
+     *
+     * The list first rather than the fields first: most people adding a rule
+     * want one of nine things, and asking them for a protocol and a port
+     * range before finding that out is asking them to know the answer before
+     * they have been offered it.
+     */
+    bool fw_adding;
+    bool fw_custom;
+    struct recon_edit fw_name;
+    struct recon_edit fw_port;
+    bool fw_port_focused;
+    enum recon_fw_direction fw_direction;
+    enum recon_fw_protocol fw_protocol;
+    enum recon_fw_action fw_action;
 
     bool naming_skin;
     struct recon_edit skin_new_name;
@@ -1941,6 +2017,139 @@ static void draw_update(struct control_panel *cp, struct recon_panel *p,
  * match decides. The numbers are shown because the order is part of the rule
  * and a list whose order matters has to say what the order is.
  */
+/*
+ * --- Adding a rule ---
+ *
+ * Presets first. Most people adding a firewall rule want one of nine things,
+ * and asking for a protocol and a port range before finding that out is
+ * asking somebody to know the answer before they have been offered it.
+ *
+ * "Something else" is under them, for the rest.
+ */
+static void draw_firewall_add(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+
+    if (cp->fw_custom) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "A rule of your own. The first rule that matches decides, and a "
+            "new one goes at the end.", COLOR_DIM);
+        y += line + PADDING;
+
+        recon_draw_text(p, cp->font, x + 8, y + ascent, 120, "Name",
+            COLOR_TEXT);
+        recon_edit_draw(p, cp->font, x + 120, y, 240, FIELD_HEIGHT,
+            &cp->fw_name);
+        recon_hit_add(p, x + 120, y, 240, FIELD_HEIGHT, HIT_FIELD_BASE + 8);
+        y += FIELD_HEIGHT + 8;
+
+        recon_draw_text(p, cp->font, x + 8, y + ascent, 120,
+            "Port, or a range", COLOR_TEXT);
+        recon_edit_draw(p, cp->font, x + 120, y, 120, FIELD_HEIGHT,
+            &cp->fw_port);
+        recon_hit_add(p, x + 120, y, 120, FIELD_HEIGHT, HIT_FIELD_BASE + 9);
+        recon_draw_text(p, cp->font, x + 250, y + ascent, w - 258,
+            "80, or 27015-27030. Empty means every port.", COLOR_DIM);
+        y += FIELD_HEIGHT + PADDING;
+
+        /*
+         * Three buttons that cycle rather than three sets of radio buttons.
+         * Each has two or three values and the label says which one it is on,
+         * so the control and its readout are the same object.
+         */
+        char label[64];
+        snprintf(label, sizeof(label), "Direction: %s",
+            recon_fw_direction_name(cp->fw_direction));
+        int bx = draw_button(cp, p, x + 8, y, label,
+            HIT_ACTION_BASE + ACTION_FIREWALL_CUSTOM_DIRECTION, true);
+
+        snprintf(label, sizeof(label), "Protocol: %s",
+            recon_fw_protocol_name(cp->fw_protocol));
+        bx = draw_button(cp, p, bx, y, label,
+            HIT_ACTION_BASE + ACTION_FIREWALL_CUSTOM_PROTOCOL, true);
+
+        snprintf(label, sizeof(label), "Then: %s",
+            recon_fw_action_name(cp->fw_action));
+        draw_button(cp, p, bx, y, label,
+            HIT_ACTION_BASE + ACTION_FIREWALL_CUSTOM_ACTION, true);
+        y += BUTTON_HEIGHT + PADDING;
+
+        bx = draw_button(cp, p, x + 8, y, "Add Rule",
+            HIT_ACTION_BASE + ACTION_FIREWALL_CUSTOM_CONFIRM,
+            cp->fw_name.text[0] != '\0');
+        draw_button(cp, p, bx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_FIREWALL_ADD_CANCEL, true);
+        return;
+    }
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "Pick one, or make your own. A new rule goes at the end of the list "
+        "and starts switched on.", COLOR_DIM);
+    y += line + PADDING;
+
+    int rows = (bottom - y - BUTTON_HEIGHT - PADDING) / ROW_HEIGHT;
+    if (rows > FW_PRESET_COUNT) {
+        rows = FW_PRESET_COUNT;
+    }
+    if (rows < 0) {
+        rows = 0;
+    }
+
+    recon_fill_rect(p, x, y, w, rows * ROW_HEIGHT, COLOR_PANEL);
+
+    for (int i = 0; i < rows; i++) {
+        const struct fw_preset *preset = &FW_PRESETS[i];
+        int ry = y + i * ROW_HEIGHT;
+
+        if (i % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        /* What it does, in the same shorthand the rule list uses, so the row
+         * somebody picks here is recognisable in the list afterwards. */
+        char shape[64];
+        if (preset->port_from == 0 && preset->port_to == 0) {
+            snprintf(shape, sizeof(shape), "%s  %s  any port",
+                recon_fw_action_name(preset->action),
+                recon_fw_direction_name(preset->direction));
+        } else if (preset->port_from == preset->port_to) {
+            snprintf(shape, sizeof(shape), "%s  %s  %s %d",
+                recon_fw_action_name(preset->action),
+                recon_fw_direction_name(preset->direction),
+                recon_fw_protocol_name(preset->protocol), preset->port_from);
+        } else {
+            snprintf(shape, sizeof(shape), "%s  %s  %s %d-%d",
+                recon_fw_action_name(preset->action),
+                recon_fw_direction_name(preset->direction),
+                recon_fw_protocol_name(preset->protocol), preset->port_from,
+                preset->port_to);
+        }
+
+        int baseline = ry + (ROW_HEIGHT + ascent) / 2 - 2;
+        recon_draw_text(p, cp->font, x + 10, baseline, 170, preset->name,
+            COLOR_TEXT);
+        recon_draw_text(p, cp->font, x + 185, baseline, 190, shape,
+            preset->action == RECON_FW_BLOCK ? COLOR_WARNING : COLOR_DIM);
+        recon_draw_text(p, cp->font, x + 380, baseline, w - 388,
+            preset->detail, COLOR_DIM);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_PRESET_BASE + i);
+    }
+
+    y += rows * ROW_HEIGHT + PADDING;
+
+    int bx = draw_button(cp, p, x + 8, y, "Something Else",
+        HIT_ACTION_BASE + ACTION_FIREWALL_ADD_CUSTOM, true);
+    draw_button(cp, p, bx, y, "Cancel",
+        HIT_ACTION_BASE + ACTION_FIREWALL_ADD_CANCEL, true);
+}
+
 static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
@@ -1949,9 +2158,19 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         line = 18;
     }
 
+    int bottom = y + h;
+
     y = draw_heading(cp, p, x, y, w, "Firewall",
-        "What ReconOS may open, and what may be opened to it. Not the "
-        "host's firewall.");
+        cp->fw_adding
+            ? "A new rule. It goes at the end, and the first rule that "
+              "matches decides."
+            : "What ReconOS may open, and what may be opened to it. Not the "
+              "host's firewall.");
+
+    if (cp->fw_adding) {
+        draw_firewall_add(cp, p, x, y, w, bottom - y);
+        return;
+    }
 
     bool on = recon_firewall_is_on();
 
@@ -2110,16 +2329,17 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
 
     y += BUTTON_HEIGHT + PADDING;
 
-    /*
-     * What this page cannot do, said here rather than left to be discovered.
-     * Adding and removing a rule is the Terminal's for now: it needs five
-     * fields and a name, and a form for that is a bigger piece of work than
-     * the page it would sit on.
-     */
-    if (y + line <= h) {
+    bx = draw_button(cp, p, x, y, "Add Rule",
+        HIT_ACTION_BASE + ACTION_FIREWALL_ADD, on);
+    draw_button(cp, p, bx, y, "Remove Rule",
+        HIT_ACTION_BASE + ACTION_FIREWALL_REMOVE, have && on);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    if (y + line <= bottom) {
         recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
-            "Adding and removing rules is 'firewall' in the Terminal. The "
-            "rules are a text file in /System/Config.", COLOR_DIM);
+            "The rules are a text file in /System/Config, and 'firewall' in "
+            "the Terminal is the same list.", COLOR_DIM);
     }
 }
 
@@ -2905,6 +3125,38 @@ static void answered(void *user, int choice) {
             : "Removed '%s'. Its files are still there.", name);
     }
     recon_appwin_refresh(cp->win);
+}
+
+/*
+ * A preset, added as a rule.
+ *
+ * Switched on. The shipped incoming rules are written down and off because
+ * they are there to be found rather than to be in force; one somebody has
+ * just picked out of a list is the opposite -- they asked for it, and adding
+ * it switched off would be adding nothing.
+ */
+static void add_preset_rule(struct control_panel *cp,
+        const struct fw_preset *preset) {
+    struct recon_fw_rule rule;
+    memset(&rule, 0, sizeof(rule));
+
+    snprintf(rule.name, sizeof(rule.name), "%s", preset->name);
+    rule.direction = preset->direction;
+    rule.protocol = preset->protocol;
+    rule.port_from = preset->port_from;
+    rule.port_to = preset->port_to;
+    rule.action = preset->action;
+    rule.enabled = true;
+
+    if (!recon_firewall_add(&rule)) {
+        set_status(cp, true, "%s", recon_firewall_last_error());
+        return;
+    }
+
+    cp->fw_adding = false;
+    cp->selected = recon_firewall_count() - 1;
+    set_status(cp, false, "Added '%s'. It is at the end of the list.",
+        rule.name);
 }
 
 static void do_action(struct control_panel *cp, enum action action) {
@@ -3744,6 +3996,142 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
     }
 
+    case ACTION_FIREWALL_ADD:
+        cp->fw_adding = true;
+        cp->fw_custom = false;
+        clear_status(cp);
+        break;
+
+    case ACTION_FIREWALL_ADD_CUSTOM:
+        cp->fw_custom = true;
+        cp->fw_port_focused = false;
+        cp->fw_direction = RECON_FW_IN;
+        cp->fw_protocol = RECON_FW_TCP;
+        cp->fw_action = RECON_FW_ALLOW;
+        recon_edit_begin(&cp->fw_name, "", false);
+        recon_edit_begin(&cp->fw_port, "", false);
+        set_status(cp, false, "A name, a port, and what to do about it.");
+        break;
+
+    case ACTION_FIREWALL_ADD_CANCEL:
+        if (cp->fw_custom) {
+            /* Back to the presets rather than out of adding altogether:
+             * Cancel on the second step undoes the second step. */
+            cp->fw_custom = false;
+            recon_edit_end(&cp->fw_name);
+            recon_edit_end(&cp->fw_port);
+        } else {
+            cp->fw_adding = false;
+        }
+        clear_status(cp);
+        break;
+
+    /*
+     * Three values cycling rather than three sets of radio buttons. Each
+     * button says which value it is on, so the control and its readout are
+     * the same object and there is nothing to keep in step.
+     */
+    case ACTION_FIREWALL_CUSTOM_DIRECTION:
+        cp->fw_direction = cp->fw_direction == RECON_FW_IN
+            ? RECON_FW_OUT : RECON_FW_IN;
+        break;
+
+    case ACTION_FIREWALL_CUSTOM_PROTOCOL:
+        cp->fw_protocol = cp->fw_protocol == RECON_FW_TCP ? RECON_FW_UDP
+            : cp->fw_protocol == RECON_FW_UDP ? RECON_FW_ANY_PROTOCOL
+            : RECON_FW_TCP;
+        break;
+
+    case ACTION_FIREWALL_CUSTOM_ACTION:
+        cp->fw_action = cp->fw_action == RECON_FW_ALLOW
+            ? RECON_FW_BLOCK : RECON_FW_ALLOW;
+        break;
+
+    case ACTION_FIREWALL_CUSTOM_CONFIRM: {
+        struct recon_fw_rule rule;
+        memset(&rule, 0, sizeof(rule));
+
+        /*
+         * Refused rather than shortened. The name is what the log says when
+         * the rule fires, and half a name in a log is a rule nobody can find
+         * again.
+         */
+        size_t length = strlen(cp->fw_name.text);
+        if (length >= sizeof(rule.name)) {
+            set_status(cp, true, "That name is too long -- %zu characters at "
+                "most.", sizeof(rule.name) - 1);
+            break;
+        }
+        memcpy(rule.name, cp->fw_name.text, length + 1);
+
+        rule.direction = cp->fw_direction;
+        rule.protocol = cp->fw_protocol;
+        rule.action = cp->fw_action;
+        rule.enabled = true;
+
+        /*
+         * "80", or "27015-27030", or nothing for every port. Read here rather
+         * than in the firewall, because this is the only place a person types
+         * one: the file has two numbers in it and always did.
+         */
+        const char *text = cp->fw_port.text;
+        if (text[0] != '\0') {
+            int from = 0;
+            int to = 0;
+            int read = sscanf(text, "%d-%d", &from, &to);
+            if (read < 1 || from < 0 || from > 65535) {
+                set_status(cp, true,
+                    "A port is a number from 0 to 65535, or two with a dash "
+                    "between them.");
+                break;
+            }
+            if (read == 1) {
+                to = from;
+            }
+            if (to < from || to > 65535) {
+                set_status(cp, true, "The end of the range comes after the "
+                    "start of it.");
+                break;
+            }
+            rule.port_from = from;
+            rule.port_to = to;
+        }
+
+        if (!recon_firewall_add(&rule)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+
+        cp->fw_adding = false;
+        cp->fw_custom = false;
+        recon_edit_end(&cp->fw_name);
+        recon_edit_end(&cp->fw_port);
+        cp->selected = recon_firewall_count() - 1;
+        set_status(cp, false, "Added '%s'. It is at the end of the list.",
+            rule.name);
+        break;
+    }
+
+    case ACTION_FIREWALL_REMOVE: {
+        struct recon_fw_rule going;
+        if (!recon_firewall_at(cp->selected, &going)) {
+            set_status(cp, true, "Choose a rule first.");
+            break;
+        }
+        if (!recon_firewall_remove(cp->selected)) {
+            set_status(cp, true, "%s", recon_firewall_last_error());
+            break;
+        }
+        if (cp->selected >= recon_firewall_count()) {
+            cp->selected = recon_firewall_count() - 1;
+        }
+        if (cp->selected < 0) {
+            cp->selected = 0;
+        }
+        set_status(cp, false, "Removed '%s'.", going.name);
+        break;
+    }
+
     case ACTION_FIREWALL_RULE_UP:
     case ACTION_FIREWALL_RULE_DOWN: {
         int by = (action == ACTION_FIREWALL_RULE_UP) ? -1 : 1;
@@ -3794,6 +4182,14 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_PRESET_BASE) {
+        int index = (int)(hit_id - HIT_PRESET_BASE);
+        if (index >= 0 && index < FW_PRESET_COUNT) {
+            add_preset_rule(cp, &FW_PRESETS[index]);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_SECTION_BASE) {
         int section = (int)(hit_id - HIT_SECTION_BASE);
         if (section >= 0 && section < APPEARANCE_SECTIONS) {
@@ -3872,6 +4268,16 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             cp->reg_key_focused = false;
             return true;
         }
+        /* A custom firewall rule: its name, then its port. */
+        if (hit_id == HIT_FIELD_BASE + 8) {
+            cp->fw_port_focused = false;
+            return true;
+        }
+        if (hit_id == HIT_FIELD_BASE + 9) {
+            cp->fw_port_focused = true;
+            return true;
+        }
+
         /* Naming a skin: the name, then the line describing it. */
         if (hit_id == HIT_FIELD_BASE + 5) {
             cp->skin_desc_focused = false;
@@ -3982,6 +4388,30 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             return true;
         case RECON_EDIT_CANCEL:
             do_action(cp, ACTION_SKIN_CANCEL);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
+    /* A custom firewall rule: its name and its port. */
+    if (cp->fw_adding && cp->fw_custom) {
+        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+            cp->fw_port_focused = !cp->fw_port_focused;
+            return true;
+        }
+
+        struct recon_edit *field = cp->fw_port_focused
+            ? &cp->fw_port : &cp->fw_name;
+
+        switch (recon_edit_key(field, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_FIREWALL_CUSTOM_CONFIRM);
+            return true;
+        case RECON_EDIT_CANCEL:
+            do_action(cp, ACTION_FIREWALL_ADD_CANCEL);
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_IGNORED:
