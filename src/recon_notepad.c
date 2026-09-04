@@ -11,6 +11,7 @@
 
 #include <stdarg.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,6 +53,8 @@
 #define COLOR_WARNING THEME(WARNING)
 
 #define HIT_TEXT (RECON_APPWIN_HIT_USER + 2)
+/* The find bar's field. Its own id, in the gap before the menu entries. */
+#define HIT_FIND (RECON_APPWIN_HIT_USER + 3)
 /* The entries inside whichever menu is down. */
 #define HIT_MENU_BASE (RECON_APPWIN_HIT_USER + 10)
 /*
@@ -77,6 +80,8 @@ enum file_command {
     EDIT_COPY,
     EDIT_PASTE,
     EDIT_SELECT_ALL,
+    EDIT_FIND,
+    EDIT_FIND_NEXT,
 };
 
 struct menu_item {
@@ -102,7 +107,9 @@ static const struct menu_item EDIT_MENU[] = {
     { "Cut",        "Ctrl+X", EDIT_CUT,    false },
     { "Copy",       "Ctrl+C", EDIT_COPY,   false },
     { "Paste",      "Ctrl+V", EDIT_PASTE,  true  },
-    { "Select All", "Ctrl+A", EDIT_SELECT_ALL, false },
+    { "Select All", "Ctrl+A", EDIT_SELECT_ALL, true  },
+    { "Find...",    "Ctrl+F", EDIT_FIND,       false },
+    { "Find Next",  "F3",     EDIT_FIND_NEXT,  false },
 };
 
 /*
@@ -210,6 +217,10 @@ struct recon_notepad {
     /* True while undo or redo is changing the text, so the change they make
      * is not recorded as another thing to undo. */
     bool replaying;
+
+    /* The find bar, and what is in it. */
+    bool finding;
+    struct recon_edit find;
 
     struct recon_filedlg dialog;
     enum pending_action pending;
@@ -594,6 +605,139 @@ static void insert_run(struct recon_notepad *np, const char *text,
     np->modified = true;
 }
 
+/* --- Find --- */
+
+/*
+ * A bar above the status line, with the search in it.
+ *
+ * A bar rather than a dialog. A find dialog covers the thing being searched,
+ * so people drag it out of the way and then cannot see the field they are
+ * typing into -- and this window is small enough that a dialog would cover
+ * most of it.
+ */
+#define FIND_HEIGHT 24
+
+/*
+ * Case-insensitive, always.
+ *
+ * A case-sensitive search is a real thing to want, and it is a second control
+ * on a bar that does not have room for one yet. Insensitive is the better
+ * default of the two: somebody looking for "error" in a log wants ERROR as
+ * well, and somebody who did not want it can see at a glance that the match
+ * is the wrong case and press again.
+ */
+static bool matches_at(const struct recon_notepad *np, size_t at,
+        const char *needle, size_t needle_len) {
+    if (at + needle_len > np->length) {
+        return false;
+    }
+    for (size_t i = 0; i < needle_len; i++) {
+        if (tolower((unsigned char)np->text[at + i]) !=
+                tolower((unsigned char)needle[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * The next match after `from`, wrapping once.
+ *
+ * Wrapping matters more than it sounds: without it, a search that starts
+ * halfway down a file reports nothing for a word that is only above the
+ * cursor, which reads as "that word is not here" and is wrong.
+ */
+static bool find_from(struct recon_notepad *np, size_t from, size_t *found) {
+    const char *needle = np->find.text;
+    size_t needle_len = strlen(needle);
+
+    if (needle_len == 0 || needle_len > np->length) {
+        return false;
+    }
+
+    size_t limit = np->length - needle_len;
+    for (size_t at = from; at <= limit; at++) {
+        if (matches_at(np, at, needle, needle_len)) {
+            *found = at;
+            return true;
+        }
+    }
+    for (size_t at = 0; at < from && at <= limit; at++) {
+        if (matches_at(np, at, needle, needle_len)) {
+            *found = at;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void do_find_next(struct recon_notepad *np) {
+    if (np->find.text[0] == '\0') {
+        set_message(np, false, "Type something to look for.");
+        return;
+    }
+
+    /*
+     * Starting one past the selection, not at the cursor.
+     *
+     * A match is left selected, so searching again from the cursor would find
+     * the same one for ever. One past its start is what makes the second
+     * press mean "the next one".
+     */
+    size_t from = np->cursor;
+    if (has_selection(np)) {
+        size_t a, b;
+        selection_range(np, &a, &b);
+        from = a + 1;
+    }
+    if (from > np->length) {
+        from = 0;
+    }
+
+    size_t at;
+    if (!find_from(np, from, &at)) {
+        set_message(np, true, "'%s' is not in this document.", np->find.text);
+        return;
+    }
+
+    np->anchor = at;
+    np->cursor = at + strlen(np->find.text);
+    scroll_to_cursor(np);
+    np->message[0] = '\0';
+}
+
+static void open_find(struct recon_notepad *np) {
+    np->finding = true;
+
+    /*
+     * Whatever is selected becomes what to look for, if it is one line of it.
+     * Selecting a word and pressing Ctrl+F to search for that word is the
+     * gesture people already make.
+     */
+    char initial[128];
+    initial[0] = '\0';
+
+    if (has_selection(np)) {
+        size_t a, b;
+        selection_range(np, &a, &b);
+        size_t length = b - a;
+        if (length > 0 && length < sizeof(initial) &&
+                memchr(np->text + a, '\n', length) == NULL) {
+            memcpy(initial, np->text + a, length);
+            initial[length] = '\0';
+        }
+    }
+
+    recon_edit_begin(&np->find, initial, false);
+    np->message[0] = '\0';
+}
+
+static void close_find(struct recon_notepad *np) {
+    np->finding = false;
+    recon_edit_end(&np->find);
+    np->message[0] = '\0';
+}
+
 /* --- Cut, copy, paste --- */
 
 static void do_copy(struct recon_notepad *np, bool cut) {
@@ -924,6 +1068,14 @@ static void run_command(struct recon_notepad *np, enum file_command command) {
         do_select_all(np);
         break;
 
+    case EDIT_FIND:
+        open_find(np);
+        break;
+
+    case EDIT_FIND_NEXT:
+        do_find_next(np);
+        break;
+
     case FILE_CLOSE:
         /*
          * Unsaved work is not thrown away on a click. Closing asks where to
@@ -1062,7 +1214,11 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     draw_menubar(np, panel, x, y, w);
 
     int content_y = y + MENUBAR_HEIGHT;
-    int text_h = h - MENUBAR_HEIGHT - STATUS_HEIGHT;
+    /* The find bar takes its height from the text, not from the status line:
+     * the status line is where the result is reported, so covering it would
+     * hide the answer to the search. */
+    int find_h = np->finding ? FIND_HEIGHT : 0;
+    int text_h = h - MENUBAR_HEIGHT - STATUS_HEIGHT - find_h;
     np->visible_lines = text_h > 0 ? text_h / line_height : 0;
 
     recon_fill_rect(panel, x, content_y, w, text_h, COLOR_BG);
@@ -1164,6 +1320,27 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     /* Status line. It sits below the text area, which now starts under the
      * menu bar, so it is measured from there rather than from the window. */
     int sy = y + text_h;
+    if (np->finding) {
+        int fy = sy - FIND_HEIGHT;
+        recon_fill_rect(panel, x, fy, w, FIND_HEIGHT, COLOR_MENUBAR);
+        recon_fill_rect(panel, x, fy, w, 1, RECON_RGB(0x90, 0x90, 0x90));
+
+        const char *label = "Find:";
+        int label_w = recon_text_width(np->font, label);
+        recon_draw_text(panel, np->font, x + PADDING,
+            fy + (FIND_HEIGHT + ascent) / 2 - 2, label_w, label, COLOR_TEXT);
+
+        int field_x = x + PADDING + label_w + 8;
+        int field_w = w - (field_x - x) - PADDING;
+        if (field_w > 260) {
+            field_w = 260;
+        }
+        recon_edit_draw(panel, np->font, field_x, fy + 2, field_w,
+            FIND_HEIGHT - 4, &np->find);
+        recon_hit_add(panel, field_x, fy + 2, field_w, FIND_HEIGHT - 4,
+            HIT_FIND);
+    }
+
     recon_fill_rect(panel, x, sy, w, STATUS_HEIGHT, COLOR_STATUS_BG);
 
     char status[256];
@@ -1351,11 +1528,45 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case XKB_KEY_V:
             do_paste(np);
             return true;
+        case XKB_KEY_f:
+        case XKB_KEY_F:
+            open_find(np);
+            return true;
         default:
             break;
         }
         /* Other control combinations are not text and must not be typed into
          * the buffer. */
+        return true;
+    }
+
+    /*
+     * The find bar has the keyboard while it is up, so typing goes into it
+     * rather than into the document behind it. Enter looks for the next
+     * match and leaves the bar open, because searching again is the usual
+     * next thing; Escape puts it away.
+     */
+    if (np->finding) {
+        if (sym == XKB_KEY_F3) {
+            do_find_next(np);
+            return true;
+        }
+        switch (recon_edit_key(&np->find, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_find_next(np);
+            return true;
+        case RECON_EDIT_CANCEL:
+            close_find(np);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
+    if (sym == XKB_KEY_F3) {
+        do_find_next(np);
         return true;
     }
 
