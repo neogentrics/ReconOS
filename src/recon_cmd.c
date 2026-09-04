@@ -17,6 +17,7 @@
 #include "recon_appwin.h"
 #include "recon_capture.h"
 #include "recon_cmd.h"
+#include "recon_control.h"
 #include "recon_error.h"
 #include "recon_firewall.h"
 #include "recon_fs.h"
@@ -848,6 +849,112 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
 
     out(s, "'firewall %s' is not something it does. 'firewall help' lists "
         "what is.\n", what);
+}
+
+/*
+ * Remote access: which way in is open, and the key for the one that needs it.
+ *
+ * Both ways are always described, because only one of them is secure and a
+ * command that mentioned the network port alone would be recommending the
+ * worse option by omission.
+ */
+static void cmd_remote(struct recon_cmd_session *s, int argc, char **argv) {
+    struct recon_control *control = recon_server_control(s->server);
+
+    if (argc < 2) {
+        out(s, "\nRemote access\n\n");
+
+        out(s, "  Over SSH, always available and encrypted by SSH:\n");
+        out(s, "    ssh -L /tmp/recon-there.sock:%s user@this-machine\n",
+            recon_control_path(control));
+        out(s, "    nc -U /tmp/recon-there.sock\n\n");
+
+        bool listening = recon_control_network_listening(control);
+        int port = listening ? recon_control_network_port(control)
+            : recon_registry_get_int(RECON_REG_SYSTEM,
+                RECON_REMOTE_PORT_KEY, RECON_FW_RECON_PORT);
+
+        out(s, "  Over the network, on TCP %d: %s\n", port,
+            listening ? "listening" : "off");
+        out(s, "    A key: %s\n",
+            recon_control_has_key() ? "set" : "not set yet");
+
+        char why[96];
+        bool allowed = recon_firewall_allows(RECON_FW_IN, RECON_FW_TCP, port,
+            NULL, why, sizeof(why));
+        out(s, "    The firewall: %s (%s)\n\n",
+            allowed ? "allows it" : "blocks it", why);
+
+        if (!listening) {
+            out(s, "  'remote on' opens it. 'remote key' makes a key.\n");
+        } else {
+            out(s, "  'remote off' closes it.\n");
+        }
+
+        out(s, "\n  The key crosses the network in the clear -- there is no\n"
+               "  TLS yet. On a trusted network that is a reasonable trade;\n"
+               "  across anything else, use the SSH route above.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "key") == 0) {
+        char key[64];
+        if (!recon_control_new_key(key, sizeof(key))) {
+            out(s, "The key could not be made.\n");
+            return;
+        }
+
+        out(s, "\n  %s\n\n", key);
+        out(s, "  Written down now: this is the only time it is shown. Only\n"
+               "  its hash is kept, so it cannot be read back -- 'remote "
+               "key'\n  again makes a new one and forgets this.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "port") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: remote port <number>\n");
+            return;
+        }
+        int port = atoi(argv[2]);
+        if (port <= 0 || port > 65535) {
+            out(s, "'%s' is not a port.\n", argv[2]);
+            return;
+        }
+        recon_registry_set_int(RECON_REG_SYSTEM, RECON_REMOTE_PORT_KEY, port);
+        out(s, "The port is %d. 'remote on' to open it there.\n", port);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "on") == 0) {
+        int port = recon_registry_get_int(RECON_REG_SYSTEM,
+            RECON_REMOTE_PORT_KEY, RECON_FW_RECON_PORT);
+
+        char why[192];
+        if (!recon_control_listen_network(control, port, why, sizeof(why))) {
+            out(s, "Not opened: %s\n", why);
+            return;
+        }
+
+        recon_registry_set_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY, true);
+
+        out(s, "Listening on %d. A connection is asked for the key before\n"
+               "it can run anything.\n\n", port);
+        out(s, "  The key crosses the network in the clear. There is no TLS\n"
+               "  yet, so this is for a network you trust.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "off") == 0) {
+        recon_control_stop_network(control);
+        recon_registry_set_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY, false);
+        out(s, "The port is closed. Connections already open are left "
+               "alone.\n");
+        return;
+    }
+
+    out(s, "'remote %s' is not something it does. 'remote' says what is.\n",
+        argv[1]);
 }
 
 static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
@@ -2509,6 +2616,8 @@ static const struct command COMMANDS[] = {
     { "spawn",    "spawn [command]",       "Start a Wayland client (testing)",  cmd_spawn },
     { "errors",   "errors [<code>|log]",   "What an error code means",          cmd_errors },
     { "firewall", "firewall [...]",        "What may open and be opened",       cmd_firewall },
+    { "remote",   "remote [on|off|key|port <n>]",
+                                           "Reaching ReconOS from elsewhere",  cmd_remote },
     { "raise",    "raise <code>",          "Report an error on purpose (testing)",
                                                                                 cmd_raise },
     { "bin",      "bin [<name>|list|restore <name>|purge <name>|empty]",

@@ -1378,6 +1378,10 @@ void recon_restart(struct recon_server *server) {
     wl_display_terminate(server->wl_display);
 }
 
+struct recon_control *recon_server_control(struct recon_server *server) {
+    return (server != NULL) ? server->control : NULL;
+}
+
 /* Launch a client. A NULL command means the configured terminal. */
 void recon_spawn(struct recon_server *server, const char *command) {
     const char *term = command;
@@ -2495,7 +2499,28 @@ int main(int argc, char **argv) {
 
     /* Remote access to the command interpreter. Optional: without it ReconOS
      * runs, just without being reachable from outside. */
-    struct recon_control *control = recon_control_create(&server, NULL);
+    server.control = recon_control_create(&server, NULL);
+    struct recon_control *control = server.control;
+
+    /*
+     * And the network port, if it was on when the machine last shut down.
+     *
+     * Asked of the firewall on the way, so a rule turned off since then keeps
+     * it shut -- a setting that outranked the firewall would make the
+     * firewall a suggestion.
+     */
+    if (control != NULL &&
+            recon_registry_get_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY,
+                false)) {
+        int port = recon_registry_get_int(RECON_REG_SYSTEM,
+            RECON_REMOTE_PORT_KEY, RECON_FW_RECON_PORT);
+
+        char why[192];
+        if (!recon_control_listen_network(control, port, why, sizeof(why))) {
+            recon_error_raisef(&server, RECON_ERR_G004, "port %d: %s", port,
+                why);
+        }
+    }
 
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
     printf(RECONOS_NAME " v" RECONOS_VERSION " - Alt+Enter for a terminal, "

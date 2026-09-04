@@ -37,6 +37,7 @@ enum recon_cursor_mode {
     RECON_CURSOR_RESIZE,
 };
 
+struct recon_control;
 struct recon_toplevel;
 struct recon_decor;
 struct wlr_xdg_decoration_manager_v1;
@@ -77,6 +78,15 @@ struct recon_server {
 
     struct wlr_xdg_shell *xdg_shell;
     struct wl_listener new_xdg_surface;
+
+    /*
+     * How ReconOS is reached from outside: the Unix socket, and the network
+     * port when it is open.
+     *
+     * Held here because the `remote` command has to be able to open and close
+     * the port, and a command has the server and nothing else.
+     */
+    struct recon_control *control;
 
     /* Server-side decorations: ReconOS draws every client's title bar. */
     struct wlr_xdg_decoration_manager_v1 *xdg_decoration;
@@ -177,6 +187,9 @@ struct recon_toplevel {
 /* Implemented in main.c, used by the shell. */
 void recon_focus_toplevel(struct recon_toplevel *toplevel);
 void recon_spawn(struct recon_server *server, const char *command);
+
+/* The control layer, or NULL when ReconOS is running without one. */
+struct recon_control *recon_server_control(struct recon_server *server);
 void recon_quit(struct recon_server *server);
 
 /*
