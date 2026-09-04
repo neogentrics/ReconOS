@@ -47,15 +47,46 @@ AREA = {
     53: 'network', 54: 'docs',   55: 'programs', 56: 'help',
     57: 'build',  58: 'startup', 59: 'build',   60: 'settings',
     61: 'display', 62: 'help',   63: 'display', 64: 'input',
+    65: 'display', 66: 'display', 67: 'display', 68: 'input',
+    69: 'build',
 }
 
 
+def gh(args):
+    """
+    Run gh, decoding its output as UTF-8.
+
+    Explicitly, rather than letting `text=True` pick the platform default.
+    On Windows that default is the locale encoding, which turned every em
+    dash in an issue title into mush -- so no title ever matched the register
+    and a second run created a duplicate of all sixty-two. A hundred and
+    twenty-six of them, before it was noticed.
+    """
+    return subprocess.run(['gh'] + args, capture_output=True,
+                          encoding='utf-8', errors='replace')
+
+
 def existing_titles():
-    out = subprocess.run(
-        ['gh', 'issue', 'list', '--repo', REPO, '--state', 'all',
-         '--limit', '500', '--json', 'title,number,state'],
-        capture_output=True, text=True, check=True).stdout
-    return {row['title']: row for row in json.loads(out)}
+    out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
+              '--limit', '500', '--json', 'title,number,state'])
+    if out.returncode != 0:
+        raise SystemExit(f'gh issue list failed: {out.stderr.strip()}')
+
+    rows = json.loads(out.stdout)
+    titles = {row['title']: row for row in rows}
+
+    """
+    A sanity check, because the failure this guards against is silent: if the
+    listing came back mangled, every title looks new and the run makes a
+    second copy of the whole register.
+    """
+    if rows and not any(t.startswith('BG-') for t in titles):
+        raise SystemExit(
+            'The issue list came back with no BG- titles in it. Refusing to '
+            'run: this is what a decoding fault looks like, and continuing '
+            'would duplicate every entry.')
+
+    return titles
 
 
 def parse(path):
@@ -116,21 +147,17 @@ def main():
                   f"{','.join(labels)}  {e['title'][:60]}")
             continue
 
-        made = subprocess.run(
-            ['gh', 'issue', 'create', '--repo', REPO,
-             '--title', e['title'], '--body', body,
-             '--label', ','.join(labels)],
-            capture_output=True, text=True)
+        made = gh(['issue', 'create', '--repo', REPO,
+                   '--title', e['title'], '--body', body,
+                   '--label', ','.join(labels)])
         if made.returncode != 0:
             print(f"  {e['id']}  FAILED: {made.stderr.strip()[:120]}")
             continue
 
         url = made.stdout.strip().splitlines()[-1]
         if closed:
-            subprocess.run(
-                ['gh', 'issue', 'close', url, '--repo', REPO,
-                 '--reason', 'completed'],
-                capture_output=True, text=True)
+            gh(['issue', 'close', url, '--repo', REPO,
+                '--reason', 'completed'])
             print(f"  {e['id']}  closed   {url}")
         else:
             print(f"  {e['id']}  open     {url}")

@@ -68,19 +68,6 @@ Features, patches and releases are tracked the same way: see
 
 ## Open
 
-### BG-060 — The Appearance page lists two wallpapers out of five
-
-[#1](https://github.com/neogentrics/ReconOS/issues/1)
-
-- **Found in** v0.2.16. **Found by** Claude, reviewing the page after Joshua
-  asked for it to be split into sections.
-- **Was** a regression introduced when Copy and Edit buttons were added to
-  each row on the Appearance page. The rows got taller; the loop drawing them
-  did not learn that, so it ran out of panel after two and drew the rest off
-  the bottom edge where nothing can see them.
-- **Open.** Being fixed as part of splitting Appearance into Themes, Colours
-  and Wallpapers.
-
 ### BG-062 — What's New reopens after a shell restart
 
 [#2](https://github.com/neogentrics/ReconOS/issues/2)
@@ -124,6 +111,100 @@ Features, patches and releases are tracked the same way: see
   `selected_row`, which is what the Services tab reads. With nothing ever
   selected, Start, Stop and Restart could not act on anything.
 - **Fixed in** v0.2.17.
+
+### BG-060 — The Appearance page lists two wallpapers out of five
+
+[#1](https://github.com/neogentrics/ReconOS/issues/1)
+
+- **Found in** v0.2.16. **Found by** Claude, reviewing the page after Joshua
+  asked for it to be split into sections.
+- **Was** the skin list and the wallpaper list were on one page, and the skin
+  list took `(height - y) / ROW_HEIGHT` rows — everything left. With ten skins
+  installed there was room for two wallpapers out of five, and the other three
+  were drawn past the bottom edge where nothing could see them. Adding Copy
+  and Edit buttons between the two lists is what pushed it over.
+- **Fixed in** v0.2.17, `4f84508`. Appearance is three sections and each has
+  the whole window, so neither list can be squeezed by the other growing. Not
+  fixed by arithmetic: an arithmetic fix would hold until the next thing was
+  added between them.
+
+### BG-065 — The shell would hold only eight windows
+
+[#147](https://github.com/neogentrics/ReconOS/issues/147)
+
+- **Found in** v0.2.17. **Found by** reading `struct recon_shell` while making
+  the Control Panel open a window per item.
+- **Was** `struct recon_appwin *apps[8]`. Seven built-ins and a Calculator is
+  eight, so a ninth window was refused — and refused quietly, from the
+  application's point of view: the window was built and drawn and had no
+  taskbar button, took no clicks, and could not be reached by Alt+Tab. It
+  looked like a window and behaved like a picture.
+- **Fixed in** v0.2.17, `4f84508`. `RECON_SHELL_WINDOWS_MAX`, thirty-two,
+  named rather than written into one array declaration — the second array that
+  had to agree with it was the one that would have been missed.
+
+### BG-066 — Every window of one application shared a remembered position
+
+[#148](https://github.com/neogentrics/ReconOS/issues/148)
+
+- **Found in** v0.2.17. **Found by** three Control Panel windows opening at
+  exactly the same coordinates, three times running, after being told to
+  cascade.
+- **Was** `geometry_key` built the registry key from `win->impl->title` — the
+  *application's* name. That is the same as the window's name for an
+  application with one window, which until now was all of them. Every Control
+  Panel item is built from one impl, so all fourteen shared a single saved
+  position: they opened on top of each other, and moving any one of them wrote
+  that position for all the rest.
+- **Fixed in** v0.2.17, `4f84508`. The key comes from the window's own title,
+  falling back to the application's.
+
+### BG-067 — The title bar drew the application's name, not the window's
+
+[#149](https://github.com/neogentrics/ReconOS/issues/149)
+
+- **Found in** v0.2.17. **Found by** screen capture: the taskbar button said
+  Firewall and the window's own title bar said Control Panel.
+- **Was** `recon_appwin_set_title` existed and the taskbar read it. The title
+  bar read `win->impl->title` directly. A header comment three functions away
+  claimed both read through `recon_appwin_title` "so they stay in step", which
+  was true of one of them.
+- **Fixed in** v0.2.17, `4f84508`.
+
+### BG-068 — A click that opened a window left the keyboard behind
+
+[#150](https://github.com/neogentrics/ReconOS/issues/150)
+
+- **Found in** v0.2.17. **Found by** injected input: the new window arrived in
+  front and `state` still reported the old one focused.
+- **Was** after offering a click to an application, the shell raised and
+  focused the window that had been clicked — unconditionally, including when
+  handling the click had deliberately focused something else. A Control Panel
+  tile opened its window, focused it, and had focus taken straight back to the
+  tile that opened it.
+- **Fixed in** v0.2.17, `4f84508`. The shell notes which window held focus
+  before the click, by identity rather than by index, and only focuses the
+  clicked one if the application did not move focus itself.
+
+### BG-069 — The issue script made 126 duplicate issues
+
+[#211](https://github.com/neogentrics/ReconOS/issues/211)
+
+- **Found in** v0.2.17. **Found by** the run's own output: entries it had
+  created an hour earlier came back as new.
+- **Was** `scripts/make-issues.py` reads the existing issues with
+  `subprocess.run(..., text=True)`, which decodes using the platform's
+  preferred encoding. On Windows that is the locale codepage, not UTF-8, so
+  every em dash in a title — and every title in the register has one — came
+  back as mush. No title ever matched, every entry looked new, and the script
+  made a second copy of the whole register. Twice.
+- **Fixed in** v0.2.17. `encoding='utf-8'` on every `gh` call, and a check
+  that refuses to run at all if the listing comes back with no `BG-` titles in
+  it: the failure is silent by nature, so the guard has to be about the shape
+  of the answer rather than about the error that was never raised. The 126
+  duplicates were deleted, and every bug kept its original issue number.
+- **Note** the register exists to show that faults get found and fixed. A
+  tool that fills it with noise is worth an entry of its own.
 
 ### BG-001 — The screen stayed blank
 

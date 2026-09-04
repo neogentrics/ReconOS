@@ -707,7 +707,7 @@ docs/         roadmap, bug register, module interface, development notes
 
 ## Bugs
 
-Sixty-two faults have been found in ReconOS so far. Every one of them has a
+Sixty-nine faults have been found in ReconOS so far. Every one of them has a
 number -- `BG-001` upward, assigned in the order it was found and never
 reused -- and an entry in [docs/BUGS.md](docs/BUGS.md) saying what was
 actually wrong rather than what it looked like.
@@ -715,6 +715,7 @@ actually wrong rather than what it looked like.
 A commit says what changed. It does not say something was broken, that
 somebody hit it, or that it is fixed now. The register does, and the
 [issues](https://github.com/neogentrics/ReconOS/issues) carry the dates.
+`python scripts/make-issues.py` keeps the two in step.
 
 The interesting ones were found by using the system, not by reading it. Four
 faults in the Help window in one sitting; a Calculator that took the whole

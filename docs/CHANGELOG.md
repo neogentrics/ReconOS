@@ -11,6 +11,34 @@ way for the two to disagree.
 
 ## v0.2.17
 
+**The Control Panel is icons.** Fourteen of them, each with a line under it
+saying what it is for. Clicking one opens it in a window of its own, named for
+the item and stepped clear of whatever opened it -- so a wallpaper and a set of
+colours can be worked on side by side. They are still the Control Panel: one
+application, one entry in the menus, one window per item and no more.
+
+**Appearance is three sections**: Themes, Colours, Wallpapers. Each gets the
+whole window, which is why the wallpaper list shows all five now instead of the
+two it had room for when the skins were above it.
+
+Choosing a skin no longer puts it on. Clicking down the list to read the
+descriptions restyled the desktop nine times on the way; there is a **Use This
+Skin** button, and the row says which one is in use.
+
+**Customize Skin**, not Copy This Skin. It asks first, then takes a name and a
+line describing it, then opens the editor **as its own window** -- because
+changing a colour is something you do while looking at the result, and an
+editor covering the thing it is changing was the worst place to put it. The
+desktop, the skin list and the colours are all on screen at once, and a colour
+changes under all three.
+
+Four faults underneath, all of which had to be fixed for any of it to work:
+the shell held eight windows and quietly dropped the ninth; every window of an
+application shared one remembered position, so they opened on top of each
+other; the title bar drew the application's name while the taskbar drew the
+window's; and a click that opened a window left the keyboard talking to the
+window that was clicked. BG-065 to BG-068.
+
 **Services.** The parts of ReconOS that run are a list now, in Watchtower
 beside Applications and Processes: the desktop shell, the control socket,
 remote access, the firewall and networking. Each one says whether it is

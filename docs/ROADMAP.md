@@ -754,7 +754,99 @@ above the cursor, which reads as "not here" and is wrong. Searching starts one
 past the selection rather than at the cursor, because a match is left
 selected and searching from the cursor would find the same one for ever.
 
-## v0.2.17 — the parts that run, and one of them can be restarted
+## v0.2.17 — the parts that run, and a Control Panel you can open twice
+
+### The Control Panel is icons
+
+Joshua's read of it, while watching it run:
+
+> The control panel is supposed to have, like, icons and text. When you click
+> on them or double click on them, it should automatically open a separate
+> window. They're not separate apps. They're all still part of the control
+> panel. That way, if I wanna mess with a screensaver and a wallpaper at the
+> same time I can.
+
+So: fourteen tiles with a line under each saying what it is for, and clicking
+one opens it in a window of its own. The window is named for the item, gets
+the help topic for that item, and is stepped down and across from whatever
+opened it. One window per item and no more -- two windows both editing the
+registry would be two views of one file, each unaware the other had written to
+it, so a second click brings the existing window forward and the tile is
+shaded to say so.
+
+A page window has no sidebar. It is a window about one thing, and a list of
+the other thirteen down its left edge would be thirteen ways to turn it into a
+window you did not ask for.
+
+This subsumes the earlier request that each Power item open its own window
+with Save and Cancel: Power is one of the fourteen.
+
+### Four faults that had been waiting for a second window
+
+None of this worked until they were fixed, and none of them could have been
+found without something that opens more than one window per application.
+
+`struct recon_appwin *apps[8]` -- eight. Seven built-ins and a Calculator is
+eight, so the ninth window was refused and the refusal was invisible from the
+application's side: the window was built, was drawn, had no taskbar button,
+took no clicks and could not be reached by Alt+Tab. It looked like a window
+and behaved like a picture. That is BG-065.
+
+A window's remembered position was keyed on `impl->title` -- the
+*application's* name, which is the same as the window's for an application
+with one window, which until now was all of them. All fourteen Control Panel
+windows shared one saved position, opened exactly on top of each other, and
+moving any one of them wrote that position for all the rest. BG-066.
+
+The title bar drew `impl->title` while the taskbar drew the window's own name.
+A comment three functions away claimed both read through `recon_appwin_title`
+"so they stay in step", which was true of one of them. BG-067.
+
+And after offering a click to an application, the shell raised and focused the
+window that had been clicked -- unconditionally, including when handling the
+click had deliberately focused something else. A tile opened its window in
+front and had focus taken straight back. The shell notes which window held
+focus before the click now, by identity rather than by index, and only focuses
+the clicked one if the application did not move focus itself. BG-068.
+
+### Appearance, in three sections
+
+Themes, Colours, Wallpapers. Each gets the whole window, which fixes BG-060 --
+two wallpapers showing out of five -- by construction rather than by
+arithmetic. The skin list took `(height - y) / ROW_HEIGHT` rows, meaning
+everything left, and the wallpapers underneath got what was over. An
+arithmetic fix would have held until the next thing was added between them.
+
+Choosing a skin no longer applies it. It used to, which made choosing one to
+copy indistinguishable from changing the whole desktop: somebody clicking down
+the list to read the descriptions restyled the system nine times on the way.
+There is a **Use This Skin** button, and the row says `(in use)` rather than
+relying on a highlight that also meant "this is the one you clicked" -- two
+different facts were wearing one appearance.
+
+**Customize Skin**, not "Copy This Skin". Copying is what happens underneath
+and it is not what anybody came here to do; they came to change how the system
+looks and are told, correctly, that a built-in cannot be changed. Naming the
+button after the thing they want rather than after the mechanism they have to
+use is the difference between a system that helps and one that explains
+itself.
+
+It asks before it does anything, because making a skin leaves a file behind
+with a name in it. Then a name and a line describing it -- the built-ins each
+have a description and it is the only thing distinguishing them in a list of
+names, so a skin of your own with a blank one is the odd entry out.
+
+Then the editor, **in its own window**. Joshua asked for that directly, and he
+is right about why: changing a colour is something you do while looking at the
+result, and an editor covering the very thing it is changing was the worst
+possible place to put it. The desktop, the skin list and the colours are on
+screen together, and a colour changes under all three.
+
+The Colours section shows the colours of whichever skin is on. Changing one on
+a built-in cannot write to it, so rather than refusing, the button says
+Customize Skin and offers to make the change on a copy. Being told "you cannot
+edit this" and left to work out that copying it first is the way round is the
+system making its own limitation into the reader's problem.
 
 ### Services
 
