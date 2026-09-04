@@ -106,6 +106,10 @@ a program.
   by hand.
 - **Ctrl+F** finds text. It ignores capitals and carries on from the top when
   it reaches the end. **F3** finds the next one.
+- **Ctrl+H** is the same bar with a second field. **Replace** changes the
+  match in front of you and moves to the next; **All** changes every one from
+  the top of the document. Tab moves between the two fields, and either can
+  be undone.
 
 ## Accounts
 

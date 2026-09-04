@@ -34,6 +34,10 @@ there is one filesystem and no volume layer under it.
 something in, `bin restore <name>` takes it back out, and `bin empty` clears
 it. Before this the bin could only be reached from the File Explorer.
 
+**Notepad can replace.** Ctrl+H opens the find bar with a second field:
+*Replace* changes the match in front of you and moves to the next, *All*
+changes every one. Both undo.
+
 **Programs written for Wayland get a ReconOS title bar.** A program that
 was not written for ReconOS used to arrive with a frame of its own, in
 somebody else's colours, with its own buttons. Now it is framed the way every

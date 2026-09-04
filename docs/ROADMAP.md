@@ -1050,8 +1050,10 @@ half can be searched. Nor can an application ask for the page about itself:
 `recon_help_show_topic` exists and nothing calls it, so somebody stuck in the
 Control Panel has to find Help and then find the right page.
 
-**Notepad has no replace, and Calculator is still deliberately shallow.**
-Notepad can select, cut, copy, paste, undo and find.
+**Calculator is still deliberately shallow.** Notepad can select, cut, copy,
+paste, undo, find and replace; the Calculator does arithmetic and nothing
+else, which is the right amount for a thing that exists to prove an
+application can be a module.
 
 **A package cannot ship a setting or a data file.** The manifest understands
 a module and an icon; anything else a program wants to place has nowhere to

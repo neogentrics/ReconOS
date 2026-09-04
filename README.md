@@ -445,8 +445,9 @@ here means the thing a user touches works.
 - **Task Manager** — processes with CPU and memory, and a view of open windows
 - **Terminal** — the command interpreter, emulating nothing
 - **Notepad** — text editing, with a File menu and a file dialog for opening
-  and saving. Closing with unsaved work asks where to put it rather than
-  throwing it away
+  and saving. Undo by word, find and replace, and a clipboard shared with the
+  rest of the system. Closing with unsaved work asks where to put it rather
+  than throwing it away
 - **Calculator** — arithmetic by mouse or keyboard
 - **Help** — a page for each part of the system, and under a rule, the change
   log back to the first version
