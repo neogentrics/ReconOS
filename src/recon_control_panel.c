@@ -88,6 +88,8 @@
 #define HIT_SECTION_BASE (RECON_APPWIN_HIT_USER + 800)
 /* The firewall's preset rules, on the Add Rule page. */
 #define HIT_PRESET_BASE (RECON_APPWIN_HIT_USER + 900)
+/* The System / Programs / User selector on the Storage page. */
+#define HIT_VOLUME_BASE (RECON_APPWIN_HIT_USER + 950)
 
 /* What the buttons on each page do. */
 enum action {
@@ -261,11 +263,12 @@ static const struct pending_item POWER_ITEMS[] = {
  * volume layer under it.
  */
 static const struct pending_item STORAGE_ITEMS[] = {
-    { "Volumes", "The disks and partitions the system can see.",
-      "ReconOS has one filesystem, hosted in a folder. There is no volume "
-      "layer to list." },
-    { "Where new files go", "Which volume documents and programs are put on.",
-      "Needs more than one volume for the choice to mean anything." },
+    { "Disk Cleanup", "Choose what to free, by kind.",
+      "The parts are measured; what is missing is the list of what is safe "
+      "to remove, and the kept old versions a revert would go back to." },
+    { "Move a space to its own disk", "Put System, Programs or User elsewhere.",
+      "The three spaces are separate here and share one filesystem "
+      "underneath. Separating them for real needs partitions." },
     { "Format and partition", "Prepare a disk for use.",
       "Writing partition tables is a kernel's job, and would be dangerous "
       "from here." },
@@ -469,6 +472,9 @@ struct control_panel {
      */
     /* Which of Themes, Colours, Wallpapers is showing. */
     enum appearance_section section;
+
+    /* Which of System, Programs, User the Storage page is showing. */
+    enum recon_volume volume;
 
     /*
      * --- Adding a firewall rule ---
@@ -1804,56 +1810,75 @@ static void storage_add(struct control_panel *cp, const char *label,
  * because "the accounts take most of the room" is not an answer anybody can
  * act on and "this account takes most of the room" is.
  */
+/*
+ * What is in the space that is showing.
+ *
+ * One space at a time rather than everything at once, because "how much room
+ * have my files taken" and "how much room has the system taken" are different
+ * questions with different things to do about them, and a single list mixing
+ * them answers neither.
+ */
 static void measure_storage(struct control_panel *cp) {
     cp->storage_count = 0;
     cp->storage_total = 0;
 
-    storage_add(cp, "The system", RECON_DIR_SYSTEM,
-        "Settings, skins, icons, help and modules.");
-    storage_add(cp, "Programs", RECON_DIR_APPS,
-        "Installed applications and the packages they came in.");
+    if (cp->volume == RECON_VOLUME_SYSTEM) {
+        storage_add(cp, "Settings", RECON_DIR_SYSTEM_CONFIG,
+            "The registry, the firewall's rules, and what is installed.");
+        storage_add(cp, "Skins", RECON_DIR_SYSTEM_THEMES,
+            "Every skin, built in or added.");
+        storage_add(cp, "Icons", RECON_DIR_SYSTEM_ICONS,
+            "Drawn once at first start, and replaceable.");
+        storage_add(cp, "Modules", RECON_DIR_SYSTEM_MODULES,
+            "Code ReconOS loads: applications and subsystems.");
+        storage_add(cp, "Help", RECON_DIR_SYSTEM_APPS,
+            "The pages the Help application reads.");
+        storage_add(cp, "Logs", RECON_DIR_LOGS,
+            "What has happened on this machine, including error codes.");
+        storage_add(cp, "Temporary", RECON_DIR_TEMP,
+            "Scratch space. Screen captures land here when no path is given.");
+    } else if (cp->volume == RECON_VOLUME_PROGRAMS) {
+        storage_add(cp, "Installed", RECON_DIR_APPS,
+            "Applications, and the packages they arrived in.");
+    } else {
+        int count = recon_users_count();
+        for (int i = 0; i < count; i++) {
+            struct recon_user user;
+            if (!recon_users_at(i, &user)) {
+                continue;
+            }
 
-    int count = recon_users_count();
-    for (int i = 0; i < count; i++) {
-        struct recon_user user;
-        if (!recon_users_at(i, &user)) {
-            continue;
+            char path[RECON_PATH_MAX];
+            if (!recon_fs_join(path, sizeof(path), RECON_DIR_USERS,
+                    user.name)) {
+                continue;
+            }
+
+            char label[48];
+            snprintf(label, sizeof(label), "%s", user.name);
+            storage_add(cp, label, path, "This account's own files.");
         }
-
-        char path[RECON_PATH_MAX];
-        if (!recon_fs_join(path, sizeof(path), RECON_DIR_USERS, user.name)) {
-            continue;
-        }
-
-        char label[48];
-        snprintf(label, sizeof(label), "%s", user.name);
-        storage_add(cp, label, path, "This account's own files.");
     }
 
-    storage_add(cp, "Temporary", RECON_DIR_TEMP,
-        "Scratch space. Screen captures land here when no path is given.");
-
     /*
-     * The bin last, and only the signed-in account's -- it lives inside
-     * their folder, so its bytes are already counted in the row above. It is
+     * This space's bin, last, and not counted in the total -- it lives inside
+     * the space, so its bytes are already in one of the rows above. It is
      * listed anyway because it is the one row somebody can act on, and a
-     * cleanup page that does not mention the bin is not a cleanup page.
+     * storage page that does not mention the bin is not much of one.
      */
-    const char *trash = recon_fs_trash_dir();
-    if (trash != NULL) {
-        unsigned long long bytes = 0;
-        int files = 0;
-        if (recon_fs_usage(NULL, trash, &bytes, &files) &&
-                cp->storage_count < STORAGE_ROWS_MAX) {
-            int i = cp->storage_count++;
-            snprintf(cp->storage[i].label, sizeof(cp->storage[i].label),
-                "Recycle Bin");
-            snprintf(cp->storage[i].detail, sizeof(cp->storage[i].detail),
-                "Deleted files, still inside your folder and counted there.");
-            cp->storage[i].bytes = bytes;
-            cp->storage[i].files = files;
-            cp->storage[i].in_total = false;
-        }
+    unsigned long long bytes = 0;
+    int files = 0;
+    if (recon_fs_trash_usage_in(cp->volume, &bytes, &files) &&
+            cp->storage_count < STORAGE_ROWS_MAX) {
+        int i = cp->storage_count++;
+        snprintf(cp->storage[i].label, sizeof(cp->storage[i].label),
+            "Recycle Bin");
+        snprintf(cp->storage[i].detail, sizeof(cp->storage[i].detail),
+            "Deleted from %s. Counted in the rows above, not again here.",
+            recon_volume_name(cp->volume));
+        cp->storage[i].bytes = bytes;
+        cp->storage[i].files = files;
+        cp->storage[i].in_total = false;
     }
 
     cp->storage_measured = true;
@@ -1868,28 +1893,88 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
     }
 
     y = draw_heading(cp, p, x, y, w, "Storage",
-        "Where the room is going. How much is left is the host's to answer.");
+        "Three spaces, measured separately. How much is left is the host's "
+        "to answer.");
 
     if (!cp->storage_measured) {
         measure_storage(cp);
     }
 
-    char total[32];
-    storage_size(cp->storage_total, total, sizeof(total));
+    /*
+     * --- The three spaces ---
+     *
+     * A selector rather than one list of everything. System, Programs and
+     * User are separate spaces with separate bins, and a page that ran them
+     * together would be a page that cannot answer either of the two questions
+     * anybody brings to it.
+     *
+     * Each button carries that space's size, so choosing between them does
+     * not mean visiting all three to find out which one is the problem.
+     */
+    int vx = x;
+    for (int i = 0; i < RECON_VOLUME_COUNT; i++) {
+        unsigned long long used = 0;
+        recon_volume_usage((enum recon_volume)i, &used, NULL);
 
-    int counted = 0;
-    for (int i = 0; i < cp->storage_count; i++) {
-        if (cp->storage[i].in_total) {
-            counted++;
-        }
+        char size[32];
+        storage_size(used, size, sizeof(size));
+
+        char label[64];
+        snprintf(label, sizeof(label), "%s  %s",
+            recon_volume_name((enum recon_volume)i), size);
+
+        int width = recon_text_width(cp->font, label) + 26;
+        bool on = cp->volume == (enum recon_volume)i;
+
+        recon_fill_rect(p, vx, y, width, BUTTON_HEIGHT,
+            on ? COLOR_SELECTED : COLOR_BUTTON);
+        recon_draw_button_edge(p, vx, y, width, BUTTON_HEIGHT, on,
+            COLOR_SEPARATOR);
+
+        int tw = recon_text_width(cp->font, label);
+        recon_draw_text(p, cp->font, vx + (width - tw) / 2,
+            y + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8, label,
+            on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
+
+        recon_hit_add(p, vx, y, width, BUTTON_HEIGHT, HIT_VOLUME_BASE + i);
+        vx += width + 6;
     }
+    y += BUTTON_HEIGHT + 8;
 
-    char summary[96];
-    snprintf(summary, sizeof(summary), "%s in all, across %d folder%s.",
-        total, counted, counted == 1 ? "" : "s");
+    /*
+     * The space's own total, not the sum of the rows.
+     *
+     * They are not the same number and it would be dishonest to print the
+     * smaller one beside a button showing the larger: the rows are the parts
+     * worth naming, and a space holds things that are not worth a row. The
+     * button and this line now say the same thing because they ask the same
+     * question.
+     */
+    unsigned long long used = 0;
+    recon_volume_usage(cp->volume, &used, NULL);
+
+    char total[32];
+    storage_size(used, total, sizeof(total));
+
+    char summary[160];
+    snprintf(summary, sizeof(summary), "%s: %s. %s",
+        recon_volume_name(cp->volume), total,
+        recon_volume_detail(cp->volume));
     recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, summary,
         COLOR_TEXT);
     y += line + 8;
+
+    /* And say so where the rows visibly do not add up to it. */
+    if (cp->storage_total < used) {
+        char rest[64];
+        storage_size(used - cp->storage_total, rest, sizeof(rest));
+        char note[128];
+        snprintf(note, sizeof(note),
+            "The parts below account for all but %s of it.", rest);
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, note,
+            COLOR_DIM);
+        y += line + 4;
+    }
 
     /* The rows. */
     int bar_w = w / 4;
@@ -1949,8 +2034,12 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
 
     int bx = draw_button(cp, p, x, y, "Measure Again",
         HIT_ACTION_BASE + ACTION_MEASURE_STORAGE, true);
-    draw_button(cp, p, bx, y, "Empty Recycle Bin",
-        HIT_ACTION_BASE + ACTION_EMPTY_BIN, recon_fs_trash_count() > 0);
+    char empty_label[64];
+    snprintf(empty_label, sizeof(empty_label), "Empty %s Bin",
+        recon_volume_name(cp->volume));
+    draw_button(cp, p, bx, y, empty_label,
+        HIT_ACTION_BASE + ACTION_EMPTY_BIN,
+        recon_fs_trash_count_in(cp->volume) > 0);
     y += BUTTON_HEIGHT + PADDING * 2;
 
     /*
@@ -3185,13 +3274,14 @@ static void answered(void *user, int choice) {
     }
 
     if (asked == QUESTION_EMPTY_BIN) {
-        if (!recon_fs_trash_empty()) {
+        if (!recon_fs_trash_empty_in(cp->volume)) {
             set_status(cp, true, "%s", recon_fs_last_error());
         } else {
             /* The numbers on the page are now wrong by exactly what was just
              * thrown away, which is the whole reason somebody pressed it. */
             measure_storage(cp);
-            set_status(cp, false, "The bin is empty.");
+            set_status(cp, false, "The %s bin is empty.",
+                recon_volume_name(cp->volume));
         }
         recon_appwin_refresh(cp->win);
         return;
@@ -3743,9 +3833,16 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
 
     case ACTION_EMPTY_BIN: {
-        int count = recon_fs_trash_count();
+        /*
+         * The bin of the space that is showing. Each of the three has its
+         * own, and one button that emptied all of them would be a button
+         * nobody could press safely -- deleting a document and deleting a
+         * system file are not the same act.
+         */
+        int count = recon_fs_trash_count_in(cp->volume);
         if (count == 0) {
-            set_status(cp, false, "The bin is already empty.");
+            set_status(cp, false, "The %s bin is already empty.",
+                recon_volume_name(cp->volume));
             break;
         }
 
@@ -3756,8 +3853,9 @@ static void do_action(struct control_panel *cp, enum action action) {
          */
         char message[192];
         snprintf(message, sizeof(message),
-            "Permanently delete %d item%s in the Recycle Bin?\n"
-            "This cannot be undone.", count, count == 1 ? "" : "s");
+            "Permanently delete %d item%s in the %s recycle bin?\n"
+            "This cannot be undone.", count, count == 1 ? "" : "s",
+            recon_volume_name(cp->volume));
 
         static const char *const buttons[] = { "Empty", "Cancel" };
         cp->question = QUESTION_EMPTY_BIN;
@@ -4345,6 +4443,19 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_VOLUME_BASE) {
+        int volume = (int)(hit_id - HIT_VOLUME_BASE);
+        if (volume >= 0 && volume < RECON_VOLUME_COUNT) {
+            cp->volume = (enum recon_volume)volume;
+            /* Measured again: this is a different space, and the rows on
+             * screen are the last one's. */
+            cp->storage_measured = false;
+            cp->selected = 0;
+            clear_status(cp);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_PRESET_BASE) {
         int index = (int)(hit_id - HIT_PRESET_BASE);
         if (index >= 0 && index < FW_PRESET_COUNT) {

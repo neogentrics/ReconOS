@@ -255,6 +255,71 @@ bool recon_fs_is_structural(const char *cwd, const char *path);
  */
 
 /* The bin's own paths, for a listing. */
+/*
+ * --- The three spaces ---
+ *
+ * System, Programs and User are separate spaces rather than three folders in
+ * one, and the separation is real in the ways that matter without a kernel:
+ * each is measured on its own, each has its own recycle bin, and deleting
+ * something from one never puts bytes into another.
+ *
+ * Real partitions need a kernel and are Phase 2. What is here is the layer
+ * above them -- the one that decides what a space *means* -- and it is worth
+ * having first, because it is the part that has to be right before anything
+ * can be moved onto a partition later.
+ *
+ * Why bother, when it is one disk underneath: because "how much room have my
+ * files taken" and "how much room has the system taken" are different
+ * questions with different answers and different things to do about them, and
+ * a single number cannot answer either. And because emptying one bin should
+ * not be a decision about the other two. Deleting a document and deleting a
+ * system file are not the same act, and one bin holding both makes emptying
+ * it a decision nobody can make safely.
+ */
+enum recon_volume {
+    /* ReconOS itself: /System, and the logs inside it. */
+    RECON_VOLUME_SYSTEM,
+    /* What is installed: /Apps. */
+    RECON_VOLUME_PROGRAMS,
+    /* Accounts and their files: /Users. */
+    RECON_VOLUME_USER,
+    RECON_VOLUME_COUNT,
+};
+
+/*
+ * Which space a path belongs to.
+ *
+ * Everything belongs to one. /Temp is the system's -- it is scratch space
+ * ReconOS keeps, not a place anybody's documents live -- and a path outside
+ * the three named roots is the system's too, because the root of the tree is
+ * ReconOS's own.
+ */
+enum recon_volume recon_volume_of(const char *cwd, const char *path);
+
+/* What it is called, and where it starts. */
+const char *recon_volume_name(enum recon_volume volume);
+const char *recon_volume_root(enum recon_volume volume);
+/* One line saying what lives there. */
+const char *recon_volume_detail(enum recon_volume volume);
+
+/* How much is in it, walked rather than cached. */
+bool recon_volume_usage(enum recon_volume volume,
+    unsigned long long *bytes_out, int *files_out);
+
+/*
+ * The bin for one space.
+ *
+ * The no-argument versions below are the user's, because that is the bin the
+ * Recycle Bin on the desktop opens and every existing caller means. Deleting
+ * a file routes itself: recon_fs_trash puts it in the bin belonging to the
+ * space it came from, so nothing that deletes has to know about any of this.
+ */
+const char *recon_fs_trash_dir_in(enum recon_volume volume);
+int recon_fs_trash_count_in(enum recon_volume volume);
+bool recon_fs_trash_empty_in(enum recon_volume volume);
+bool recon_fs_trash_usage_in(enum recon_volume volume,
+    unsigned long long *bytes_out, int *files_out);
+
 const char *recon_fs_trash_dir(void);
 
 /* Move something to the bin. Refuses /System, and refuses the bin itself. */

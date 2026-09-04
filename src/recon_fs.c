@@ -1197,10 +1197,110 @@ bool recon_fs_unique_name(const char *cwd, const char *directory,
 
 static char g_trash_path[RECON_PATH_MAX];
 
-static const char *trash_subdir(const char *which) {
+/* --- The three spaces --- */
+
+static const struct {
+    const char *name;
+    const char *root;
+    const char *detail;
+} VOLUMES[RECON_VOLUME_COUNT] = {
+    [RECON_VOLUME_SYSTEM] = { "System", RECON_DIR_SYSTEM,
+        "ReconOS itself: skins, icons, settings, logs" },
+    [RECON_VOLUME_PROGRAMS] = { "Programs", RECON_DIR_APPS,
+        "What is installed, and what it was installed from" },
+    [RECON_VOLUME_USER] = { "User", RECON_DIR_USERS,
+        "Accounts, and everything in them" },
+};
+
+const char *recon_volume_name(enum recon_volume volume) {
+    if (volume < 0 || volume >= RECON_VOLUME_COUNT) {
+        return "";
+    }
+    return VOLUMES[volume].name;
+}
+
+const char *recon_volume_root(enum recon_volume volume) {
+    if (volume < 0 || volume >= RECON_VOLUME_COUNT) {
+        return "/";
+    }
+    return VOLUMES[volume].root;
+}
+
+const char *recon_volume_detail(enum recon_volume volume) {
+    if (volume < 0 || volume >= RECON_VOLUME_COUNT) {
+        return "";
+    }
+    return VOLUMES[volume].detail;
+}
+
+/* Whether `canonical` is at or under `root`. */
+static bool path_under(const char *canonical, const char *root) {
+    size_t len = strlen(root);
+    if (strncmp(canonical, root, len) != 0) {
+        return false;
+    }
+    return canonical[len] == '\0' || canonical[len] == '/';
+}
+
+enum recon_volume recon_volume_of(const char *cwd, const char *path) {
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        return RECON_VOLUME_SYSTEM;
+    }
+
+    if (path_under(canonical, RECON_DIR_USERS)) {
+        return RECON_VOLUME_USER;
+    }
+    if (path_under(canonical, RECON_DIR_APPS)) {
+        return RECON_VOLUME_PROGRAMS;
+    }
+
+    /*
+     * Everything else is the system's, including /Temp and the root itself.
+     * /Temp is scratch space ReconOS keeps rather than a place documents
+     * live, and a path that is in none of the three named roots is in the
+     * root of the tree, which is ReconOS's own.
+     */
+    return RECON_VOLUME_SYSTEM;
+}
+
+/*
+ * Where a space's bin lives.
+ *
+ * Inside the space it belongs to, which is the whole point: a bin outside its
+ * own space would mean deleting a system file put bytes into somebody's
+ * account, and the number on the Storage page would move for the wrong space.
+ *
+ * The user's is per account rather than per volume -- one bin for /Users
+ * would be one account's deleted documents sitting where another account can
+ * read them, which the account boundary exists to prevent.
+ */
+static const char *volume_trash_base(enum recon_volume volume) {
+    switch (volume) {
+    case RECON_VOLUME_SYSTEM:
+        return RECON_DIR_SYSTEM;
+    case RECON_VOLUME_PROGRAMS:
+        return RECON_DIR_APPS;
+    default:
+        return recon_fs_user_dir(NULL);
+    }
+}
+
+static const char *trash_subdir_in(enum recon_volume volume,
+        const char *which) {
     snprintf(g_trash_path, sizeof(g_trash_path), "%s/%s",
-        recon_fs_user_dir(NULL), which);
+        volume_trash_base(volume), which);
     return g_trash_path;
+}
+
+static const char *trash_subdir(const char *which) {
+    return trash_subdir_in(RECON_VOLUME_USER, which);
+}
+
+const char *recon_fs_trash_dir_in(enum recon_volume volume) {
+    return trash_subdir_in(volume, TRASH_FILES);
 }
 
 const char *recon_fs_trash_dir(void) {
@@ -1209,19 +1309,24 @@ const char *recon_fs_trash_dir(void) {
 
 /* Make sure the bin exists. Called before anything that writes to it, since
  * a user created before the bin existed has no .Trash. */
-static bool ensure_trash(void) {
+static bool ensure_trash_in(enum recon_volume volume) {
     char host[RECON_PATH_MAX * 2];
 
     const char *dirs[] = { TRASH_ROOT, TRASH_FILES, TRASH_INFO };
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
         char reconos[RECON_PATH_MAX];
-        snprintf(reconos, sizeof(reconos), "%s/%s", recon_fs_user_dir(NULL), dirs[i]);
+        snprintf(reconos, sizeof(reconos), "%s/%s",
+            volume_trash_base(volume), dirs[i]);
         snprintf(host, sizeof(host), "%s%s", g_host_root, reconos);
         if (!make_tree(host)) {
             return false;
         }
     }
     return true;
+}
+
+static bool ensure_trash(void) {
+    return ensure_trash_in(RECON_VOLUME_USER);
 }
 
 bool recon_fs_is_trash(const char *cwd, const char *path) {
@@ -1264,7 +1369,12 @@ bool recon_fs_trash(const char *cwd, const char *path) {
         set_error("'%s' not found", canonical);
         return false;
     }
-    if (!ensure_trash()) {
+    /*
+     * Into the bin belonging to the space it came from, so nothing that
+     * deletes has to know there is more than one bin.
+     */
+    enum recon_volume volume = recon_volume_of(cwd, canonical);
+    if (!ensure_trash_in(volume)) {
         return false;
     }
 
@@ -1283,7 +1393,8 @@ bool recon_fs_trash(const char *cwd, const char *path) {
     }
 
     char files_dir[RECON_PATH_MAX];
-    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+    snprintf(files_dir, sizeof(files_dir), "%s",
+        trash_subdir_in(volume, TRASH_FILES));
 
     char name[RECON_NAME_MAX];
     if (!recon_fs_unique_name("/", files_dir, base, extension, name, sizeof(name))) {
@@ -1308,7 +1419,8 @@ bool recon_fs_trash(const char *cwd, const char *path) {
      * can still be purged and can be put somewhere sensible by hand.
      */
     char info[RECON_PATH_MAX];
-    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+    snprintf(info, sizeof(info), "%s/%s.origin",
+        trash_subdir_in(volume, TRASH_INFO), name);
 
     char body[RECON_PATH_MAX + 2];
     int length = snprintf(body, sizeof(body), "%s\n", canonical);
@@ -1412,17 +1524,42 @@ bool recon_fs_trash_purge(const char *name) {
     return true;
 }
 
-int recon_fs_trash_count(void) {
+int recon_fs_trash_count_in(enum recon_volume volume) {
     char files_dir[RECON_PATH_MAX];
-    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+    snprintf(files_dir, sizeof(files_dir), "%s",
+        trash_subdir_in(volume, TRASH_FILES));
 
     int count = recon_fs_list("/", files_dir, NULL, 0);
     return count > 0 ? count : 0;
 }
 
-bool recon_fs_trash_empty(void) {
+int recon_fs_trash_count(void) {
+    return recon_fs_trash_count_in(RECON_VOLUME_USER);
+}
+
+bool recon_fs_trash_usage_in(enum recon_volume volume,
+        unsigned long long *bytes_out, int *files_out) {
     char files_dir[RECON_PATH_MAX];
-    snprintf(files_dir, sizeof(files_dir), "%s", trash_subdir(TRASH_FILES));
+    snprintf(files_dir, sizeof(files_dir), "%s",
+        trash_subdir_in(volume, TRASH_FILES));
+
+    if (!recon_fs_usage("/", files_dir, bytes_out, files_out)) {
+        /* No bin yet is an empty bin, not a failure: a space nobody has
+         * deleted anything from has no .Trash in it. */
+        if (bytes_out != NULL) {
+            *bytes_out = 0;
+        }
+        if (files_out != NULL) {
+            *files_out = 0;
+        }
+    }
+    return true;
+}
+
+bool recon_fs_trash_empty_in(enum recon_volume volume) {
+    char files_dir[RECON_PATH_MAX];
+    snprintf(files_dir, sizeof(files_dir), "%s",
+        trash_subdir_in(volume, TRASH_FILES));
 
     struct recon_dirent entries[512];
     int count = recon_fs_list("/", files_dir, entries, 512);
@@ -1433,13 +1570,57 @@ bool recon_fs_trash_empty(void) {
         count = 512;
     }
 
+    /*
+     * Purging is by name and looks in the user's bin, so a name from another
+     * space has to be removed where it actually is. Done here rather than by
+     * teaching recon_fs_trash_purge about volumes, because restoring from
+     * anywhere but the user's bin is not a thing the desktop offers yet and
+     * a half-general function is worse than a specific one.
+     */
     bool ok = true;
     for (int i = 0; i < count; i++) {
-        if (!recon_fs_trash_purge(entries[i].name)) {
+        if (volume == RECON_VOLUME_USER) {
+            if (!recon_fs_trash_purge(entries[i].name)) {
+                ok = false;
+            }
+            continue;
+        }
+
+        char victim[RECON_PATH_MAX];
+        if (!recon_fs_join(victim, sizeof(victim), files_dir,
+                entries[i].name)) {
+            ok = false;
+            continue;
+        }
+        if (!recon_fs_remove_tree("/", victim)) {
             ok = false;
         }
+
+        char info[RECON_PATH_MAX];
+        snprintf(info, sizeof(info), "%s/%s.origin",
+            trash_subdir_in(volume, TRASH_INFO), entries[i].name);
+        recon_fs_remove("/", info);
     }
     return ok;
+}
+
+bool recon_fs_trash_empty(void) {
+    return recon_fs_trash_empty_in(RECON_VOLUME_USER);
+}
+
+/*
+ * How much is in one space.
+ *
+ * Walked rather than cached. A number that is a minute old is a number
+ * somebody acts on and finds wrong, and this is only asked for when a page
+ * showing it is opened or refreshed.
+ */
+bool recon_volume_usage(enum recon_volume volume,
+        unsigned long long *bytes_out, int *files_out) {
+    if (volume < 0 || volume >= RECON_VOLUME_COUNT) {
+        return false;
+    }
+    return recon_fs_usage("/", VOLUMES[volume].root, bytes_out, files_out);
 }
 
 /* --- The file clipboard --- */
