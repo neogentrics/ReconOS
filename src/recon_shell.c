@@ -537,6 +537,20 @@ struct recon_shell {
 
     /* Built-in windows. Listed on the taskbar beside client windows, and
      * offered input in front-to-back order. */
+    /*
+     * --- Blanking ---
+     *
+     * A black panel over everything, and a timer that puts it there. The
+     * timer is armed from whatever the last input was and re-armed on the
+     * next one, so an idle desktop has exactly one timer running and a busy
+     * one has exactly one timer running.
+     */
+    struct recon_panel *blank;
+    struct wl_event_source *blank_timer;
+    bool blanked;
+    int blank_after_seconds;   /* 0 means never. */
+    bool lock_on_wake;
+
     struct recon_appwin *apps[RECON_SHELL_WINDOWS_MAX];
     int app_count;
     /*
@@ -2190,6 +2204,8 @@ static void layout(struct recon_shell *shell) {
  * shell adopts whatever windows already exist.
  */
 static int adopt_window(struct recon_shell *shell, struct recon_appwin *win);
+/* Defined with the rest of the blanking, below the shell it acts on. */
+static int blank_expired(void *data);
 
 struct recon_shell *recon_shell_create(struct recon_server *server,
         int screen_width, int screen_height) {
@@ -2223,6 +2239,20 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         recon_panel_set_enabled(shell->menu, false);
         draw_menu(shell);
     }
+
+    /*
+     * The blanking panel, and the timer that raises it. Above everything
+     * including the dim and the session screen -- it is the last thing drawn
+     * because it is meant to cover all of them.
+     */
+    shell->blank = recon_panel_create(&server->scene->tree,
+        screen_width, screen_height);
+    if (shell->blank != NULL) {
+        recon_panel_set_enabled(shell->blank, false);
+    }
+    shell->blank_timer = wl_event_loop_add_timer(
+        wl_display_get_event_loop(server->wl_display), blank_expired, shell);
+    recon_shell_blank_reload(shell);
 
     shell->dim = recon_panel_create(&server->scene->tree,
         screen_width, screen_height);
@@ -2385,6 +2415,122 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     return shell;
 }
 
+/* --- Blanking the screen --- */
+
+static int blank_expired(void *data) {
+    struct recon_shell *shell = data;
+    recon_shell_blank(shell);
+    return 0;
+}
+
+/*
+ * Start the countdown again, or stop it.
+ *
+ * One timer, re-armed. Arming a second would be two things racing to blank a
+ * screen that only needs blanking once, and the loser would blank it again a
+ * moment after somebody woke it.
+ */
+static void blank_rearm(struct recon_shell *shell) {
+    if (shell == NULL || shell->blank_timer == NULL) {
+        return;
+    }
+
+    if (shell->blank_after_seconds <= 0 || shell->blanked) {
+        wl_event_source_timer_update(shell->blank_timer, 0);
+        return;
+    }
+
+    wl_event_source_timer_update(shell->blank_timer,
+        shell->blank_after_seconds * 1000);
+}
+
+void recon_shell_blank_reload(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+
+    /*
+     * Minutes in the setting, seconds here. Minutes because that is the unit
+     * somebody thinks in for this -- nobody wants their screen to blank after
+     * three hundred seconds -- and seconds because that is what a timer takes.
+     */
+    int minutes = recon_registry_get_int(RECON_REG_USER,
+        RECON_BLANK_AFTER_KEY, 0);
+    if (minutes < 0) {
+        minutes = 0;
+    }
+    shell->blank_after_seconds = minutes * 60;
+    shell->lock_on_wake = recon_registry_get_bool(RECON_REG_USER,
+        RECON_BLANK_LOCK_KEY, false);
+
+    blank_rearm(shell);
+}
+
+void recon_shell_blank(struct recon_shell *shell) {
+    if (shell == NULL || shell->blank == NULL || shell->blanked) {
+        return;
+    }
+
+    /*
+     * Not while nobody is signed in. The session screen is already the thing
+     * to show somebody who is not here, and blanking it would replace a
+     * screen asking who you are with a screen saying nothing.
+     */
+    if (recon_users_current() == NULL) {
+        return;
+    }
+
+    recon_fill(shell->blank, 0xFF000000);
+    recon_panel_commit(shell->blank);
+    recon_panel_set_enabled(shell->blank, true);
+    recon_panel_raise_to_top(shell->blank);
+
+    shell->blanked = true;
+    blank_rearm(shell);
+}
+
+bool recon_shell_is_blanked(struct recon_shell *shell) {
+    return shell != NULL && shell->blanked;
+}
+
+bool recon_shell_note_input(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return false;
+    }
+
+    if (!shell->blanked) {
+        blank_rearm(shell);
+        return false;
+    }
+
+    /* Waking. */
+    if (shell->blank != NULL) {
+        recon_panel_set_enabled(shell->blank, false);
+    }
+    shell->blanked = false;
+
+    /*
+     * Locked on the way back, if that is what was asked for. After the panel
+     * comes down rather than before: the lock screen has to be the thing on
+     * top, and raising it under a black rectangle would hide it.
+     */
+    if (shell->lock_on_wake && recon_users_current() != NULL) {
+        recon_shell_lock(shell);
+    }
+
+    blank_rearm(shell);
+
+    /*
+     * The input that woke it is spent on waking.
+     *
+     * A keystroke that both wakes the screen and types a character means
+     * somebody comes back to their desk, presses a key to see what is
+     * happening, and finds they have typed into a document they cannot see
+     * yet. The first one wakes; the second one does something.
+     */
+    return true;
+}
+
 void recon_shell_destroy(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
@@ -2399,6 +2545,10 @@ void recon_shell_destroy(struct recon_shell *shell) {
      * destroying it -- which is what makes a shell restart survivable for
      * whatever somebody was in the middle of typing.
      */
+    if (shell->blank_timer != NULL) {
+        wl_event_source_remove(shell->blank_timer);
+    }
+
     recon_desktop_destroy(shell->desktop);
     recon_session_destroy(shell->session);
     recon_panel_destroy(shell->dialog);

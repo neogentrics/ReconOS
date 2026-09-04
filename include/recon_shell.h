@@ -208,6 +208,40 @@ void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop);
 void recon_shell_clear_app_focus(struct recon_shell *shell);
 
 /*
+ * --- Blanking the screen when nothing is happening ---
+ *
+ * Not the display's power state, which needs a kernel: this covers the screen
+ * with black. What it saves is the picture, not the watt -- an OLED panel does
+ * not burn an image of a taskbar into itself, and nobody walking past reads a
+ * document that is not on screen.
+ *
+ * Which is the honest description, so it is the one the Control Panel gives.
+ * Calling this "the display turns off" would be a claim about hardware ReconOS
+ * cannot make.
+ *
+ * Two settings, in the user's hive: how long, and whether waking asks who you
+ * are. Both are per-account, because both are about the person rather than the
+ * machine.
+ */
+#define RECON_BLANK_AFTER_KEY "display/blank-after"
+#define RECON_BLANK_LOCK_KEY "display/lock-on-wake"
+
+/* Any input at all. Restarts the countdown, and wakes a blanked screen --
+ * which is the same signal, so it is one call. Returns true if it woke the
+ * screen, in which case the input was spent on waking and should go no
+ * further: the first key after a blank should not also be typed into
+ * whatever had focus. */
+bool recon_shell_note_input(struct recon_shell *shell);
+
+/* Blank it now, without waiting. */
+void recon_shell_blank(struct recon_shell *shell);
+
+bool recon_shell_is_blanked(struct recon_shell *shell);
+
+/* Re-read the two settings, after the Control Panel has changed one. */
+void recon_shell_blank_reload(struct recon_shell *shell);
+
+/*
  * The most windows ReconOS will draw its own frames around at once.
  *
  * Named rather than left as a number in one array declaration, because

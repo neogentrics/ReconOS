@@ -134,6 +134,9 @@ enum action {
     ACTION_FIREWALL_DEFAULT_OUT,
     ACTION_FIREWALL_RULE_TOGGLE,
     ACTION_FIREWALL_RULE_ACTION,
+    ACTION_BLANK_LONGER,
+    ACTION_BLANK_SHORTER,
+    ACTION_BLANK_LOCK,
     ACTION_FIREWALL_ADD,
     ACTION_FIREWALL_ADD_CUSTOM,
     ACTION_FIREWALL_ADD_CANCEL,
@@ -246,8 +249,6 @@ static const struct pending_item POWER_ITEMS[] = {
     { "Hibernate", "Write memory to disk and switch off.",
       "Needs somewhere on disk to write an image to, and a boot path that "
       "reads it back." },
-    { "Screen blanks after", "Turn the display off when nothing is happening.",
-      "Needs an idle timer and control of the display's power state." },
     { "Power mode", "Trade speed against battery.",
       "Nothing to trade yet: no governor, and no battery to read." },
 };
@@ -1609,8 +1610,113 @@ static void draw_reading(struct control_panel *cp, struct recon_panel *p,
  * The tag on the right is deliberately plain: this is a note about the state
  * of the system, not a feature being advertised.
  */
-static void draw_pending_page(struct control_panel *cp, struct recon_panel *p,
-        int x, int y, int w, int h, enum page page) {
+/* Defined below; the Power page ends with the three items that need one. */
+static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
+    int x, int y, int w, int h, enum page page, bool heading);
+
+/*
+ * --- Power ---
+ *
+ * One thing here is real. Sleep, hibernate and a power mode all need control
+ * of a machine that ReconOS is a process on; covering the screen with black
+ * after a while does not.
+ *
+ * And it is described as what it is. "The display turns off" would be a claim
+ * about hardware ReconOS cannot make -- what this saves is the picture, not
+ * the watt.
+ */
+static const int BLANK_STEPS[] = { 0, 1, 2, 5, 10, 15, 30, 60 };
+
+#define BLANK_STEP_COUNT ((int)(sizeof(BLANK_STEPS) / sizeof(BLANK_STEPS[0])))
+
+static void blank_label(int minutes, char *out, size_t size) {
+    if (minutes <= 0) {
+        snprintf(out, size, "Never");
+    } else if (minutes == 1) {
+        snprintf(out, size, "After 1 minute");
+    } else if (minutes < 60) {
+        snprintf(out, size, "After %d minutes", minutes);
+    } else {
+        snprintf(out, size, "After 1 hour");
+    }
+}
+
+static void draw_power(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+    y = draw_heading(cp, p, x, y, w, "Power",
+        "What the machine does when it is left alone.");
+
+    int minutes = recon_registry_get_int(RECON_REG_USER,
+        RECON_BLANK_AFTER_KEY, 0);
+    bool lock = recon_registry_get_bool(RECON_REG_USER,
+        RECON_BLANK_LOCK_KEY, false);
+
+    /*
+     * Two lines rather than one that runs off the edge, and the second one is
+     * the honest caveat: this covers the screen, it does not switch the panel
+     * off. Saying "the display turns off" would be a claim about hardware
+     * ReconOS cannot make.
+     */
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "Cover the screen when nothing has happened for a while.", COLOR_DIM);
+    y += line;
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "It covers the screen rather than switching the display off, which "
+        "would need a kernel.", COLOR_DIM);
+    y += line + PADDING;
+
+    char label[48];
+    blank_label(minutes, label, sizeof(label));
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent + 6, 150, "Blank the screen",
+        COLOR_TEXT);
+
+    int bx = draw_button(cp, p, x + 170, y, "Sooner",
+        HIT_ACTION_BASE + ACTION_BLANK_SHORTER, minutes > 0);
+    bx = draw_button(cp, p, bx, y, "Later",
+        HIT_ACTION_BASE + ACTION_BLANK_LONGER,
+        minutes < BLANK_STEPS[BLANK_STEP_COUNT - 1]);
+    recon_draw_text(p, cp->font, bx + 8, y + ascent + 6, w - (bx - x) - 16,
+        label, minutes > 0 ? COLOR_TEXT : COLOR_DIM);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    draw_button(cp, p, x + 170, y,
+        lock ? "Ask for the password: yes" : "Ask for the password: no",
+        HIT_ACTION_BASE + ACTION_BLANK_LOCK, minutes > 0);
+    recon_draw_text(p, cp->font, x + 8, y + ascent + 6, 160, "When it wakes",
+        minutes > 0 ? COLOR_TEXT : COLOR_DIM);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    if (minutes <= 0) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "The screen never blanks, so there is nothing to wake from.",
+            COLOR_DIM);
+        y += line;
+    }
+    y += PADDING;
+
+    /* And the three that genuinely need the kernel, in the same shape the
+     * other unbuilt pages use -- without a second heading. */
+    draw_pending_list(cp, p, x, y, w, bottom - y, PAGE_POWER, false);
+}
+
+/*
+ * `heading` is false for a page that has already drawn its own, which is the
+ * Power page: it has one setting that works and three that need a kernel, and
+ * a second "Power -- what the machine does when it is left alone" halfway
+ * down reads as the page having started again.
+ */
+static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h, enum page page, bool heading) {
     (void)h;
     int ascent = recon_font_ascent(cp->font);
     int line = recon_font_line_height(cp->font);
@@ -1618,7 +1724,10 @@ static void draw_pending_page(struct control_panel *cp, struct recon_panel *p,
         line = 18;
     }
 
-    y = draw_heading(cp, p, x, y, w, PAGES[page].label, PENDING[page].lede);
+    if (heading) {
+        y = draw_heading(cp, p, x, y, w, PAGES[page].label,
+            PENDING[page].lede);
+    }
 
     const char *tag = "Not built yet";
     int tag_w = recon_text_width(cp->font, tag);
@@ -2963,6 +3072,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     switch (cp->page) {
     case PAGE_ACCOUNTS:   draw_accounts(cp, p, x, y, w, h); break;
+    case PAGE_POWER:      draw_power(cp, p, x, y, w, h); break;
     case PAGE_APPEARANCE: draw_appearance(cp, p, x, y, w, h); break;
     case PAGE_READING:    draw_reading(cp, p, x, y, w, h); break;
     case PAGE_PROGRAMS:   draw_programs(cp, p, x, y, w, h); break;
@@ -2974,7 +3084,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
     case PAGE_REGISTRY:   draw_registry(cp, p, x, y, w, h); break;
     case PAGE_ABOUT:      draw_system(cp, p, x, y, w, h); break;
     default:
-        draw_pending_page(cp, p, x, y, w, h, cp->page);
+        draw_pending_list(cp, p, x, y, w, h, cp->page, true);
         break;
     }
 }
@@ -3993,6 +4103,59 @@ static void do_action(struct control_panel *cp, enum action action) {
 
         set_status(cp, false, "'%s' now says %s.", rule.name,
             recon_fw_action_name(rule.action));
+        break;
+    }
+
+    /*
+     * Stepped through a list rather than typed. The useful values are a short
+     * list -- one, two, five, ten, fifteen, thirty, an hour -- and a field
+     * that accepts 7 is a field somebody has to be told 7 is allowed in.
+     */
+    case ACTION_BLANK_LONGER:
+    case ACTION_BLANK_SHORTER: {
+        int minutes = recon_registry_get_int(RECON_REG_USER,
+            RECON_BLANK_AFTER_KEY, 0);
+
+        int at = 0;
+        for (int i = 0; i < BLANK_STEP_COUNT; i++) {
+            if (BLANK_STEPS[i] == minutes) {
+                at = i;
+                break;
+            }
+            /* A value from a hand-edited registry that is not on the list
+             * lands on the nearest step below it, rather than jumping to
+             * never. */
+            if (BLANK_STEPS[i] < minutes) {
+                at = i;
+            }
+        }
+
+        at += (action == ACTION_BLANK_LONGER) ? 1 : -1;
+        if (at < 0) {
+            at = 0;
+        }
+        if (at >= BLANK_STEP_COUNT) {
+            at = BLANK_STEP_COUNT - 1;
+        }
+
+        recon_registry_set_int(RECON_REG_USER, RECON_BLANK_AFTER_KEY,
+            BLANK_STEPS[at]);
+        recon_shell_blank_reload(cp->server->shell);
+
+        char label[48];
+        blank_label(BLANK_STEPS[at], label, sizeof(label));
+        set_status(cp, false, "The screen blanks: %s.", label);
+        break;
+    }
+
+    case ACTION_BLANK_LOCK: {
+        bool lock = !recon_registry_get_bool(RECON_REG_USER,
+            RECON_BLANK_LOCK_KEY, false);
+        recon_registry_set_bool(RECON_REG_USER, RECON_BLANK_LOCK_KEY, lock);
+        recon_shell_blank_reload(cp->server->shell);
+        set_status(cp, false, lock
+            ? "Waking the screen will ask for your password."
+            : "Waking the screen goes straight back to your desktop.");
         break;
     }
 

@@ -1129,6 +1129,15 @@ static void seat_request_set_cursor(struct wl_listener *listener, void *data) {
  * Returns true when the shell consumed the event, so a real event knows
  * whether the seat still needs telling.
  */
+/* Every route input takes calls this first. See recon_shell_note_input. */
+static bool woke_the_screen(struct recon_server *server) {
+    if (server == NULL || !recon_shell_note_input(server->shell)) {
+        return false;
+    }
+    recon_damage_all(server);
+    return true;
+}
+
 static bool dispatch_button(struct recon_server *server, uint32_t button,
         bool pressed) {
     if (!pressed) {
@@ -1265,6 +1274,9 @@ void recon_inject_button(struct recon_server *server, uint32_t button, bool pres
     if (server == NULL) {
         return;
     }
+    if (woke_the_screen(server)) {
+        return;
+    }
     dispatch_button(server, button, pressed);
     recon_damage_all(server);
 }
@@ -1292,6 +1304,18 @@ void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifi
      * clients to cycle. A shortcut nothing can press is a shortcut nothing
      * notices the loss of.
      */
+    /*
+     * And the same first step: restart the blanking countdown, and if the
+     * screen had blanked, spend this key on waking it.
+     *
+     * Left out, an injected key could not wake a blanked screen -- which
+     * would make blanking untestable from outside, and untestable is how
+     * Alt+Tab stopped working without anybody noticing.
+     */
+    if (woke_the_screen(server)) {
+        return;
+    }
+
     if (!handle_shortcut(server, modifiers, sym)) {
         recon_shell_handle_key(server->shell, sym, modifiers);
     }
@@ -1314,6 +1338,10 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
     struct recon_server *server = wl_container_of(listener, server, cursor_button);
     struct wlr_pointer_button_event *event = data;
 
+    if (woke_the_screen(server)) {
+        return;
+    }
+
     if (dispatch_button(server, event->button,
             event->state != WL_POINTER_BUTTON_STATE_RELEASED)) {
         return;
@@ -1328,6 +1356,13 @@ static void server_cursor_motion(struct wl_listener *listener, void *data) {
     struct wlr_pointer_motion_event *event = data;
 
     wlr_cursor_move(server->cursor, &event->pointer->base, event->delta_x, event->delta_y);
+    /*
+     * Motion wakes the screen but is not spent on waking, unlike a key or a
+     * click: moving the mouse to wake a machine and having the pointer stay
+     * where it was would feel broken, and a pointer move does nothing on its
+     * own anyway.
+     */
+    recon_shell_note_input(server->shell);
     recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
     process_cursor_motion(server, event->time_msec);
     recon_damage_all(server);
@@ -1338,6 +1373,7 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
     struct wlr_pointer_motion_absolute_event *event = data;
 
     wlr_cursor_warp_absolute(server->cursor, &event->pointer->base, event->x, event->y);
+    recon_shell_note_input(server->shell);
     recon_shell_handle_motion(server->shell, server->cursor->x, server->cursor->y);
     process_cursor_motion(server, event->time_msec);
     recon_damage_all(server);
@@ -1346,6 +1382,10 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
     struct recon_server *server = wl_container_of(listener, server, cursor_axis);
     struct wlr_pointer_axis_event *event = data;
+
+    if (woke_the_screen(server)) {
+        return;
+    }
 
     if (recon_shell_handle_scroll(server->shell, server->cursor->x, server->cursor->y,
             event->delta)) {
@@ -1751,6 +1791,19 @@ static void server_keyboard_key(struct wl_listener *listener, void *data) {
 
     bool handled = false;
     uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->wlr_keyboard);
+
+    /*
+     * The press restarts the blanking countdown, and wakes the screen if it
+     * had already blanked. A key that wakes it does nothing else -- somebody
+     * coming back to their desk presses a key to see what is there, and
+     * typing that key into a document they cannot see yet is not what they
+     * asked for.
+     */
+    if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+            recon_shell_note_input(server->shell)) {
+        recon_damage_all(server);
+        return;
+    }
 
     if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
         for (int i = 0; i < nsyms; i++) {

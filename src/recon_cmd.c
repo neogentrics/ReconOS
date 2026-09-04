@@ -622,6 +622,57 @@ static void show_rule(struct recon_cmd_session *s, int index,
  * disagree, and the one somebody happened to be looking at would be the one
  * they believed.
  */
+/*
+ * Blank the screen now, or say what the settings are.
+ *
+ * Here because the thing it drives is a timer measured in minutes, and a test
+ * that has to wait a minute to find out whether blanking works is a test
+ * nobody runs.
+ */
+static void cmd_blank(struct recon_cmd_session *s, int argc, char **argv) {
+    struct recon_server *server = s->server;
+    if (server == NULL || server->shell == NULL) {
+        out(s, "  No desktop to blank.\n");
+        return;
+    }
+
+    /*
+     * Re-read the settings first. The shell holds them rather than asking the
+     * registry sixty times a second, and the Control Panel tells it when it
+     * changes one -- but `reg set` does not, so a setting written that way
+     * would be reported here as whatever it was at startup.
+     */
+    recon_shell_blank_reload(server->shell);
+
+    if (argc >= 2 && strcasecmp(argv[1], "now") == 0) {
+        recon_shell_blank(server->shell);
+        out(s, "  Blanked.\n");
+        return;
+    }
+
+    if (argc >= 2 && strcasecmp(argv[1], "wake") == 0) {
+        out(s, recon_shell_note_input(server->shell)
+            ? "  Woken.\n" : "  It was not blanked.\n");
+        return;
+    }
+
+    int minutes = recon_registry_get_int(RECON_REG_USER,
+        RECON_BLANK_AFTER_KEY, 0);
+    bool lock = recon_registry_get_bool(RECON_REG_USER,
+        RECON_BLANK_LOCK_KEY, false);
+
+    out(s, "\n  Blank the screen: %s\n", minutes > 0 ? "yes" : "never");
+    if (minutes > 0) {
+        out(s, "  After:            %d minute%s\n", minutes,
+            minutes == 1 ? "" : "s");
+        out(s, "  On waking:        %s\n",
+            lock ? "ask for the password" : "straight back");
+    }
+    out(s, "  Now:              %s\n\n",
+        recon_shell_is_blanked(server->shell) ? "blanked" : "awake");
+    out(s, "  blank now | blank wake\n");
+}
+
 static void cmd_services(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         int count = recon_service_count();
@@ -2703,6 +2754,7 @@ static const struct command COMMANDS[] = {
     { "errors",   "errors [<code>|log]",   "What an error code means",          cmd_errors },
     { "firewall", "firewall [...]",        "What may open and be opened",       cmd_firewall },
     { "services", "services [...]",        "The parts of ReconOS that run",     cmd_services },
+    { "blank", "blank [now|wake]",         "Blanking the screen when idle",     cmd_blank },
     { "remote",   "remote [on|off|key|port <n>]",
                                            "Reaching ReconOS from elsewhere",  cmd_remote },
     { "raise",    "raise <code>",          "Report an error on purpose (testing)",
