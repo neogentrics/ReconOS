@@ -516,12 +516,24 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ```
 
+A clean build produces no warnings. That is worth keeping: a build with
+fourteen warnings in it is a build where the fifteenth is invisible, which is
+how Alt+Tab stayed dead for months here. Where a truncation is intended, say
+so with `recon_text_copy` or `recon_text_printf` rather than leaving the
+compiler to guess.
+
 ### Tests
 
 The filesystem operations have their own tests, because renaming, copying and
 deleting are what lose a user's work when they are wrong, and clicking through
 a desktop is a poor way to find that out. They run against a throwaway root and
 need no display:
+
+```bash
+ctest --test-dir build
+```
+
+Or one suite on its own:
 
 ```bash
 ./build/recon_fs_tests

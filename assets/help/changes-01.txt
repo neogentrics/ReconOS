@@ -21,6 +21,13 @@ The Recycle Bin from the Terminal. bin lists it, bin <name> puts
 something in, bin restore <name> takes it back out, and bin empty clears
 it. Before this the bin could only be reached from the File Explorer.
 
+Three quiet bugs, found by clearing the compiler's warnings. The File
+Explorer's folder drop-down could point at the wrong place for a deeply nested
+folder; a wallpaper or account picture with a very long file name was listed
+but could not be loaded; and a file with a very long name could be moved to
+the wrong place on its way to the bin. The build now compiles with nothing to
+say, so the next warning will be one somebody notices.
+
 Skins can be written here. *Copy This Skin* on the Appearance page writes
 the chosen one out under a name of your own; *Edit This Skin* lists every
 colour with a swatch and lets you change it. The change is immediate and is

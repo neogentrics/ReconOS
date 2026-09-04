@@ -430,11 +430,12 @@ noticed. Fixed in v0.2.6:
   they name. `recon_fs_join` refuses instead.
 - The empty-format `set_status` calls in the explorer, as in the Control Panel.
 
-Fourteen sites remain, all the same shape: a name copied out of a path into a
-name-sized buffer, where the bound holds in practice but the compiler cannot
-see it. (A build reports them 26 times, because `recon_fs.c` and its
-neighbours are compiled into seven targets — the site count is the honest
-number.) Worth a sweep; not worth silencing individually.
+Fourteen sites remained after that, all the same shape: a name copied out of a
+path into a name-sized buffer, where the bound holds in practice but the
+compiler cannot see it. (A build reported them 26 times, because `recon_fs.c`
+and its neighbours are compiled into seven targets — the site count is the
+honest number.) They were swept in v0.2.15, and three of them turned out to be
+real. The build has no warnings in it now.
 
 **Separately**, the filesystem had been leaking host paths into messages
 people read — deleting something that was not there said `cannot read
@@ -862,6 +863,40 @@ found by reading the file, which needed `theme copy` in the Terminal to exist.
 Not done: the ramps and the frame metrics can be removed from the editor but
 not set there, and a skin cannot be renamed or deleted from it. The file is
 still editable by hand, which is the way to do any of those today.
+
+### A build with no warnings in it
+
+Twenty-six warnings across fourteen sites, all `-Wformat-truncation`, all of
+the form *this snprintf might cut its argument short*. A build with fourteen
+warnings in it is a build where the fifteenth is invisible — which is how
+Alt+Tab stayed dead for months in a tree that was compiling clean apart from
+the noise nobody read any more.
+
+Eleven were telling the truth. A window title has room for a name and not a
+path; a status line quoting something somebody typed should stop at the edge
+of the line; a note about why a module would not load is a sentence, not a
+record. Cutting is what those want. They say so now, through
+`recon_text_copy` and `recon_text_printf`, which name the intent rather than
+leaving the compiler to guess at it. Both are `static inline` in `ReconOS.h`
+because half a dozen test binaries link a handful of source files each, and a
+new object for five lines would mean adding it to every one of those lists
+and to every one added later.
+
+Three were not, and are fixed rather than declared:
+
+- The File Explorer's drop-down built the path to each subfolder by pasting
+  strings. A path cut short is a path to somewhere else, and this one is
+  compared against the known places and then navigated to.
+- The wallpaper and avatar lists stored a shortened name when one did not
+  fit. That name is what the file is asked for by later, so a shortened one
+  is not a picture with a shorter name — it is an entry in the list that
+  cannot be loaded, offered to somebody who will click it. They are skipped
+  now.
+- Moving a file to the bin pasted its destination the same way.
+
+The remaining risk is the obvious one: a wrapper that hides truncation
+warnings for every argument at once is only correct while it is used for text
+a person reads. Its comment says so twice.
 
 ### Typing in the Start menu
 
