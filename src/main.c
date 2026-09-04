@@ -58,6 +58,7 @@
 #include "ReconOS.h"
 #include "recon_decor.h"
 #include "recon_control.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_help.h"
 #include "recon_icon_gen.h"
@@ -2260,11 +2261,25 @@ int main(int argc, char **argv) {
     /* The filesystem comes up before anything that might want to read from
      * it, and creates its layout on first run. */
     if (!recon_fs_init(NULL)) {
-        wlr_log(WLR_ERROR, "ReconOS: cannot open the filesystem: %s",
-            recon_fs_last_error());
+        /*
+         * Raised rather than only logged, even though there is nothing to
+         * draw on yet: the code goes to stderr and the whole point of a code
+         * is that the person reading it can look it up. VT-A002 in a terminal
+         * is worth more than a sentence they have to describe from memory.
+         */
+        recon_error_raisef(NULL, RECON_ERR_A002, "%s", recon_fs_last_error());
         return 1;
     }
     wlr_log(WLR_INFO, "ReconOS: filesystem rooted at %s", recon_fs_host_root());
+
+    /*
+     * Now that there is somewhere to write, catch the signals that mean a
+     * crash. A crash cannot be drawn -- the process is already in a state
+     * where the drawing may be what is broken -- so the handler writes the
+     * record and gets out of the way. The screen appears on the next start,
+     * which is a start that works.
+     */
+    recon_error_catch_crashes();
 
     /* Settings come up next, since almost everything after this may want to
      * know what was chosen last time. */

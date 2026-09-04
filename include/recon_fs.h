@@ -48,6 +48,15 @@
 #define RECON_DIR_TEMP "/Temp"
 
 /*
+ * Where the system writes down what happened.
+ *
+ * Under /System because it is the machine's rather than any account's: a
+ * fault that stopped the system happened to the machine, and the account it
+ * happened to may not be the one reading about it afterwards.
+ */
+#define RECON_DIR_LOGS "/System/Logs"
+
+/*
  * Every user gets the same folders, created with the account. Which ones
  * exist is the system's decision rather than each user's, so a program can
  * rely on Documents being there without checking.

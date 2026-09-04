@@ -11,7 +11,8 @@ help-10.txt	The Terminal
 help-11.txt	Pictures of the screen
 help-12.txt	Help and updates
 help-13.txt	Text and letters
-help-14.txt	What is not built yet
+help-14.txt	When something goes wrong
+help-15.txt	What is not built yet
 changes-01.txt	v0.2.15
 changes-02.txt	v0.2.14
 changes-03.txt	v0.2.13

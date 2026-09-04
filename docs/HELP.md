@@ -233,6 +233,37 @@ A keyboard laid out for a language with accents in it types them, and the
 arrow keys and Backspace step over a whole character rather than a byte of
 one.
 
+## When something goes wrong
+
+ReconOS names its faults so you can look one up. A code reads like this:
+
+```
+VT-A001
+```
+
+`VT` is the system. The letter says which part of it — A is startup, B is
+storage, C is accounts, and so on. The number says which fault.
+
+**`errors VT-A001`** in the Terminal says what a code means. **`errors`** on
+its own lists every code there is, and **`errors log`** is what has actually
+happened on this machine.
+
+There are three kinds:
+
+- **STOP** — the system cannot continue. It shows a screen with the code on it
+  and writes the code and the time into `/System/Logs`. The next start says
+  what happened.
+- **fault** — something failed and the rest carried on. Reported where it
+  happened.
+- **note** — written down, and nothing broke.
+
+If the last run stopped, the first screen after the startup screen says so
+once, with the code. The machine in front of you is working; the message is
+about the run before it.
+
+The full list is also in `docs/ERRORS.md` in the repository, for when you have
+a code and not a working machine.
+
 ## What is not built yet
 
 Several Control Panel pages are there and say plainly that they are not

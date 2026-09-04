@@ -68,6 +68,15 @@ void recon_shell_begin_session(struct recon_shell *shell);
 /* Whether setup or the login screen is up, which is when nothing else is. */
 bool recon_shell_session_active(struct recon_shell *shell);
 
+/*
+ * The session, for the one thing that has to reach past the shell to get at
+ * it: the screen that says the system has stopped. The session owns a panel
+ * covering the whole display, which is what a stop needs, and there is no
+ * sense in a second one existing only for the case where everything else has
+ * already failed.
+ */
+struct recon_session *recon_shell_session(struct recon_shell *shell);
+
 /* What the gate is showing, for diagnosis from outside. */
 /* Where an account's tile is on the login screen, in screen coordinates, so
  * that choosing one can be driven from outside. False when the grid is not

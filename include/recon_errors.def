@@ -1,0 +1,279 @@
+/*
+ * Every error code ReconOS knows, once.
+ *
+ * RECON_ERROR(area, number, level, summary, detail)
+ *
+ *   area    a single capital letter; see the list below. Not I or O.
+ *   number  001 upward within that area, three digits, never reused
+ *   level   NOTE, FAULT or STOP
+ *   summary a few words -- what went wrong
+ *   detail  a sentence or two -- what it means, and what can be done
+ *
+ * Included by recon_error.h to build the enumeration and by recon_error.c to
+ * build the table, and read by scripts/make-errors.sh to write docs/ERRORS.md.
+ * Adding a code here adds it everywhere.
+ *
+ * Rules that matter:
+ *
+ *   - A number is never reused, even after the fault it named stops existing.
+ *     Somebody has that code written down.
+ *   - A code's letter and number never change. Its severity may.
+ *   - New codes go at the end of their area, not in a gap that looks tidy.
+ *
+ * The areas:
+ *
+ *   A  Startup and shutdown
+ *   B  Storage and the filesystem
+ *   C  Accounts and signing in
+ *   D  Display, windows and drawing
+ *   E  Programs, modules and packages
+ *   F  Network
+ *   G  Firewall and remote access
+ *   H  Settings and the registry
+ *   J  Applications
+ *   K  Input
+ *   L  Skins, icons and wallpapers
+ *   M  Help and documentation
+ */
+
+/* --- A: Startup and shutdown --- */
+
+RECON_ERROR(A, 001, STOP,
+    "No usable font",
+    "ReconOS draws everything itself and found no font to draw with. It "
+    "looks for DejaVu Sans, Liberation Sans and Ubuntu in the usual places. "
+    "Installing any one of them is enough.")
+
+RECON_ERROR(A, 002, STOP,
+    "The filesystem could not be opened",
+    "ReconOS keeps its files under one folder on the host and could not "
+    "create or reach it. Check that the folder RECONOS_ROOT names exists and "
+    "can be written to.")
+
+RECON_ERROR(A, 003, STOP,
+    "No display to draw on",
+    "The compositor started but found no output. On a real machine this "
+    "means the graphics driver did not come up; in a window it means the "
+    "host compositor refused the connection.")
+
+RECON_ERROR(A, 004, STOP,
+    "The Wayland socket could not be created",
+    "Nothing can connect to ReconOS without it, including its own windows. "
+    "Usually XDG_RUNTIME_DIR is missing, unwritable, or already holds a "
+    "socket from a copy that did not shut down.")
+
+RECON_ERROR(A, 005, FAULT,
+    "The last run ended unexpectedly",
+    "ReconOS did not shut down cleanly the previous time. Nothing is lost "
+    "that was saved; anything open at the time was not.")
+
+RECON_ERROR(A, 006, FAULT,
+    "A startup check found a problem",
+    "One of the checks run before the login screen did not pass. The check "
+    "that failed reports its own code alongside this one.")
+
+RECON_ERROR(A, 007, FAULT,
+    "A system folder was missing and was rebuilt",
+    "One of the folders ReconOS relies on was not there and has been "
+    "recreated empty. Anything that was in it is gone.")
+
+/* --- B: Storage and the filesystem --- */
+
+RECON_ERROR(B, 001, FAULT,
+    "A file could not be read",
+    "The file is there but could not be opened, or ended sooner than its "
+    "own length said it would.")
+
+RECON_ERROR(B, 002, FAULT,
+    "A file could not be written",
+    "The write was refused. The usual causes are a full disk, a read-only "
+    "filesystem underneath, or a folder that has been removed since it was "
+    "opened.")
+
+RECON_ERROR(B, 003, FAULT,
+    "A path led outside the filesystem",
+    "Something asked for a path that resolves above the ReconOS root. The "
+    "request was refused; this is the boundary working, not failing.")
+
+RECON_ERROR(B, 004, FAULT,
+    "A name was too long",
+    "Names and paths have limits, and joining these two exceeded one. The "
+    "operation was refused rather than performed on a shortened name, which "
+    "would have been a different file.")
+
+RECON_ERROR(B, 005, FAULT,
+    "The Recycle Bin could not be reached",
+    "Deleting puts things in the bin, and the bin could not be opened or "
+    "written to. The file was left where it was.")
+
+/* --- C: Accounts and signing in --- */
+
+RECON_ERROR(C, 001, STOP,
+    "The account list could not be read",
+    "ReconOS cannot tell who may use this machine, so it will not let "
+    "anybody in. The list lives in /System/Config; if it is damaged, the "
+    "machine has to be set up again.")
+
+RECON_ERROR(C, 002, FAULT,
+    "An account's folder is missing",
+    "The account exists but the folder holding its files does not. It has "
+    "been recreated empty; what was in it is not recoverable from here.")
+
+RECON_ERROR(C, 003, NOTE,
+    "A sign-in was refused",
+    "The password did not match. Recorded because a run of these is worth "
+    "seeing, not because one is a problem.")
+
+RECON_ERROR(C, 004, FAULT,
+    "An account could not be changed",
+    "Adding, removing or altering an account did not take effect. The "
+    "account list is unchanged.")
+
+/* --- D: Display, windows and drawing --- */
+
+RECON_ERROR(D, 001, STOP,
+    "The renderer could not be created",
+    "ReconOS could not get a renderer from the graphics stack. On a virtual "
+    "machine, WLR_RENDERER_ALLOW_SOFTWARE=1 is usually what is missing.")
+
+RECON_ERROR(D, 002, FAULT,
+    "A window could not be drawn",
+    "There was not enough memory for the window's pixels, or the buffer was "
+    "refused. The window is not shown; the rest of the system is unaffected.")
+
+RECON_ERROR(D, 003, FAULT,
+    "The screen could not be captured",
+    "Print Screen or the capture command could not read the screen back, or "
+    "could not write the picture out.")
+
+/* --- E: Programs, modules and packages --- */
+
+RECON_ERROR(E, 001, FAULT,
+    "A program would not load",
+    "The file is there and is a module, and loading it failed. Modules is "
+    "the Control Panel page that says why for each one.")
+
+RECON_ERROR(E, 002, FAULT,
+    "A program was built for a different ReconOS",
+    "Modules declare which version of the interface they were built "
+    "against, and this one does not match. It has to be rebuilt.")
+
+RECON_ERROR(E, 003, FAULT,
+    "A package could not be read",
+    "The folder is not a package, or its package.txt is missing, or says "
+    "something the installer does not understand.")
+
+RECON_ERROR(E, 004, FAULT,
+    "An install was rolled back",
+    "The files were placed and the program then refused to load, so "
+    "everything the install put down has been taken back. Nothing was left "
+    "behind.")
+
+RECON_ERROR(E, 005, FAULT,
+    "A program could not be removed",
+    "Some of what the install placed could not be deleted. The receipt says "
+    "what it was.")
+
+/* --- F: Network --- */
+
+RECON_ERROR(F, 001, FAULT,
+    "The network could not be read",
+    "ReconOS reports the host's network rather than implementing one, and "
+    "the host would not say what it has.")
+
+RECON_ERROR(F, 002, FAULT,
+    "A connection could not be opened",
+    "The address was reached and refused, or was not reached at all.")
+
+RECON_ERROR(F, 003, FAULT,
+    "A name could not be resolved",
+    "No address was found for that name. Either the name is wrong or "
+    "nothing is answering name lookups.")
+
+/* --- G: Firewall and remote access --- */
+
+RECON_ERROR(G, 001, NOTE,
+    "The firewall refused a connection",
+    "A rule blocked it, or nothing allowed it and the default for that "
+    "direction is to block. Control Panel, Network, Firewall shows the "
+    "rules.")
+
+RECON_ERROR(G, 002, FAULT,
+    "The firewall rules could not be read",
+    "The rules file is missing or damaged. The built-in defaults are in "
+    "force: outgoing allowed, incoming blocked.")
+
+RECON_ERROR(G, 003, FAULT,
+    "The firewall rules could not be saved",
+    "The change is in force for this session and will not survive a "
+    "restart.")
+
+RECON_ERROR(G, 004, FAULT,
+    "Remote access could not be opened",
+    "The port could not be listened on. Something else is using it, or the "
+    "system would not allow it.")
+
+RECON_ERROR(G, 005, NOTE,
+    "A remote connection was refused",
+    "It arrived without a key, or with one that does not match. Recorded "
+    "with the address it came from.")
+
+/* --- H: Settings and the registry --- */
+
+RECON_ERROR(H, 001, FAULT,
+    "Settings could not be read",
+    "A settings file is missing or damaged. What could not be read falls "
+    "back to the defaults rather than to nothing.")
+
+RECON_ERROR(H, 002, FAULT,
+    "Settings could not be saved",
+    "The change is in force now and will not survive a restart.")
+
+RECON_ERROR(H, 003, NOTE,
+    "A setting was ignored",
+    "The value is not one that setting can take, so the default is being "
+    "used. The setting is left as it is rather than corrected, because the "
+    "value somebody wrote is evidence of what they meant.")
+
+/* --- J: Applications --- */
+
+RECON_ERROR(J, 001, FAULT,
+    "A program would not open",
+    "The window could not be built. There was not enough memory, or the "
+    "program refused to start.")
+
+RECON_ERROR(J, 002, FAULT,
+    "A program stopped answering",
+    "It is still running and is not responding. Watchtower can end it.")
+
+/* --- K: Input --- */
+
+RECON_ERROR(K, 001, STOP,
+    "The keyboard could not be set up",
+    "No keyboard layout could be built, so nothing typed would reach "
+    "anything. This is usually a missing or damaged xkeyboard-config.")
+
+/* --- L: Skins, icons and wallpapers --- */
+
+RECON_ERROR(L, 001, FAULT,
+    "A skin could not be read",
+    "The file is not a skin, or names a colour that is not one. The skin is "
+    "not offered; the one in use is unaffected.")
+
+RECON_ERROR(L, 002, FAULT,
+    "A picture could not be drawn",
+    "An icon or wallpaper file could not be read, or is not in a format "
+    "ReconOS knows. It is left out rather than drawn wrong.")
+
+RECON_ERROR(L, 003, NOTE,
+    "A colour nothing answered",
+    "Something asked for a colour by a name no skin defines, so it was "
+    "drawn in the fallback. Visible on screen as a colour that does not "
+    "belong.")
+
+/* --- M: Help and documentation --- */
+
+RECON_ERROR(M, 001, FAULT,
+    "The help could not be written out",
+    "The help pages are copied into /System/Help at every start and this "
+    "one failed. Whatever was there from last time is still there.")

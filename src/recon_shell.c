@@ -2557,6 +2557,10 @@ bool recon_shell_session_active(struct recon_shell *shell) {
     return shell != NULL && recon_session_active(shell->session);
 }
 
+struct recon_session *recon_shell_session(struct recon_shell *shell) {
+    return (shell != NULL) ? shell->session : NULL;
+}
+
 /*
  * Where an account's tile is on the login screen, passed through to the
  * session.

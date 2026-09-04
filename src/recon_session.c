@@ -21,7 +21,9 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_error.h"
 #include "recon_registry.h"
+#include "recon_shell.h"
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
@@ -117,6 +119,18 @@ enum stage {
     STAGE_READING,
     STAGE_LOOK,
     STAGE_FINISHED,
+    /*
+     * The system has stopped. Full screen, like the splash, because nothing
+     * behind it is usable any more and a card would suggest otherwise.
+     */
+    STAGE_STOPPED,
+    /*
+     * And the gentler version: the *last* run stopped, this one is fine, and
+     * somebody should be told once before they carry on. A card rather than a
+     * full screen -- the machine in front of them is working, and saying
+     * otherwise would be a lie told in a large font.
+     */
+    STAGE_LAST_STOP,
     /* Not part of setup. */
     STAGE_LOGIN,
     /* Nothing showing; the desktop has it. */
@@ -309,6 +323,13 @@ struct recon_session {
 
     int width, height;
     enum stage stage;
+
+    /* What stopped, and what it added. Held rather than pointed at, because
+     * the thing that raised it may be gone by the time this is drawn. */
+    char stop_code[16];
+    char stop_summary[96];
+    char stop_detail[512];
+    char stop_advice[256];
     bool signed_in_flag;
 
     /* Setup and login share these; only one is showing at a time. */
@@ -437,8 +458,11 @@ static int card_height(struct recon_session *session) {
 
     switch (session->stage) {
     case STAGE_BOOTING:
-        /* No card: the splash is the whole screen and draws its own layout. */
+    case STAGE_STOPPED:
+        /* No card: these are the whole screen and draw their own layout. */
         return session->height;
+    case STAGE_LAST_STOP:
+        return base + TITLE_SIZE + line * 7 + BUTTON_HEIGHT + GAP * 3;
     case STAGE_UPDATING:
         return base + TITLE_SIZE + line * 4 + 14 + GAP * 4;
     case STAGE_WELCOME:
@@ -877,6 +901,118 @@ static void draw_ring(struct recon_panel *p, int cx, int cy, int radius,
     }
 }
 
+/*
+ * The system has stopped.
+ *
+ * Not a wall of hexadecimal. Somebody reading this is not going to debug it;
+ * they are going to write down the code, restart, and look it up -- so the
+ * code is the largest thing on the screen and everything else is there to
+ * make it worth writing down.
+ *
+ * Drawn in fixed colours rather than the skin's. A skin is a file that can be
+ * edited, and the one fault this screen must survive is the one where the
+ * colours are the problem: a stop screen that renders black on black tells
+ * nobody anything.
+ */
+static void draw_stopped(struct recon_session *session, struct recon_panel *p) {
+    const recon_color BACKGROUND = RECON_RGB(0x0E, 0x1B, 0x33);
+    const recon_color HEADING    = RECON_RGB(0xFF, 0xFF, 0xFF);
+    const recon_color CODE       = RECON_RGB(0xFF, 0xC8, 0x50);
+    const recon_color BODY       = RECON_RGB(0xC8, 0xD4, 0xE8);
+    const recon_color QUIET      = RECON_RGB(0x84, 0x96, 0xB4);
+
+    int line = recon_font_line_height(session->font);
+    if (line <= 0) {
+        line = 18;
+    }
+    int ascent = recon_font_ascent(session->font);
+
+    struct recon_font *big = session->heading != NULL
+        ? session->heading : session->font;
+
+    recon_fill(p, BACKGROUND);
+
+    /*
+     * Left-aligned in a column, not centred. This is text to be read and
+     * copied, and a centred paragraph with a ragged left edge is neither.
+     */
+    int x = session->width / 2 - 260;
+    if (x < 40) {
+        x = 40;
+    }
+    int w = session->width - x * 2;
+    if (w < 200) {
+        w = session->width - 80;
+    }
+
+    int y = session->height / 3 - 40;
+
+    recon_icon_draw(p, RECON_ICON_LOGO, x, y, 48);
+
+    recon_draw_text(p, big, x + 64, y + recon_font_ascent(big) + 6, w - 64,
+        "ReconOS has stopped", HEADING);
+    y += 64 + GAP;
+
+    /* The code, as large as the heading, because it is the part that has to
+     * survive being read out over a telephone. */
+    recon_draw_text(p, big, x, y + recon_font_ascent(big), w,
+        session->stop_code, CODE);
+    y += TITLE_SIZE + 6;
+
+    recon_draw_text(p, session->font, x, y + ascent, w,
+        session->stop_summary, HEADING);
+    y += line + GAP;
+
+    /* The description, wrapped by hand: this screen cannot lean on anything
+     * that might be part of what failed. */
+    const char *at = session->stop_detail;
+    while (*at != '\0' && y + line < session->height - line * 4) {
+        char piece[128];
+        size_t used = 0;
+        size_t last_space = 0;
+
+        while (at[used] != '\0' && used < sizeof(piece) - 1) {
+            piece[used] = at[used];
+            if (at[used] == ' ') {
+                last_space = used;
+            }
+            used++;
+
+            piece[used] = '\0';
+            if (recon_text_width(session->font, piece) > w &&
+                    last_space > 0) {
+                used = last_space;
+                break;
+            }
+        }
+        piece[used] = '\0';
+
+        recon_draw_text(p, session->font, x, y + ascent, w, piece, BODY);
+        y += line;
+
+        at += used;
+        while (*at == ' ') {
+            at++;
+        }
+    }
+
+    if (session->stop_advice[0] != '\0') {
+        y += GAP;
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            session->stop_advice, QUIET);
+        y += line;
+    }
+
+    /*
+     * What to do now, at the bottom, where a person looks after they have
+     * finished reading rather than before they have started.
+     */
+    recon_draw_text(p, session->font, x,
+        session->height - line * 2 + ascent, w,
+        "Press any key to shut down. The code and the time are in "
+        "/System/Logs.", QUIET);
+}
+
 static void draw_splash(struct recon_session *session, struct recon_panel *p) {
     int line = recon_font_line_height(session->font);
     if (line <= 0) {
@@ -985,6 +1121,12 @@ static void draw(struct recon_session *session) {
      * returns rather than being a case in the switch below -- everything
      * after this point is about laying out a card with questions in it.
      */
+    if (session->stage == STAGE_STOPPED) {
+        draw_stopped(session, p);
+        recon_panel_commit(p);
+        return;
+    }
+
     if (session->stage == STAGE_BOOTING) {
         draw_splash(session, p);
         recon_panel_commit(p);
@@ -1007,6 +1149,32 @@ static void draw(struct recon_session *session) {
     int w = cw - CARD_PADDING * 2;
 
     switch (session->stage) {
+    case STAGE_LAST_STOP: {
+        draw_title(session, p, x, y, w, "The last run did not finish", NULL);
+        y += TITLE_SIZE + GAP;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            session->stop_code, THEME(WARNING));
+        y += line + 2;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            session->stop_summary, THEME(MENU_TEXT));
+        y += line + GAP;
+
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "This machine is running normally now. Nothing that had been "
+            "saved is lost.", THEME(MENU_TEXT_DISABLED));
+        y += line;
+        recon_draw_text(p, session->font, x, y + ascent, w,
+            "Help has what the code means; the log is in /System/Logs.",
+            THEME(MENU_TEXT_DISABLED));
+        y += line + GAP;
+
+        draw_button(session, p, x + w - BUTTON_WIDTH, y, BUTTON_WIDTH,
+            "Continue", HIT_PRIMARY, true, true);
+        break;
+    }
+
     case STAGE_UPDATING: {
         char title[96];
         snprintf(title, sizeof(title), "Updating to %s", RECONOS_VERSION);
@@ -1537,9 +1705,20 @@ static void go_to(struct recon_session *session, enum stage stage) {
     recon_session_refresh(session);
 }
 
+/*
+ * What comes after the card reporting a stop from last time -- which is what
+ * would have come straight after the splash. Split out so the card can be
+ * skipped when there is nothing to say without duplicating the rest.
+ */
+static void begin_after_last_stop(struct recon_session *session);
+
 /* The primary button, or Enter. */
 static void advance(struct recon_session *session) {
     switch (session->stage) {
+    case STAGE_LAST_STOP:
+        begin_after_last_stop(session);
+        break;
+
     case STAGE_WELCOME:
         go_to(session, STAGE_ACCOUNT);
         break;
@@ -1862,6 +2041,33 @@ static int update_tick(void *data) {
  * front of it.
  */
 static void begin_after_splash(struct recon_session *session) {
+    /*
+     * Did the last run stop?
+     *
+     * Before the update screen and before the login, because it is the oldest
+     * news on the machine and everything after it is about what happens next.
+     * Taken rather than read, so it is said once.
+     */
+    char code[16];
+    char detail[512];
+
+    if (recon_error_take_last(code, sizeof(code), detail, sizeof(detail))) {
+        recon_text_copy(session->stop_code, sizeof(session->stop_code), code);
+        recon_text_copy(session->stop_detail, sizeof(session->stop_detail),
+            detail);
+
+        const struct recon_error_info *info = recon_error_find(code);
+        recon_text_copy(session->stop_summary, sizeof(session->stop_summary),
+            info != NULL ? info->summary : "The system stopped");
+
+        go_to(session, STAGE_LAST_STOP);
+        return;
+    }
+
+    begin_after_last_stop(session);
+}
+
+static void begin_after_last_stop(struct recon_session *session) {
     recon_edit_begin(&session->name, "", false);
     recon_edit_begin(&session->password, "", false);
     recon_edit_begin(&session->confirm, "", false);
@@ -2130,6 +2336,18 @@ bool recon_session_handle_key(struct recon_session *session,
         return false;
     }
 
+    /*
+     * A stopped system takes one key and shuts down.
+     *
+     * Any key rather than a named one, because somebody at a stopped machine
+     * should not have to find a particular key -- and because there is
+     * nothing else this screen could mean by a keypress.
+     */
+    if (session->stage == STAGE_STOPPED) {
+        recon_quit(session->server);
+        return true;
+    }
+
     /* Tab moves between fields, which is how a form is expected to work. */
     if (sym == XKB_KEY_Tab && session->stage == STAGE_ACCOUNT) {
         bool backwards = (modifiers & RECON_MOD_SHIFT) != 0;
@@ -2322,4 +2540,56 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
         session->stage == STAGE_LOGIN ? session->account : session->option,
         recon_users_current() != NULL ? recon_users_current() : "(nobody)",
         session->message);
+}
+
+/*
+ * The system has stopped.
+ *
+ * The record is already on disk by the time this is called -- that happens
+ * first, precisely because the screen is the part most likely to fail when
+ * what failed is the drawing.
+ *
+ * Returns with the screen up and the session owning the machine, or does not
+ * return at all when there is nothing to draw with. The second case is real:
+ * "no usable font" is a stop, and it is a stop that happens before there is
+ * any way to say so on screen. Then stderr is what is left, and it is better
+ * than a blank display.
+ */
+void recon_error_show_stop(struct recon_server *server,
+        const struct recon_error_info *info, const char *detail) {
+    struct recon_session *session =
+        (server != NULL) ? recon_shell_session(server->shell) : NULL;
+
+    if (session == NULL || session->panel == NULL || session->font == NULL) {
+        fprintf(stderr, "\nReconOS has stopped.\n\n  %s  %s\n\n%s\n%s%s\n\n",
+            info->code, info->summary, info->detail,
+            (detail != NULL && detail[0] != '\0') ? "\n" : "",
+            (detail != NULL) ? detail : "");
+        exit(1);
+    }
+
+    recon_text_copy(session->stop_code, sizeof(session->stop_code),
+        info->code);
+    recon_text_copy(session->stop_summary, sizeof(session->stop_summary),
+        info->summary);
+    recon_text_copy(session->stop_detail, sizeof(session->stop_detail),
+        info->detail);
+    recon_text_copy(session->stop_advice, sizeof(session->stop_advice),
+        (detail != NULL) ? detail : "");
+
+    /*
+     * The timers go first. A splash still ticking behind a stop screen would
+     * walk the session on to the login while the stop is being read.
+     */
+    if (session->boot_timer != NULL) {
+        wl_event_source_timer_update(session->boot_timer, 0);
+    }
+    if (session->update_timer != NULL) {
+        wl_event_source_timer_update(session->update_timer, 0);
+    }
+
+    session->stage = STAGE_STOPPED;
+    recon_panel_set_enabled(session->panel, true);
+    recon_panel_raise_to_top(session->panel);
+    recon_session_refresh(session);
 }

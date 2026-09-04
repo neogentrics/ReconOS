@@ -17,6 +17,7 @@
 #include "recon_appwin.h"
 #include "recon_capture.h"
 #include "recon_cmd.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
 #include "recon_package.h"
@@ -460,6 +461,125 @@ static void cmd_spawn(struct recon_cmd_session *s, int argc, char **argv) {
     recon_spawn(server, used > 0 ? command : NULL);
     out(s, "Started '%s'. It appears when it has drawn something.\n",
         used > 0 ? command : "the configured terminal");
+}
+
+/*
+ * Look up an error code, or list them.
+ *
+ * The point of a code is that somebody can find out what it means from the
+ * machine that showed it -- without a second machine, a search engine, or the
+ * documentation being to hand. So the whole table is here, in the system,
+ * rather than only in docs/ERRORS.md.
+ */
+static void cmd_errors(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc >= 2 && strcasecmp(argv[1], "log") == 0) {
+        size_t size = 0;
+        char *text = recon_fs_read("/", RECON_ERROR_LOG, &size);
+        if (text == NULL) {
+            out(s, "Nothing has gone wrong on this machine yet.\n");
+            return;
+        }
+        out(s, "%s", text);
+        free(text);
+        return;
+    }
+
+    if (argc >= 2) {
+        const struct recon_error_info *info = recon_error_find(argv[1]);
+        if (info == NULL) {
+            out(s, "There is no error code '%s'. 'errors' lists them all.\n",
+                argv[1]);
+            return;
+        }
+
+        const char *area = recon_error_area_name(info->code[3]);
+        const char *level =
+            info->level == RECON_ERROR_STOP ? "stops the system"
+            : info->level == RECON_ERROR_FAULT ? "something failed"
+            : "recorded, nothing broke";
+
+        out(s, "\n  %s  %s\n", info->code, info->summary);
+        out(s, "  %-8s %s\n", "", area != NULL ? area : "");
+        out(s, "  %-8s %s\n\n", "", level);
+        out(s, "  %s\n\n", info->detail);
+        return;
+    }
+
+    /*
+     * The whole list, grouped by area, because a code is looked up far more
+     * often than it is browsed -- and when it is browsed, it is because
+     * somebody is asking what kind of thing can go wrong.
+     */
+    char area = '\0';
+    int count = recon_error_count();
+
+    for (int i = 0; i < count; i++) {
+        const struct recon_error_info *info = recon_error_at(i);
+        if (info == NULL) {
+            continue;
+        }
+
+        if (info->code[3] != area) {
+            area = info->code[3];
+            const char *name = recon_error_area_name(area);
+            out(s, "\n  %c -- %s\n", area, name != NULL ? name : "");
+        }
+
+        out(s, "    %-9s %-6s %s\n", info->code,
+            info->level == RECON_ERROR_STOP ? "STOP"
+                : info->level == RECON_ERROR_FAULT ? "fault" : "note",
+            info->summary);
+    }
+
+    out(s, "\n  %d codes. 'errors <code>' says what one means; "
+        "'errors log' is what has happened here.\n", count);
+}
+
+/*
+ * Raise an error on purpose.
+ *
+ * Only with RECONOS_ALLOW_SPAWN set, the same gate as `spawn`, and for the
+ * same reason: this is a development facility and not a thing a system should
+ * offer. It exists because the stop screen is the one screen that has to work
+ * on the day everything else has not, and a screen nobody has ever seen is a
+ * screen nobody knows the state of.
+ */
+static void cmd_raise(struct recon_cmd_session *s, int argc, char **argv) {
+    if (getenv("RECONOS_ALLOW_SPAWN") == NULL) {
+        out(s, "'raise' makes the system report an error it did not have.\n"
+               "It is here for testing the error screen, and is only\n"
+               "available when RECONOS_ALLOW_SPAWN is set.\n");
+        return;
+    }
+
+    if (argc < 2) {
+        out(s, "Usage: raise <code>\n");
+        return;
+    }
+
+    const struct recon_error_info *info = recon_error_find(argv[1]);
+    if (info == NULL) {
+        out(s, "There is no error code '%s'.\n", argv[1]);
+        return;
+    }
+
+    /* Found by name, raised by index: the table is one array, so an entry's
+     * position in it is its code. */
+    int which = -1;
+    for (int i = 0; i < recon_error_count(); i++) {
+        if (recon_error_at(i) == info) {
+            which = i;
+            break;
+        }
+    }
+    if (which < 0) {
+        out(s, "That code is not in the table.\n");
+        return;
+    }
+
+    out(s, "Raising %s.\n", info->code);
+    recon_error_raise(s->server, (enum recon_error_code)which,
+        "Raised on purpose from the terminal.");
 }
 
 static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
@@ -2119,6 +2239,9 @@ static const struct command COMMANDS[] = {
     { "del",      "del <name>",            "Delete a file or empty directory",  cmd_del },
     { "deltree",  "deltree <name>",        "Delete a folder and its contents",  cmd_deltree },
     { "spawn",    "spawn [command]",       "Start a Wayland client (testing)",  cmd_spawn },
+    { "errors",   "errors [<code>|log]",   "What an error code means",          cmd_errors },
+    { "raise",    "raise <code>",          "Report an error on purpose (testing)",
+                                                                                cmd_raise },
     { "bin",      "bin [<name>|list|restore <name>|purge <name>|empty]",
                                                "The Recycle Bin",                   cmd_bin },
     { "rename",   "rename <name> <new>",   "Rename a file or folder",           cmd_rename },
