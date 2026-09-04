@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.7.** The version number tracks what works, not what is
+**Status: v0.2.8.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -34,7 +34,9 @@ since the skin system was built. v0.2.5 made the registry changeable from the
 Control Panel rather than only readable there. v0.2.6 added window snapping,
 and fixed Alt+Tab, which had been quietly dead since ReconOS started drawing
 its own windows. v0.2.7 added four desktops, which was the last thing the
-Multitasking page said was missing.
+Multitasking page said was missing. v0.2.8 made Properties work, and made the
+explorer and the properties box agree about how big a file is and what it
+is.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.

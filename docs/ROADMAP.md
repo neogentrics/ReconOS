@@ -492,6 +492,33 @@ That is twice now that getting the *pairs* right — rather than adding new
 kinds of check — has found something invisible on screen. The lesson worth
 keeping: a palette test is only as good as its list of what is drawn on what.
 
+## v0.2.8 — Properties
+
+It had been in the context menu since the menus existed, greyed out, because
+there was nothing to show. It shows the name, what it is, how big, where it
+lives, and when it last changed.
+
+**One answer, in one place.** The desktop and the explorer offer the same
+entry, and two copies of "how big is this and when did it change" is two
+places to answer it differently — which was not hypothetical. The explorer
+already had its own rounding, so a file said "2.4 KB" in the listing and
+would have said "2441 bytes" in its properties; and its own type naming, so
+the Type column said "File" for a thing whose properties call it a Text file.
+Both now come from `recon_props`.
+
+Deliberately not in `recon_fs`: counting a folder's contents is a filesystem
+question, but "2.4 KB" and "3 September 2026" are decisions about how to say
+a number to a person, and the filesystem should not be making those.
+
+A folder is measured in items rather than bytes — the size of a directory is
+a number about the filesystem, not about anything the person put there.
+
+Two things it needed: files now carry a modification time, which nothing had
+recorded; and a dialog message can break its own lines. The wrapping was on
+width alone, which is right for a sentence and wrong for four short facts,
+and the line limit was three, which quietly dropped "Changed ..." and left a
+box that looked complete without it.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -571,8 +598,9 @@ rewrite later.
   writable by its owner alone, so no other account on the machine can drive
   ReconOS through it, but that is a file permission rather than a login and it
   is not enough to carry the socket off the local machine.
-- Properties is in the context menu and disabled: there is no properties view
-  yet, and hiding the entry would suggest there never will be.
+- Properties tells you what something is, not what it is for. There is no way
+  to change anything from it — no read-only flag, no "open with", because
+  neither exists to be changed.
 - Nothing warns before a registry change breaks something. The page asks for
   the administrator's password and asks again before a removal, and that is
   all: it does not know which settings the system depends on, so setting
