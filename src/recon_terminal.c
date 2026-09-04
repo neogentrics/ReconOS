@@ -17,6 +17,7 @@
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_icons.h"
+#include "recon_clip.h"
 #include "recon_cmd.h"
 #include "recon_terminal.h"
 #include "recon_theme.h"
@@ -247,6 +248,31 @@ static void insert_char(struct recon_terminal *term, char c) {
 
 static bool terminal_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_terminal *term = user;
+
+    if ((modifiers & RECON_MOD_CTRL) != 0) {
+        /*
+         * Paste, one character at a time through the same path typing takes,
+         * so the input line's own limit applies.
+         *
+         * A newline ends it rather than submitting the line. Pasting several
+         * commands and having them all run is how somebody loses a directory
+         * to a paste they meant to read first -- the first line goes in, and
+         * pressing Return is still a decision.
+         */
+        if (sym == XKB_KEY_v || sym == XKB_KEY_V) {
+            const char *held = recon_clip_text();
+            for (const char *c = held; *c != '\0'; c++) {
+                if (*c == '\n' || *c == '\r') {
+                    break;
+                }
+                insert_char(term, *c);
+            }
+            return true;
+        }
+
+        /* Other control combinations are not text and must not be typed. */
+        return true;
+    }
 
     switch (sym) {
     case XKB_KEY_Return:

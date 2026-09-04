@@ -17,6 +17,7 @@
 
 #include "recon_appwin.h"
 #include "recon_filedlg.h"
+#include "recon_clip.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_notepad.h"
@@ -35,6 +36,9 @@
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
 #define COLOR_CURSOR THEME(CARET)
+/* What marks selected text. The field selection rather than the list
+ * one: this is text being edited, not a row being pointed at. */
+#define COLOR_SELECTION THEME(FIELD_SELECTION)
 #define COLOR_STATUS_BG THEME(WINDOW_FRAME)
 #define COLOR_STATUS_TEXT THEME(SURFACE_TEXT_DIM)
 #define COLOR_MENUBAR THEME(MENU)
@@ -69,6 +73,10 @@ enum file_command {
     FILE_CLOSE,
     EDIT_UNDO,
     EDIT_REDO,
+    EDIT_CUT,
+    EDIT_COPY,
+    EDIT_PASTE,
+    EDIT_SELECT_ALL,
 };
 
 struct menu_item {
@@ -89,8 +97,12 @@ static const struct menu_item FILE_MENU[] = {
 };
 
 static const struct menu_item EDIT_MENU[] = {
-    { "Undo", "Ctrl+Z", EDIT_UNDO, false },
-    { "Redo", "Ctrl+Y", EDIT_REDO, false },
+    { "Undo",       "Ctrl+Z", EDIT_UNDO,   false },
+    { "Redo",       "Ctrl+Y", EDIT_REDO,   true  },
+    { "Cut",        "Ctrl+X", EDIT_CUT,    false },
+    { "Copy",       "Ctrl+C", EDIT_COPY,   false },
+    { "Paste",      "Ctrl+V", EDIT_PASTE,  true  },
+    { "Select All", "Ctrl+A", EDIT_SELECT_ALL, false },
 };
 
 /*
@@ -166,6 +178,12 @@ struct recon_notepad {
     size_t length;
     size_t capacity;
     size_t cursor; /* byte offset into text */
+
+    /*
+     * The other end of a selection, or NO_ANCHOR. Zero is a real place in the
+     * document, so "nothing selected" cannot be zero.
+     */
+    size_t anchor;
 
     int scroll_line;
     int visible_lines;
@@ -459,7 +477,176 @@ static void forget_history(struct recon_notepad *np) {
     np->undo_at = 0;
 }
 
+/* --- Selection --- */
+
+/*
+ * A selection is an anchor and the cursor, with the text between them.
+ *
+ * Which of the two comes first is not fixed: dragging backwards from a word
+ * puts the anchor after the cursor, and everything below sorts them rather
+ * than assuming. Anchoring at SIZE_MAX means nothing is selected, because
+ * zero is a real place in the document and "no selection" is not.
+ */
+#define NO_ANCHOR ((size_t)-1)
+
+static bool has_selection(const struct recon_notepad *np) {
+    return np->anchor != NO_ANCHOR && np->anchor != np->cursor;
+}
+
+static void selection_range(const struct recon_notepad *np,
+        size_t *from, size_t *to) {
+    if (!has_selection(np)) {
+        *from = np->cursor;
+        *to = np->cursor;
+        return;
+    }
+    *from = np->anchor < np->cursor ? np->anchor : np->cursor;
+    *to = np->anchor < np->cursor ? np->cursor : np->anchor;
+}
+
+static void clear_selection(struct recon_notepad *np) {
+    np->anchor = NO_ANCHOR;
+}
+
+/*
+ * Start or continue a selection, depending on whether Shift is held.
+ *
+ * Called before every cursor movement. Moving without Shift drops whatever
+ * was selected, which is what makes an arrow key mean "go here" rather than
+ * "extend to here".
+ */
+static void before_move(struct recon_notepad *np, bool extending) {
+    if (!extending) {
+        clear_selection(np);
+        return;
+    }
+    if (np->anchor == NO_ANCHOR) {
+        np->anchor = np->cursor;
+    }
+}
+
+/* Record a whole run as one edit, rather than one per character. */
+static void record_run(struct recon_notepad *np, size_t at, const char *text,
+        size_t length, bool insert) {
+    if (np->replaying || length == 0) {
+        return;
+    }
+
+    struct edit *edit = push_edit(np);
+    edit->text = malloc(length);
+    if (edit->text == NULL) {
+        np->undo_count--;
+        np->undo_at = np->undo_count;
+        return;
+    }
+    memcpy(edit->text, text, length);
+    edit->length = length;
+    edit->at = at;
+    edit->insert = insert;
+    edit->cursor_before = np->cursor;
+}
+
+/*
+ * Take out everything between two points, as one undoable act.
+ *
+ * Not a loop over delete_before_cursor: that would record a character at a
+ * time and group them by word, so undoing a deleted paragraph would give it
+ * back a word at a time -- which is not what deleting it was.
+ */
+static void delete_range(struct recon_notepad *np, size_t from, size_t to) {
+    if (to <= from || to > np->length) {
+        return;
+    }
+
+    record_run(np, from, np->text + from, to - from, false);
+
+    memmove(np->text + from, np->text + to, np->length - to + 1);
+    np->length -= (to - from);
+    np->cursor = from;
+    np->modified = true;
+    clear_selection(np);
+}
+
+/* Whatever is selected, gone. True when there was something. */
+static bool delete_selection(struct recon_notepad *np) {
+    if (!has_selection(np)) {
+        return false;
+    }
+    size_t from, to;
+    selection_range(np, &from, &to);
+    delete_range(np, from, to);
+    return true;
+}
+
+static void insert_run(struct recon_notepad *np, const char *text,
+        size_t length) {
+    if (length == 0 || !ensure_capacity(np, np->length + length)) {
+        return;
+    }
+
+    record_run(np, np->cursor, text, length, true);
+
+    memmove(np->text + np->cursor + length, np->text + np->cursor,
+        np->length - np->cursor + 1);
+    memcpy(np->text + np->cursor, text, length);
+    np->length += length;
+    np->cursor += length;
+    np->modified = true;
+}
+
+/* --- Cut, copy, paste --- */
+
+static void do_copy(struct recon_notepad *np, bool cut) {
+    if (!has_selection(np)) {
+        set_message(np, false, "Nothing is selected.");
+        return;
+    }
+
+    size_t from, to;
+    selection_range(np, &from, &to);
+    if (!recon_clip_set_text(np->text + from, to - from)) {
+        set_message(np, true, "There was not room to copy that.");
+        return;
+    }
+
+    if (cut) {
+        delete_range(np, from, to);
+        scroll_to_cursor(np);
+        set_message(np, false, "Cut %zu characters.", to - from);
+    } else {
+        set_message(np, false, "Copied %zu characters.", to - from);
+    }
+}
+
+static void do_paste(struct recon_notepad *np) {
+    if (recon_clip_empty()) {
+        set_message(np, false, "The clipboard is empty.");
+        return;
+    }
+
+    /* Pasting over a selection replaces it, which is what the selection being
+     * there means. */
+    delete_selection(np);
+    insert_run(np, recon_clip_text(), recon_clip_length());
+    scroll_to_cursor(np);
+    np->message[0] = '\0';
+}
+
+static void do_select_all(struct recon_notepad *np) {
+    if (np->length == 0) {
+        return;
+    }
+    np->anchor = 0;
+    np->cursor = np->length;
+    scroll_to_cursor(np);
+    np->message[0] = '\0';
+}
+
 static void insert_char(struct recon_notepad *np, char c) {
+    /* Typing over a selection replaces it, which is what having selected it
+     * meant. Done first so the character lands where the selection was. */
+    delete_selection(np);
+
     if (!ensure_capacity(np, np->length + 1)) {
         return;
     }
@@ -474,6 +661,9 @@ static void insert_char(struct recon_notepad *np, char c) {
 }
 
 static void delete_before_cursor(struct recon_notepad *np) {
+    if (delete_selection(np)) {
+        return;    /* Backspace with something selected removes that. */
+    }
     if (np->cursor == 0) {
         return;
     }
@@ -487,6 +677,9 @@ static void delete_before_cursor(struct recon_notepad *np) {
 }
 
 static void delete_at_cursor(struct recon_notepad *np) {
+    if (delete_selection(np)) {
+        return;
+    }
     if (np->cursor >= np->length) {
         return;
     }
@@ -715,6 +908,22 @@ static void run_command(struct recon_notepad *np, enum file_command command) {
         do_redo(np);
         break;
 
+    case EDIT_CUT:
+        do_copy(np, true);
+        break;
+
+    case EDIT_COPY:
+        do_copy(np, false);
+        break;
+
+    case EDIT_PASTE:
+        do_paste(np);
+        break;
+
+    case EDIT_SELECT_ALL:
+        do_select_all(np);
+        break;
+
     case FILE_CLOSE:
         /*
          * Unsaved work is not thrown away on a click. Closing asks where to
@@ -868,6 +1077,9 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     int line = 0;
     int cursor_line = line_number(np, np->cursor);
 
+    size_t sel_from, sel_to;
+    selection_range(np, &sel_from, &sel_to);
+
     while (pos <= np->length && line < np->scroll_line + np->visible_lines) {
         size_t end = line_end(np, pos);
 
@@ -875,6 +1087,48 @@ static void notepad_draw(void *user, struct recon_panel *panel,
             int row = line - np->scroll_line;
             int ly = y + PADDING + row * line_height;
             int baseline = ly + ascent;
+
+            /*
+             * The selection, under the text rather than over it.
+             *
+             * Drawn per line and clipped to that line, because a selection
+             * spanning three lines is three rectangles and not one -- and the
+             * middle one has to run to the edge of the text, not to the edge
+             * of the window, or an empty line in the middle of a selection
+             * looks like the selection stopped there.
+             */
+            if (sel_to > sel_from) {
+                size_t line_from = pos > sel_from ? pos : sel_from;
+                size_t line_to = end < sel_to ? end : sel_to;
+
+                if (line_to >= line_from &&
+                        line_from <= end && line_to >= pos) {
+                    char saved_a = np->text[line_from];
+                    np->text[line_from] = '\0';
+                    int from_x = recon_text_width(np->font, np->text + pos);
+                    np->text[line_from] = saved_a;
+
+                    char saved_b = np->text[line_to];
+                    np->text[line_to] = '\0';
+                    int to_x = recon_text_width(np->font, np->text + pos);
+                    np->text[line_to] = saved_b;
+
+                    /*
+                     * A line whose break is inside the selection shows a
+                     * little past its last character, so the newline itself
+                     * reads as part of what was taken.
+                     */
+                    if (sel_to > end) {
+                        to_x += 4;
+                    }
+
+                    if (to_x > from_x) {
+                        recon_fill_rect(panel, x + PADDING + from_x, ly,
+                            to_x - from_x, line_height - LINE_SPACING,
+                            COLOR_SELECTION);
+                    }
+                }
+            }
 
             if (end > pos) {
                 /* recon_draw_text needs a terminated string; borrow the byte
@@ -1048,6 +1302,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     bool ctrl = (modifiers & RECON_MOD_CTRL) != 0;
+    bool shift = (modifiers & RECON_MOD_SHIFT) != 0;
 
     if (ctrl) {
         switch (sym) {
@@ -1079,6 +1334,22 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case XKB_KEY_y:
         case XKB_KEY_Y:
             do_redo(np);
+            return true;
+        case XKB_KEY_a:
+        case XKB_KEY_A:
+            do_select_all(np);
+            return true;
+        case XKB_KEY_c:
+        case XKB_KEY_C:
+            do_copy(np, false);
+            return true;
+        case XKB_KEY_x:
+        case XKB_KEY_X:
+            do_copy(np, true);
+            return true;
+        case XKB_KEY_v:
+        case XKB_KEY_V:
+            do_paste(np);
             return true;
         default:
             break;
@@ -1120,7 +1391,13 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
         return true;
 
+    /*
+     * Moving with Shift held extends the selection; moving without it drops
+     * whatever was selected. before_move is called on every one of these, so
+     * there is no arrow key that quietly forgets to.
+     */
     case XKB_KEY_Left:
+        before_move(np, shift);
         if (np->cursor > 0) {
             np->cursor--;
         }
@@ -1128,6 +1405,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
 
     case XKB_KEY_Right:
+        before_move(np, shift);
         if (np->cursor < np->length) {
             np->cursor++;
         }
@@ -1135,20 +1413,24 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
 
     case XKB_KEY_Up:
+        before_move(np, shift);
         move_up(np);
         scroll_to_cursor(np);
         return true;
 
     case XKB_KEY_Down:
+        before_move(np, shift);
         move_down(np);
         scroll_to_cursor(np);
         return true;
 
     case XKB_KEY_Home:
+        before_move(np, shift);
         np->cursor = line_start(np, np->cursor);
         return true;
 
     case XKB_KEY_End:
+        before_move(np, shift);
         np->cursor = line_end(np, np->cursor);
         return true;
 
@@ -1279,6 +1561,7 @@ struct recon_appwin *recon_notepad_create(struct recon_server *server,
      */
     np->menu_open = -1;
     np->menu_hover = -1;
+    np->anchor = NO_ANCHOR;
 
     if (!ensure_capacity(np, 0)) {
         free(np);

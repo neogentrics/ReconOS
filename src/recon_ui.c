@@ -21,6 +21,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/log.h>
 
+#include "recon_clip.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 
@@ -1060,6 +1061,52 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
             edit->caret = edit->length;
             return RECON_EDIT_CHANGED;
         }
+
+        /*
+         * Cut, copy and paste, on the system's clipboard.
+         *
+         * Here rather than in each field's owner, because every field in
+         * ReconOS is this editor -- renaming a file, typing a path, naming
+         * one to save -- and a clipboard that works in some of them and not
+         * others is worse than none, since which is which cannot be seen.
+         */
+        int from, to;
+        if (sym == XKB_KEY_c || sym == XKB_KEY_C) {
+            if (edit_selection(edit, &from, &to)) {
+                recon_clip_set_text(edit->text + from, (size_t)(to - from));
+            }
+            return RECON_EDIT_IGNORED;
+        }
+        if (sym == XKB_KEY_x || sym == XKB_KEY_X) {
+            if (edit_selection(edit, &from, &to)) {
+                recon_clip_set_text(edit->text + from, (size_t)(to - from));
+                edit_delete_selection(edit);
+                return RECON_EDIT_CHANGED;
+            }
+            return RECON_EDIT_IGNORED;
+        }
+        if (sym == XKB_KEY_v || sym == XKB_KEY_V) {
+            const char *held = recon_clip_text();
+            if (*held == '\0') {
+                return RECON_EDIT_IGNORED;
+            }
+            edit_delete_selection(edit);
+            /*
+             * One character at a time, through the same path typing takes, so
+             * the field's own length limit applies. A newline is skipped:
+             * this is a single line, and pasting a paragraph into a file name
+             * should give the first line rather than a name with a line break
+             * in it.
+             */
+            for (const char *c = held; *c != '\0'; c++) {
+                if (*c == '\n' || *c == '\r') {
+                    break;
+                }
+                edit_insert(edit, *c);
+            }
+            return RECON_EDIT_CHANGED;
+        }
+
         /* Other control combinations are not text and must not be typed. */
         return RECON_EDIT_IGNORED;
     }
