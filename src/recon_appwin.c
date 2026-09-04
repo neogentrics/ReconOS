@@ -180,6 +180,20 @@ static void draw_buttons(struct recon_appwin *win) {
         default:
             break;
         }
+
+        /*
+         * The corners last, so the glyph and the bevel are rounded off with
+         * the button rather than sticking out of it.
+         *
+         * Filled back to the title bar's colour, not cleared: this is a
+         * button drawn on top of a bar that is already painted, and a hole
+         * here would show the wallpaper through the middle of the frame.
+         */
+        int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+        if (radius > 0) {
+            recon_round_rect(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, radius,
+                win->focused ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE));
+        }
     }
 }
 

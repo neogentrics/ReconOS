@@ -1348,6 +1348,15 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
     recon_fill_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
     recon_draw_bevel(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, active || minimized);
 
+    /* Rounded to whatever the skin asks for, filled back to the bar behind
+     * rather than cleared -- a hole here would show the wallpaper through the
+     * taskbar. */
+    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    if (radius > 0) {
+        recon_round_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, radius,
+            THEME(BAR));
+    }
+
     /* The icon comes first, so a bar of buttons can be read at a glance
      * without depending on the titles fitting. */
     int text_x = x + TEXT_INSET;
@@ -1435,6 +1444,12 @@ static void draw_taskbar(struct recon_shell *shell) {
         shell->menu_open ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
     recon_draw_bevel(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open);
+
+    int apps_radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    if (apps_radius > 0) {
+        recon_round_rect(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+            APPS_BUTTON_WIDTH, BUTTON_HEIGHT, apps_radius, THEME(BAR));
+    }
 
     /* A mark so the button reads as the system menu rather than a window. */
     int mark_size = BUTTON_HEIGHT - 10;

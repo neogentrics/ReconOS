@@ -160,6 +160,14 @@ enum recon_theme_metric {
     RECON_METRIC_CORNER,
     /* The minimize, maximize and close buttons. */
     RECON_METRIC_BUTTON_SIZE,
+    /*
+     * How far a button's corners are rounded. Zero is square.
+     *
+     * All four, unlike a window's -- a button sits inside something rather
+     * than against the edge of the screen, so there is no side of it that
+     * rounding would turn into a gap.
+     */
+    RECON_METRIC_BUTTON_CORNER,
 
     RECON_METRIC_COUNT,
 };

@@ -592,6 +592,96 @@ void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
     recon_fill_rect(panel, x, y, w, h, recon_theme_color(role));
 }
 
+/*
+ * Mix `over` into `base` by `amount` out of 255.
+ *
+ * Used where a shape's edge falls partway across a pixel, so a curve reads as
+ * a curve rather than as a staircase. Alpha is taken from the base, because
+ * everything this is used on is already opaque and a corner that also went
+ * transparent would show whatever is beneath the panel.
+ */
+static uint32_t blend_over(uint32_t base, uint32_t over, int amount) {
+    if (amount <= 0) {
+        return base;
+    }
+    if (amount >= 255) {
+        return (base & 0xFF000000u) | (over & 0x00FFFFFFu);
+    }
+
+    unsigned out = base & 0xFF000000u;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        int a = (int)((base >> shift) & 0xFF);
+        int b = (int)((over >> shift) & 0xFF);
+        int mixed = a + ((b - a) * amount) / 255;
+        out |= (unsigned)mixed << shift;
+    }
+    return out;
+}
+
+/*
+ * Round all four corners of a rectangle already drawn into the panel.
+ *
+ * Unlike a window's top corners, this fills the corner back in with what is
+ * behind it rather than clearing it to transparent: a button sits on a panel
+ * that has already been painted, and punching a hole in it would show the
+ * wallpaper through the middle of a title bar.
+ */
+void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
+        int radius, recon_color behind) {
+    if (panel == NULL || radius <= 0 || w <= 0 || h <= 0) {
+        return;
+    }
+    if (radius * 2 > w || radius * 2 > h) {
+        return;    /* Rounder than the shape; leave it square. */
+    }
+
+    const int SAMPLES = 4;
+
+    for (int dy = 0; dy < radius; dy++) {
+        for (int dx = 0; dx < radius; dx++) {
+            int inside = 0;
+
+            for (int sy = 0; sy < SAMPLES; sy++) {
+                for (int sx = 0; sx < SAMPLES; sx++) {
+                    double px = dx + (sx + 0.5) / SAMPLES;
+                    double py = dy + (sy + 0.5) / SAMPLES;
+                    double ox = radius - px;
+                    double oy = radius - py;
+                    if (ox * ox + oy * oy <= (double)radius * radius) {
+                        inside++;
+                    }
+                }
+            }
+
+            if (inside == SAMPLES * SAMPLES) {
+                continue;
+            }
+
+            /* How much of the corner belongs to what is behind it. */
+            int coverage = 255 - (inside * 255) / (SAMPLES * SAMPLES);
+
+            const int corners[4][2] = {
+                { x + dx,             y + dy },
+                { x + w - 1 - dx,     y + dy },
+                { x + dx,             y + h - 1 - dy },
+                { x + w - 1 - dx,     y + h - 1 - dy },
+            };
+
+            for (int i = 0; i < 4; i++) {
+                int cx = corners[i][0];
+                int cy = corners[i][1];
+                if (cx < 0 || cy < 0 || cx >= panel->width ||
+                        cy >= panel->height) {
+                    continue;
+                }
+
+                uint32_t *pixel = panel->pixels + (size_t)cy * panel->width + cx;
+                *pixel = blend_over(*pixel, behind, coverage);
+            }
+        }
+    }
+}
+
 void recon_round_top_corners(struct recon_panel *panel, int radius,
         recon_color edge) {
     (void)edge;

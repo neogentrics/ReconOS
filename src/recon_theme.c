@@ -578,6 +578,7 @@ static const struct {
     { "metric.border",        3,  1,  12 },
     { "metric.corner",        0,  0,  16 },
     { "metric.button-size",  16, 10,  32 },
+    { "metric.button-corner", 0,  0,   8 },
 };
 
 _Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
@@ -683,6 +684,7 @@ static const struct metric_spec SHAPE_BEACON[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_CORNER,        7 },
     { RECON_METRIC_BUTTON_SIZE,  18 },
+    { RECON_METRIC_BUTTON_CORNER, 3 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -694,6 +696,7 @@ static const struct metric_spec SHAPE_AQUA[] = {
     { RECON_METRIC_TITLE_HEIGHT, 28 },
     { RECON_METRIC_BORDER,        1 },
     { RECON_METRIC_CORNER,        9 },
+    { RECON_METRIC_BUTTON_CORNER, 4 },
     { RECON_METRIC_COUNT, 0 },
 };
 

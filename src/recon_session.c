@@ -220,7 +220,16 @@ static int update_tick(void *data);
  * developer sees a hundred times a day and a user sees once.
  */
 #define BOOT_TICK_MS 55        /* the animation, which wants to be smooth */
-#define BOOT_TICKS_PER_STEP 3  /* the lines, which do not */
+/*
+ * Five ticks a line rather than three: about a second and three quarters
+ * altogether.
+ *
+ * At three it went past faster than it could be read, which is the wrong
+ * failure for a screen whose whole job is to say the machine is starting. It
+ * is still short enough that somebody restarting for the fourth time in a row
+ * is not waiting on it.
+ */
+#define BOOT_TICKS_PER_STEP 5
 
 struct boot_step {
     const char *label;

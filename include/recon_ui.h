@@ -160,6 +160,17 @@ void recon_fill_gradient(struct recon_panel *panel, int x, int y, int w, int h,
 void recon_round_top_corners(struct recon_panel *panel, int radius,
     recon_color edge);
 
+/*
+ * Round all four corners of a rectangle already drawn into the panel.
+ *
+ * Unlike a window's top corners, the corner is filled with `behind` rather
+ * than cleared: a button sits on a panel that has already been painted, and
+ * punching a hole in it would show the wallpaper through the middle of a
+ * title bar.
+ */
+void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
+    int radius, recon_color behind);
+
 /* A one-pixel outline just inside the given rectangle. */
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);
