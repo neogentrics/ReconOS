@@ -128,8 +128,10 @@ open and only you can unlock it. **Sign Out** ends the session.
 
 ## How it looks
 
-**Control Panel → Appearance** lists the skins. Choosing one puts it on
-immediately, for your account alone; other accounts keep theirs.
+**Control Panel → Appearance** has three sections: **Themes**, **Colours** and
+**Wallpapers**. Choosing a skin in the list picks it out and shows what it is;
+**Use This Skin** puts it on. It is yours alone -- other accounts keep theirs,
+and the one in use says so beside its name.
 
 Ten ship. Four of them are for how people actually see: **Deuteran**,
 **Protan** and **Tritan** for the three kinds of colour vision deficiency, and
@@ -145,15 +147,23 @@ with the most evidence behind it for a dyslexic reader.
 A skin is a text file in `/System/Themes`. `theme install` adds one somebody
 else wrote.
 
-**Copy This Skin**, under the list, writes the chosen skin out under a name of
-your own and opens it for editing. A copy rather than a blank file: a skin
-answers forty-eight questions about colour, and having them all answered
-already is a much easier place to start than an empty file.
+**Customize Skin**, under the list, makes your own copy of the chosen skin. It
+asks first, then for a name and a line describing it, and then opens the **Skin
+Editor** in a window of its own -- beside the list rather than over it, because
+changing a colour is something you do while looking at the result.
 
-**Edit This Skin** lists every colour with a swatch of what it currently is.
-Pick one, press **Change Colour**, and type a colour as RRGGBB — or AARRGGBB
-where it needs to be see-through. The change is immediate and is written to the
-file straight away; there is no separate save.
+A copy rather than a blank file: a skin answers forty-eight questions about
+colour, and having them all answered already is a much easier place to start
+than an empty file. The skin that ships cannot be changed, only copied; a copy
+is yours and can be edited or deleted.
+
+The editor lists every colour with a swatch of what it currently is. Pick one,
+press **Change Colour**, and type a colour as RRGGBB — or AARRGGBB where it
+needs to be see-through. The change is immediate and is written to the file
+straight away; there is no separate save.
+
+The **Colours** section shows the colours of whichever skin is on. If that skin
+is one that ships, changing a colour offers to make your copy first.
 
 Some colours are a *ramp* from one to another, shown as two halves of the
 swatch and a second value. **Remove Ramp** makes one flat.

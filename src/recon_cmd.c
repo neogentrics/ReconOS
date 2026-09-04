@@ -1229,6 +1229,25 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    if (strcasecmp(what, "scroll") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: ui scroll <up|down> [times]\n");
+            return;
+        }
+
+        bool down = strcasecmp(argv[2], "down") == 0;
+        int times = (argc >= 4) ? atoi(argv[3]) : 1;
+        if (times < 1) {
+            times = 1;
+        }
+
+        for (int i = 0; i < times; i++) {
+            recon_inject_scroll(server, down ? 1.0 : -1.0);
+        }
+        out(s, "scrolled %s %d\n", down ? "down" : "up", times);
+        return;
+    }
+
     if (strcasecmp(what, "move") == 0 || strcasecmp(what, "click") == 0 ||
             strcasecmp(what, "rclick") == 0) {
         if (argc < 4) {

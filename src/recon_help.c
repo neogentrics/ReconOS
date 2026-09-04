@@ -514,6 +514,19 @@ static void help_draw(void *user, struct recon_panel *panel,
         help->topic_scroll = 0;
     }
 
+    /*
+     * The whole sidebar takes the wheel, not only the rows: a list is
+     * scrolled by pointing at it, and the gap under the last row is still
+     * pointing at it.
+     *
+     * Registered **before** the rows, because the last region added wins and
+     * this one covers all of them. Added after, it swallowed every click on
+     * the list -- the topics were drawn, highlighted under the pointer, and
+     * could not be chosen. A region that exists to catch what the others miss
+     * has to sit underneath them.
+     */
+    recon_hit_add(panel, x, y, SIDEBAR_WIDTH, h, HIT_SIDEBAR);
+
     int ty = y + PADDING / 2;
     bool divided = false;
 
@@ -570,11 +583,6 @@ static void help_draw(void *user, struct recon_panel *panel,
         h - PADDING, help->topic_scroll, help->topic_rows,
         help->topic_count);
 
-    /* The whole sidebar takes the wheel, not only the rows: a list is
-     * scrolled by pointing at it, and the gap under the last row is still
-     * pointing at it. */
-    recon_hit_add(panel, x, y, SIDEBAR_WIDTH, h, HIT_SIDEBAR);
-
     /* --- The page --- */
     int body_x = x + SIDEBAR_WIDTH + 1 + PADDING * 2;
     int body_w = w - (body_x - x) - PADDING * 2;
@@ -620,9 +628,33 @@ static void help_draw(void *user, struct recon_panel *panel,
         if (index >= help->page.line_count) {
             break;
         }
+
+        /*
+         * A subheading, drawn as one.
+         *
+         * The help is written as Markdown and read from it, so a line that
+         * starts with hashes is a heading -- and until now it was drawn with
+         * the hashes still on the front, which is the source leaking through
+         * into the page. Nobody writing the help asked for "### Making a skin
+         * of your own" to appear on screen.
+         */
+        const char *line = help->page.lines[index];
+        if (line[0] == '#') {
+            const char *text = line;
+            while (*text == '#') {
+                text++;
+            }
+            while (*text == ' ') {
+                text++;
+            }
+            recon_draw_text(panel, help->font, body_x,
+                body_y + i * line_height + ascent, body_w, text,
+                COLOR_HEADING);
+            continue;
+        }
+
         recon_draw_text(panel, help->font, body_x,
-            body_y + i * line_height + ascent, body_w,
-            help->page.lines[index], COLOR_TEXT);
+            body_y + i * line_height + ascent, body_w, line, COLOR_TEXT);
     }
 
     draw_scrollbar(panel, x + w - BAR_WIDTH - 2, y + PADDING,

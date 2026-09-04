@@ -108,6 +108,10 @@ struct recon_appwin {
 
     int screen_w, screen_h, reserved_bottom;
 
+    /* Set by the application to override impl->icon; empty means it has not
+     * been, and the application's own is used. */
+    char icon[64];
+
     /* Set by the application to override impl->title; empty means it has not
      * asked for anything but its own name. */
     char title[96];
@@ -214,7 +218,9 @@ static void draw_frame(struct recon_appwin *win) {
 
     /* An icon at the left, so a window says what it is before it is read. */
     int text_x = TITLE_INSET;
-    const char *icon = win->impl->icon != NULL ? win->impl->icon : RECON_ICON_APP;
+    /* The window's own, which is the application's unless it said otherwise
+     * -- and the same one the taskbar draws, because both ask here. */
+    const char *icon = recon_appwin_icon(win);
     int icon_size = TITLE_HEIGHT - 8;
     if (recon_icon_draw(p, icon, TITLE_INSET, 4, icon_size)) {
         text_x = TITLE_INSET + icon_size + 6;
@@ -828,7 +834,22 @@ const char *recon_appwin_icon(struct recon_appwin *win) {
     if (win == NULL) {
         return RECON_ICON_APP;
     }
+    if (win->icon[0] != '\0') {
+        return win->icon;
+    }
     return win->impl->icon != NULL ? win->impl->icon : RECON_ICON_APP;
+}
+
+void recon_appwin_set_icon(struct recon_appwin *win, const char *icon) {
+    if (win == NULL) {
+        return;
+    }
+    if (icon == NULL || icon[0] == '\0') {
+        win->icon[0] = '\0';  /* Back to the application's own. */
+    } else {
+        snprintf(win->icon, sizeof(win->icon), "%s", icon);
+    }
+    recon_appwin_refresh(win);
 }
 
 bool recon_appwin_is_focused(struct recon_appwin *win) {

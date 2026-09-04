@@ -158,6 +158,7 @@ enum action {
     ACTION_FIREWALL_RULE_DOWN,
     /* Skins */
     ACTION_USE_SKIN,
+    ACTION_ADD_WALLPAPER,
     ACTION_COPY_SKIN,
     ACTION_BEGIN_NAMING_SKIN,
     ACTION_CONFIRM_COPY_SKIN,
@@ -173,7 +174,7 @@ enum action {
 enum page {
     PAGE_ACCOUNTS,
     PAGE_APPEARANCE,
-    PAGE_READING,
+    PAGE_DISPLAY,
 
     PAGE_PROGRAMS,
     PAGE_MODULES,
@@ -213,7 +214,7 @@ static const struct {
 } PAGES[PAGE_COUNT] = {
     { "Accounts", RECON_ICON_APP, "Who may sign in" },
     { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
-    { "Reading", RECON_ICON_NOTEPAD, "Text, spacing, colour" },
+    { "Display Settings", RECON_ICON_NOTEPAD, "Text, size, resolution" },
 
     { "Programs", RECON_ICON_PROGRAMS, "What is installed" },
     { "Modules", RECON_ICON_MODULES, "Code the system loads" },
@@ -252,6 +253,20 @@ struct pending_item {
     const char *label;
     const char *detail;   /* What it is for. */
     const char *blocked;  /* What has to exist first. */
+};
+
+static const struct pending_item DISPLAY_ITEMS[] = {
+    { "Screen resolution", "How many pixels the display is.",
+      "ReconOS takes whatever size the window or the screen it was given is. "
+      "Asking a display for a different mode is a kernel's conversation with "
+      "a driver." },
+    { "Choose a font", "Pick from the fonts on this machine.",
+      "There is no list to pick from. ReconOS draws with whichever font the "
+      "host has, found by searching the usual places, and ships none of its "
+      "own." },
+    { "Add a font", "Install one for this system.",
+      "Needs somewhere for fonts to live and something that reads the common "
+      "formats. The same piece of work as the list above." },
 };
 
 static const struct pending_item POWER_ITEMS[] = {
@@ -331,6 +346,9 @@ static const struct {
     const struct pending_item *items;
     int count;
 } PENDING[PAGE_COUNT] = {
+    [PAGE_DISPLAY] = { "How text is sized and spaced, and how big the screen "
+        "is.", DISPLAY_ITEMS,
+        (int)(sizeof(DISPLAY_ITEMS) / sizeof(DISPLAY_ITEMS[0])) },
     [PAGE_POWER] = { "What the machine does when it is left alone.",
         POWER_ITEMS, (int)(sizeof(POWER_ITEMS) / sizeof(POWER_ITEMS[0])) },
     [PAGE_TROUBLESHOOT] = { "When something is not working.",
@@ -597,6 +615,17 @@ struct control_panel {
     enum recon_fw_protocol fw_protocol;
     enum recon_fw_action fw_action;
 
+    /*
+     * Where each list in Appearance has been scrolled to.
+     *
+     * One per list rather than one shared: they are three different lists of
+     * three different lengths, and carrying a position from a list of
+     * forty-eight roles into a list of five wallpapers would land past the
+     * end of it.
+     */
+    int theme_scroll;
+    int paper_scroll;
+
     bool naming_skin;
     struct recon_edit skin_new_name;
     /*
@@ -737,6 +766,69 @@ static void clear_status(struct control_panel *cp) {
 }
 
 /* --- Small drawing helpers --- */
+
+/*
+ * A bar down the right of a list, showing how much of it is on screen.
+ *
+ * Drawn only when there is more than fits. A bar that is always there and
+ * always full is furniture; one that appears when there is somewhere to go is
+ * the only thing on screen that says the list continues.
+ *
+ * Returns how much width it took, so the rows can keep clear of it.
+ */
+#define SCROLLBAR_WIDTH 7
+
+static int draw_scrollbar(struct recon_panel *p, int x, int y, int h,
+        int scroll, int visible, int total) {
+    if (total <= visible || visible <= 0 || h <= 0) {
+        return 0;
+    }
+
+    recon_fill_rect(p, x, y, SCROLLBAR_WIDTH, h, COLOR_BG);
+
+    int thumb = h * visible / total;
+    if (thumb < 12) {
+        thumb = 12;
+    }
+    if (thumb > h) {
+        thumb = h;
+    }
+
+    int span = total - visible;
+    int travel = h - thumb;
+    int at = span > 0 ? travel * scroll / span : 0;
+    if (at < 0) {
+        at = 0;
+    }
+    if (at > travel) {
+        at = travel;
+    }
+
+    recon_fill_rect(p, x + 1, y + at, SCROLLBAR_WIDTH - 2, thumb,
+        COLOR_SELECTED);
+    return SCROLLBAR_WIDTH;
+}
+
+/*
+ * Keep a scroll position inside the list it belongs to.
+ *
+ * Clamped where the list is drawn rather than where the wheel is turned,
+ * because this is the only place that knows both how many rows there are and
+ * how many fit. The wheel handler only ever adds and subtracts.
+ */
+static int clamp_scroll(int *scroll, int visible, int total) {
+    int most = total - visible;
+    if (most < 0) {
+        most = 0;
+    }
+    if (*scroll > most) {
+        *scroll = most;
+    }
+    if (*scroll < 0) {
+        *scroll = 0;
+    }
+    return *scroll;
+}
 
 static int draw_button(struct control_panel *cp, struct recon_panel *p,
         int x, int y, const char *label, uint32_t id, bool enabled) {
@@ -1230,7 +1322,7 @@ static const char *help_topic_for(enum page page) {
     case PAGE_ACCOUNTS:   return "Accounts";
     case PAGE_APPEARANCE: return "How it looks";
     case PAGE_CLEANUP:    return "Storage";
-    case PAGE_READING:    return "How it looks";
+    case PAGE_DISPLAY:    return "How it looks";
     case PAGE_PROGRAMS:   return "Programs";
     case PAGE_MODULES:    return "Programs";
     case PAGE_STORAGE:    return "Files";
@@ -1310,6 +1402,8 @@ static void draw_appearance_themes(struct control_panel *cp,
         rows = count;
     }
 
+    clamp_scroll(&cp->theme_scroll, rows, count);
+
     cp->list_x = x;
     cp->list_y = y;
     cp->list_w = w;
@@ -1317,15 +1411,24 @@ static void draw_appearance_themes(struct control_panel *cp,
 
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->theme_scroll, rows, count);
+    w -= bar;
+
     const char *current = recon_theme_current();
 
-    for (int i = 0; i < rows; i++) {
+    for (int row = 0; row < rows; row++) {
+        int i = cp->theme_scroll + row;
+        if (i >= count) {
+            break;
+        }
+
         struct recon_theme_info info;
         if (!recon_theme_at(i, &info)) {
             break;
         }
 
-        int ry = y + i * ROW_HEIGHT;
+        int ry = y + row * ROW_HEIGHT;
         bool showing = strcmp(info.name, current) == 0;
         bool picked = cp->selected == i;
 
@@ -1371,9 +1474,12 @@ static void draw_appearance_themes(struct control_panel *cp,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 10, info.description,
             faint);
 
-        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+        /* The row's number on screen, not its number in the list: the
+         * click handler adds the scroll back on. */
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
     }
 
+    w += bar;
     y += cp->list_h + PADDING;
 
     struct recon_theme_info chosen;
@@ -1473,14 +1579,16 @@ static void draw_appearance_colours(struct control_panel *cp,
         list_h = ROW_HEIGHT;
     }
 
-    int rows = list_h / ROW_HEIGHT;
     int roles = RECON_THEME_ROLE_COUNT;
-    if (rows > roles - cp->skin_scroll) {
-        rows = roles - cp->skin_scroll;
+    int rows = list_h / ROW_HEIGHT;
+    if (rows > roles) {
+        rows = roles;
     }
     if (rows < 0) {
         rows = 0;
     }
+
+    clamp_scroll(&cp->skin_scroll, rows, roles);
 
     cp->list_x = x;
     cp->list_y = y;
@@ -1488,6 +1596,10 @@ static void draw_appearance_colours(struct control_panel *cp,
     cp->list_h = rows * ROW_HEIGHT;
 
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->skin_scroll, rows, roles);
+    w -= bar;
 
     int swatch = ROW_HEIGHT - 8;
 
@@ -1532,13 +1644,14 @@ static void draw_appearance_colours(struct control_panel *cp,
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
     }
 
+    w += bar;
     y += cp->list_h + PADDING;
 
     if (roles > rows) {
         char more[64];
-        snprintf(more, sizeof(more), "%d of %d. Scroll for the rest.",
-            rows, roles);
-        recon_draw_text(p, cp->font, x + w - 200, y + ascent, 190, more,
+        snprintf(more, sizeof(more), "%d-%d of %d. The wheel shows the rest.",
+            cp->skin_scroll + 1, cp->skin_scroll + rows, roles);
+        recon_draw_text(p, cp->font, x + w - 240, y + ascent, 230, more,
             COLOR_DIM);
     }
 
@@ -1563,7 +1676,7 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
     y += line + PADDING;
 
     int papers = recon_wallpaper_count();
-    int list_h = h - (line + PADDING);
+    int list_h = h - (line + PADDING) - BUTTON_HEIGHT - PADDING;
     int rows = list_h / ROW_HEIGHT;
     if (rows > papers) {
         rows = papers;
@@ -1572,6 +1685,8 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
         rows = 0;
     }
 
+    clamp_scroll(&cp->paper_scroll, rows, papers);
+
     cp->list_x = x;
     cp->list_y = y;
     cp->list_w = w;
@@ -1579,15 +1694,24 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
 
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->paper_scroll, rows, papers);
+    w -= bar;
+
     const char *showing = recon_wallpaper_current();
 
-    for (int i = 0; i < rows; i++) {
+    for (int row = 0; row < rows; row++) {
+        int i = cp->paper_scroll + row;
+        if (i >= papers) {
+            break;
+        }
+
         char name[96];
         if (!recon_wallpaper_at(i, name, sizeof(name))) {
             break;
         }
 
-        int ry = y + i * ROW_HEIGHT;
+        int ry = y + row * ROW_HEIGHT;
         bool on = strcmp(name, showing) == 0;
 
         if (on) {
@@ -1600,12 +1724,21 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, w - 28, name,
             on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
-        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_WALLPAPER_BASE + i);
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_WALLPAPER_BASE + row);
     }
 
+    w += bar;
+    y += cp->list_h + PADDING;
+
+    draw_button(cp, p, x, y, "Add a Picture",
+        HIT_ACTION_BASE + ACTION_ADD_WALLPAPER, true);
+
     if (papers > rows) {
-        recon_draw_text(p, cp->font, x, y + cp->list_h + 4 + ascent, w,
-            "The window is too short to show them all.", COLOR_DIM);
+        char more[64];
+        snprintf(more, sizeof(more), "%d-%d of %d. The wheel shows the rest.",
+            cp->paper_scroll + 1, cp->paper_scroll + rows, papers);
+        recon_draw_text(p, cp->font, x + w - 240,
+            y + (BUTTON_HEIGHT + ascent) / 2 - 2, 230, more, COLOR_DIM);
     }
 }
 
@@ -1640,8 +1773,30 @@ static void draw_appearance(struct control_panel *cp, struct recon_panel *p,
     }
 }
 
-static void draw_reading(struct control_panel *cp, struct recon_panel *p,
+/*
+ * Defined below. Two pages draw it after their own settings: the ones that
+ * have something working and something that needs a kernel.
+ */
+static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
+    int x, int y, int w, int h, enum page page, bool heading);
+
+/*
+ * --- Display Settings ---
+ *
+ * It was called Reading, and it was about the spacing and the size of text.
+ * That is a fair description of what it does and a poor one of what it is
+ * for: somebody looking for how big the letters are does not go to a page
+ * called Reading, and somebody looking for the resolution has nowhere to go
+ * at all.
+ *
+ * Still missing here, and worth naming rather than leaving as a gap: the
+ * screen resolution, a list of fonts to choose from, and a way to add one.
+ * ReconOS has no fonts of its own and no installer for them -- it draws with
+ * whichever the host has -- so all three wait on the same thing.
+ */
+static void draw_display(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
+    int bottom = y + h;
     (void)h;
     int ascent = recon_font_ascent(cp->font);
     int line = recon_font_line_height(cp->font);
@@ -1649,7 +1804,7 @@ static void draw_reading(struct control_panel *cp, struct recon_panel *p,
         line = 18;
     }
 
-    y = draw_heading(cp, p, x, y, w, "Reading",
+    y = draw_heading(cp, p, x, y, w, "Display Settings",
         "How text is spaced and sized. Not a colour; see Appearance for that.");
 
     struct {
@@ -1708,6 +1863,11 @@ static void draw_reading(struct control_panel *cp, struct recon_panel *p,
 
     draw_button(cp, p, x, y, "Back to the defaults",
         HIT_ACTION_BASE + ACTION_RESET_READING, true);
+    y += BUTTON_HEIGHT + PADDING * 2;
+
+    /* And the three things this page is named for and cannot do yet, said
+     * plainly rather than left as a gap nobody can see. */
+    draw_pending_list(cp, p, x, y, w, bottom - y, PAGE_DISPLAY, false);
 }
 
 /*
@@ -1717,10 +1877,6 @@ static void draw_reading(struct control_panel *cp, struct recon_panel *p,
  * The tag on the right is deliberately plain: this is a note about the state
  * of the system, not a feature being advertised.
  */
-/* Defined below; the Power page ends with the three items that need one. */
-static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
-    int x, int y, int w, int h, enum page page, bool heading);
-
 /*
  * --- Power ---
  *
@@ -2842,8 +2998,12 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
 
     bx = draw_button(cp, p, x, y, "Add Rule",
         HIT_ACTION_BASE + ACTION_FIREWALL_ADD, on);
+    /* Greyed for a rule that ships: it can be turned off but not removed,
+     * and a button that refuses when pressed is worse than one that shows it
+     * will. */
     draw_button(cp, p, bx, y, "Remove Rule",
-        HIT_ACTION_BASE + ACTION_FIREWALL_REMOVE, have && on);
+        HIT_ACTION_BASE + ACTION_FIREWALL_REMOVE,
+        have && on && !recon_firewall_is_built_in(&chosen));
 
     y += BUTTON_HEIGHT + PADDING;
 
@@ -3476,7 +3636,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
     case PAGE_ACCOUNTS:   draw_accounts(cp, p, x, y, w, h); break;
     case PAGE_POWER:      draw_power(cp, p, x, y, w, h); break;
     case PAGE_APPEARANCE: draw_appearance(cp, p, x, y, w, h); break;
-    case PAGE_READING:    draw_reading(cp, p, x, y, w, h); break;
+    case PAGE_DISPLAY:    draw_display(cp, p, x, y, w, h); break;
     case PAGE_PROGRAMS:   draw_programs(cp, p, x, y, w, h); break;
     case PAGE_MODULES:    draw_modules(cp, p, x, y, w, h); break;
     case PAGE_NETWORK:    draw_network(cp, p, x, y, w, h); break;
@@ -4335,6 +4495,18 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     /* --- Skins --- */
 
+    case ACTION_ADD_WALLPAPER:
+        /*
+         * Not built. The picture has to be chosen from the filesystem, which
+         * means the file dialog, and the wallpaper list has to be able to
+         * hold something from outside /System/Wallpapers -- neither of which
+         * exists yet.
+         */
+        set_status(cp, true, "Not built yet: choosing a picture needs the "
+            "file dialog, and the list can only hold what is in "
+            "/System/Wallpapers.");
+        break;
+
     case ACTION_USE_SKIN: {
         struct recon_theme_info info;
         if (!recon_theme_at(cp->selected, &info)) {
@@ -4989,7 +5161,8 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     if (hit_id >= HIT_WALLPAPER_BASE) {
-        int index = (int)(hit_id - HIT_WALLPAPER_BASE);
+        /* Screen row plus where the list is scrolled to. */
+        int index = cp->paper_scroll + (int)(hit_id - HIT_WALLPAPER_BASE);
         char name[96];
         if (recon_wallpaper_at(index, name, sizeof(name)) &&
                 recon_wallpaper_set(name)) {
@@ -5089,6 +5262,10 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             cp->skin_row = cp->skin_scroll + index;
             cp->skin_value_editing = false;
             return true;
+        }
+
+        if (cp->page == PAGE_APPEARANCE) {
+            index += cp->theme_scroll;
         }
 
         if (cp->page == PAGE_APPEARANCE) {
@@ -5337,13 +5514,31 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 static void panel_scroll(void *user, double delta) {
     struct control_panel *cp = user;
 
-    /* Forty-eight roles do not fit, and reaching for the arrow keys to see
-     * the rest of a list you are looking at with a mouse is a small
-     * indignity. */
-    if (cp->page == PAGE_APPEARANCE && cp->skin_editing) {
-        cp->skin_scroll += (delta > 0) ? 3 : -3;
-        if (cp->skin_scroll < 0) {
-            cp->skin_scroll = 0;
+    /*
+     * Every list in Appearance takes the wheel.
+     *
+     * Only the skin editor did, which meant the Colours section said "scroll
+     * for the rest" under a list that could not be scrolled -- a page telling
+     * somebody to do something it would not let them do. Themes and
+     * Wallpapers are here for the same reason in advance: neither overflows
+     * today, and both will the first time somebody adds a tenth skin or a
+     * sixth picture.
+     *
+     * Only floored here. The upper bound belongs where the list is drawn,
+     * which is the only place that knows how many rows there are and how many
+     * fit.
+     */
+    int step = (delta > 0) ? 3 : -3;
+
+    if (cp->page == PAGE_APPEARANCE) {
+        int *at = cp->skin_editing ? &cp->skin_scroll
+            : cp->section == APPEARANCE_COLOURS ? &cp->skin_scroll
+            : cp->section == APPEARANCE_WALLPAPERS ? &cp->paper_scroll
+            : &cp->theme_scroll;
+
+        *at += step;
+        if (*at < 0) {
+            *at = 0;
         }
         return;
     }
@@ -5381,7 +5576,7 @@ static void panel_destroy(void *user) {
 static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .title = "Control Panel",
     .help = "Accounts",
-    .icon = RECON_ICON_SYSTEM,
+    .icon = RECON_ICON_CONTROL_PANEL,
     /* Tall enough for the whole page list without scrolling it: a settings
      * window whose own list of settings does not fit is a poor advertisement
      * for the settings. */
@@ -5441,6 +5636,7 @@ static void open_page_window(struct control_panel *cp, enum page page) {
          * can tell apart, which is the same as no taskbar.
          */
         recon_appwin_set_title(sub->win, PAGES[page].label);
+        recon_appwin_set_icon(sub->win, PAGES[page].icon);
         recon_appwin_set_help_topic(sub->win, help_topic_for(page));
 
         g_pages[page] = sub;
@@ -5536,6 +5732,7 @@ static void open_skin_editor(struct control_panel *cp, const char *skin) {
         }
 
         recon_appwin_set_title(ed->win, "Skin Editor");
+        recon_appwin_set_icon(ed->win, RECON_ICON_APPEARANCE);
         recon_appwin_set_help_topic(ed->win, "How it looks");
         g_skin_editor = ed;
     }

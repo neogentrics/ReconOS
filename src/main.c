@@ -1287,6 +1287,18 @@ void recon_inject_button(struct recon_server *server, uint32_t button, bool pres
 static bool handle_shortcut(struct recon_server *server, uint32_t modifiers,
     xkb_keysym_t sym);
 
+void recon_inject_scroll(struct recon_server *server, double delta) {
+    if (server == NULL) {
+        return;
+    }
+    if (woke_the_screen(server)) {
+        return;
+    }
+    recon_shell_handle_scroll(server->shell, server->cursor->x,
+        server->cursor->y, delta);
+    recon_damage_all(server);
+}
+
 void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers) {
     if (server == NULL) {
         return;

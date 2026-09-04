@@ -292,6 +292,20 @@ void recon_appwin_content_origin(struct recon_appwin *win, int *x, int *y);
  * bar both read through recon_appwin_title, so they stay in step.
  */
 void recon_appwin_set_title(struct recon_appwin *win, const char *title);
+
+/*
+ * Override the icon the application registered, for this window alone.
+ *
+ * The companion to set_title, and needed for the same reason: an application
+ * that opens a window per thing you are looking at has one impl and many
+ * windows, and fourteen windows carrying one icon are fourteen taskbar
+ * buttons nobody can tell apart.
+ *
+ * Whatever is set here is what the title bar draws and what the taskbar draws
+ * -- both read through recon_appwin_icon, so there is one answer rather than
+ * two that can disagree. NULL puts the application's own icon back.
+ */
+void recon_appwin_set_icon(struct recon_appwin *win, const char *icon);
 const char *recon_appwin_icon(struct recon_appwin *win);
 
 /*

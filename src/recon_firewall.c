@@ -263,13 +263,7 @@ static bool parse_rule(char *value, struct recon_fw_rule *out) {
  * remote access. Turning one on is a switch rather than an exercise in
  * remembering a port number.
  */
-static void write_defaults(void) {
-    g_on = true;
-    g_defaults[RECON_FW_IN] = RECON_FW_BLOCK;
-    g_defaults[RECON_FW_OUT] = RECON_FW_ALLOW;
-    g_count = 0;
-
-    static const struct recon_fw_rule DEFAULTS[] = {
+static const struct recon_fw_rule DEFAULTS[] = {
         { "ReconOS remote access", RECON_FW_IN, RECON_FW_TCP,
           RECON_FW_RECON_PORT, RECON_FW_RECON_PORT, "", RECON_FW_ALLOW,
           false },
@@ -296,9 +290,47 @@ static void write_defaults(void) {
           RECON_FW_ALLOW, true },
         { "Time", RECON_FW_OUT, RECON_FW_UDP, 123, 123, "", RECON_FW_ALLOW,
           true },
-    };
+};
 
-    for (size_t i = 0; i < sizeof(DEFAULTS) / sizeof(DEFAULTS[0]) &&
+#define DEFAULT_COUNT ((int)(sizeof(DEFAULTS) / sizeof(DEFAULTS[0])))
+
+/*
+ * Whether this rule is one of the ones ReconOS ships.
+ *
+ * Matched on the whole shape -- name, direction, protocol and ports -- rather
+ * than on the name alone, so somebody who happens to call their own rule
+ * "Web" does not find they cannot delete it.
+ *
+ * Derived rather than stored. The rules file has seven fields and has had
+ * seven fields since it existed; an eighth would make every file written
+ * before today unreadable, and a flag in a file somebody can edit is not a
+ * flag worth the migration anyway.
+ */
+bool recon_firewall_is_built_in(const struct recon_fw_rule *rule) {
+    if (rule == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < DEFAULT_COUNT; i++) {
+        const struct recon_fw_rule *shipped = &DEFAULTS[i];
+        if (strcmp(shipped->name, rule->name) == 0 &&
+                shipped->direction == rule->direction &&
+                shipped->protocol == rule->protocol &&
+                shipped->port_from == rule->port_from &&
+                shipped->port_to == rule->port_to) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void write_defaults(void) {
+    g_on = true;
+    g_defaults[RECON_FW_IN] = RECON_FW_BLOCK;
+    g_defaults[RECON_FW_OUT] = RECON_FW_ALLOW;
+    g_count = 0;
+
+    for (int i = 0; i < DEFAULT_COUNT &&
             g_count < RECON_FIREWALL_RULES_MAX; i++) {
         g_rules[g_count++] = DEFAULTS[i];
     }
@@ -436,6 +468,19 @@ bool recon_firewall_remove(int index) {
     if (index < 0 || index >= g_count) {
         return false;
     }
+
+    /*
+     * A rule that ships stays. It can be turned off, moved, and switched from
+     * allow to block -- everything except removed, because there is nowhere
+     * to get it back from and "Secure shell, tcp 22" is not a thing anybody
+     * should have to remember in order to restore it.
+     */
+    if (recon_firewall_is_built_in(&g_rules[index])) {
+        set_error("'%s' is one of the rules ReconOS ships. It can be turned "
+            "off, but not removed", g_rules[index].name);
+        return false;
+    }
+
     memmove(&g_rules[index], &g_rules[index + 1],
         (size_t)(g_count - index - 1) * sizeof(g_rules[0]));
     g_count--;

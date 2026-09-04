@@ -241,6 +241,16 @@ void recon_inject_pointer(struct recon_server *server, int x, int y);
 void recon_inject_button(struct recon_server *server, uint32_t button, bool pressed);
 void recon_inject_key(struct recon_server *server, uint32_t sym, uint32_t modifiers);
 
+/*
+ * Turn the wheel where the pointer is.
+ *
+ * Positive is down, matching what the shell's own handler takes. Here for the
+ * same reason the other three are: a path nothing can drive from outside is a
+ * path that stops working without anybody noticing, which is exactly what had
+ * happened to the Control Panel's lists.
+ */
+void recon_inject_scroll(struct recon_server *server, double delta);
+
 /* Where the pointer is, so a test can check what it is about to click. */
 void recon_pointer_position(struct recon_server *server, int *x, int *y);
 

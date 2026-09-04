@@ -146,6 +146,17 @@ bool recon_firewall_at(int index, struct recon_fw_rule *out);
  * makes no sense. */
 bool recon_firewall_add(const struct recon_fw_rule *rule);
 
+/*
+ * Whether this rule is one ReconOS ships.
+ *
+ * The general rule, which is not only the firewall's: what the system
+ * provides can be switched, reordered, turned off and copied, and cannot be
+ * deleted. What somebody made can be deleted. A preset that can be removed is
+ * a preset that is gone for good, and there is nowhere to get it back from.
+ */
+bool recon_firewall_is_built_in(const struct recon_fw_rule *rule);
+
+/* Refuses a rule that ships. See recon_firewall_is_built_in. */
 bool recon_firewall_remove(int index);
 bool recon_firewall_set_rule_on(int index, bool on);
 
