@@ -1,5 +1,3 @@
-Windows snap to the edges. Drag one to the left or right edge for that
-half of the screen, or to the top to fill it.
-
-Alt+Tab works again. It had quietly stopped working when ReconOS began
-drawing its own windows.
+Four desktops. Alt+1 to Alt+4 switches between them; the numbers on the
+right of the taskbar do the same. Alt+Shift and a number takes the current
+window with you.

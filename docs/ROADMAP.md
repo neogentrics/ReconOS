@@ -14,6 +14,31 @@ a client request, a display change. Nothing polls.
 rather than imported, it gets written. Not for novelty — because understanding
 the whole stack is the point of the project.
 
+## How work is tracked
+
+Four places, and each answers a different question:
+
+| Where | Question |
+|---|---|
+| This file | What is planned, and why each decision went the way it did |
+| [docs/CHANGELOG.md](CHANGELOG.md) | What shipped in each version |
+| [docs/BUGS.md](BUGS.md) | Every fault ever found, and what it actually was |
+| [Issues](https://github.com/neogentrics/ReconOS/issues) | What is open now, and the discussion |
+
+Bugs are numbered `BG-001` upward, in the order they were found. Errors the
+running system raises are numbered `VT-A001` and so on, by area -- see
+[docs/ERRORS.md](ERRORS.md). Those are two different things: a bug is an event
+that happened once and was fixed, an error code is a category the system can
+raise forever.
+
+Every bug is a GitHub issue labelled `bug`; features, patches and releases are
+issues too, with the labels [docs/BUGS.md](BUGS.md#labels) lists. A commit
+fixing a bug names its number.
+
+This started on 4 September 2026, with the first sixty-two bugs numbered
+retroactively out of the commit history. Before that the record was commits
+only, which says what changed and not that anything was ever wrong.
+
 ## Phases
 
 ### Phase 1 — Desktop shell (current)
@@ -728,6 +753,87 @@ started halfway down a file reports nothing for a word that only appears
 above the cursor, which reads as "not here" and is wrong. Searching starts one
 past the selection rather than at the cursor, because a match is left
 selected and searching from the cursor would find the same one for ever.
+
+## v0.2.17 — the parts that run, and one of them can be restarted
+
+### Services
+
+Watchtower has a Services tab. Five entries: the desktop shell, the control
+socket, remote access, the firewall, and networking. Each says whether it is
+running, stopped, or failed and with which error code, and how many times it
+has been started this run. `services` in the Terminal is the same registry
+read a different way -- not a second copy of it, because two lists of what is
+running eventually disagree and the one somebody happened to be looking at
+would be the one they believed.
+
+Multitasking used to be a Control Panel page listing behaviour nobody could
+change: "Title bar buttons -- real, but not settable". Joshua's read of it was
+right and worth writing down:
+
+> Multitasking doesn't need to be a separate tab in the control panel. It
+> needs to show up in the task manager. It's one of the services that can be
+> seen running that can be turned on or off or restarted.
+
+So the page is gone and the shell is a service.
+
+`starts` rather than an uptime, because ReconOS has no clock of its own to
+measure one against, and the count says the thing worth knowing: one means a
+normal system, more than one means somebody has been repairing something.
+
+An essential service refuses Stop and allows Restart. The desktop shell is the
+only one so far. Stopped is a decision and failed is a problem, and a list
+that showed them the same way would hide every fault behind something that
+looks intentional -- so they are two states, and a failed one carries its
+code.
+
+### Restarting the shell
+
+The interesting half. Stopping the shell destroys the taskbar, the desktop,
+the menus and the session screen. It leaves the application windows alone,
+because they belong to the application registry rather than to the shell, and
+the new shell adopts whatever is still open.
+
+That is the whole point: a taskbar can be repaired without costing somebody
+the document they were writing. Whoever is signed in stays signed in -- being
+asked for a password because a taskbar needed rebuilding would be the repair
+costing more than the fault did.
+
+Two faults had been sitting in the code waiting for something to run this
+path.
+
+The UI font was loaded by the shell and freed with it. Every surviving window
+holds that pointer and several cache a copy of their own, so the first frame
+after a restart was a segmentation fault five frames deep in the glyph
+rasteriser -- reproducible three times out of three. The font belongs to the
+system now: loaded once per size for the whole run, freed after nothing is
+left that could draw. `recon_font_reload` already worked this way for changing
+a typeface; ownership is what was wrong. That is BG-061.
+
+And registering a built-in application twice was refused as a name collision.
+A second shell registers the same seven built-ins, so a restarted desktop had
+no Notepad and no File Explorer while the old windows were still on screen -- a
+desktop you cannot open anything from. A built-in re-registering itself is an
+update in place; a module trying to take a built-in's name is still refused,
+because that is the collision the check exists for and the shell's own
+built-ins are not two pieces of code.
+
+Finding it took making the test harness sign a user in first. Without an
+account signed in the restart takes the other branch and does not crash, which
+is why three runs under gdb looked clean while every run outside it dumped
+core.
+
+### Bugs have numbers
+
+[docs/BUGS.md](BUGS.md), and sixty-two GitHub issues. See
+[How work is tracked](#how-work-is-tracked) at the top of this file.
+
+Joshua asked for it in these terms:
+
+> People like to see a track record. People like to see that there's actually
+> been progression, not just random commits and updates every time something's
+> done.
+
+---
 
 ## v0.2.16 — saying what went wrong, and a boundary around what opens
 

@@ -9,6 +9,45 @@ way for the two to disagree.
 
 ---
 
+## v0.2.17
+
+**Services.** The parts of ReconOS that run are a list now, in Watchtower
+beside Applications and Processes: the desktop shell, the control socket,
+remote access, the firewall and networking. Each one says whether it is
+running, stopped, or failed and with which error code, and how many times it
+has been started this run -- one means a normal system, more than one means
+somebody has been repairing something. Start, Stop and Restart. `services` in
+the Terminal is the same list and the same registry.
+
+Multitasking used to be a Control Panel page describing behaviour nobody could
+change. It is a service now, which is what it always was.
+
+**The desktop shell can be restarted.** It rebuilds the taskbar, the desktop,
+the menus and the window management, and leaves your application windows open
+-- so a taskbar can be repaired without costing you the document you were
+writing. Whoever is signed in stays signed in: restarting the shell is a
+repair, not a sign-out.
+
+Two faults found by doing that, both of which had been waiting:
+
+The UI font belonged to the shell and was freed with it, while every surviving
+window still held the pointer. The first frame after a restart was a crash
+inside the glyph rasteriser. The font belongs to the system now, loaded once
+per size for the whole run.
+
+Registering a built-in application twice was refused as a name collision, so a
+restarted desktop had no Notepad and no File Explorer while the old windows
+were still on screen. A built-in re-registering itself is an update in place;
+a module trying to take a built-in's name is still refused.
+
+**Bugs have numbers.** Every fault found in ReconOS -- sixty-two of them so
+far -- is written down in `docs/BUGS.md` with an ID (`BG-001` upward), what it
+actually was, how it surfaced, who found it, and what was done about it. The
+ones found before today were numbered retroactively from the commit history.
+They are GitHub issues too, so the record is public and dated.
+
+---
+
 ## v0.2.16
 
 **Errors have codes now.** When something goes wrong ReconOS names it —

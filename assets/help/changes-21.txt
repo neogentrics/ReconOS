@@ -1,4 +1,5 @@
-The first version that was a usable desktop: it sets itself up on first run,
-asks who you are on every run after, and gives that person a desktop of their
-own. A taskbar, a Start menu, windows, a file explorer, a terminal, a task
-manager, Notepad and a calculator.
+One account at a time, properly. Each account gets its own settings, its
+own folders and its own windows.
+
+A Control Panel with the shape of the whole system in it, including the
+parts that are not built, each saying what has to exist first.

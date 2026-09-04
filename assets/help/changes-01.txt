@@ -1,27 +1,36 @@
-Errors have codes now. When something goes wrong ReconOS names it —
-VT-A001, VT-G005 — so it can be written down and looked up. errors in
-the Terminal says what a code means, errors log is what has happened on this
-machine, and docs/ERRORS.md is the whole list for when you have a code and
-not a working machine.
+Services. The parts of ReconOS that run are a list now, in Watchtower
+beside Applications and Processes: the desktop shell, the control socket,
+remote access, the firewall and networking. Each one says whether it is
+running, stopped, or failed and with which error code, and how many times it
+has been started this run -- one means a normal system, more than one means
+somebody has been repairing something. Start, Stop and Restart. services in
+the Terminal is the same list and the same registry.
 
-Three kinds: STOP (the system cannot continue and shows a screen with the
-code on it), fault (something failed and the rest carried on), and note
-(written down, nothing broke). If a run stops, the next start says so once,
-with the code.
+Multitasking used to be a Control Panel page describing behaviour nobody could
+change. It is a service now, which is what it always was.
 
-A firewall. Control Panel → Firewall, and firewall in the Terminal. It
-decides what ReconOS itself opens and accepts: outgoing allowed, incoming
-blocked, and a list of rules where the first match decides. Nine rules ship —
-the incoming ones written down and switched off, so opening one is a switch
-rather than remembering a port number. It is not the host's firewall and does
-not touch it.
+The desktop shell can be restarted. It rebuilds the taskbar, the desktop,
+the menus and the window management, and leaves your application windows open
+-- so a taskbar can be repaired without costing you the document you were
+writing. Whoever is signed in stays signed in: restarting the shell is a
+repair, not a sign-out.
 
-The startup screen checks the system instead of only counting it. Every
-folder the system needs, the skins, the accounts, the programs, the firewall —
-each line says what it found, and says the code when what it found is wrong.
-Missing folders are rebuilt rather than only reported.
+Two faults found by doing that, both of which had been waiting:
 
-Remote access, two ways. Over SSH by forwarding the control socket, which
-is encrypted and needs nothing from ReconOS; or over TCP 7420 with a key, which
-is off by default and says plainly that the key crosses the network in the
-clear. The firewall has to allow it either way.
+The UI font belonged to the shell and was freed with it, while every surviving
+window still held the pointer. The first frame after a restart was a crash
+inside the glyph rasteriser. The font belongs to the system now, loaded once
+per size for the whole run.
+
+Registering a built-in application twice was refused as a name collision, so a
+restarted desktop had no Notepad and no File Explorer while the old windows
+were still on screen. A built-in re-registering itself is an update in place;
+a module trying to take a built-in's name is still refused.
+
+Bugs have numbers. Every fault found in ReconOS -- sixty-two of them so
+far -- is written down in docs/BUGS.md with an ID (BG-001 upward), what it
+actually was, how it surfaced, who found it, and what was done about it. The
+ones found before today were numbered retroactively from the commit history.
+They are GitHub issues too, so the record is public and dated.
+
+---

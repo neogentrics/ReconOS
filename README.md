@@ -58,6 +58,10 @@ than counts, and remote access two ways.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
+[docs/BUGS.md](docs/BUGS.md) has every fault ever found in it -- what it
+actually was, how it surfaced, who found it, and what was done about it --
+and every entry is also a
+[GitHub issue](https://github.com/neogentrics/ReconOS/issues).
 
 Still early. There is no kernel of its own, and the account roles are
 enforced by ReconOS inside ReconOS rather than by anything underneath it. What is here works and is tested; what
@@ -698,8 +702,26 @@ tests/        tests that need no display
 scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
 third_party/  vendored dependencies (stb_image)
-docs/         roadmap, module interface, development notes
+docs/         roadmap, bug register, module interface, development notes
 ```
+
+## Bugs
+
+Sixty-two faults have been found in ReconOS so far. Every one of them has a
+number -- `BG-001` upward, assigned in the order it was found and never
+reused -- and an entry in [docs/BUGS.md](docs/BUGS.md) saying what was
+actually wrong rather than what it looked like.
+
+A commit says what changed. It does not say something was broken, that
+somebody hit it, or that it is fixed now. The register does, and the
+[issues](https://github.com/neogentrics/ReconOS/issues) carry the dates.
+
+The interesting ones were found by using the system, not by reading it. Four
+faults in the Help window in one sitting; a Calculator that took the whole
+desktop down because a struct grew a field and the ABI number did not; every
+context menu entry in the system silently doing nothing for weeks because
+nothing could press a button without a person there to do it. That last one
+is why ReconOS can drive its own input now.
 
 ## Where this is going
 
