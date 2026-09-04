@@ -1,0 +1,14 @@
+Control Panel → Appearance lists the skins. Choosing one puts it on
+immediately, for your account alone; other accounts keep theirs.
+
+Ten ship. Four of them are for how people actually see: Deuteran,
+Protan and Tritan for the three kinds of colour vision deficiency, and
+Contrast for low vision. Reading softens the contrast and warms the
+background.
+
+Control Panel → Reading changes the spacing between letters and lines, the
+typeface and its size. Extra space between letters is the single adjustment
+with the most evidence behind it for a dyslexic reader.
+
+A skin is a text file in /System/Themes. theme install adds one somebody
+else wrote.

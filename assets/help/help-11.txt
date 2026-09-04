@@ -1,0 +1,2 @@
+Print Screen saves a picture of the whole screen into your Pictures
+folder. So does the capture command, which can also be given a path.

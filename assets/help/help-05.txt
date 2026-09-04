@@ -1,0 +1,9 @@
+Icons on the desktop are the contents of your Desktop folder, so anything that
+writes a file there puts it on the desktop.
+
+Drag an icon and it stays where you put it. Where you put things is
+remembered per account, as a position on a grid, so it survives the screen
+changing size.
+
+Right-click the desktop to make a new folder, a new file, or a shortcut to
+a program.

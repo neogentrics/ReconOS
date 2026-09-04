@@ -1,0 +1,8 @@
+Drag a window by its title bar. Drag any edge or corner to resize it.
+
+Drag a window until the pointer touches the left or right edge of the
+screen and let go, and it fills that half. Drag it to the top and it fills
+the screen. The middle button in the title bar puts it back where it was.
+
+The three buttons at the right of a title bar are minimize, maximize and
+close.

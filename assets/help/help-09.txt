@@ -1,0 +1,11 @@
+Control Panel → Programs installs and removes programs, and Modules
+shows what is loaded and why anything refused to load.
+
+A program arrives as a package: a folder ending in .rpk with a
+package.txt inside saying what it is and what to place where. Installing
+writes down everything it put in place, so removing it takes back exactly
+that and nothing else.
+
+Installing a program is an administrator's decision. A program runs inside
+ReconOS with everything ReconOS can do, which is closer to installing a driver
+than to saving a file.

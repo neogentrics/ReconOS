@@ -1,0 +1,12 @@
+The Terminal runs ReconOS commands. It is not a Unix shell: nothing here
+reaches the machine underneath, and nothing outside ReconOS can be run from
+it.
+
+help lists every command. Some worth knowing:
+
+- dir, cd, type — look around and read a file
+- copy, move, rename, del — change things
+- theme, wallpaper — how it looks
+- net — what the network is doing
+- capture — a picture of the screen
+- reg — the settings the system remembers

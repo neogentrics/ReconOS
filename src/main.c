@@ -57,6 +57,7 @@
 #include "ReconOS.h"
 #include "recon_control.h"
 #include "recon_fs.h"
+#include "recon_help.h"
 #include "recon_icon_gen.h"
 #include "recon_icons.h"
 #include "recon_server.h"
@@ -281,6 +282,60 @@ static char *asset_path(const char *name) {
  * it. Doing nothing when it is already there is what makes a replacement
  * stay replaced.
  */
+/*
+ * Read a whole asset into memory. Caller frees.
+ *
+ * Public because the help text is an asset too, and it is copied into the
+ * ReconOS filesystem the same way the icons are -- from outside, once, at
+ * startup. Everything that needs an asset needs it at that moment and for
+ * that reason, so one door serves them all.
+ */
+char *recon_asset_read(const char *name, size_t *size_out) {
+    if (size_out != NULL) {
+        *size_out = 0;
+    }
+
+    char *path = asset_path(name);
+    if (path == NULL) {
+        return NULL;
+    }
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        free(path);
+        return NULL;
+    }
+    free(path);
+
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return NULL;
+    }
+    long size = ftell(f);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+
+    /* One byte over and terminated, so a caller treating it as text is right
+     * without having to be careful. */
+    char *data = malloc((size_t)size + 1);
+    if (data == NULL) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t got = fread(data, 1, (size_t)size, f);
+    fclose(f);
+
+    data[got] = '\0';
+    if (size_out != NULL) {
+        *size_out = got;
+    }
+    return data;
+}
+
 static void install_asset_icon(const char *asset, const char *icon_name) {
     char destination[RECON_PATH_MAX];
     snprintf(destination, sizeof(destination), "%s/%s.png",
@@ -1910,6 +1965,19 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/control-panel.png", RECON_ICON_CONTROL_PANEL);
     install_asset_icon("icons/apps.png", RECON_ICON_APPS);
     install_asset_icon("icons/help.png", RECON_ICON_HELP);
+
+    /*
+     * The help and the change log, rewritten every start rather than only
+     * when missing.
+     *
+     * Unlike an icon or a skin, there is nothing in a help page somebody
+     * would have customised and want kept -- and help describing a version
+     * the system is no longer running is worse than no help at all.
+     */
+    int topics = recon_help_write_defaults();
+    if (topics > 0) {
+        wlr_log(WLR_INFO, "ReconOS: %d help topics", topics);
+    }
 
     /*
      * Wallpapers, drawn the way the icons are. A system with nothing

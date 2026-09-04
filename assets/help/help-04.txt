@@ -1,0 +1,12 @@
+The File Explorer shows your folders. Type a path into the bar at the top,
+or use the drop-down at its right for the places you go often.
+
+Click something once to select it, again to open it. A folder opens; a text
+file opens in Notepad. Something ReconOS has nothing to open with says so.
+
+Right-click anything for what can be done to it, including Properties,
+which says what it is, how big it is and when it last changed.
+
+Deleting puts things in the Recycle Bin rather than destroying them, and
+each item remembers where it came from, so restoring puts it back. Shift and
+Delete skips the bin, after asking.

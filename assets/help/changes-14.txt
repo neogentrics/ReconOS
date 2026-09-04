@@ -1,0 +1,3 @@
+Connections that carry data, with a rule about which programs may open
+one. Screen capture on Print Screen. Installing and removing programs.
+Wallpapers the system draws for itself.

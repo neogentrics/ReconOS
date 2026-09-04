@@ -1,0 +1,13 @@
+The Apps button at the bottom left opens the Start menu. The left column
+is the programs you open most; All Programs at the foot of it lists
+everything installed. The right column is your folders, the Control Panel, and
+this help.
+
+Along the bottom of the menu are five buttons: lock the screen, sign out,
+switch user, restart, and shut down. Point at one and its name appears on the
+left.
+
+The bar along the bottom of the screen lists every window that is open on this
+desktop. Click one to bring it forward; click the one in front to put it away.
+
+Alt+Tab steps through the open windows without touching the mouse.

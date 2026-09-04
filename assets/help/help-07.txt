@@ -1,0 +1,12 @@
+The Control Panel has an Accounts page. An administrator can add an
+account, set or clear its password, give it a picture, and make it an
+administrator or a limited account.
+
+Removing an account asks what to do about its folder: keeping the files and
+deleting them are separate decisions, and only one of them can be undone.
+
+A limited account cannot change anything in /System and cannot read
+another account's files.
+
+Lock covers the screen without ending your session — your windows stay
+open and only you can unlock it. Sign Out ends the session.

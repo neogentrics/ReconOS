@@ -34,6 +34,7 @@
 #include "recon_terminal.h"
 #include "recon_taskmgr.h"
 #include "recon_fs.h"
+#include "recon_help.h"
 #include "recon_icons.h"
 #include "recon_avatar.h"
 #include "recon_modules.h"
@@ -237,6 +238,12 @@ static const struct menu_place MENU_PLACES[] = {
      * right-hand one could not be reached at all.
      */
     { "Control Panel", RECON_ICON_CONTROL_PANEL, PLACE_APP, "Control Panel" },
+    /*
+     * Directly under the Control Panel, because somebody who has opened one
+     * looking for an answer is often in the wrong one, and the other should
+     * be the next thing their eye lands on.
+     */
+    { "Help", RECON_ICON_HELP, PLACE_APP, "Help" },
 };
 
 #define MENU_PLACE_COUNT \
@@ -2102,6 +2109,13 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
          * looking one up by name would find whichever came first.
          */
         { "Control Panel", RECON_ICON_CONTROL_PANEL, recon_control_panel_create, false },
+
+        /*
+         * Help is beside the Control Panel rather than in the applications
+         * column, for the same reason: it is a thing about the system rather
+         * than a thing you work in.
+         */
+        { "Help", RECON_ICON_HELP, recon_help_create, false },
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {

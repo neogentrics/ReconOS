@@ -1,0 +1,3 @@
+Skins can change the shape of a window, not only its colours: the height
+of a title bar, the thickness of its border, how far its corners are rounded,
+and how big its buttons are.

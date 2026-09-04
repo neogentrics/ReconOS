@@ -1,0 +1,4 @@
+Desktop icons can be dragged, and stay where they are put.
+
+Files open when you click them. A text file opens in Notepad. Before this,
+nothing in the system opened a file by being clicked.

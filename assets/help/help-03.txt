@@ -1,0 +1,8 @@
+There are four. The numbers at the right of the taskbar say which you are on,
+and a dot under a number means that desktop has windows on it.
+
+Alt+1 to Alt+4 switches. Hold Shift as well and the window you are
+using comes with you.
+
+A window on another desktop is not on this taskbar. That is deliberate: it is
+how four desktops stay four separate places rather than one crowded one.

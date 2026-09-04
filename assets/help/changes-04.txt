@@ -1,0 +1,2 @@
+Notepad can undo, by word rather than by keystroke, and has an Edit menu
+so the shortcuts are findable.
