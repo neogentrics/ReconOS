@@ -584,6 +584,57 @@ static int load_directory(const char *directory, const char *extension) {
 }
 
 /* Copy a host file into the ReconOS filesystem. */
+/*
+ * Is the shipped copy different from the one already installed?
+ *
+ * Byte for byte, not by size or timestamp. A module rebuilt from unchanged
+ * source is the same length and a different file; one rebuilt after an
+ * interface change is often the same length too. Timestamps travel badly --
+ * a tarball, a copy, a clock that went backwards -- and the question being
+ * asked is not "which is newer" but "is this the one I shipped".
+ *
+ * True when they differ or when either cannot be read, because a file that
+ * cannot be compared should be replaced rather than trusted.
+ */
+static bool files_differ(const char *host_path, const char *reconos_path) {
+    char installed_host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(NULL, reconos_path, installed_host,
+            sizeof(installed_host), NULL, 0)) {
+        return true;
+    }
+
+    FILE *a = fopen(host_path, "rb");
+    if (a == NULL) {
+        return true;
+    }
+    FILE *b = fopen(installed_host, "rb");
+    if (b == NULL) {
+        fclose(a);
+        return true;
+    }
+
+    bool differ = false;
+    for (;;) {
+        char left[4096];
+        char right[4096];
+
+        size_t got_left = fread(left, 1, sizeof(left), a);
+        size_t got_right = fread(right, 1, sizeof(right), b);
+
+        if (got_left != got_right || memcmp(left, right, got_left) != 0) {
+            differ = true;
+            break;
+        }
+        if (got_left == 0) {
+            break;      /* Both ended together with everything matching. */
+        }
+    }
+
+    fclose(a);
+    fclose(b);
+    return differ;
+}
+
 static bool install_file(const char *host_path, const char *reconos_path) {
     FILE *in = fopen(host_path, "rb");
     if (in == NULL) {
@@ -657,18 +708,28 @@ int recon_modules_install_shipped(void) {
         snprintf(target, sizeof(target), "%s/%s",
             is_app ? RECON_DIR_APPS : RECON_DIR_MODULES, entry->d_name);
 
-        /*
-         * Already there means the user has it, and possibly a newer or
-         * deliberately different one. Nothing is overwritten: an install that
-         * quietly replaces what is there is an install that undoes people's
-         * choices.
-         */
-        if (recon_fs_exists("/", target)) {
-            continue;
-        }
-
         char host[RECON_PATH_MAX * 2];
         snprintf(host, sizeof(host), "%s/%s", source, entry->d_name);
+
+        /*
+         * A shipped module is replaced when the copy on disk is different.
+         *
+         * This used to skip anything already there, on the grounds that an
+         * install which quietly replaces what is there undoes people's
+         * choices. That reasoning is right about a program somebody
+         * installed and wrong about the ones ReconOS ships beside itself --
+         * and it caused exactly the fault it was meant to prevent, one step
+         * removed: an old Calculator stayed on disk across an update that
+         * changed the interface it was built against, and opening it
+         * segfaulted the system.
+         *
+         * The system's own components are the system's to replace. A module
+         * somebody wrote has a name of its own and is not touched by this
+         * loop at all, because this loop only walks what ReconOS shipped.
+         */
+        if (recon_fs_exists("/", target) && !files_differ(host, target)) {
+            continue;
+        }
 
         if (install_file(host, target)) {
             wlr_log(WLR_INFO, "ReconOS: installed %s", target);

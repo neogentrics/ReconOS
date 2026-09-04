@@ -62,12 +62,25 @@ struct recon_appwin;
 /*
  * The interface version.
  *
- * Bumped whenever anything below changes shape. A module built against a
+ * Bumped whenever anything below changes shape -- or anything *reachable*
+ * from below, which is the part that was missed. A module built against a
  * different number is refused rather than loaded, because the alternative is
- * calling through a function pointer that means something else now -- which
+ * calling through a function pointer that means something else now, which
  * does not fail, it corrupts.
+ *
+ * 2 (v0.2.16): `struct recon_appwin_impl` gained a `help` field in v0.2.15
+ * and this number was not bumped. A module built before that has a smaller
+ * struct, so reading the new field read past the end of it -- and ReconOS
+ * segfaulted the moment somebody opened the Calculator. The gate existed
+ * precisely for this and was standing open because nobody had turned the
+ * number.
+ *
+ * The rule this is here to enforce, stated so it is harder to miss: **any
+ * change to a struct a module can hold or pass is an ABI change**, including
+ * adding a field at the end, and including structs declared in other headers
+ * that this interface exposes.
  */
-#define RECON_MODULE_ABI 1
+#define RECON_MODULE_ABI 2
 
 /* The symbol a module must export. Looked up by name after loading. */
 #define RECON_MODULE_SYMBOL "recon_module_descriptor"
