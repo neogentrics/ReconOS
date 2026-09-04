@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "ReconOS.h"
 #include "recon_access.h"
@@ -22,6 +23,7 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_help.h"
+#include "recon_explorer.h"
 #include "recon_modules.h"
 #include "recon_package.h"
 #include "recon_net.h"
@@ -90,6 +92,8 @@
 #define HIT_PRESET_BASE (RECON_APPWIN_HIT_USER + 900)
 /* The System / Programs / User selector on the Storage page. */
 #define HIT_VOLUME_BASE (RECON_APPWIN_HIT_USER + 950)
+/* The tick boxes on the Disk Cleanup page. */
+#define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
 /* What the buttons on each page do. */
 enum action {
@@ -129,6 +133,9 @@ enum action {
     ACTION_RESET_READING,
     /* Storage */
     ACTION_MEASURE_STORAGE,
+    ACTION_CLEAN_NOW,
+    ACTION_CLEAN_VIEW,
+    ACTION_CLEAN_SYSTEM_FILES,
     ACTION_EMPTY_BIN,
     /* Firewall */
     ACTION_FIREWALL_TOGGLE,
@@ -183,6 +190,7 @@ enum page {
     PAGE_FIREWALL,
     PAGE_POWER,
     PAGE_STORAGE,
+    PAGE_CLEANUP,
     PAGE_UPDATE,
 
     PAGE_TROUBLESHOOT,
@@ -214,6 +222,7 @@ static const struct {
     { "Firewall", RECON_ICON_FIREWALL, "What may be opened" },
     { "Power", RECON_ICON_SHUTDOWN, "Left alone, and asleep" },
     { "Storage", RECON_ICON_EXPLORER, "Where the room went" },
+    { "Disk Cleanup", RECON_ICON_TRASH, "Free some of it up" },
     { "Update", RECON_ICON_SYSTEM, "What version this is" },
 
     { "Troubleshoot", RECON_ICON_TERMINAL, "When it goes wrong" },
@@ -401,6 +410,82 @@ static const struct fw_preset FW_PRESETS[] = {
 
 #define FW_PRESET_COUNT ((int)(sizeof(FW_PRESETS) / sizeof(FW_PRESETS[0])))
 
+/*
+ * --- What Disk Cleanup knows how to free ---
+ *
+ * Each category is a place and a rule about what in it is safe to remove.
+ * Nothing here is a guess: a category exists because there is a definite
+ * answer to "what is this, and what happens if it goes", and a cleanup tool
+ * that removes things it cannot describe is a tool nobody should run.
+ *
+ * `pattern` empty means everything in the folder. Otherwise it is a suffix,
+ * so screen captures can be swept without taking the folder's other contents
+ * with them.
+ */
+struct clean_category {
+    const char *label;
+    const char *detail;
+    /* What is lost. Shown beside the row, because a checkbox with a size next
+     * to it does not say what ticking it costs. */
+    const char *cost;
+    const char *path;
+    const char *pattern;
+    /*
+     * A suffix this category does *not* take, so two categories over the same
+     * folder do not both count the same file.
+     *
+     * Screen captures and temporary files are both /Temp, and without this
+     * one .png was counted in each: ticking both promised twice the room
+     * there was to free. A cleanup tool whose total is wrong is a cleanup
+     * tool nobody believes the second time.
+     */
+    const char *except;
+    /* The recycle bin is not a folder to sweep -- it has an emptying of its
+     * own that also clears the origin notes beside the files. */
+    bool is_bin;
+};
+
+static const struct clean_category CLEAN_SYSTEM[] = {
+    { "Recycle bin", "Files deleted from the system.",
+      "They stop being recoverable.", NULL, NULL, NULL, true },
+    { "Screen captures", "Pictures of the screen, taken with Print Screen.",
+      "The pictures go. Nothing else uses them.",
+      RECON_DIR_TEMP, ".png", NULL, false },
+    { "Other temporary files", "Scratch space ReconOS writes and never clears.",
+      "Nothing running keeps anything here that it needs.",
+      RECON_DIR_TEMP, NULL, ".png", false },
+    { "Logs", "What has happened on this machine, including error codes.",
+      "The record of past faults goes with them.",
+      RECON_DIR_LOGS, NULL, NULL, false },
+};
+
+static const struct clean_category CLEAN_PROGRAMS[] = {
+    { "Recycle bin", "Programs and packages deleted from here.",
+      "They stop being recoverable.", NULL, NULL, NULL, true },
+    { "Installer packages", "The .rpk files programs arrived in.",
+      "Reinstalling one needs the package again.",
+      RECON_DIR_APPS, ".rpk", NULL, false },
+};
+
+static const struct clean_category CLEAN_USER[] = {
+    { "Recycle bin", "What you have deleted.",
+      "They stop being recoverable.", NULL, NULL, NULL, true },
+};
+
+static const struct {
+    const struct clean_category *items;
+    int count;
+} CLEAN[RECON_VOLUME_COUNT] = {
+    [RECON_VOLUME_SYSTEM] = { CLEAN_SYSTEM,
+        (int)(sizeof(CLEAN_SYSTEM) / sizeof(CLEAN_SYSTEM[0])) },
+    [RECON_VOLUME_PROGRAMS] = { CLEAN_PROGRAMS,
+        (int)(sizeof(CLEAN_PROGRAMS) / sizeof(CLEAN_PROGRAMS[0])) },
+    [RECON_VOLUME_USER] = { CLEAN_USER,
+        (int)(sizeof(CLEAN_USER) / sizeof(CLEAN_USER[0])) },
+};
+
+#define CLEAN_MAX 8
+
 enum question {
     QUESTION_NONE,
     QUESTION_REMOVE_USER,
@@ -408,6 +493,7 @@ enum question {
     QUESTION_REMOVE_KEY,
     QUESTION_EMPTY_BIN,
     QUESTION_CUSTOMIZE_SKIN,
+    QUESTION_CLEAN_UP,
 };
 
 struct control_panel {
@@ -473,8 +559,22 @@ struct control_panel {
     /* Which of Themes, Colours, Wallpapers is showing. */
     enum appearance_section section;
 
-    /* Which of System, Programs, User the Storage page is showing. */
+    /* Which of System, Programs, User the Storage and Cleanup pages show. */
     enum recon_volume volume;
+
+    /*
+     * What Disk Cleanup last measured, and what is ticked.
+     *
+     * Measured on the way in and after a clean, like Storage: walking the
+     * tree sixty times a second would make the page feel broken, and a size
+     * that is a minute old is a size somebody acts on and finds wrong.
+     */
+    struct {
+        unsigned long long bytes;
+        int files;
+        bool ticked;
+    } clean[CLEAN_MAX];
+    bool clean_measured;
 
     /*
      * --- Adding a firewall rule ---
@@ -1129,6 +1229,7 @@ static const char *help_topic_for(enum page page) {
     switch (page) {
     case PAGE_ACCOUNTS:   return "Accounts";
     case PAGE_APPEARANCE: return "How it looks";
+    case PAGE_CLEANUP:    return "Storage";
     case PAGE_READING:    return "How it looks";
     case PAGE_PROGRAMS:   return "Programs";
     case PAGE_MODULES:    return "Programs";
@@ -2080,6 +2181,218 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
  * -- stopped being true when the change log arrived, and a page that keeps
  * saying so after the fact is worse than one that never said it.
  */
+/* --- Disk Cleanup --- */
+
+/*
+ * How much one category is holding.
+ *
+ * The bin is asked its own way, because a bin is not a folder to be swept:
+ * emptying it also clears the origin notes beside the files, and measuring
+ * the files folder alone would report a size that emptying does not free all
+ * of.
+ */
+static bool category_covers(const struct clean_category *item,
+        const struct recon_dirent *entry) {
+    if (entry->kind != RECON_FILE_REGULAR) {
+        return false;
+    }
+
+    size_t name_len = strlen(entry->name);
+
+    if (item->pattern != NULL) {
+        size_t len = strlen(item->pattern);
+        if (name_len < len ||
+                strcasecmp(entry->name + name_len - len, item->pattern) != 0) {
+            return false;
+        }
+    }
+
+    if (item->except != NULL) {
+        size_t len = strlen(item->except);
+        if (name_len >= len &&
+                strcasecmp(entry->name + name_len - len, item->except) == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void measure_category(struct control_panel *cp,
+        const struct clean_category *item, unsigned long long *bytes_out,
+        int *files_out) {
+    *bytes_out = 0;
+    *files_out = 0;
+
+    if (item->is_bin) {
+        recon_fs_trash_usage_in(cp->volume, bytes_out, files_out);
+        return;
+    }
+
+    struct recon_dirent entries[256];
+    int count = recon_fs_list("/", item->path, entries, 256);
+    if (count < 0) {
+        return;
+    }
+    if (count > 256) {
+        count = 256;
+    }
+
+    for (int i = 0; i < count; i++) {
+        if (!category_covers(item, &entries[i])) {
+            continue;
+        }
+        *bytes_out += entries[i].size;
+        (*files_out)++;
+    }
+}
+
+static void measure_cleanup(struct control_panel *cp) {
+    int count = CLEAN[cp->volume].count;
+    for (int i = 0; i < count && i < CLEAN_MAX; i++) {
+        measure_category(cp, &CLEAN[cp->volume].items[i],
+            &cp->clean[i].bytes, &cp->clean[i].files);
+    }
+    cp->clean_measured = true;
+}
+
+static void draw_cleanup(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+    y = draw_heading(cp, p, x, y, w, "Disk Cleanup",
+        "What can be freed, and what it costs to free it.");
+
+    if (!cp->clean_measured) {
+        measure_cleanup(cp);
+    }
+
+    /* The same three spaces as Storage, chosen the same way. */
+    int vx = x;
+    for (int i = 0; i < RECON_VOLUME_COUNT; i++) {
+        const char *label = recon_volume_name((enum recon_volume)i);
+        int width = recon_text_width(cp->font, label) + 26;
+        bool on = cp->volume == (enum recon_volume)i;
+
+        recon_fill_rect(p, vx, y, width, BUTTON_HEIGHT,
+            on ? COLOR_SELECTED : COLOR_BUTTON);
+        recon_draw_button_edge(p, vx, y, width, BUTTON_HEIGHT, on,
+            COLOR_SEPARATOR);
+
+        int tw = recon_text_width(cp->font, label);
+        recon_draw_text(p, cp->font, vx + (width - tw) / 2,
+            y + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8, label,
+            on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
+
+        recon_hit_add(p, vx, y, width, BUTTON_HEIGHT, HIT_VOLUME_BASE + i);
+        vx += width + 6;
+    }
+    y += BUTTON_HEIGHT + 8;
+
+    int count = CLEAN[cp->volume].count;
+    unsigned long long chosen_bytes = 0;
+    int chosen_rows = 0;
+    for (int i = 0; i < count && i < CLEAN_MAX; i++) {
+        if (cp->clean[i].ticked) {
+            chosen_bytes += cp->clean[i].bytes;
+            chosen_rows++;
+        }
+    }
+
+    char picked[96];
+    if (chosen_rows == 0) {
+        snprintf(picked, sizeof(picked), "Nothing ticked.");
+    } else {
+        char size[32];
+        storage_size(chosen_bytes, size, sizeof(size));
+        snprintf(picked, sizeof(picked), "%s would be freed.", size);
+    }
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, picked,
+        chosen_rows > 0 ? COLOR_TEXT : COLOR_DIM);
+    y += line + 6;
+
+    /* The rows: a box, what it is, what it costs, and how much. */
+    int box = 13;
+    int row_h = line * 2 + 10;
+
+    for (int i = 0; i < count && i < CLEAN_MAX; i++) {
+        if (y + row_h > bottom - BUTTON_HEIGHT - PADDING * 2) {
+            break;
+        }
+
+        const struct clean_category *item = &CLEAN[cp->volume].items[i];
+        bool selected = cp->selected == i;
+
+        if (selected) {
+            recon_fill_rect(p, x, y, w, row_h, COLOR_SELECTED);
+        } else if (i % 2 == 1) {
+            recon_fill_rect(p, x, y, w, row_h, COLOR_ROW_ALT);
+        }
+
+        recon_color ink = selected ? COLOR_SELECTED_TEXT : COLOR_TEXT;
+        recon_color faint = selected ? COLOR_SELECTED_TEXT : COLOR_DIM;
+
+        /* The box. Drawn rather than a glyph, because a tick has to read at
+         * this size and the font's is not reliable across skins. */
+        int by = y + (row_h - box) / 2;
+        recon_fill_rect(p, x + 8, by, box, box, COLOR_PANEL);
+        recon_stroke_rect(p, x + 8, by, box, box, COLOR_SEPARATOR);
+        if (cp->clean[i].ticked) {
+            recon_fill_rect(p, x + 11, by + 3, box - 6, box - 6, COLOR_TEXT);
+        }
+
+        recon_draw_text(p, cp->font, x + 30, y + 5 + ascent, 260, item->label,
+            ink);
+        recon_draw_text(p, cp->font, x + 30, y + 5 + ascent + line,
+            w - 160, item->detail, faint);
+
+        char size[32];
+        storage_size(cp->clean[i].bytes, size, sizeof(size));
+        recon_draw_text(p, cp->font, x + w - 110, y + 5 + ascent, 100, size,
+            ink);
+
+        char files[32];
+        snprintf(files, sizeof(files), "%d file%s", cp->clean[i].files,
+            cp->clean[i].files == 1 ? "" : "s");
+        recon_draw_text(p, cp->font, x + w - 110, y + 5 + ascent + line, 100,
+            files, faint);
+
+        recon_hit_add(p, x, y, w, row_h, HIT_CLEAN_BASE + i);
+        y += row_h + 2;
+    }
+
+    y += PADDING;
+
+    /* What ticking the chosen row costs, in words, above the button that
+     * would do it. A size is not a consequence. */
+    if (cp->selected >= 0 && cp->selected < count) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            CLEAN[cp->volume].items[cp->selected].cost, COLOR_DIM);
+        y += line + 4;
+    }
+
+    int bx = draw_button(cp, p, x, y, "Clean Up",
+        HIT_ACTION_BASE + ACTION_CLEAN_NOW, chosen_rows > 0);
+    bx = draw_button(cp, p, bx, y, "View Files",
+        HIT_ACTION_BASE + ACTION_CLEAN_VIEW,
+        cp->selected >= 0 && cp->selected < count &&
+        !CLEAN[cp->volume].items[cp->selected].is_bin);
+    draw_button(cp, p, bx, y, "Clean Up System Files",
+        HIT_ACTION_BASE + ACTION_CLEAN_SYSTEM_FILES, true);
+    y += BUTTON_HEIGHT + PADDING;
+
+    if (y + line <= bottom) {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "Ticking a row does nothing until Clean Up is pressed, and Clean "
+            "Up asks first.", COLOR_DIM);
+    }
+}
+
 static void draw_update(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
@@ -3169,6 +3482,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
     case PAGE_NETWORK:    draw_network(cp, p, x, y, w, h); break;
     case PAGE_FIREWALL:   draw_firewall(cp, p, x, y, w, h); break;
     case PAGE_STORAGE:    draw_storage(cp, p, x, y, w, h); break;
+    case PAGE_CLEANUP:    draw_cleanup(cp, p, x, y, w, h); break;
     case PAGE_UPDATE:     draw_update(cp, p, x, y, w, h); break;
     case PAGE_REGISTRY:   draw_registry(cp, p, x, y, w, h); break;
     case PAGE_ABOUT:      draw_system(cp, p, x, y, w, h); break;
@@ -3263,6 +3577,81 @@ static void answered(void *user, int choice) {
     int button_count = (asked == QUESTION_REMOVE_USER) ? 3 : 2;
     if (choice < 0 || choice >= button_count - 1) {
         set_status(cp, false, "Nothing was changed.");
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_CLEAN_UP) {
+        int removed = 0;
+        int failed = 0;
+
+        for (int i = 0; i < CLEAN[cp->volume].count && i < CLEAN_MAX; i++) {
+            if (!cp->clean[i].ticked) {
+                continue;
+            }
+
+            const struct clean_category *item = &CLEAN[cp->volume].items[i];
+
+            if (item->is_bin) {
+                if (recon_fs_trash_empty_in(cp->volume)) {
+                    removed += cp->clean[i].files;
+                } else {
+                    failed++;
+                }
+                continue;
+            }
+
+            struct recon_dirent entries[256];
+            int count = recon_fs_list("/", item->path, entries, 256);
+            if (count < 0) {
+                continue;
+            }
+            if (count > 256) {
+                count = 256;
+            }
+
+            for (int e = 0; e < count; e++) {
+                if (!category_covers(item, &entries[e])) {
+                    continue;
+                }
+
+                char victim[RECON_PATH_MAX];
+                if (!recon_fs_join(victim, sizeof(victim), item->path,
+                        entries[e].name)) {
+                    failed++;
+                    continue;
+                }
+
+                /*
+                 * Removed rather than put in the bin. Everything on this page
+                 * is already either in the bin or scratch, and moving scratch
+                 * into the bin would free nothing -- which is the one thing
+                 * somebody pressing Clean Up asked for.
+                 */
+                if (recon_fs_remove("/", victim)) {
+                    removed++;
+                } else {
+                    failed++;
+                }
+            }
+        }
+
+        /* The sizes on screen are now wrong by what was just freed, which is
+         * the whole reason somebody pressed it. */
+        for (int i = 0; i < CLEAN_MAX; i++) {
+            cp->clean[i].ticked = false;
+        }
+        cp->clean_measured = false;
+        measure_cleanup(cp);
+        cp->storage_measured = false;
+
+        if (failed > 0) {
+            set_status(cp, true, "Removed %d; %d could not be removed.",
+                removed, failed);
+        } else {
+            set_status(cp, false, "Removed %d file%s.", removed,
+                removed == 1 ? "" : "s");
+        }
         recon_appwin_refresh(cp->win);
         return;
     }
@@ -3826,6 +4215,86 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_shell_restyle(cp->server->shell);
         set_status(cp, false, "Back to the defaults.");
         break;
+
+    case ACTION_CLEAN_VIEW: {
+        int count = CLEAN[cp->volume].count;
+        if (cp->selected < 0 || cp->selected >= count) {
+            set_status(cp, true, "Choose something first.");
+            break;
+        }
+
+        const struct clean_category *item =
+            &CLEAN[cp->volume].items[cp->selected];
+        if (item->path == NULL) {
+            set_status(cp, true, "The bin is opened from the desktop.");
+            break;
+        }
+
+        /*
+         * Opened in the File Explorer rather than listed here. A cleanup page
+         * that grew its own file list would be a second explorer, worse than
+         * the one that exists, and somebody who wants to see what is about to
+         * go wants to see it in the thing they already know how to use.
+         */
+        recon_shell_open_named(cp->server->shell, "File Explorer");
+
+        struct recon_appwin *win =
+            recon_installed_app_existing("File Explorer");
+        if (win == NULL) {
+            set_status(cp, true, "Could not open the File Explorer.");
+            break;
+        }
+        recon_explorer_open_at(win, item->path);
+        set_status(cp, false, "%s, in the File Explorer.", item->path);
+        break;
+    }
+
+    case ACTION_CLEAN_SYSTEM_FILES:
+        /*
+         * The old versions a revert would go back to. There are none: nothing
+         * keeps a copy of the previous version yet, so there is nothing here
+         * to offer and nothing to warn about losing.
+         *
+         * The button is here rather than absent because this is the one that
+         * has to exist before Recovery can, and a gap nobody can see is a gap
+         * nobody remembers to fill.
+         */
+        set_status(cp, true, "Nothing keeps previous versions yet, so there "
+            "are none to remove. This is what Recovery will revert to.");
+        break;
+
+    case ACTION_CLEAN_NOW: {
+        unsigned long long bytes = 0;
+        int rows = 0;
+        int files = 0;
+        for (int i = 0; i < CLEAN[cp->volume].count && i < CLEAN_MAX; i++) {
+            if (cp->clean[i].ticked) {
+                bytes += cp->clean[i].bytes;
+                files += cp->clean[i].files;
+                rows++;
+            }
+        }
+
+        if (rows == 0) {
+            set_status(cp, true, "Nothing is ticked.");
+            break;
+        }
+
+        char size[32];
+        storage_size(bytes, size, sizeof(size));
+
+        char message[240];
+        snprintf(message, sizeof(message),
+            "Permanently delete %d file%s, freeing %s?\n"
+            "This cannot be undone -- these do not go to the recycle bin.",
+            files, files == 1 ? "" : "s", size);
+
+        static const char *const buttons[] = { "Clean Up", "Cancel" };
+        cp->question = QUESTION_CLEAN_UP;
+        recon_appwin_ask(cp->win, "Disk Cleanup", message, buttons, 2,
+            answered);
+        break;
+    }
 
     case ACTION_MEASURE_STORAGE:
         measure_storage(cp);
@@ -4443,6 +4912,23 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_CLEAN_BASE) {
+        int index = (int)(hit_id - HIT_CLEAN_BASE);
+        if (index >= 0 && index < CLEAN[cp->volume].count &&
+                index < CLEAN_MAX) {
+            /*
+             * Clicking a row both chooses it and ticks it. Two targets in a
+             * row -- a box that ticks and a body that selects -- is a row
+             * where half of it does something different from the other half
+             * for no reason a reader can see.
+             */
+            cp->selected = index;
+            cp->clean[index].ticked = !cp->clean[index].ticked;
+            clear_status(cp);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_VOLUME_BASE) {
         int volume = (int)(hit_id - HIT_VOLUME_BASE);
         if (volume >= 0 && volume < RECON_VOLUME_COUNT) {
@@ -4450,6 +4936,18 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             /* Measured again: this is a different space, and the rows on
              * screen are the last one's. */
             cp->storage_measured = false;
+            cp->clean_measured = false;
+
+            /*
+             * And nothing is ticked. The ticks belong to the rows they were
+             * put on, and the rows have just changed -- carrying them across
+             * would mean pressing Clean Up deleted something nobody looked
+             * at.
+             */
+            for (int i = 0; i < CLEAN_MAX; i++) {
+                cp->clean[i].ticked = false;
+            }
+
             cp->selected = 0;
             clear_status(cp);
         }
