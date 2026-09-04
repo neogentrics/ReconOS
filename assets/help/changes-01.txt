@@ -1,9 +1,12 @@
-Programs arrive as packages. A .rpk is a folder with a manifest in it,
-so a program can bring an icon and other files rather than being one file of
-code. Installing writes a receipt naming everything it placed, and removing
-takes back exactly that. The receipt is written before the program is loaded,
-so one that refuses to load can be rolled back instead of leaving files
-nothing knows about.
+Help. A new application, beside the Control Panel in the Start menu, with
+a page for each part of the system and this change log underneath. The text is
+written out of the system's own files every time it starts, so help describing
+a version that is no longer running cannot survive an update.
 
-Find in Notepad. Ctrl+F opens a bar above the status line. It ignores
-case and wraps around the end of the document.
+What changed, after an update. The first time an account reaches the
+desktop on a new version, a window says what that version brought, with an OK
+button. Each account is told once. The whole log is in Help at any time,
+back to the first version.
+
+The Control Panel and the Start menu have their own icons, instead of
+sharing the plain window that stood in for everything without one.

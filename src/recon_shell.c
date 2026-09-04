@@ -2116,6 +2116,15 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
          * than a thing you work in.
          */
         { "Help", RECON_ICON_HELP, recon_help_create, false },
+
+        /*
+         * The notice shown after an update. Registered so the shell can build
+         * it, focus it and list it on the taskbar the way it does any other
+         * window, and kept out of the menus because nobody goes looking for
+         * it -- it comes to them, once, and the log it is quoting from is
+         * reached deliberately through Help.
+         */
+        { "What's New", RECON_ICON_HELP, recon_help_notice_create, false },
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {
@@ -2406,6 +2415,18 @@ static void adopt_signed_in_user(struct recon_shell *shell) {
     set_desktop_visible(shell, true);
     recon_desktop_reload(shell->desktop);
     recon_shell_restyle(shell);
+
+    /*
+     * What changed, once per account per version.
+     *
+     * Here rather than at startup because the answer belongs to a person: the
+     * hive holding "I have read this" is the one that was just loaded, and an
+     * account that has not signed in since three updates ago should be told
+     * about the current one on the first desktop they see.
+     */
+    if (recon_help_notice_due()) {
+        recon_shell_open_named(shell, "What's New");
+    }
 }
 
 void recon_shell_begin_session(struct recon_shell *shell) {

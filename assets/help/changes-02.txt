@@ -1,8 +1,9 @@
-Removing an account can keep or delete its files. They are two decisions,
-and only one of them can be undone.
+Programs arrive as packages. A .rpk is a folder with a manifest in it,
+so a program can bring an icon and other files rather than being one file of
+code. Installing writes a receipt naming everything it placed, and removing
+takes back exactly that. The receipt is written before the program is loaded,
+so one that refuses to load can be rolled back instead of leaving files
+nothing knows about.
 
-The Start menu's power buttons are icons, in the bottom right. The name of
-whichever one you point at appears on the left.
-
-Buttons have rounded corners where the skin asks for them, and the startup
-screen is slower, because it went past faster than it could be read.
+Find in Notepad. Ctrl+F opens a bar above the status line. It ignores
+case and wraps around the end of the document.

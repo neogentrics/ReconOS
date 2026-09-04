@@ -1,3 +1,2 @@
-Skins can change the shape of a window, not only its colours: the height
-of a title bar, the thickness of its border, how far its corners are rounded,
-and how big its buttons are.
+Notepad can undo, by word rather than by keystroke, and has an Edit menu
+so the shortcuts are findable.

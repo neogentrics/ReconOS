@@ -76,4 +76,27 @@ void recon_help_show_topic(struct recon_appwin *win, const char *title);
  */
 const char *recon_help_current_changes(void);
 
+/* --- The notice shown after an update --- */
+
+/*
+ * Whether the signed-in account should be shown what changed.
+ *
+ * True when the change log says something about the running version and this
+ * account has not acknowledged that version yet. Read after the account's hive
+ * has been loaded, since the answer is that account's.
+ */
+bool recon_help_notice_due(void);
+
+/*
+ * The window that says what changed, with an OK button that records having
+ * read it.
+ *
+ * Registered as an application so the shell can build it, focus it and put it
+ * on the taskbar the way it does every other window -- but kept out of the
+ * menus, because it is not something anybody goes looking for. The change log
+ * is reached deliberately through Help.
+ */
+struct recon_appwin *recon_help_notice_create(struct recon_server *server,
+    struct recon_font *font);
+
 #endif

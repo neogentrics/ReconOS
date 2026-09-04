@@ -9,6 +9,21 @@ way for the two to disagree.
 
 ---
 
+## v0.2.15
+
+**Help.** A new application, beside the Control Panel in the Start menu, with
+a page for each part of the system and this change log underneath. The text is
+written out of the system's own files every time it starts, so help describing
+a version that is no longer running cannot survive an update.
+
+**What changed, after an update.** The first time an account reaches the
+desktop on a new version, a window says what that version brought, with an OK
+button. Each account is told once. The whole log is in Help at any time,
+back to the first version.
+
+**The Control Panel and the Start menu have their own icons**, instead of
+sharing the plain window that stood in for everything without one.
+
 ## v0.2.14
 
 **Programs arrive as packages.** A `.rpk` is a folder with a manifest in it,
