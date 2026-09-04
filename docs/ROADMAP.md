@@ -942,16 +942,31 @@ summary that grows until it fills the page is the document shown in the wrong
 reader.
 
 Building it found something that had been on screen for a while without being
-noticed: **ReconOS draws one font and that font has no glyph past ASCII**, so
-every em dash in the help and the change log came out as nothing at all -- a
-sentence with a hole where its punctuation should be, which reads as a bug in
-the sentence. The Markdown is read on GitHub too, so it keeps its real dashes
-and quotes; `make-help.sh` folds them down to ASCII on the way into the
-system.
+noticed: **every em dash in the help came out as nothing at all** — a sentence
+with a hole where its punctuation should be, which reads as a bug in the
+sentence.
 
-That is a patch on the symptom. The cause -- text outside ASCII draws as
-blank, wherever it comes from -- is still there, and a file named with an
-accent will still lose it.
+The first fix was to fold the punctuation to ASCII in `make-help.sh`. That was
+a patch on the symptom, and the symptom was not the interesting part: text was
+walked *a byte at a time* and glyphs were cached only for 32..126, so any
+UTF-8 sequence was three or four bytes each of which drew nothing. Not a box,
+not a question mark — nothing. **The typeface had the glyphs the whole time.**
+
+So the walk decodes UTF-8, and the glyph cache gained a second half: a
+direct-mapped table of 128 entries for everything past ASCII, because the
+alternative to a fixed size is a cache that grows with whatever a person
+types. A collision costs one rasterization.
+
+Accents, dashes, quotation marks and other alphabets now draw — in file names
+as well as in the help — and a character the font has no drawing for shows as
+an empty box, which is the font saying so rather than the character being
+lost. The ASCII folding came back out; the source keeps its real punctuation.
+
+Still ASCII-only: **typing**. `recon_edit_key` accepts 0x20..0x7E and refuses
+the rest, and making it accept more means making the caret, the arrow keys and
+backspace step by character rather than by byte -- deleting one byte of a
+two-byte character leaves a broken sequence. That is its own pass, with its
+own tests.
 
 ### F1
 

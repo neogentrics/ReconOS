@@ -1,4 +1,4 @@
-Control Panel -> Appearance lists the skins. Choosing one puts it on
+Control Panel → Appearance lists the skins. Choosing one puts it on
 immediately, for your account alone; other accounts keep theirs.
 
 Ten ship. Four of them are for how people actually see: Deuteran,
@@ -6,7 +6,7 @@ Protan and Tritan for the three kinds of colour vision deficiency, and
 Contrast for low vision. Reading softens the contrast and warms the
 background.
 
-Control Panel -> Reading changes the spacing between letters and lines, the
+Control Panel → Reading changes the spacing between letters and lines, the
 typeface and its size. Extra space between letters is the single adjustment
 with the most evidence behind it for a dyslexic reader.
 
@@ -21,14 +21,14 @@ answers forty-eight questions about colour, and having them all answered
 already is a much easier place to start than an empty file.
 
 Edit This Skin lists every colour with a swatch of what it currently is.
-Pick one, press Change Colour, and type a colour as RRGGBB -- or AARRGGBB
+Pick one, press Change Colour, and type a colour as RRGGBB — or AARRGGBB
 where it needs to be see-through. The change is immediate and is written to the
 file straight away; there is no separate save.
 
 Some colours are a *ramp* from one to another, shown as two halves of the
 swatch and a second value. Remove Ramp makes one flat.
 
-The ten skins that ship cannot be edited -- they are built into ReconOS, so a
+The ten skins that ship cannot be edited — they are built into ReconOS, so a
 change to their files would be ignored. Copy one first; the copy is yours.
 
 From the Terminal, theme copy <name> does the same thing.

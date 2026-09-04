@@ -270,6 +270,15 @@ meant "gone" since DOS.
 **Dialogs.** Anything destructive asks in a window, with Cancel last so it is
 what both Enter and Escape choose. Clicking outside does not dismiss one.
 
+**Text is UTF-8.** Accents, dashes, quotation marks and other alphabets draw
+the way they are written, in file names as well as in the help. Text used to
+be walked a byte at a time with glyphs cached only for 32..126, so any
+multi-byte character was three or four bytes each of which drew nothing --
+not a box, not a question mark, nothing -- and the typeface had the glyphs
+the whole time. A character the font has no drawing for now shows as an empty
+box. Typing is still limited to the plain English keyboard: making the caret
+and backspace step by character rather than by byte is its own piece of work.
+
 **Skins you can write here.** *Copy This Skin* on the Appearance page writes
 the chosen skin out under a name of your own and opens it for editing; the
 editor lists every role with a swatch of what it currently is, and a colour

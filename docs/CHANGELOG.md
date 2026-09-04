@@ -34,6 +34,12 @@ there is one filesystem and no volume layer under it.
 something in, `bin restore <name>` takes it back out, and `bin empty` clears
 it. Before this the bin could only be reached from the File Explorer.
 
+**Text that is not plain English draws properly.** Accents, dashes,
+quotation marks and other alphabets used to be dropped silently — a sentence
+would arrive with a hole where its punctuation should be. They are read as
+UTF-8 now, in file names as well as in the help. A character the font has no
+drawing for shows as an empty box rather than as nothing.
+
 **The Update page says what version this is and what it brought**, with a
 way through to the whole change log. It used to be three notes about things
 that do not work; one of them stopped being true when the change log arrived.

@@ -36,6 +36,23 @@
 #define GLYPH_LAST 126  /* tilde */
 #define GLYPH_COUNT (GLYPH_LAST - GLYPH_FIRST + 1)
 
+/*
+ * And a small cache for everything else.
+ *
+ * Text was walked a byte at a time and glyphs were kept only for 32..126, so
+ * anything outside that -- an accent, an em dash, a character from another
+ * script -- was three or four bytes each of which drew nothing. Not a box, not
+ * a question mark: nothing, so a sentence arrived with a hole in it where its
+ * punctuation should be, which reads as a fault in the sentence rather than in
+ * the font. The typeface had the glyphs the whole time.
+ *
+ * Direct-mapped rather than a list, because the alternative to a fixed size is
+ * a cache that grows with whatever a person types, and a desktop drawing
+ * mostly English will use a handful of these. A collision evicts, which costs
+ * one rasterization and nothing else.
+ */
+#define GLYPH_EXTRA 128
+
 struct recon_glyph {
     unsigned char *bitmap; /* coverage, width*height bytes; NULL until cached */
     int width, height;
@@ -51,6 +68,11 @@ struct recon_font {
     int ascent, descent, line_gap;
     int pixel_height;
     struct recon_glyph glyphs[GLYPH_COUNT];
+
+    struct recon_glyph extra[GLYPH_EXTRA];
+    /* Which character each slot currently holds. Zero means empty; zero is
+     * not a character anybody draws. */
+    uint32_t extra_for[GLYPH_EXTRA];
 };
 
 /* Searched in order when no font path is given. */
@@ -170,6 +192,9 @@ void recon_font_destroy(struct recon_font *font) {
     for (int i = 0; i < GLYPH_COUNT; i++) {
         free(font->glyphs[i].bitmap);
     }
+    for (int i = 0; i < GLYPH_EXTRA; i++) {
+        free(font->extra[i].bitmap);
+    }
     free(font->file_data);
     free(font);
 }
@@ -186,23 +211,15 @@ int recon_font_line_height(struct recon_font *font) {
         + g_line_spacing;
 }
 
-/* Rasterize a character on first use; later calls reuse the cached mask. */
-static struct recon_glyph *glyph_for(struct recon_font *font, unsigned char c) {
-    if (font == NULL || c < GLYPH_FIRST || c > GLYPH_LAST) {
-        return NULL;
-    }
-
-    struct recon_glyph *glyph = &font->glyphs[c - GLYPH_FIRST];
-    if (glyph->cached) {
-        return glyph;
-    }
-
+/* Fill in one glyph from the typeface. */
+static void rasterize(struct recon_font *font, struct recon_glyph *glyph,
+        uint32_t c) {
     int advance, left_bearing;
-    stbtt_GetCodepointHMetrics(&font->info, c, &advance, &left_bearing);
+    stbtt_GetCodepointHMetrics(&font->info, (int)c, &advance, &left_bearing);
     glyph->advance = (int)(advance * font->scale + 0.5f);
 
     int x0, y0, x1, y1;
-    stbtt_GetCodepointBitmapBox(&font->info, c, font->scale, font->scale,
+    stbtt_GetCodepointBitmapBox(&font->info, (int)c, font->scale, font->scale,
         &x0, &y0, &x1, &y1);
 
     glyph->width = x1 - x0;
@@ -215,12 +232,82 @@ static struct recon_glyph *glyph_for(struct recon_font *font, unsigned char c) {
         if (glyph->bitmap != NULL) {
             stbtt_MakeCodepointBitmap(&font->info, glyph->bitmap,
                 glyph->width, glyph->height, glyph->width,
-                font->scale, font->scale, c);
+                font->scale, font->scale, (int)c);
         }
     }
 
     glyph->cached = true;
+}
+
+/* Rasterize a character on first use; later calls reuse the cached mask. */
+static struct recon_glyph *glyph_for(struct recon_font *font, uint32_t c) {
+    if (font == NULL || c < GLYPH_FIRST) {
+        return NULL;
+    }
+
+    if (c <= GLYPH_LAST) {
+        struct recon_glyph *glyph = &font->glyphs[c - GLYPH_FIRST];
+        if (!glyph->cached) {
+            rasterize(font, glyph, c);
+        }
+        return glyph;
+    }
+
+    struct recon_glyph *glyph = &font->extra[c % GLYPH_EXTRA];
+    if (glyph->cached && font->extra_for[c % GLYPH_EXTRA] == c) {
+        return glyph;
+    }
+
+    /* A different character was here. Its mask goes; one rasterization is
+     * the whole cost of a collision. */
+    free(glyph->bitmap);
+    memset(glyph, 0, sizeof(*glyph));
+    font->extra_for[c % GLYPH_EXTRA] = c;
+
+    rasterize(font, glyph, c);
     return glyph;
+}
+
+/*
+ * The next character, and how many bytes it took.
+ *
+ * Enough UTF-8 to read what the system actually holds: the text files it
+ * ships, names people type, and anything pasted in. A malformed sequence is
+ * read as one byte so the walk always advances -- a decoder that can stall on
+ * bad input is a decoder that hangs the desktop on a corrupt file name.
+ */
+static uint32_t next_codepoint(const unsigned char *p, int *length) {
+    *length = 1;
+
+    if (p[0] < 0x80) {
+        return p[0];
+    }
+
+    int extra;
+    uint32_t value;
+
+    if ((p[0] & 0xE0) == 0xC0) {
+        extra = 1;
+        value = p[0] & 0x1Fu;
+    } else if ((p[0] & 0xF0) == 0xE0) {
+        extra = 2;
+        value = p[0] & 0x0Fu;
+    } else if ((p[0] & 0xF8) == 0xF0) {
+        extra = 3;
+        value = p[0] & 0x07u;
+    } else {
+        return p[0];   /* A continuation byte on its own, or worse. */
+    }
+
+    for (int i = 1; i <= extra; i++) {
+        if ((p[i] & 0xC0) != 0x80) {
+            return p[0];   /* Cut short. Take the lead byte and move on. */
+        }
+        value = (value << 6) | (uint32_t)(p[i] & 0x3F);
+    }
+
+    *length = extra + 1;
+    return value;
 }
 
 bool recon_font_reload(struct recon_font *font, const char *path,
@@ -255,8 +342,12 @@ int recon_text_width(struct recon_font *font, const char *text) {
     }
 
     int width = 0;
-    for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; p++) {
-        struct recon_glyph *glyph = glyph_for(font, *p);
+    for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; ) {
+        int length = 1;
+        uint32_t c = next_codepoint(p, &length);
+        p += length;
+
+        struct recon_glyph *glyph = glyph_for(font, c);
         if (glyph != NULL) {
             width += glyph->advance + g_letter_spacing;
         }
@@ -917,8 +1008,12 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
     }
 
     int pen = x;
-    for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; p++) {
-        struct recon_glyph *glyph = glyph_for(font, *p);
+    for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; ) {
+        int length = 1;
+        uint32_t c = next_codepoint(p, &length);
+        p += length;
+
+        struct recon_glyph *glyph = glyph_for(font, c);
         if (glyph == NULL) {
             continue;
         }
@@ -932,7 +1027,7 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
 
     if (truncating) {
         for (const char *e = "..."; *e != '\0'; e++) {
-            struct recon_glyph *glyph = glyph_for(font, (unsigned char)*e);
+            struct recon_glyph *glyph = glyph_for(font, (uint32_t)*e);
             if (glyph == NULL) {
                 continue;
             }

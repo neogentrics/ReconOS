@@ -1,4 +1,4 @@
-Control Panel -> Programs installs and removes programs, and Modules
+Control Panel → Programs installs and removes programs, and Modules
 shows what is loaded and why anything refused to load.
 
 A program arrives as a package: a folder ending in .rpk with a

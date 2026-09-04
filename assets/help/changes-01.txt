@@ -12,14 +12,20 @@ The Control Panel and the Start menu have their own icons, instead of
 sharing the plain window that stood in for everything without one.
 
 Storage says where the room went. The page used to be four notes about
-things that do not work. It now measures what ReconOS owns -- the system, the
-programs, each account by name, the scratch space and the Recycle Bin -- and
+things that do not work. It now measures what ReconOS owns — the system, the
+programs, each account by name, the scratch space and the Recycle Bin — and
 can empty the bin. How much room is left is still the host's answer, because
 there is one filesystem and no volume layer under it.
 
 The Recycle Bin from the Terminal. bin lists it, bin <name> puts
 something in, bin restore <name> takes it back out, and bin empty clears
 it. Before this the bin could only be reached from the File Explorer.
+
+Text that is not plain English draws properly. Accents, dashes,
+quotation marks and other alphabets used to be dropped silently — a sentence
+would arrive with a hole where its punctuation should be. They are read as
+UTF-8 now, in file names as well as in the help. A character the font has no
+drawing for shows as an empty box rather than as nothing.
 
 The Update page says what version this is and what it brought, with a
 way through to the whole change log. It used to be three notes about things
@@ -32,7 +38,7 @@ changes every one. Both undo.
 Programs written for Wayland get a ReconOS title bar. A program that
 was not written for ReconOS used to arrive with a frame of its own, in
 somebody else's colours, with its own buttons. Now it is framed the way every
-other window is -- same colours, same buttons, same corners -- and can be
+other window is — same colours, same buttons, same corners — and can be
 dragged, resized, minimized, maximized and closed like one. A program that
 insists on drawing its own frame still may; it is not given a second one.
 
@@ -49,7 +55,7 @@ say, so the next warning will be one somebody notices.
 Skins can be written here. *Copy This Skin* on the Appearance page writes
 the chosen one out under a name of your own; *Edit This Skin* lists every
 colour with a swatch and lets you change it. The change is immediate and is
-saved as you make it. The ten that ship are built in and cannot be edited --
+saved as you make it. The ten that ship are built in and cannot be edited —
 copy one first. theme copy <name> does the same from the Terminal.
 
 Type in the Start menu to find something. The list narrows to names

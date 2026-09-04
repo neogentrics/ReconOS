@@ -1,4 +1,4 @@
-Choose an account, then sign in -- two screens rather than one, so nothing
+Choose an account, then sign in — two screens rather than one, so nothing
 about how an account signs in is shown before one is chosen.
 
 Updates announce themselves on the first start after one.

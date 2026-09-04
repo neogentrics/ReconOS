@@ -1,7 +1,10 @@
-ReconOS draws one font, and that font covers the plain English alphabet and
-nothing else. A letter outside it -- an accent, a dash of the typographic
-kind, a character from another script -- is drawn as nothing rather than as a
-box, so text containing one arrives with a gap in it.
+Text is read as UTF-8, so accents, dashes, quotation marks and other alphabets
+draw the way they are written — in file names as well as in this help.
 
-That includes file names. A file can be named with such a letter and will keep
-it, but its name will not read correctly on screen.
+A character the font has no drawing for appears as an empty box. That is the
+font saying so rather than the character being lost: the file still has it,
+and it will keep it.
+
+Typing is still limited to the plain English keyboard. A character outside
+that can be in a file's name and be shown, but there is no way to type one
+into a text box here yet.
