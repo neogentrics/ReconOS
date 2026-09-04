@@ -20,6 +20,7 @@
 #include "recon_control.h"
 #include "recon_error.h"
 #include "recon_firewall.h"
+#include "recon_service.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
 #include "recon_package.h"
@@ -613,6 +614,91 @@ static void show_rule(struct recon_cmd_session *s, int index,
  * the shape people already know: a switch, a default per direction, and a
  * numbered list where the first match decides.
  */
+/*
+ * The services, listed and driven.
+ *
+ * Watchtower has the same list behind a tab, and this is the same registry --
+ * not a second copy of it. Two lists of what is running would eventually
+ * disagree, and the one somebody happened to be looking at would be the one
+ * they believed.
+ */
+static void cmd_services(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        int count = recon_service_count();
+        out(s, "\n  %-18s %-10s %6s  %s\n", "service", "state", "starts",
+            "what it does");
+
+        for (int i = 0; i < count; i++) {
+            struct recon_service_info svc;
+            if (!recon_service_at(i, &svc)) {
+                continue;
+            }
+
+            char state[48];
+            if (svc.state == RECON_SERVICE_FAILED && svc.problem[0] != '\0') {
+                snprintf(state, sizeof(state), "failed %s", svc.problem);
+            } else {
+                snprintf(state, sizeof(state), "%s",
+                    recon_service_state_name(svc.state));
+            }
+
+            out(s, "  %-18s %-10s %6d  %s%s\n", svc.name, state, svc.starts,
+                svc.detail, svc.essential ? " [essential]" : "");
+        }
+
+        out(s, "\n  services start|stop|restart <name>\n"
+               "  An essential service can be restarted but not stopped.\n");
+        return;
+    }
+
+    const char *what = argv[1];
+    if (argc < 3) {
+        out(s, "  Which service? 'services' lists them.\n");
+        return;
+    }
+
+    /*
+     * The rest of the line, joined: service names have spaces in them
+     * ("Desktop shell"), and quoting one on a command line is a thing nobody
+     * should have to remember.
+     */
+    char name[RECON_SERVICE_NAME_MAX];
+    name[0] = '\0';
+    for (int i = 2; i < argc; i++) {
+        if (i > 2) {
+            strncat(name, " ", sizeof(name) - strlen(name) - 1);
+        }
+        strncat(name, argv[i], sizeof(name) - strlen(name) - 1);
+    }
+
+    struct recon_service_info svc;
+    if (!recon_service_find(name, &svc)) {
+        out(s, "  There is no service called '%s'.\n", name);
+        return;
+    }
+
+    bool ok;
+    if (strcasecmp(what, "stop") == 0) {
+        ok = recon_service_stop(name);
+    } else if (strcasecmp(what, "restart") == 0) {
+        ok = recon_service_restart(name);
+    } else if (strcasecmp(what, "start") == 0) {
+        ok = recon_service_start(name);
+    } else {
+        out(s, "  services start|stop|restart <name>\n");
+        return;
+    }
+
+    if (ok) {
+        out(s, "  %s: %s.\n", svc.name, what);
+    } else {
+        const char *why = recon_service_last_error();
+        out(s, "  Could not %s %s%s%s\n", what, svc.name,
+            (why != NULL && why[0] != '\0') ? ": " : ".",
+            (why != NULL && why[0] != '\0') ? why : "");
+    }
+}
+
 static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "\nFirewall: %s\n", recon_firewall_is_on() ? "on" : "off");
@@ -2616,6 +2702,7 @@ static const struct command COMMANDS[] = {
     { "spawn",    "spawn [command]",       "Start a Wayland client (testing)",  cmd_spawn },
     { "errors",   "errors [<code>|log]",   "What an error code means",          cmd_errors },
     { "firewall", "firewall [...]",        "What may open and be opened",       cmd_firewall },
+    { "services", "services [...]",        "The parts of ReconOS that run",     cmd_services },
     { "remote",   "remote [on|off|key|port <n>]",
                                            "Reaching ReconOS from elsewhere",  cmd_remote },
     { "raise",    "raise <code>",          "Report an error on purpose (testing)",

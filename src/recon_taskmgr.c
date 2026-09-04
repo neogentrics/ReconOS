@@ -26,6 +26,7 @@
 #include "recon_icons.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
+#include "recon_service.h"
 #include "recon_modules.h"
 #include "recon_shell.h"
 #include "recon_taskmgr.h"
@@ -95,6 +96,9 @@
 #define HIT_TAB_BASE (RECON_APPWIN_HIT_USER + 20)
 #define HIT_DIVIDER_BASE (RECON_APPWIN_HIT_USER + 30)
 #define HIT_EXPAND_BASE (RECON_APPWIN_HIT_USER + 50)
+#define HIT_SVC_START (RECON_APPWIN_HIT_USER + 11)
+#define HIT_SVC_STOP (RECON_APPWIN_HIT_USER + 12)
+#define HIT_SVC_RESTART (RECON_APPWIN_HIT_USER + 13)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
 
 #define TAB_HEIGHT 24
@@ -124,10 +128,18 @@ enum open_menu {
 enum tab {
     TAB_APPLICATIONS,
     TAB_PROCESSES,
+    /*
+     * The parts of ReconOS that run. Not the machine's processes, which is
+     * the tab beside it -- these are subsystems of ReconOS, and the reason
+     * they are listed is that they can be stopped and started.
+     */
+    TAB_SERVICES,
     TAB_USERS,
 };
 
-static const char *const TAB_LABELS[] = { "Applications", "Processes", "Users" };
+static const char *const TAB_LABELS[] = {
+    "Applications", "Processes", "Services", "Users"
+};
 #define TAB_COUNT ((int)(sizeof(TAB_LABELS) / sizeof(TAB_LABELS[0])))
 
 struct column {
@@ -160,9 +172,19 @@ static const struct column DEFAULT_COLUMNS[TAB_COUNT][COLUMNS_MAX] = {
         { "User", 150 }, { "Status", 100 }, { "CPU", 60 }, { "Memory", 90 },
         { "Disk", 60 }, { "Network", 70 },
     },
+    /*
+     * "Starts" rather than an uptime. ReconOS has no clock of its own to
+     * measure one against, and a count of starts says the thing that is
+     * actually worth knowing: one means a normal system, more than one means
+     * somebody has been repairing something.
+     */
+    [TAB_SERVICES] = {
+        { "Service", 200 }, { "State", 90 }, { "Starts", 70 },
+        { "What it does", 300 },
+    },
 };
 
-static const int COLUMN_COUNT[TAB_COUNT] = { 4, 5, 6 };
+static const int COLUMN_COUNT[TAB_COUNT] = { 4, 5, 4, 6 };
 
 static const char *const FILE_ITEMS[] = { "Exit" };
 static const char *const VIEW_ITEMS[] = { "Sort by Name", "Sort by CPU", "Sort by Memory" };
@@ -614,6 +636,94 @@ static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
  * When there is a kernel underneath keeping per-account accounts, these
  * become real numbers without this tab changing shape.
  */
+/*
+ * The parts of ReconOS that run.
+ *
+ * The state is asked for on every draw rather than remembered, because a
+ * service can fail between one frame and the next and a list that showed the
+ * last thing it was told would be a list that lies during exactly the fault
+ * somebody opened this window to find.
+ */
+static void draw_service_rows(struct recon_taskmgr *tm, struct recon_panel *p,
+        int x, int y, int w, int rows) {
+    int ascent = recon_font_ascent(tm->font);
+    recon_fill_rect(p, x, y, w, rows * ROW_HEIGHT, COLOR_LIST_BG);
+
+    int count = recon_service_count();
+
+    for (int row = 0; row < rows; row++) {
+        int index = tm->scroll + row;
+        if (index >= count) {
+            break;
+        }
+
+        struct recon_service_info svc;
+        if (!recon_service_at(index, &svc)) {
+            break;
+        }
+
+        int ry = y + row * ROW_HEIGHT;
+        bool selected = (tm->selected_row == index);
+
+        if (selected) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+        } else if (index % 2 == 1) {
+            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color text = selected ? COLOR_ROW_SELECTED_TEXT : COLOR_TEXT;
+        int ty = ry + (ROW_HEIGHT - ascent) / 2;
+
+        recon_draw_text(p, tm->font, x + column_x(tm, 0) + 6, ty,
+            column_width(tm, 0) - 12, svc.name, text);
+
+        /*
+         * A failed service says which fault it was, not only that there was
+         * one -- "Failed" alone sends somebody hunting, and the code is the
+         * thing they would have gone hunting for.
+         */
+        char state[48];
+        if (svc.state == RECON_SERVICE_FAILED && svc.problem[0] != '\0') {
+            snprintf(state, sizeof(state), "Failed %s", svc.problem);
+        } else {
+            snprintf(state, sizeof(state), "%s",
+                recon_service_state_name(svc.state));
+        }
+
+        recon_color state_color = text;
+        if (!selected) {
+            if (svc.state == RECON_SERVICE_FAILED) {
+                state_color = COLOR_ALERT;
+            } else if (svc.state == RECON_SERVICE_STOPPED) {
+                state_color = COLOR_STATUS;
+            }
+        }
+        recon_draw_text(p, tm->font, x + column_x(tm, 1) + 6, ty,
+            column_width(tm, 1) - 12, state, state_color);
+
+        char starts[16];
+        snprintf(starts, sizeof(starts), "%d", svc.starts);
+        recon_draw_text(p, tm->font, x + column_x(tm, 2) + 6, ty,
+            column_width(tm, 2) - 12, starts, text);
+
+        /* Whatever is left of the window, so the sentence is not cut short
+         * by a column width nobody chose for it. */
+        recon_draw_text(p, tm->font, x + column_x(tm, 3) + 6, ty,
+            w - column_x(tm, 3) - 12, svc.detail,
+            selected ? text : COLOR_STATUS);
+
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, tm->font, x + 12, y + 10, w - 24,
+            "No services are registered.", COLOR_STATUS);
+    }
+
+    /* So scrolling knows how far it may go. */
+    tm->rows_matching = count;
+}
+
 static void draw_user_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         int x, int y, int w, int rows) {
     int ascent = recon_font_ascent(tm->font);
@@ -760,6 +870,22 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
             HIT_MANAGE_USERS };
         buttons[count++] = (typeof(buttons[0])){ "Disconnect", HIT_DISCONNECT };
         buttons[count++] = (typeof(buttons[0])){ "Run New Task", HIT_RUN_TASK };
+    } else if (tm->tab == TAB_SERVICES) {
+        /*
+         * Start or Stop, not both: one of the two is always meaningless for
+         * whatever is selected, and a button that does nothing when pressed
+         * teaches people not to trust the buttons that do.
+         */
+        struct recon_service_info svc;
+        bool have = tm->selected_row >= 0 &&
+            recon_service_at(tm->selected_row, &svc);
+
+        buttons[count++] = (typeof(buttons[0])){ "Restart", HIT_SVC_RESTART };
+        if (have && svc.state == RECON_SERVICE_RUNNING) {
+            buttons[count++] = (typeof(buttons[0])){ "Stop", HIT_SVC_STOP };
+        } else {
+            buttons[count++] = (typeof(buttons[0])){ "Start", HIT_SVC_START };
+        }
     } else {
         buttons[count++] = (typeof(buttons[0])){ "End Task", HIT_END_TASK };
         buttons[count++] = (typeof(buttons[0])){ "Run New Task", HIT_RUN_TASK };
@@ -869,6 +995,7 @@ static void taskmgr_draw(void *user, struct recon_panel *p, int x, int y, int w,
     draw_header(tm, p, x, header_y, w);
     switch (tm->tab) {
     case TAB_APPLICATIONS: draw_app_rows(tm, p, x, rows_y, w, rows); break;
+    case TAB_SERVICES:     draw_service_rows(tm, p, x, rows_y, w, rows); break;
     case TAB_USERS:        draw_user_rows(tm, p, x, rows_y, w, rows); break;
     default:               draw_rows(tm, p, x, rows_y, w, rows); break;
     }
@@ -1114,6 +1241,45 @@ static void taskmgr_motion(void *user, uint32_t hit_id, int cx, int cy) {
     }
 }
 
+/*
+ * Start, stop or restart whatever is selected on the Services tab.
+ *
+ * Every outcome ends in the status line, including the refusals. Somebody who
+ * presses Stop on an essential service has to be told why nothing happened,
+ * or the window looks broken rather than careful.
+ */
+static void act_on_service(struct recon_taskmgr *tm, uint32_t hit_id) {
+    struct recon_service_info svc;
+    if (tm->selected_row < 0 || !recon_service_at(tm->selected_row, &svc)) {
+        snprintf(tm->status, sizeof(tm->status),
+            "Choose a service first.");
+        return;
+    }
+
+    const char *verb = "start";
+    bool ok;
+    if (hit_id == HIT_SVC_STOP) {
+        verb = "stop";
+        ok = recon_service_stop(svc.name);
+    } else if (hit_id == HIT_SVC_RESTART) {
+        verb = "restart";
+        ok = recon_service_restart(svc.name);
+    } else {
+        ok = recon_service_start(svc.name);
+    }
+
+    if (ok) {
+        snprintf(tm->status, sizeof(tm->status), "%s: %s%s.", svc.name, verb,
+            hit_id == HIT_SVC_STOP ? "ped" :
+            hit_id == HIT_SVC_RESTART ? "ed" : "ed");
+    } else {
+        const char *why = recon_service_last_error();
+        snprintf(tm->status, sizeof(tm->status), "Could not %s %s%s%s", verb,
+            svc.name, (why != NULL && why[0] != '\0') ? ": " : ".",
+            (why != NULL && why[0] != '\0') ? why : "");
+    }
+}
+
 static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed) {
     struct recon_taskmgr *tm = user;
 
@@ -1180,6 +1346,12 @@ static bool taskmgr_click(void *user, uint32_t hit_id, int cx, int cy, bool pres
         return true;
     case HIT_END_TASK:
         end_selected_task(tm);
+        return true;
+
+    case HIT_SVC_START:
+    case HIT_SVC_STOP:
+    case HIT_SVC_RESTART:
+        act_on_service(tm, hit_id);
         return true;
 
     /*

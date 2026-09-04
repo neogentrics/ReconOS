@@ -2126,6 +2126,13 @@ static void layout(struct recon_shell *shell) {
 
 /* --- Lifecycle --- */
 
+/*
+ * Where a window sits in the shell's list, adding it if it is new. Defined
+ * with the rest of the window handling below; needed up here because a new
+ * shell adopts whatever windows already exist.
+ */
+static int adopt_window(struct recon_shell *shell, struct recon_appwin *win);
+
 struct recon_shell *recon_shell_create(struct recon_server *server,
         int screen_width, int screen_height) {
     struct recon_shell *shell = calloc(1, sizeof(*shell));
@@ -2138,14 +2145,16 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     shell->screen_width = screen_width;
     shell->screen_height = screen_height;
 
-    /* No font means no labels, but the taskbar still works as buttons. */
-    shell->font = recon_font_load(getenv("RECONOS_FONT"), FONT_HEIGHT);
+    /*
+     * The system's, not the shell's. Windows outlive a shell restart and draw
+     * with this pointer; a font freed with the shell would take them with it.
+     */
+    shell->font = recon_font_system(FONT_HEIGHT);
 
     shell->taskbar = recon_panel_create(&server->scene->tree,
         screen_width, TASKBAR_HEIGHT);
     if (shell->taskbar == NULL) {
         wlr_log(WLR_ERROR, "ReconOS: could not create the taskbar");
-        recon_font_destroy(shell->font);
         free(shell);
         return NULL;
     }
@@ -2285,6 +2294,20 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     shell->session = recon_session_create(server, shell->font,
         screen_width, screen_height);
 
+    /*
+     * Take over whatever windows already exist.
+     *
+     * Nothing on a first start, and everything on a restart -- which is the
+     * whole point: the taskbar comes back listing the windows that were open
+     * before, because they never closed.
+     */
+    struct recon_appwin *existing[8];
+    int found = recon_installed_app_windows(existing,
+        (int)(sizeof(existing) / sizeof(existing[0])));
+    for (int i = 0; i < found; i++) {
+        adopt_window(shell, existing[i]);
+    }
+
     layout(shell);
     draw_taskbar(shell);
 
@@ -2308,9 +2331,16 @@ void recon_shell_destroy(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
     }
-    for (int i = 0; i < shell->app_count; i++) {
-        recon_appwin_destroy(shell->apps[i]);
-    }
+
+    /*
+     * The application windows are not touched.
+     *
+     * They belong to the application registry, which built them and hands
+     * the same one back on every open. The shell borrowed them to draw a
+     * taskbar and route clicks, and letting go of a borrowed thing is not
+     * destroying it -- which is what makes a shell restart survivable for
+     * whatever somebody was in the middle of typing.
+     */
     recon_desktop_destroy(shell->desktop);
     recon_session_destroy(shell->session);
     recon_panel_destroy(shell->dialog);
@@ -2319,7 +2349,6 @@ void recon_shell_destroy(struct recon_shell *shell) {
     recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
     recon_panel_destroy(shell->taskbar);
-    recon_font_destroy(shell->font);
     free(shell);
 }
 
@@ -2482,14 +2511,16 @@ static void adopt_signed_in_user(struct recon_shell *shell) {
      */
     if (who != NULL && shell->last_user[0] != '\0' &&
             strcmp(shell->last_user, who) != 0) {
+        /*
+         * The registry ends them, because the registry owns them. The shell
+         * only forgets the list it was drawing a taskbar from.
+         */
+        recon_installed_apps_close_windows();
+
         for (int i = 0; i < shell->app_count; i++) {
-            recon_appwin_destroy(shell->apps[i]);
             shell->apps[i] = NULL;
         }
         shell->app_count = 0;
-        /* The registry hands these out; it must not keep handing out ones
-         * that no longer exist. */
-        recon_installed_apps_forget_windows();
         set_focused_app(shell, -1);
         recon_fs_clip_clear();
     }
@@ -2521,6 +2552,27 @@ static void adopt_signed_in_user(struct recon_shell *shell) {
     if (recon_help_notice_due()) {
         recon_shell_open_named(shell, "What's New");
     }
+}
+
+void recon_shell_resume_session(struct recon_shell *shell) {
+    if (shell == NULL) {
+        return;
+    }
+
+    if (recon_users_current() == NULL) {
+        /* Nobody is signed in -- so this is not a restart of a running
+         * desktop, it is a shell coming up before anybody has arrived. */
+        recon_shell_begin_session(shell);
+        return;
+    }
+
+    /*
+     * Everything that depends on which account signed in, which is the same
+     * work a sign-in does. `last_user` is empty on a new shell, so the
+     * "different person means a clean desktop" rule inside does not fire --
+     * correctly: it is the same person, and their windows are still open.
+     */
+    adopt_signed_in_user(shell);
 }
 
 void recon_shell_begin_session(struct recon_shell *shell) {

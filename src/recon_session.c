@@ -2123,8 +2123,10 @@ struct recon_session *recon_session_create(struct recon_server *server,
      * a heading in the body size is worse-looking and still readable, which
      * is the right trade for something that can fail to load.
      */
-    session->heading = recon_font_load(getenv("RECONOS_FONT"),
-        recon_font_line_height(font) + 10);
+    /* The system's, for the same reason the shell's is: the session screen
+     * is built and destroyed with the shell, and a font it freed would be a
+     * font every surviving window was still drawing with. */
+    session->heading = recon_font_system(recon_font_line_height(font) + 10);
 
     struct wl_event_loop *loop = wl_display_get_event_loop(server->wl_display);
     session->update_timer = wl_event_loop_add_timer(loop, update_tick, session);
@@ -2143,7 +2145,6 @@ void recon_session_destroy(struct recon_session *session) {
     if (session->update_timer != NULL) {
         wl_event_source_remove(session->update_timer);
     }
-    recon_font_destroy(session->heading);
     recon_panel_destroy(session->panel);
     free(session);
 }

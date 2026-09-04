@@ -155,15 +155,36 @@ struct recon_appwin *recon_installed_app_window(const char *name);
 struct recon_appwin *recon_installed_app_existing(const char *name);
 
 /*
- * Forget every cached window without destroying any of them.
+ * --- Who owns an application's window ---
  *
- * For a change of account. The windows themselves belong to the shell, which
- * destroys them; this only stops the registry handing the next person the
- * previous one's File Explorer, still showing the folder they left it in.
- * Calling it without destroying them leaks; destroying them without calling
- * it leaves dangling pointers behind.
+ * This registry does. It built the window, it hands the same one back on
+ * every open, and it destroys it.
+ *
+ * It used to be the shell: the shell destroyed the windows and called
+ * recon_installed_apps_forget_windows to stop the registry handing out
+ * pointers to freed memory. That was workable and it made the desktop shell
+ * impossible to restart -- restarting it closed every open window, so
+ * repairing a taskbar cost somebody the document they were writing.
+ *
+ * The shell *borrows* them now. It keeps a list of the windows that exist so
+ * it can draw a taskbar and route clicks, and a new shell takes over
+ * whatever this registry is holding.
  */
-void recon_installed_apps_forget_windows(void);
+
+/*
+ * Destroy every window and forget them.
+ *
+ * For a change of account: signing in as somebody else must not hand them
+ * the previous person's File Explorer, still showing the folder they left it
+ * in. That is the one case where the windows genuinely have to end.
+ */
+void recon_installed_apps_close_windows(void);
+
+/*
+ * Every window that currently exists, so a new shell can take over the ones
+ * the previous one was drawing. Returns how many were written.
+ */
+int recon_installed_app_windows(struct recon_appwin **out, int max);
 
 /*
  * Register something built into ReconOS. Same registry as a module's, with the

@@ -65,6 +65,7 @@
 #include "recon_icon_gen.h"
 #include "recon_icons.h"
 #include "recon_server.h"
+#include "recon_service.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
 #include "recon_capture.h"
@@ -1382,6 +1383,167 @@ struct recon_control *recon_server_control(struct recon_server *server) {
     return (server != NULL) ? server->control : NULL;
 }
 
+/* --- Services --- */
+
+/*
+ * The desktop shell, stopped and started again.
+ *
+ * Stopping it destroys the taskbar, the desktop, the menus and the session
+ * screen, and leaves the application windows alone -- they belong to the
+ * application registry, and the new shell adopts whatever is still there.
+ * That is what makes this worth having: a taskbar can be repaired without
+ * costing somebody the document they were writing.
+ *
+ * The server's pointer is replaced rather than a second shell being built
+ * beside the first, because everything that reaches the shell reaches it
+ * through server->shell -- so there is exactly one moment, between these two
+ * lines, when it is NULL, and nothing runs in it.
+ */
+static bool shell_service_start(void *user) {
+    struct recon_server *server = user;
+
+    server->shell = recon_shell_create(server, server->screen_width,
+        server->screen_height);
+    if (server->shell == NULL) {
+        return false;
+    }
+
+    /*
+     * Straight to the desktop rather than back through the login screen.
+     *
+     * Restarting the shell is a repair, not a sign-out: whoever is signed in
+     * stays signed in, and being asked for a password because a taskbar
+     * needed rebuilding would be the repair costing more than the fault.
+     */
+    recon_shell_resume_session(server->shell);
+    recon_damage_all(server);
+    return true;
+}
+
+static void shell_service_stop(void *user) {
+    struct recon_server *server = user;
+
+    struct recon_shell *going = server->shell;
+    server->shell = NULL;
+    recon_shell_destroy(going);
+}
+
+static bool control_service_start(void *user) {
+    struct recon_server *server = user;
+    server->control = recon_control_create(server, NULL);
+    return server->control != NULL;
+}
+
+static void control_service_stop(void *user) {
+    struct recon_server *server = user;
+    recon_control_destroy(server->control);
+    server->control = NULL;
+}
+
+static bool remote_service_start(void *user) {
+    struct recon_server *server = user;
+    if (server->control == NULL) {
+        return false;
+    }
+
+    int port = recon_registry_get_int(RECON_REG_SYSTEM,
+        RECON_REMOTE_PORT_KEY, RECON_FW_RECON_PORT);
+
+    char why[192];
+    if (!recon_control_listen_network(server->control, port, why,
+            sizeof(why))) {
+        recon_error_raisef(server, RECON_ERR_G004, "port %d: %s", port, why);
+        return false;
+    }
+    recon_registry_set_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY, true);
+    return true;
+}
+
+static void remote_service_stop(void *user) {
+    struct recon_server *server = user;
+    recon_control_stop_network(server->control);
+    recon_registry_set_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY, false);
+}
+
+static bool firewall_service_start(void *user) {
+    (void)user;
+    return recon_firewall_set_on(true);
+}
+
+static void firewall_service_stop(void *user) {
+    (void)user;
+    recon_firewall_set_on(false);
+}
+
+static bool network_service_start(void *user) {
+    struct recon_server *server = user;
+
+    /*
+     * recon_net_init reports nothing: it hangs a socket on the event loop and
+     * either has one or does not, and every call that needs it checks for
+     * itself. So this starts it and says so, rather than inventing a result
+     * to return.
+     */
+    recon_net_init(wl_display_get_event_loop(server->wl_display));
+    return true;
+}
+
+static void network_service_stop(void *user) {
+    (void)user;
+    recon_net_finish();
+}
+
+/*
+ * Registered after everything is up, with each one's state read from what is
+ * actually true rather than assumed -- a list that claimed the firewall was
+ * running when it had been switched off would be wrong from the first frame,
+ * and a list nobody can trust is worse than no list.
+ */
+static void register_services(struct recon_server *server) {
+    static const struct recon_service_impl SHELL = {
+        .name = "Desktop shell",
+        .detail = "The taskbar, the desktop, the menus and window management.",
+        .essential = true,
+        .start = shell_service_start,
+        .stop = shell_service_stop,
+    };
+    static const struct recon_service_impl CONTROL = {
+        .name = "Control socket",
+        .detail = "Commands from outside the screen, on the local machine.",
+        .essential = false,
+        .start = control_service_start,
+        .stop = control_service_stop,
+    };
+    static const struct recon_service_impl REMOTE = {
+        .name = "Remote access",
+        .detail = "The network port, for reaching this machine from elsewhere.",
+        .essential = false,
+        .start = remote_service_start,
+        .stop = remote_service_stop,
+    };
+    static const struct recon_service_impl FIREWALL = {
+        .name = "Firewall",
+        .detail = "What ReconOS may open, and what may be opened to it.",
+        .essential = false,
+        .start = firewall_service_start,
+        .stop = firewall_service_stop,
+    };
+    static const struct recon_service_impl NETWORK = {
+        .name = "Networking",
+        .detail = "Reading the host's network, and connections across it.",
+        .essential = false,
+        .start = network_service_start,
+        .stop = network_service_stop,
+    };
+
+    recon_service_register(&SHELL, server, server->shell != NULL);
+    recon_service_register(&CONTROL, server, server->control != NULL);
+    recon_service_register(&REMOTE, server,
+        recon_control_network_listening(server->control));
+    recon_service_register(&FIREWALL, server, recon_firewall_is_on());
+    recon_service_register(&NETWORK, server, true);
+}
+
 /* Launch a client. A NULL command means the configured terminal. */
 void recon_spawn(struct recon_server *server, const char *command) {
     const char *term = command;
@@ -2522,6 +2684,12 @@ int main(int argc, char **argv) {
         }
     }
 
+    /*
+     * The services, once everything they describe is actually up. Each one's
+     * state is read from what is true rather than assumed.
+     */
+    register_services(&server);
+
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
     printf(RECONOS_NAME " v" RECONOS_VERSION " - Alt+Enter for a terminal, "
         "Ctrl+Alt+Del for the task manager, Alt+Q to quit.\n");
@@ -2529,11 +2697,20 @@ int main(int argc, char **argv) {
 
     wl_display_run(server.wl_display);
 
-    recon_control_destroy(control);
+    recon_control_destroy(server.control);
+
+    /*
+     * The windows first, then the shell. The registry owns them now, and it
+     * is the only thing that can end them -- the shell would have left them
+     * alive, which is right for a restart and a leak at shutdown.
+     */
+    recon_installed_apps_close_windows();
     recon_shell_destroy(server.shell);
     recon_users_finish();
     recon_net_finish();
     recon_theme_finish();
+    /* Last of the drawing resources, once nothing is left that could draw. */
+    recon_font_system_finish();
     recon_registry_finish();
     recon_fs_finish();
     wl_display_destroy_clients(server.wl_display);

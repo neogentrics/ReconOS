@@ -146,7 +146,6 @@ enum page {
     PAGE_FIREWALL,
     PAGE_POWER,
     PAGE_STORAGE,
-    PAGE_MULTITASKING,
     PAGE_UPDATE,
 
     PAGE_TROUBLESHOOT,
@@ -173,7 +172,6 @@ static const struct {
     { "Firewall", RECON_ICON_SYSTEM, false },
     { "Power", RECON_ICON_SHUTDOWN, false },
     { "Storage", RECON_ICON_EXPLORER, false },
-    { "Multitasking", RECON_ICON_TASKMGR, false },
     { "Update", RECON_ICON_SYSTEM, false },
 
     { "Troubleshoot", RECON_ICON_TERMINAL, true },
@@ -235,11 +233,6 @@ static const struct pending_item STORAGE_ITEMS[] = {
       "from here." },
 };
 
-static const struct pending_item MULTITASKING_ITEMS[] = {
-    { "Title bar buttons", "Which buttons a window's title bar carries.",
-      "Real, but not settable: they are drawn from a fixed set." },
-};
-
 /*
  * What Update still cannot do. "What changed" left this list in v0.2.15 --
  * the change log is in the system now, and this page is where it is read
@@ -290,9 +283,6 @@ static const struct {
 } PENDING[PAGE_COUNT] = {
     [PAGE_POWER] = { "What the machine does when it is left alone.",
         POWER_ITEMS, (int)(sizeof(POWER_ITEMS) / sizeof(POWER_ITEMS[0])) },
-    [PAGE_MULTITASKING] = { "How windows and desktops behave together.",
-        MULTITASKING_ITEMS,
-        (int)(sizeof(MULTITASKING_ITEMS) / sizeof(MULTITASKING_ITEMS[0])) },
     [PAGE_TROUBLESHOOT] = { "When something is not working.",
         TROUBLESHOOT_ITEMS,
         (int)(sizeof(TROUBLESHOOT_ITEMS) / sizeof(TROUBLESHOOT_ITEMS[0])) },
@@ -942,7 +932,6 @@ static const char *help_topic_for(enum page page) {
     case PAGE_PROGRAMS:   return "Programs";
     case PAGE_MODULES:    return "Programs";
     case PAGE_STORAGE:    return "Files";
-    case PAGE_MULTITASKING: return "Desktops";
     case PAGE_REGISTRY:   return "The Terminal";
     default:              return "What is not built yet";
     }

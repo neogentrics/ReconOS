@@ -106,9 +106,36 @@ static bool register_app(const struct recon_app_registration *app,
         set_error("an application needs a name and a way to create it");
         return false;
     }
-    if (app_slot_for(app->name) != NULL) {
-        set_error("an application called '%s' is already registered", app->name);
-        return false;
+    struct app_slot *existing = app_slot_for(app->name);
+    if (existing != NULL) {
+        /*
+         * Registering a built-in twice is a shell restart, not a collision.
+         *
+         * The built-ins are registered by the shell as it comes up, so a
+         * second shell registers the same seven again. Refusing left the new
+         * shell with no Notepad and no File Explorer while the old windows
+         * were still on screen -- a desktop you cannot open anything from.
+         *
+         * The entry is updated rather than skipped, because the function
+         * pointers come from this build and are the ones to keep, and the
+         * window pointer is left alone, because that window is still open.
+         *
+         * A module doing the same thing is still refused: two different
+         * pieces of code answering to one name is the collision this check
+         * exists for, and the shell's own built-ins are not two pieces of
+         * code.
+         */
+        if (module != NULL || existing->info.module[0] != '\0') {
+            set_error("an application called '%s' is already registered",
+                app->name);
+            return false;
+        }
+
+        existing->create = app->create;
+        snprintf(existing->info.icon, sizeof(existing->info.icon), "%s",
+            app->icon != NULL ? app->icon : "");
+        existing->info.in_menu = app->in_menu;
+        return true;
     }
 
     for (int i = 0; i < APPS_MAX; i++) {
@@ -243,6 +270,31 @@ const char *recon_installed_app_resolve(const char *target) {
     }
 
     return NULL;
+}
+
+int recon_installed_app_windows(struct recon_appwin **out, int max) {
+    int found = 0;
+    for (int i = 0; i < APPS_MAX && found < max; i++) {
+        if (g_apps[i].used && g_apps[i].window != NULL) {
+            out[found++] = g_apps[i].window;
+        }
+    }
+    return found;
+}
+
+void recon_installed_apps_close_windows(void) {
+    /*
+     * Destroyed here rather than by whoever asked, because this registry is
+     * what holds the pointer -- and a caller that destroyed them itself
+     * would leave this holding freed memory, which is the arrangement this
+     * replaced.
+     */
+    for (int i = 0; i < APPS_MAX; i++) {
+        if (g_apps[i].used && g_apps[i].window != NULL) {
+            recon_appwin_destroy(g_apps[i].window);
+            g_apps[i].window = NULL;
+        }
+    }
 }
 
 void recon_installed_apps_forget_windows(void) {

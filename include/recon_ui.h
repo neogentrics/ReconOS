@@ -48,6 +48,28 @@ struct recon_font;
 struct recon_font *recon_font_load(const char *path, int pixel_height);
 void recon_font_destroy(struct recon_font *font);
 
+/*
+ * The shared font at a given size, loaded once and kept for the whole run.
+ *
+ * Application windows outlive the shell that built them -- that is what makes
+ * restarting the shell a repair rather than a loss -- and every one of them
+ * holds this pointer, several caching a copy of their own. A font owned by
+ * the shell and freed with it left all of them drawing through freed memory,
+ * which is a segmentation fault on the first frame after a restart rather
+ * than an error anybody could act on.
+ *
+ * So the font outlives every shell. The pointer for a given size is the same
+ * pointer every time it is asked for, which is also what makes changing the
+ * typeface work: recon_font_reload replaces the contents in place, and every
+ * window pointing here draws with the new one without being told.
+ *
+ * Returns NULL if no usable font was found; callers must cope.
+ */
+struct recon_font *recon_font_system(int pixel_height);
+
+/* At shutdown, once nothing is left that could still draw. */
+void recon_font_system_finish(void);
+
 /* --- Reading --- */
 
 /*

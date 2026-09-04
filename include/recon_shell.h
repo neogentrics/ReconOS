@@ -65,6 +65,17 @@ void recon_shell_lock(struct recon_shell *shell);
  */
 void recon_shell_begin_session(struct recon_shell *shell);
 
+/*
+ * Bring a freshly built shell to whatever state the machine is already in.
+ *
+ * For a shell restart. Somebody signed in stays signed in and lands on their
+ * desktop: restarting the shell is a repair, and being asked for a password
+ * because a taskbar needed rebuilding would cost more than the fault did.
+ * With nobody signed in it does what a first start does and asks who is
+ * there.
+ */
+void recon_shell_resume_session(struct recon_shell *shell);
+
 /* Whether setup or the login screen is up, which is when nothing else is. */
 bool recon_shell_session_active(struct recon_shell *shell);
 

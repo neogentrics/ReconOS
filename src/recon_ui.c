@@ -310,6 +310,59 @@ static uint32_t next_codepoint(const unsigned char *p, int *length) {
     return value;
 }
 
+/*
+ * The shared fonts, one per size asked for.
+ *
+ * Small and fixed: a desktop uses two or three sizes -- body text, headings,
+ * and the splash -- and a system that has quietly loaded thirty typefaces has
+ * a leak rather than a need.
+ */
+#define SYSTEM_FONTS_MAX 6
+
+static struct {
+    int pixel_height;
+    struct recon_font *font;
+} g_system_fonts[SYSTEM_FONTS_MAX];
+
+struct recon_font *recon_font_system(int pixel_height) {
+    for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
+        if (g_system_fonts[i].font != NULL &&
+                g_system_fonts[i].pixel_height == pixel_height) {
+            return g_system_fonts[i].font;
+        }
+    }
+
+    for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
+        if (g_system_fonts[i].font != NULL) {
+            continue;
+        }
+
+        struct recon_font *font = recon_font_load(getenv("RECONOS_FONT"),
+            pixel_height);
+        if (font == NULL) {
+            return NULL;
+        }
+        g_system_fonts[i].pixel_height = pixel_height;
+        g_system_fonts[i].font = font;
+        return font;
+    }
+
+    /*
+     * Out of slots. The nearest size already loaded, rather than NULL: text
+     * slightly the wrong size is a cosmetic fault, and no text at all is not.
+     */
+    wlr_log(WLR_ERROR, "ReconOS: no room for a %dpx font", pixel_height);
+    return g_system_fonts[0].font;
+}
+
+void recon_font_system_finish(void) {
+    for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
+        recon_font_destroy(g_system_fonts[i].font);
+        g_system_fonts[i].font = NULL;
+        g_system_fonts[i].pixel_height = 0;
+    }
+}
+
 bool recon_font_reload(struct recon_font *font, const char *path,
         int pixel_height) {
     if (font == NULL) {
