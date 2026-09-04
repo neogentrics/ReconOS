@@ -24,6 +24,20 @@ back to the first version.
 **The Control Panel and the Start menu have their own icons**, instead of
 sharing the plain window that stood in for everything without one.
 
+**Storage says where the room went.** The page used to be four notes about
+things that do not work. It now measures what ReconOS owns — the system, the
+programs, each account by name, the scratch space and the Recycle Bin — and
+can empty the bin. How much room is left is still the host's answer, because
+there is one filesystem and no volume layer under it.
+
+**The Recycle Bin from the Terminal.** `bin` lists it, `bin <name>` puts
+something in, `bin restore <name>` takes it back out, and `bin empty` clears
+it. Before this the bin could only be reached from the File Explorer.
+
+**Every button is the same shape.** The rounded corners a skin asks for were
+written in three places and every button that had not been rewritten stayed
+square. On Beacon that meant two shapes of button in one window.
+
 ## v0.2.14
 
 **Programs arrive as packages.** A `.rpk` is a folder with a manifest in it,

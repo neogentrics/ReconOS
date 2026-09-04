@@ -1,8 +1,8 @@
 Several Control Panel pages are there and say plainly that they are not
-built: Power, Storage, Update, Troubleshoot and Recovery. Nearly all of them
-need a kernel of ReconOS's own, which is the next phase of the project — a
-program running on Linux cannot suspend a machine, partition a disk, or
-reinstall itself.
+built: Power, Update, Troubleshoot and Recovery, and part of Storage. Nearly
+all of it needs a kernel of ReconOS's own, which is the next phase of the
+project — a program running on Linux cannot suspend a machine, partition a
+disk, or reinstall itself.
 
 They are shown rather than hidden on purpose. A gap nobody can see is a gap
 nobody remembers.

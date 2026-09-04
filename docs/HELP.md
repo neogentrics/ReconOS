@@ -62,6 +62,14 @@ Deleting puts things in the **Recycle Bin** rather than destroying them, and
 each item remembers where it came from, so restoring puts it back. **Shift and
 Delete** skips the bin, after asking.
 
+From the Terminal the bin is the **bin** command: `bin` lists it, `bin <name>`
+puts something in, `bin restore <name>` takes it back out, and `bin empty`
+clears it. Note that **del** is not the same thing — it removes a file rather
+than binning it, and there is no undoing that.
+
+The Control Panel's **Storage** page says how much room the bin is holding,
+and can empty it.
+
 ## The desktop
 
 Icons on the desktop are the contents of your Desktop folder, so anything that
@@ -146,6 +154,7 @@ it.
 - **net** — what the network is doing
 - **capture** — a picture of the screen
 - **reg** — the settings the system remembers
+- **bin** — the Recycle Bin: list it, fill it, empty it
 
 ## Pictures of the screen
 
@@ -173,10 +182,10 @@ one under it.
 ## What is not built yet
 
 Several Control Panel pages are there and say plainly that they are not
-built: Power, Storage, Update, Troubleshoot and Recovery. Nearly all of them
-need a kernel of ReconOS's own, which is the next phase of the project — a
-program running on Linux cannot suspend a machine, partition a disk, or
-reinstall itself.
+built: Power, Update, Troubleshoot and Recovery, and part of Storage. Nearly
+all of it needs a kernel of ReconOS's own, which is the next phase of the
+project — a program running on Linux cannot suspend a machine, partition a
+disk, or reinstall itself.
 
 They are shown rather than hidden on purpose. A gap nobody can see is a gap
 nobody remembers.

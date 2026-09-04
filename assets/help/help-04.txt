@@ -10,3 +10,11 @@ which says what it is, how big it is and when it last changed.
 Deleting puts things in the Recycle Bin rather than destroying them, and
 each item remembers where it came from, so restoring puts it back. Shift and
 Delete skips the bin, after asking.
+
+From the Terminal the bin is the bin command: bin lists it, bin <name>
+puts something in, bin restore <name> takes it back out, and bin empty
+clears it. Note that del is not the same thing — it removes a file rather
+than binning it, and there is no undoing that.
+
+The Control Panel's Storage page says how much room the bin is holding,
+and can empty it.

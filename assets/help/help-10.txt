@@ -10,3 +10,4 @@ help lists every command. Some worth knowing:
 - net — what the network is doing
 - capture — a picture of the screen
 - reg — the settings the system remembers
+- bin — the Recycle Bin: list it, fill it, empty it

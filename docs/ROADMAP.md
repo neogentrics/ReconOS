@@ -779,6 +779,62 @@ kept out of the menus, because nobody goes looking for it. It comes to them.
 **Icons for the Control Panel, the Start menu and Help**, which had been
 sharing the plain window that stood in for anything without one.
 
+### One button shape
+
+The corner rounding a skin asks for was written three times — in the taskbar,
+in the window frame, and in the notice after an update — and every button that
+had not been rewritten stayed square. On Beacon that meant one skin producing
+two shapes of button inside one window, which is not a theme so much as a list
+of the files somebody remembered to change.
+
+`recon_draw_button_edge` is that decision in one place: the bevel, then the
+radius rounded off it. Bevel first and rounding after, because the bevel is
+what says pressed from raised and a skin asking for round corners is not
+asking to give that up. Sunken text fields and panel outlines still call the
+bevel directly — they are not buttons and do not round.
+
+Beacon's button radius went from three to five: at three the corner was there
+but had to be looked for, which is the cost of rounding without the difference
+it was meant to make.
+
+### Storage, which mostly was not blocked
+
+The page was four notes about things that do not work. Three were the same
+missing thing said three ways — one filesystem, hosted in a folder, no volume
+layer under it. The fourth, *find what is taking room and offer to remove it*,
+was not blocked on anything. It had just not been written.
+
+It now walks what ReconOS owns and says where the room went: the system, the
+programs, each account **by name**, the scratch space, and the bin. Accounts
+one by one because "the accounts take most of the room" is not an answer
+anybody can act on and "this account takes most of the room" is.
+
+The bars are a **share of the total, not of a disk**. Without a volume layer
+there is no capacity to be a fraction of, and drawing one anyway would be
+inventing the number the page opens by saying it does not have. The bin's
+bytes are shown but not added to the total: they are already inside the
+account folder above it.
+
+Measuring walks the tree, so it happens when the page is opened and when
+somebody asks again, rather than on every frame.
+
+The three things still blocked are listed underneath. The page used to be
+nothing but that list, and dropping it now that most of the page works is how
+a gap stops being visible.
+
+### The bin, from outside a window
+
+Building the above needed a `bin` command, because the Recycle Bin could only
+be reached from the File Explorer — nothing outside a window could look at it,
+put anything back, or empty it, so nothing could test that emptying it works.
+`bin` lists, `bin <name>` fills, `bin restore` and `bin purge` act on one item,
+`bin empty` clears it.
+
+`del` is deliberately not this: it has meant "gone" since DOS, and a word that
+has meant one thing for forty years is a poor place to put a surprise. But it
+does mean the two ways of removing a file behave differently, which is worth
+being able to see rather than worth hiding.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
