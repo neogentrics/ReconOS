@@ -848,6 +848,40 @@ Customize Skin and offers to make the change on a copy. Being told "you cannot
 edit this" and left to work out that copying it first is the way round is the
 system making its own limitation into the reader's problem.
 
+### Disk Cleanup
+
+The shape Joshua asked for, item by item: a drive to clean, categories with
+their sizes, a tick box on each, View Files, and Clean Up System Files.
+
+A category is a place and a rule about what in it is safe to remove. Each one
+exists because there is a definite answer to "what is this, and what happens if
+it goes" -- and that answer is on screen, beside the button that would do it,
+because a size is not a consequence. A cleanup tool that removes things it
+cannot describe is a tool nobody should run.
+
+The categories do not overlap, and getting that right took a second pass.
+Screen captures and temporary files are both `/Temp`, and the first version
+counted the same `.png` in each: ticking both promised twice the room there
+was. There is one test now for which files a category covers, used by both the
+measuring and the removing, so the number in the confirmation is the number of
+files that actually go.
+
+Cleaning **removes** rather than binning. Everything on the page is already
+either in the bin or scratch, and moving scratch into the bin frees nothing --
+which is the one thing somebody pressing Clean Up asked for. The question it
+asks first says so plainly.
+
+View Files opens the folder in the File Explorer rather than listing it in
+place. A cleanup page that grew its own file list would be a second explorer,
+worse than the one that exists, and somebody who wants to see what is about to
+go wants to see it in the thing they already know.
+
+**Clean Up System Files** is the hinge to Recovery, and it is honest about
+being empty: nothing keeps a copy of the previous version yet, so there is
+nothing to remove and nothing to warn about losing. The button is there rather
+than absent because it is the one that has to exist before Recovery can, and a
+gap nobody can see is a gap nobody remembers to fill.
+
 ### Storage, decided
 
 Joshua asked directly, and was owed an answer:

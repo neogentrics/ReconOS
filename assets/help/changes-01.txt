@@ -1,3 +1,9 @@
+Disk Cleanup, as its own Control Panel item: a space to clean, categories
+with sizes and counts and a tick box each, View Files, and Clean Up System
+Files. Each row says what it costs to tick it, because a size is not a
+consequence. Cleaning removes rather than binning -- moving scratch into the
+bin would free nothing -- and the question it asks first says so.
+
 Storage is three spaces: System, Programs and User, each measured on its
 own and each with its own recycle bin. Deleting routes itself -- a file goes to
 the bin belonging to the space it came from -- and emptying one names the space
