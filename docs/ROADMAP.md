@@ -591,6 +591,38 @@ than being filled, because a window sits over the wallpaper and over other
 windows — there is no one colour a corner could be painted that would be
 right anywhere but where it was chosen.
 
+## v0.2.11 — Notepad can undo
+
+A text editor that cannot undo is a text editor that loses work, and this one
+now opens files by being clicked, so more text passes through it than when
+the only way in was to type it.
+
+An edit records what changed and where, not a copy of the document —
+snapshots would mean holding a hundred copies of a file to step back a
+hundred keystrokes.
+
+**Grouped by word.** The first version grouped only at line breaks, which
+made typing a sentence a single undo: one press and the whole line was gone,
+with no way back to the word. A word ends when the run of spaces after it
+does, so the trailing space goes with the word it follows.
+
+**Opening a file forgets the history.** Undoing past that moment would put
+the previous document's characters back into this one a few at a time, which
+is not "the change before this one" by any reading and is how an editor
+quietly corrupts a file somebody trusted it with.
+
+And an **Edit menu**, because Ctrl+Z is only discoverable to somebody who
+already knows it. Every entry shows its shortcut, right-aligned and dim.
+
+Three things went wrong making the menu bar hold two menus, all the same
+shape as bugs already fixed elsewhere here: the second menu's hit id was the
+text area's, so clicking Edit put the caret in the document; `menu_open` came
+from `calloc` as zero and zero had just become the File menu, so a new window
+opened with File already down — the file explorer had that exact bug for that
+exact reason; and the branch handling entries ran before the branch handling
+names, so with a menu down, clicking a name read as an entry index past the
+end of it.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.

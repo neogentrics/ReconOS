@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.10.** The version number tracks what works, not what is
+**Status: v0.2.11.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -38,7 +38,8 @@ Multitasking page said was missing. v0.2.8 made Properties work, and made the
 explorer and the properties box agree about how big a file is and what it
 is. v0.2.9 let desktop icons be moved and remembered, and made a file open
 when you click it — which nothing in the system did before. v0.2.10 let a
-skin set the *shape* of a window frame and not only its colours.
+skin set the *shape* of a window frame and not only its colours, and v0.2.11
+gave Notepad undo and a menu to find it in.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
