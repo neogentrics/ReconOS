@@ -42,11 +42,23 @@
 #define COLOR_MENU_BORDER THEME(MENU_BORDER)
 #define COLOR_MENU_HILITE THEME(MENU_HILITE)
 #define COLOR_MENU_HILITE_TEXT THEME(MENU_HILITE_TEXT)
+/* A menu entry's shortcut, which is a reminder rather than another thing to
+ * read -- so it uses the colour a menu gives to something unavailable. */
+#define COLOR_MENU_DIM THEME(MENU_TEXT_DISABLED)
 #define COLOR_WARNING THEME(WARNING)
 
-#define HIT_FILE (RECON_APPWIN_HIT_USER + 1)
 #define HIT_TEXT (RECON_APPWIN_HIT_USER + 2)
+/* The entries inside whichever menu is down. */
 #define HIT_MENU_BASE (RECON_APPWIN_HIT_USER + 10)
+/*
+ * The names along the bar, one id each.
+ *
+ * Its own range with room in it. This was a single HIT_FILE next to HIT_TEXT,
+ * and adding a second menu made its id the text area's -- so clicking Edit
+ * put the caret in the document and the menu never opened. A range with a gap
+ * after it is what stops the next menu doing the same thing.
+ */
+#define HIT_MENUBAR_BASE (RECON_APPWIN_HIT_USER + 40)
 
 /* The File menu, in the order it is shown. */
 enum file_command {
@@ -55,21 +67,49 @@ enum file_command {
     FILE_SAVE,
     FILE_SAVE_AS,
     FILE_CLOSE,
+    EDIT_UNDO,
+    EDIT_REDO,
 };
 
-static const struct {
+struct menu_item {
     const char *label;
+    /* What the keyboard does instead, shown beside the entry. A shortcut
+     * nobody can see is a shortcut only the person who wrote it knows. */
+    const char *shortcut;
     enum file_command command;
     bool separator_after;
-} FILE_MENU[] = {
-    { "New",     FILE_NEW,     false },
-    { "Open...", FILE_OPEN,    true  },
-    { "Save",    FILE_SAVE,    false },
-    { "Save As...", FILE_SAVE_AS, true },
-    { "Close",   FILE_CLOSE,   false },
 };
 
-#define FILE_MENU_COUNT ((int)(sizeof(FILE_MENU) / sizeof(FILE_MENU[0])))
+static const struct menu_item FILE_MENU[] = {
+    { "New",        "Ctrl+N", FILE_NEW,     false },
+    { "Open...",    "Ctrl+O", FILE_OPEN,    true  },
+    { "Save",       "Ctrl+S", FILE_SAVE,    false },
+    { "Save As...", "",       FILE_SAVE_AS, true  },
+    { "Close",      "",       FILE_CLOSE,   false },
+};
+
+static const struct menu_item EDIT_MENU[] = {
+    { "Undo", "Ctrl+Z", EDIT_UNDO, false },
+    { "Redo", "Ctrl+Y", EDIT_REDO, false },
+};
+
+/*
+ * The menu bar, in the order it is drawn.
+ *
+ * A table rather than two of everything, because the second menu is where a
+ * menu bar written for one starts drawing the first one's items under the
+ * second one's name.
+ */
+static const struct {
+    const char *name;
+    const struct menu_item *items;
+    int count;
+} MENUS[] = {
+    { "File", FILE_MENU, (int)(sizeof(FILE_MENU) / sizeof(FILE_MENU[0])) },
+    { "Edit", EDIT_MENU, (int)(sizeof(EDIT_MENU) / sizeof(EDIT_MENU[0])) },
+};
+
+#define MENU_COUNT ((int)(sizeof(MENUS) / sizeof(MENUS[0])))
 
 /*
  * What the file dialog was opened for. The dialog itself does not know or care
@@ -81,6 +121,41 @@ enum pending_action {
     PENDING_SAVE,
     /* Saving because the window is being closed: once written, close it. */
     PENDING_SAVE_THEN_CLOSE,
+};
+
+/* --- Undo --- */
+
+/* The editor's own state, defined below: the history is described here
+ * because the struct holds it, and operates on the struct in turn. */
+struct recon_notepad;
+
+/* Defined with the drawing, below; the history needs it to keep the cursor
+ * on screen after stepping back. */
+static void scroll_to_cursor(struct recon_notepad *np);
+static void set_message(struct recon_notepad *np, bool warning,
+    const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static bool ensure_capacity(struct recon_notepad *np, size_t needed);
+
+
+/*
+ * Every change, and how to put it back.
+ *
+ * A text editor that cannot undo is a text editor that loses work, and this
+ * one now opens files by being clicked -- so more text passes through it than
+ * when the only way in was to type it.
+ *
+ * An edit records what changed and where, not a copy of the whole document.
+ * Snapshots are simpler and would mean holding a hundred copies of a file to
+ * be able to step back a hundred keystrokes.
+ */
+#define UNDO_MAX 256
+
+struct edit {
+    size_t at;       /* where in the text it happened */
+    char *text;      /* what was put in, or taken out */
+    size_t length;
+    bool insert;     /* true when this edit added the text */
+    size_t cursor_before;
 };
 
 struct recon_notepad {
@@ -100,8 +175,23 @@ struct recon_notepad {
      * never been saved, which is what makes Save fall through to Save As. */
     char path[RECON_PATH_MAX];
 
-    bool menu_open;
+    /* Which menu is showing, or -1. A bool was enough for one menu. */
+    int menu_open;
     int menu_hover;
+
+    /*
+     * What was done, and where in that history we are.
+     *
+     * `undo_at` is not the same as `undo_count`: undoing walks it back
+     * without discarding what it walked past, which is what makes redo
+     * possible. Typing something new is what throws the rest away.
+     */
+    struct edit undo[UNDO_MAX];
+    int undo_count;
+    int undo_at;
+    /* True while undo or redo is changing the text, so the change they make
+     * is not recorded as another thing to undo. */
+    bool replaying;
 
     struct recon_filedlg dialog;
     enum pending_action pending;
@@ -169,10 +259,212 @@ static bool ensure_capacity(struct recon_notepad *np, size_t needed) {
     return true;
 }
 
+/* Whitespace, for deciding where one typed word ends and the next starts. */
+static bool is_space(char c) {
+    return c == ' ' || c == '\t';
+}
+
+static void edit_free(struct edit *edit) {
+    free(edit->text);
+    edit->text = NULL;
+    edit->length = 0;
+}
+
+/* Drop everything ahead of where we are: once something new is typed, the
+ * future that was undone is not reachable any more, and keeping it would let
+ * redo paste it back into a document it no longer fits. */
+static void drop_redo(struct recon_notepad *np) {
+    for (int i = np->undo_count - 1; i >= np->undo_at; i--) {
+        edit_free(&np->undo[i]);
+    }
+    np->undo_count = np->undo_at;
+}
+
+static struct edit *push_edit(struct recon_notepad *np) {
+    drop_redo(np);
+
+    if (np->undo_count == UNDO_MAX) {
+        /* The oldest goes. A bounded history is the price of not growing
+         * without limit while somebody holds a key down. */
+        edit_free(&np->undo[0]);
+        memmove(&np->undo[0], &np->undo[1],
+            sizeof(np->undo[0]) * (UNDO_MAX - 1));
+        np->undo_count--;
+    }
+
+    struct edit *edit = &np->undo[np->undo_count];
+    memset(edit, 0, sizeof(*edit));
+    np->undo_count++;
+    np->undo_at = np->undo_count;
+    return edit;
+}
+
+/* Add to the edit at the top of the stack, if this change continues it. */
+static bool extend_edit(struct recon_notepad *np, size_t at, char c,
+        bool insert) {
+    if (np->undo_at == 0 || np->undo_at != np->undo_count) {
+        return false;
+    }
+
+    struct edit *edit = &np->undo[np->undo_count - 1];
+    if (edit->insert != insert) {
+        return false;
+    }
+
+    /*
+     * Where one edit ends and the next begins.
+     *
+     * Undo works in units of what somebody would call "a thing I did", and
+     * the unit people think in is a word. Grouping only at line breaks made
+     * typing a sentence a single undo -- one press and the whole line was
+     * gone, with no way back to the word.
+     *
+     * So: a line break is always a boundary, and a word ends when the run of
+     * spaces after it does. That keeps the trailing space with the word it
+     * follows, so undoing gives back "hello " and then nothing, rather than
+     * "hello", then " ", then nothing.
+     */
+    char last = '\0';
+    if (edit->length > 0) {
+        /* Deleting prepends, so index zero is the most recent character. */
+        last = insert ? edit->text[edit->length - 1] : edit->text[0];
+    }
+
+    if (c == '\n' || last == '\n') {
+        return false;
+    }
+    if (is_space(last) && !is_space(c)) {
+        return false;
+    }
+
+    if (insert) {
+        /* Typing carries on from where the last character went. */
+        if (at != edit->at + edit->length) {
+            return false;
+        }
+    } else {
+        /* Backspace walks backwards, so each removal is just before the last.
+         * The text is prepended and the edit's start moves with it. */
+        if (at + 1 != edit->at) {
+            return false;
+        }
+    }
+
+    char *grown = realloc(edit->text, edit->length + 1);
+    if (grown == NULL) {
+        return false;
+    }
+    edit->text = grown;
+
+    if (insert) {
+        edit->text[edit->length] = c;
+    } else {
+        memmove(edit->text + 1, edit->text, edit->length);
+        edit->text[0] = c;
+        edit->at = at;
+    }
+    edit->length++;
+    return true;
+}
+
+/* Remember one character going in or out. */
+static void record(struct recon_notepad *np, size_t at, char c, bool insert,
+        size_t cursor_before) {
+    if (np->replaying) {
+        return;    /* Undo and redo are not themselves edits. */
+    }
+
+    if (extend_edit(np, at, c, insert)) {
+        return;
+    }
+
+    struct edit *edit = push_edit(np);
+    edit->text = malloc(1);
+    if (edit->text == NULL) {
+        np->undo_count--;
+        np->undo_at = np->undo_count;
+        return;
+    }
+    edit->text[0] = c;
+    edit->length = 1;
+    edit->at = at;
+    edit->insert = insert;
+    edit->cursor_before = cursor_before;
+}
+
+/* Put text back, or take it out again, without recording it as a new edit. */
+static void apply_edit(struct recon_notepad *np, const struct edit *edit,
+        bool as_insert) {
+    np->replaying = true;
+
+    if (as_insert) {
+        if (ensure_capacity(np, np->length + edit->length)) {
+            memmove(np->text + edit->at + edit->length, np->text + edit->at,
+                np->length - edit->at + 1);
+            memcpy(np->text + edit->at, edit->text, edit->length);
+            np->length += edit->length;
+            np->cursor = edit->at + edit->length;
+        }
+    } else {
+        if (edit->at + edit->length <= np->length) {
+            memmove(np->text + edit->at, np->text + edit->at + edit->length,
+                np->length - edit->at - edit->length + 1);
+            np->length -= edit->length;
+            np->cursor = edit->at;
+        }
+    }
+
+    np->replaying = false;
+    np->modified = true;
+}
+
+static void do_undo(struct recon_notepad *np) {
+    if (np->undo_at == 0) {
+        set_message(np, false, "Nothing to undo.");
+        return;
+    }
+
+    np->undo_at--;
+    const struct edit *edit = &np->undo[np->undo_at];
+
+    /* The reverse of what it did. */
+    apply_edit(np, edit, !edit->insert);
+    if (edit->insert) {
+        np->cursor = edit->at;
+    }
+    scroll_to_cursor(np);
+    np->message[0] = '\0';
+}
+
+static void do_redo(struct recon_notepad *np) {
+    if (np->undo_at >= np->undo_count) {
+        set_message(np, false, "Nothing to redo.");
+        return;
+    }
+
+    const struct edit *edit = &np->undo[np->undo_at];
+    np->undo_at++;
+
+    apply_edit(np, edit, edit->insert);
+    scroll_to_cursor(np);
+    np->message[0] = '\0';
+}
+
+/* Everything forgotten, for when the document is replaced rather than edited. */
+static void forget_history(struct recon_notepad *np) {
+    for (int i = 0; i < np->undo_count; i++) {
+        edit_free(&np->undo[i]);
+    }
+    np->undo_count = 0;
+    np->undo_at = 0;
+}
+
 static void insert_char(struct recon_notepad *np, char c) {
     if (!ensure_capacity(np, np->length + 1)) {
         return;
     }
+    record(np, np->cursor, c, true, np->cursor);
+
     memmove(np->text + np->cursor + 1, np->text + np->cursor,
         np->length - np->cursor + 1);
     np->text[np->cursor] = c;
@@ -185,6 +477,8 @@ static void delete_before_cursor(struct recon_notepad *np) {
     if (np->cursor == 0) {
         return;
     }
+    record(np, np->cursor - 1, np->text[np->cursor - 1], false, np->cursor);
+
     memmove(np->text + np->cursor - 1, np->text + np->cursor,
         np->length - np->cursor + 1);
     np->cursor--;
@@ -196,6 +490,8 @@ static void delete_at_cursor(struct recon_notepad *np) {
     if (np->cursor >= np->length) {
         return;
     }
+    record(np, np->cursor, np->text[np->cursor], false, np->cursor);
+
     memmove(np->text + np->cursor, np->text + np->cursor + 1,
         np->length - np->cursor);
     np->length--;
@@ -283,6 +579,16 @@ static void set_text(struct recon_notepad *np, const char *text, size_t length) 
     np->length = length;
     np->cursor = 0;
     np->scroll_line = 0;
+
+    /*
+     * A new document has no history worth keeping.
+     *
+     * Undoing past the moment a file was opened would put the previous
+     * document's characters back into this one a few at a time -- which is
+     * not "the change before this one" by any reading, and is how an editor
+     * quietly corrupts a file somebody trusted it with.
+     */
+    forget_history(np);
 }
 
 static void do_new(struct recon_notepad *np) {
@@ -378,7 +684,7 @@ static void do_save(struct recon_notepad *np, enum pending_action pending) {
 }
 
 static void run_command(struct recon_notepad *np, enum file_command command) {
-    np->menu_open = false;
+    np->menu_open = -1;
 
     switch (command) {
     case FILE_NEW:
@@ -399,6 +705,14 @@ static void run_command(struct recon_notepad *np, enum file_command command) {
 
     case FILE_SAVE_AS:
         ask_save_as(np, PENDING_SAVE);
+        break;
+
+    case EDIT_UNDO:
+        do_undo(np);
+        break;
+
+    case EDIT_REDO:
+        do_redo(np);
         break;
 
     case FILE_CLOSE:
@@ -440,7 +754,16 @@ static void finish_dialog(struct recon_notepad *np) {
 
 /* --- Drawing --- */
 
-/* The menu bar, and the File menu when it is down. */
+/* Where a menu's name starts on the bar, so its dropdown opens under it. */
+static int menu_left(struct recon_notepad *np, int x, int which) {
+    int at = x + 2;
+    for (int i = 0; i < which && i < MENU_COUNT; i++) {
+        at += recon_text_width(np->font, MENUS[i].name) + 20;
+    }
+    return at;
+}
+
+/* The menu bar. Every menu's name, and which of them is down. */
 static void draw_menubar(struct recon_notepad *np, struct recon_panel *panel,
         int x, int y, int w) {
     int ascent = recon_font_ascent(np->font);
@@ -449,28 +772,44 @@ static void draw_menubar(struct recon_notepad *np, struct recon_panel *panel,
     recon_fill_rect(panel, x, y + MENUBAR_HEIGHT - 1, w, 1,
         RECON_RGB(0x90, 0x90, 0x90));
 
-    int file_w = recon_text_width(np->font, "File") + 20;
-    if (np->menu_open) {
-        recon_fill_rect(panel, x + 2, y + 1, file_w, MENUBAR_HEIGHT - 2,
-            COLOR_MENU_HILITE);
+    for (int i = 0; i < MENU_COUNT; i++) {
+        int width = recon_text_width(np->font, MENUS[i].name) + 20;
+        int at = menu_left(np, x, i);
+        bool open = (np->menu_open == i);
+
+        if (open) {
+            recon_fill_rect(panel, at, y + 1, width, MENUBAR_HEIGHT - 2,
+                COLOR_MENU_HILITE);
+        }
+        recon_draw_text(panel, np->font, at + 10,
+            y + (MENUBAR_HEIGHT + ascent) / 2 - 2, width, MENUS[i].name,
+            open ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
+
+        /* One id per menu, counting from the first, so a click resolves to a
+         * menu without the bar and the handler each doing the arithmetic. */
+        recon_hit_add(panel, at, y + 1, width, MENUBAR_HEIGHT - 2,
+            HIT_MENUBAR_BASE + i);
     }
-    recon_draw_text(panel, np->font, x + 12, y + (MENUBAR_HEIGHT + ascent) / 2 - 2,
-        file_w, "File",
-        np->menu_open ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
-    recon_hit_add(panel, x + 2, y + 1, file_w, MENUBAR_HEIGHT - 2, HIT_FILE);
 }
 
 static void draw_file_menu(struct recon_notepad *np, struct recon_panel *panel,
         int x, int y) {
+    if (np->menu_open < 0 || np->menu_open >= MENU_COUNT) {
+        return;
+    }
+
+    const struct menu_item *items = MENUS[np->menu_open].items;
+    int count = MENUS[np->menu_open].count;
+
     int ascent = recon_font_ascent(np->font);
-    int height = FILE_MENU_COUNT * MENU_ITEM_HEIGHT + 6;
-    int mx = x + 2;
+    int height = count * MENU_ITEM_HEIGHT + 6;
+    int mx = menu_left(np, x, np->menu_open);
     int my = y + MENUBAR_HEIGHT;
 
     recon_fill_rect(panel, mx, my, MENU_WIDTH, height, COLOR_MENU);
     recon_stroke_rect(panel, mx, my, MENU_WIDTH, height, COLOR_MENU_BORDER);
 
-    for (int i = 0; i < FILE_MENU_COUNT; i++) {
+    for (int i = 0; i < count; i++) {
         int iy = my + 3 + i * MENU_ITEM_HEIGHT;
         bool hovered = (i == np->menu_hover);
 
@@ -479,12 +818,20 @@ static void draw_file_menu(struct recon_notepad *np, struct recon_panel *panel,
                 COLOR_MENU_HILITE);
         }
 
-        recon_draw_text(panel, np->font, mx + 10,
-            iy + (MENU_ITEM_HEIGHT + ascent) / 2 - 2, MENU_WIDTH - 20,
-            FILE_MENU[i].label,
-            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
+        int baseline = iy + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
+        recon_draw_text(panel, np->font, mx + 10, baseline, MENU_WIDTH - 20,
+            items[i].label, hovered ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
 
-        if (FILE_MENU[i].separator_after) {
+        /* The shortcut, right-aligned and dimmer: it is a reminder, not
+         * another thing to read. */
+        if (items[i].shortcut != NULL && items[i].shortcut[0] != '\0') {
+            int sw = recon_text_width(np->font, items[i].shortcut);
+            recon_draw_text(panel, np->font, mx + MENU_WIDTH - 10 - sw,
+                baseline, sw, items[i].shortcut,
+                hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_DIM);
+        }
+
+        if (items[i].separator_after) {
             recon_fill_rect(panel, mx + 4, iy + MENU_ITEM_HEIGHT - 1,
                 MENU_WIDTH - 8, 1, RECON_RGB(0x90, 0x90, 0x90));
         }
@@ -579,7 +926,7 @@ static void notepad_draw(void *user, struct recon_panel *panel,
             ? COLOR_WARNING : COLOR_STATUS_TEXT);
 
     /* The menu draws over the text, so it goes last. */
-    if (np->menu_open) {
+    if (np->menu_open >= 0) {
         draw_file_menu(np, panel, x, y - MENUBAR_HEIGHT);
     }
 
@@ -622,24 +969,33 @@ static bool notepad_click(void *user, uint32_t hit_id, int cx, int cy,
         return true;
     }
 
-    if (hit_id >= HIT_MENU_BASE && np->menu_open) {
-        int index = (int)(hit_id - HIT_MENU_BASE);
-        if (index >= 0 && index < FILE_MENU_COUNT) {
-            run_command(np, FILE_MENU[index].command);
-        }
+    /*
+     * A name on the bar. Checked before the entries below it, because the
+     * bar's ids sit above the entries' and would otherwise be read as an
+     * entry index far past the end of whichever menu is open.
+     */
+    if (hit_id >= HIT_MENUBAR_BASE &&
+            hit_id < HIT_MENUBAR_BASE + (uint32_t)MENU_COUNT) {
+        int which = (int)(hit_id - HIT_MENUBAR_BASE);
+        /* Clicking the open menu's own name closes it, which is what makes
+         * the name a toggle rather than only a way in. */
+        np->menu_open = (np->menu_open == which) ? -1 : which;
+        np->menu_hover = -1;
         return true;
     }
 
-    if (hit_id == HIT_FILE) {
-        np->menu_open = !np->menu_open;
-        np->menu_hover = -1;
+    if (hit_id >= HIT_MENU_BASE && np->menu_open >= 0) {
+        int index = (int)(hit_id - HIT_MENU_BASE);
+        if (index >= 0 && index < MENUS[np->menu_open].count) {
+            run_command(np, MENUS[np->menu_open].items[index].command);
+        }
         return true;
     }
 
     /* A click anywhere else closes the menu rather than choosing from it,
      * which is what clicking away from an open menu should do. */
-    if (np->menu_open) {
-        np->menu_open = false;
+    if (np->menu_open >= 0) {
+        np->menu_open = -1;
         return true;
     }
 
@@ -655,7 +1011,7 @@ static void notepad_motion(void *user, uint32_t hit_id, int cx, int cy) {
     (void)cx;
     (void)cy;
 
-    if (!np->menu_open) {
+    if (np->menu_open < 0) {
         np->menu_hover = -1;
         return;
     }
@@ -663,7 +1019,7 @@ static void notepad_motion(void *user, uint32_t hit_id, int cx, int cy) {
     int hover = -1;
     if (hit_id >= HIT_MENU_BASE) {
         int index = (int)(hit_id - HIT_MENU_BASE);
-        if (index >= 0 && index < FILE_MENU_COUNT) {
+        if (index >= 0 && index < MENUS[np->menu_open].count) {
             hover = index;
         }
     }
@@ -710,6 +1066,20 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             run_command(np, (modifiers & RECON_MOD_SHIFT)
                 ? FILE_SAVE_AS : FILE_SAVE);
             return true;
+        case XKB_KEY_z:
+        case XKB_KEY_Z:
+            /* Shift+Ctrl+Z redoes, which is the other spelling of Ctrl+Y and
+             * the one people who came from a Mac reach for. */
+            if (modifiers & RECON_MOD_SHIFT) {
+                do_redo(np);
+            } else {
+                do_undo(np);
+            }
+            return true;
+        case XKB_KEY_y:
+        case XKB_KEY_Y:
+            do_redo(np);
+            return true;
         default:
             break;
         }
@@ -718,8 +1088,8 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
     }
 
-    if (np->menu_open && sym == XKB_KEY_Escape) {
-        np->menu_open = false;
+    if (np->menu_open >= 0 && sym == XKB_KEY_Escape) {
+        np->menu_open = -1;
         return true;
     }
 
@@ -846,6 +1216,7 @@ static void notepad_context_action(void *user, uint32_t id) {
 
 static void notepad_destroy(void *user) {
     struct recon_notepad *np = user;
+    forget_history(np);
     free(np->text);
     free(np);
 }
@@ -900,6 +1271,13 @@ struct recon_appwin *recon_notepad_create(struct recon_server *server,
         return NULL;
     }
     np->font = font;
+    /*
+     * No menu is down. Zero would mean the File menu, so a new window came up
+     * with its own File menu open and the first click on the bar closed it
+     * rather than opening anything -- which is precisely the bug the file
+     * explorer had, for precisely this reason.
+     */
+    np->menu_open = -1;
     np->menu_hover = -1;
 
     if (!ensure_capacity(np, 0)) {
