@@ -623,6 +623,37 @@ exact reason; and the branch handling entries ran before the branch handling
 names, so with a menu down, clicking a name read as an entry index past the
 end of it.
 
+## v0.2.12 — a text clipboard, and something to select with
+
+There was **no way to move text from one place to another**. The clipboard in
+`recon_fs` holds a path — what the explorer and the desktop copy between them
+— and text was not something the system could carry, so a line in the
+Terminal could be read and typed back into Notepad by hand and that was all.
+
+The text clipboard is separate from the file one rather than a field on it.
+They are the same idea and not the same thing: copying a file and then
+copying a sentence should not make the file un-pasteable.
+
+**Notepad can select.** An anchor and the cursor, either able to come first,
+because dragging backwards from a word is a selection too. Typing over a
+selection replaces it; backspace removes it; pasting over it replaces it. The
+highlight is drawn per line and clipped to that line, since a selection
+across three lines is three rectangles — and a line whose break is inside the
+selection shows a little past its last character, so the newline reads as
+part of what was taken.
+
+A selection deleted or pasted is **one undo**, not one per character.
+
+Cut, copy, paste and select all are in the Edit menu with their shortcuts
+beside them, and in every text field in the system — renaming a file, typing
+a path, naming one to save. That lives in `recon_edit` rather than in each
+field's owner, because a clipboard that works in some fields and not others
+is worse than none: which is which cannot be seen.
+
+The terminal pastes too. A newline **ends** the paste rather than submitting
+the line: pasting several commands and having them all run is how somebody
+loses a directory to a paste they meant to read first.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
