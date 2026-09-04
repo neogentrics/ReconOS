@@ -562,9 +562,13 @@ Collected from using it. Nothing here is started.
 `theme install` takes a file and `theme remove` takes it away; there is no
 editor for one, so writing a skin still means writing a text file.
 
-**No paint program, and no properties dialogs.** Desktop icon positions are
-not remembered. Client windows still draw their own decorations. The control
-socket still has no authentication, only file permissions.
+**No paint program.** Client windows still draw their own decorations. The
+control socket still has no authentication, only file permissions.
+
+**Only text files open.** `recon_props_opener` maps a name to an application
+and knows about text; a picture has nowhere to go because nothing views one,
+and the mapping is a list in one function rather than anything a program can
+register itself with.
 
 **Nothing can listen, and nothing is encrypted.** Streams connect outwards in
 the clear; there is no TLS and no way to accept a connection.

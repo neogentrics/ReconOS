@@ -209,6 +209,19 @@ make these a way of hiding windows rather than of arranging them.
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
 the root is refused rather than quietly clamped.
 
+**A desktop you can arrange.** Icons are a view of your Desktop folder, so
+anything that writes a file there puts it on the desktop. Drag one and it
+stays where you put it — the arrangement is remembered as grid positions, so
+it survives a change of screen size rather than falling off the edge. Only
+icons you moved are recorded; the grid fills in around them.
+
+**Files open when you click them.** A text file opens in Notepad, from the
+desktop or the explorer. Something with nothing to open it says so — "Nothing
+here opens a Picture" — rather than being handed to Notepad, which would show
+a window of binary and look like damage. Notepad refuses while it is holding
+unsaved work, because a double-click somewhere else on the screen should not
+be able to discard what you were writing.
+
 **A recycle bin.** Deleting puts things there rather than destroying them, and
 each item remembers where it came from so restoring puts it back — recreating
 the folder it came from if that has gone since. It is the first icon on the
