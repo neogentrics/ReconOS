@@ -220,6 +220,16 @@ who has not signed in for a while still hears about the version they arrive
 on. **All changes** opens Help at that version's entry, with every earlier
 one under it.
 
+## Text and letters
+
+ReconOS draws one font, and that font covers the plain English alphabet and
+nothing else. A letter outside it -- an accent, a dash of the typographic
+kind, a character from another script -- is drawn as nothing rather than as a
+box, so text containing one arrives with a gap in it.
+
+That includes file names. A file can be named with such a letter and will keep
+it, but its name will not read correctly on screen.
+
 ## What is not built yet
 
 Several Control Panel pages are there and say plainly that they are not

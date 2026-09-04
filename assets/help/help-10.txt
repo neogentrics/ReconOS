@@ -4,10 +4,10 @@ it.
 
 help lists every command. Some worth knowing:
 
-- dir, cd, type — look around and read a file
-- copy, move, rename, del — change things
-- theme, wallpaper — how it looks
-- net — what the network is doing
-- capture — a picture of the screen
-- reg — the settings the system remembers
-- bin — the Recycle Bin: list it, fill it, empty it
+- dir, cd, type -- look around and read a file
+- copy, move, rename, del -- change things
+- theme, wallpaper -- how it looks
+- net -- what the network is doing
+- capture -- a picture of the screen
+- reg -- the settings the system remembers
+- bin -- the Recycle Bin: list it, fill it, empty it

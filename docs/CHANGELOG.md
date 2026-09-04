@@ -34,6 +34,10 @@ there is one filesystem and no volume layer under it.
 something in, `bin restore <name>` takes it back out, and `bin empty` clears
 it. Before this the bin could only be reached from the File Explorer.
 
+**The Update page says what version this is and what it brought**, with a
+way through to the whole change log. It used to be three notes about things
+that do not work; one of them stopped being true when the change log arrived.
+
 **Notepad can replace.** Ctrl+H opens the find bar with a second field:
 *Replace* changes the match in front of you and moves to the next, *All*
 changes every one. Both undo.

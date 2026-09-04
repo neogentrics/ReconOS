@@ -1,8 +1,7 @@
-Several Control Panel pages are there and say plainly that they are not
-built: Power, Update, Troubleshoot and Recovery, and part of Storage. Nearly
-all of it needs a kernel of ReconOS's own, which is the next phase of the
-project — a program running on Linux cannot suspend a machine, partition a
-disk, or reinstall itself.
+ReconOS draws one font, and that font covers the plain English alphabet and
+nothing else. A letter outside it -- an accent, a dash of the typographic
+kind, a character from another script -- is drawn as nothing rather than as a
+box, so text containing one arrives with a gap in it.
 
-They are shown rather than hidden on purpose. A gap nobody can see is a gap
-nobody remembers.
+That includes file names. A file can be named with such a letter and will keep
+it, but its name will not read correctly on screen.

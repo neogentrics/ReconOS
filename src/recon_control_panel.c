@@ -20,6 +20,7 @@
 #include "recon_control_panel.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_help.h"
 #include "recon_modules.h"
 #include "recon_package.h"
 #include "recon_net.h"
@@ -112,6 +113,8 @@ enum action {
     ACTION_SKIN_SET,
     ACTION_SKIN_CANCEL,
     ACTION_SKIN_FLAT,
+    /* Update */
+    ACTION_SHOW_CHANGES,
 };
 
 enum page {
@@ -218,13 +221,16 @@ static const struct pending_item MULTITASKING_ITEMS[] = {
       "Real, but not settable: they are drawn from a fixed set." },
 };
 
+/*
+ * What Update still cannot do. "What changed" left this list in v0.2.15 --
+ * the change log is in the system now, and this page is where it is read
+ * from. The other two are the same missing thing said twice: there is
+ * nowhere to fetch an update from and no way to trust one if there were.
+ */
 static const struct pending_item UPDATE_ITEMS[] = {
     { "Check for updates", "Ask whether a newer ReconOS exists.",
       "Nothing to ask. There is no update server and no signed package "
       "format to trust an answer from." },
-    { "What changed", "The history of what each version did.",
-      "The history exists in the repository; nothing brings it into the "
-      "system." },
     { "Install automatically", "Apply updates without being asked.",
       "Would need updates first, and a way to restart into them." },
 };
@@ -268,8 +274,6 @@ static const struct {
     [PAGE_MULTITASKING] = { "How windows and desktops behave together.",
         MULTITASKING_ITEMS,
         (int)(sizeof(MULTITASKING_ITEMS) / sizeof(MULTITASKING_ITEMS[0])) },
-    [PAGE_UPDATE] = { "Keeping ReconOS current.",
-        UPDATE_ITEMS, (int)(sizeof(UPDATE_ITEMS) / sizeof(UPDATE_ITEMS[0])) },
     [PAGE_TROUBLESHOOT] = { "When something is not working.",
         TROUBLESHOOT_ITEMS,
         (int)(sizeof(TROUBLESHOOT_ITEMS) / sizeof(TROUBLESHOOT_ITEMS[0])) },
@@ -1420,6 +1424,139 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
     }
 }
 
+/*
+ * What version this is, and what it brought.
+ *
+ * The page was three notes about things that do not work. One of them --
+ * "the history exists in the repository; nothing brings it into the system"
+ * -- stopped being true when the change log arrived, and a page that keeps
+ * saying so after the fact is worse than one that never said it.
+ */
+static void draw_update(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    y = draw_heading(cp, p, x, y, w, "Update",
+        "What is running, and what it brought.");
+
+    char version[64];
+    snprintf(version, sizeof(version), "ReconOS v%s", RECONOS_VERSION);
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, version,
+        THEME(ACCENT));
+    y += line + 4;
+
+    /*
+     * The version this system last *started* as. The same when nothing has
+     * changed, and different only in the moment between an update landing and
+     * the first start after it -- which is exactly when somebody would want
+     * to know.
+     */
+    const char *installed =
+        recon_registry_get(RECON_REG_SYSTEM, "system/installed-version", "");
+
+    char note[192];
+    if (installed[0] == '\0') {
+        snprintf(note, sizeof(note),
+            "This system has not recorded a version yet.");
+    } else if (strcmp(installed, RECONOS_VERSION) == 0) {
+        snprintf(note, sizeof(note),
+            "Installed and running the same version. Nothing is pending.");
+    } else {
+        snprintf(note, sizeof(note),
+            "Last started as v%s. The next start will finish the update.",
+            installed);
+    }
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, note, COLOR_DIM);
+    y += line + PADDING;
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+        "What changed in this version:", COLOR_TEXT);
+    y += line + 4;
+
+    const char *changes = recon_help_current_changes();
+    if (changes == NULL || changes[0] == '\0') {
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16,
+            "The change log says nothing about this version.", COLOR_DIM);
+        y += line;
+    } else {
+        /*
+         * The first few lines only, with a button to the rest. This is a page
+         * about the state of the system, not a place to read a document in --
+         * Help is that, and sending somebody there is better than growing a
+         * second reader here that would then have to be kept in step.
+         */
+        int reserved = BUTTON_HEIGHT + PADDING * 4 + line * 2 +
+            (int)(sizeof(UPDATE_ITEMS) / sizeof(UPDATE_ITEMS[0])) * (line + 2);
+        int room = (h - y - reserved) / line;
+
+        /*
+         * Eight lines at most, whatever the window's height. This is a
+         * summary with a way to the whole thing, and a summary that grows
+         * until it fills the page is not a summary -- it is the document,
+         * shown in the wrong reader, pushing what is under it off the end.
+         */
+        if (room > 8) {
+            room = 8;
+        }
+        if (room < 1) {
+            room = 1;
+        }
+
+        /*
+         * The source lines as written, not re-wrapped. Help is the reader;
+         * this is a look at the first few lines of what it holds, and
+         * building a second wrapper here would be a second thing to keep in
+         * step with the first.
+         */
+        char buffer[2048];
+        recon_text_copy(buffer, sizeof(buffer), changes);
+
+        int shown = 0;
+        char *save = NULL;
+        for (char *at = strtok_r(buffer, "\n", &save);
+                at != NULL && shown < room;
+                at = strtok_r(NULL, "\n", &save)) {
+            if (*at == '\0') {
+                continue;
+            }
+            recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, at,
+                COLOR_DIM);
+            y += line;
+            shown++;
+        }
+    }
+
+    y += PADDING;
+    draw_button(cp, p, x, y, "All Changes",
+        HIT_ACTION_BASE + ACTION_SHOW_CHANGES, true);
+    y += BUTTON_HEIGHT + PADDING * 2;
+
+    if (y + line * 2 > h) {
+        return;
+    }
+
+    recon_fill_rect(p, x, y, w, 1, COLOR_SEPARATOR);
+    y += PADDING;
+
+    recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, "Not built yet:",
+        COLOR_DIM);
+    y += line + 4;
+
+    int count = (int)(sizeof(UPDATE_ITEMS) / sizeof(UPDATE_ITEMS[0]));
+    for (int i = 0; i < count && y + line <= h; i++) {
+        char text[192];
+        snprintf(text, sizeof(text), "%s -- %s", UPDATE_ITEMS[i].label,
+            UPDATE_ITEMS[i].blocked);
+        recon_draw_text(p, cp->font, x + 8, y + ascent, w - 16, text,
+            COLOR_DIM);
+        y += line + 2;
+    }
+}
+
 /* What is installed, and what could be done about it. */
 static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
@@ -2007,6 +2144,7 @@ static void panel_draw(void *user, struct recon_panel *p,
     case PAGE_MODULES:    draw_modules(cp, p, cx, cy, cw, chh); break;
     case PAGE_NETWORK:    draw_network(cp, p, cx, cy, cw, chh); break;
     case PAGE_STORAGE:    draw_storage(cp, p, cx, cy, cw, chh); break;
+    case PAGE_UPDATE:     draw_update(cp, p, cx, cy, cw, chh); break;
     case PAGE_REGISTRY:   draw_registry(cp, p, cx, cy, cw, chh); break;
     case PAGE_ABOUT:      draw_system(cp, p, cx, cy, cw, chh); break;
     default:
@@ -2797,6 +2935,18 @@ static void do_action(struct control_panel *cp, enum action action) {
         }
         clear_status(cp);
         break;
+
+    case ACTION_SHOW_CHANGES: {
+        /* Help, at this version's entry. The whole log is under it, back to
+         * the first version, which is what "all changes" means. */
+        char version[48];
+        snprintf(version, sizeof(version), "v%s", RECONOS_VERSION);
+
+        recon_shell_open_named(cp->server->shell, "Help");
+        recon_help_show_topic(recon_installed_app_existing("Help"), version);
+        clear_status(cp);
+        break;
+    }
 
     case ACTION_SKIN_DONE:
         cp->skin_editing = false;

@@ -8,5 +8,5 @@ deleting them are separate decisions, and only one of them can be undone.
 A limited account cannot change anything in /System and cannot read
 another account's files.
 
-Lock covers the screen without ending your session — your windows stay
+Lock covers the screen without ending your session -- your windows stay
 open and only you can unlock it. Sign Out ends the session.

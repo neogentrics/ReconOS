@@ -123,8 +123,8 @@ mouse. Now typing filters the list, the arrows move the highlight, Enter opens
 it, and Escape steps back one thing at a time: what was typed, then the long
 list, then the menu.
 
-**A Control Panel** with thirteen pages. Eight do something: Accounts,
-Appearance, Reading, Programs, Modules, Storage, Registry, About. Modules
+**A Control Panel** with thirteen pages. Nine do something: Accounts,
+Appearance, Reading, Programs, Modules, Storage, Update, Registry, About. Modules
 loads and unloads code in the running system and says why anything refused to
 load.
 
@@ -143,9 +143,14 @@ look like one act. Saving redraws everything, since a setting here is one
 something is already using: set `theme` by hand and the desktop restyles
 while you watch.
 
-The other four -- Power, Update, Troubleshoot and Recovery -- are there and
-say plainly that they are not built, and what has to exist first. So does the
-part of Storage that needs more than one volume to mean anything. Usually a kernel: a hosted
+The other three -- Power, Troubleshoot and Recovery -- are there and say
+plainly that they are not built, and what has to exist first. So do the parts
+of Storage that need more than one volume to mean anything, and the parts of
+Update that need somewhere to fetch one from.
+
+Update says what version is running, whether the installed version matches it,
+and the first few lines of what this version brought, with a way through to
+the whole log in Help. Usually a kernel: a hosted
 process cannot suspend a machine, partition a disk, or reinstall itself. A
 gap nobody can see is a gap nobody remembers.
 

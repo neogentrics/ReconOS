@@ -53,6 +53,22 @@ split_topics() {
             gsub(/\*\*/, "", line)
             gsub(/`/, "", line)
 
+            # Typographic punctuation down to ASCII.
+            #
+            # The Markdown is read on GitHub as well as in the system, so it
+            # is written with real dashes and quotes. ReconOS draws one font
+            # and that font has no glyph past ASCII, so an em dash came out as
+            # nothing at all -- a sentence with a hole where its punctuation
+            # should be, which reads as a bug in the sentence.
+            gsub(/\xe2\x80\x94/, "--", line)   # em dash
+            gsub(/\xe2\x80\x93/, "-", line)    # en dash
+            gsub(/\xe2\x80\x98/, "\x27", line) # left single quote
+            gsub(/\xe2\x80\x99/, "\x27", line) # right single quote
+            gsub(/\xe2\x80\x9c/, "\"", line)   # left double quote
+            gsub(/\xe2\x80\x9d/, "\"", line)   # right double quote
+            gsub(/\xe2\x80\xa6/, "...", line)  # ellipsis
+            gsub(/\xe2\x86\x92/, "->", line)   # right arrow
+
             # No blank line at the very top of a topic: the heading is why
             # that blank line was there, and the heading has gone.
             # (No apostrophes in here -- the awk program is single-quoted,

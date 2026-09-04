@@ -927,6 +927,32 @@ Two more paths that existed and had never been taken:
 Not done: an icon that means anything. A Wayland client hands its compositor
 an `app_id`, not a picture.
 
+### Update, and a font that draws no dashes
+
+The Update page was three notes about things that do not work. One of them --
+*the history exists in the repository; nothing brings it into the system* --
+stopped being true when the change log arrived, and a page that keeps saying
+so after the fact is worse than one that never said it.
+
+It now says what version is running, whether the installed version matches it,
+the first few lines of what this version brought, and offers a way through to
+the whole log in Help. The first few lines rather than all of them: this is a
+page about the state of the system, not a place to read a document in, and a
+summary that grows until it fills the page is the document shown in the wrong
+reader.
+
+Building it found something that had been on screen for a while without being
+noticed: **ReconOS draws one font and that font has no glyph past ASCII**, so
+every em dash in the help and the change log came out as nothing at all -- a
+sentence with a hole where its punctuation should be, which reads as a bug in
+the sentence. The Markdown is read on GitHub too, so it keeps its real dashes
+and quotes; `make-help.sh` folds them down to ASCII on the way into the
+system.
+
+That is a patch on the symptom. The cause -- text outside ASCII draws as
+blank, wherever it comes from -- is still there, and a file named with an
+accent will still lose it.
+
 ### F1
 
 `recon_help_show_topic` had existed since the help did and nothing called it:
