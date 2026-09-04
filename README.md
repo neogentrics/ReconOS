@@ -47,7 +47,9 @@ package format with a manifest and a receipt, so an install can place more
 than one file and removing it takes back exactly what it placed. v0.2.15
 gave the system a way to explain itself: a Help application holding both the
 written help and the change log, and a window that says what changed the
-first time an account reaches the desktop on a new version.
+first time an account reaches the desktop on a new version. It also made
+Storage work, gave the Recycle Bin a command so it can be reached from
+outside a window, and settled on one button shape for the whole system.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.

@@ -331,6 +331,21 @@ static int opens_of(const char *name) {
     return recon_registry_get_int(RECON_REG_USER, key, 0);
 }
 
+/* Does `haystack` contain `needle`, ignoring case? An empty needle matches
+ * everything, which is what "nothing typed yet" should mean. */
+static bool contains_fold(const char *haystack, const char *needle) {
+    if (needle == NULL || needle[0] == '\0') {
+        return true;
+    }
+    size_t length = strlen(needle);
+    for (const char *at = haystack; *at != '\0'; at++) {
+        if (strncasecmp(at, needle, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /*
  * The applications the left column is currently showing.
  *
@@ -338,16 +353,30 @@ static int opens_of(const char *name) {
  * use?" -- most-opened first, which is what the space is worth spending on.
  * Open, it answers "what is installed?", and the only order that helps you
  * find a name you already know is alphabetical.
+ *
+ * `filter` narrows it to names containing what has been typed. Anything typed
+ * puts the column into the second order whatever mode it was in: somebody
+ * typing letters is looking for a name, and most-used is not an order you can
+ * look a name up in.
  */
-static int menu_apps(bool show_all, struct menu_entry *out, int max) {
+static int menu_apps(bool show_all, const char *filter,
+        struct menu_entry *out, int max) {
     struct menu_entry found[MENU_APPS_MAX];
     int counts[MENU_APPS_MAX];
     int total = 0;
+
+    bool searching = (filter != NULL && filter[0] != '\0');
+    if (searching) {
+        show_all = true;
+    }
 
     int installed = recon_installed_app_count();
     for (int i = 0; i < installed && total < MENU_APPS_MAX; i++) {
         struct recon_installed_app app;
         if (!recon_installed_app_at(i, &app) || !app.in_menu) {
+            continue;
+        }
+        if (!contains_fold(app.name, filter)) {
             continue;
         }
         snprintf(found[total].label, sizeof(found[total].label), "%s", app.name);
@@ -412,14 +441,15 @@ static bool menu_has_more(void) {
 /* These take the mode rather than the shell because they are defined above
  * it -- and because what the column shows is the only thing about the shell
  * they were ever asking. */
-static int menu_entry_count(bool show_all) {
+static int menu_entry_count(bool show_all, const char *filter) {
     struct menu_entry entries[MENU_APPS_MAX];
-    return menu_apps(show_all, entries, MENU_APPS_MAX);
+    return menu_apps(show_all, filter, entries, MENU_APPS_MAX);
 }
 
-static bool menu_entry_at(bool show_all, int index, struct menu_entry *out) {
+static bool menu_entry_at(bool show_all, const char *filter, int index,
+        struct menu_entry *out) {
     struct menu_entry entries[MENU_APPS_MAX];
-    int count = menu_apps(show_all, entries, MENU_APPS_MAX);
+    int count = menu_apps(show_all, filter, entries, MENU_APPS_MAX);
     if (index < 0 || index >= count) {
         return false;
     }
@@ -481,6 +511,16 @@ struct recon_shell {
      * reopened expanded would make the short list unreachable by accident.
      */
     bool menu_show_all;
+
+    /*
+     * What has been typed into the menu to narrow it.
+     *
+     * The Start menu never took a key before this -- not even Escape -- so
+     * the only way to reach an application was to find its name with the
+     * mouse in a list that is alphabetical and nothing else. Fine at seven
+     * applications, which is what there are.
+     */
+    char menu_filter[48];
 
     /*
      * Which virtual desktop is showing. Windows remember their own; this is
@@ -850,11 +890,14 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
     recon_damage_all(shell->server);
 }
 
-static int menu_height(bool show_all) {
+static int menu_height(bool show_all, const char *filter) {
     /* As tall as whichever column needs more, plus the header and footer.
      * Sizing to the left alone would clip the right when few applications are
      * installed, which is exactly the state a new system is in. */
-    int rows = menu_entry_count(show_all);
+    int rows = menu_entry_count(show_all, filter);
+    if (rows == 0 && filter != NULL && filter[0] != '\0') {
+        rows = 1;    /* the "Nothing by that name" line */
+    }
     if (menu_has_more()) {
         rows++;    /* the All Programs row, which is part of the column */
     }
@@ -1000,10 +1043,10 @@ bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
     uint32_t wanted = 0;
     bool found = false;
 
-    int apps = menu_entry_count(shell->menu_show_all);
+    int apps = menu_entry_count(shell->menu_show_all, shell->menu_filter);
     for (int i = 0; i < apps && !found; i++) {
         struct menu_entry entry;
-        if (menu_entry_at(shell->menu_show_all, i, &entry) &&
+        if (menu_entry_at(shell->menu_show_all, shell->menu_filter, i, &entry) &&
                 strcasecmp(entry.label, label) == 0) {
             wanted = HIT_MENU_BASE + i;
             found = true;
@@ -1098,11 +1141,11 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
     if (shell->menu_open) {
         /* Everything in it, with where to click, so a test does not have to
          * work out the layout for itself. */
-        int apps = menu_entry_count(shell->menu_show_all);
+        int apps = menu_entry_count(shell->menu_show_all, shell->menu_filter);
         for (int i = 0; i < apps; i++) {
             struct menu_entry entry;
             int mx = 0, my = 0;
-            if (menu_entry_at(shell->menu_show_all, i, &entry) &&
+            if (menu_entry_at(shell->menu_show_all, shell->menu_filter, i, &entry) &&
                     recon_shell_menu_entry_at(shell, entry.label, &mx, &my)) {
                 EMIT("  app    %-18s click at %d,%d\n", entry.label, mx, my);
             }
@@ -1768,10 +1811,45 @@ static void draw_menu(struct recon_shell *shell) {
         body_bottom - body_y, COLOR_MENU_SEPARATOR);
 
     /* --- Left: the applications --- */
-    int count = menu_entry_count(shell->menu_show_all);
+
+    /*
+     * What is being looked for, above the list, only once something has been
+     * typed. A search box standing empty in a menu of seven applications is
+     * furniture; a line that appears when it has something to say is not.
+     */
+    if (shell->menu_filter[0] != '\0') {
+        char looking[80];
+        snprintf(looking, sizeof(looking), "Finding: %s", shell->menu_filter);
+
+        recon_fill_role(menu, MENU_PADDING, body_y,
+            MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
+            RECON_THEME_SELECTION);
+        recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET,
+            body_y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2,
+            MENU_LEFT_WIDTH - MENU_PADDING * 2 - TEXT_INSET, looking,
+            THEME(SELECTION_TEXT));
+
+        body_y += MENU_ITEM_HEIGHT;
+    }
+
+    int count = menu_entry_count(shell->menu_show_all, shell->menu_filter);
+
+    /*
+     * Nothing matched. Said, rather than left as an empty column somebody has
+     * to work out the meaning of -- and counted as a row, so the foot of the
+     * list is not drawn on top of the sentence.
+     */
+    int rows = count;
+    if (count == 0 && shell->menu_filter[0] != '\0') {
+        recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET,
+            body_y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2,
+            MENU_LEFT_WIDTH - MENU_PADDING * 2, "Nothing by that name.",
+            COLOR_MENU_TEXT_DISABLED);
+        rows = 1;
+    }
     for (int i = 0; i < count; i++) {
         struct menu_entry entry;
-        if (!menu_entry_at(shell->menu_show_all, i, &entry)) {
+        if (!menu_entry_at(shell->menu_show_all, shell->menu_filter, i, &entry)) {
             break;
         }
 
@@ -1808,7 +1886,7 @@ static void draw_menu(struct recon_shell *shell) {
      * buttons here do nothing.
      */
     if (menu_has_more()) {
-        int y = body_y + count * MENU_ITEM_HEIGHT;
+        int y = body_y + rows * MENU_ITEM_HEIGHT;
         if (y + MENU_ITEM_HEIGHT <= body_bottom) {
             bool hovered = (shell->menu_hover == HIT_ALL_PROGRAMS);
             int baseline = y + (MENU_ITEM_HEIGHT + ascent) / 2 - 2;
@@ -1826,8 +1904,12 @@ static void draw_menu(struct recon_shell *shell) {
             }
 
             unsigned ink = hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT;
-            const char *label = shell->menu_show_all
-                ? "Back" : "All Programs";
+            /* While something is being looked for, this is the way back
+             * from it -- which is a more useful thing for the row under a
+             * search to do than switching an order the search overrode. */
+            const char *label = shell->menu_filter[0] != '\0'
+                ? "Clear"
+                : (shell->menu_show_all ? "Back" : "All Programs");
             recon_draw_text(menu, shell->font, MENU_PADDING + TEXT_INSET,
                 baseline, MENU_LEFT_WIDTH - MENU_PADDING * 2 - 24, label, ink);
 
@@ -1839,7 +1921,9 @@ static void draw_menu(struct recon_shell *shell) {
             int ax = MENU_LEFT_WIDTH - MENU_PADDING - 16;
             int ay = y + MENU_ITEM_HEIGHT / 2;
             for (int step = 0; step < 5; step++) {
-                int dx = shell->menu_show_all ? (4 - step) : step;
+                bool backwards = shell->menu_show_all ||
+                    shell->menu_filter[0] != '\0';
+                int dx = backwards ? (4 - step) : step;
                 recon_fill_rect(menu, ax + dx, ay - (4 - step),
                     1, (4 - step) * 2 + 1, ink);
             }
@@ -2013,7 +2097,7 @@ static void layout(struct recon_shell *shell) {
          * drawing a longer list into a panel that was still the short list's
          * height, so everything past the sixth entry was clipped away.
          */
-        int height = menu_height(shell->menu_show_all);
+        int height = menu_height(shell->menu_show_all, shell->menu_filter);
         recon_panel_resize(shell->menu, MENU_WIDTH, height);
         recon_panel_set_position(shell->menu, TASKBAR_PADDING,
             shell->screen_height - TASKBAR_HEIGHT - height);
@@ -2067,7 +2151,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
 
     shell->menu = recon_panel_create(&server->scene->tree, MENU_WIDTH,
-        menu_height(false));
+        menu_height(false, ""));
     if (shell->menu != NULL) {
         recon_panel_set_enabled(shell->menu, false);
         draw_menu(shell);
@@ -3310,6 +3394,122 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
     return false;
 }
 
+/*
+ * Keys, while the Start menu is up.
+ *
+ * The menu never took one before this -- not even Escape -- so the only way
+ * to reach an application was to find its name with the mouse. Typing narrows
+ * the list, the arrows move the highlight, Enter opens what is highlighted.
+ *
+ * The highlight is the same `menu_hover` the pointer sets, so a menu being
+ * driven from the keyboard looks exactly like one being driven from the
+ * mouse, and moving the mouse takes over without a fight.
+ */
+static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
+        uint32_t modifiers) {
+    int count = menu_entry_count(shell->menu_show_all, shell->menu_filter);
+    size_t typed = strlen(shell->menu_filter);
+
+    switch (sym) {
+    case XKB_KEY_Escape:
+        /* One step back at a time: what was typed, then the long list, then
+         * the menu. Closing outright would throw away a search somebody is
+         * halfway through correcting. */
+        if (typed > 0) {
+            shell->menu_filter[0] = '\0';
+        } else if (shell->menu_show_all) {
+            shell->menu_show_all = false;
+        } else {
+            recon_shell_close_menu(shell);
+            return true;
+        }
+        shell->menu_hover = -1;
+        layout(shell);
+        draw_menu(shell);
+        recon_damage_all(shell->server);
+        return true;
+
+    case XKB_KEY_BackSpace:
+        if (typed > 0) {
+            shell->menu_filter[typed - 1] = '\0';
+            shell->menu_hover = -1;
+            layout(shell);
+            draw_menu(shell);
+            recon_damage_all(shell->server);
+        }
+        return true;
+
+    case XKB_KEY_Up:
+    case XKB_KEY_Down: {
+        if (count <= 0) {
+            return true;
+        }
+        int at = (shell->menu_hover >= HIT_MENU_BASE &&
+                  shell->menu_hover < HIT_MENU_BASE + count)
+            ? shell->menu_hover - HIT_MENU_BASE
+            : (sym == XKB_KEY_Down ? -1 : count);
+
+        at += (sym == XKB_KEY_Down) ? 1 : -1;
+        if (at < 0) {
+            at = count - 1;
+        } else if (at >= count) {
+            at = 0;
+        }
+
+        shell->menu_hover = HIT_MENU_BASE + at;
+        draw_menu(shell);
+        recon_damage_all(shell->server);
+        return true;
+    }
+
+    case XKB_KEY_Return:
+    case XKB_KEY_KP_Enter: {
+        if (count <= 0) {
+            return true;
+        }
+        /*
+         * Whatever is highlighted, or the first match when nothing is --
+         * typing three letters and pressing Enter should open the thing those
+         * letters found, without a trip through the arrow keys.
+         */
+        int at = (shell->menu_hover >= HIT_MENU_BASE &&
+                  shell->menu_hover < HIT_MENU_BASE + count)
+            ? shell->menu_hover - HIT_MENU_BASE : 0;
+
+        struct menu_entry entry;
+        if (menu_entry_at(shell->menu_show_all, shell->menu_filter, at,
+                &entry)) {
+            recon_shell_close_menu(shell);
+            recon_shell_open_named(shell, entry.label);
+        }
+        return true;
+    }
+
+    default:
+        break;
+    }
+
+    /*
+     * Anything printable narrows the list. Read from the keysym rather than
+     * from a text event, because that is what the shell is given -- which
+     * limits this to the Latin range, and is the same limit every other
+     * typed-into thing in ReconOS currently has.
+     */
+    if (sym >= 0x20 && sym <= 0x7E && (modifiers & WLR_MODIFIER_CTRL) == 0) {
+        if (typed + 1 < sizeof(shell->menu_filter)) {
+            shell->menu_filter[typed] = (char)sym;
+            shell->menu_filter[typed + 1] = '\0';
+            shell->menu_hover = -1;
+            layout(shell);
+            draw_menu(shell);
+            recon_damage_all(shell->server);
+        }
+        return true;
+    }
+
+    return false;
+}
+
 bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
         uint32_t modifiers) {
     if (shell == NULL) {
@@ -3339,6 +3539,12 @@ bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
             draw_dialog(shell);
             recon_damage_all(shell->server);
         }
+        return true;
+    }
+
+    /* The Start menu, while it is up, for the same reason a dialog does:
+     * it is the thing the person is looking at. */
+    if (shell->menu_open && menu_handle_key(shell, sym, modifiers)) {
         return true;
     }
 
@@ -3525,6 +3731,9 @@ void recon_shell_close_menu(struct recon_shell *shell) {
         return;
     }
     shell->menu_open = false;
+    /* What was typed goes with it. A menu reopened still holding somebody's
+     * last search would be showing a list they did not ask for. */
+    shell->menu_filter[0] = '\0';
     /* Back to the short list, so the menu opens the same way every time. */
     shell->menu_show_all = false;
     recon_panel_set_enabled(shell->menu, false);
@@ -3712,7 +3921,14 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
          * with >=, so the order of these branches is what separates them.
          */
         if (hit == HIT_ALL_PROGRAMS) {
-            shell->menu_show_all = !shell->menu_show_all;
+            /* While something is being looked for, this row is the way back
+             * from it rather than a switch between two orders the search has
+             * already overridden. */
+            if (shell->menu_filter[0] != '\0') {
+                shell->menu_filter[0] = '\0';
+            } else {
+                shell->menu_show_all = !shell->menu_show_all;
+            }
             shell->menu_hover = -1;
             layout(shell);
             draw_menu(shell);
@@ -3785,7 +4001,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             int index = (int)(hit - HIT_MENU_BASE);
             struct menu_entry entry;
             if (index >= 0 &&
-                    menu_entry_at(shell->menu_show_all, index, &entry)) {
+                    menu_entry_at(shell->menu_show_all, shell->menu_filter, index, &entry)) {
                 /* Close the menu first: quitting never returns here. */
                 recon_shell_close_menu(shell);
                 if (entry.is_shutdown) {
