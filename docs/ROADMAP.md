@@ -654,6 +654,43 @@ The terminal pastes too. A newline **ends** the paste rather than submitting
 the line: pasting several commands and having them all run is how somebody
 loses a directory to a paste they meant to read first.
 
+## v0.2.13 — asked for while watching it run
+
+**Removing an account can take its files.** Closing an account and destroying
+somebody's documents are separate decisions, and the dialog offered only
+"Remove" — which had already made the second one on their behalf. Keep Files,
+Delete Files, Cancel. The terminal takes `users remove <name> files`.
+
+The account goes first and the folder second. If the folder cannot be removed
+the account is still gone: the login is what was asked about, and leaving it
+in place because a file was locked would be answering a different question.
+
+That changed the shape of the answer handling, which read "anything but the
+first button means cancel" — untrue the moment a question has two ways of
+saying yes. It is the last button now, which is the one Enter and Escape
+choose anyway.
+
+**The Start menu's footer is five icons in the bottom right.** Spelled out,
+they were labels of different lengths in buttons of identical width, which
+reads as a row of text rather than a row of controls — and "Sign Out" beside
+"Switch User" is two phrases that must be read before either can be told
+apart. The name of whichever the pointer is over appears on the left, in
+space nothing else uses.
+
+The footer is filled with the menu's colour now rather than the taskbar's. It
+left its ink with no role guaranteed to read on it: `menu.text` is measured
+against the menu and `bar.text` against a taskbar button, and the footer was
+neither. On a skin with a deep blue bar the glyphs came out dark on dark.
+
+**Buttons round off**, on a fifth metric. All four corners, unlike a window's,
+and the corner is filled back to what is behind rather than cleared — a
+window clears because the wallpaper is behind it, a button would show the
+wallpaper through the middle of a title bar.
+
+**The splash takes about a second and three quarters**, up from just over
+one. It went past faster than it could be read, which is the wrong failure
+for a screen whose job is to say the machine is starting.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
