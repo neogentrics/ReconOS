@@ -152,6 +152,24 @@ it.
 **Print Screen** saves a picture of the whole screen into your Pictures
 folder. So does the **capture** command, which can also be given a path.
 
+## This help, and what changed
+
+**Help** is in the Start menu, under the Control Panel. The list down the left
+is these pages; under the rule at the bottom of it is the change log, one
+entry for every version back to the first.
+
+The text is written out of the system's own files each time it starts, so it
+always describes the version you are running. Editing a page under
+`/System/Help` changes what you see until the next update puts the shipped
+one back.
+
+The first time you reach the desktop after an update, a window says what that
+version brought. Pressing **OK** records that you have read it, and it does
+not come back for that version. Each account is told separately, so somebody
+who has not signed in for a while still hears about the version they arrive
+on. **All changes** opens Help at that version's entry, with every earlier
+one under it.
+
 ## What is not built yet
 
 Several Control Panel pages are there and say plainly that they are not

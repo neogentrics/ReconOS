@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.14.** The version number tracks what works, not what is
+**Status: v0.2.15.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -44,7 +44,10 @@ which the system did not have at all. v0.2.13 came out of watching it run:
 removing an account can now take its files, and the Start menu's footer is
 icons rather than five words. v0.2.14 gave programs a way to arrive: a
 package format with a manifest and a receipt, so an install can place more
-than one file and removing it takes back exactly what it placed.
+than one file and removing it takes back exactly what it placed. v0.2.15
+gave the system a way to explain itself: a Help application holding both the
+written help and the change log, and a window that says what changed the
+first time an account reaches the desktop on a new version.
 
 [docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
 and the list of what is known to be missing.
@@ -412,6 +415,20 @@ here means the thing a user touches works.
   and saving. Closing with unsaved work asks where to put it rather than
   throwing it away
 - **Calculator** — arithmetic by mouse or keyboard
+- **Help** — a page for each part of the system, and under a rule, the change
+  log back to the first version
+
+**Help that stays true.** The pages and the log are one document each in
+`docs/`, split into topics by a script and written into `/System/Help` every
+time ReconOS starts. Prose about a feature lives beside the prose about every
+other feature rather than in the file that implements it, which is the
+arrangement under which it stays written — and rewriting it on every start
+means help describing a version that is no longer running cannot survive an
+update.
+
+The first time an account reaches the desktop on a new version, a window says
+what that version brought, with an OK button. The version is recorded against
+that account, so each person is told once and nobody is told twice.
 
 **A file dialog** shared by the applications that need one. It is drawn inside
 the window that asked for it, so it cannot be dragged away from its own

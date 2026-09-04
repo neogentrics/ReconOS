@@ -9,7 +9,8 @@ help-08.txt	How it looks
 help-09.txt	Programs
 help-10.txt	The Terminal
 help-11.txt	Pictures of the screen
-help-12.txt	What is not built yet
+help-12.txt	This help, and what changed
+help-13.txt	What is not built yet
 changes-01.txt	v0.2.15
 changes-02.txt	v0.2.14
 changes-03.txt	v0.2.13

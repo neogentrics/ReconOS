@@ -728,6 +728,57 @@ above the cursor, which reads as "not here" and is wrong. Searching starts one
 past the selection rather than at the cursor, because a match is left
 selected and searching from the cursor would find the same one for ever.
 
+## v0.2.15 — help, and telling people what changed
+
+Every version so far shipped with no way for the system to explain itself.
+The control panel says what is not built, which is honest and is not the same
+as help: somebody who does not know how to reach a second desktop has nowhere
+to look, and the answer only existed in a README they would have to leave the
+machine to read.
+
+**The source is two Markdown files**, `docs/HELP.md` and `docs/CHANGELOG.md`,
+split into topics by `scripts/make-help.sh`. Prose about a feature lives
+beside the prose about every other feature rather than in the C file that
+implements it — that is the arrangement under which it stays written. The
+split runs at build time and its output is checked in, so a system with no
+awk still ships with help.
+
+**Written out on every start**, unlike icons and skins, which are written
+only when missing. There is nothing in a help page somebody would have
+customised and want kept, and help describing a version the system is no
+longer running is worse than no help at all.
+
+**One window, two documents.** The help and the change log are the same
+question asked at different times, and somebody who has found one has found
+the other. A rule divides them, because the halves are read differently: one
+is looked up, the other is read through, and thirty entries in a single
+unbroken list hides that.
+
+**Paragraphs are reflowed, not lines.** The source is hard-wrapped to about
+eighty columns because it is a file people edit. Wrapping each of those lines
+on its own produced a ragged column — a full line, then two words, then a
+full line — which reads as though the text were broken rather than as though
+the window were narrow. Doing it properly turned up a second thing:
+`strtok_r` runs a row of newlines together as one separator, so the blank
+line between two entries never arrived and the two were welded into a single
+block of prose. Blank lines are the only paragraph marks the source has, so
+they are now read by hand rather than by a function that throws them away.
+
+**A notice after an update**, once per account per version. Per account
+rather than per machine: an update is news to each person the first time they
+sign in after it, and somebody who has been away for three versions should
+still be met with the current one on the first desktop they see. Pressing OK
+records the version in that account's hive; so does opening the full log,
+because leaving it unread would punish the person who took the trouble to
+read further.
+
+The notice is registered as an application so the shell builds it, focuses it
+and lists it on the taskbar the way it does every other window — but it is
+kept out of the menus, because nobody goes looking for it. It comes to them.
+
+**Icons for the Control Panel, the Start menu and Help**, which had been
+sharing the plain window that stood in for anything without one.
+
 ## What is known to be missing
 
 Collected from using it. Nothing here is started.
@@ -747,6 +798,12 @@ already has. It is not started because **there is no Wayland client in the
 development environment to test it against**, and shipping window management
 that has never been driven is how Alt+Tab came to be dead for months without
 anybody noticing.
+
+**Help has no search, and no way in from where you are.** The topic list is
+short enough to read, but the change log makes it thirty entries and neither
+half can be searched. Nor can an application ask for the page about itself:
+`recon_help_show_topic` exists and nothing calls it, so somebody stuck in the
+Control Panel has to find Help and then find the right page.
 
 **Notepad has no replace, and Calculator is still deliberately shallow.**
 Notepad can select, cut, copy, paste, undo and find.
