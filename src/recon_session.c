@@ -22,6 +22,7 @@
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_error.h"
+#include "recon_firewall.h"
 #include "recon_registry.h"
 #include "recon_shell.h"
 #include "recon_server.h"
@@ -222,13 +223,22 @@ static int update_tick(void *data);
  * The system used to appear without announcing itself: one frame of nothing,
  * then a login screen.
  *
- * What it reports is a count of what it brought up -- icons, skins,
- * wallpapers, accounts, modules -- rather than progress through work being
- * done. The startup work is finished before this screen can exist, and a bar
- * pretending to drive it would be a decoration in front of nothing. Counting
- * is honest about which it is: these are real numbers, read at the moment
- * each line appears, and if one of them says zero then something really is
- * missing.
+ * It used to report a count of what had been brought up -- icons, skins,
+ * wallpapers, accounts, modules -- and nothing else, because the startup work
+ * was finished before this screen could exist and a bar pretending to drive
+ * it would have been a decoration in front of nothing.
+ *
+ * Now it checks. Each line looks at the part of the system it names, says
+ * what it found, and raises a code when what it found is wrong: a system
+ * folder that is missing, an account whose folder has gone, a program whose
+ * file is not there any more. That is what this screen is for on every system
+ * that has one, and it is why it takes a moment -- the moment is the checking,
+ * not a delay added to look like checking.
+ *
+ * A check that fails does not stop the start. Almost everything here is
+ * survivable, and a machine that refuses to boot because one icon folder is
+ * unreadable is worse than one that says so and carries on. What it cannot
+ * survive raises a STOP of its own and never reaches this screen.
  *
  * It is skippable, because a splash is the one part of a system that a
  * developer sees a hundred times a day and a user sees once.
@@ -247,42 +257,192 @@ static int update_tick(void *data);
 
 struct boot_step {
     const char *label;
-    /* How many of the thing there are, or -1 when there is nothing to count. */
-    int (*count)(void);
+    /*
+     * Look at this part of the system.
+     *
+     * Returns how many of the thing there are, or -1 when there is nothing
+     * worth counting. Sets `*problem` to a code when something is wrong, and
+     * `note` to a few words about it -- the screen has room for one line, and
+     * a code with no words beside it makes somebody look it up to find out
+     * whether they need to care.
+     */
+    int (*check)(enum recon_error_code *problem, char *note, size_t size);
 };
+
+/*
+ * The folders the system cannot do without.
+ *
+ * recon_fs creates these at startup, so finding one missing here means it
+ * could not be created or has gone since -- either way the system is standing
+ * on something that is not there, and it is worth saying so before anybody
+ * puts a file in it.
+ */
+static int boot_check_filesystem(enum recon_error_code *problem, char *note,
+        size_t size) {
+    static const char *const NEEDED[] = {
+        RECON_DIR_SYSTEM, RECON_DIR_SYSTEM_CONFIG, RECON_DIR_SYSTEM_THEMES,
+        RECON_DIR_SYSTEM_ICONS, RECON_DIR_SYSTEM_MODULES, RECON_DIR_LOGS,
+        RECON_DIR_APPS, RECON_DIR_USERS, RECON_DIR_TEMP,
+    };
+
+    int missing = 0;
+    for (size_t i = 0; i < sizeof(NEEDED) / sizeof(NEEDED[0]); i++) {
+        if (recon_fs_exists("/", NEEDED[i])) {
+            continue;
+        }
+        missing++;
+        recon_fs_mkdir("/", NEEDED[i]);
+        recon_error_raisef(NULL, RECON_ERR_A007, "%s", NEEDED[i]);
+    }
+
+    if (missing > 0) {
+        *problem = RECON_ERR_A007;
+        snprintf(note, size, "%d rebuilt", missing);
+    }
+    return (int)(sizeof(NEEDED) / sizeof(NEEDED[0]));
+}
+
+/* The two hives. Missing is normal on a first run; unreadable is not. */
+static int boot_check_settings(enum recon_error_code *problem, char *note,
+        size_t size) {
+    (void)problem; (void)note; (void)size;
+    return recon_registry_count(RECON_REG_SYSTEM, "") +
+           recon_registry_count(RECON_REG_USER, "");
+}
 
 /* Counted from the folder rather than from the icon cache, which only holds
  * what has been asked for so far -- at this point in a start, almost nothing. */
-static int boot_count_icons(void) {
+static int boot_check_icons(enum recon_error_code *problem, char *note,
+        size_t size) {
     struct recon_dirent entries[128];
     int found = recon_fs_list("/", RECON_DIR_SYSTEM_ICONS, entries, 128);
-    return found < 0 ? -1 : found;
+
+    if (found < 0) {
+        *problem = RECON_ERR_L002;
+        recon_text_copy(note, size, "cannot read the folder");
+        return -1;
+    }
+    return found;
 }
 
-static int boot_count_skins(void) {
-    return recon_theme_count();
+/* The skins, and whether the one in use is among them. A skin that has been
+ * deleted since it was chosen leaves the system drawing in the fallback. */
+static int boot_check_appearance(enum recon_error_code *problem, char *note,
+        size_t size) {
+    int count = recon_theme_count();
+    const char *current = recon_theme_current();
+
+    bool found = false;
+    for (int i = 0; i < count && !found; i++) {
+        struct recon_theme_info info;
+        if (recon_theme_at(i, &info) && strcmp(info.name, current) == 0) {
+            found = true;
+        }
+    }
+
+    if (!found) {
+        *problem = RECON_ERR_L001;
+        snprintf(note, size, "'%s' is not there", current);
+    }
+    return count;
 }
 
-static int boot_count_wallpapers(void) {
+static int boot_check_wallpapers(enum recon_error_code *problem, char *note,
+        size_t size) {
+    (void)problem; (void)note; (void)size;
     return recon_wallpaper_count();
 }
 
-static int boot_count_accounts(void) {
-    return recon_users_count();
+/*
+ * The programs, and whether each one is still where its registration says.
+ *
+ * Not loaded and unloaded: they are already loaded by this point, so "did it
+ * load" is a question the module layer has already answered and is reported
+ * here. Loading them a second time to test them would run their startup code
+ * twice, which is a worse thing to do to a program than not testing it.
+ */
+static int boot_check_programs(enum recon_error_code *problem, char *note,
+        size_t size) {
+    int count = recon_modules_count();
+    int refused = 0;
+
+    for (int i = 0; i < count; i++) {
+        struct recon_module_state state;
+        if (!recon_modules_at(i, &state)) {
+            continue;
+        }
+        if (!state.loaded) {
+            refused++;
+        }
+    }
+
+    if (refused > 0) {
+        *problem = RECON_ERR_E001;
+        snprintf(note, size, "%d would not load", refused);
+    }
+    return count;
 }
 
-static int boot_count_modules(void) {
-    return recon_modules_count();
+/*
+ * The accounts, and whether each one still has somewhere to keep its files.
+ *
+ * A folder that has gone is recreated empty: the account is what the login
+ * screen offers, and offering one that cannot be signed into would be worse
+ * than an empty Documents.
+ */
+static int boot_check_accounts(enum recon_error_code *problem, char *note,
+        size_t size) {
+    int count = recon_users_count();
+    int rebuilt = 0;
+
+    for (int i = 0; i < count; i++) {
+        struct recon_user user;
+        if (!recon_users_at(i, &user)) {
+            continue;
+        }
+
+        char path[RECON_PATH_MAX];
+        if (!recon_fs_join(path, sizeof(path), RECON_DIR_USERS, user.name)) {
+            continue;
+        }
+        if (recon_fs_exists("/", path)) {
+            continue;
+        }
+
+        rebuilt++;
+        recon_fs_create_user(user.name);
+        recon_error_raisef(NULL, RECON_ERR_C002, "%s", user.name);
+    }
+
+    if (rebuilt > 0) {
+        *problem = RECON_ERR_C002;
+        snprintf(note, size, "%d folder%s rebuilt", rebuilt,
+            rebuilt == 1 ? "" : "s");
+    }
+    return count;
+}
+
+/* What the firewall is doing, said out loud at every start. A firewall that
+ * is off should not be a thing somebody discovers later. */
+static int boot_check_firewall(enum recon_error_code *problem, char *note,
+        size_t size) {
+    if (!recon_firewall_is_on()) {
+        *problem = RECON_ERR_G001;
+        recon_text_copy(note, size, "off");
+        return recon_firewall_count();
+    }
+    return recon_firewall_count();
 }
 
 static const struct boot_step BOOT_STEPS[] = {
-    { "Filesystem", NULL },
-    { "Settings", NULL },
-    { "Icons", boot_count_icons },
-    { "Appearance", boot_count_skins },
-    { "Wallpapers", boot_count_wallpapers },
-    { "Applications", boot_count_modules },
-    { "Accounts", boot_count_accounts },
+    { "Filesystem", boot_check_filesystem },
+    { "Settings", boot_check_settings },
+    { "Icons", boot_check_icons },
+    { "Appearance", boot_check_appearance },
+    { "Wallpapers", boot_check_wallpapers },
+    { "Applications", boot_check_programs },
+    { "Accounts", boot_check_accounts },
+    { "Firewall", boot_check_firewall },
 };
 
 #define BOOT_STEP_COUNT ((int)(sizeof(BOOT_STEPS) / sizeof(BOOT_STEPS[0])))
@@ -378,6 +538,13 @@ struct recon_session {
     int boot_ticks;
     unsigned boot_phase;
     char boot_detail[64];
+    /* The code the current line's check raised, or "" if it passed. Shown
+     * beside the line, because a check that failed silently is a check that
+     * did not happen as far as anybody watching is concerned. */
+    char boot_problem[16];
+    /* And whether any of them did, so the login screen can say so once
+     * rather than the splash saying it and going away. */
+    bool boot_had_problem;
     struct wl_event_source *boot_timer;
 
     /* The update screen: which step, what it found, and where it came from. */
@@ -1087,16 +1254,25 @@ static void draw_splash(struct recon_session *session, struct recon_panel *p) {
         index = BOOT_STEP_COUNT - 1;
     }
 
-    char what[128];
-    if (session->boot_detail[0] != '\0') {
+    char what[160];
+    if (session->boot_problem[0] != '\0') {
+        /* The code first, because it is the part worth reading. */
+        snprintf(what, sizeof(what), "%s   %s%s%s", BOOT_STEPS[index].label,
+            session->boot_problem,
+            session->boot_detail[0] != '\0' ? "  " : "",
+            session->boot_detail);
+    } else if (session->boot_detail[0] != '\0') {
         snprintf(what, sizeof(what), "%s   %s", BOOT_STEPS[index].label,
             session->boot_detail);
     } else {
         snprintf(what, sizeof(what), "%s", BOOT_STEPS[index].label);
     }
+
     int what_w = recon_text_width(session->font, what);
     recon_draw_text(p, session->font, cx - what_w / 2, y + ascent,
-        session->width, what, THEME(MENU_TEXT_DISABLED));
+        session->width, what,
+        session->boot_problem[0] != '\0' ? THEME(WARNING)
+                                       : THEME(MENU_TEXT_DISABLED));
 }
 
 static void draw(struct recon_session *session) {
@@ -1965,10 +2141,37 @@ static int boot_tick(void *data) {
         }
 
         int found = -1;
-        if (BOOT_STEPS[session->boot_step].count != NULL) {
-            found = BOOT_STEPS[session->boot_step].count();
+        enum recon_error_code problem = RECON_ERROR_COUNT;
+        char note[48];
+        note[0] = '\0';
+
+        if (BOOT_STEPS[session->boot_step].check != NULL) {
+            found = BOOT_STEPS[session->boot_step].check(&problem, note,
+                sizeof(note));
         }
-        if (found >= 0) {
+
+        /*
+         * What the line says: the count, or what went wrong, or both. A
+         * count on its own reads as "this many, and fine", which is exactly
+         * what it means when nothing set a problem.
+         */
+        session->boot_problem[0] = '\0';
+
+        if (problem != RECON_ERROR_COUNT) {
+            const struct recon_error_info *info = recon_error_at(problem);
+            if (info != NULL) {
+                recon_text_copy(session->boot_problem,
+                    sizeof(session->boot_problem), info->code);
+            }
+            session->boot_had_problem = true;
+
+            if (note[0] != '\0') {
+                recon_text_copy(session->boot_detail,
+                    sizeof(session->boot_detail), note);
+            } else {
+                session->boot_detail[0] = '\0';
+            }
+        } else if (found >= 0) {
             snprintf(session->boot_detail, sizeof(session->boot_detail),
                 "%d", found);
         } else {
