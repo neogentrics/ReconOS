@@ -1236,26 +1236,103 @@ static bool edit_delete_selection(struct recon_edit *edit) {
     return true;
 }
 
-static void edit_insert(struct recon_edit *edit, char c) {
-    edit_delete_selection(edit);
-
-    if (edit->length + 1 >= RECON_EDIT_MAX) {
-        return;
+/*
+ * Where the character containing or preceding `at` begins.
+ *
+ * The text is UTF-8, so a character is one to four bytes and the caret is a
+ * byte offset. Stepping by one byte put the caret in the middle of a
+ * character, and deleting one byte of a two-byte character left a broken
+ * sequence in the field -- a name that had been typed correctly and could no
+ * longer be read.
+ *
+ * Continuation bytes are 10xxxxxx. Walking back over them lands on the lead
+ * byte, and the loop is bounded by the start of the buffer, so malformed text
+ * costs a few wasted steps rather than a walk off the front.
+ */
+static int edit_step_back(const struct recon_edit *edit, int at) {
+    if (at <= 0) {
+        return 0;
     }
-    memmove(edit->text + edit->caret + 1, edit->text + edit->caret,
-        (size_t)(edit->length - edit->caret) + 1);
-    edit->text[edit->caret] = c;
-    edit->caret++;
-    edit->length++;
+    at--;
+    while (at > 0 && ((unsigned char)edit->text[at] & 0xC0) == 0x80) {
+        at--;
+    }
+    return at;
 }
 
+/* And where the character at `at` ends. */
+static int edit_step_forward(const struct recon_edit *edit, int at) {
+    if (at >= edit->length) {
+        return edit->length;
+    }
+    at++;
+    while (at < edit->length &&
+            ((unsigned char)edit->text[at] & 0xC0) == 0x80) {
+        at++;
+    }
+    return at;
+}
+
+/* Insert a run of bytes -- one character's worth, or a whole paste. */
+static void edit_insert_bytes(struct recon_edit *edit, const char *bytes,
+        int count) {
+    edit_delete_selection(edit);
+
+    if (count <= 0 || edit->length + count >= RECON_EDIT_MAX) {
+        return;
+    }
+    memmove(edit->text + edit->caret + count, edit->text + edit->caret,
+        (size_t)(edit->length - edit->caret) + 1);
+    memcpy(edit->text + edit->caret, bytes, (size_t)count);
+    edit->caret += count;
+    edit->length += count;
+}
+
+static void edit_insert(struct recon_edit *edit, char c) {
+    edit_insert_bytes(edit, &c, 1);
+}
+
+/*
+ * One character as UTF-8. Returns how many bytes it took, or 0 for something
+ * that is not a character anybody types.
+ */
+static int encode_utf8(uint32_t c, char *out) {
+    if (c < 0x80) {
+        out[0] = (char)c;
+        return 1;
+    }
+    if (c < 0x800) {
+        out[0] = (char)(0xC0 | (c >> 6));
+        out[1] = (char)(0x80 | (c & 0x3F));
+        return 2;
+    }
+    if (c < 0x10000) {
+        out[0] = (char)(0xE0 | (c >> 12));
+        out[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (c & 0x3F));
+        return 3;
+    }
+    if (c <= 0x10FFFF) {
+        out[0] = (char)(0xF0 | (c >> 18));
+        out[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (c & 0x3F));
+        return 4;
+    }
+    return 0;
+}
+
+/* Remove the character starting at `index`, however many bytes that is. */
 static void edit_delete_at(struct recon_edit *edit, int index) {
     if (index < 0 || index >= edit->length) {
         return;
     }
-    memmove(edit->text + index, edit->text + index + 1,
-        (size_t)(edit->length - index));
-    edit->length--;
+    int end = edit_step_forward(edit, index);
+    int count = end - index;
+
+    memmove(edit->text + index, edit->text + end,
+        (size_t)(edit->length - end) + 1);
+    edit->length -= count;
 }
 
 enum recon_edit_result recon_edit_key(struct recon_edit *edit,
@@ -1333,8 +1410,9 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
         /* Backspace over a selection removes the selection, not the character
          * before it. */
         if (!edit_delete_selection(edit) && edit->caret > 0) {
-            edit_delete_at(edit, edit->caret - 1);
-            edit->caret--;
+            int start = edit_step_back(edit, edit->caret);
+            edit_delete_at(edit, start);
+            edit->caret = start;
         }
         return RECON_EDIT_CHANGED;
 
@@ -1354,7 +1432,7 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
             }
             edit->anchor = -1;
         } else if (edit->caret > 0) {
-            edit->caret--;
+            edit->caret = edit_step_back(edit, edit->caret);
         }
         return RECON_EDIT_CHANGED;
 
@@ -1366,7 +1444,7 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
             }
             edit->anchor = -1;
         } else if (edit->caret < edit->length) {
-            edit->caret++;
+            edit->caret = edit_step_forward(edit, edit->caret);
         }
         return RECON_EDIT_CHANGED;
 
@@ -1388,11 +1466,20 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
      * Anything that produces a printable character is text. Control codes are
      * not: a stray Tab or newline inside a filename would be legal on disk and
      * impossible to see.
+     *
+     * Everything above the control range, not only ASCII. A keyboard laid out
+     * for a language with accents in it sends those characters, and refusing
+     * them meant a person could name a file only in English -- on a system
+     * that will happily store the name and now draws it correctly.
      */
     uint32_t code = xkb_keysym_to_utf32(sym);
-    if (code >= 0x20 && code < 0x7F) {
-        edit_insert(edit, (char)code);
-        return RECON_EDIT_CHANGED;
+    if (code >= 0x20 && code != 0x7F) {
+        char bytes[4];
+        int count = encode_utf8(code, bytes);
+        if (count > 0) {
+            edit_insert_bytes(edit, bytes, count);
+            return RECON_EDIT_CHANGED;
+        }
     }
 
     return RECON_EDIT_IGNORED;

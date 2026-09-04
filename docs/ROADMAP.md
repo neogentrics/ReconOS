@@ -962,11 +962,19 @@ as well as in the help — and a character the font has no drawing for shows as
 an empty box, which is the font saying so rather than the character being
 lost. The ASCII folding came back out; the source keeps its real punctuation.
 
-Still ASCII-only: **typing**. `recon_edit_key` accepts 0x20..0x7E and refuses
-the rest, and making it accept more means making the caret, the arrow keys and
-backspace step by character rather than by byte -- deleting one byte of a
-two-byte character leaves a broken sequence. That is its own pass, with its
-own tests.
+**Typing followed**, because the two halves are one thing: a field that shows
+a character it cannot navigate is worse than one that shows neither. The caret
+is still a byte offset -- that is what the text is -- but the arrow keys and
+Backspace step over whole characters by walking off the continuation bytes,
+and `recon_edit_key` accepts everything above the control range rather than
+only ASCII. A keyboard laid out for a language with accents in it sends those
+characters, and refusing them meant a person could name a file only in English
+on a system that would happily store the name.
+
+Verified end to end: typed `Café` into the skin-copy field, pressed Enter, and
+found `Café.theme` on disk under that name and in the skin list. Backspace
+over `α` and `ñ` removed two characters and left `Café` intact rather than
+half of a two-byte sequence.
 
 ### F1
 

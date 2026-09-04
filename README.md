@@ -276,8 +276,10 @@ be walked a byte at a time with glyphs cached only for 32..126, so any
 multi-byte character was three or four bytes each of which drew nothing --
 not a box, not a question mark, nothing -- and the typeface had the glyphs
 the whole time. A character the font has no drawing for now shows as an empty
-box. Typing is still limited to the plain English keyboard: making the caret
-and backspace step by character rather than by byte is its own piece of work.
+box. A keyboard laid out for a language with accents in it types them: the
+caret is still a byte offset, because that is what the text is, but the arrow
+keys and Backspace step over whole characters by walking off the continuation
+bytes.
 
 **Skins you can write here.** *Copy This Skin* on the Appearance page writes
 the chosen skin out under a name of your own and opens it for editing; the
