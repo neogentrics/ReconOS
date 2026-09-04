@@ -1903,6 +1903,15 @@ int main(int argc, char **argv) {
     install_asset_icon("logo.png", RECON_ICON_LOGO);
 
     /*
+     * The same door for the icons that are drawings rather than generated
+     * shapes. They live in assets/icons and are copied in on first run, so
+     * they are asked for by name and replaceable like everything else.
+     */
+    install_asset_icon("icons/control-panel.png", RECON_ICON_CONTROL_PANEL);
+    install_asset_icon("icons/apps.png", RECON_ICON_APPS);
+    install_asset_icon("icons/help.png", RECON_ICON_HELP);
+
+    /*
      * Wallpapers, drawn the way the icons are. A system with nothing
      * installed should still look like something, and the photograph that
      * ships is one option among them rather than the only one.

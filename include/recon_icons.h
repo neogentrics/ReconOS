@@ -28,6 +28,17 @@
 #define RECON_ICON_EXPLORER "explorer"
 #define RECON_ICON_TASKMGR "taskmanager"
 #define RECON_ICON_SYSTEM "system"
+/*
+ * Drawn artwork rather than generated shapes, copied out of the asset
+ * directory on first run the way the Recon Towers mark is.
+ *
+ * These three were all the generic system square, which is what the Control
+ * Panel, the Apps button and half the settings pages were showing -- the same
+ * red window meaning four different things.
+ */
+#define RECON_ICON_CONTROL_PANEL "control-panel"
+#define RECON_ICON_APPS "apps"
+#define RECON_ICON_HELP "help"
 #define RECON_ICON_SHUTDOWN "shutdown"
 /* The Recon Towers mark. Copied in from the assets rather than drawn: it is
  * artwork, not a generated glyph. */
