@@ -76,6 +76,41 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-078 — A dialog asked for four buttons and silently got three
+
+[#231](https://github.com/neogentrics/ReconOS/issues/231)
+
+- **Found in** v0.2.17. **Found by** screen capture, building the New Skin
+  question: the dialog came up with Light, Dark and High Contrast and no
+  Cancel.
+- **Was** `recon_shell_ask` clamped to `RECON_DIALOG_BUTTONS_MAX`, which was
+  three, by cutting the tail. The tail is the way out: the contract is that
+  callers put the safe answer last and Enter and Escape both choose it. So a
+  question with one button too many did not lose an answer -- it lost its
+  escape hatch, and Escape silently started confirming instead of declining.
+  Three had been enough for every question there was, which is why a cap that
+  cannot be right had never been wrong.
+- **Fixed in** v0.2.17. The maximum is four, and truncation now drops from the
+  middle: the last slot always keeps the caller's last button. Losing an
+  answer is visible; losing the safety is not.
+
+### BG-079 — A chosen wallpaper outlived the skin change it was promised to
+
+[#232](https://github.com/neogentrics/ReconOS/issues/232)
+
+- **Found in** v0.2.17. **Found by** screen capture, testing New Skin: the
+  system went dark and the desktop stayed light.
+- **Was** the Wallpapers page says a picture chosen there "stays until the
+  skin changes again". `recon_wallpaper_current` preferred the account's
+  choice over the skin's suggestion unconditionally, so the first picture
+  anybody chose was the last one they would ever see -- no skin could put its
+  own on again. The page and the code had disagreed since wallpapers became
+  choosable, and the page is the promise.
+- **Fixed in** v0.2.17. `recon_wallpaper_set` records the skin in force
+  alongside the picture, and the choice applies only while that skin is still
+  on. Changing the skin is also somebody saying what they want, and it is the
+  more recent of the two.
+
 ### BG-062 — What's New reopens after a shell restart
 
 [#2](https://github.com/neogentrics/ReconOS/issues/2)

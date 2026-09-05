@@ -235,10 +235,22 @@ static bool exists(const char *name) {
 }
 
 const char *recon_wallpaper_current(void) {
-    /* The account's own choice comes first. */
+    /*
+     * The account's own choice comes first -- while the skin it was made
+     * under is still on.
+     *
+     * A picture chosen on the Wallpapers page beats what the skin suggests,
+     * because somebody said so out loud. Changing the skin is also somebody
+     * saying so out loud, and it is the more recent of the two.
+     */
     const char *chosen = recon_registry_get(RECON_REG_USER,
         RECON_WALLPAPER_KEY, "");
-    if (exists(chosen)) {
+    const char *under = recon_registry_get(RECON_REG_USER,
+        RECON_WALLPAPER_SKIN_KEY, "");
+    bool still = under[0] == '\0' ||
+        strcmp(under, recon_theme_current()) == 0;
+
+    if (still && exists(chosen)) {
         snprintf(g_current, sizeof(g_current), "%s", chosen);
         return g_current;
     }
@@ -493,10 +505,16 @@ bool recon_wallpaper_remove(const char *name) {
 bool recon_wallpaper_set(const char *name) {
     if (name == NULL || *name == '\0') {
         recon_registry_remove(RECON_REG_USER, RECON_WALLPAPER_KEY);
+        recon_registry_remove(RECON_REG_USER, RECON_WALLPAPER_SKIN_KEY);
         return true;
     }
     if (!exists(name)) {
         return false;
     }
+
+    /* Written together: the picture and the skin it was chosen under. The
+     * second is what lets the choice expire when the skin changes. */
+    recon_registry_set(RECON_REG_USER, RECON_WALLPAPER_SKIN_KEY,
+        recon_theme_current());
     return recon_registry_set(RECON_REG_USER, RECON_WALLPAPER_KEY, name);
 }

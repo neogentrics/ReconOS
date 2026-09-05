@@ -165,6 +165,7 @@ enum action {
     ACTION_ADD_WALLPAPER,
     ACTION_REMOVE_WALLPAPER,
     ACTION_COPY_SKIN,
+    ACTION_NEW_SKIN,
     ACTION_BEGIN_NAMING_SKIN,
     ACTION_CONFIRM_COPY_SKIN,
     ACTION_EDIT_SKIN,
@@ -549,6 +550,7 @@ enum question {
     QUESTION_REMOVE_KEY,
     QUESTION_EMPTY_BIN,
     QUESTION_CUSTOMIZE_SKIN,
+    QUESTION_NEW_SKIN,
     QUESTION_CLEAN_UP,
 };
 
@@ -685,6 +687,14 @@ struct control_panel {
     int paper_scroll;
 
     bool naming_skin;
+
+    /*
+     * Which built-in a new skin starts from, or empty when the naming form
+     * was reached by customizing whatever was selected. A skin has forty-eight
+     * roles and every one of them has to be a colour; there is no blank to
+     * start from, only a choice of which finished thing to start from.
+     */
+    char new_skin_from[64];
     struct recon_edit skin_new_name;
     /*
      * And a line saying what it is for. The built-in skins each have one and
@@ -1428,6 +1438,30 @@ static int draw_sections(struct control_panel *cp, struct recon_panel *p,
 
 /* --- Themes --- */
 
+/*
+ * Which skin a new one is being built from.
+ *
+ * Either the one named when New Skin was pressed, or -- when the naming form
+ * was reached by customizing -- whichever row is selected. Both paths end at
+ * the same form, and the form should not have to know which way it was
+ * reached.
+ */
+static bool source_skin(struct control_panel *cp,
+        struct recon_theme_info *out) {
+    if (cp->new_skin_from[0] != '\0') {
+        int count = recon_theme_count();
+        for (int i = 0; i < count; i++) {
+            if (recon_theme_at(i, out) &&
+                    strcmp(out->name, cp->new_skin_from) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return recon_theme_at(cp->selected, out);
+}
+
+
 static void draw_appearance_themes(struct control_panel *cp,
         struct recon_panel *p, int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
@@ -1555,8 +1589,9 @@ static void draw_appearance_themes(struct control_panel *cp,
      */
     if (cp->naming_skin) {
         char asking[140];
+        struct recon_theme_info from;
         snprintf(asking, sizeof(asking), "A name for your version of %s:",
-            have_chosen ? chosen.name : recon_theme_current());
+            source_skin(cp, &from) ? from.name : recon_theme_current());
         recon_draw_text(p, cp->font, x, y + ascent, w, asking, COLOR_DIM);
         y += line + 2;
 
@@ -1581,9 +1616,18 @@ static void draw_appearance_themes(struct control_panel *cp,
         HIT_ACTION_BASE + ACTION_USE_SKIN, have_chosen);
     sbx = draw_button(cp, p, sbx, y, "Customize Skin",
         HIT_ACTION_BASE + ACTION_COPY_SKIN, have_chosen);
-    draw_button(cp, p, sbx, y, "Edit Colours",
+    sbx = draw_button(cp, p, sbx, y, "Edit Colours",
         HIT_ACTION_BASE + ACTION_EDIT_SKIN,
         have_chosen && !chosen.built_in);
+
+    /*
+     * Always enabled: this is the one button here that does not act on the
+     * selection, which is the whole reason for it. "Customize Skin" makes a
+     * copy of the row you are pointing at, and somebody who wants to make
+     * their own has to work out that pointing at somebody else's is how.
+     */
+    draw_button(cp, p, sbx, y, "New Skin",
+        HIT_ACTION_BASE + ACTION_NEW_SKIN, true);
 }
 
 /* --- Colours --- */
@@ -4153,7 +4197,12 @@ static void answered(void *user, int choice) {
      * account offers two ways of saying yes, so "anything but the first" is
      * no longer the same as "no".
      */
-    int button_count = (asked == QUESTION_REMOVE_USER) ? 3 : 2;
+    int button_count = 2;
+    if (asked == QUESTION_REMOVE_USER) {
+        button_count = 3;
+    } else if (asked == QUESTION_NEW_SKIN) {
+        button_count = 4;
+    }
     if (choice < 0 || choice >= button_count - 1) {
         set_status(cp, false, "Nothing was changed.");
         recon_appwin_refresh(cp->win);
@@ -4231,6 +4280,21 @@ static void answered(void *user, int choice) {
             set_status(cp, false, "Removed %d file%s.", removed,
                 removed == 1 ? "" : "s");
         }
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
+    if (asked == QUESTION_NEW_SKIN) {
+        /*
+         * Named for what they look like rather than for the skin behind each
+         * one. Somebody starting a skin knows they want a dark one; whether
+         * the dark one they are handed is called Midnight is the system's
+         * business, not theirs.
+         */
+        static const char *const FROM[] = { "Aqua", "Midnight", "Contrast" };
+        snprintf(cp->new_skin_from, sizeof(cp->new_skin_from), "%s",
+            FROM[choice]);
+        do_action(cp, ACTION_BEGIN_NAMING_SKIN);
         recon_appwin_refresh(cp->win);
         return;
     }
@@ -5018,6 +5082,23 @@ static void do_action(struct control_panel *cp, enum action action) {
      * then a name and a line describing it, then the editor in its own
      * window.
      */
+    case ACTION_NEW_SKIN:
+        /*
+         * Three starting points rather than a blank one. Forty-eight roles
+         * all have to hold a colour for anything to draw, so "empty" is not
+         * an available state -- the only real question is which finished set
+         * to start from, and light, dark and high-contrast are the three
+         * answers that lead somewhere different.
+         */
+        cp->question = QUESTION_NEW_SKIN;
+        recon_appwin_ask(cp->win, "New Skin",
+            "A skin needs all forty-eight of its colours set, so a new one "
+            "starts from an existing set rather than from nothing.\n\n"
+            "Which one should it start from?",
+            (const char *const[]){ "Light", "Dark", "High Contrast",
+                "Cancel" }, 4, answered);
+        break;
+
     case ACTION_COPY_SKIN: {
         struct recon_theme_info info;
         if (!recon_theme_at(cp->selected, &info)) {
@@ -5040,7 +5121,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     case ACTION_BEGIN_NAMING_SKIN: {
         struct recon_theme_info info;
-        if (!recon_theme_at(cp->selected, &info)) {
+        if (!source_skin(cp, &info)) {
             set_status(cp, true, "Choose a skin first.");
             break;
         }
@@ -5064,7 +5145,7 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     case ACTION_CONFIRM_COPY_SKIN: {
         struct recon_theme_info info;
-        if (!recon_theme_at(cp->selected, &info)) {
+        if (!source_skin(cp, &info)) {
             set_status(cp, true, "Choose a skin first.");
             break;
         }
@@ -5096,6 +5177,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         }
 
         cp->naming_skin = false;
+        cp->new_skin_from[0] = '\0';
         recon_edit_end(&cp->skin_new_name);
         recon_edit_end(&cp->skin_new_desc);
 
@@ -5239,6 +5321,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         }
         if (cp->naming_skin) {
             cp->naming_skin = false;
+            cp->new_skin_from[0] = '\0';
             recon_edit_end(&cp->skin_new_name);
         }
         clear_status(cp);

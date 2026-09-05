@@ -27,6 +27,16 @@
 #define RECON_WALLPAPER_KEY "desktop/wallpaper"
 
 /*
+ * Which skin was on when that picture was chosen.
+ *
+ * The Wallpapers page says a picture chosen there "stays until the skin
+ * changes again", and this is what makes that true. Without it the choice is
+ * permanent and a skin can never put its own picture on again -- which is not
+ * what the page says, and the page is the promise.
+ */
+#define RECON_WALLPAPER_SKIN_KEY "desktop/wallpaper-skin"
+
+/*
  * Write the wallpapers ReconOS draws for itself, if they are not there.
  * Returns how many were written. An existing file is left alone, so one
  * somebody replaced stays replaced.

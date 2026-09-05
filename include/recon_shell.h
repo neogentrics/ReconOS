@@ -338,7 +338,12 @@ bool recon_shell_handle_scroll(struct recon_shell *shell, double lx, double ly,
  */
 typedef void (*recon_answer_fn)(void *user, int choice);
 
-#define RECON_DIALOG_BUTTONS_MAX 3
+/*
+ * Four: three answers and a way out. Three was enough while every question
+ * was a yes/no, and one question with three real answers plus Cancel does not
+ * fit in it.
+ */
+#define RECON_DIALOG_BUTTONS_MAX 4
 
 void recon_shell_ask(struct recon_shell *shell, const char *title,
     const char *message, const char *const *buttons, int button_count,

@@ -809,6 +809,7 @@ struct recon_shell {
 
 /* --- Asking the user something --- */
 
+/* The narrowest a dialog gets. It widens for its buttons; see below. */
 #define DIALOG_WIDTH 380
 #define DIALOG_TITLE_HEIGHT 24
 #define DIALOG_PADDING 14
@@ -824,10 +825,30 @@ struct recon_shell {
  */
 #define DIALOG_LINE_MAX 6
 
+/*
+ * How wide this dialog has to be.
+ *
+ * The buttons decide it. Their row is a fixed width each and they sit in one
+ * line, so four of them need more than three did, and a width that ignored
+ * them pushed the first button off the left edge -- drawn, clickable, and
+ * half outside the frame.
+ */
+static int dialog_width(struct recon_shell *shell) {
+    int buttons = shell->dialog_button_count;
+    if (buttons < 1) {
+        buttons = 1;
+    }
+
+    int needed = DIALOG_PADDING * 2 + buttons * DIALOG_BUTTON_WIDTH +
+        (buttons - 1) * DIALOG_BUTTON_GAP;
+
+    return needed > DIALOG_WIDTH ? needed : DIALOG_WIDTH;
+}
+
 /* How many lines the message needs, wrapped to the dialog's width. */
 static int dialog_wrap(struct recon_shell *shell, const char *message,
         char lines[DIALOG_LINE_MAX][128]) {
-    int usable = DIALOG_WIDTH - DIALOG_PADDING * 2;
+    int usable = dialog_width(shell) - DIALOG_PADDING * 2;
     int count = 0;
 
     const char *word = message;
@@ -1028,7 +1049,17 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
             button_count < 1) {
         return;
     }
+    /*
+     * Too many buttons drops from the middle, never from the end.
+     *
+     * The last button is the way out -- Enter and Escape both choose it --
+     * so cutting the tail is how a dialog ends up with Escape confirming
+     * something instead of declining it. Cutting the middle loses an answer,
+     * which is visible; cutting the end loses the safety, which is not.
+     */
+    int dropped = 0;
     if (button_count > RECON_DIALOG_BUTTONS_MAX) {
+        dropped = button_count - RECON_DIALOG_BUTTONS_MAX;
         button_count = RECON_DIALOG_BUTTONS_MAX;
     }
 
@@ -1044,8 +1075,11 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
         message != NULL ? message : "");
 
     for (int i = 0; i < button_count; i++) {
+        /* The last slot keeps the caller's last button; the ones before it
+         * come from the front, so what is lost is out of the middle. */
+        int from = (i == button_count - 1) ? i + dropped : i;
         snprintf(shell->dialog_buttons[i], sizeof(shell->dialog_buttons[i]),
-            "%s", buttons[i]);
+            "%s", buttons[from]);
     }
     shell->dialog_button_count = button_count;
 
@@ -1063,9 +1097,10 @@ void recon_shell_ask(struct recon_shell *shell, const char *title,
     shell->dialog_open = true;
 
     int height = dialog_height(shell);
-    recon_panel_resize(shell->dialog, DIALOG_WIDTH, height);
+    int width = dialog_width(shell);
+    recon_panel_resize(shell->dialog, width, height);
     recon_panel_set_position(shell->dialog,
-        (shell->screen_width - DIALOG_WIDTH) / 2,
+        (shell->screen_width - width) / 2,
         (shell->screen_height - height) / 2);
 
     if (shell->dim != NULL) {
