@@ -15,7 +15,7 @@ help-14.txt	The firewall
 help-15.txt	Reaching this machine from elsewhere
 help-16.txt	When something goes wrong
 help-17.txt	What is not built yet
-changes-01.txt	v0.3.0 — in progress
+changes-01.txt	v0.3.0
 changes-02.txt	v0.2.17
 changes-03.txt	v0.2.16
 changes-04.txt	v0.2.15

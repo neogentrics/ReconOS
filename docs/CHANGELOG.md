@@ -9,7 +9,7 @@ way for the two to disagree.
 
 ---
 
-## v0.3.0 — in progress
+## v0.3.0
 
 **Mail.** IMAP and POP3, both over TLS, both through the encrypted streams
 above — so the certificate of whatever answers is checked before a password
