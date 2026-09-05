@@ -322,6 +322,21 @@ Features, patches and releases are tracked the same way: see
   draw pinned the list and made the wheel do nothing at all, which was the
   first attempt.
 
+### BG-077 — Nothing in the Start menu could be right-clicked
+
+[#230](https://github.com/neogentrics/ReconOS/issues/230)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"You can't right click them. If
+  you try to right click, it right clicks the desktop in the background."*
+- **Was** `recon_shell_handle_right_click` closed the Start menu as its first
+  act, before testing where the click had landed. So a right-click on an
+  application fell through to whatever was behind the menu -- the desktop --
+  and the desktop's own menu appeared instead.
+- **Fixed in** v0.2.17, `e045523`. The menu is tested first, and closing it
+  happens only once nothing in it has claimed the click. A right-click on a
+  gap in the menu now leaves the menu open, which is the same fault in a
+  smaller place.
+
 ### BG-001 — The screen stayed blank
 
 [#3](https://github.com/neogentrics/ReconOS/issues/3)

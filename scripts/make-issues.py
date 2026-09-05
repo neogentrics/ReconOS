@@ -50,7 +50,7 @@ AREA = {
     65: 'display', 66: 'display', 67: 'display', 68: 'input',
     69: 'build',   70: 'help',   71: 'help',
     72: 'settings', 73: 'display', 74: 'storage',
-    75: 'input',   76: 'firewall',
+    75: 'input',   76: 'firewall', 77: 'input',
 }
 
 

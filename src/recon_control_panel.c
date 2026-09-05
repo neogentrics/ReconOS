@@ -92,6 +92,8 @@
 #define HIT_PRESET_BASE (RECON_APPWIN_HIT_USER + 900)
 /* The System / Programs / User selector on the Storage page. */
 #define HIT_VOLUME_BASE (RECON_APPWIN_HIT_USER + 950)
+/* Installed / System Apps, at the top of the Programs page. */
+#define HIT_PROGRAMS_TAB_BASE (RECON_APPWIN_HIT_USER + 1100)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -107,6 +109,8 @@ enum action {
     ACTION_CHOOSE_AVATAR,
     /* Programs and modules */
     ACTION_INSTALL_PROGRAM,
+    ACTION_REPAIR_PROGRAM,
+    ACTION_DISABLE_PROGRAM,
     ACTION_REMOVE_PROGRAM,
     ACTION_CONFIRM_INSTALL,
     ACTION_LOAD_MODULE,
@@ -361,6 +365,25 @@ static const struct {
 
 /* What a pending question is about, since the answer arrives later. */
 /*
+ * --- Programs, in two lists ---
+ *
+ * What somebody installed and what ships with ReconOS are two different
+ * things, and the buttons that make sense for them are different too. An
+ * installed program can be removed; a system application cannot, and asking
+ * "why is Remove greyed out" of a list where half the rows behave one way and
+ * half the other is a question the page should never have made anybody ask.
+ */
+enum programs_tab {
+    PROGRAMS_INSTALLED,
+    PROGRAMS_SYSTEM,
+    PROGRAMS_TABS,
+};
+
+static const char *const PROGRAMS_TAB_NAMES[PROGRAMS_TABS] = {
+    "Installed", "System Apps",
+};
+
+/*
  * --- Appearance, in three parts ---
  *
  * It used to be one page with the skins at the top, the buttons under them
@@ -576,6 +599,10 @@ struct control_panel {
      */
     /* Which of Themes, Colours, Wallpapers is showing. */
     enum appearance_section section;
+
+    /* Which of the two Programs lists is showing, and where it is scrolled. */
+    enum programs_tab programs;
+    int programs_scroll;
 
     /* Which of System, Programs, User the Storage and Cleanup pages show. */
     enum recon_volume volume;
@@ -3062,18 +3089,108 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
 }
 
 /* What is installed, and what could be done about it. */
+/*
+ * Whether an application is one that ships.
+ *
+ * A system application has no module behind it -- it is compiled into
+ * ReconOS. One that arrived as a `.rex` names the module it came from, and
+ * that name is also how it is removed.
+ */
+static bool app_is_system(const struct recon_installed_app *app) {
+    return app->module[0] == '\0';
+}
+
+/* How many are in the list showing. */
+static int programs_in_tab(struct control_panel *cp,
+        struct recon_installed_app *out, int max) {
+    int total = recon_installed_app_count();
+    int found = 0;
+
+    for (int i = 0; i < total && found < max; i++) {
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(i, &app)) {
+            continue;
+        }
+        bool system = app_is_system(&app);
+        if ((cp->programs == PROGRAMS_SYSTEM) != system) {
+            continue;
+        }
+        out[found++] = app;
+    }
+    return found;
+}
+
+/* Whichever row is chosen, from the list that is showing. */
+static bool program_selected(struct control_panel *cp,
+        struct recon_installed_app *out) {
+    struct recon_installed_app apps[64];
+    int count = programs_in_tab(cp, apps, 64);
+    if (cp->selected < 0 || cp->selected >= count) {
+        return false;
+    }
+    *out = apps[cp->selected];
+    return true;
+}
+
 static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
-    y = draw_heading(cp, p, x, y, w, "Programs",
-        "What is installed. Applications come from modules in /Apps.");
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
 
-    int count = recon_installed_app_count();
-    int rows = (h - y - BUTTON_HEIGHT - PADDING * 3) / ROW_HEIGHT;
+    int bottom = y + h;
+
+    y = draw_heading(cp, p, x, y, w,
+        cp->programs == PROGRAMS_SYSTEM ? "System Apps" : "Programs",
+        cp->programs == PROGRAMS_SYSTEM
+            ? "What ships with ReconOS. These cannot be removed."
+            : "What has been installed here. Applications come from modules "
+              "in /Apps.");
+
+    /* The two lists. */
+    int bx = x;
+    for (int i = 0; i < PROGRAMS_TABS; i++) {
+        const char *label = PROGRAMS_TAB_NAMES[i];
+        int width = recon_text_width(cp->font, label) + 28;
+        bool on = cp->programs == (enum programs_tab)i;
+
+        recon_fill_rect(p, bx, y, width, SECTION_HEIGHT,
+            on ? COLOR_PANEL : COLOR_BG);
+        recon_stroke_rect(p, bx, y, width, SECTION_HEIGHT, COLOR_SEPARATOR);
+
+        int tw = recon_text_width(cp->font, label);
+        recon_draw_text(p, cp->font, bx + (width - tw) / 2,
+            y + (SECTION_HEIGHT + ascent) / 2 - 2, width - 8, label,
+            on ? COLOR_TEXT : COLOR_DIM);
+
+        recon_hit_add(p, bx, y, width, SECTION_HEIGHT,
+            HIT_PROGRAMS_TAB_BASE + i);
+        bx += width;
+    }
+    recon_fill_rect(p, x, y + SECTION_HEIGHT - 1, w, 1, COLOR_SEPARATOR);
+    y += SECTION_HEIGHT + PADDING;
+
+    struct recon_installed_app apps[64];
+    int count = programs_in_tab(cp, apps, 64);
+
+    int footer = BUTTON_HEIGHT + PADDING * 2 + line;
+    int rows = (bottom - y - footer) / ROW_HEIGHT;
     if (rows < 1) {
         rows = 1;
     }
     if (rows > count) {
         rows = count;
+    }
+
+    clamp_scroll(&cp->programs_scroll, rows, count);
+
+    if (cp->selected < 0) {
+        cp->selected = 0;
+    }
+    if (count > 0 && cp->selected >= count) {
+        cp->selected = count - 1;
     }
 
     cp->list_x = x;
@@ -3082,14 +3199,24 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
     cp->list_h = rows * ROW_HEIGHT;
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
-    for (int i = 0; i < rows; i++) {
-        struct recon_installed_app app;
-        if (!recon_installed_app_at(i, &app)) {
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->programs_scroll, rows, count);
+
+    for (int row = 0; row < rows; row++) {
+        int i = cp->programs_scroll + row;
+        if (i >= count) {
             break;
         }
-        draw_row(cp, p, x, y + i * ROW_HEIGHT, w, i, app.name,
-            app.module[0] != '\0' ? app.module : "built into ReconOS",
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, w - bar, row, apps[i].name,
+            app_is_system(&apps[i]) ? "built into ReconOS" : apps[i].module,
             i == cp->selected);
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, cp->programs == PROGRAMS_SYSTEM
+                ? "Nothing built in is listed here."
+                : "Nothing has been installed yet.", COLOR_DIM);
     }
 
     y += cp->list_h + PADDING;
@@ -3106,33 +3233,52 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         recon_hit_add(p, x, y, w - 4, FIELD_HEIGHT, HIT_FIELD_BASE);
         y += FIELD_HEIGHT + 8;
 
-        int bx = draw_button(cp, p, x, y, "Install",
+        int ix = draw_button(cp, p, x, y, "Install",
             HIT_ACTION_BASE + ACTION_CONFIRM_INSTALL, true);
-        draw_button(cp, p, bx, y, "Cancel",
+        draw_button(cp, p, ix, y, "Cancel",
             HIT_ACTION_BASE + ACTION_NONE, true);
         return;
     }
 
-    struct recon_installed_app chosen;
-    bool have = recon_installed_app_at(cp->selected, &chosen);
-    bool removable = have && chosen.module[0] != '\0';
+    bool have = cp->selected >= 0 && cp->selected < count;
 
-    int bx = draw_button(cp, p, x, y, "Install a Program",
+    if (cp->programs == PROGRAMS_SYSTEM) {
+        /*
+         * Repair and Disable, which are the two things worth doing to
+         * something that cannot be removed. Neither is built: repair needs an
+         * installer to reinstall from, and disable needs somewhere to record
+         * that an application is not to be offered.
+         */
+        int sx = draw_button(cp, p, x, y, "Repair",
+            HIT_ACTION_BASE + ACTION_REPAIR_PROGRAM, admin && have);
+        draw_button(cp, p, sx, y, "Disable",
+            HIT_ACTION_BASE + ACTION_DISABLE_PROGRAM, admin && have);
+        y += BUTTON_HEIGHT + PADDING;
+
+        if (y + line <= bottom) {
+            recon_draw_text(p, cp->font, x, y + ascent, w,
+                "A system application cannot be removed. Repair puts its "
+                "files back; Disable stops it being offered.", COLOR_DIM);
+        }
+        return;
+    }
+
+    int ix = draw_button(cp, p, x, y, "Install a Program",
         HIT_ACTION_BASE + ACTION_INSTALL_PROGRAM, admin);
-    draw_button(cp, p, bx, y, "Remove",
-        HIT_ACTION_BASE + ACTION_REMOVE_PROGRAM, admin && removable);
-
+    ix = draw_button(cp, p, ix, y, "Repair",
+        HIT_ACTION_BASE + ACTION_REPAIR_PROGRAM, admin && have);
+    draw_button(cp, p, ix, y, "Remove",
+        HIT_ACTION_BASE + ACTION_REMOVE_PROGRAM, admin && have);
     y += BUTTON_HEIGHT + PADDING;
 
-    int ascent = recon_font_ascent(cp->font);
-    recon_draw_text(p, cp->font, x, y + ascent, w,
-        have && !removable
-            ? "That one is part of ReconOS, so it cannot be removed."
-            : "Programs are .rex files. Installing copies one into /Apps.",
-        COLOR_DIM);
+    if (y + line <= bottom) {
+        recon_draw_text(p, cp->font, x, y + ascent, w, admin
+            ? "Installing takes the path of a .rex module."
+            : "Only an administrator can install or remove a program.",
+            COLOR_DIM);
+    }
 }
 
-/* Modules: the ones that loaded, and the ones that would not. */
 static void draw_modules(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int line = recon_font_line_height(cp->font);
@@ -4112,6 +4258,33 @@ static void do_action(struct control_panel *cp, enum action action) {
         clear_status(cp);
         break;
 
+    case ACTION_REPAIR_PROGRAM:
+        /*
+         * Not built, and what is missing is the same thing in both lists: an
+         * installer to put the files back from.
+         *
+         * A system application would need one kept somewhere -- Joshua is
+         * right that it should be able to reinstall itself, and right that
+         * the installer has to exist for that to mean anything. An installed
+         * program would need its package still around, which is exactly what
+         * Disk Cleanup offers to delete.
+         */
+        set_status(cp, true, "Not built yet: repairing needs an installer to "
+            "put the files back from, and nothing keeps one.");
+        break;
+
+    case ACTION_DISABLE_PROGRAM:
+        /*
+         * Also not built. Disabling has to be recorded somewhere the
+         * application registry reads before it offers anything, and it has to
+         * survive a restart -- which is a registry key and a check, but also
+         * a decision about what "disabled" means for something the shell
+         * built a window for at startup.
+         */
+        set_status(cp, true, "Not built yet: nothing records that an "
+            "application is not to be offered.");
+        break;
+
     case ACTION_INSTALL_PROGRAM:
         /*
          * A path to type, rather than a file dialog. The dialog draws itself
@@ -4173,8 +4346,15 @@ static void do_action(struct control_panel *cp, enum action action) {
          * compiled into ReconOS, and "remove the File Explorer" is a request
          * to delete part of the system rather than a program.
          */
+        /*
+         * Resolved through the list that is showing, not the whole
+         * registry. The page has two lists now and the selection is an
+         * index into one of them; reading it as an index into everything
+         * would remove whichever program happened to sit at that
+         * position overall.
+         */
         struct recon_installed_app app;
-        if (!recon_installed_app_at(cp->selected, &app)) {
+        if (!program_selected(cp, &app)) {
             set_status(cp, true, "Choose a program first.");
             break;
         }
@@ -5201,6 +5381,20 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    if (hit_id >= HIT_PROGRAMS_TAB_BASE) {
+        int tab = (int)(hit_id - HIT_PROGRAMS_TAB_BASE);
+        if (tab >= 0 && tab < PROGRAMS_TABS) {
+            cp->programs = (enum programs_tab)tab;
+            /* A different list: the selection and the scroll belong to the
+             * one that was showing. */
+            cp->selected = 0;
+            cp->programs_scroll = 0;
+            cp->installing = false;
+            clear_status(cp);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_CLEAN_BASE) {
         int index = (int)(hit_id - HIT_CLEAN_BASE);
         if (index >= 0 && index < CLEAN[cp->volume].count &&
@@ -5380,6 +5574,11 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         if (cp->page == PAGE_FIREWALL) {
             /* Screen row plus where the list is scrolled to. */
             cp->selected = cp->fw_scroll + index;
+            return true;
+        }
+
+        if (cp->page == PAGE_PROGRAMS) {
+            cp->selected = cp->programs_scroll + index;
             return true;
         }
 
@@ -5683,6 +5882,14 @@ static void panel_scroll(void *user, double delta) {
         cp->fw_scroll += step;
         if (cp->fw_scroll < 0) {
             cp->fw_scroll = 0;
+        }
+        return;
+    }
+
+    if (cp->page == PAGE_PROGRAMS) {
+        cp->programs_scroll += step;
+        if (cp->programs_scroll < 0) {
+            cp->programs_scroll = 0;
         }
         return;
     }

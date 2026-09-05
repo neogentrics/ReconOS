@@ -1229,6 +1229,32 @@ static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
+    /*
+     * A double click, sent as one command.
+     *
+     * Two `ui click` commands are two connections a second apart, which is
+     * two single clicks -- so nothing that needs a double click could be
+     * driven from outside, and the Control Panel's tiles could not be opened
+     * by a test at all. Same reasoning as `ui scroll`: a path nothing can
+     * drive is a path that breaks quietly.
+     */
+    if (strcasecmp(what, "dclick") == 0) {
+        if (argc < 4) {
+            out(s, "Usage: ui dclick <x> <y>\n");
+            return;
+        }
+
+        int x = atoi(argv[2]);
+        int y = atoi(argv[3]);
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "double clicked at %d %d\n", x, y);
+        return;
+    }
+
     if (strcasecmp(what, "scroll") == 0) {
         if (argc < 3) {
             out(s, "Usage: ui scroll <up|down> [times]\n");
