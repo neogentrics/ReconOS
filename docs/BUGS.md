@@ -68,6 +68,14 @@ Features, patches and releases are tracked the same way: see
 
 ## Open
 
+None. Every bug below was found and closed; the list is kept in full
+rather than pruned, because a register that only shows what is currently
+broken says nothing about the work.
+
+---
+
+## Fixed
+
 ### BG-062 — What's New reopens after a shell restart
 
 [#2](https://github.com/neogentrics/ReconOS/issues/2)
@@ -79,12 +87,10 @@ Features, patches and releases are tracked the same way: see
   them a second time. Harmless, and wrong: a shell restart is a repair, not a
   new session, and it should not put a window in front of what somebody was
   doing.
-- **Open.** Low: the notice is correct to still be due; only its raising is
-  wrong.
-
----
-
-## Fixed
+- **Fixed in** v0.2.17. `adopt_signed_in_user` takes an `arriving` flag. A
+  sign-in passes true; a shell restart passes false, and only the true case
+  raises the notice. The notice stays due either way -- it is still unread,
+  and it will be shown the next time somebody actually signs in.
 
 ### BG-063 — The first row on the Services tab was drawn through the header rule
 

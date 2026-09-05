@@ -80,4 +80,19 @@ bool recon_wallpaper_add(const char *cwd, const char *path, char *name_out,
  */
 bool recon_wallpaper_origin(const char *name, char *out, size_t size);
 
+/*
+ * Take one out of the list.
+ *
+ * Only one somebody added: the pictures that ship are presets, and a preset
+ * that can be deleted is a preset that is gone for good with nowhere to get
+ * it back from. The same rule the skins and the firewall's rules follow.
+ *
+ * Refuses the one currently showing, too. Deleting the background out from
+ * under a desktop leaves it with nothing to draw.
+ */
+bool recon_wallpaper_remove(const char *name);
+
+/* Why the last call refused. */
+const char *recon_wallpaper_last_error(void);
+
 #endif

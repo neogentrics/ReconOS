@@ -399,6 +399,97 @@ bool recon_wallpaper_add(const char *cwd, const char *path, char *name_out,
     return true;
 }
 
+static char g_wallpaper_error[192];
+
+const char *recon_wallpaper_last_error(void) {
+    return g_wallpaper_error;
+}
+
+/* Drop one line from the origins file, matched on the name before the bar. */
+static void forget_origin(const char *name) {
+    size_t length = 0;
+    char *text = recon_fs_read("/", RECON_WALLPAPER_ORIGINS, &length);
+    if (text == NULL) {
+        return;
+    }
+
+    char kept[4096];
+    size_t used = 0;
+    size_t wanted = strlen(name);
+
+    char *line = text;
+    while (line != NULL && *line != '\0') {
+        char *end = strchr(line, '\n');
+        if (end != NULL) {
+            *end = '\0';
+        }
+
+        /*
+         * Compared against the part before the bar, and copied whole. Cutting
+         * the line to compare it and then rebuilding it is how a line comes
+         * back with its second half written twice.
+         */
+        const char *bar = strchr(line, '|');
+        size_t label = (bar != NULL) ? (size_t)(bar - line) : strlen(line);
+
+        bool mine = (label == wanted) && (strncmp(line, name, label) == 0);
+        if (!mine && *line != '\0') {
+            int n = snprintf(kept + used, sizeof(kept) - used, "%s\n", line);
+            if (n > 0 && (size_t)n < sizeof(kept) - used) {
+                used += (size_t)n;
+            }
+        }
+
+        line = (end != NULL) ? end + 1 : NULL;
+    }
+
+    free(text);
+    recon_fs_write("/", RECON_WALLPAPER_ORIGINS, kept, used);
+}
+
+bool recon_wallpaper_remove(const char *name) {
+    if (name == NULL || *name == '\0') {
+        snprintf(g_wallpaper_error, sizeof(g_wallpaper_error),
+            "no wallpaper named");
+        return false;
+    }
+
+    char origin[RECON_PATH_MAX];
+    if (!recon_wallpaper_origin(name, origin, sizeof(origin))) {
+        snprintf(g_wallpaper_error, sizeof(g_wallpaper_error),
+            "'%s' ships with ReconOS and cannot be removed", name);
+        return false;
+    }
+
+    const char *showing = recon_wallpaper_current();
+    if (showing != NULL && strcmp(showing, name) == 0) {
+        snprintf(g_wallpaper_error, sizeof(g_wallpaper_error),
+            "'%s' is the background. Choose another one first", name);
+        return false;
+    }
+
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), RECON_DIR_WALLPAPERS, name)) {
+        snprintf(g_wallpaper_error, sizeof(g_wallpaper_error),
+            "that name is too long");
+        return false;
+    }
+
+    if (!recon_fs_remove("/", path)) {
+        snprintf(g_wallpaper_error, sizeof(g_wallpaper_error), "%s",
+            recon_fs_last_error());
+        return false;
+    }
+
+    /*
+     * And the line saying where it came from. Left behind, it would be
+     * waiting to attach itself to the next picture that happened to arrive
+     * under the same name.
+     */
+    forget_origin(name);
+    return true;
+}
+
 bool recon_wallpaper_set(const char *name) {
     if (name == NULL || *name == '\0') {
         recon_registry_remove(RECON_REG_USER, RECON_WALLPAPER_KEY);

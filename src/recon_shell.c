@@ -3027,7 +3027,14 @@ static void set_desktop_visible(struct recon_shell *shell, bool visible) {
  * person, so they are read now rather than at startup -- at startup there is
  * nobody to read them for.
  */
-static void adopt_signed_in_user(struct recon_shell *shell) {
+/*
+ * `arriving` is false for a shell restart, where the same person is already
+ * here and everything they had open is still open. It decides one thing: the
+ * "what changed in this version" notice, which is for somebody arriving at a
+ * desktop rather than for somebody whose taskbar was just repaired underneath
+ * them.
+ */
+static void adopt_signed_in_user(struct recon_shell *shell, bool arriving) {
     const char *who = recon_users_current();
 
     /*
@@ -3082,7 +3089,7 @@ static void adopt_signed_in_user(struct recon_shell *shell) {
      * account that has not signed in since three updates ago should be told
      * about the current one on the first desktop they see.
      */
-    if (recon_help_notice_due()) {
+    if (arriving && recon_help_notice_due()) {
         recon_shell_open_named(shell, "What's New");
     }
 }
@@ -3104,8 +3111,13 @@ void recon_shell_resume_session(struct recon_shell *shell) {
      * work a sign-in does. `last_user` is empty on a new shell, so the
      * "different person means a clean desktop" rule inside does not fire --
      * correctly: it is the same person, and their windows are still open.
+     *
+     * Not arriving, though. Nobody signed in here: a taskbar was rebuilt
+     * under somebody who was already using the machine, and putting the
+     * "what changed" notice in front of them a second time is the repair
+     * announcing itself.
      */
-    adopt_signed_in_user(shell);
+    adopt_signed_in_user(shell, false);
 }
 
 void recon_shell_begin_session(struct recon_shell *shell) {
@@ -4322,7 +4334,7 @@ bool recon_shell_handle_key(struct recon_shell *shell, uint32_t sym,
     if (recon_session_active(shell->session)) {
         bool handled = recon_session_handle_key(shell->session, sym, modifiers);
         if (recon_session_take_signed_in(shell->session)) {
-            adopt_signed_in_user(shell);
+            adopt_signed_in_user(shell, true);
         }
         return handled;
     }
@@ -4649,7 +4661,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     if (recon_session_active(shell->session)) {
         bool handled = recon_session_handle_click(shell->session, lx, ly, pressed);
         if (recon_session_take_signed_in(shell->session)) {
-            adopt_signed_in_user(shell);
+            adopt_signed_in_user(shell, true);
         }
         return handled;
     }

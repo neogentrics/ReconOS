@@ -163,6 +163,7 @@ enum action {
     /* Skins */
     ACTION_USE_SKIN,
     ACTION_ADD_WALLPAPER,
+    ACTION_REMOVE_WALLPAPER,
     ACTION_COPY_SKIN,
     ACTION_BEGIN_NAMING_SKIN,
     ACTION_CONFIRM_COPY_SKIN,
@@ -1769,7 +1770,18 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
         }
 
         int ry = y + row * ROW_HEIGHT;
-        bool on = strcmp(name, showing) == 0;
+
+        /*
+         * Two different facts, and they were sharing one highlight.
+         *
+         * `on` is the row somebody clicked -- what Remove would act on, and
+         * the only thing a click has to show for itself. `showing` is the
+         * picture actually on the desktop, which the dot says instead. When
+         * the highlight tracked `showing`, clicking a row changed nothing
+         * anybody could see and Remove appeared to fire at random.
+         */
+        bool on = row == cp->selected;
+        bool in_use = strcmp(name, showing) == 0;
 
         if (on) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
@@ -1777,8 +1789,13 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
 
-        recon_draw_text(p, cp->font, x + 14,
-            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 20, name,
+        if (in_use) {
+            recon_fill_rect(p, x + 8, ry + ROW_HEIGHT / 2 - 3, 6, 6,
+                on ? COLOR_SELECTED_TEXT : COLOR_SELECTED);
+        }
+
+        recon_draw_text(p, cp->font, x + 20,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 26, name,
             on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
         /*
@@ -1824,8 +1841,23 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
     w += bar;
     y += cp->list_h + PADDING;
 
-    draw_button(cp, p, x, y, "Add a Picture",
+    /*
+     * Remove only what somebody added. A picture that ships is a preset, and
+     * the button says so by being greyed rather than by refusing after the
+     * press.
+     */
+    char chosen[96];
+    char chosen_origin[RECON_PATH_MAX];
+    bool own = cp->selected >= 0 &&
+        cp->paper_scroll + cp->selected < papers &&
+        recon_wallpaper_at(cp->paper_scroll + cp->selected, chosen,
+            sizeof(chosen)) &&
+        recon_wallpaper_origin(chosen, chosen_origin, sizeof(chosen_origin));
+
+    int wx = draw_button(cp, p, x, y, "Add a Picture",
         HIT_ACTION_BASE + ACTION_ADD_WALLPAPER, true);
+    draw_button(cp, p, wx, y, "Remove",
+        HIT_ACTION_BASE + ACTION_REMOVE_WALLPAPER, own);
 
     if (papers > rows) {
         char more[64];
@@ -4916,6 +4948,27 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     /* --- Skins --- */
 
+    case ACTION_REMOVE_WALLPAPER: {
+        char name[96];
+        if (!recon_wallpaper_at(cp->paper_scroll + cp->selected, name,
+                sizeof(name))) {
+            set_status(cp, true, "Choose a picture first.");
+            break;
+        }
+        if (!recon_wallpaper_remove(name)) {
+            set_status(cp, true, "%s", recon_wallpaper_last_error());
+            break;
+        }
+        /*
+         * Nothing chosen afterwards. The row number would survive the removal
+         * and point at whichever picture slid up into its place, arming
+         * Remove against something nobody picked.
+         */
+        cp->selected = -1;
+        set_status(cp, false, "Removed '%s'.", name);
+        break;
+    }
+
     case ACTION_ADD_WALLPAPER: {
         /*
          * The File Explorer, at Pictures, where the picture is.
@@ -5615,7 +5668,11 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
              * surprise, not a convenience. */
             cp->naming_skin = false;
             cp->skin_value_editing = false;
-            cp->selected = 0;
+            /*
+             * Nothing chosen yet, rather than row zero chosen. Row zero would
+             * arm Remove against a picture nobody pointed at.
+             */
+            cp->selected = -1;
             clear_status(cp);
         }
         return true;
@@ -5653,9 +5710,28 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     if (hit_id >= HIT_WALLPAPER_BASE) {
         /* Screen row plus where the list is scrolled to. */
         int index = cp->paper_scroll + (int)(hit_id - HIT_WALLPAPER_BASE);
+
+        /*
+         * One click chooses the row, two puts the picture on. The same rule
+         * as everywhere else, and here it is the only rule that works:
+         * applying on a single click would make the chosen row and the
+         * showing row the same row always, and Remove refuses the one
+         * showing -- so the button could never be reached.
+         */
+        cp->selected = (int)(hit_id - HIT_WALLPAPER_BASE);
+
         char name[96];
-        if (recon_wallpaper_at(index, name, sizeof(name)) &&
-                recon_wallpaper_set(name)) {
+        if (!recon_wallpaper_at(index, name, sizeof(name))) {
+            return true;
+        }
+
+        if (!recon_click_is_double(hit_id)) {
+            set_status(cp, false, "'%s' chosen. Double-click to put it on.",
+                name);
+            return true;
+        }
+
+        if (recon_wallpaper_set(name)) {
             recon_background_reload(cp->server);
             set_status(cp, false, "Wallpaper is now '%s'.", name);
         }
