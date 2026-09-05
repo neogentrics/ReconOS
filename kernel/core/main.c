@@ -9,6 +9,7 @@
 #include <recon/kernel/block.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/crc32.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
@@ -116,6 +117,8 @@ void kmain(void)
 		user_boundary_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",
 		block_self_test() ? "pass" : "FAIL");
+	kprintf("  checksums          : %s\n",
+		crc32_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 	user_print_summary();

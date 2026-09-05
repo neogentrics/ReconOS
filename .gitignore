@@ -32,3 +32,4 @@ Thumbs.db
 *.log
 dist/
 kernel/build/disk.img
+kernel/build/fixtures/

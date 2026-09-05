@@ -123,21 +123,37 @@ run: $(BOOT_IMAGE)
 # *why* it is portable will name the machines it is avoiding, and failing the
 # build for that teaches people to write worse comments.
 #
-# All-ones constants are stripped too, and that is a refinement rather than a
-# loophole. The long-hex-number rule is there to catch *addresses*, and no
-# address is 0xFFFFFFFF: that number is a mask, or a "not present" answer from a
-# bus, or every value there could be. Writing block devices produced three of
-# them in one afternoon -- sizing a base address register works by writing all
-# ones -- and each one was rewritten to appease a rule that was not aimed at it.
-# Rewriting correct code to satisfy a check makes the check the author rather
-# than the reader's friend, so the check learned the distinction instead.
+# --- The numeric clause was replaced, and this is why ---
+#
+# It used to flag any hex constant of six digits or more, on the theory that
+# such a number is a hardware address. Over checkpoints 11 and 12 that clause
+# fired six times and was right none of them: it caught "virt" read out of a
+# 32-bit register, every-block-there-could-be, the all-ones written to size a
+# base address register, a CRC polynomial, and two published checksum values.
+# Each time, correct code was rewritten to appease it. A check that makes people
+# rephrase working code is teaching the wrong lesson -- it becomes the author's
+# adversary rather than the reader's friend -- and one with no true positives is
+# not paying for that.
+#
+# What replaced it is what a hardware address actually *looks like when it is
+# used*: an integer literal cast to a pointer. That is the only way core/ can
+# reach a fixed location, because everything else it touches arrives as a
+# pointer from arch/ or from a bus. Checked against a file of nine real
+# violations and a file of legitimate constants before it was adopted, rather
+# than assumed to work.
+#
+# Port instructions are named too. They exist on exactly one architecture, and a
+# portable file containing one is not portable no matter what it looks like.
+#
+# This is a smoke alarm, not a proof. The real guarantee is that core/ compiles
+# unchanged for both architectures and is linked against two different arch/
+# directories, and a genuinely machine-specific assumption fails there.
 check-portable:
 	@bad=""; \
 	for f in core/*.c core/*.h; do \
 		[ -e "$$f" ] || continue; \
-		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' \
-		           -e 's|0[xX][fF][fF][fF][fF][fF]*[uUlL]*||g' "$$f" \
-		      | grep -nE '__asm__|asm volatile|\bx86|\baarch64|\briscv|0x[0-9a-fA-F]{6,}' \
+		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' "$$f" \
+		      | grep -nE '__asm__|asm volatile|\bx86|\baarch64|\briscv|\*[[:space:]]*\)[[:space:]]*0x[0-9a-fA-F]{6,}|\bout[bwl]\b|\bin[bwl]\b' \
 		      | sed "s|^|$$f:|"); \
 		[ -n "$$hit" ] && bad="$$bad$$hit\n"; \
 	done; \
