@@ -55,7 +55,9 @@ pkg_check_modules(AVCODEC libavcodec libavutil)
 if(AVCODEC_FOUND)
     message(STATUS "libavcodec found (${AVCODEC_libavcodec_VERSION}); "
                    "building the codec pack")
-    recon_add_module(CodecPack ".rts" codecpack/recon_codecpack.c)
+    recon_add_module(CodecPack ".rts"
+        codecpack/recon_codecpack.c
+        codecpack/recon_codecpack_video.c)
     target_include_directories(CodecPack PRIVATE ${AVCODEC_INCLUDE_DIRS})
     target_link_libraries(CodecPack PRIVATE ${AVCODEC_LIBRARIES})
 else()

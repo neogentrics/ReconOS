@@ -98,6 +98,8 @@ add_executable(ReconOS
     src/recon_audio.c
     src/recon_codec.c
     src/recon_mp4.c
+    src/recon_movie.c
+    src/recon_video.c
     src/recon_player.c
     src/recon_html.c
     src/recon_web.c
@@ -282,6 +284,20 @@ target_include_directories(recon_clock_tests PRIVATE
 
 target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES}
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+# Colour conversion and scaling have a known right answer, so they are checked
+# against it rather than against another implementation. The decoder is verified
+# against ffmpeg on a real film, which is right for a decoder and needs a
+# library, a file and a subprocess; this needs none of them and runs on a
+# machine with no codec pack installed at all.
+add_executable(recon_video_tests
+    tests/test_video.c
+    src/recon_video.c)
+
+target_include_directories(recon_video_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_video_tests PRIVATE m)
 
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.

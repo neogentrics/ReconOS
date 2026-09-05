@@ -120,6 +120,37 @@ int recon_mp4_first(const struct recon_mp4 *mp4, enum recon_mp4_kind kind);
 bool recon_mp4_sample(const struct recon_mp4 *mp4, int track, int index,
     size_t *offset, size_t *length, uint64_t *start_in_timescale);
 
+/*
+ * The last sample at or before `index` that can be decoded on its own.
+ *
+ * Seeking video is not seeking sound, and this is the difference. An audio
+ * frame decodes by itself; a video frame is mostly a description of how it
+ * differs from earlier ones, so landing on an arbitrary frame and decoding
+ * forward gives several seconds of coloured smears before the picture assembles
+ * itself. The answer is to start at the last frame that stands alone and decode
+ * up to where the caller actually asked for.
+ *
+ * A track with no sync table has every sample answer for itself -- which is
+ * what the format says, and is true of all audio.
+ *
+ * -1 when the track or index is not there.
+ */
+int recon_mp4_sync_sample(const struct recon_mp4 *mp4, int track, int index);
+
+/* Which sample covers this moment. -1 when the track cannot say. */
+int recon_mp4_sample_at_time(const struct recon_mp4 *mp4, int track,
+    double seconds);
+
+/*
+ * The bytes this was opened over.
+ *
+ * A caller that has a sample's offset needs somewhere to add it to, and asking
+ * it to keep its own copy of the pointer alongside the handle is asking it to
+ * keep two things in step that are already one thing.
+ */
+void recon_mp4_bytes(const struct recon_mp4 *mp4, const uint8_t **bytes,
+    size_t *length);
+
 /* How long the whole thing runs, in seconds. Zero when the file does not
  * say, which a badly-written one does not. */
 double recon_mp4_duration(const struct recon_mp4 *mp4);

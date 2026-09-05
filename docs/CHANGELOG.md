@@ -70,14 +70,54 @@ halves are separate, and it was wrong until it was tested — `open()` returned
 NULL for three unrelated reasons with no way to tell them apart, so the player
 guessed, and guessed "or it is damaged" about a perfectly good file.
 
-**There is still no video**, and `recon_codec.h` says why at length rather than
-leaving a gap. What changed is that the container is no longer part of the
-problem: the demuxer already reads the video track's dimensions, frame count
-and parameter sets. What is missing is a decoder and a clock, not a parser. Sound is a stream of numbers and a speaker. Video is that, plus
-a container interleaving it with the sound, plus a clock keeping the two
-together, plus a decoder whose output is thirty megabytes a second that has to
-be scaled and colour-converted before anything can look at it. The place it
-would go is defined; a function that returned nothing would be a promise.
+**Video plays.** H.264 and H.265 decode through the codec pack; everything
+around them is ReconOS's own, and the split is deliberate rather than
+convenient. libavcodec is handed compressed bytes and gives back three planes.
+It is not asked to demux, to convert colour, to scale, or to decide when a
+picture should be shown -- it can do all four, and all four are structure or
+arithmetic, which are the things this project writes for itself. Keeping the
+borrowed part exactly the size of the thing that justifies it is what keeps the
+justification checkable: "libavcodec, because H.264 is seven hundred pages" is a
+claim somebody can weigh, and "libavcodec" is not.
+
+**Colour conversion carries the two things that are usually guessed.** Which
+coefficients (BT.601 or BT.709) and which range (0-255 or the broadcast 16-235)
+are read from the file and only guessed when the file does not say -- and then
+guessed the same way everything else guesses, by picture height. Treating studio
+range as full range gives grey blacks and washed-out whites, which is the
+commonest way a home-made player looks subtly wrong and never looks like a bug.
+
+**Converting and scaling are one pass, and there are two resamplers.** Going
+straight from the planes to the window's size means the colour conversion runs
+once per pixel that will be *seen* rather than once per pixel in the file: a
+1080p frame in a 400-pixel box is nine tenths less work, every frame. And the
+resampling changes with direction -- interpolation when enlarging, an average of
+every source pixel when reducing. That second one was not a preference. Bilinear
+reads four pixels, which is most of the source at 1:1 and a twelfth of it at
+3.4x, and what gets thrown away comes back as aliasing that crawls from frame to
+frame. Measured against ffmpeg: 5.05 mean difference per channel with bilinear,
+3.59 with the average, and 1.15 at native size where neither runs.
+
+**The sound leads and the picture follows.** The device is the clock, as it has
+been since sound arrived -- it consumes samples at a fixed rate whether or not
+anybody is watching, and asking how many it has played is a measurement rather
+than an estimate. Pictures have no such thing, so a frame that arrives late is
+*dropped* rather than shown late. A file with no sound track runs on wall time,
+which is a worse clock and is still a real one; counting frames and assuming
+each took as long as it should have is not.
+
+**Seeking starts from the last frame that stands on its own.** Video frames are
+mostly descriptions of how they differ from earlier ones, so landing anywhere
+and decoding forward gives a second of coloured smears. The sync-sample table
+says where the self-contained frames are; everything between there and the
+target is decoded for what it teaches the decoder and never shown.
+
+**Verified against ffmpeg on a real file, frame by frame**, at five scales and
+seven seek targets rather than one of each -- which is what caught both faults.
+The full accounts are BG-097 and BG-098, and the short version of each is worth
+carrying: a test whose inputs are all round numbers is testing round numbers,
+and a comparison against a reference decoder proves agreement about the one file
+it was run on.
 
 **A Media Player** with a playlist, transport, a draggable position bar and its
 own volume — applied to the samples rather than to the device's mixer, because

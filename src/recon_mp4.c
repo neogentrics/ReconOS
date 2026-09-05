@@ -65,6 +65,28 @@ struct track {
     bool wide_offsets;      /* co64 rather than stco */
 
     /*
+     * Which samples can be decoded without the ones before them.
+     *
+     * Absent for audio and for video where every frame stands alone, and the
+     * format says that absence means *all* of them are -- not none, which is
+     * the reading that turns a missing table into a file that cannot be seeked
+     * at all.
+     */
+    struct table stss;
+
+    /*
+     * How far each sample's display time is from its decode time.
+     *
+     * Absent unless the file reorders, and most do: a B-frame is predicted from
+     * a picture that comes *after* it, so it has to be decoded after that
+     * picture and shown before it. stts gives decode times; this is what turns
+     * them into display times, and without it a reordered file plays its frames
+     * in the right order at the wrong moments -- which looks like stutter
+     * rather than like a missing table.
+     */
+    struct table ctts;
+
+    /*
      * Where the last lookup got to.
      *
      * A player asks for sample 0, then 1, then 2. Remembering the walk turns
@@ -292,6 +314,26 @@ static void on_box(struct recon_mp4 *mp4, struct track *track,
     }
 
     /* --- The tables --- */
+
+    if (memcmp(name, "ctts", 4) == 0) {
+        const uint8_t *at = skip_full(body, length, NULL);
+        if (at == NULL || length < 8) {
+            return;
+        }
+        track->ctts.count = be32(at);
+        track->ctts.entries = at + 4;
+        return;
+    }
+
+    if (memcmp(name, "stss", 4) == 0) {
+        const uint8_t *at = skip_full(body, length, NULL);
+        if (at == NULL || length < 8) {
+            return;
+        }
+        track->stss.count = be32(at);
+        track->stss.entries = at + 4;
+        return;
+    }
 
     if (memcmp(name, "stts", 4) == 0 || memcmp(name, "stsc", 4) == 0 ||
             memcmp(name, "stco", 4) == 0 || memcmp(name, "co64", 4) == 0) {
@@ -605,6 +647,49 @@ static uint64_t sample_time(const struct track *t, int index) {
     return at;
 }
 
+/*
+ * The gap between when a sample is decoded and when it is shown.
+ *
+ * Run-length like every other table here: "this many samples, each offset by
+ * this much". Signed, because a file may be written with the offsets centred on
+ * zero rather than starting at it -- version 1 of the box says so explicitly,
+ * and version 0 files in the wild do it anyway.
+ */
+static int32_t composition_offset(const struct track *t, int index) {
+    if (t->ctts.entries == NULL || t->ctts.count == 0) {
+        return 0;
+    }
+
+    uint32_t seen = 0;
+    for (uint32_t i = 0; i < t->ctts.count; i++) {
+        const uint8_t *entry = t->ctts.entries + (size_t)i * 8;
+        uint32_t count = be32(entry);
+        if ((uint64_t)index < (uint64_t)seen + count) {
+            return (int32_t)be32(entry + 4);
+        }
+        seen += count;
+    }
+    return 0;
+}
+
+/*
+ * When a sample is shown, which is decode time plus the offset above.
+ *
+ * Clamped at zero rather than allowed to go negative. A file whose first frames
+ * carry negative offsets is saying its stream starts slightly before zero --
+ * legal, and the usual convention is to trim rather than to play a picture at a
+ * negative moment, which nothing downstream has a way to express.
+ */
+static uint64_t presentation_time(const struct track *t, int index) {
+    uint64_t decode = sample_time(t, index);
+    int32_t offset = composition_offset(t, index);
+
+    if (offset < 0 && (uint64_t)(-(int64_t)offset) > decode) {
+        return 0;
+    }
+    return (uint64_t)((int64_t)decode + offset);
+}
+
 bool recon_mp4_sample(const struct recon_mp4 *mp4, int track_index, int index,
         size_t *offset, size_t *length, uint64_t *start) {
     if (mp4 == NULL || track_index < 0 || track_index >= mp4->count) {
@@ -655,7 +740,7 @@ bool recon_mp4_sample(const struct recon_mp4 *mp4, int track_index, int index,
     t->cached_chunk = chunk;
     t->cached_first_in_chunk = first_in_chunk;
     t->cached_offset = at;
-    t->cached_time = sample_time(t, index);
+    t->cached_time = presentation_time(t, index);
 
     if (offset != NULL) {
         *offset = at;
@@ -667,4 +752,119 @@ bool recon_mp4_sample(const struct recon_mp4 *mp4, int track_index, int index,
         *start = t->cached_time;
     }
     return true;
+}
+
+void recon_mp4_bytes(const struct recon_mp4 *mp4, const uint8_t **bytes,
+        size_t *length) {
+    if (bytes != NULL) {
+        *bytes = (mp4 != NULL) ? mp4->bytes : NULL;
+    }
+    if (length != NULL) {
+        *length = (mp4 != NULL) ? mp4->length : 0;
+    }
+}
+
+/* --- Seeking --- */
+
+int recon_mp4_sync_sample(const struct recon_mp4 *mp4, int track, int index) {
+    if (mp4 == NULL || track < 0 || track >= mp4->count || index < 0) {
+        return -1;
+    }
+    const struct track *t = &mp4->tracks[track];
+    if (index >= t->info.sample_count) {
+        index = t->info.sample_count - 1;
+    }
+    if (index < 0) {
+        return -1;
+    }
+
+    /*
+     * No table means every sample stands alone. That is what the format says,
+     * and reading it the other way -- no table, so nothing is seekable -- turns
+     * every audio track and every all-keyframe video into one that cannot be
+     * moved through.
+     */
+    if (t->stss.entries == NULL || t->stss.count == 0) {
+        return index;
+    }
+
+    /*
+     * The largest sync sample at or before `index`, found by walking rather
+     * than by bisection.
+     *
+     * The table is sorted, so bisection would work and would be faster in the
+     * abstract. It is a few thousand entries for a feature-length film and this
+     * runs once per seek, not once per frame -- and a linear walk is a loop
+     * anybody can check by eye, where an off-by-one in a bisection over a
+     * one-based table is the kind of bug that lands you two seconds from where
+     * you asked and nowhere near an obvious cause.
+     */
+    int best = -1;
+    for (uint32_t i = 0; i < t->stss.count; i++) {
+        /* One-based on disc, zero-based here, which is the single most likely
+         * place for this file to be wrong and so is done once. */
+        int at = (int)be32(t->stss.entries + (size_t)i * 4) - 1;
+        if (at > index) {
+            break;
+        }
+        if (at >= 0) {
+            best = at;
+        }
+    }
+
+    /*
+     * Before the first sync sample there is nothing decodable, so start at the
+     * beginning rather than refusing. A file whose first frame is not a
+     * keyframe is malformed, but it exists, and playing it from zero is a
+     * better answer than declining to play it.
+     */
+    return (best >= 0) ? best : 0;
+}
+
+int recon_mp4_sample_at_time(const struct recon_mp4 *mp4, int track,
+        double seconds) {
+    if (mp4 == NULL || track < 0 || track >= mp4->count) {
+        return -1;
+    }
+    const struct track *t = &mp4->tracks[track];
+    if (t->info.timescale == 0 || t->info.sample_count <= 0) {
+        return -1;
+    }
+    if (seconds < 0.0) {
+        seconds = 0.0;
+    }
+
+    uint64_t want = (uint64_t)(seconds * (double)t->info.timescale);
+
+    /*
+     * stts is run-length: "this many samples, each this long". So this walks
+     * runs rather than samples, and a file with a constant frame rate -- which
+     * is most of them -- has exactly one run and this is arithmetic.
+     */
+    uint64_t elapsed = 0;
+    int index = 0;
+
+    for (uint32_t i = 0; i < t->stts.count; i++) {
+        const uint8_t *entry = t->stts.entries + (size_t)i * 8;
+        uint32_t count = be32(entry);
+        uint32_t duration = be32(entry + 4);
+
+        if (duration == 0) {
+            index += (int)count;
+            continue;
+        }
+
+        uint64_t run = (uint64_t)count * duration;
+        if (elapsed + run > want) {
+            index += (int)((want - elapsed) / duration);
+            return (index < t->info.sample_count) ?
+                index : t->info.sample_count - 1;
+        }
+        elapsed += run;
+        index += (int)count;
+    }
+
+    /* Past the end asks for the last one, which is what a drag to the far right
+     * of the position bar means. */
+    return t->info.sample_count - 1;
 }

@@ -6,6 +6,16 @@
  * playlist -- hangs off that one callback, which is why there is no clock in
  * here. The device is the clock, and asking it how much it has actually played
  * is more truthful than counting.
+ *
+ * Video did not change that; it is the reason it matters. Pictures have no
+ * clock of their own -- nothing consumes them at a fixed rate, so a player that
+ * counts frames and assumes each took as long as it should have will drift away
+ * from its own soundtrack and never notice. So the sound leads: the device is
+ * asked what it has played, the picture for that moment is fetched, and a frame
+ * that arrives late is dropped rather than shown late.
+ *
+ * A file with no sound has nothing to ask, and falls back to wall time. That is
+ * a worse clock and it is still a real one, which counting is not.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -22,9 +32,12 @@
 #include "recon_codec.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_movie.h"
+#include "recon_server.h"
 #include "recon_player.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_video.h"
 #include "recon_users.h"
 
 #define COLOR_BG THEME(SURFACE)
@@ -49,6 +62,32 @@
 #define PADDING 10
 #define BUTTON 34
 #define SCROLLBAR_WIDTH 7
+
+/*
+ * How often to ask the movie what should be on screen.
+ *
+ * Not the frame rate -- the rate at which the question is asked, which has to
+ * be faster than any answer changes or frames are shown a tick late. Sixteen
+ * milliseconds is a little over sixty times a second, and asking costs almost
+ * nothing when the answer is no: recon_movie_advance returns false without
+ * decoding anything until a frame is actually due.
+ */
+#define VIDEO_TICK_MS 16
+
+/*
+ * And how often to ask when there is no picture.
+ *
+ * The only thing that changes while sound plays is the position, which is shown
+ * to the second, so a quarter of a second is four times finer than anything
+ * anybody can see and sixteen times cheaper than the video rate. Asking at the
+ * video rate for a file with no video would be redrawing a window sixty times a
+ * second to move a bar once.
+ */
+#define AUDIO_TICK_MS 250
+
+/* Room for the playlist under a picture. Four rows is enough to see what is
+ * next without taking the window away from what it is for. */
+#define LIST_ROWS_WITH_VIDEO 4
 
 #define HIT_PLAY (RECON_APPWIN_HIT_USER + 1)
 #define HIT_PREVIOUS (RECON_APPWIN_HIT_USER + 2)
@@ -84,6 +123,33 @@ struct recon_player {
     struct recon_codec_reader *reader;
     struct recon_codec_format format;
     struct recon_audio_stream *stream;
+
+    /*
+     * The picture, when there is one. Null for a sound file, which is most of
+     * them -- everything below is written so that the sound path does not
+     * acquire a branch for the sake of the video one.
+     */
+    struct recon_movie *movie;
+    struct wl_event_source *ticker;
+    struct wl_event_loop *loop;
+
+    /* Where the picture was drawn, so the size it is decoded at can follow the
+     * window rather than the file. */
+    int video_w, video_h;
+
+    /*
+     * Where the clock starts for a file with no sound.
+     *
+     * Kept in the same units the audio path uses -- seconds from the start of
+     * the track -- so that everything downstream asks one question and does not
+     * care which of the two answered it.
+     */
+    struct timespec wall_base;
+    bool wall_running;
+
+    /* The whole second the position was last drawn at, so the window is
+     * redrawn when it changes and not sixty times a second while it does not. */
+    int shown_second;
 
     /*
      * 0 to 16, and applied here rather than by the device.
@@ -127,7 +193,23 @@ static void set_status(struct recon_player *p, bool error, const char *fmt,
 
 /* --- Playing --- */
 
+/* The video clock and its timer, defined below next to each other because they
+ * are one idea, and declared here because starting a track needs them. */
+static void stop_ticking(struct recon_player *p);
+static void start_ticking(struct recon_player *p);
+static double clock_seconds(struct recon_player *p);
+
 static void stop_playing(struct recon_player *p) {
+    stop_ticking(p);
+    if (p->movie != NULL) {
+        recon_movie_close(p->movie);
+        p->movie = NULL;
+    }
+    p->wall_running = false;
+    p->shown_second = -1;
+    p->video_w = 0;
+    p->video_h = 0;
+
     if (p->stream != NULL) {
         recon_audio_stop(p->stream);
         p->stream = NULL;
@@ -220,56 +302,200 @@ static void play_index(struct recon_player *p, int index) {
         return;
     }
 
+    /*
+     * The picture first, because it decides what a failure to find sound means.
+     *
+     * A file with video and no decodable audio used to be a dead end. It is a
+     * silent film now, which is the better answer -- and the reverse is
+     * unchanged: a sound file simply has no movie and takes every path it took
+     * before.
+     */
+    struct recon_movie *movie = recon_movie_open((const uint8_t *)bytes,
+        length);
+
     const struct recon_codec *codec = recon_codec_for(p->tracks[index].name,
         (const uint8_t *)bytes, length);
-    if (codec == NULL) {
+    if (codec == NULL && movie == NULL) {
         free(bytes);
-        set_status(p, true, "Nothing here can decode '%s'. "
-            "Control Panel shows what can be played.", p->tracks[index].name);
+        set_status(p, true, "Nothing here can decode '%s'. %s",
+            p->tracks[index].name, recon_movie_last_error());
         return;
     }
 
     struct recon_codec_format format;
     memset(&format, 0, sizeof(format));
-    struct recon_codec_reader *reader = codec->open((const uint8_t *)bytes,
-        length, &format);
-    if (reader == NULL) {
-        free(bytes);
-        /*
-         * The decoder's own words. It said "not a %s file after all, or it is
-         * damaged" here, which is a guess -- and the guess was wrong for the
-         * commonest case, a perfectly good video file with no decoder for what
-         * is inside it.
-         */
-        set_status(p, true, "%s", recon_codec_last_error());
-        return;
+    struct recon_codec_reader *reader = NULL;
+
+    if (codec != NULL) {
+        reader = codec->open((const uint8_t *)bytes, length, &format);
+        if (reader == NULL && movie == NULL) {
+            free(bytes);
+            /*
+             * The decoder's own words. It said "not a %s file after all, or it
+             * is damaged" here, which is a guess -- and the guess was wrong for
+             * the commonest case, a perfectly good video file with no decoder
+             * for what is inside it.
+             */
+            set_status(p, true, "%s", recon_codec_last_error());
+            return;
+        }
     }
 
     p->file = (uint8_t *)bytes;
     p->file_length = length;
-    p->codec = codec;
+    p->codec = (reader != NULL) ? codec : NULL;
     p->reader = reader;
     p->format = format;
+    p->movie = movie;
 
-    p->stream = recon_audio_play(format.rate, format.channels, on_fill,
-        on_finished, p);
-    if (p->stream == NULL) {
-        set_status(p, true, "%s", recon_audio_last_error());
-        stop_playing(p);
-        return;
+    if (reader != NULL) {
+        p->stream = recon_audio_play(format.rate, format.channels, on_fill,
+            on_finished, p);
+        if (p->stream == NULL && movie == NULL) {
+            set_status(p, true, "%s", recon_audio_last_error());
+            stop_playing(p);
+            return;
+        }
     }
 
     p->base = 0;
     p->playing = index;
     p->selected = index;
-    set_status(p, false, "%s, %d Hz, %s", codec->name, format.rate,
-        format.channels == 1 ? "mono" : "stereo");
+
+    if (movie != NULL) {
+        int vw = 0, vh = 0;
+        recon_movie_size(movie, &vw, &vh);
+
+        /*
+         * A video with no sound runs on wall time, and the moment it starts is
+         * recorded here rather than at the first tick. Starting the clock when
+         * the first frame is asked for would make every decode delay part of
+         * the timeline, so a slow first frame would put the whole file behind
+         * and it would never catch up.
+         */
+        if (p->stream == NULL) {
+            clock_gettime(CLOCK_MONOTONIC, &p->wall_base);
+            p->wall_running = true;
+        }
+        if (p->stream != NULL) {
+            set_status(p, false, "%s, %dx%d, with %s sound",
+                recon_movie_format(movie), vw, vh, codec->name);
+        } else {
+            set_status(p, false, "%s, %dx%d, no sound track this can play",
+                recon_movie_format(movie), vw, vh);
+        }
+    } else {
+        set_status(p, false, "%s, %d Hz, %s", codec->name, format.rate,
+            format.channels == 1 ? "mono" : "stereo");
+    }
+
+    /* Whatever is playing, something has to ask what time it is -- a position
+     * bar that only moves when the window happens to be redrawn for some other
+     * reason is one that looks broken exactly when it is being watched. */
+    p->shown_second = -1;
+    start_ticking(p);
 
     /* A title bar is not the place for a whole filename, so a long one is
      * cut. The list below shows it in full. */
     char title[160];
     snprintf(title, sizeof(title), "%.150s", p->tracks[index].name);
     recon_appwin_set_title(p->win, title);
+}
+
+/*
+ * What time it is in this track, in seconds.
+ *
+ * The sound device when there is one, because it is the only thing here that
+ * counts at a real rate: it consumes samples whether or not anything is
+ * watching, and asking how many it has actually played is a measurement.
+ * Wall time otherwise, which is what a file with no sound track has to use.
+ *
+ * These are the same units and mean the same thing, which is the point of
+ * having one function: nothing above it has to know which clock answered.
+ */
+static double clock_seconds(struct recon_player *p) {
+    if (p->stream != NULL && p->format.rate > 0) {
+        return (double)(p->base + recon_audio_frames_played(p->stream)) /
+            (double)p->format.rate;
+    }
+
+    if (!p->wall_running) {
+        return (double)p->base;
+    }
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)p->base +
+        (double)(now.tv_sec - p->wall_base.tv_sec) +
+        (double)(now.tv_nsec - p->wall_base.tv_nsec) / 1000000000.0;
+}
+
+/*
+ * Ask the movie what should be on screen, and redraw only if it changed.
+ *
+ * The "only if" is the whole reason this is cheap. A video at twenty-five
+ * frames a second asked sixty times a second says no more often than it says
+ * yes, and a window that redrew on every tick would spend most of its effort
+ * compositing a picture nobody had changed.
+ */
+static int on_tick(void *data) {
+    struct recon_player *p = data;
+    int again = (p->movie != NULL) ? VIDEO_TICK_MS : AUDIO_TICK_MS;
+
+    if (p->stream == NULL && p->movie == NULL) {
+        return 0;                      /* nothing is playing */
+    }
+
+    if (p->stream != NULL && recon_audio_paused(p->stream)) {
+        /* Paused holds the picture where it is rather than freezing the clock
+         * and letting it lurch forward on resume. */
+        wl_event_source_timer_update(p->ticker, again);
+        return 0;
+    }
+
+    bool changed = false;
+
+    if (p->movie != NULL && recon_movie_advance(p->movie, clock_seconds(p))) {
+        changed = true;
+    }
+
+    /*
+     * And the position, whether or not there is a picture.
+     *
+     * Compared to the second because that is what the window shows. Redrawing
+     * whenever the underlying number moved would redraw on every tick and
+     * change nothing anybody can see -- the whole point of asking often is to
+     * notice the moment it *does* change.
+     */
+    int shown = (int)clock_seconds(p);
+    if (shown != p->shown_second) {
+        p->shown_second = shown;
+        changed = true;
+    }
+
+    if (changed) {
+        recon_appwin_refresh(p->win);
+    }
+    wl_event_source_timer_update(p->ticker, again);
+    return 0;
+}
+
+static void stop_ticking(struct recon_player *p) {
+    if (p->ticker != NULL) {
+        wl_event_source_remove(p->ticker);
+        p->ticker = NULL;
+    }
+}
+
+static void start_ticking(struct recon_player *p) {
+    if (p->loop == NULL || p->ticker != NULL) {
+        return;
+    }
+    p->ticker = wl_event_loop_add_timer(p->loop, on_tick, p);
+    if (p->ticker != NULL) {
+        wl_event_source_timer_update(p->ticker,
+            (p->movie != NULL) ? VIDEO_TICK_MS : AUDIO_TICK_MS);
+    }
 }
 
 /* Where the track has got to, in frames, asked of the device rather than
@@ -283,7 +509,22 @@ static uint64_t position_frames(struct recon_player *p) {
 }
 
 static void seek_to(struct recon_player *p, uint64_t frame) {
+    /*
+     * A video with no sound has no frames to count in, so its seeks arrive in
+     * this function's units anyway -- the caller converts using the format's
+     * rate, and a silent film borrows a nominal one. Handled first, because
+     * everything below assumes there is a decoder to move.
+     */
     if (p->reader == NULL || p->codec == NULL || p->codec->seek == NULL) {
+        if (p->movie != NULL && p->format.rate > 0) {
+            double when = (double)frame / (double)p->format.rate;
+            if (recon_movie_seek(p->movie, when)) {
+                p->base = frame;
+                if (p->wall_running) {
+                    clock_gettime(CLOCK_MONOTONIC, &p->wall_base);
+                }
+            }
+        }
         return;
     }
     if (p->format.frames > 0 && frame >= p->format.frames) {
@@ -309,6 +550,19 @@ static void seek_to(struct recon_player *p, uint64_t frame) {
         recon_audio_stop(p->stream);
         p->stream = recon_audio_play(p->format.rate, p->format.channels,
             on_fill, on_finished, p);
+    }
+
+    /*
+     * And the picture goes with it. Seeking the sound without seeking the
+     * picture is the failure that looks most like a working player: everything
+     * moves, the video simply carries on from where it was, and the two drift
+     * apart by exactly however far the bar was dragged.
+     */
+    if (p->movie != NULL && p->format.rate > 0) {
+        recon_movie_seek(p->movie, (double)frame / (double)p->format.rate);
+        if (p->wall_running) {
+            clock_gettime(CLOCK_MONOTONIC, &p->wall_base);
+        }
     }
 }
 
@@ -578,6 +832,28 @@ static void player_draw(void *user, struct recon_panel *panel, int x, int y,
     uint64_t at = position_frames(p);
     uint64_t total = p->format.frames;
 
+    /*
+     * A file with pictures and no sound has no frames to count in, so it
+     * borrows a rate and the movie's own duration. Fifty is not a sample rate
+     * anybody uses, which is deliberate: it is a unit for the bar to divide,
+     * not a claim about audio, and picking a plausible-looking 44100 would
+     * invite somebody to read it as one.
+     */
+    if (p->movie != NULL && p->format.rate == 0) {
+        p->format.rate = 50;
+        p->format.frames =
+            (uint64_t)(recon_movie_duration(p->movie) * 50.0);
+        at = position_frames(p);
+        total = p->format.frames;
+    }
+    if (p->movie != NULL && p->stream == NULL) {
+        /* Wall time, in the same borrowed units. */
+        at = (uint64_t)(clock_seconds(p) * (double)p->format.rate);
+        if (total > 0 && at > total) {
+            at = total;
+        }
+    }
+
     char now[16], end[16];
     as_time(at, p->format.rate, now, sizeof(now));
     as_time(total, p->format.rate, end, sizeof(end));
@@ -610,9 +886,60 @@ static void player_draw(void *user, struct recon_panel *panel, int x, int y,
         }
     }
 
-    /* --- The list --- */
+    /* --- The picture --- */
     int top = y + PADDING;
     int bottom = transport_y - PADDING;
+
+    if (p->movie != NULL) {
+        /*
+         * The picture takes what is left after a short strip of playlist.
+         *
+         * Not the whole area: a media player that hides what is playing next
+         * the moment a video starts has stopped being a playlist, and the way
+         * back is to stop the thing you are watching. Four rows costs about
+         * ninety pixels and keeps both.
+         */
+        int reserved = LIST_ROWS_WITH_VIDEO * ROW_HEIGHT + PADDING;
+        int box_h = bottom - top - reserved;
+        int box_w = w - PADDING * 2;
+
+        if (box_h > 40 && box_w > 40) {
+            int pw = 0, ph = 0;
+            int vw = 0, vh = 0;
+            recon_movie_size(p->movie, &vw, &vh);
+            recon_video_fit(vw, vh, box_w, box_h, &pw, &ph);
+
+            /*
+             * Told what size to decode at from here, which is the one place
+             * that knows. Asking for the window's size means the colour
+             * conversion happens once per pixel that will be seen rather than
+             * once per pixel in the file -- a 1080p frame in a 400-pixel box is
+             * nine tenths less work, every frame.
+             */
+            if (pw != p->video_w || ph != p->video_h) {
+                if (recon_movie_set_size(p->movie, pw, ph)) {
+                    p->video_w = pw;
+                    p->video_h = ph;
+                }
+            }
+
+            /* Centred, on black. Black rather than the window's colour because
+             * a picture is a thing being looked at and the surround should get
+             * out of its way. */
+            int px = x + PADDING + (box_w - pw) / 2;
+            int py = top + (box_h - ph) / 2;
+            recon_fill_rect(panel, x + PADDING, top, box_w, box_h, 0xFF000000);
+
+            const unsigned char *pixels = recon_movie_pixels(p->movie);
+            if (pixels != NULL) {
+                recon_draw_image(panel, px, py, pw, ph, pixels, pw, ph);
+            }
+
+            top += box_h + PADDING;
+        }
+    }
+
+    /* --- The list --- */
     p->rows_visible = (bottom - top) / ROW_HEIGHT;
     if (p->rows_visible < 1) {
         p->rows_visible = 1;
@@ -621,7 +948,7 @@ static void player_draw(void *user, struct recon_panel *panel, int x, int y,
     if (p->count == 0) {
         recon_draw_text(panel, p->font, x + PADDING, top + ascent,
             w - PADDING * 2,
-            "Nothing to play. Put a .wav or .mp3 in your Music folder.",
+            "Nothing to play. Put a .wav, .mp3 or .mp4 in your Music folder.",
             COLOR_DIM);
         return;
     }
@@ -885,6 +1212,7 @@ struct recon_appwin *recon_player_create(struct recon_server *server,
     }
 
     p->font = font;
+    p->loop = wl_display_get_event_loop(server->wl_display);
     p->playing = -1;
     p->selected = 0;
     p->volume = 16;

@@ -52,6 +52,13 @@ static int g_count;
 static struct recon_codec_frames g_frames[FRAME_CODECS_MAX];
 static int g_frame_count;
 
+/* Picture decoders. Same arrangement, separate shelf -- a caller asking "is
+ * there an H.264 decoder" must not be answered by an audio one that happens to
+ * share the name, which is not hypothetical: HEVC audio does not exist but
+ * "H.265" as a string is not reserved to anybody. */
+static struct recon_codec_video g_video[FRAME_CODECS_MAX];
+static int g_video_count;
+
 /* --- The registry --- */
 
 bool recon_codec_register(const struct recon_codec *codec) {
@@ -218,6 +225,61 @@ bool recon_codec_frames_at(int index, struct recon_codec_frames *out) {
         return false;
     }
     *out = g_frames[index];
+    return true;
+}
+
+/* --- Picture decoders --- */
+
+bool recon_codec_register_video(const struct recon_codec_video *codec) {
+    if (codec == NULL || codec->name[0] == '\0' || codec->open == NULL ||
+            codec->decode == NULL) {
+        return false;
+    }
+    for (int i = 0; i < g_video_count; i++) {
+        if (strcasecmp(g_video[i].name, codec->name) == 0) {
+            return false;          /* the name is taken; see above */
+        }
+    }
+    if (g_video_count >= FRAME_CODECS_MAX) {
+        return false;
+    }
+    g_video[g_video_count++] = *codec;
+    return true;
+}
+
+bool recon_codec_unregister_video(const char *name) {
+    for (int i = 0; i < g_video_count; i++) {
+        if (strcasecmp(g_video[i].name, name) == 0) {
+            memmove(&g_video[i], &g_video[i + 1],
+                sizeof(g_video[0]) * (size_t)(g_video_count - i - 1));
+            g_video_count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+const struct recon_codec_video *recon_codec_video_for(const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < g_video_count; i++) {
+        if (strcasecmp(g_video[i].name, name) == 0) {
+            return &g_video[i];
+        }
+    }
+    return NULL;
+}
+
+int recon_codec_video_count(void) {
+    return g_video_count;
+}
+
+bool recon_codec_video_at(int index, struct recon_codec_video *out) {
+    if (index < 0 || index >= g_video_count || out == NULL) {
+        return false;
+    }
+    *out = g_video[index];
     return true;
 }
 

@@ -6,8 +6,8 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-11_suites-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-96-da3633?style=flat-square)](docs/BUGS.md)
+[![tests](https://img.shields.io/badge/tests-12_suites-238636?style=flat-square)](#tests)
+[![bugs](https://img.shields.io/badge/bugs_recorded-99-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -70,7 +70,7 @@ written down as it was hit rather than guessed at in advance.
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | ten, including three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 11 suites, no display needed |
+| **Tests** | 12 suites, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -84,7 +84,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
-| **0.3.1** *in progress* | ReconOS makes a sound: `recon_audio`, one file that knows the hardware, pulled rather than pushed. A codec registry, with WAV written from the specification and our own MP4 demuxer. A Media Player. A web viewer. An icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement |
+| **0.3.1** *in progress* | ReconOS makes a sound, and now shows a picture: `recon_audio`, a codec registry, WAV written from the specification, our own MP4 demuxer, and video playing with the sound device as the clock. Colour conversion and scaling are ours; H.264 is borrowed, in a module. A Media Player, a web viewer, an icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement |
 | **0.3.0** | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
 | **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
 | **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |
@@ -510,9 +510,11 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   stored — it is asked for and forgotten when the window closes, and the
   window says so
 - **Media Player** — a playlist, transport, a draggable position bar and its
-  own volume. Plays WAV, MP3 and the sound track of an MP4. Video files open
-  and are read correctly; there is no picture yet, and the refusal names the
-  decoder that is missing rather than failing vaguely
+  own volume. Plays WAV, MP3, and MP4 with picture and sound together. The
+  sound device is the clock and the picture follows it, so a late frame is
+  dropped rather than shown late; a file with no sound runs on wall time
+  instead. Decoding H.264 needs the codec pack, and when it is not installed
+  the refusal names the decoder that is missing rather than failing vaguely
 - **Web** — a viewer, and it is called one everywhere. HTTP and HTTPS, chunked
   responses, a redirect limit, and an https→http downgrade is refused rather
   than followed

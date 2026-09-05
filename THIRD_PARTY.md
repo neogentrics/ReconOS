@@ -70,10 +70,18 @@ Linked at build time, not distributed with ReconOS.
 
 - **License:** LGPL-2.1 or later
 - **Source:** https://ffmpeg.org/
-- **Used for:** decoding AAC, in the optional `CodecPack.rts` module and
-  nowhere else. It is handed one compressed frame and asked for samples;
-  none of its demuxing, scaling, filtering or conversion is used, because
-  ReconOS does those itself.
+- **Used for:** decoding AAC, H.264 and H.265, in the optional `CodecPack.rts`
+  module and nowhere else. It is handed one compressed frame and asked for
+  samples or for three planes of picture; none of its demuxing, scaling,
+  filtering or colour conversion is used, because ReconOS does those itself —
+  in `recon_mp4`, `recon_video` and `recon_movie` respectively.
+
+  That boundary is the point rather than a detail. Keeping a borrowed
+  dependency at exactly the size of the thing that justifies it is what keeps
+  the justification checkable: *"libavcodec, because H.264 is seven hundred
+  pages of specification and a decoder that is ninety-five per cent correct
+  looks broken rather than nearly right"* is a claim somebody can weigh.
+  *"libavcodec"* is not.
 
   **A module rather than part of the system, deliberately.** Somebody who never
   plays video should not carry the dependency; a codec pack should be removable;

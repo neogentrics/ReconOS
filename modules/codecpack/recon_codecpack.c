@@ -36,9 +36,10 @@
 #include <libavutil/mem.h>
 
 #include "recon_codec.h"
+#include "recon_codecpack.h"
 #include "recon_module.h"
 
-#define CODECPACK_VERSION "1.0.0"
+#define CODECPACK_VERSION "1.1.0"
 
 /* --- One decoder --- */
 
@@ -269,8 +270,8 @@ static bool load(void) {
     };
 
     /*
-     * AAC only, for now, and deliberately not a list of everything libavcodec
-     * can do.
+     * AAC and the video decoders, and deliberately not a list of everything
+     * libavcodec can do.
      *
      * Registering a decoder for a format nothing here can demux would be a
      * claim the system cannot keep: ReconOS reads MP4 and nothing else, so
@@ -278,12 +279,19 @@ static bool load(void) {
      * A registry entry that can never be reached is worse than a gap, because
      * a settings page would list it as installed.
      *
-     * Video is not here either. Decoding H.264 is one line more than this;
+     * Video used to be excluded by the same rule, and for a better reason than
+     * demuxing: decoding H.264 is one line more than decoding AAC, but
      * *showing* it needs colour conversion, scaling and a clock keeping two
-     * streams together, and none of that exists yet. A video decoder with
-     * nowhere to send its pictures would be the same empty claim.
+     * streams together, and a decoder with nowhere to send its pictures is the
+     * same empty claim. Those three now exist, in recon_video, recon_movie and
+     * the player, and all three are ReconOS's own -- so the claim can be kept
+     * and the decoder goes in.
      */
     if (!recon_codec_register_frames(&AAC)) {
+        return false;
+    }
+    if (!recon_codecpack_video_load()) {
+        recon_codec_unregister_frames("AAC");
         return false;
     }
     return true;
@@ -291,12 +299,13 @@ static bool load(void) {
 
 static void unload(void) {
     recon_codec_unregister_frames("AAC");
+    recon_codecpack_video_unload();
 }
 
 RECON_MODULE(
     .name = "Codec Pack",
     .version = CODECPACK_VERSION,
-    .description = "AAC decoding, through libavcodec",
+    .description = "AAC, H.264 and H.265 decoding, through libavcodec",
     .load = load,
     .unload = unload,
 );

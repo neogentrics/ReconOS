@@ -23,18 +23,26 @@
  *
  * --- Video ---
  *
- * There is none, and it is worth saying why rather than leaving a gap.
+ * There are three registries here, not one, and the split is the whole design.
  *
- * Sound is a stream of numbers and a speaker. Video is a stream of numbers,
- * and a container format that interleaves it with the sound, and a clock that
- * keeps the two together, and a decoder whose output is thirty megabytes a
- * second that has to be scaled and colour-converted before anything can look
- * at it. Each of those is larger than everything in this file.
+ * A **file codec** is handed a whole file and finds its own way through it.
+ * A **frame codec** is handed one compressed audio frame at a time by
+ * something that already knows where the frames are. A **video codec** is the
+ * same arrangement for pictures, and it needs its own shape rather than a flag
+ * on the audio one: what comes out is not a number of samples but a picture,
+ * with a size, a colour space, and a moment it belongs at.
  *
- * The place it would go is here -- a decoder that produces frames rather than
- * samples -- and the interface deliberately does not pretend to have one yet.
- * A `recon_codec_video` that returned nothing would be a promise, and the
- * gap is more honest than a promise.
+ * This file used to say there was no video and explain why at length. What it
+ * said was that decoding is the small half -- the large half is a container
+ * that interleaves two streams, a clock that keeps them together, and turning
+ * thirty megabytes a second of planes into something the screen can show. That
+ * was true and it is still true; those three are now written, in recon_mp4,
+ * recon_movie and recon_video respectively, and all three are ReconOS's own.
+ *
+ * What is *not* written here is H.264 itself, for the same reason AAC is not:
+ * seven hundred pages, where ninety-five per cent correct looks broken rather
+ * than nearly right. So a module brings it, and when no module has, ReconOS
+ * says which decoder is missing instead of showing a black rectangle.
  */
 
 #ifndef RECON_CODEC_H
@@ -172,6 +180,82 @@ struct recon_codec_frames {
 
 bool recon_codec_register_frames(const struct recon_codec_frames *codec);
 bool recon_codec_unregister_frames(const char *name);
+
+/*
+ * --- Decoders that produce pictures ---
+ *
+ * The same arrangement again, and deliberately not the same interface.
+ *
+ * An audio frame decodes to a count of samples, and the caller knows what to do
+ * with them because there is only one thing to do with them. A video frame
+ * decodes to a picture that has a size the container may have lied about, a
+ * colour space that has to be carried or the colours come out wrong, and a
+ * moment it belongs at that is not the moment it was handed over.
+ *
+ * That last one is why `decode` reports whether a picture came out rather than
+ * returning one every time. Modern video is not in order: a decoder is fed
+ * frames in the order they are *stored*, which is not the order they are shown,
+ * and it holds several while it waits for the one that comes first. A caller
+ * that assumed one frame in meant one picture out would show the file scrambled
+ * -- and would look, at a glance, like a decoder bug rather than a caller bug.
+ */
+
+struct recon_codec_video_reader;
+struct recon_video_picture;
+
+struct recon_codec_video {
+    /* Matched against the name a demuxer reports: "H.264", "H.265". */
+    char name[RECON_CODEC_NAME_MAX];
+
+    /*
+     * `setup` is the container's parameter sets -- H.264's avcC box. A decoder
+     * cannot start without them: they carry the picture size, the profile and
+     * the entropy coder, none of which the frames themselves repeat.
+     *
+     * `width` and `height` are what the container claims, and are written back
+     * with what the decoder actually found. Those disagree more often than they
+     * should, and the decoder is the one that is right.
+     */
+    struct recon_codec_video_reader *(*open)(const uint8_t *setup,
+        size_t setup_length, int *width, int *height);
+
+    /*
+     * Feed one compressed frame. Returns 1 when a picture came out, 0 when the
+     * decoder kept it for later, and -1 when the frame could not be decoded.
+     *
+     * `out` borrows the decoder's own memory and stays valid until the next
+     * call. Nothing copies it -- a 1080p picture is three megabytes, and
+     * copying one per frame costs more than every sum performed on it.
+     */
+    int (*decode)(struct recon_codec_video_reader *reader,
+        const uint8_t *frame, size_t length, double time,
+        struct recon_video_picture *out);
+
+    /*
+     * Pictures the decoder is still holding, one call at a time, after the last
+     * frame has been fed. Returns 1 while there are more, 0 when there are not.
+     *
+     * Without this the last few pictures of every file are never shown, which
+     * looks like a video that ends slightly early -- small enough to be blamed
+     * on the file. May be NULL for a decoder that holds nothing.
+     */
+    int (*flush)(struct recon_codec_video_reader *reader,
+        struct recon_video_picture *out);
+
+    /* Throw away what is held between frames, after a seek. May be NULL. */
+    void (*reset)(struct recon_codec_video_reader *reader);
+
+    void (*close)(struct recon_codec_video_reader *reader);
+};
+
+bool recon_codec_register_video(const struct recon_codec_video *codec);
+bool recon_codec_unregister_video(const char *name);
+
+/* The picture decoder for a format, or NULL when none is installed. */
+const struct recon_codec_video *recon_codec_video_for(const char *name);
+
+int recon_codec_video_count(void);
+bool recon_codec_video_at(int index, struct recon_codec_video *out);
 
 /* The frame decoder for a format, or NULL when none is installed. The caller
  * says which one is missing, by name -- "there is no AAC decoder installed" is

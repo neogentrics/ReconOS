@@ -76,6 +76,91 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-099 — The position bar never moved on its own
+
+- **Found in** v0.3.1, by noticing that the video's position advanced and the
+  MP3's did not, in the same run, reading the same clock.
+- **Was** the player asked the sound device where it had got to only while it
+  was drawing, and nothing made it draw. The clock was correct the whole time
+  and the number on screen was however old the last redraw was.
+
+  It had never been visible because the window is redrawn whenever anything
+  happens to it — a click, a move, a focus change, a menu opening somewhere
+  else. During use that is often enough that the bar looks like it updates
+  erratically; during an automated test, where nothing touches the window, it
+  never updates at all.
+
+- **Fixed by** running the timer whenever anything is playing rather than only
+  when there is a picture, at a quarter of a second for sound and sixty times a
+  second for video, and redrawing only when the second actually changes.
+- **Why it survived** it predates video by several versions and was never
+  looked for, because the failure of a clock display is indistinguishable from
+  a clock that is not running — and the clock genuinely had not been running
+  once before, for a different reason, which had been found and fixed. A second
+  fault behind a first one that produced the same symptom.
+
+  The thing that surfaced it was **two things that should have agreed and did
+  not**: the same window, the same clock, two files, two different answers. That
+  is worth more than either observation alone, and neither was being looked at
+  on purpose — the video was being checked and the MP3 was the control.
+
+### BG-098 — Seeking worked at every whole second and nowhere else
+
+- **Found in** v0.3.1, by a seek test that happened to include two times with a
+  decimal point in them.
+- **Was** seeking sets a line before which decoded frames are used to prime the
+  decoder and not shown — everything between the last keyframe and the target
+  exists only so the target has something to have been predicted from. That
+  line was set to *the time that was asked for*.
+
+  A frame is not a moment, it is an interval. The frame containing 33.7 seconds
+  starts at 33.667, so refusing to show anything before 33.7 refused that frame
+  — and the next one does not begin until after 33.7 either. The seek decoded
+  correctly, threw the answer away, and produced no picture at all.
+
+- **Fixed by** setting the line at the target frame's own start time, read from
+  the sample table, rather than at the time the caller named.
+- **Why it survived** every seek to a whole number of seconds worked perfectly,
+  because whole seconds land on frame boundaries at 25 and 50 frames a second.
+  Five of the seven times in the first version of the test were round numbers,
+  and all five passed.
+
+  **A test whose inputs are all round numbers is testing the arithmetic of round
+  numbers.** The habit worth keeping is not "add a decimal" — it is to ask, for
+  any test that passes, which property of the *inputs* it might be relying on.
+  Round numbers, powers of two, square pictures, even dimensions, and one item
+  in the list are the same mistake wearing five hats.
+
+### BG-097 — Every reordered video would have played at the wrong times
+
+- **Found in** v0.3.1, before it shipped, by checking which boxes the test file
+  actually contained instead of assuming the ones being read were the ones that
+  mattered.
+- **Was** frame times were taken from `stts`, which gives the time a frame is
+  *decoded*. The time a frame is *shown* is that plus the offset in `ctts`, and
+  `ctts` was not being read at all.
+
+  The two are the same number only for a file with no B-frames. A B-frame is
+  predicted from a picture that comes after it, so it has to be decoded after
+  that picture and displayed before it — which is exactly what the offset
+  records. Without it, a reordered file plays its frames in the right order at
+  the wrong moments.
+
+- **Fixed by** reading `ctts` and adding the offset, clamped at zero for a file
+  whose first frames carry negative offsets.
+- **Why it nearly survived** the test file has no `ctts` box. Every check
+  passed, against ffmpeg, frame by frame, at five scales — because the file
+  does not reorder, and on a file that does not reorder taking decode times as
+  display times is correct.
+
+  **A comparison against a reference decoder proves agreement about the file it
+  was run on, and nothing else.** The thing that found this was not a better
+  comparison; it was looking at what the file *was* — and the first scan
+  reported every box absent, including `stts`, which every MP4 must have. An
+  answer that says a mandatory thing is missing is not a finding, it is a broken
+  instrument: `moov` was at the end of the file and the scan read the first
+  eight megabytes.
+
 ### BG-096 — A video track's parameter sets vanished, eight bytes at a time
 
 [#261](https://github.com/neogentrics/ReconOS/issues/261)
