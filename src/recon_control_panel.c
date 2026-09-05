@@ -19,6 +19,7 @@
 #include "recon_appwin.h"
 #include "recon_avatar.h"
 #include "recon_control_panel.h"
+#include "recon_display.h"
 #include "recon_firewall.h"
 #include "recon_fonts.h"
 #include "recon_fs.h"
@@ -99,6 +100,7 @@
 #define HIT_NET_TAB_BASE (RECON_APPWIN_HIT_USER + 1140)
 #define HIT_NET_ROW_BASE (RECON_APPWIN_HIT_USER + 1160)
 #define HIT_FONT_BASE (RECON_APPWIN_HIT_USER + 1200)
+#define HIT_MODE_BASE (RECON_APPWIN_HIT_USER + 1240)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -142,6 +144,7 @@ enum action {
     ACTION_SIZE_LESS,
     ACTION_SIZE_MORE,
     ACTION_RESET_READING,
+    ACTION_SET_RESOLUTION,
     ACTION_ADD_FONT,
     ACTION_REMOVE_FONT,
     ACTION_USE_FONT,
@@ -284,13 +287,6 @@ static const struct pending_item ABOUT_ITEMS[] = {
       "means partitions, which means the kernel." },
 };
 
-static const struct pending_item DISPLAY_ITEMS[] = {
-    { "Screen resolution", "How many pixels the display is.",
-      "ReconOS takes whatever size the window or the screen it was given is. "
-      "Asking a display for a different mode is a kernel's conversation with "
-      "a driver." },
-};
-
 static const struct pending_item POWER_ITEMS[] = {
     { "Sleep", "Stop everything and hold it in memory.",
       "Suspending needs a kernel underneath. ReconOS is a process on one." },
@@ -370,9 +366,10 @@ static const struct {
 } PENDING[PAGE_COUNT] = {
     [PAGE_ABOUT] = { "Related, and not built yet.", ABOUT_ITEMS,
         (int)(sizeof(ABOUT_ITEMS) / sizeof(ABOUT_ITEMS[0])) },
+    /* Nothing not-built left on this page: resolution was the last of the
+     * three and it is built. The summary stays; the list is empty. */
     [PAGE_DISPLAY] = { "How text is sized and spaced, and how big the screen "
-        "is.", DISPLAY_ITEMS,
-        (int)(sizeof(DISPLAY_ITEMS) / sizeof(DISPLAY_ITEMS[0])) },
+        "is.", NULL, 0 },
     [PAGE_POWER] = { "What the machine does when it is left alone.",
         POWER_ITEMS, (int)(sizeof(POWER_ITEMS) / sizeof(POWER_ITEMS[0])) },
     [PAGE_TROUBLESHOOT] = { "When something is not working.",
@@ -707,6 +704,9 @@ struct control_panel {
     int theme_scroll;
     int paper_scroll;
 
+    /* Which screen size is picked, before it is applied. */
+    int mode_selected;
+
     /* Which installed font is picked, and how far the list is scrolled. */
     int font_selected;
     int font_scroll;
@@ -846,6 +846,7 @@ static void nothing_chosen(struct control_panel *cp) {
     cp->selected = -1;
     cp->net_selected = -1;
     cp->font_selected = -1;
+    cp->mode_selected = -1;
 
     /* And nothing under the pointer, which is the same kind of zero: the
      * front page opened with its first icon lit as though the pointer were
@@ -2190,9 +2191,81 @@ static void draw_display(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_DEFAULT_FONT, *chosen != '\0');
     y += BUTTON_HEIGHT + PADDING * 2;
 
-    /* And the three things this page is named for and cannot do yet, said
-     * plainly rather than left as a gap nobody can see. */
-    draw_pending_list(cp, p, x, y, w, bottom - y, PAGE_DISPLAY, false);
+    /* --- The screen --- */
+
+    recon_draw_text(p, cp->font, x, y + ascent, w, "Screen", COLOR_TEXT);
+    y += line + 4;
+
+    struct recon_display screen;
+    if (!recon_display_at(0, &screen)) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "No display is attached.", COLOR_DIM);
+        return;
+    }
+
+    char now[128];
+    snprintf(now, sizeof(now), "%s is %d by %d", screen.name, screen.width,
+        screen.height);
+    recon_draw_text(p, cp->font, x, y + ascent, w, now, COLOR_DIM);
+    y += line + 6;
+
+    /*
+     * A display that cannot be changed says so instead of offering a list.
+     *
+     * This is the usual case while ReconOS runs inside another compositor:
+     * it is whatever size that window is, and a resolution picker there would
+     * be a control that could only ever fail. Saying what is actually true is
+     * more use than a disabled list.
+     */
+    if (!screen.can_change) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "It takes its size from what ReconOS is running inside, so there "
+            "is nothing here to change.", COLOR_DIM);
+        y += line;
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "On a machine ReconOS has to itself, the sizes it offers appear "
+            "here.", COLOR_DIM);
+        return;
+    }
+
+    int sizes = screen.mode_count;
+    if (sizes > 6) {
+        sizes = 6;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = sizes * ROW_HEIGHT;
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    for (int row = 0; row < sizes; row++) {
+        struct recon_display_mode mode;
+        if (!recon_display_mode_at(0, row, &mode)) {
+            break;
+        }
+
+        char label[64];
+        snprintf(label, sizeof(label), "%d by %d", mode.width, mode.height);
+
+        /* Refresh in millihertz, divided only to show it. 59.94 is a real
+         * refresh rate and rounding it to 59 would be inventing a number. */
+        char detail[96];
+        snprintf(detail, sizeof(detail), "%.2f Hz%s%s",
+            (double)mode.refresh / 1000.0,
+            mode.preferred ? "   this display's own" : "",
+            mode.current ? "   in use" : "");
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, w, row, label, detail,
+            row == cp->mode_selected);
+        recon_hit_add(p, x, y + row * ROW_HEIGHT, w, ROW_HEIGHT,
+            HIT_MODE_BASE + (uint32_t)row);
+    }
+
+    y += cp->list_h + PADDING;
+
+    draw_button(cp, p, x, y, "Use This Size",
+        HIT_ACTION_BASE + ACTION_SET_RESOLUTION, cp->mode_selected >= 0);
 }
 
 /*
@@ -5574,6 +5647,37 @@ static void do_action(struct control_panel *cp, enum action action) {
         set_status(cp, false, "Back to the system's own font.");
         break;
 
+    case ACTION_SET_RESOLUTION: {
+        if (cp->mode_selected < 0) {
+            set_status(cp, true, "Choose a size first.");
+            break;
+        }
+
+        struct recon_display_mode mode;
+        if (!recon_display_mode_at(0, cp->mode_selected, &mode)) {
+            set_status(cp, true, "That size is no longer offered.");
+            break;
+        }
+
+        char why[192];
+        if (!recon_display_set_mode(0, cp->mode_selected, why, sizeof(why))) {
+            set_status(cp, true, "%s", why);
+            break;
+        }
+
+        /*
+         * Everything is laid out against the screen's size, so the shell has
+         * to be told the screen changed. Without this the taskbar stays where
+         * the old bottom edge was, which on a larger screen is a bar floating
+         * across the middle of the desktop.
+         */
+        recon_shell_restyle(cp->server->shell);
+
+        set_status(cp, false, "The screen is now %d by %d.", mode.width,
+            mode.height);
+        break;
+    }
+
     case ACTION_ADD_FONT: {
         /*
          * The File Explorer, the same way a wallpaper is added.
@@ -6415,6 +6519,13 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
      * unbounded >=, so an id that belongs to a base above the one being
      * tested is answered by the wrong branch and vanishes without a trace.
      */
+    if (hit_id >= HIT_MODE_BASE) {
+        int row = (int)(hit_id - HIT_MODE_BASE);
+        cp->mode_selected = (cp->mode_selected == row) ? -1 : row;
+        clear_status(cp);
+        return true;
+    }
+
     if (hit_id >= HIT_FONT_BASE) {
         int row = (int)(hit_id - HIT_FONT_BASE);
         cp->font_selected = (cp->font_selected == row) ? -1 : row;

@@ -61,6 +61,7 @@ add_executable(ReconOS
     src/recon_appwin.c
     src/recon_cmd.c
     src/recon_control.c
+    src/recon_display.c
     src/recon_tls.c
     src/recon_control_panel.c
     src/recon_decor.c

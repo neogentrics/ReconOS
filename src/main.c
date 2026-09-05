@@ -57,6 +57,7 @@
 
 #include "ReconOS.h"
 #include "recon_decor.h"
+#include "recon_display.h"
 #include "recon_control.h"
 #include "recon_error.h"
 #include "recon_firewall.h"
@@ -2424,6 +2425,11 @@ static void server_new_output(struct wl_listener *listener, void *data) {
          * registry, since it wants the machine name from there.
          */
         recon_net_init(wl_display_get_event_loop(server->wl_display));
+
+        /* The screens, so the Control Panel can ask about them without
+         * knowing what is answering. */
+        recon_display_init(server);
+
         wlr_log(WLR_INFO, "ReconOS: network %s, %d interface%s, gateway %s",
             recon_net_online() ? "up" : "down",
             recon_net_interface_count(),
