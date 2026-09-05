@@ -311,6 +311,109 @@ static void test_spaces(void) {
         "two marks close together are one word");
 }
 
+/* --- Blocks --- */
+
+/* Three short bars, the shape of a line of writing. */
+static void write_a_line(struct page *p, int x, int y, int height) {
+    for (int i = 0; i < 3; i++) {
+        blot(p, x + i * 9, y, 6, height, 20);
+    }
+}
+
+/* Every line found in every block. However the picture was divided, this is
+ * the number that has to survive the division. */
+static int lines_in_all(struct page *p, const struct recon_ocr_region *regions,
+        int count) {
+    struct recon_ocr_line lines[16];
+    int total = 0;
+    for (int i = 0; i < count; i++) {
+        total += recon_ocr_lines_in(p->ink, PAGE_W, PAGE_H, &regions[i],
+            lines, 16);
+    }
+    return total;
+}
+
+static void test_regions(void) {
+    printf("Blocks\n");
+
+    struct page p;
+    struct recon_ocr_region regions[32];
+
+    /* A picture that is only writing is one block, and nothing changes for it.
+     * That is the case every earlier test in this file is about. */
+    paper(&p, 240);
+    write_a_line(&p, 20, 20, 10);
+    write_a_line(&p, 20, 36, 10);
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+
+    int count = recon_ocr_regions(p.ink, PAGE_W, PAGE_H, regions, 32);
+    check(count >= 1, "a picture of only writing has blocks in it");
+    check(lines_in_all(&p, regions, count) == 2,
+        "and both lines survive being divided up");
+
+    /* Two lots of writing far apart across the page. */
+    paper(&p, 240);
+    write_a_line(&p, 10, 20, 10);
+    write_a_line(&p, 130, 20, 10);
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+    count = recon_ocr_regions(p.ink, PAGE_W, PAGE_H, regions, 32);
+    check(count == 2, "writing either side of a wide gap is two blocks");
+
+    /*
+     * The case this stage was built for.
+     *
+     * Writing inside a drawn box. The box's sides put ink on every row it
+     * spans, so no row is blank and the line finder -- looking at the whole
+     * picture -- finds one band covering the box and everything in it.
+     *
+     * This is a screenshot in miniature: a window is a box with writing in it.
+     */
+    /*
+     * Taller than 48 rows on purpose. Below that a full-height line is not
+     * treated as a border, because at the bottom of the recursion a block is a
+     * single line of writing and a tall letter spans it -- so the box in this
+     * test has to be the size a real window is, not the size that fits neatly
+     * into a test page.
+     */
+    paper(&p, 240);
+    blot(&p, 20, 8, 120, 1, 20);        /* top */
+    blot(&p, 20, 90, 120, 1, 20);       /* bottom */
+    blot(&p, 20, 8, 1, 83, 20);         /* left */
+    blot(&p, 139, 8, 1, 83, 20);        /* right */
+    write_a_line(&p, 30, 20, 10);
+    write_a_line(&p, 30, 60, 10);
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+
+    struct recon_ocr_line lines[16];
+    int whole = recon_ocr_lines(p.ink, PAGE_W, PAGE_H, lines, 16);
+    check(whole == 1, "a boxed page is one band to the line finder");
+
+    count = recon_ocr_regions(p.ink, PAGE_W, PAGE_H, regions, 32);
+    check(count >= 1, "but the block finder gets inside the box");
+
+    /* And within the block that holds the writing, both lines are found. */
+    int best = 0;
+    for (int i = 0; i < count; i++) {
+        int n = recon_ocr_lines_in(p.ink, PAGE_W, PAGE_H, &regions[i], lines,
+            16);
+        if (n > best) {
+            best = n;
+        }
+    }
+    check(lines_in_all(&p, regions, count) == 2,
+        "and both lines inside the box are found");
+    check(best >= 1, "with the writing in a block of its own");
+
+    /* A blank picture has no blocks, which is an answer rather than a fault. */
+    paper(&p, 240);
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+    check(recon_ocr_regions(p.ink, PAGE_W, PAGE_H, regions, 32) == 0,
+        "a blank picture has no blocks");
+
+    check(recon_ocr_regions(NULL, PAGE_W, PAGE_H, regions, 32) == 0,
+        "no picture is refused");
+}
+
 int main(void) {
     printf("OCR tests\n\n");
 
@@ -318,6 +421,7 @@ int main(void) {
     test_lines();
     test_marks();
     test_spaces();
+    test_regions();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return (g_failures == 0) ? 0 : 1;

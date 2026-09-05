@@ -154,18 +154,296 @@ bool recon_ocr_ink_detail(const unsigned char *rgba, int width, int height,
     return true;
 }
 
+
+/* --- Blocks --- */
+
+/*
+ * How wide a run of blank has to be before it separates two blocks.
+ *
+ * Proportional to the piece being cut, with a floor. That is the whole trick,
+ * and a fixed number of pixels cannot do the job: the gap between two words at
+ * forty point is wider than the gap between two paragraphs at eight, so any
+ * constant either splits words somewhere or fails to split paragraphs
+ * elsewhere.
+ *
+ * A twentieth means a cut has to be a real piece of the space available. On a
+ * 1280-wide screen that is 64 pixels, which separates windows and leaves their
+ * insides alone; inside a 400-wide block of text it is 20, which is wider than
+ * any word space at any size that block could be holding. The rule tightens as
+ * the recursion goes deeper, which is exactly the direction it needs to.
+ */
+static int cut_needed(int extent) {
+    int needed = extent / 20;
+    return needed < 6 ? 6 : needed;
+}
+
+/* How much ink is in this row, within these columns? */
+static int row_ink(const unsigned char *ink, int width,
+        const struct recon_ocr_region *at, int y) {
+    const unsigned char *row = ink + (size_t)y * width;
+    int seen = 0;
+    for (int x = at->left; x < at->right; x++) {
+        seen += row[x] != 0;
+    }
+    return seen;
+}
+
+static int column_ink(const unsigned char *ink, int width,
+        const struct recon_ocr_region *at, int x) {
+    int seen = 0;
+    for (int y = at->top; y < at->bottom; y++) {
+        seen += ink[(size_t)y * width + x] != 0;
+    }
+    return seen;
+}
+
+static bool row_has_ink(const unsigned char *ink, int width,
+        const struct recon_ocr_region *at, int y) {
+    return row_ink(ink, width, at, y) > 0;
+}
+
+static bool column_has_ink(const unsigned char *ink, int width,
+        const struct recon_ocr_region *at, int x) {
+    return column_ink(ink, width, at, x) > 0;
+}
+
+/*
+ * A block big enough that a full-span line in it means a frame rather than a
+ * letter.
+ *
+ * At the bottom of the recursion a block is one line of writing, and there a
+ * tall letter genuinely is inked across almost the whole height -- an 'l' at
+ * thirty point spans its line the way a border spans a window. Cutting on that
+ * would split a line at every ascender.
+ *
+ * Forty-eight pixels is taller than any single line this engine can read and a
+ * small fraction of any window, so the two cases do not meet.
+ */
+#define DIVIDER_MIN_EXTENT 48
+
+/*
+ * Nearly all of it, not all of it.
+ *
+ * A window border is interrupted where another window overlaps it, and a
+ * printed rule loses a pixel to the paper. Demanding every row would find
+ * neither.
+ */
+static bool spans(int inked, int extent) {
+    return extent >= DIVIDER_MIN_EXTENT && inked * 20 >= extent * 19;
+}
+
+/*
+ * Shrink a block to the ink actually in it.
+ *
+ * Done before every cut, so that the proportional threshold is measured
+ * against the writing rather than against the margin around it. Without this a
+ * block with a wide empty border keeps demanding wider cuts than its contents
+ * ever contain, and stops splitting one level too early.
+ */
+static bool tighten(const unsigned char *ink, int width,
+        struct recon_ocr_region *at) {
+    /*
+     * Blank margins and drawn borders, from every edge, until nothing moves.
+     *
+     * A border is not a margin but it is not content either, and at an edge it
+     * is not a cut: a run at the end of a block has nothing on its far side to
+     * separate from. Left attached, it is a column of ink on every row of the
+     * block, and no line can ever be found inside it.
+     *
+     * Repeated rather than done once because each strip changes the extent the
+     * next edge is judged against -- and because a border two pixels thick is
+     * two passes.
+     */
+    bool moved = true;
+    while (moved) {
+        moved = false;
+
+        if (at->top >= at->bottom || at->left >= at->right) {
+            return false;
+        }
+
+        int across = at->right - at->left;
+        int down = at->bottom - at->top;
+
+        int ink_at = row_ink(ink, width, at, at->top);
+        if (ink_at == 0 || spans(ink_at, across)) {
+            at->top++;
+            moved = true;
+            continue;
+        }
+        ink_at = row_ink(ink, width, at, at->bottom - 1);
+        if (ink_at == 0 || spans(ink_at, across)) {
+            at->bottom--;
+            moved = true;
+            continue;
+        }
+        ink_at = column_ink(ink, width, at, at->left);
+        if (ink_at == 0 || spans(ink_at, down)) {
+            at->left++;
+            moved = true;
+            continue;
+        }
+        ink_at = column_ink(ink, width, at, at->right - 1);
+        if (ink_at == 0 || spans(ink_at, down)) {
+            at->right--;
+            moved = true;
+        }
+    }
+    return at->left < at->right && at->top < at->bottom;
+}
+
+/*
+ * Split a block on the widest run of blank, one axis at a time.
+ *
+ * Rows first, then columns, then rows again on each piece -- which is what
+ * takes a screen apart in the order a person would describe it: into windows,
+ * then into the parts of a window, then into paragraphs.
+ *
+ * `depth` is a stop rather than a policy. Twelve levels is far more than any
+ * real layout needs and far fewer than a picture of noise could demand.
+ */
+static void split_block(const unsigned char *ink, int width,
+        struct recon_ocr_region at, bool try_rows, int depth,
+        struct recon_ocr_region *out, int *count, int max) {
+    if (*count >= max || depth <= 0) {
+        return;
+    }
+    if (!tighten(ink, width, &at)) {
+        return;                     /* nothing in it */
+    }
+
+    int extent = try_rows ? (at.bottom - at.top) : (at.right - at.left);
+    int needed = cut_needed(extent);
+
+    /*
+     * Every gap wide enough, not just the widest.
+     *
+     * Cutting only at the largest would need a pass per piece and would take
+     * a column of ten paragraphs apart in ten passes. Cutting at all of them
+     * at once is one pass and the same answer.
+     */
+    int pieces = 0;
+    int run = 0;
+    int piece_start = try_rows ? at.top : at.left;
+    int limit = try_rows ? at.bottom : at.right;
+
+    int across = try_rows ? (at.right - at.left) : (at.bottom - at.top);
+    bool run_has_divider = false;
+
+    for (int i = piece_start; i <= limit; i++) {
+        bool blank;
+        bool divider = false;
+
+        if (i == limit) {
+            blank = true;           /* the end closes the last piece */
+        } else {
+            int inked = try_rows ? row_ink(ink, width, &at, i)
+                                 : column_ink(ink, width, &at, i);
+            blank = inked == 0;
+            divider = !blank && spans(inked, across);
+        }
+
+        if (blank || divider) {
+            run++;
+            run_has_divider = run_has_divider || divider;
+            continue;
+        }
+
+        /*
+         * A run separates two pieces when it is wide enough to be a gap in the
+         * layout, or when it contains a line drawn across the whole block. The
+         * second is what gets inside a window: its border is one column of ink
+         * on every row, so no run of blank will ever be wide enough there.
+         */
+        if ((run >= needed || run_has_divider) && i - run > piece_start) {
+            struct recon_ocr_region piece = at;
+            if (try_rows) {
+                piece.top = piece_start;
+                piece.bottom = i - run;
+            } else {
+                piece.left = piece_start;
+                piece.right = i - run;
+            }
+            split_block(ink, width, piece, !try_rows, depth - 1, out, count,
+                max);
+            pieces++;
+            piece_start = i;
+        } else if (run > 0 && i - run == piece_start) {
+            piece_start = i;        /* leading blank, not a cut */
+        }
+        run = 0;
+        run_has_divider = false;
+    }
+
+    /* The tail, and the case where nothing was wide enough to cut at. */
+    if (pieces > 0) {
+        struct recon_ocr_region piece = at;
+        if (try_rows) {
+            piece.top = piece_start;
+        } else {
+            piece.left = piece_start;
+        }
+        if ((try_rows ? piece.bottom - piece.top : piece.right - piece.left)
+                > 0) {
+            split_block(ink, width, piece, !try_rows, depth - 1, out, count,
+                max);
+        }
+        return;
+    }
+
+    /*
+     * No cut on this axis. Try the other one before giving up -- a block of
+     * text has no wide gaps between its lines and plenty between its columns,
+     * or the reverse, and stopping at the first axis that fails would hand
+     * back the whole thing.
+     */
+    if (try_rows) {
+        split_block(ink, width, at, false, depth - 1, out, count, max);
+        return;
+    }
+
+    if (*count < max) {
+        out[(*count)++] = at;
+    }
+}
+
+int recon_ocr_regions(const unsigned char *ink, int width, int height,
+        struct recon_ocr_region *out, int max) {
+    if (ink == NULL || out == NULL || width <= 0 || height <= 0 || max <= 0) {
+        return 0;
+    }
+
+    struct recon_ocr_region whole = { 0, 0, width, height };
+    int count = 0;
+    split_block(ink, width, whole, true, 12, out, &count, max);
+    return count;
+}
+
 /* --- Lines --- */
 
 int recon_ocr_lines(const unsigned char *ink, int width, int height,
         struct recon_ocr_line *out, int max) {
-    if (ink == NULL || out == NULL || width <= 0 || height <= 0 || max <= 0) {
+    struct recon_ocr_region whole = { 0, 0, width, height };
+    return recon_ocr_lines_in(ink, width, height, &whole, out, max);
+}
+
+int recon_ocr_lines_in(const unsigned char *ink, int width, int height,
+        const struct recon_ocr_region *region, struct recon_ocr_line *out,
+        int max) {
+    if (ink == NULL || out == NULL || region == NULL || width <= 0 ||
+            height <= 0 || max <= 0) {
+        return 0;
+    }
+    if (region->left < 0 || region->top < 0 || region->right > width ||
+            region->bottom > height || region->left >= region->right ||
+            region->top >= region->bottom) {
         return 0;
     }
 
     int found = 0;
     int top = -1;
 
-    for (int y = 0; y <= height; y++) {
+    for (int y = region->top; y <= region->bottom; y++) {
         /*
          * One row past the bottom, deliberately, and treated as empty. It
          * closes a line that runs to the last row of the image -- which is the
@@ -173,9 +451,9 @@ int recon_ocr_lines(const unsigned char *ink, int width, int height,
          * screenshot of one line of text looks like.
          */
         bool has_ink = false;
-        if (y < height) {
+        if (y < region->bottom) {
             const unsigned char *row = ink + (size_t)y * width;
-            for (int x = 0; x < width && !has_ink; x++) {
+            for (int x = region->left; x < region->right && !has_ink; x++) {
                 has_ink = row[x] != 0;
             }
         }
@@ -187,14 +465,14 @@ int recon_ocr_lines(const unsigned char *ink, int width, int height,
                 struct recon_ocr_line *line = &out[found];
                 line->top = top;
                 line->bottom = y;
-                line->left = width;
-                line->right = 0;
+                line->left = region->right;
+                line->right = region->left;
 
                 /* The ink's own extent, so a centred line is not measured from
-                 * the page edge. */
+                 * the block's edge. */
                 for (int row_y = top; row_y < y; row_y++) {
                     const unsigned char *row = ink + (size_t)row_y * width;
-                    for (int x = 0; x < width; x++) {
+                    for (int x = region->left; x < region->right; x++) {
                         if (row[x] == 0) {
                             continue;
                         }
@@ -307,10 +585,35 @@ static int space_threshold(const int *gaps, int count, int line_height) {
      * unbroken run: a line whose widest gap is barely wider than its typical
      * one is a line with no spaces in it.
      */
-    if (widest < median * 2) {
+    /*
+     * And it has to be wider by an absolute amount as well as a proportional
+     * one. At nine-pixel text the gaps are one and two pixels: two is twice
+     * one, so the proportional test alone calls every two-pixel gap a word
+     * break, and a clock reads "9/5/2 0 2 6". One pixel of difference is not
+     * evidence of anything at any size.
+     */
+    if (widest < median * 2 || widest - median < 2) {
         return widest + 1;          /* nothing reaches this */
     }
-    return (median + widest) / 2;
+
+    /*
+     * And a floor, because a distribution can be real and still be noise.
+     *
+     * At small sizes the gaps are one and two pixels, and the difference
+     * between a letter gap and a word gap is smaller than the difference
+     * between two letter gaps -- so the rule above finds a word break between
+     * every character. A clock reading "9/5/2026" comes out as
+     * "9 / 5 / 2 0 2 6".
+     *
+     * A quarter of the band's height is narrower than any word space and wider
+     * than any gap between two letters. That is what the original threshold
+     * measured, and it was right about the quantity and wrong to be the only
+     * thing consulted.
+     */
+    int decided = (median + widest) / 2;
+    int floor_needed = line_height / 4;
+
+    return decided > floor_needed ? decided : floor_needed;
 }
 
 int recon_ocr_marks(const unsigned char *ink, int width,

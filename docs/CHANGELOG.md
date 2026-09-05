@@ -185,6 +185,42 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**Screenshots read now.** A whole 1280x720 desktop -- windows, their menus, the
+status bar and the clock -- comes back as 101 of 125 marks at confidence 97,
+where a day earlier it came back as nothing.
+
+The missing stage was in front of the others. Finding lines by looking for rows
+with no ink is right for a picture that is only writing and wrong for a screen:
+a window border puts ink on every row it spans, so the display collapsed into a
+few enormous bands and every mark in one was a blob.
+
+**The first guess about why was wrong, and measuring said so immediately.** I
+assumed the wallpaper was being thresholded as ink and drowning everything. A
+whole desktop measures 1.9% ink -- *less* than a crop of plain text at 3.9%. The
+threshold was never involved. It was geometry.
+
+`recon_ocr_regions` cuts the picture on whitespace, alternating between rows and
+columns and recursing into each piece: a screen into windows, a window into its
+bar and its contents, the contents into paragraphs. **A cut has to be wide
+relative to the piece being cut**, which is what stops the recursion running
+past a paragraph and separating the words in it -- a fixed number of pixels
+cannot do that, because the gap between two words at forty point is wider than
+the gap between two paragraphs at eight.
+
+**And a line drawn across a whole block is a place to cut, not something to
+read.** That is what gets inside a window at all: its border is one column of
+ink on every row, so no run of blank will ever be wide enough there. Text never
+spans its own extent; a frame, a rule and an underline always do. Only where the
+block is over 48 pixels, because at the bottom of the recursion a block is a
+single line and a tall letter genuinely does span it.
+
+Smaller blocks then exposed the other end of BG-100. The taskbar clock read as
+`9 / 5 / 2 0 2 6`: its gaps are one and two pixels, and two is twice one, so the
+proportional rule found a word break between every character. That fault was a
+threshold taken from the band's height alone; its fix took one from the
+distribution alone. Both halves were needed -- **one pixel of difference is not
+evidence at any size**, and a quarter of the height is the floor under it.
+
 **A Read Text button in Photos.** It reads the picture on screen, writes the
 text to a new file in Documents named after the picture, and opens it in
 Notepad. Verified end to end on a running system: 46 of 46 marks, confidence

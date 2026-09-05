@@ -81,6 +81,16 @@
 #define MAX_LINES 256
 #define MAX_MARKS 512
 
+/*
+ * Blocks in one picture.
+ *
+ * A screen taken apart into windows, their bars and their paragraphs comes to
+ * a few dozen. Two hundred and fifty six is room for a page of a newspaper and
+ * a stop against a picture of noise, which splits until the depth limit ends
+ * it.
+ */
+#define MAX_REGIONS 256
+
 /* --- Errors --- */
 
 static char g_error[192];
@@ -1155,22 +1165,33 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
     recon_ocr_font_set_ink_cut(font,
         page.ink_is_dark ? 255 - page.threshold : page.threshold);
 
+    struct recon_ocr_region *regions = calloc(MAX_REGIONS, sizeof(*regions));
     struct recon_ocr_line *lines = calloc(MAX_LINES, sizeof(*lines));
     struct recon_ocr_mark *marks = calloc(MAX_MARKS, sizeof(*marks));
     struct recon_ocr_match *matches = calloc(MAX_MARKS, sizeof(*matches));
 
-    if (lines == NULL || marks == NULL || matches == NULL) {
-        free(ink); free(lines); free(marks); free(matches);
+    if (regions == NULL || lines == NULL || marks == NULL ||
+            matches == NULL) {
+        free(ink); free(regions); free(lines); free(marks); free(matches);
         fail("Out of memory.");
         return false;
     }
 
-    int line_count = recon_ocr_lines(ink, width, height, lines, MAX_LINES);
-    if (line_count == MAX_LINES) {
-        out->truncated = true;      /* there were more; there was no room */
+    /*
+     * Blocks before lines.
+     *
+     * A picture that is only text comes back as one block and nothing changes.
+     * A screenshot comes back as many, and that is what makes it readable at
+     * all: looking for lines across a whole screen finds bands that span the
+     * window borders, and every mark in one of those is a blob.
+     */
+    int region_count = recon_ocr_regions(ink, width, height, regions,
+        MAX_REGIONS);
+    if (region_count == MAX_REGIONS) {
+        out->truncated = true;
     }
-    if (line_count == 0) {
-        free(ink); free(lines); free(marks); free(matches);
+    if (region_count == 0) {
+        free(ink); free(regions); free(lines); free(marks); free(matches);
         fail("There is nothing in this picture that looks like a line of "
             "text.");
         return false;
@@ -1178,10 +1199,10 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
 
     /* Generous: every mark can cost three bytes, plus a space before it and a
      * newline per line. */
-    size_t room = (size_t)line_count * (MAX_MARKS * 4 + 2) + 1;
+    size_t room = (size_t)region_count * (MAX_MARKS * 4 + 2) + 1;
     char *text = malloc(room);
     if (text == NULL) {
-        free(ink); free(lines); free(marks); free(matches);
+        free(ink); free(regions); free(lines); free(marks); free(matches);
         fail("Out of memory.");
         return false;
     }
@@ -1193,7 +1214,29 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
     struct recon_ocr_fit previous;
     bool have_previous = false;
 
-    for (int i = 0; i < line_count; i++) {
+    int line_total = 0;
+
+    for (int region = 0; region < region_count; region++) {
+        int line_count = recon_ocr_lines_in(ink, width, height,
+            &regions[region], lines, MAX_LINES);
+        if (line_count == MAX_LINES) {
+            out->truncated = true;
+        }
+
+        /*
+         * A fit is not carried between blocks.
+         *
+         * Within a block the lines are almost always one size, which is what
+         * makes the hint worth having. Between blocks they are usually not --
+         * a title bar, a menu and a paragraph are three sizes -- and a hint
+         * from the wrong block costs more than it saves, because a fit that is
+         * accepted on a stale hint is a whole block read at the wrong size.
+         */
+        have_previous = false;
+
+        for (int i = 0; i < line_count; i++) {
+            line_total++;
+
         int mark_count = recon_ocr_marks(ink, width, &lines[i], marks,
             MAX_MARKS);
         if (mark_count == MAX_MARKS) {
@@ -1236,16 +1279,21 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
             out->characters++;
         }
 
-        if (i + 1 < line_count && at + 1 < room) {
+        if (at + 1 < room) {
             text[at++] = '\n';
+        }
         }
     }
 
+    /* The last newline is a separator with nothing after it. */
+    while (at > 0 && text[at - 1] == '\n') {
+        at--;
+    }
     text[at] = '\0';
 
     out->text = text;
     out->length = at;
-    out->lines = line_count;
+    out->lines = line_total;
 
     /*
      * Averaged over what was named, with the refused excluded rather than
@@ -1256,6 +1304,7 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
     out->confidence = named > 0 ? (int)(confidence_total / named) : 0;
 
     free(ink);
+    free(regions);
     free(lines);
     free(marks);
     free(matches);

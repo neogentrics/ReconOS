@@ -106,17 +106,22 @@ struct recon_ocr_result {
  *     genuinely cannot separate at that size refused rather than guessed.
  *   - The same scaled to 40%: most marks refused, and it says so.
  *
- *   - **A screenshot of a whole desktop: almost nothing.** Worth stating
- *     plainly because it is the picture people will try first. `recon_ocr_lines`
- *     treats a row with any ink at all as part of a line, which is true of a
- *     cropped page and false of a screen where window borders and icons put
- *     something on nearly every row -- so the whole display collapses into a
- *     few enormous bands and every mark in them is a blob. The engine refuses
- *     them, correctly, and reads nothing.
+ *   - A screenshot of a whole desktop: the windows, their menus, the status
+ *     bar and the clock. Most of it, and it says which parts it could not
+ *     manage.
  *
- * Fixing that means finding the text regions before finding lines, which is a
- * stage that does not exist here yet. Until it does, this reads a picture of
- * some text and not a picture of a screen.
+ * That last one used to read as nothing at all, and the reason is worth keeping
+ * because it is the shape of the whole problem. Finding lines by looking for
+ * rows with no ink is right for a picture that is only writing and wrong for a
+ * screen: a window border puts ink on every row it spans, so the display
+ * collapsed into a few enormous bands and every mark in one was a blob.
+ *
+ * `recon_ocr_regions` is the stage that fixes it, and it comes first.
+ *
+ * What is still beyond this: handwriting, a photograph taken at an angle, and
+ * text whose shapes are not close to shapes this system can draw. Those are not
+ * gaps to be filled in later -- they are what the approach is, and the engine
+ * declines them rather than guessing.
  */
 
 const char *recon_ocr_last_error(void);
@@ -164,6 +169,41 @@ struct recon_ocr_polarity {
 bool recon_ocr_ink_detail(const unsigned char *rgba, int width, int height,
     unsigned char *ink, struct recon_ocr_polarity *out);
 
+/* --- Blocks --- */
+
+/*
+ * A rectangle of the picture that holds one block of writing.
+ *
+ * Right is exclusive, like a mark's.
+ */
+struct recon_ocr_region {
+    int left, top, right, bottom;
+};
+
+/*
+ * Split a picture into the blocks that hold writing.
+ *
+ * This is the stage that makes a screenshot readable rather than a crop of one.
+ * Finding lines by looking for rows with no ink works on a picture that is only
+ * text, and fails on a screen: a window border puts ink on every row it spans,
+ * so the whole display becomes one band and every mark in it is a blob.
+ *
+ * The method is to cut on whitespace, alternating between rows and columns,
+ * recursing into each piece. A screen splits into windows, a window into its
+ * bar and its contents, and the contents into paragraphs -- at which point no
+ * gap is wide enough to cut again and the piece is handed back.
+ *
+ * A cut has to be wide *relative to the piece being cut*, which is what stops
+ * the recursion running past a paragraph and separating the words in it. A
+ * fixed number of pixels cannot do that: the gap between two words at forty
+ * point is wider than the gap between two paragraphs at eight.
+ *
+ * Returns how many were found, up to `max`. Zero means nothing in the picture
+ * had ink in it.
+ */
+int recon_ocr_regions(const unsigned char *ink, int width, int height,
+    struct recon_ocr_region *out, int max);
+
 /* A horizontal band that text sits in. */
 struct recon_ocr_line {
     int top, bottom;        /* rows, inclusive of top and exclusive of bottom */
@@ -180,6 +220,17 @@ struct recon_ocr_line {
  */
 int recon_ocr_lines(const unsigned char *ink, int width, int height,
     struct recon_ocr_line *out, int max);
+
+/*
+ * The same, inside one block.
+ *
+ * `recon_ocr_lines` is this with the whole picture as the block, and is kept
+ * because a picture that is only text needs no block-finding and every test of
+ * the line finder is clearer without one.
+ */
+int recon_ocr_lines_in(const unsigned char *ink, int width, int height,
+    const struct recon_ocr_region *region, struct recon_ocr_line *out,
+    int max);
 
 /* One mark: a connected run of ink within a line. */
 struct recon_ocr_mark {
