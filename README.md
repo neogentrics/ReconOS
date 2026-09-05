@@ -3,10 +3,10 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.3.0_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-9_suites-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-11_suites-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-96-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -22,7 +22,7 @@ same time.**
 | What it is | The compositor, window management, the shell, the applications | Boot, memory, drivers, processes |
 | Where | `src/`, `include/`, `modules/` | `kernel/` |
 | Built against | wlroots and the Linux kernel | no libc, no wlroots, nothing |
-| State | A usable desktop. v0.2.17 released | Runs its own memory, threads and clocks. v0.0.10 |
+| State | A usable desktop. v0.2.17 released | Runs user mode, its own memory, threads and clocks. v0.0.11 |
 
 **The kernel today** boots on x86_64 and aarch64 — under legacy BIOS, under
 UEFI, and via device tree, **from a bootloader we wrote**; GRUB left the boot
@@ -32,9 +32,16 @@ itself, allocates by the byte, reports a fault instead of resetting the
 machine, keeps a monotonic clock and a wall clock read off the hardware, and
 runs threads it can take execution away from.
 
-It runs nothing of the desktop's yet, and will not until checkpoint 10. That
-sentence stays in every time this paragraph is rewritten, because the one
-before it is impressive enough to be misread.
+Checkpoint 10 has since landed — user mode, the first system call and the
+higher half — so there is now a privilege boundary and a process to put
+something behind. It still runs nothing of the desktop's. That sentence stays
+in every time this paragraph is rewritten, because the one before it is
+impressive enough to be misread.
+
+What it does not yet have is **an address space per process**, and that is now
+the thing the desktop is waiting on: it is what
+[docs/APPLICATIONS.md](docs/APPLICATIONS.md) decided installed applications
+would need.
 
 **Phase 1 currently runs on Linux, and that is temporary.** wlroots and the
 Linux kernel underneath are scaffolding, not architecture. Every place the
@@ -60,7 +67,7 @@ written down as it was hit rather than guessed at in advance.
 | **Written in** | C11, no framework |
 | **Draws** | its own windows, menus, icons and text — nothing is a toolkit widget |
 | **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for encryption in both directions |
-| **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Photos, Calendar, Calculator, Control Panel, Help |
+| **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | ten, including three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Tests** | 11 suites, no display needed |
@@ -77,7 +84,8 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
-| **0.3.0** *in progress* | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
+| **0.3.1** *in progress* | ReconOS makes a sound: `recon_audio`, one file that knows the hardware, pulled rather than pushed. A codec registry, with WAV written from the specification and our own MP4 demuxer. A Media Player. A web viewer. An icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement |
+| **0.3.0** | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
 | **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
 | **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |
 | **0.2.15** | Help and the change log, in the system. Skins writable from inside it. Storage. Typing in the Start menu |
@@ -501,6 +509,13 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   checked. Nothing is ever deleted on the server, and the password is not
   stored — it is asked for and forgotten when the window closes, and the
   window says so
+- **Media Player** — a playlist, transport, a draggable position bar and its
+  own volume. Plays WAV, MP3 and the sound track of an MP4. Video files open
+  and are read correctly; there is no picture yet, and the refusal names the
+  decoder that is missing rather than failing vaguely
+- **Web** — a viewer, and it is called one everywhere. HTTP and HTTPS, chunked
+  responses, a redirect limit, and an https→http downgrade is refused rather
+  than followed
 - **Photos** — one picture at a time, fitted to the window and never enlarged
   past its own size, on a dark mat
 - **Calendar** — a month at a time, with what is on each day kept as a text
