@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -35,15 +36,35 @@
 #include "recon_firewall.h"
 #include "recon_fs.h"
 #include "recon_server.h"
+#include "recon_tls.h"
 
 #define MAX_CLIENTS 8
 #define READ_BUFFER 1024
+
+/*
+ * One end of a connection, whether or not it is encrypted.
+ *
+ * A connection over the Unix socket is a bare descriptor: it has already
+ * proved itself by being able to open a file only its owner can open, and
+ * encrypting a channel that never leaves the machine would cost something and
+ * protect nothing. A connection over the network is the same descriptor with
+ * a TLS session on top.
+ *
+ * Kept as one type so that everything above it -- the greeting, the prompt,
+ * the command output -- is written once and does not care which it is
+ * holding. Every place that used to write() to a descriptor now goes through
+ * `wire_send`, and the two paths differ in exactly one branch.
+ */
+struct control_wire {
+    int fd;
+    struct recon_tls_conn *tls;   /* NULL for the Unix socket. */
+};
 
 struct control_client {
     struct recon_control *control;
     struct recon_cmd_session *session;
     struct wl_event_source *source;
-    int fd;
+    struct control_wire wire;
 
     char pending[READ_BUFFER];
     size_t pending_used;
@@ -75,6 +96,27 @@ struct recon_control {
     struct control_client *clients[MAX_CLIENTS];
 };
 
+/*
+ * Close whichever kind this is.
+ *
+ * `recon_tls_close` says goodbye and closes the descriptor itself, so closing
+ * it here as well would be closing a number that has already been handed
+ * back -- which, once the process opens something else, is closing somebody
+ * else's file.
+ */
+static void wire_close(struct control_wire *wire) {
+    if (wire->tls != NULL) {
+        recon_tls_close(wire->tls);
+        wire->tls = NULL;
+        wire->fd = -1;
+        return;
+    }
+    if (wire->fd >= 0) {
+        close(wire->fd);
+        wire->fd = -1;
+    }
+}
+
 static void client_close(struct control_client *client) {
     struct recon_control *control = client->control;
 
@@ -88,15 +130,21 @@ static void client_close(struct control_client *client) {
     if (client->source != NULL) {
         wl_event_source_remove(client->source);
     }
-    close(client->fd);
+    wire_close(&client->wire);
     recon_cmd_session_destroy(client->session);
     free(client);
 }
 
-static void send_all(int fd, const char *data, size_t size) {
+static void send_all(struct control_wire *wire, const char *data,
+        size_t size) {
     size_t sent = 0;
     while (sent < size) {
-        ssize_t written = write(fd, data + sent, size - sent);
+        int written;
+        if (wire->tls != NULL) {
+            written = recon_tls_write(wire->tls, data + sent, size - sent);
+        } else {
+            written = (int)write(wire->fd, data + sent, size - sent);
+        }
         if (written <= 0) {
             /* The reader has gone; nothing useful to do about it here. */
             return;
@@ -248,7 +296,7 @@ static bool handle_line(struct control_client *client, char *line) {
             recon_error_raisef(NULL, RECON_ERR_G005, "from %s", client->from);
 
             const char *no = "That key is not right.\n";
-            send_all(client->fd, no, strlen(no));
+            send_all(&client->wire, no, strlen(no));
             return false;
         }
 
@@ -259,7 +307,7 @@ static bool handle_line(struct control_client *client, char *line) {
         const char *greeting =
             RECONOS_NAME " " RECONOS_VERSION
             " remote connection. Type 'help' for commands.\n";
-        send_all(client->fd, greeting, strlen(greeting));
+        send_all(&client->wire, greeting, strlen(greeting));
 
         /*
          * And the line stops being a line here.
@@ -274,14 +322,14 @@ static bool handle_line(struct control_client *client, char *line) {
 
     const char *output = recon_cmd_run(client->session, line);
     if (output != NULL && *output != '\0') {
-        send_all(client->fd, output, strlen(output));
+        send_all(&client->wire, output, strlen(output));
     }
 
     /* A marker the caller can wait for, so it knows a reply is complete
      * rather than guessing from timing. */
     char prompt[RECON_PATH_MAX + 32];
     int n = snprintf(prompt, sizeof(prompt), "[%s]$ ", recon_cmd_cwd(client->session));
-    send_all(client->fd, prompt, (size_t)n);
+    send_all(&client->wire, prompt, (size_t)n);
     return true;
 }
 
@@ -294,7 +342,18 @@ static int on_client_readable(int fd, uint32_t mask, void *data) {
     }
 
     char buffer[READ_BUFFER];
-    ssize_t got = read(fd, buffer, sizeof(buffer));
+    ssize_t got;
+    if (client->wire.tls != NULL) {
+        /*
+         * Through the encryption, not from the descriptor. Reading the
+         * descriptor directly would hand back ciphertext, which the line
+         * splitting below would then look for newlines in -- and find, at
+         * random, roughly once every two hundred and fifty-six bytes.
+         */
+        got = recon_tls_read(client->wire.tls, buffer, sizeof(buffer));
+    } else {
+        got = read(fd, buffer, sizeof(buffer));
+    }
     if (got <= 0) {
         client_close(client);
         return 0;
@@ -333,8 +392,8 @@ static int on_client_readable(int fd, uint32_t mask, void *data) {
  * neither is about what a connection can do once it is up: where it came
  * from, and whether it has to prove itself first.
  */
-static void take_connection(struct recon_control *control, int client_fd,
-        bool from_network, const char *from) {
+static void take_connection(struct recon_control *control,
+        struct control_wire wire, bool from_network, const char *from) {
     int slot = -1;
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (control->clients[i] == NULL) {
@@ -344,34 +403,39 @@ static void take_connection(struct recon_control *control, int client_fd,
     }
     if (slot < 0) {
         const char *busy = "ReconOS: too many control connections\n";
-        send_all(client_fd, busy, strlen(busy));
-        close(client_fd);
+        send_all(&wire, busy, strlen(busy));
+        wire_close(&wire);
         return;
     }
 
     struct control_client *client = calloc(1, sizeof(*client));
     if (client == NULL) {
-        close(client_fd);
+        wire_close(&wire);
         return;
     }
 
     client->control = control;
-    client->fd = client_fd;
+    client->wire = wire;
     client->needs_key = from_network;
     recon_text_copy(client->from, sizeof(client->from),
         from != NULL ? from : "the local machine");
 
     client->session = recon_cmd_session_create(control->server);
     if (client->session == NULL) {
-        close(client_fd);
+        wire_close(&client->wire);
         free(client);
         return;
     }
 
     struct wl_event_loop *loop =
         wl_display_get_event_loop(control->server->wl_display);
-    client->source = wl_event_loop_add_fd(loop, client_fd, WL_EVENT_READABLE,
-        on_client_readable, client);
+    /*
+     * The descriptor is watched even for an encrypted connection: readable is
+     * readable, and what arrives is handed to the TLS layer rather than to
+     * the line splitter.
+     */
+    client->source = wl_event_loop_add_fd(loop, client->wire.fd,
+        WL_EVENT_READABLE, on_client_readable, client);
     control->clients[slot] = client;
 
     if (from_network) {
@@ -381,7 +445,7 @@ static void take_connection(struct recon_control *control, int client_fd,
          * version number from the greeting.
          */
         const char *ask = "Key: ";
-        send_all(client_fd, ask, strlen(ask));
+        send_all(&client->wire, ask, strlen(ask));
         wlr_log(WLR_INFO, "ReconOS: remote connection from %s, asking for a "
             "key", client->from);
         return;
@@ -390,7 +454,7 @@ static void take_connection(struct recon_control *control, int client_fd,
     const char *greeting =
         RECONOS_NAME " " RECONOS_VERSION
         " control connection. Type 'help' for commands.\n";
-    send_all(client_fd, greeting, strlen(greeting));
+    send_all(&client->wire, greeting, strlen(greeting));
     handle_line(client, "");
 
     wlr_log(WLR_INFO, "ReconOS: control connection opened");
@@ -405,7 +469,8 @@ static int on_connection(int fd, uint32_t mask, void *data) {
         return 0;
     }
 
-    take_connection(control, client_fd, false, NULL);
+    take_connection(control, (struct control_wire){ .fd = client_fd },
+        false, NULL);
     return 0;
 }
 
@@ -442,7 +507,39 @@ static int on_network_connection(int fd, uint32_t mask, void *data) {
         return 0;
     }
 
-    take_connection(control, client_fd, true, from);
+    /*
+     * A deadline on the handshake, before the handshake.
+     *
+     * `recon_tls_accept` runs the exchange to completion, so a client that
+     * connects and then says nothing would hold this thread -- and this
+     * thread is the one drawing the desktop. Five seconds is far longer than
+     * a handshake takes and far shorter than somebody would tolerate a frozen
+     * screen. Cleared again once the connection is up, because after that the
+     * event loop decides when to read and a slow reader is not a fault.
+     */
+    struct timeval limit = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &limit, sizeof(limit));
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &limit, sizeof(limit));
+
+    struct recon_tls_conn *tls = recon_tls_accept(client_fd);
+    if (tls == NULL) {
+        /*
+         * Logged rather than answered. Whatever failed to complete a
+         * handshake cannot read a message about why, and something scanning
+         * ports should learn as little as possible from being refused.
+         */
+        wlr_log(WLR_INFO, "ReconOS: refused a connection from %s: %s", from,
+            recon_tls_last_error());
+        close(client_fd);
+        return 0;
+    }
+
+    struct timeval none = { .tv_sec = 0, .tv_usec = 0 };
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof(none));
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &none, sizeof(none));
+
+    take_connection(control,
+        (struct control_wire){ .fd = client_fd, .tls = tls }, true, from);
     return 0;
 }
 
@@ -627,6 +724,27 @@ bool recon_control_listen_network(struct recon_control *control, int port,
         char note[192];
         snprintf(note, sizeof(note),
             "the firewall blocks incoming tcp %d (%s)", port, why);
+        recon_text_copy(why_out, why_size, note);
+        return false;
+    }
+
+    /*
+     * Then the certificate, which is made here if there is none.
+     *
+     * Before the socket rather than after: a port that opens and then cannot
+     * encrypt is a port that has to be closed again, and for the moment
+     * between the two it is a port taking connections in the clear. Refusing
+     * to open at all is the only state that is never wrong.
+     *
+     * This is also the moment the key is generated on a machine that has
+     * never turned remote access on, which is why it can take a second.
+     */
+    char tls_why[192];
+    if (!recon_tls_init(tls_why, sizeof(tls_why))) {
+        char note[256];
+        snprintf(note, sizeof(note),
+            "encryption could not be set up, so the port stays shut: %s",
+            tls_why);
         recon_text_copy(why_out, why_size, note);
         return false;
     }
