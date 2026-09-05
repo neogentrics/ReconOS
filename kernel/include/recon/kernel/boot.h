@@ -46,9 +46,38 @@ struct mem_region {
 
 /* Fixed, because there is no allocator yet -- this structure has to exist
  * before memory management does, which is the whole chicken-and-egg of early
- * boot. Real machines report well under thirty regions; the count is checked
- * and an overflow is reported rather than silently dropped. */
-#define BOOT_MAX_REGIONS 64
+ * boot.
+ *
+ * It was 64, on the reasoning that "real machines report well under thirty
+ * regions". That was true of every machine tested at the time and wrong the
+ * first time our own UEFI loader ran: OVMF reported 86, and 68 of them were
+ * dropped. Firmware fragments its map as it allocates, so the count reflects
+ * how much the firmware did before handing over, not how much memory exists.
+ *
+ * 256 at 24 bytes each is 6KB of BSS, which is nothing, and the dropped-region
+ * counter stays -- because the lesson is that this number was guessed once and
+ * a guess that fails silently is worse than a large array. */
+#define BOOT_MAX_REGIONS 256
+
+/* A linear framebuffer, where the firmware left us one. Zero width means there
+ * is none, which is the normal answer on a serial-only machine and is not an
+ * error. `pitch` is bytes per row and is *not* width times four -- firmware
+ * routinely pads rows, and deriving one from the other is the classic way to
+ * get a picture that shears progressively down the screen. */
+enum fb_format {
+	FB_FORMAT_NONE = 0,
+	FB_FORMAT_BGRA,
+	FB_FORMAT_RGBA,
+};
+
+struct framebuffer {
+	paddr_t base;
+	u64 size;
+	u32 width;
+	u32 height;
+	u32 pitch;
+	enum fb_format format;
+};
 
 struct boot_info {
 	enum boot_firmware firmware;
@@ -63,9 +92,16 @@ struct boot_info {
 	u64 usable_bytes;
 	u64 total_bytes;
 
+	struct framebuffer fb;
+
 	paddr_t acpi_rsdp;	/* 0 if the firmware did not point at one */
 	paddr_t dtb;		/* 0 if there is no device tree */
 };
+
+/* Reads the structure our own bootloader left us. Portable: the ReconBoot
+ * protocol is the same on every architecture, which is most of why it exists.
+ * Returns false if what was handed over is not one. */
+bool reconboot_parse(paddr_t handoff);
 
 /* The one copy. Written only by arch/ during early init. */
 struct boot_info *boot_info(void);

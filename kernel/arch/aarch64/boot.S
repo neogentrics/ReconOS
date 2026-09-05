@@ -80,3 +80,48 @@ halt:
 secondary_park:
 	wfe
 	b	secondary_park
+
+/* --- ReconBoot ----------------------------------------------------------
+ *
+ * Our own UEFI loader's way in. aarch64 needs no mode switch -- unlike x86 it
+ * is already where the kernel wants to be -- so the only reason this is a
+ * separate entry from _start is the handoff: the loader passes a structure and
+ * the firmware passes a device tree, and they are not the same thing.
+ *
+ * BSS is not cleared here. The loader zeroed every byte of each segment with no
+ * bytes in the file, which is exactly BSS, and clearing it again would wipe the
+ * handoff pointer stored below.
+ */
+	.global reconboot_entry
+reconboot_entry:
+	/* x0 = struct reconboot *. Both ABIs agree on this architecture, so
+	   there is nothing to reconcile the way there is on x86_64. */
+	ldr	x1, =__stack_top
+	mov	sp, x1
+
+	ldr	x1, =reconboot_handoff
+	str	x0, [x1]
+
+	bl	kmain
+	b	halt
+
+/* Placed in .data, not .bss: nothing clears BSS on this path, and on the
+ * device-tree path BSS is cleared before this would be written. */
+	.section .data
+	.align 8
+	.global reconboot_handoff
+reconboot_handoff:
+	.quad	0
+
+/* --- ReconBoot header ---------------------------------------------------
+ *
+ * Must match struct reconboot_kernel_header in boot/include/reconboot.h. The
+ * loader finds it by scanning the loaded image for the magic, which is how one
+ * kernel binary stays bootable by every protocol it supports.
+ */
+	.section .reconboot, "a"
+	.align 8
+	.quad	0x00544f4f424e4352	/* "RCNBOOT" */
+	.long	1			/* version */
+	.long	24			/* sizeof(header) */
+	.quad	reconboot_entry

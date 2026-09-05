@@ -11,6 +11,10 @@ extern u32 boot_magic;
 
 #define BOOT_PROTOCOL_MULTIBOOT2 1
 #define BOOT_PROTOCOL_PVH        2
+#define BOOT_PROTOCOL_RECONBOOT  3
+
+/* Set by reconboot_entry from RDI. Zero on every other path. */
+extern u64 reconboot_handoff;
 
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 #define PVH_START_INFO_MAGIC        0x336ec578u
