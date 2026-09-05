@@ -14,9 +14,10 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.5`. The number says what works. What works: it boots four ways across two
+`0.0.6`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, hands pages of it out, and is started by a bootloader we wrote.
+can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, and is started by a
+bootloader we wrote.
 
 ## What "finished" means
 
@@ -51,12 +52,12 @@ courtesy now rather than a dependency.
 | 2 | A physical page allocator | **Done** |
 | 3 | Reads what this processor can actually do | **Done** |
 | 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | **Done** |
-| 5 | Its own page tables, the higher half, and large pages where the CPU has them | |
+| 5 | Its own page tables, a direct map, and large pages where the CPU has them | **Done** |
 | 6 | A kernel heap | |
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
 | 8 | A timer, a tick, and time | |
 | 9 | Threads, a scheduler, and every core in use | |
-| 10 | User mode, and the first system call | |
+| 10 | User mode, the first system call, and the kernel moves to the higher half | |
 | 11 | Block devices — storage the kernel can read and write | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
 | 13 | ReconFS — a filesystem of its own | |
@@ -187,6 +188,66 @@ the kernel has to write, and two of them cannot be obtained on ARM at all
 without firmware help. Writing it early also meant the handoff protocol was
 designed by us rather than inherited from GRUB.
 
+### Checkpoint 5 — done
+
+**The kernel stops running on borrowed page tables.** Until now it ran on the
+trampoline's identity map, or the firmware's — both map more than they should
+and neither can be changed.
+
+Verified on all eight boot paths: PVH, GRUB on BIOS, GRUB on UEFI and reconboot
+on UEFI for x86_64; device tree and reconboot on UEFI for aarch64; plus both
+architectures with a CPU that has gigabyte pages.
+
+**Large pages, and the evidence they are actually used.** The same binary on
+two CPUs, mapping the same 2GB machine:
+
+| CPU | Pages used | Page tables cost |
+|---|---|---|
+| `-cpu qemu64` (no 1GB pages) | 6,398 × 2MB, 1,036 × 4KB | 23 pages, 92KB |
+| `-cpu max` (1GB pages) | **12 × 1GB**, 1,022 × 2MB, 1,036 × 4KB | **12 pages, 48KB** |
+
+Also a direct map of all physical memory at a fixed offset, so allocating a page
+and writing to it no longer needs a page table edit; and pages that cannot be
+executed, on every CPU that has the bit.
+
+**A span is not a size, again.** The first version mapped one range from zero
+to the highest address in the memory map. This machine's map ends with twelve
+gigabytes of reserved space at the 1TB mark, so that was 524,288 entries and
+4MB of page tables to describe a hole. Region by region it is 29 pages. The same
+mistake the page bitmap made at checkpoint 2, wearing different clothes — and
+worth noticing that it was made twice, by the same person, three days apart.
+
+**Two bugs, and both are about the moment the map changes.**
+
+*The root table pointer stopped being valid at the instant it was installed.*
+Every pointer to a page table was obtained through the map we were handed;
+afterwards only the kernel image is identity mapped, and the root table is not
+in the kernel image. It presented as a page fault at exactly the root table
+address plus the index being looked up — `CR2=0x5800` for a root at `0x5000`
+and index 256 — which is a satisfying thing to be able to read off a fault.
+Same class as the allocator's bitmap, one level up.
+
+*Supported is not enabled.* Bit 63 of a page table entry is the no-execute bit
+only once `EFER.NXE` says so. Until then it is a **reserved** bit, and setting a
+reserved bit does not mean "executable" — it means every access through that
+entry faults, whatever the entry otherwise says. The two UEFI paths worked and
+the two using our own trampoline did not, because firmware enables NXE for
+itself and our trampoline never had a reason to. CPUID reports the feature is
+*supported*; it does not report that it is *enabled*, and code that reads the
+first as the second works only on machines that happened to enable it already.
+
+**The higher half is deferred to checkpoint 10, deliberately.** It was in this
+checkpoint's title and it is not done. The kernel still runs identity-mapped.
+
+The reason to move it is to leave the low half of the address space free for
+user processes — and there are no user processes until checkpoint 10, so today
+it would buy tidiness and nothing else. The direct map, which is the part that
+other code will build on, exists now. Moving the kernel image itself is a linker
+script change plus one jump, and doing it beside the work that first needs it
+means it can be tested by something that actually cares. Recorded here rather
+than quietly dropped, because a checkpoint that shrinks to fit what got done is
+not a checkpoint.
+
 ## Using the machine you are on
 
 The project's central claim is that a 4GB machine should not need 16GB to feel
@@ -227,10 +288,24 @@ What does make memory use efficient, on every generation equally:
 **Use what the chip has, not what the oldest chip would have had.** Checkpoint
 3 reads the capabilities; the checkpoints that follow spend them:
 
-- **Every core** (checkpoint 9). A scheduler that leaves cores parked is
-  wasting the most expensive thing the machine has. Secondary cores are
-  currently parked in `boot.S` on both architectures, waiting for an SMP story
-  to wake them into.
+- **Every core, and every thread on it** (checkpoint 9). A scheduler that
+  leaves cores parked is wasting the most expensive thing the machine has.
+  Secondary cores are currently parked in `boot.S` on both architectures,
+  waiting for an SMP story to wake them into.
+
+  Three distinctions the scheduler has to know about, because treating them as
+  interchangeable is how a machine gets slower the more work you give it:
+
+  | | What it means | Why it matters |
+  | --- | --- | --- |
+  | **Cores** | Independent execution units | Real parallelism |
+  | **Threads** (Intel Hyper-Threading, AMD SMT) | Two threads sharing one core's execution resources | Two threads on one core are *not* two cores. Filling both before using an idle core is slower than not |
+  | **Core types** (Intel P/E-cores, Apple Silicon performance/efficiency) | Cores of different speed and power in one machine | Putting latency-sensitive work on an efficiency core makes an idle machine feel slow |
+
+  Apple Silicon is aarch64 with heterogeneous cores, so it is the same problem
+  as Intel's hybrid parts wearing different clothes; both are read from the
+  topology rather than from a table of chip names, because a table of names is
+  wrong for every chip released after it was written.
 - **Crypto in silicon.** AES-NI and ARM's AES extension turn encryption from a
   loop into an instruction. Disk encryption without it is a reason not to use
   disk encryption.
@@ -273,14 +348,27 @@ looks impossible:
 
 1. **Reading and writing sectors** (checkpoint 11). Drivers: NVMe, AHCI, USB
    mass storage, virtio. This is the kernel's job and nobody else's.
-2. **Understanding the partition layout** (checkpoint 12). GPT and MBR are the
-   only two schemes that matter — everything else sits inside them. Windows
-   uses GPT on any modern machine and MBR on old ones; Linux the same; macOS
-   uses GPT with an Apple partition scheme inside it. **This is a data format,
-   not a kernel service**, so it is parsed above the block layer, the same line
-   [THIRD_PARTY.md](../THIRD_PARTY.md) already draws for PNG and TLS. The
-   desktop owns the parser; the kernel owes it sectors, a sector size, a sector
-   count, and whether the device is removable.
+2. **Understanding the partition layout** (checkpoint 12). Three schemes, not
+   two:
+
+   | Scheme | Where it is found |
+   | --- | --- |
+   | **GPT** | Every modern machine. Windows, Linux, and Intel and Apple Silicon Macs |
+   | **MBR** | Old PCs, and removable media formatted by anything old |
+   | **APM** (Apple Partition Map) | PowerPC Macs, and some old Mac external drives |
+
+   **This is a data format, not a kernel service**, so it is parsed above the
+   block layer — the same line [THIRD_PARTY.md](../THIRD_PARTY.md) already
+   draws for PNG and TLS. The desktop owns the parser; the kernel owes it
+   sectors, a sector size, a sector count, and whether the device is removable.
+
+   *Worth separating carefully, because the two are easy to conflate:* a
+   **partition table** says where the partitions are, and a **filesystem** says
+   what is inside one. macOS uses GPT for the first and APFS (or HFS+ on older
+   systems) for the second. Reading a Mac's partition table needs GPT, which we
+   need anyway. Reading a Mac's *files* needs APFS, which is a separate and much
+   larger job — and, importantly, is not required in order to install beside
+   macOS without damaging it.
 3. **A filesystem of our own** (checkpoint 13). ReconFS. Not designed yet, and
    deliberately not designed yet: it should be designed when there is a block
    layer to build it on and real use to shape it, not before. What is already
@@ -291,8 +379,10 @@ looks impossible:
    possibly resizing a partition; it does not require reading a single NTFS
    file. FAT32 is the exception and is required, because the UEFI System
    Partition is FAT32 and that is where our own bootloader has to be written.
-   So: FAT32 at checkpoint 14, the others when somebody actually wants to open
-   a file on them.
+   That holds on a Mac too: Apple uses a standard FAT32 EFI System Partition,
+   so installing beside macOS needs GPT and FAT32 and nothing Apple-specific.
+   APFS, NTFS, ext4 and HFS+ come when somebody actually wants to open a file
+   on them.
 
 ### What is already known about ReconFS
 

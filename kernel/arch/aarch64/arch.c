@@ -10,14 +10,6 @@ u64 arch_dtb_pointer;
 
 /* --- PL011 UART -------------------------------------------------------- */
 
-/* QEMU's `virt` machine puts the first PL011 here, and so do a great many
- * ARM boards, because the address came from the same reference design. It is
- * hardcoded for now on purpose: reading it out of the device tree requires a
- * device tree parser, and a device tree parser that cannot print why it failed
- * is a bad first thing to write. This address is the bootstrap that makes
- * writing the parser possible. */
-#define PL011_BASE 0x09000000UL
-
 #define PL011_DR    0x00 /* data */
 #define PL011_FR    0x18 /* flags */
 #define PL011_FR_TXFF (1u << 5) /* transmit FIFO full */

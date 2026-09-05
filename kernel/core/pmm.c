@@ -3,6 +3,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
+#include <recon/kernel/vm.h>
 
 /* One bit per page: set means in use, clear means free. Starting from "all
  * used" and clearing what the firmware called usable is the safe direction --
@@ -22,6 +23,10 @@ static size_t free_pages;
  * them as "used", which is both wasteful and a lie, since nothing is using
  * them and nothing could. */
 static paddr_t base_paddr;
+
+/* Where the bitmap physically lives, kept because the address it is *reached*
+ * at changes when the kernel stops using the map it was handed. */
+static paddr_t bitmap_base;
 
 static inline size_t page_index(paddr_t addr)
 {
@@ -135,9 +140,11 @@ void pmm_init(void)
 	if (!bitmap_phys)
 		panic("pmm: no usable region large enough to hold the page bitmap");
 
-	/* Identity, for now. When the kernel moves to the higher half this
-	 * becomes a translation, and it is the only place here that has to
-	 * change. */
+	/* Identity while the kernel is still on the map it was handed. Once the
+	 * kernel builds its own, the bitmap has to be reached through the direct
+	 * map instead -- see pmm_remap(), which vm_init() calls the moment the
+	 * new tables are live. */
+	bitmap_base = bitmap_phys;
 	bitmap = (u8 *)(uintptr_t)bitmap_phys;
 
 	kmemset(bitmap, 0xFF, bitmap_bytes);
@@ -242,6 +249,16 @@ void pmm_free_pages(paddr_t page, size_t count)
 void pmm_free_page(paddr_t page)
 {
 	pmm_free_pages(page, 1);
+}
+
+/* Called once, by vm_init(), immediately after the kernel switches to its own
+ * page tables. Before that the bitmap is reachable at its physical address
+ * because the map we were handed is an identity map; afterwards it is not,
+ * because the kernel maps only what it means to. Without this the first
+ * allocation after the switch writes into an unmapped page. */
+void pmm_remap(void)
+{
+	bitmap = (u8 *)phys_to_virt(bitmap_base);
 }
 
 size_t pmm_total_pages(void)     { return total_pages; }
