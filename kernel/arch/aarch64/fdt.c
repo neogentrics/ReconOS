@@ -19,6 +19,7 @@
 
 #include <recon/kernel/boot.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/vm.h>
 
 #define FDT_MAGIC 0xd00dfeedu
 
@@ -203,4 +204,149 @@ bool fdt_parse(u64 dtb_phys)
 	}
 
 	return true;
+}
+
+/* --- A second pass, for devices ------------------------------------------
+ *
+ * The walk above runs before there is an allocator, so anything it wanted to
+ * remember would need somewhere fixed to put it. The blob is still there
+ * afterwards -- it was recorded as bootloader-owned memory precisely so that
+ * nothing hands it out -- so the cheaper answer is to read it again when the
+ * question is asked.
+ *
+ * `compatible` is a list of NUL-separated strings, most specific first, and a
+ * match on any of them is a match. Comparing only the first would miss
+ * "virtio,mmio" on a node that also claims something more specific, which is
+ * exactly the shape the property exists to allow.
+ */
+static bool compatible_contains(const char *list, u32 len, const char *want)
+{
+	u32 i = 0;
+
+	while (i < len) {
+		const char *entry = list + i;
+		u32 n = 0;
+
+		while (i + n < len && entry[n] != '\0')
+			n++;
+
+		if (n && kstrlen(want) == n) {
+			u32 k = 0;
+
+			while (k < n && entry[k] == want[k])
+				k++;
+			if (k == n)
+				return true;
+		}
+
+		i += n + 1;
+	}
+
+	return false;
+}
+
+void fdt_each_compatible(u64 dtb_phys, const char *compat,
+			 void (*fn)(u64 base, u64 size))
+{
+	const u8 *dtb = (const u8 *)phys_to_virt((paddr_t)dtb_phys);
+	const struct fdt_header *h = (const struct fdt_header *)dtb;
+	const u8 *strings, *p, *end;
+
+	u32 addr_cells = 2, size_cells = 1;
+	int depth = 0;
+
+	/* Held across the properties of one node, because `compatible` and
+	 * `reg` arrive in whichever order the tree was written and the node is
+	 * only interesting when both are present. */
+	bool matched = false;
+	const u8 *reg_value = 0;
+	u32 reg_len = 0;
+
+	if (!dtb_phys || be32(&h->magic) != FDT_MAGIC)
+		return;
+
+	strings = dtb + be32(&h->off_dt_strings);
+	p       = dtb + be32(&h->off_dt_struct);
+	end     = p + be32(&h->size_dt_struct);
+
+	while (p + 4 <= end) {
+		u32 token = be32(p);
+
+		p += 4;
+
+		switch (token) {
+		case FDT_BEGIN_NODE: {
+			const char *name = (const char *)p;
+
+			depth++;
+			p += (kstrlen(name) + 1 + 3) & ~3u;
+
+			matched   = false;
+			reg_value = 0;
+			reg_len   = 0;
+			break;
+		}
+
+		case FDT_END_NODE:
+			/* Report on the way *out* of the node, when both
+			 * properties have certainly been seen. */
+			if (matched && reg_value) {
+				const u8 *v = reg_value;
+				const u8 *v_end = reg_value + reg_len;
+
+				while (v < v_end) {
+					u64 base, size;
+
+					if (!read_cells(&v, addr_cells, &base) ||
+					    !read_cells(&v, size_cells, &size))
+						break;
+					fn(base, size);
+				}
+			}
+
+			matched   = false;
+			reg_value = 0;
+			depth--;
+			break;
+
+		case FDT_NOP:
+			break;
+
+		case FDT_END:
+			return;
+
+		case FDT_PROP: {
+			u32 len, nameoff;
+			const char *prop;
+			const u8 *value;
+
+			if (p + 8 > end)
+				return;
+
+			len     = be32(p);
+			nameoff = be32(p + 4);
+			value   = p + 8;
+			prop    = (const char *)(strings + nameoff);
+
+			p = value + ((len + 3) & ~3u);
+
+			if (depth == 1) {
+				if (name_is(prop, "#address-cells") && len == 4)
+					addr_cells = be32(value);
+				else if (name_is(prop, "#size-cells") && len == 4)
+					size_cells = be32(value);
+			} else if (name_is(prop, "compatible")) {
+				matched = compatible_contains((const char *)value,
+							      len, compat);
+			} else if (name_is(prop, "reg")) {
+				reg_value = value;
+				reg_len   = len;
+			}
+			break;
+		}
+
+		default:
+			return;
+		}
+	}
 }

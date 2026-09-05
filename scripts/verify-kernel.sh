@@ -94,6 +94,24 @@ make -C kernel check-portable >/dev/null || { echo "core/ is no longer portable"
 X64_ELF=$ROOT/kernel/build/x86_64/reconos-kernel.elf
 ARM_IMG=$ROOT/kernel/build/aarch64/reconos-kernel.img
 
+# A disk to attach, so the block layer is tested against something rather than
+# reporting that it found nothing and calling that a pass.
+#
+# A fresh one per run. The block self-test restores every byte it borrows, so
+# reusing an image would work -- and a test whose correctness depends on the
+# previous run having tidied up is a test that hides the first failure to do so.
+DISK=$WORK/disk.img
+dd if=/dev/zero of="$DISK" bs=1M count=64 status=none
+
+# force-legacy=false asks QEMU for virtio 1.0 on its memory-mapped bus, which
+# still defaults to the pre-1.0 draft. That draft is a different protocol
+# wearing the same name -- guest-endian configuration space, a queue set up by
+# page number -- and this kernel implements 1.0 and refuses the other with a
+# message rather than half-supporting both.
+ARM_DISK=(-global virtio-mmio.force-legacy=false
+          -drive "file=$DISK,format=raw,if=none,id=d0"
+          -device virtio-blk-device,drive=d0)
+
 # A GRUB rescue ISO. The same ISO boots on BIOS and on UEFI -- grub-mkrescue
 # writes both an El Torito boot catalogue and an EFI system partition -- which
 # is why two of the paths below differ only by whether -bios is passed.
@@ -152,15 +170,23 @@ echo "aarch64"
 
 check "  device tree, cortex-a72" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
-		-kernel "$ARM_IMG"
+		-kernel "$ARM_IMG" "${ARM_DISK[@]}"
 
 check "  device tree, -cpu max" \
-	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic -kernel "$ARM_IMG"
+	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic -kernel "$ARM_IMG" \
+		"${ARM_DISK[@]}"
+
+# One run with no disk at all, on purpose. A kernel that only works on a machine
+# with storage attached is a kernel that cannot boot a diskless one, and the
+# path where nothing is found is otherwise never taken.
+check "  device tree, no disk attached" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+		-kernel "$ARM_IMG"
 
 for n in 2 4 8; do
 	check "  device tree, $n processors" \
 		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
-			-nographic -kernel "$ARM_IMG"
+			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
 done
 
 if [ "$ONLY" = all ] || [ "$ONLY" = aarch64 ]; then

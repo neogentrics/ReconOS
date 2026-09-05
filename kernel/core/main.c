@@ -5,6 +5,7 @@
  * looks identical no matter what booted it.
  */
 #include <recon/kernel/arch.h>
+#include <recon/kernel/block.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/cpu.h>
@@ -76,6 +77,12 @@ void kmain(void)
 	 * to take it back off the processor. */
 	user_init();
 
+	/* Last of all, because a driver needs everything: pages for its rings,
+	 * a map to reach registers through, a clock to time out against, and a
+	 * scheduler to yield to while the hardware thinks. */
+	block_init();
+	block_print_summary();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -101,6 +108,8 @@ void kmain(void)
 		user_self_test() ? "pass" : "FAIL");
 	kprintf("  the boundary holds : %s\n",
 		user_boundary_test() ? "pass" : "FAIL");
+	kprintf("  block devices      : %s\n",
+		block_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 	user_print_summary();

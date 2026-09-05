@@ -80,4 +80,12 @@ void aarch64_time_print_source(void);
  * Returns false if the blob is not one. */
 bool fdt_parse(u64 dtb_phys);
 
+/* Walks the tree again, later, calling `fn` for every node whose `compatible`
+ * property contains `compat` and which has a `reg`. A second pass rather than
+ * collecting everything during the first: the first runs before there is an
+ * allocator, so anything it wanted to remember would need somewhere fixed to
+ * put it, and the blob is still there to be read again. */
+void fdt_each_compatible(u64 dtb_phys, const char *compat,
+			 void (*fn)(u64 base, u64 size));
+
 #endif /* RECON_ARCH_AARCH64_H */
