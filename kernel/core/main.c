@@ -7,6 +7,7 @@
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/cpu.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
 
@@ -14,22 +15,23 @@
 #define RECONOS_KERNEL_VERSION "0.0.0"
 #endif
 
+static struct cpu_caps cpu;
+
 static void banner(void)
 {
-	char cpu[128];
-
 	kputs("\n");
 	kputs("ReconOS kernel " RECONOS_KERNEL_VERSION "\n");
 	kprintf("  architecture : %s\n", arch_name());
-
-	arch_cpu_identify(cpu, sizeof(cpu));
-	kprintf("  cpu          : %s\n", cpu);
 }
 
 void kmain(void)
 {
 	arch_early_init();
 	banner();
+
+	arch_cpu_caps(&cpu);
+	cpu_print_caps(&cpu);
+
 	boot_print_summary();
 
 	pmm_init();
