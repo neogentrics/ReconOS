@@ -1128,6 +1128,52 @@ static int dialog_height(struct recon_shell *shell) {
         DIALOG_PADDING + DIALOG_BUTTON_HEIGHT + DIALOG_PADDING;
 }
 
+/* --- Publishing a surface, with whatever glass the skin asked for --- */
+
+/*
+ * Two functions rather than one with a flag, because the choice between them
+ * is a judgement about what a surface is *for*, and a bare `true` at the call
+ * site says none of it.
+ *
+ * Full glass is for chrome you look past: the taskbar is a strip with a few
+ * short labels and survives being see-through.
+ *
+ * Half is for chrome you read. At full strength the Apps menu put "Recon Core"
+ * directly on top of another window's "Line 1, Column 1" -- two things to read
+ * in one place, which is worse than either alone. Halved rather than given its
+ * own setting in the skin file: a skin says how much glass it wants once, and
+ * the rule that follows is a sentence.
+ *
+ * Neither is for the security box. See draw_security.
+ */
+static void finish_chrome(struct recon_panel *panel) {
+    recon_panel_fade(panel, 0, 0, recon_panel_width(panel),
+        recon_panel_height(panel),
+        (uint8_t)recon_theme_metric(RECON_METRIC_CHROME_OPACITY));
+    recon_panel_commit(panel);
+}
+
+/*
+ * Glass on a title strip, and nothing below it.
+ *
+ * The same division recon_appwin makes for a window: the bar that says what
+ * this is fades, and the part somebody has to read does not. A dialog asking
+ * about deleting a file had the file list's selected row showing through the
+ * question, which is legible and is not what a question should look like.
+ */
+static void finish_titled_chrome(struct recon_panel *panel, int title_height) {
+    recon_panel_fade(panel, 0, 0, recon_panel_width(panel), title_height,
+        (uint8_t)recon_theme_metric(RECON_METRIC_CHROME_OPACITY));
+    recon_panel_commit(panel);
+}
+
+static void finish_reading_chrome(struct recon_panel *panel) {
+    int chrome = recon_theme_metric(RECON_METRIC_CHROME_OPACITY);
+    recon_panel_fade(panel, 0, 0, recon_panel_width(panel),
+        recon_panel_height(panel), (uint8_t)((chrome + 255) / 2));
+    recon_panel_commit(panel);
+}
+
 static void draw_dialog(struct recon_shell *shell) {
     struct recon_panel *p = shell->dialog;
     if (p == NULL) {
@@ -1207,7 +1253,7 @@ static void draw_dialog(struct recon_shell *shell) {
 
     recon_draw_bevel(p, 0, 0, width, height, false);
     recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
-    recon_panel_commit(p);
+    finish_titled_chrome(p, DIALOG_TITLE_HEIGHT);
 }
 
 bool recon_shell_dialog_open(struct recon_shell *shell) {
@@ -1698,7 +1744,7 @@ static void draw_context(struct recon_shell *shell) {
 
     recon_draw_bevel(p, 0, 0, width, height, false);
     recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
-    recon_panel_commit(p);
+    finish_reading_chrome(p);
 }
 
 /*
@@ -1951,34 +1997,6 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
     }
 }
 
-/*
- * Fade a whole panel to the skin's chrome opacity, then publish it.
- *
- * A function rather than two lines because draw_taskbar has two exits and both
- * need it -- and the one that would get missed is the early one, taken only
- * when no windows are open, which is exactly the state a person sees first and
- * a test sees least.
- *
- * `reads_as_a_list` halves the effect, and it is the difference between a
- * taskbar and a menu. A taskbar is a strip with a few short labels on it and
- * survives being see-through. A menu is a column of a dozen labels somebody is
- * scanning, and at the same opacity the Apps menu put "Recon Core" on top of
- * another window's "Line 1, Column 1" -- two things to read in one place, which
- * is worse than either alone.
- *
- * Halved rather than given its own setting in the skin file. A skin says how
- * much glass it wants once, and the rule that follows from it is statable in a
- * sentence: chrome you read a list from gets half.
- */
-static void finish_chrome(struct recon_panel *panel, bool reads_as_a_list) {
-    int chrome = recon_theme_metric(RECON_METRIC_CHROME_OPACITY);
-    int alpha = reads_as_a_list ? (chrome + 255) / 2 : chrome;
-
-    recon_panel_fade(panel, 0, 0, recon_panel_width(panel),
-        recon_panel_height(panel), (uint8_t)alpha);
-    recon_panel_commit(panel);
-}
-
 static void draw_taskbar(struct recon_shell *shell) {
     struct recon_panel *bar = shell->taskbar;
     if (bar == NULL) {
@@ -2068,7 +2086,7 @@ static void draw_taskbar(struct recon_shell *shell) {
     draw_pager(shell, bar, width - pager_w + TASKBAR_PADDING, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
-        finish_chrome(bar, false);
+        finish_chrome(bar);
         return;
     }
 
@@ -2146,7 +2164,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         x += button_width + TASKBAR_PADDING;
     }
 
-    finish_chrome(bar, false);
+    finish_chrome(bar);
 }
 
 /*
@@ -2619,7 +2637,7 @@ static void draw_menu(struct recon_shell *shell) {
         }
     }
 
-    finish_chrome(menu, true);
+    finish_reading_chrome(menu);
 }
 
 /* --- All Programs --- */
@@ -2698,7 +2716,7 @@ static void draw_programs(struct recon_shell *shell) {
             COLOR_MENU_TEXT_DISABLED);
     }
 
-    recon_panel_commit(p);
+    finish_reading_chrome(p);
 }
 
 static void programs_close(struct recon_shell *shell) {
@@ -2796,6 +2814,21 @@ static void draw_security(struct recon_shell *shell) {
 
     recon_draw_bevel(p, 0, 0, width, height, false);
     recon_stroke_rect(p, 0, 0, width, height, COLOR_MENU_BORDER);
+    /*
+     * Solid, and it is the one surface here that stays that way.
+     *
+     * This box asks somebody to approve something they cannot
+     * undo, and it dims the whole desktop behind itself so that
+     * being asked is unmistakable. Making it see-through would
+     * work directly against the thing it exists to do: a question
+     * about authority should not blend into whatever happens to
+     * be underneath it, and "it looked like part of the window
+     * behind" is the beginning of every story about somebody
+     * approving the wrong thing.
+     *
+     * The skin does not get a say. That is the same rule as the
+     * one about there being no switch to turn a safety check off.
+     */
     recon_panel_commit(p);
 }
 

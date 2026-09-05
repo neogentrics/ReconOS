@@ -185,7 +185,25 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
-**And the first wallpaper made for this system rather than drawn by it.** The
+**Glass reaches the dialogs, and stops at one of them.** The context menu and
+All Programs take the same half-strength glass the Apps menu does. A dialog
+takes it *only on its title strip*, which is the rule window frames already
+follow: the bar that says what this is fades, and the part somebody has to read
+does not.
+
+That was found by looking rather than by reasoning. Faded whole, the delete
+confirmation had the file list's selected row -- a solid blue bar -- running
+directly behind the words "Move 'notes.txt' to the Recycle Bin?". Legible, and
+not what a question about somebody's file should look like.
+
+**The security box stays solid, and the skin gets no say.** It asks somebody to
+approve something they cannot undo, and it dims the whole desktop behind itself
+so that being asked is unmistakable. See-through would work directly against
+what it is for: "it looked like part of the window behind" is the beginning of
+every story about somebody approving the wrong thing. Same rule as there being
+no switch to turn a safety check off.
+
+**Four wallpapers made for this system rather than drawn by it.** The
 four that existed are two colours, a ramp and some stars, generated at first run
 -- the right default, and not artwork. Glass is see-through *to* the wallpaper,
 which makes the wallpaper matter more than it did before it existed.

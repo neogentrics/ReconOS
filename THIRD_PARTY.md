@@ -142,12 +142,21 @@ Linked at build time, not distributed with ReconOS.
 
 ### Wallpapers
 
-`assets/wallpapers/Aurora.jpg` was made for ReconOS and is not borrowed from
-anywhere. It is worth saying how, because "made for" and "drawn by hand" are
-different claims and only the first one is true: it was produced by an image
-model from a written description, and the description asked for a quiet upper
-left specifically so window chrome stays readable over it. Nobody else has a
-claim on it, and nobody painted it either.
+`assets/wallpapers/` holds four images made for ReconOS and borrowed from
+nowhere: **Aurora** (a ribbon of light), **Spire** (glass towers from below),
+**Meridian** (a pale dawn, for the light skins, which had none) and **Current**
+(deep emerald water).
+
+It is worth saying how, because "made for" and "drawn by hand" are different
+claims and only the first one is true: each was produced by an image model from
+a written description. Nobody else has a claim on them, and nobody painted them
+either.
+
+Every one of those descriptions asked for the same thing -- a quiet, uncluttered
+upper left -- because that is where window chrome lands, and a see-through
+desktop makes the wallpaper part of whether a title bar can be read. It is the
+one property these were selected on, and it was checked by putting a window on
+top of each rather than by admiring the picture.
 
 The four other wallpapers ReconOS offers are not files at all -- they are drawn
 at first run from two colours, a ramp and some stars, in `recon_wallpaper.c`.

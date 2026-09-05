@@ -172,7 +172,10 @@ static bool draw_one(const struct drawn_wallpaper *style) {
  * second one.
  */
 static const char *const BUNDLED[] = {
-    "Aurora.jpg",
+    "Aurora.jpg",     /* dark, a ribbon of light -- made for the glass skin */
+    "Spire.jpg",      /* dark, glass towers seen from below */
+    "Meridian.jpg",   /* pale, for the light skins, which had none */
+    "Current.jpg",    /* dark emerald, the quietest of the four */
     NULL,
 };
 
