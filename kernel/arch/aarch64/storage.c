@@ -16,6 +16,9 @@
 #include <recon/kernel/block.h>
 #include <recon/kernel/virtio.h>
 #include <recon/kernel/pci.h>
+
+/* In core/virtio_pci.c. */
+bool virtio_pci_probe(const struct pci_device *d, struct virtio_device *out);
 #include <recon/kernel/boot.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/console.h>
@@ -79,54 +82,32 @@ void arch_storage_probe(void)
 
 	slots_seen = devices_found = 0;
 
-	/* No device tree means the firmware described the machine some other
-	 * way -- which on this architecture means UEFI, and reaching those
-	 * devices means PCI. Reported as nothing found rather than pretended
-	 * over. */
-	if (!info->dtb)
-		return;
+	if (info->dtb)
+		fdt_each_compatible(info->dtb, "virtio,mmio", probe_slot);
 
-	fdt_each_compatible(info->dtb, "virtio,mmio", probe_slot);
+	/* And the bus, which is where the devices are when the firmware
+	 * described this machine with ACPI instead of a tree. Both are walked
+	 * rather than one or the other: a machine can have devices on each, and
+	 * an empty walk costs nothing. */
+	pci_scan();
+
+	for (unsigned i = 0; i < pci_device_count(); i++) {
+		const struct pci_device *d = pci_device_at(i);
+		struct virtio_device v;
+
+		if (!virtio_pci_probe(d, &v))
+			continue;
+
+		if (virtio_blk_attach(&v))
+			devices_found++;
+	}
 }
 
 void arch_storage_print(void)
 {
-	if (!boot_info()->dtb) {
-		kputs("  looked at    : nothing; no device tree, so no bus to walk\n");
-		return;
-	}
+	if (slots_seen)
+		kprintf("  looked at    : %u memory-mapped virtio slots\n",
+			slots_seen);
 
-	kprintf("  looked at    : %u memory-mapped virtio slots, %u occupied\n",
-		slots_seen, devices_found);
-}
-
-/* --- PCI, which this architecture has and does not use yet -----------------
- *
- * QEMU's virt machine has a PCI host bridge, and so does every ARM server. It
- * is reached through a memory window whose address is in the device tree rather
- * than through I/O ports, and using it means parsing the host bridge node --
- * its register window, and the ranges it forwards.
- *
- * Not done, because the memory-mapped transport already reaches every device
- * this machine offers, and a second path to the same disk would be a second
- * untested path. It becomes worth doing when this kernel meets an ARM machine
- * whose storage is only on PCI, which is most real ones.
- */
-bool arch_pci_available(void)
-{
-	return false;
-}
-
-u32 arch_pci_config_read(u8 bus, u8 slot, u8 func, u8 offset)
-{
-	return 0xFFFFFFFFu;
-}
-
-void arch_pci_config_write(u8 bus, u8 slot, u8 func, u8 offset, u32 value)
-{
-}
-
-bool arch_pci_mmio_window(u64 *base, u64 *size)
-{
-	return false;
+	pci_print_summary();
 }

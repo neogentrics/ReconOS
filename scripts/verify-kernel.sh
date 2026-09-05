@@ -236,18 +236,17 @@ done
 
 if [ "$ONLY" = all ] || [ "$ONLY" = aarch64 ]; then
 	if [ -f "$OVMF_ARM" ] && make -C boot ARCH=aarch64 esp >/dev/null 2>&1; then
-		# No expectation of a disk on this one path, and the reason is
-		# worth knowing: booting aarch64 through UEFI means the firmware
-		# describes the machine with ACPI rather than with a device tree,
-		# and this kernel finds memory-mapped virtio devices by reading
-		# the tree. With no tree there is nothing to read, and the devices
-		# that are reachable sit on PCI -- which needs the configuration
-		# window, which is in an ACPI table nothing parses yet.
-		check "  reconboot, UEFI" \
+		# The disk here is on PCI rather than on the memory-mapped bus.
+		# This firmware describes the machine with ACPI instead of a
+		# device tree, so the configuration window is read out of the
+		# MCFG table -- which is the same walk x86_64 will need for its
+		# processor list, and the reason it was worth writing here.
+		checkd "  reconboot, UEFI" \
 			qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 				-bios "$OVMF_ARM" \
 				-drive format=raw,file="$ROOT/boot/build/aarch64/esp.img" \
-				"${ARM_DISK[@]}"
+				-drive "file=$DISK,format=raw,if=none,id=d1" \
+				-device virtio-blk-pci,drive=d1
 	else
 		skip "  reconboot, UEFI" "the loader did not build"
 	fi

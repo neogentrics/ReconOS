@@ -5,6 +5,7 @@
  * looks identical no matter what booted it.
  */
 #include <recon/kernel/arch.h>
+#include <recon/kernel/acpi.h>
 #include <recon/kernel/block.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
@@ -52,6 +53,10 @@ void kmain(void)
 	heap_init();
 	heap_print_summary();
 
+	/* After the direct map, because the tables are read through it, and
+	 * before anything that wants to know what hardware exists. */
+	acpi_init(boot_info()->acpi_rsdp);
+
 	/* After the heap, because a fault report is more useful than a fault,
 	 * and before anything that might fault. */
 	trap_init();
@@ -82,6 +87,7 @@ void kmain(void)
 	 * scheduler to yield to while the hardware thinks. */
 	block_init();
 	block_print_summary();
+	acpi_print_summary();
 
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
