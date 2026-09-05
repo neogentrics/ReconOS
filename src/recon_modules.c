@@ -19,6 +19,7 @@
 #include "recon_appwin.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
+#include "recon_registry.h"
 #include "recon_users.h"
 
 #define MODULES_MAX 32
@@ -194,6 +195,93 @@ bool recon_unregister_app(const char *name) {
     return true;
 }
 
+/* --- Turning an application off --- */
+
+/*
+ * One key holding names separated by bars, rather than a key each.
+ *
+ * A registry key cannot contain a space and half the applications have one in
+ * their name, so a key per application is not available. The same shape the
+ * pinned-menu list uses.
+ */
+#define APPS_DISABLED_KEY "apps/disabled"
+
+/* Whether `name` appears in the bar-separated list, whole. */
+static bool named_in(const char *list, const char *name) {
+    if (list == NULL || name == NULL || *name == '\0') {
+        return false;
+    }
+
+    size_t want = strlen(name);
+    const char *at = list;
+
+    while (*at != '\0') {
+        const char *bar = strchr(at, '|');
+        size_t length = (bar != NULL) ? (size_t)(bar - at) : strlen(at);
+
+        /* Compared whole. A substring match would turn off "Terminal"
+         * because somebody disabled "Terminal Services". */
+        if (length == want && strncmp(at, name, length) == 0) {
+            return true;
+        }
+
+        at = (bar != NULL) ? bar + 1 : at + length;
+    }
+    return false;
+}
+
+bool recon_installed_app_is_disabled(const char *name) {
+    return named_in(recon_registry_get(RECON_REG_SYSTEM, APPS_DISABLED_KEY,
+        ""), name);
+}
+
+bool recon_installed_app_set_disabled(const char *name, bool disabled) {
+    if (name == NULL || *name == '\0') {
+        return false;
+    }
+    if (recon_installed_app_is_disabled(name) == disabled) {
+        return true;
+    }
+
+    const char *current = recon_registry_get(RECON_REG_SYSTEM,
+        APPS_DISABLED_KEY, "");
+
+    char rebuilt[1024];
+    size_t used = 0;
+    rebuilt[0] = '\0';
+
+    /* Rebuilt from what is there, dropping this name; then added back if it
+     * is being turned off. One pass, and no way to end up listed twice. */
+    const char *at = current;
+    while (*at != '\0') {
+        const char *bar = strchr(at, '|');
+        size_t length = (bar != NULL) ? (size_t)(bar - at) : strlen(at);
+
+        bool mine = (length == strlen(name)) &&
+            (strncmp(at, name, length) == 0);
+
+        if (!mine && length > 0) {
+            int n = snprintf(rebuilt + used, sizeof(rebuilt) - used, "%s%.*s",
+                used > 0 ? "|" : "", (int)length, at);
+            if (n > 0 && (size_t)n < sizeof(rebuilt) - used) {
+                used += (size_t)n;
+            }
+        }
+
+        at = (bar != NULL) ? bar + 1 : at + length;
+    }
+
+    if (disabled) {
+        int n = snprintf(rebuilt + used, sizeof(rebuilt) - used, "%s%s",
+            used > 0 ? "|" : "", name);
+        if (n <= 0 || (size_t)n >= sizeof(rebuilt) - used) {
+            return false;
+        }
+    }
+
+    return recon_registry_set(RECON_REG_SYSTEM, APPS_DISABLED_KEY, rebuilt);
+}
+
 int recon_installed_app_count(void) {
     int count = 0;
     for (int i = 0; i < APPS_MAX; i++) {
@@ -225,6 +313,10 @@ bool recon_installed_app_at(int index, struct recon_installed_app *out) {
         return false;
     }
     *out = slot->info;
+    /* Read rather than stored on the slot: the setting lives in the registry
+     * and can be changed from outside this process, so a copy kept here would
+     * be a second answer that could disagree with the first. */
+    out->disabled = recon_installed_app_is_disabled(out->name);
     return true;
 }
 
@@ -312,6 +404,17 @@ struct recon_appwin *recon_installed_app_window(const char *name) {
     struct app_slot *slot = app_slot_for(recon_installed_app_resolve(name));
     if (slot == NULL) {
         set_error("no application called '%s'", name != NULL ? name : "");
+        return NULL;
+    }
+
+    /*
+     * Refused here, which is the one place every route to opening something
+     * passes through -- the menus, the desktop, a shortcut, the terminal.
+     * Turning an application off anywhere else would be turning off the ways
+     * of opening it that somebody had thought of.
+     */
+    if (recon_installed_app_is_disabled(slot->info.name)) {
+        set_error("'%s' is turned off", slot->info.name);
         return NULL;
     }
     if (slot->window != NULL) {

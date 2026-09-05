@@ -397,7 +397,11 @@ static bool installed_app_named(const char *name,
     for (int i = 0; i < count; i++) {
         if (recon_installed_app_at(i, out) &&
                 strcasecmp(out->name, name) == 0) {
-            return true;
+            /* Turned off reads as absent from here up. This is what the
+             * pinned list asks, so an application pinned before it was turned
+             * off stops appearing on the menu rather than appearing and
+             * refusing. */
+            return !out->disabled;
         }
     }
     return false;
@@ -533,7 +537,12 @@ static int menu_apps(bool show_all, const char *filter,
     int installed = recon_installed_app_count();
     for (int i = 0; i < installed && total < MENU_APPS_MAX; i++) {
         struct recon_installed_app app;
-        if (!recon_installed_app_at(i, &app) || !app.in_menu) {
+        /*
+         * A turned-off application is not offered. Not greyed either: a menu
+         * is a list of what can be done, and something in it that cannot be
+         * done is a list that has to be read twice.
+         */
+        if (!recon_installed_app_at(i, &app) || !app.in_menu || app.disabled) {
             continue;
         }
         if (!contains_fold(app.name, filter)) {

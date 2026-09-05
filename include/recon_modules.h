@@ -125,6 +125,16 @@ struct recon_installed_app {
     bool in_menu;
     /* The module that contributed it, or empty for one built in. */
     char module[64];
+
+    /*
+     * Turned off. Still registered, still listed where applications are
+     * managed, and offered nowhere else: not in the menus, and not buildable.
+     *
+     * Distinct from removed on purpose. Removing a built-in is not possible
+     * -- it is compiled in -- and "I do not want this and cannot delete it"
+     * is a real thing to want, which this is the answer to.
+     */
+    bool disabled;
 };
 
 /*
@@ -141,6 +151,16 @@ const char *recon_installed_app_resolve(const char *target);
 /* The icon name for a registered application, stable for as long as it stays
  * registered. NULL if it has none. */
 const char *recon_installed_app_icon(const char *name);
+
+/*
+ * Whether an application is turned off, and turning one off or back on.
+ *
+ * The list of disabled names lives in the system registry, so it survives a
+ * restart -- an application that came back after a reboot would be a setting
+ * that did not mean anything.
+ */
+bool recon_installed_app_is_disabled(const char *name);
+bool recon_installed_app_set_disabled(const char *name, bool disabled);
 
 int recon_installed_app_count(void);
 bool recon_installed_app_at(int index, struct recon_installed_app *out);

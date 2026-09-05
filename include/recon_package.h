@@ -92,6 +92,22 @@ bool recon_package_install(const char *path);
  */
 bool recon_package_uninstall(const char *name);
 
+/*
+ * Check that everything an install placed is still there.
+ *
+ * `placed` comes back as the number of files the receipt names and `missing`
+ * as how many of them are gone; `first_missing` names one of them, for a
+ * message that can say something rather than a count.
+ *
+ * This checks; it does not put anything back. Putting a file back needs the
+ * package it came from, and nothing keeps one -- a package is a folder
+ * somebody had, on their disk, which they are free to delete the moment the
+ * install finishes. Saying so is more use than a Repair button that quietly
+ * does nothing.
+ */
+bool recon_package_verify(const char *name, int *placed, int *missing,
+    char *first_missing, size_t size);
+
 /* What is installed, in the order the receipts were found. */
 int recon_package_count(void);
 bool recon_package_at(int index, struct recon_package_info *out);

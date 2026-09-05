@@ -3506,9 +3506,15 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         if (i >= count) {
             break;
         }
-        draw_row(cp, p, x, y + row * ROW_HEIGHT, w - bar, row, apps[i].name,
+        /* Turned off said on the row, because this is the only list that
+         * still shows one and so the only place the state can be seen. */
+        char detail[128];
+        snprintf(detail, sizeof(detail), "%s%s",
             app_is_system(&apps[i]) ? "built into ReconOS" : apps[i].module,
-            i == cp->selected);
+            apps[i].disabled ? "   turned off" : "");
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, w - bar, row, apps[i].name,
+            detail, i == cp->selected);
     }
 
     if (count == 0) {
@@ -3544,20 +3550,32 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
     if (cp->programs == PROGRAMS_SYSTEM) {
         /*
          * Repair and Disable, which are the two things worth doing to
-         * something that cannot be removed. Neither is built: repair needs an
-         * installer to reinstall from, and disable needs somewhere to record
-         * that an application is not to be offered.
+         * something that cannot be removed.
+         *
+         * The button says which way it goes rather than sitting there
+         * meaning both. "Disable" over something already off is a button
+         * whose label is a lie about what pressing it does.
          */
+        struct recon_installed_app chosen;
+        bool off = have && program_selected(cp, &chosen) && chosen.disabled;
+
         int sx = draw_button(cp, p, x, y, "Repair",
-            HIT_ACTION_BASE + ACTION_REPAIR_PROGRAM, admin && have);
-        draw_button(cp, p, sx, y, "Disable",
+            HIT_ACTION_BASE + ACTION_REPAIR_PROGRAM, admin && have && !off);
+        draw_button(cp, p, sx, y, off ? "Turn On" : "Disable",
             HIT_ACTION_BASE + ACTION_DISABLE_PROGRAM, admin && have);
         y += BUTTON_HEIGHT + PADDING;
 
         if (y + line <= bottom) {
             recon_draw_text(p, cp->font, x, y + ascent, w,
-                "A system application cannot be removed. Repair puts its "
-                "files back; Disable stops it being offered.", COLOR_DIM);
+                "A system application cannot be removed. Disable stops it "
+                "being offered anywhere, and survives a restart.", COLOR_DIM);
+            y += line;
+        }
+        if (y + line <= bottom) {
+            recon_draw_text(p, cp->font, x, y + ascent, w,
+                "Repair checks that a built-in is registered as it should "
+                "be. It is compiled in, so there are no files to put back.",
+                COLOR_DIM);
         }
         return;
     }
@@ -4956,32 +4974,130 @@ static void do_action(struct control_panel *cp, enum action action) {
         clear_status(cp);
         break;
 
-    case ACTION_REPAIR_PROGRAM:
-        /*
-         * Not built, and what is missing is the same thing in both lists: an
-         * installer to put the files back from.
-         *
-         * A system application would need one kept somewhere -- Joshua is
-         * right that it should be able to reinstall itself, and right that
-         * the installer has to exist for that to mean anything. An installed
-         * program would need its package still around, which is exactly what
-         * Disk Cleanup offers to delete.
-         */
-        set_status(cp, true, "Not built yet: repairing needs an installer to "
-            "put the files back from, and nothing keeps one.");
-        break;
+    case ACTION_REPAIR_PROGRAM: {
+        struct recon_installed_app chosen;
+        if (!program_selected(cp, &chosen)) {
+            set_status(cp, true, "Choose a program first.");
+            break;
+        }
 
-    case ACTION_DISABLE_PROGRAM:
         /*
-         * Also not built. Disabling has to be recorded somewhere the
-         * application registry reads before it offers anything, and it has to
-         * survive a restart -- which is a registry key and a check, but also
-         * a decision about what "disabled" means for something the shell
-         * built a window for at startup.
+         * A built-in has no files of its own -- it is compiled in -- so the
+         * only thing that can be wrong with one is its registration, and the
+         * only honest repair is to say whether that is intact.
          */
-        set_status(cp, true, "Not built yet: nothing records that an "
-            "application is not to be offered.");
+        if (cp->programs == PROGRAMS_SYSTEM) {
+            set_status(cp, false, "'%s' is registered and its icon is '%s'. "
+                "A built-in has no files to put back; it is compiled in.",
+                chosen.name,
+                chosen.icon[0] != '\0' ? chosen.icon : "none");
+            break;
+        }
+
+        /*
+         * An application arrives one of two ways, and repair has to answer
+         * for both.
+         *
+         * A package leaves a receipt naming every file it placed, and those
+         * can be checked. A bare `.rex` module dropped into /Apps leaves no
+         * receipt -- there is only the one file, and whether it is still
+         * there and still loading is the whole question.
+         */
+        if (!recon_package_installed(chosen.name)) {
+            char path[RECON_PATH_MAX];
+            if (!recon_modules_path_of(chosen.module, path, sizeof(path))) {
+                set_status(cp, true, "'%s' came from a module ReconOS can no "
+                    "longer find.", chosen.name);
+                break;
+            }
+
+            if (!recon_fs_exists("/", path)) {
+                set_status(cp, true, "'%s' is registered but its module '%s' "
+                    "is gone. Install it again from its .rex file.",
+                    chosen.name, path);
+                break;
+            }
+
+            set_status(cp, false, "'%s' is intact: it came as a single module "
+                "and '%s' is still there and loaded.", chosen.name, path);
+            break;
+        }
+
+        /*
+         * Installed from a package, so the receipt says which files. Checking
+         * them is real; putting one back is not, because putting a file back
+         * needs the package it came from and nothing keeps one.
+         */
+        int placed = 0;
+        int missing = 0;
+        char gone[RECON_PATH_MAX];
+        if (!recon_package_verify(chosen.name, &placed, &missing, gone,
+                sizeof(gone))) {
+            set_status(cp, true, "%s", recon_package_last_error());
+            break;
+        }
+
+        if (missing == 0) {
+            set_status(cp, false, "'%s' is intact: all %d file%s the install "
+                "placed are still there.", chosen.name, placed,
+                placed == 1 ? "" : "s");
+            break;
+        }
+
+        set_status(cp, true, "'%s' is missing %d of its %d file%s, starting "
+            "with '%s'. Install it again from its package to put them back.",
+            chosen.name, missing, placed, placed == 1 ? "" : "s", gone);
         break;
+    }
+
+    case ACTION_DISABLE_PROGRAM: {
+        struct recon_installed_app chosen;
+        if (!program_selected(cp, &chosen)) {
+            set_status(cp, true, "Choose a program first.");
+            break;
+        }
+
+        bool turning_off = !chosen.disabled;
+
+        /*
+         * The Control Panel is one of them, and turning it off from inside
+         * itself would close the door on the way back. Refused rather than
+         * allowed and regretted.
+         */
+        if (turning_off && strcmp(chosen.name, "Control Panel") == 0) {
+            set_status(cp, true, "The Control Panel cannot be turned off from "
+                "inside itself -- there would be no way to turn it back on.");
+            break;
+        }
+
+        if (!recon_installed_app_set_disabled(chosen.name, turning_off)) {
+            set_status(cp, true, "Could not record that.");
+            break;
+        }
+
+        /*
+         * Its window goes, and the menus are rebuilt. An application turned
+         * off with a window still on the screen is turned off everywhere
+         * except where somebody is looking.
+         */
+        if (turning_off) {
+            struct recon_appwin *open =
+                recon_installed_app_existing(chosen.name);
+            if (open != NULL) {
+                recon_appwin_hide(open);
+            }
+        }
+
+        /* The taskbar and the menu are drawn from the application list, so
+         * they have to be told the list now answers differently. */
+        recon_shell_restyle(cp->server->shell);
+
+        set_status(cp, false, turning_off
+            ? "'%s' is turned off. It is offered nowhere until it is turned "
+              "back on."
+            : "'%s' is on again.", chosen.name);
+        break;
+    }
 
     case ACTION_INSTALL_PROGRAM:
         /*

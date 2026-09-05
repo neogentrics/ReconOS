@@ -398,6 +398,44 @@ bool recon_package_install(const char *path) {
     return true;
 }
 
+bool recon_package_verify(const char *name, int *placed, int *missing,
+        char *first_missing, size_t size) {
+    if (placed != NULL) {
+        *placed = 0;
+    }
+    if (missing != NULL) {
+        *missing = 0;
+    }
+    if (first_missing != NULL && size > 0) {
+        first_missing[0] = '\0';
+    }
+
+    char files[PLACED_MAX][RECON_PATH_MAX];
+    int count = 0;
+    if (!read_receipt(name, NULL, files, &count)) {
+        return false;
+    }
+
+    int gone = 0;
+    for (int i = 0; i < count; i++) {
+        if (recon_fs_exists("/", files[i])) {
+            continue;
+        }
+        if (gone == 0 && first_missing != NULL && size > 0) {
+            snprintf(first_missing, size, "%s", files[i]);
+        }
+        gone++;
+    }
+
+    if (placed != NULL) {
+        *placed = count;
+    }
+    if (missing != NULL) {
+        *missing = gone;
+    }
+    return true;
+}
+
 bool recon_package_uninstall(const char *name) {
     if (name == NULL || *name == '\0') {
         set_error("nothing to remove");
