@@ -94,6 +94,7 @@ add_executable(ReconOS
     src/recon_taskmgr.c
     src/recon_terminal.c
     src/recon_ui.c
+    src/recon_version.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
 
@@ -246,6 +247,15 @@ target_include_directories(recon_clock_tests PRIVATE
 
 target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES})
 
+# Comparing versions with strcmp is right for nine releases and wrong on the
+# tenth, in the direction that makes an update system refuse the update.
+add_executable(recon_version_tests
+    tests/test_version.c
+    src/recon_version.c)
+
+target_include_directories(recon_version_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 # Whether the accessibility skins work is a question about people who are not
 # in the room. It is answered by simulating each deficiency and measuring, not
 # by looking at the palette and deciding it seems fine.
@@ -314,6 +324,7 @@ add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME tls COMMAND recon_tls_tests)
 add_test(NAME clock COMMAND recon_clock_tests)
+add_test(NAME versions COMMAND recon_version_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)

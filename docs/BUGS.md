@@ -76,6 +76,38 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-088 — Installing an older applet deleted the newer one that refused it
+
+[#255](https://github.com/neogentrics/ReconOS/issues/255)
+
+- **Found in** v0.3.0. **Found by** the test written for applet versioning,
+  on its first run, one step after the step it was written to prove.
+- **Was** applet versioning added a rule: a module registering a name that is
+  already taken wins only if its version is higher. That rule worked. What had
+  no rule at all was *un*registering.
+
+  The loader calls a module's `unload()` when its `load()` returns false, so a
+  module that changed its mind can tidy up whatever it registered first. A
+  module that lost the version comparison takes exactly that path — and its
+  `unload()` calls `recon_unregister_app("Notepad")`, which removed whichever
+  Notepad was registered. Not its own. The winner's.
+
+  So installing an applet *older* than the one running silently uninstalled
+  the running one, and reported only "declined to load". Installing a second
+  older one then removed the built-in as well, and the system had no Notepad
+  at all — no error, no log line, just a name that had quietly stopped
+  existing.
+
+  The shape is worth naming: **the guard was on acquiring the name and not on
+  releasing it**, and a caller who fails the guard is handed the release path
+  as its consolation. Every check that decides who owns something needs its
+  mirror image, or the losing branch becomes the exploit.
+- **Fixed in** v0.3.0. A module may only unregister what it registered:
+  the module whose `load()` or `unload()` is running is named while it runs,
+  and `recon_unregister_app` refuses a name belonging to somebody else. Fixed
+  at the registry rather than at the loader, so it holds however unload comes
+  to be called.
+
 ### BG-087 — The font cache's fallback claimed "nearest" and returned "first"
 
 [#254](https://github.com/neogentrics/ReconOS/issues/254)

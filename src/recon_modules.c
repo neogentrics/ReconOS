@@ -41,6 +41,20 @@ struct app_slot {
         struct recon_font *font);
     struct recon_appwin *window;
     bool used;
+
+    /*
+     * The built-in standing behind a module that took its name.
+     *
+     * Kept rather than overwritten so that removing an applet update returns
+     * the system to the applet it shipped with, instead of to nothing. An
+     * update you cannot back out of is not an update, it is a decision.
+     */
+    bool has_builtin;
+    struct recon_appwin *(*builtin_create)(struct recon_server *server,
+        struct recon_font *font);
+    char builtin_icon[64];
+    char builtin_version[RECON_VERSION_MAX];
+    bool builtin_in_menu;
 };
 
 static struct recon_server *g_server;
@@ -54,12 +68,21 @@ static int g_command_count;
 static char g_error[256];
 
 /*
- * The module being loaded right now, so registrations made from its load() can
- * be attributed to it without every call having to say who it is. Cleared as
- * soon as load() returns, because a registration arriving later has no honest
- * owner to record.
+ * The module whose load() or unload() is running right now, so what it does
+ * can be attributed to it without every call having to say who it is. Cleared
+ * as soon as that function returns, because a registration arriving later has
+ * no honest owner to record.
+ *
+ * It covers unload() as well as load() because of BG-088. A module that
+ * declines to load still gets its unload() called, to clean up whatever it
+ * registered before changing its mind -- and an applet update that lost the
+ * version comparison would then call recon_unregister_app("Notepad") and
+ * remove the Notepad that had beaten it. Installing an *older* applet deleted
+ * the newer one, and installing a second older one deleted the built-in, so
+ * the system ended up with no Notepad at all. Knowing who is unloading is what
+ * lets that be refused.
  */
-static const char *g_loading;
+static const char *g_current_module;
 
 static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
@@ -101,14 +124,119 @@ static struct app_slot *app_slot_for(const char *name) {
     return NULL;
 }
 
+/* The version an application declared, normalised, or "" for none. */
+static void version_text(const char *declared, char *out, size_t size) {
+    struct recon_version parsed;
+    if (declared == NULL || !recon_version_parse(declared, &parsed)) {
+        snprintf(out, size, "%s", "");
+        return;
+    }
+    recon_version_format(&parsed, out, size);
+}
+
+/*
+ * Take a name a built-in already answers to.
+ *
+ * The built-in is not thrown away: its create function, icon and version go
+ * into the shadow, so removing the module puts it back. See the comment on
+ * struct app_slot.
+ */
+static void displace_builtin(struct app_slot *slot,
+        const struct recon_app_registration *app, const char *module,
+        const char *version) {
+    if (!slot->has_builtin) {
+        slot->has_builtin = true;
+        slot->builtin_create = slot->create;
+        slot->builtin_in_menu = slot->info.in_menu;
+        snprintf(slot->builtin_icon, sizeof(slot->builtin_icon), "%s",
+            slot->info.icon);
+        snprintf(slot->builtin_version, sizeof(slot->builtin_version), "%s",
+            slot->info.version);
+    }
+
+    slot->create = app->create;
+    slot->info.in_menu = app->in_menu;
+    snprintf(slot->info.icon, sizeof(slot->info.icon), "%s",
+        app->icon != NULL ? app->icon : "");
+    snprintf(slot->info.module, sizeof(slot->info.module), "%s", module);
+    snprintf(slot->info.version, sizeof(slot->info.version), "%s", version);
+    slot->info.replaces_builtin = true;
+    snprintf(slot->info.builtin_version, sizeof(slot->info.builtin_version),
+        "%s", slot->builtin_version);
+}
+
+/*
+ * A module registering over something already registered: does it win?
+ *
+ * Written out rather than folded into an if, because every branch here is a
+ * decision somebody will one day want the reason for.
+ */
+static bool newer_wins(struct app_slot *slot, const char *name,
+        const char *version) {
+    const char *holder = slot->info.version;
+
+    if (version[0] == '\0') {
+        set_error("'%s' is already registered, and this one declares no "
+            "version to be newer than", name);
+        return false;
+    }
+    if (holder[0] == '\0') {
+        /*
+         * Nothing to compare against. Refused rather than allowed: the thing
+         * already answering to the name works, and replacing it on the
+         * strength of "it did not say" is a change nobody asked for.
+         */
+        set_error("'%s' is already registered by something that declares no "
+            "version, so there is nothing to be newer than", name);
+        return false;
+    }
+
+    bool unreadable = false;
+    int order = recon_version_compare_text(version, holder, &unreadable);
+    if (unreadable) {
+        set_error("could not read '%s' or '%s' as a version for '%s'",
+            version, holder, name);
+        return false;
+    }
+    if (order <= 0) {
+        set_error("'%s' %s is not newer than the %s already registered",
+            name, version, holder);
+        return false;
+    }
+
+    /*
+     * Swapping the code under a window that is open is the same crash
+     * unregister refuses, arriving by a different door.
+     */
+    if (slot->window != NULL) {
+        set_error("'%s' is open; close it before installing %s over %s",
+            name, version, holder);
+        return false;
+    }
+
+    return true;
+}
+
 static bool register_app(const struct recon_app_registration *app,
         const char *module) {
     if (app == NULL || app->name == NULL || app->create == NULL) {
         set_error("an application needs a name and a way to create it");
         return false;
     }
+
+    char version[RECON_VERSION_MAX];
+    version_text(app->version, version, sizeof(version));
+    if (app->version != NULL && version[0] == '\0') {
+        set_error("'%s' declares '%s', which is not a version",
+            app->name, app->version);
+        return false;
+    }
+
     struct app_slot *existing = app_slot_for(app->name);
     if (existing != NULL) {
+        bool from_module = module != NULL;
+        bool held_by_module = existing->info.module[0] != '\0';
+
         /*
          * Registering a built-in twice is a shell restart, not a collision.
          *
@@ -120,22 +248,76 @@ static bool register_app(const struct recon_app_registration *app,
          * The entry is updated rather than skipped, because the function
          * pointers come from this build and are the ones to keep, and the
          * window pointer is left alone, because that window is still open.
-         *
-         * A module doing the same thing is still refused: two different
-         * pieces of code answering to one name is the collision this check
-         * exists for, and the shell's own built-ins are not two pieces of
-         * code.
          */
-        if (module != NULL || existing->info.module[0] != '\0') {
-            set_error("an application called '%s' is already registered",
-                app->name);
+        if (!from_module && !held_by_module) {
+            existing->create = app->create;
+            snprintf(existing->info.icon, sizeof(existing->info.icon), "%s",
+                app->icon != NULL ? app->icon : "");
+            snprintf(existing->info.version, sizeof(existing->info.version),
+                "%s", version);
+            existing->info.in_menu = app->in_menu;
+            return true;
+        }
+
+        /*
+         * A built-in re-registering under a module that has taken its name.
+         *
+         * The shell restarting must not quietly demote every applet update in
+         * the system, so the module keeps the name and the *shadow* is
+         * refreshed -- those pointers come from this build and are the ones to
+         * fall back to.
+         *
+         * Except when this build has finally caught up: if the built-in is now
+         * the newer of the two, it takes its name back, which is how an
+         * applet update stops applying once the release it was ahead of
+         * arrives.
+         */
+        if (!from_module && held_by_module) {
+            existing->has_builtin = true;
+            existing->builtin_create = app->create;
+            existing->builtin_in_menu = app->in_menu;
+            snprintf(existing->builtin_icon, sizeof(existing->builtin_icon),
+                "%s", app->icon != NULL ? app->icon : "");
+            snprintf(existing->builtin_version,
+                sizeof(existing->builtin_version), "%s", version);
+            snprintf(existing->info.builtin_version,
+                sizeof(existing->info.builtin_version), "%s", version);
+
+            bool unreadable = false;
+            int order = recon_version_compare_text(version,
+                existing->info.version, &unreadable);
+            if (!unreadable && order > 0 && existing->window == NULL) {
+                wlr_log(WLR_INFO, "ReconOS: built-in '%s' %s supersedes the "
+                    "%s from '%s'", app->name, version,
+                    existing->info.version, existing->info.module);
+                existing->create = app->create;
+                existing->info.in_menu = app->in_menu;
+                snprintf(existing->info.icon, sizeof(existing->info.icon),
+                    "%s", app->icon != NULL ? app->icon : "");
+                existing->info.module[0] = '\0';
+                existing->info.replaces_builtin = false;
+                existing->has_builtin = false;
+                snprintf(existing->info.version,
+                    sizeof(existing->info.version), "%s", version);
+            }
+            return true;
+        }
+
+        /* A module, over a built-in or over another module. Newest wins. */
+        if (!newer_wins(existing, app->name, version)) {
             return false;
         }
 
-        existing->create = app->create;
-        snprintf(existing->info.icon, sizeof(existing->info.icon), "%s",
-            app->icon != NULL ? app->icon : "");
-        existing->info.in_menu = app->in_menu;
+        if (held_by_module) {
+            wlr_log(WLR_INFO, "ReconOS: '%s' from '%s' replaces the %s from "
+                "'%s'", app->name, module, existing->info.version,
+                existing->info.module);
+        } else {
+            wlr_log(WLR_INFO, "ReconOS: '%s' %s from '%s' replaces the "
+                "built-in %s", app->name, version, module,
+                existing->info.version);
+        }
+        displace_builtin(existing, app, module, version);
         return true;
     }
 
@@ -153,6 +335,7 @@ static bool register_app(const struct recon_app_registration *app,
             app->icon != NULL ? app->icon : "");
         snprintf(slot->info.module, sizeof(slot->info.module), "%s",
             module != NULL ? module : "");
+        snprintf(slot->info.version, sizeof(slot->info.version), "%s", version);
         slot->info.in_menu = app->in_menu;
         return true;
     }
@@ -162,7 +345,7 @@ static bool register_app(const struct recon_app_registration *app,
 }
 
 bool recon_register_app(const struct recon_app_registration *app) {
-    return register_app(app, g_loading);
+    return register_app(app, g_current_module);
 }
 
 bool recon_register_builtin_app(const struct recon_app_registration *app) {
@@ -182,6 +365,27 @@ bool recon_unregister_app(const char *name) {
     }
 
     /*
+     * A module may only take back what it put there. BG-088.
+     *
+     * Registering is guarded by a version comparison; unregistering was
+     * guarded by nothing, so a module that lost the comparison could still
+     * remove the winner on its way out -- and the loader calls unload() on
+     * exactly that path, to let a module that declined to load tidy up after
+     * itself. Installing an older applet therefore deleted the newer one that
+     * had refused it, silently, and reported only "declined to load".
+     *
+     * g_current_module is NULL when this is not a module calling, which is the
+     * system tidying up and is allowed.
+     */
+    if (g_current_module != NULL &&
+            strcmp(slot->info.module, g_current_module) != 0) {
+        set_error("'%s' belongs to %s, not to %s", name,
+            slot->info.module[0] != '\0' ? slot->info.module : "ReconOS",
+            g_current_module);
+        return false;
+    }
+
+    /*
      * A window whose code is about to be unloaded is a window that will crash
      * the moment anything touches it -- a redraw, a click, the taskbar asking
      * for its title. Refuse rather than take the desktop down.
@@ -189,6 +393,28 @@ bool recon_unregister_app(const char *name) {
     if (slot->window != NULL) {
         set_error("'%s' is open; close it first", name);
         return false;
+    }
+
+    /*
+     * A module that took a built-in's name gives it back rather than taking it
+     * with it. Removing an applet update must leave the applet ReconOS ships,
+     * not a hole where Notepad used to be.
+     */
+    if (slot->has_builtin) {
+        wlr_log(WLR_INFO, "ReconOS: '%s' returns to the built-in %s", name,
+            slot->builtin_version);
+
+        slot->create = slot->builtin_create;
+        slot->info.in_menu = slot->builtin_in_menu;
+        snprintf(slot->info.icon, sizeof(slot->info.icon), "%s",
+            slot->builtin_icon);
+        snprintf(slot->info.version, sizeof(slot->info.version), "%s",
+            slot->builtin_version);
+        slot->info.module[0] = '\0';
+        slot->info.replaces_builtin = false;
+        slot->info.builtin_version[0] = '\0';
+        slot->has_builtin = false;
+        return true;
     }
 
     memset(slot, 0, sizeof(*slot));
@@ -629,18 +855,25 @@ bool recon_modules_load(const char *reconos_path) {
     recon_text_copy(slot->state.path, sizeof(slot->state.path), canonical);
 
     if (descriptor->load != NULL) {
-        g_loading = slot->state.name;
+        g_current_module = slot->state.name;
         bool ok = descriptor->load();
-        g_loading = NULL;
+        g_current_module = NULL;
 
         if (!ok) {
             /*
              * The module declined. Whatever it managed to register before
              * saying so is left behind unless it cleaned up itself, so unload
              * is called to give it the chance.
+             *
+             * Named while it runs, so that chance extends only to its own
+             * registrations. See BG-088: it used to be able to unregister
+             * anything, and a module that lost a version comparison would
+             * unregister the applet that beat it.
              */
             if (descriptor->unload != NULL) {
+                g_current_module = slot->state.name;
                 descriptor->unload();
+                g_current_module = NULL;
             }
             recon_text_copy(slot->state.problem, sizeof(slot->state.problem),
                 g_error[0] != '\0' ? g_error : "the module declined to load");
@@ -674,7 +907,9 @@ bool recon_modules_unload(const char *name) {
     }
 
     if (slot->descriptor != NULL && slot->descriptor->unload != NULL) {
+        g_current_module = slot->state.name;
         slot->descriptor->unload();
+        g_current_module = NULL;
     }
 
     /*
@@ -1079,7 +1314,9 @@ void recon_modules_finish(void) {
         }
         if (g_modules[i].descriptor != NULL &&
                 g_modules[i].descriptor->unload != NULL) {
+            g_current_module = g_modules[i].state.name;
             g_modules[i].descriptor->unload();
+            g_current_module = NULL;
         }
         if (g_modules[i].handle != NULL) {
             dlclose(g_modules[i].handle);

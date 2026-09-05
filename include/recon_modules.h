@@ -22,6 +22,7 @@
 #include <stddef.h>
 
 #include "recon_module.h"
+#include "recon_version.h"
 
 struct recon_server;
 struct recon_font;
@@ -125,6 +126,26 @@ struct recon_installed_app {
     bool in_menu;
     /* The module that contributed it, or empty for one built in. */
     char module[64];
+
+    /*
+     * Which release of this applet is the one answering to the name.
+     *
+     * For a built-in that is the system's version. For one a module
+     * contributed it is whatever the module declared, which is how an applet
+     * gets updated without the system being rebuilt.
+     */
+    char version[RECON_VERSION_MAX];
+
+    /*
+     * True when a module has taken over a name ReconOS ships an application
+     * for, and the built-in is standing behind it.
+     *
+     * Worth showing rather than hiding: "Notepad 0.3.1, replacing the built-in
+     * 0.3.0" is a different sentence from "Notepad 0.3.1", and somebody
+     * wondering why their Notepad looks different deserves the first one.
+     */
+    bool replaces_builtin;
+    char builtin_version[RECON_VERSION_MAX];
 
     /*
      * Turned off. Still registered, still listed where applications are

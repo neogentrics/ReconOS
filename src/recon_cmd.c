@@ -2214,8 +2214,20 @@ static void cmd_apps(struct recon_cmd_session *s, int argc, char **argv) {
             const char *state = (win == NULL) ? "not started"
                 : (recon_appwin_is_open(win) ? "open" : "closed");
 
-            out(s, "  %d  %-20s %-12s %s\n", i, app.name, state,
-                app.module[0] != '\0' ? app.module : "built in");
+            /* Which release, and what it displaced. An applet updated on its
+             * own is the one case where "which Notepad is this?" has an
+             * answer worth printing. */
+            char origin[128];
+            if (app.replaces_builtin) {
+                snprintf(origin, sizeof(origin), "%s (over built-in %s)",
+                    app.module, app.builtin_version);
+            } else {
+                snprintf(origin, sizeof(origin), "%s",
+                    app.module[0] != '\0' ? app.module : "built in");
+            }
+
+            out(s, "  %d  %-20s %-8s %-12s %s\n", i, app.name,
+                app.version[0] != '\0' ? app.version : "-", state, origin);
         }
         out(s, "\n'apps <number>' or 'apps <name>' opens one.\n");
         return;

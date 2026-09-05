@@ -2937,28 +2937,41 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * They go through recon_register_builtin_app, which is recon_register_app
      * with the contributing module left empty -- the same registry a module
      * adds to, so the path a module takes is the path the system takes.
+     *
+     * Each carries the system's version as its own. That is what makes an
+     * applet update decidable: a Notepad.rex claiming 0.3.1 is newer than the
+     * 0.3.0 built into this build and takes the name, and when ReconOS 0.4.0
+     * ships, its built-in Notepad is newer again and takes it back. An applet
+     * update applies until the release that catches up with it.
      */
     static const struct recon_app_registration BUILTIN_APPS[] = {
-        { "File Explorer", RECON_ICON_EXPLORER, recon_explorer_create, true },
-        { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true },
-        { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
-        { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
-        { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true },
-        { "Calendar", RECON_ICON_CALENDAR, recon_calendar_create, true },
+        { "File Explorer", RECON_ICON_EXPLORER, recon_explorer_create, true,
+          RECONOS_VERSION },
+        { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true,
+          RECONOS_VERSION },
+        { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true,
+          RECONOS_VERSION },
+        { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true,
+          RECONOS_VERSION },
+        { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true,
+          RECONOS_VERSION },
+        { "Calendar", RECON_ICON_CALENDAR, recon_calendar_create, true,
+          RECONOS_VERSION },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing
          * it in both would put the same name in two places, and anything
          * looking one up by name would find whichever came first.
          */
-        { "Control Panel", RECON_ICON_CONTROL_PANEL, recon_control_panel_create, false },
+        { "Control Panel", RECON_ICON_CONTROL_PANEL, recon_control_panel_create,
+          false, RECONOS_VERSION },
 
         /*
          * Help is beside the Control Panel rather than in the applications
          * column, for the same reason: it is a thing about the system rather
          * than a thing you work in.
          */
-        { "Help", RECON_ICON_HELP, recon_help_create, false },
+        { "Help", RECON_ICON_HELP, recon_help_create, false, RECONOS_VERSION },
 
         /*
          * The notice shown after an update. Registered so the shell can build
@@ -2967,7 +2980,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
          * it -- it comes to them, once, and the log it is quoting from is
          * reached deliberately through Help.
          */
-        { "What's New", RECON_ICON_HELP, recon_help_notice_create, false },
+        { "What's New", RECON_ICON_HELP, recon_help_notice_create, false,
+          RECONOS_VERSION },
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {

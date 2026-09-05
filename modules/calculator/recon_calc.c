@@ -1308,12 +1308,26 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
  * good first thing: entirely self-contained, useful, and nothing else depends
  * on it. If it fails to load the user loses a calculator, not a desktop.
  */
+/*
+ * One version, named once.
+ *
+ * The module carries a version and so does the application inside it, and the
+ * two are the same thing said twice -- which is the shape where they drift,
+ * because bumping one and forgetting the other costs nothing at the time and
+ * shows up later as a module that says 2.0 registering an applet that says
+ * 1.0.
+ *
+ * 2.0.0: five modes and the converters. 1.0 was the four-function keypad.
+ */
+#define CALCULATOR_VERSION "2.0.0"
+
 static bool calculator_load(void) {
     static const struct recon_app_registration APP = {
         .name = "Calculator",
         .icon = RECON_ICON_CALCULATOR,
         .create = recon_calc_create,
         .in_menu = true,
+        .version = CALCULATOR_VERSION,
     };
     return recon_register_app(&APP);
 }
@@ -1324,8 +1338,8 @@ static void calculator_unload(void) {
 
 RECON_MODULE(
     .name = "Calculator",
-    .version = "1.0",
-    .description = "Arithmetic by mouse or keyboard",
+    .version = CALCULATOR_VERSION,
+    .description = "Arithmetic by mouse or keyboard, in five modes",
     .load = calculator_load,
     .unload = calculator_unload,
 );

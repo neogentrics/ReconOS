@@ -75,12 +75,18 @@ struct recon_appwin;
  * precisely for this and was standing open because nobody had turned the
  * number.
  *
+ * 3 (v0.3.0): `struct recon_app_registration` gained `version`, so an applet
+ * can be updated on its own. Bumped here rather than in a later panic: a
+ * module built against 2 has a four-field registration struct, and reading a
+ * fifth field out of it would read whatever follows it in memory and then
+ * compare that as a version string.
+ *
  * The rule this is here to enforce, stated so it is harder to miss: **any
  * change to a struct a module can hold or pass is an ABI change**, including
  * adding a field at the end, and including structs declared in other headers
  * that this interface exposes.
  */
-#define RECON_MODULE_ABI 2
+#define RECON_MODULE_ABI 3
 
 /* The symbol a module must export. Looked up by name after loading. */
 #define RECON_MODULE_SYMBOL "recon_module_descriptor"
@@ -125,6 +131,29 @@ struct recon_app_registration {
     /* False for something launched another way -- by a file association, or
      * by another module -- that should not clutter the menu. */
     bool in_menu;
+
+    /*
+     * Which release of *this applet* it is: "1.4.0", "0.3.1".
+     *
+     * This is how an applet is updated without updating ReconOS. Register an
+     * application whose name is already taken and whose version is higher, and
+     * it takes over the name; the one it displaced is remembered and comes
+     * back if this module is removed. A version equal or lower is refused, and
+     * so is one that will not parse.
+     *
+     * The applications built into ReconOS carry the system's version, so a
+     * replacement has to claim to be newer than the system that shipped the
+     * thing it is replacing. That has a consequence worth knowing about before
+     * it surprises somebody: when ReconOS itself is updated past an installed
+     * applet, the built-in wins again and the installed one steps aside. That
+     * is the intended behaviour -- an applet update is superseded by the
+     * release that catches up with it -- rather than an accident.
+     *
+     * NULL means "no opinion", which registers only if the name is free. An
+     * applet with no version cannot displace anything, which is the right
+     * default for something that has not thought about it.
+     */
+    const char *version;
 };
 
 /*

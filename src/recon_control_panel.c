@@ -3719,12 +3719,29 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
         if (i >= count) {
             break;
         }
-        /* Turned off said on the row, because this is the only list that
-         * still shows one and so the only place the state can be seen. */
-        char detail[128];
-        snprintf(detail, sizeof(detail), "%s%s",
+        /*
+         * Where it came from, which release it is, and whether it is off.
+         *
+         * The version is on the row rather than behind a Properties button
+         * because the question it answers -- "is the update I installed the
+         * one that is running?" -- is asked while looking at the list, and an
+         * answer one click away is an answer nobody checks.
+         */
+        char detail[256];
+        char version[48] = "";
+        if (apps[i].version[0] != '\0') {
+            snprintf(version, sizeof(version), "   %s", apps[i].version);
+        }
+
+        char over[64] = "";
+        if (apps[i].replaces_builtin && apps[i].builtin_version[0] != '\0') {
+            snprintf(over, sizeof(over), ", over the built-in %s",
+                apps[i].builtin_version);
+        }
+
+        snprintf(detail, sizeof(detail), "%s%s%s%s",
             app_is_system(&apps[i]) ? "built into ReconOS" : apps[i].module,
-            apps[i].disabled ? "   turned off" : "");
+            version, over, apps[i].disabled ? "   turned off" : "");
 
         draw_row(cp, p, x, y + row * ROW_HEIGHT, w - bar, row, apps[i].name,
             detail, i == cp->selected);
