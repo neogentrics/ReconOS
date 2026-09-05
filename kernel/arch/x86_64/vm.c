@@ -117,11 +117,16 @@ static u64 *next_level(u64 *table, unsigned index, bool create)
 
 		phys = virt_to_phys(fresh);
 
-		/* Intermediate entries are permissive: the CPU takes the *most*
-		 * restrictive of the levels for write and user, but the least
-		 * restrictive for NX -- so NX must be cleared here and set on
-		 * the leaf, or nothing below is ever executable. */
-		table[index] = (phys & PTE_ADDR_MASK) | PTE_PRESENT | PTE_WRITE;
+		/* Intermediate entries are permissive, and deliberately so.
+		 *
+		 * The processor takes the *most* restrictive of every level for
+		 * write and user, and the *least* restrictive for no-execute.
+		 * So NX must be clear here and set on the leaf, or nothing below
+		 * is ever executable -- and USER must be set here, or nothing
+		 * below is ever reachable from user mode however the leaf is
+		 * marked. The leaf decides; the levels above must not veto. */
+		table[index] = (phys & PTE_ADDR_MASK)
+			     | PTE_PRESENT | PTE_WRITE | PTE_USER;
 		return fresh;
 	}
 
@@ -134,6 +139,26 @@ static u64 *next_level(u64 *table, unsigned index, bool create)
 	return table_at(table[index] & PTE_ADDR_MASK);
 }
 
+/* Replacing a live mapping means the old translation may still be sitting in
+ * the processor's cache of them, and a cached translation is consulted before
+ * the table it came from. So the entry has to be knocked out by hand.
+ *
+ * This was missing until user mode arrived, and it could not have been noticed
+ * before: every mapping the kernel had ever made was made once, at an address
+ * nothing had touched yet, and there was nothing stale to find. The second user
+ * program, mapped at the same address as the first, read the first program's
+ * page and ran it -- correct tables, wrong memory.
+ *
+ * Only replacements are invalidated. A first mapping has nothing cached, and
+ * invalidating unconditionally would mean five hundred invalidations while
+ * building the direct map for no reason at all.
+ */
+static void invalidate_if_live(u64 entry, vaddr_t va)
+{
+	if (entry & PTE_PRESENT)
+		__asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+}
+
 static u64 leaf_bits(unsigned flags, bool large)
 {
 	u64 bits = PTE_PRESENT;
@@ -142,7 +167,12 @@ static u64 leaf_bits(unsigned flags, bool large)
 		bits |= PTE_WRITE;
 	if (!(flags & VM_EXEC) && caps.no_execute)
 		bits |= PTE_NX;
-	if (flags & VM_GLOBAL)
+	if (flags & VM_USER)
+		bits |= PTE_USER;
+	else if (flags & VM_GLOBAL)
+		/* Global and user are mutually exclusive here on purpose: a
+		 * global mapping survives an address space switch, and a user
+		 * mapping belongs to one address space by definition. */
 		bits |= PTE_GLOBAL;
 	if (flags & VM_DEVICE)
 		bits |= PTE_PCD | PTE_PWT;
@@ -174,6 +204,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 		 * never made from five hundred and twelve 2MB ones. */
 		if (caps.page_1g && size >= SIZE_1G &&
 		    !((va | pa) & (SIZE_1G - 1))) {
+			invalidate_if_live(pdpt[i3], va);
 			pdpt[i3] = (pa & PTE_ADDR_MASK) | leaf_bits(flags, true);
 			mapped_1g++;
 			va += SIZE_1G;
@@ -188,6 +219,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 		if (caps.page_2m && size >= SIZE_2M &&
 		    !((va | pa) & (SIZE_2M - 1))) {
+			invalidate_if_live(pd[i2], va);
 			pd[i2] = (pa & PTE_ADDR_MASK) | leaf_bits(flags, true);
 			mapped_2m++;
 			va += SIZE_2M;
@@ -200,6 +232,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 		if (!pt)
 			return false;
 
+		invalidate_if_live(pt[i1], va);
 		pt[i1] = (pa & PTE_ADDR_MASK) | leaf_bits(flags, false);
 		mapped_4k++;
 		va += PAGE_SIZE;

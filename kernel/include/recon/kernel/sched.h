@@ -42,6 +42,8 @@
 #include <recon/kernel/types.h>
 #include <recon/kernel/compiler.h>
 
+struct personality;
+
 #define THREAD_NAME_MAX 24
 
 /* How many ticks a thread gets before the scheduler looks elsewhere. At a
@@ -76,6 +78,11 @@ struct thread {
 
 	void *stack_base;
 	size_t stack_pages;
+
+	/* Which system calls this thread's program means when it makes one.
+	 * Null for a kernel thread, which makes none. See user.h -- it is one
+	 * pointer now and a rewrite later. */
+	const struct personality *personality;
 
 	char name[THREAD_NAME_MAX];
 };

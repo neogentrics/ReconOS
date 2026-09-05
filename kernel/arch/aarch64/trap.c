@@ -16,14 +16,21 @@
 #include <recon/kernel/trap.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/panic.h>
+#include <recon/kernel/user.h>
+#include <recon/kernel/sched.h>
 
-/* Must match the layout vectors.S builds, exactly. */
+/* Must match the layout vectors.S builds, exactly.
+ *
+ * x[0] is the program's real x0, not the vector number -- which it used to be,
+ * and which was harmless right up until a system call needed its first
+ * argument. The vector has a slot of its own now. */
 struct trap_frame {
-	u64 x[31];	/* x0 holds the vector slot index, not the original x0 */
-	u64 elr;	/* where it faulted; writable, to resume elsewhere */
+	u64 x[31];	/* x0 through x30, as the interrupted code left them */
+	u64 elr;	/* where it happened; writable, to resume elsewhere */
 	u64 spsr;
 	u64 esr;
 	u64 far;
+	u64 vector;	/* which of the sixteen slots we came through */
 };
 
 extern char exception_vectors[];
@@ -87,11 +94,39 @@ void trap_dispatch(struct trap_frame *f)
 	unsigned ec = (unsigned)(f->esr >> 26);
 	unsigned iss = (unsigned)(f->esr & 0x1FFFFFF);
 
-	/* Slots 1, 5, 9 and 13 are IRQ. Five is the one kernel interrupts arrive
-	 * on -- current exception level, on its own stack. */
-	if ((f->x[0] & 3) == 1) {
+	/* Slots 1, 5, 9 and 13 are IRQ. Five is where kernel interrupts arrive;
+	 * nine is where one that interrupted a *user* program arrives, and both
+	 * are handled identically -- the tick does not care whose time it took. */
+	if ((f->vector & 3) == 1) {
 		aarch64_irq();
 		return;
+	}
+
+	/* A system call: a synchronous exception from a lower level whose class
+	 * says SVC. Slot 8 is where a 64-bit user program's `svc` lands.
+	 *
+	 * The register convention is Linux's on this architecture, chosen rather
+	 * than invented: x8 carries the number, x0 through x5 the arguments, and
+	 * the result returns in x0. Matching it costs nothing now and means a
+	 * compatibility layer has one less thing to translate later. */
+	if (f->vector == 8 && ec == 0x15) {
+		f->x[0] = (u64)syscall_dispatch(f->x[8],
+						f->x[0], f->x[1], f->x[2],
+						f->x[3], f->x[4], f->x[5]);
+		return;
+	}
+
+	/* A fault in a user program, rather than in the kernel. It kills the
+	 * program and nothing else -- which is the entire point of the boundary,
+	 * and is the first time in this kernel's life that something can go
+	 * wrong without the machine stopping. */
+	if (f->vector >= 8) {
+		kprintf("\nuser program fault: %s at %p, touching %p\n",
+			exception_class(ec), (void *)(uintptr_t)f->elr,
+			(void *)(uintptr_t)f->far);
+		kputs("the program is ended; the kernel continues\n");
+		user_note_fault();
+		thread_exit();
 	}
 
 	if (trap_expecting) {
@@ -103,7 +138,7 @@ void trap_dispatch(struct trap_frame *f)
 	}
 
 	kputs_unlocked("\n=== ReconOS kernel fault ===\n");
-	kprintf_unlocked("  exception    : %s\n", slot_name[f->x[0] & 15]);
+	kprintf_unlocked("  exception    : %s\n", slot_name[f->vector & 15]);
 	kprintf_unlocked("  class        : %s\n", exception_class(ec));
 
 	if (ec == 0x24 || ec == 0x25) {
@@ -129,7 +164,13 @@ void trap_dispatch(struct trap_frame *f)
 
 	/* kprintf supports no field widths, so the register numbers are padded
 	 * by hand. The alternative was to add widths to the formatter for the
-	 * sake of one caller. */
+	 * sake of one caller.
+	 *
+	 * x0 gets a line of its own because the pairs below start at x1, which
+	 * they did back when slot zero held the vector number and there was no
+	 * x0 to print. It holds a real register now, and a fault report that
+	 * omits the first argument register omits the interesting one. */
+	kprintf_unlocked("  x 0 %p\n", (void *)(uintptr_t)f->x[0]);
 	for (unsigned i = 1; i < 31; i += 2)
 		kprintf_unlocked("  x%s%u %p   x%s%u %p\n",
 			i < 10 ? " " : "", i, (void *)(uintptr_t)f->x[i],

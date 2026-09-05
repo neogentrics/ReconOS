@@ -41,8 +41,10 @@
 /* Lower attributes. */
 #define ATTR_IDX(n)  ((u64)(n) << 2)
 #define ATTR_NS      (1ULL << 5)
-#define ATTR_AP_RW   (0ULL << 6)	/* read/write at EL1, nothing at EL0 */
-#define ATTR_AP_RO   (2ULL << 6)	/* read-only at EL1 */
+#define ATTR_AP_RW      (0ULL << 6)	/* read/write at EL1, nothing at EL0 */
+#define ATTR_AP_USER_RW (1ULL << 6)	/* read/write at both levels */
+#define ATTR_AP_RO      (2ULL << 6)	/* read-only at EL1, nothing at EL0 */
+#define ATTR_AP_USER_RO (3ULL << 6)	/* read-only at both levels */
 #define ATTR_SH_INNER (3ULL << 8)	/* inner shareable */
 #define ATTR_AF      (1ULL << 10)
 #define ATTR_NG      (1ULL << 11)
@@ -144,6 +146,39 @@ static u64 *next_level(u64 *table, unsigned index, bool create)
 	}
 }
 
+/* Replacing a live mapping means the old translation may still be sitting in
+ * the processor's cache of them, and a cached translation is consulted before
+ * the table it came from. So the entry has to be knocked out by hand.
+ *
+ * This was missing until user mode arrived, and it could not have been noticed
+ * before: every mapping the kernel had ever made was made once, at an address
+ * nothing had touched yet, and there was nothing stale to find. The second user
+ * program, mapped at the same address as the first, read the first program's
+ * page and ran it -- correct tables, wrong memory.
+ *
+ * Only replacements are invalidated. A first mapping has nothing cached, and
+ * invalidating unconditionally would mean five hundred invalidations while
+ * building the direct map for no reason at all.
+ */
+static void invalidate_if_live(u64 entry, vaddr_t va)
+{
+	if ((entry & 3) == DESC_INVALID)
+		return;
+
+	/* The address goes in as a page number, not a byte address, and the
+	 * ordering around it is not optional: the table write has to be visible
+	 * before the invalidation, and the invalidation complete before any
+	 * instruction that might use the new translation is fetched. */
+	__asm__ volatile(
+		"dsb ishst\n"
+		"tlbi vaae1is, %0\n"
+		"dsb ish\n"
+		"isb\n"
+		:
+		: "r"(va >> 12)
+		: "memory");
+}
+
 static u64 leaf_attrs(unsigned flags, bool block)
 {
 	u64 a = block ? DESC_BLOCK : DESC_PAGE;
@@ -158,15 +193,34 @@ static u64 leaf_attrs(unsigned flags, bool block)
 		a |= ATTR_IDX(MAIR_NORMAL) | ATTR_SH_INNER;
 	}
 
-	a |= (flags & VM_WRITE) ? ATTR_AP_RW : ATTR_AP_RO;
+	/* The access permission bits carry both questions at once on this
+	 * architecture: who may reach it, and whether they may write. Four
+	 * combinations, and picking the wrong one is the difference between a
+	 * page a user program cannot see and one it can rewrite. */
+	if (flags & VM_USER)
+		a |= (flags & VM_WRITE) ? ATTR_AP_USER_RW : ATTR_AP_USER_RO;
+	else
+		a |= (flags & VM_WRITE) ? ATTR_AP_RW : ATTR_AP_RO;
 
-	/* Never executable from EL0 -- nothing the kernel maps is user code.
-	 * Executable from EL1 only where asked. Device memory is never
-	 * executable, which matters: a speculative instruction fetch from a
-	 * memory-mapped register is a real way to hang a bus. */
-	a |= ATTR_UXN;
-	if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
-		a |= ATTR_PXN;
+	/* Execute-never, separately for each privilege level.
+	 *
+	 * A kernel mapping is never executable from EL0 -- nothing the kernel
+	 * maps is user code. A *user* mapping is never executable from EL1,
+	 * which is the more important half: it means the kernel cannot be talked
+	 * into running a user program's bytes with kernel privilege, which is
+	 * the shape of a whole family of exploits.
+	 *
+	 * Device memory is never executable at all: a speculative instruction
+	 * fetch from a memory-mapped register is a real way to hang a bus. */
+	if (flags & VM_USER) {
+		a |= ATTR_PXN;			/* never executable by the kernel */
+		if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
+			a |= ATTR_UXN;
+	} else {
+		a |= ATTR_UXN;			/* never executable by user mode */
+		if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
+			a |= ATTR_PXN;
+	}
 
 	return a;
 }
@@ -198,6 +252,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 		if (caps.page_1g && size >= SIZE_1G &&
 		    !((va | pa) & (SIZE_1G - 1))) {
+			invalidate_if_live(l1[i1], va);
 			l1[i1] = (pa & ADDR_MASK) | leaf_attrs(flags, true);
 			mapped_1g++;
 			va += SIZE_1G; pa += SIZE_1G; size -= SIZE_1G;
@@ -210,6 +265,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 		if (caps.page_2m && size >= SIZE_2M &&
 		    !((va | pa) & (SIZE_2M - 1))) {
+			invalidate_if_live(l2[i2], va);
 			l2[i2] = (pa & ADDR_MASK) | leaf_attrs(flags, true);
 			mapped_2m++;
 			va += SIZE_2M; pa += SIZE_2M; size -= SIZE_2M;
@@ -220,6 +276,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 		if (!l3)
 			return false;
 
+		invalidate_if_live(l3[i3], va);
 		l3[i3] = (pa & ADDR_MASK) | leaf_attrs(flags, false);
 		mapped_4k++;
 		va += PAGE_SIZE; pa += PAGE_SIZE; size -= PAGE_SIZE;

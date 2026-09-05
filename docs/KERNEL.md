@@ -60,7 +60,7 @@ courtesy now rather than a dependency.
 | 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and preemption | **Done** |
 | 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
-| 10 | User mode, the first system call, and the kernel moves to the higher half | |
+| 10 | User mode, the first system call, and the kernel moves to the higher half | **User mode done**, the higher half open |
 | 11 | Block devices — storage the kernel can read and write | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
 | 13 | ReconFS — a filesystem of its own | |
@@ -615,6 +615,120 @@ checks will first bite this kernel, and it is listed rather than assumed.
 Also absent by choice: priorities (a scheme invented before there is a workload
 to shape it around is fitted to nothing) and blocking (waiting for a key or a
 disk needs the key or the disk to exist).
+
+
+### Checkpoint 10 — user mode and the first system call
+
+**This is the checkpoint the desktop's accounts have been waiting for.**
+
+Everything before it ran at one privilege level. A bug anywhere could write
+anywhere, and "this account may not do that" was a decision code made about
+itself — which meant any program that simply did not ask was not bound by it.
+ReconOS declines to install software for a standard account because its Control
+Panel declines to. After this checkpoint the processor declines.
+
+**Entering.** The two architectures are barely comparable here.
+
+On aarch64 a privilege level is a *number in the saved processor state*, and the
+same `eret` that returns from an exception is what enters user mode: set SPSR to
+say EL0, set ELR to the entry point, set SP_EL0, and return from an exception
+that never happened. `arch/aarch64/user.c` is fifty lines and most of them are
+comment.
+
+On x86_64 it is descriptors. The GDT grew user code and user data entries, and
+their *order* is not free: SYSRET rebuilds both user selectors by adding 8 and
+16 to a single base held in one MSR, so user data must follow kernel data and
+user code must follow that. A GDT laid out the way a person would find natural —
+code, code, data, data — does not work, and fails by loading a plausible wrong
+segment rather than by refusing. Entry itself is `iretq` against a hand-built
+interrupt frame, because `iretq` can set RFLAGS to anything and there are no
+saved flags to restore the first time.
+
+**Returning.** `svc` on ARM lands in vector slot 8, one of the sixteen the
+exception table has filled since checkpoint 7 and nothing had used. `syscall` on
+x86 needs an entry point of its own, and the interesting thing about it is what
+it does *not* do: it does not switch stacks. The processor arrives in the kernel
+still standing on the user program's stack, at whatever address the user program
+chose. Three instructions — `swapgs`, save, switch — get off it, and the window
+before them is why SFMASK clears the interrupt flag on entry.
+
+**The register conventions are Linux's, deliberately.** x8 and x0–x5 on ARM;
+RAX and RDI/RSI/RDX/R10/R8/R9 on x86. Matching them costs nothing today and
+means a compatibility layer for Linux binaries has one less thing to translate,
+which is the whole argument for the next paragraph.
+
+**Personality: the one thing the kernel owes the compatibility layers.** A
+system call arrives as a number. What that number *means* is a property of the
+program making it — 1 is `write` to a Linux binary and something else entirely
+to a Windows one. So the syscall table is a pointer on the process rather than a
+global, and a process is created with a personality that selects it. Nothing
+needs it yet; there is one table and everything uses it. It is built this way
+now because it costs one pointer now and a rewrite later. Linux calls this
+`binfmt`; Windows NT called them subsystems.
+
+**Two defences, and both are tested by a program written to attack them.**
+
+The first is code: `user_range_ok` checks every pointer a system call is handed,
+for overflow first — a pointer near the top of the address space with a huge
+length otherwise produces an end address that wrapped below the start, and every
+subsequent range test passes.
+
+The second is the processor: kernel mappings do not carry `VM_USER`, and its
+absence is what makes the kernel unreachable. Not a check in any code — a bit
+consulted on every access.
+
+So the second test program tries both. It asks the kernel to `write` from the
+direct map's base, which is every byte of physical memory laid out conveniently;
+that is refused. Then, having been refused, it reads the address itself; that
+faults. It is killed, and the kernel is not — which is the first time in this
+kernel's life that something can go wrong without the machine stopping.
+
+The test treats the program *exiting normally* as the failure, because exiting
+normally is what it does when the first attempt succeeds.
+
+**Two bugs, both older than this checkpoint, both found by the second program.**
+
+`vm_map` never invalidated the TLB when it replaced a live mapping. It could not
+have been noticed before: every mapping the kernel had ever made was made once,
+at an address nothing had touched, and there was nothing stale to find. The
+second user program, mapped at the same virtual address as the first, read and
+ran the first program's page — correct page tables, wrong memory. Only
+replacements are invalidated now; invalidating unconditionally would mean five
+hundred invalidations while building the direct map for no reason.
+
+The aarch64 exception vectors destroyed `x0` before saving it — each of the
+sixteen slots began `mov x0, #index`. That was harmless for as long as every
+exception was a fault, because nobody wanted the register, only the report. It
+stopped being harmless the moment a system call needed its first argument:
+`write(1, buf, len)` would have been `write(8, buf, len)`. The frame gained a
+slot for the vector number, and `x0` is now stored before anything can clobber
+it.
+
+**Verification.** `scripts/verify-kernel.sh` boots the kernel eleven ways and
+reads the self-test counts rather than the absence of a crash:
+
+| Path | Self-tests |
+|---|---|
+| x86_64 PVH, direct kernel load | 10 |
+| x86_64 PVH, `-cpu max` | 10 |
+| x86_64 Multiboot2 via GRUB, BIOS | 10 |
+| x86_64 Multiboot2 via GRUB, UEFI | 10 |
+| x86_64 reconboot, UEFI | 10 |
+| aarch64 device tree, cortex-a72 | 10 |
+| aarch64 device tree, `-cpu max` | 10 |
+| aarch64 device tree, 2 / 4 / 8 processors | 10 each |
+| aarch64 reconboot, UEFI | 10 |
+
+110 self-tests, no failures. The script itself cost one confusing run to get
+right: its patterns were anchored with `$`, and QEMU's serial console ends every
+line with a carriage return as well as a newline, so every path reported no
+output at all — which reads exactly like a kernel that never booted.
+
+**The higher half is still open, and is the rest of this checkpoint.** See the
+note under checkpoint 5. The reason to move the kernel image out of the low half
+is to leave that half to user processes, and there are user processes now — so
+the reason has arrived, and the work has not yet.
+
 
 ## Using the machine you are on
 

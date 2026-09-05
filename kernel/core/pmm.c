@@ -202,6 +202,25 @@ paddr_t pmm_alloc_pages(size_t count)
 
 				mark_used(start, count);
 				search_hint = (i + 1) % total_pages;
+
+				/* Cleared on the way OUT, not on the way in.
+				 *
+				 * Clearing on free trusts every caller to have
+				 * called free, to have called it on the whole
+				 * allocation, and not to have kept a copy.
+				 * Clearing on allocate is unconditional and
+				 * cannot be forgotten by anybody -- including
+				 * code that has not been written yet.
+				 *
+				 * That is the difference between a guarantee and
+				 * a convention, and it is what stops a page that
+				 * held a password reaching the next process that
+				 * asks for memory. It costs a page-zeroing per
+				 * allocation, which is real and is the right
+				 * thing to pay. */
+				kmemset(phys_to_virt(page_addr(start)), 0,
+					count * PAGE_SIZE);
+
 				return page_addr(start);
 			}
 		}
