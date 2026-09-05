@@ -1072,10 +1072,42 @@ Four rules hold across all of it, each paid for by something:
 
 Processes are deliberately *not* stubbed. Applications are `dlopen`'d into the
 compositor's address space, so there is no boundary to write in advance — the
-boundary is an address space and there is not one. The module ABI is settled at
-checkpoint 5, where address spaces arrive, and `recon_appwin_impl` is its real
-surface: a struct of callbacks holding pointers into the compositor's own
+boundary is an address space and there is not one. `recon_appwin_impl` is the
+real surface: a struct of callbacks holding pointers into the compositor's own
 memory, which is the part that cannot survive a process boundary unchanged.
+
+**That sentence used to say the module ABI would be settled at checkpoint 5,
+"where address spaces arrive."** The numbering has moved twice since it was
+written and address spaces arrived at checkpoint 10, which has now landed — so
+the deadline is here rather than ahead, and the paragraph is corrected rather
+than quietly left pointing at a checkpoint that means something else now.
+
+What checkpoint 10 actually settled is smaller than the sentence promised. The
+processor now enforces a privilege boundary, and a process has a personality —
+its own idea of what a system call number means. What it does *not* yet have is
+its own address space: there is one set of page tables, and every thread shares
+it. A process in the sense `recon_appwin_impl` would have to cross needs that,
+plus shared memory between two of them, plus a way to pass a handle. None of
+those is hard after checkpoint 11's device model; none of them exists today.
+
+**The observation that matters for the decision, and it is the desktop
+session's to make.** A function pointer means nothing across an address space,
+so the interface cannot simply be recompiled — it has to invert. The shape that
+survives is the one where the application owns its buffer, draws into shared
+memory, and *submits* a frame, rather than the compositor calling into it. That
+is Wayland, which the compositor already implements for external clients. The
+out-of-process path therefore already exists in the tree; what does not is
+in-tree applications using it.
+
+So the likely answer is not a new ABI but a migration: `recon_appwin_impl`
+stays as a convenience for code that genuinely lives inside the compositor's
+process, and everything a person installs becomes a client. The kernel's part
+is shared memory and handles, and it is on the line for checkpoints 11 through
+13 anyway.
+
+The decision does not need making now. It needs making before checkpoint 15,
+because the installer is what fixes the meaning of "an application", and by then
+the answer has to be true.
 
 The kernel claims error-code area letter `N` in `recon_errors.def`.
 
