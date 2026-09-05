@@ -350,12 +350,30 @@ void vm_init(void)
 			panic("vm: could not map the kernel image");
 	}
 
-	/* The console, as Device memory, identity mapped. Without this the
-	 * kernel goes silent the instant the tables change -- and a kernel that
-	 * cannot report why it stopped is a kernel that is very hard to fix. */
-	if (!vm_map((vaddr_t)PL011_BASE, (paddr_t)PL011_BASE, PAGE_SIZE,
-		    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
-		panic("vm: could not map the console");
+	/* The machine's fixed hardware, as Device memory, identity mapped.
+	 *
+	 * The console first and for its own reason: without it the kernel goes
+	 * silent the instant the tables change, and a kernel that cannot report
+	 * why it stopped is very hard to fix.
+	 *
+	 * The others are here because they are touched before any driver exists
+	 * to discover them. Every one of these was added after something faulted
+	 * reaching for it -- which is the right way round, since a map that
+	 * covers what nothing uses is a map that hides what nothing checked. */
+	{
+		static const paddr_t fixed_devices[] = {
+			PL011_BASE,	/* console */
+			GICD_BASE,	/* interrupt controller, distributor */
+			GICC_BASE,	/* interrupt controller, CPU interface */
+			PL031_BASE,	/* real-time clock */
+		};
+
+		for (unsigned i = 0; i < RK_ARRAY_LEN(fixed_devices); i++)
+			if (!vm_map((vaddr_t)fixed_devices[i], fixed_devices[i],
+				    PAGE_SIZE * 16,
+				    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
+				panic("vm: could not map the machine's fixed hardware");
+	}
 
 	/* Physical memory in the high half. Unlike x86 this is done region by
 	 * region rather than as one span, because the memory type has to be

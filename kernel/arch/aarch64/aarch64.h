@@ -17,6 +17,22 @@ extern u64 reconboot_handoff;
  * kernel switches to its own translation tables. */
 #define PL011_BASE 0x09000000UL
 
+/* The rest of the machine's fixed addresses, together in one place because the
+ * page tables have to map every one of them before anything touches it.
+ *
+ * Learned by fault: the GIC was configured before it was mapped, and the kernel
+ * took a translation fault writing to the CPU interface. Which is exactly what
+ * the fault reporter from checkpoint 7 is for -- it said "data abort,
+ * translation fault level 2, on a write to 0x08010004", and 0x08010004 is the
+ * priority mask register. Two minutes, no guessing. */
+#define GICD_BASE  0x08000000UL		/* interrupt controller, distributor */
+#define GICC_BASE  0x08010000UL		/* interrupt controller, CPU interface */
+#define PL031_BASE 0x09010000UL		/* real-time clock */
+
+/* In time.c: the interrupt path, and what the console reports about the clock. */
+void aarch64_irq(void);
+void aarch64_time_print_source(void);
+
 /* Reads the memory and the command line out of a flattened device tree.
  * Returns false if the blob is not one. */
 bool fdt_parse(u64 dtb_phys);

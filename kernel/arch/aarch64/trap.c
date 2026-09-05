@@ -87,6 +87,13 @@ void trap_dispatch(struct trap_frame *f)
 	unsigned ec = (unsigned)(f->esr >> 26);
 	unsigned iss = (unsigned)(f->esr & 0x1FFFFFF);
 
+	/* Slots 1, 5, 9 and 13 are IRQ. Five is the one kernel interrupts arrive
+	 * on -- current exception level, on its own stack. */
+	if ((f->x[0] & 3) == 1) {
+		aarch64_irq();
+		return;
+	}
+
 	if (trap_expecting) {
 		trap_caught = true;
 		trap_expecting = false;

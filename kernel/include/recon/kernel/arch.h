@@ -49,6 +49,25 @@ void arch_early_init(void);
  * which has nothing else working can still say what went wrong. */
 void arch_console_putc(char c);
 
+/* --- Time -----------------------------------------------------------------
+ *
+ * Three functions rather than one, because a machine has two clocks and they
+ * answer different questions -- see time.h. The tick is set up here too, since
+ * arranging a periodic interrupt means naming a timer and an interrupt
+ * controller, and both are machine-specific in every detail. */
+
+/* Starts the counter, calibrates it, and arranges a periodic interrupt at
+ * TIME_TICK_HZ. Interrupts are enabled by the time this returns. */
+void arch_time_init(void);
+
+/* Nanoseconds since arch_time_init(). Never decreases. */
+u64 arch_monotonic_ns(void);
+
+/* Nanoseconds since 1970-01-01 UTC, or 0 where the machine has no clock the
+ * kernel can read. Zero is a real answer, and better than a plausible wrong
+ * one. */
+u64 arch_wall_ns(void);
+
 /* --- Control ----------------------------------------------------------- */
 
 /* Stop this CPU forever, with interrupts masked. Used by panic(). */

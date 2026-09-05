@@ -102,6 +102,36 @@ isr_\n:
 	ISR_ERR   30		/* security */
 	ISR_NOERR 31
 
+/* Hardware interrupts. The controller was remapped to deliver them starting at
+ * vector 32, because its default vectors collide with the CPU's own exceptions
+ * -- IRQ 0 would otherwise arrive as vector 8, which is the double fault.
+ *
+ * None of these carry an error code, so all of them push a zero. */
+	.macro IRQ n
+	.global irq_\n
+irq_\n:
+	pushq	$0
+	pushq	$(32 + \n)
+	jmp	isr_common
+	.endm
+
+	IRQ 0		/* timer */
+	IRQ 1
+	IRQ 2
+	IRQ 3
+	IRQ 4
+	IRQ 5
+	IRQ 6
+	IRQ 7
+	IRQ 8
+	IRQ 9
+	IRQ 10
+	IRQ 11
+	IRQ 12
+	IRQ 13
+	IRQ 14
+	IRQ 15
+
 isr_common:
 	SAVE_REGS
 
