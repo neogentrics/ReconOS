@@ -27,6 +27,7 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_appwin.h"
+#include "recon_calendar.h"
 #include "recon_clock.h"
 #include "recon_control_panel.h"
 #include "recon_desktop.h"
@@ -2943,6 +2944,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
         { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
         { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true },
+        { "Calendar", RECON_ICON_CALENDAR, recon_calendar_create, true },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing

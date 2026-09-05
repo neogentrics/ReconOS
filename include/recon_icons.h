@@ -50,6 +50,7 @@
 #define RECON_ICON_UPDATE "update"
 #define RECON_ICON_CLOCK "clock"
 #define RECON_ICON_PHOTOS "photos"
+#define RECON_ICON_CALENDAR "calendar"
 #define RECON_ICON_SHUTDOWN "shutdown"
 /* The Recon Towers mark. Copied in from the assets rather than drawn: it is
  * artwork, not a generated glyph. */

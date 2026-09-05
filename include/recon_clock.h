@@ -85,6 +85,16 @@ void recon_clock_now(struct recon_clock_time *out);
 void recon_clock_break_up(int64_t seconds, struct recon_clock_time *out);
 
 /*
+ * The other direction: a date, as seconds since 1970 at midnight UTC.
+ *
+ * Here so that nothing else has to know how many days a month has. Asking for
+ * the first of next month and subtracting gives February's length, correctly,
+ * in 2100 -- and the calendar gets that for free rather than carrying a
+ * second table that has to be right about the same rule.
+ */
+int64_t recon_clock_epoch_of(int year, int month, int day);
+
+/*
  * The clock as the taskbar shows it, and as the longer forms below it.
  *
  * Three separate calls rather than one with a mode, because they are read in

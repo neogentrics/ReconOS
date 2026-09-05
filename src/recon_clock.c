@@ -171,6 +171,30 @@ void recon_clock_now(struct recon_clock_time *out) {
     }
 }
 
+/*
+ * Days from a civil date, which is `break_up`'s arithmetic run forwards.
+ *
+ * Hinnant's days_from_civil. Paired with the one above deliberately: the two
+ * are inverses and a bug in either shows up as a date that will not survive a
+ * round trip, which the tests check.
+ */
+int64_t recon_clock_epoch_of(int year, int month, int day) {
+    int64_t y = year;
+    int64_t m = month;
+    int64_t d = day;
+
+    /* March is the start of the year, so the leap day is at the end of one. */
+    y -= (m <= 2);
+
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = era * 146097 + doe - 719468;
+
+    return days * 86400;
+}
+
 void recon_clock_break_up(int64_t seconds, struct recon_clock_time *out) {
     if (out != NULL) {
         break_up(seconds, out);
