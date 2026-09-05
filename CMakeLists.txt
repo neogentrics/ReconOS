@@ -100,6 +100,7 @@ add_executable(ReconOS
     src/recon_color.c
     src/recon_mp4.c
     src/recon_movie.c
+    src/recon_ocr.c
     src/recon_video.c
     src/recon_player.c
     src/recon_html.c
@@ -286,6 +287,19 @@ target_include_directories(recon_clock_tests PRIVATE
 
 target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES}
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+# Deciding which pixels are ink, finding the bands text sits in, and splitting
+# a band into marks all happen before any font is involved. That is what makes
+# them testable without one -- and the images are built a rectangle at a time,
+# so the right answer is known rather than inspected. An OCR test that runs on a
+# photograph can only be checked by reading its output, which means it passes
+# whenever the output looks plausible.
+add_executable(recon_ocr_tests
+    tests/test_ocr.c
+    src/recon_ocr.c)
+
+target_include_directories(recon_ocr_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Colour conversion and scaling have a known right answer, so they are checked
 # against it rather than against another implementation. The decoder is verified

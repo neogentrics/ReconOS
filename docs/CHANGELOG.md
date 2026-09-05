@@ -185,6 +185,41 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**Reading text out of a picture, begun.** ReconOS has no word processor and
+cannot yet run anybody else's, so a screenshot of a document is currently text
+that cannot be got at. That makes this worth more here than it would be
+elsewhere.
+
+**It is not a research project, and the reason is that ReconOS draws its own
+text.** General optical character recognition -- photographs, perspective,
+handwriting, unknown faces -- is a field. But most of what anybody wants read is
+text that was *rendered*: a screenshot, a saved page, a scan of ordinary print.
+A system with a font rasterizer can produce the shapes it is trying to
+recognise, which turns "what letter is this" into a comparison against shapes it
+can draw on demand. That is the whole idea and it is also the whole limit.
+
+Three of the five stages are built and tested: deciding which pixels are ink,
+finding the bands text sits in, and splitting a band into marks. All three are
+arithmetic on a bitmap, so they need no font and are tested without one -- on
+images built a rectangle at a time, because an OCR test that runs on a
+photograph can only be checked by reading its output, which means it passes
+whenever the output looks plausible.
+
+Two things settled early because they are the honest part rather than the last
+part. The threshold is chosen from the image by Otsu's method rather than fixed,
+and it also decides **which way round the page is** -- light text on dark is as
+ordinary as dark on light in a screenshot, and reading it backwards does not
+fail: it finds the *gaps* between letters, which are marks, in rows, of
+plausible size, and produces a confident answer made entirely of holes. And the
+result carries a confidence and a count of marks it could not name, because a
+reader that cannot say "I am guessing" is one that lies on every picture it was
+not built for.
+
+**The matching is not written**, and there is deliberately no whole-picture
+entry point yet. A function that finds marks and can name none of them works and
+returns nothing, which is a worse thing to ship than a header saying which half
+is finished.
+
 **The glass can be a colour.** Six tints -- Blue, Amber, Rose, Jade, Violet,
 Graphite -- chosen beside the skin rather than as skins of their own. Eleven
 skins times six colours is sixty-six entries in a list somebody has to read,
