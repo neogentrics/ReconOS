@@ -619,6 +619,39 @@ to shape it around is fitted to nothing) and blocking (waiting for a key or a
 disk needs the key or the disk to exist).
 
 
+### Not a checkpoint, but on the record: virtualization
+
+Asked for, and deliberately not scheduled yet. Recorded here rather than
+remembered, which is the whole reason this file exists.
+
+**It is a kernel thing.** Both architectures put it in the processor, and
+checkpoint 3 already reports whether this machine has it. On x86_64 it is VMX or
+SVM: the kernel enters root mode and a guest runs in non-root mode, exiting into
+the kernel on anything it may not do itself. On aarch64 it is EL2, and there is
+a catch worth knowing early — a kernel *entered* at EL2 can drop to EL1 and keep
+EL2 for itself; a kernel entered at EL1 cannot climb back. ReconOS runs at EL1
+and does not currently record which it was entered at. That is free at boot and
+unrecoverable afterwards, so it is the one piece worth doing before the rest.
+
+**Why it comes after the disk work rather than before.** A hypervisor needs
+nested page tables (an extension of checkpoint 5, and part of why the page table
+code is a thing rather than a fixed layout), memory the physical allocator is
+not also handing out, virtual devices — which needs a device model, which needs
+checkpoint 11's block layer — and somewhere to keep a disk image, which needs a
+filesystem. Every one of those is already on the line for its own reasons.
+Reaching for virtualization first would mean building all of them badly, in a
+hurry, for one caller.
+
+**It does not replace the compatibility layers, and they do not replace it.**
+A compatibility layer runs *one program* from another system by translating its
+system calls: cheap, fast, and exactly as complete as the translation. A
+hypervisor runs *the whole other system*: complete by construction, and costs a
+machine's worth of resources to do it. The personality pointer added at
+checkpoint 10 is the first half of the first answer. Both are wanted, for the
+same reason every desktop that has both wants both.
+
+Tracked as [issue #265](https://github.com/neogentrics/ReconOS/issues/265).
+
 ### Checkpoint 10 — user mode, the first system call, and the higher half
 
 **This is the checkpoint the desktop's accounts have been waiting for.**
