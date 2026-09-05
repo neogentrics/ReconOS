@@ -1166,6 +1166,9 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
     }
 
     int line_count = recon_ocr_lines(ink, width, height, lines, MAX_LINES);
+    if (line_count == MAX_LINES) {
+        out->truncated = true;      /* there were more; there was no room */
+    }
     if (line_count == 0) {
         free(ink); free(lines); free(marks); free(matches);
         fail("There is nothing in this picture that looks like a line of "
@@ -1193,6 +1196,9 @@ bool recon_ocr_read(const unsigned char *rgba, int width, int height,
     for (int i = 0; i < line_count; i++) {
         int mark_count = recon_ocr_marks(ink, width, &lines[i], marks,
             MAX_MARKS);
+        if (mark_count == MAX_MARKS) {
+            out->truncated = true;
+        }
         if (mark_count <= 0) {
             continue;
         }

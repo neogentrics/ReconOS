@@ -20,7 +20,10 @@
 #include "recon_appwin.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_ocr_match.h"
 #include "recon_photos.h"
+#include "recon_server.h"
+#include "recon_shell.h"
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
@@ -47,6 +50,32 @@
 #define HIT_NEXT (RECON_APPWIN_HIT_USER + 2)
 #define HIT_FIT (RECON_APPWIN_HIT_USER + 3)
 #define HIT_PICTURE (RECON_APPWIN_HIT_USER + 4)
+#define HIT_READ (RECON_APPWIN_HIT_USER + 5)
+
+/*
+ * Above this, ask first.
+ *
+ * The read is synchronous and the desktop is single-threaded, so whatever it
+ * costs is time nothing else answers for. Measured rather than guessed: a
+ * 1920x1080 screenshot reads in about forty milliseconds and a 2400-pixel-wide
+ * page in about a hundred, both including opening the typeface and decoding the
+ * file. Nothing at those sizes is worth interrupting somebody for.
+ *
+ * Twelve megapixels is roughly a quarter of a second by that rate -- the point
+ * at which a person would notice the machine stop rather than merely fail to
+ * notice it running. A photograph from a camera is the picture that crosses it.
+ */
+#define ASK_ABOVE_PIXELS 12000000LL
+
+/*
+ * Long enough for the "Reading" line to be on screen before the reading starts.
+ *
+ * The work happens on a timer rather than on the click for exactly this: a
+ * synchronous read inside the click handler would freeze with the *previous*
+ * status showing, so the one moment the machine is busy is the one moment it
+ * has not said so.
+ */
+#define READ_SETTLE_MS 40
 
 #define PICTURES_MAX 512
 
@@ -72,6 +101,31 @@ struct recon_photos {
 
     char message[192];
     bool message_is_warning;
+
+    /* --- Reading the text in a picture --- */
+
+    /* Kept rather than reached for through the window, because tearing down
+     * has to cancel a question and must not depend on what is still alive. */
+    struct recon_shell *shell;
+    struct wl_event_source *read_timer;
+
+    /* Opened the first time somebody reads, and held. Parsing a typeface is
+     * the expensive part of a small read, and it does not change. */
+    struct recon_ocr_font *ocr;
+
+    /*
+     * Which picture the pending read was asked for, and what it was called.
+     *
+     * Forty milliseconds is enough to press Next, and reading the picture
+     * somebody has moved on from is worse than reading none: the file would be
+     * named after one picture and hold the text of another.
+     */
+    int reading_at;                     /* -1 when nothing is pending */
+    char reading_name[RECON_NAME_MAX];
+
+    /* A guess, held while its question is on screen. */
+    struct recon_ocr_result held;
+    bool holding;
 };
 
 static void set_message(struct recon_photos *ph, bool warning, const char *fmt,
@@ -87,6 +141,10 @@ static void set_message(struct recon_photos *ph, bool warning,
 }
 
 /* Whether the name ends in something stb_image can decode. */
+static int on_read_tick(void *user);
+static void begin_reading(struct recon_photos *ph);
+static void on_size_answer(void *user, int choice);
+
 static bool looks_like_a_picture(const char *name) {
     static const char *const KINDS[] = { ".png", ".jpg", ".jpeg", ".bmp",
         ".gif", ".tga", ".psd", NULL };
@@ -246,6 +304,285 @@ bool recon_photos_open_path(struct recon_appwin *win, const char *path) {
 
 /* --- Drawing --- */
 
+
+/* --- Reading the text in a picture --- */
+
+/*
+ * The provenance line, written into every file this produces.
+ *
+ * Always, not only when the reading was doubtful. A note that appears solely on
+ * uncertain files makes its *absence* a claim of confidence -- and absence is
+ * erased by one edit, by one copy and paste, by anything at all. A line that is
+ * always there says what it says and nothing more.
+ */
+static int describe_reading(char *out, size_t size, const char *from,
+        const struct recon_ocr_result *r, bool a_reading) {
+    int named = r->characters - r->unrecognised;
+
+    int used = snprintf(out, size,
+        "Read from %s by ReconOS. %d of %d marks named, confidence %d.\n",
+        from, named, r->characters, r->confidence);
+
+    if (r->unrecognised > 0 && used > 0 && (size_t)used < size) {
+        used += snprintf(out + used, size - (size_t)used,
+            "The %d it could not name are written as \xEF\xBF\xBD, not guessed "
+            "at.\n", r->unrecognised);
+    }
+    if (!a_reading && used > 0 && (size_t)used < size) {
+        used += snprintf(out + used, size - (size_t)used,
+            "This did not meet the bar for a reading. Every line of it is a "
+            "guess.\n");
+    }
+    if (r->truncated && used > 0 && (size_t)used < size) {
+        used += snprintf(out + used, size - (size_t)used,
+            "The picture held more than could be read in one go. The rest was "
+            "not looked at.\n");
+    }
+    if (used > 0 && (size_t)used < size) {
+        used += snprintf(out + used, size - (size_t)used, "\n");
+    }
+    return used;
+}
+
+/*
+ * Write it out, and open it.
+ *
+ * Into Documents rather than beside the picture: Documents is made with the
+ * account and is always writable, and the picture may be sitting on a volume
+ * this account cannot write to. A new name rather than an overwrite, because
+ * this is a button somebody will press twice and the second press must not
+ * take the first result away.
+ */
+static bool save_reading(struct recon_photos *ph,
+        const struct recon_ocr_result *r, bool a_reading) {
+    char documents[RECON_PATH_MAX];
+    recon_text_copy(documents, sizeof(documents),
+        recon_fs_user_dir("Documents"));
+
+    char base[RECON_NAME_MAX];
+    recon_text_copy(base, sizeof(base), ph->reading_name);
+    char *dot = strrchr(base, '.');
+    if (dot != NULL && dot != base) {
+        *dot = '\0';
+    }
+    if (base[0] == '\0') {
+        recon_text_copy(base, sizeof(base), "Reading");
+    }
+
+    char leaf[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", documents, base, ".txt", leaf,
+            sizeof(leaf))) {
+        set_message(ph, true, "%s", recon_fs_last_error());
+        return false;
+    }
+
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), documents, leaf)) {
+        set_message(ph, true, "That name is too long to save as text.");
+        return false;
+    }
+
+    char head[512];
+    int head_len = describe_reading(head, sizeof(head), ph->reading_name, r,
+        a_reading);
+    if (head_len < 0) {
+        head_len = 0;
+    }
+
+    /*
+     * One buffer and one write. A header written separately would leave a file
+     * containing nothing but a provenance note if the second write failed --
+     * which is a file that says a reading happened and does not contain one.
+     */
+    size_t total = (size_t)head_len + r->length + 2;
+    char *body = malloc(total);
+    if (body == NULL) {
+        set_message(ph, true, "Not enough memory to save that.");
+        return false;
+    }
+
+    memcpy(body, head, (size_t)head_len);
+    memcpy(body + head_len, r->text, r->length);
+    size_t at = (size_t)head_len + r->length;
+    if (at == 0 || body[at - 1] != '\n') {
+        body[at++] = '\n';
+    }
+
+    bool wrote = recon_fs_write("/", path, body, at);
+    free(body);
+
+    if (!wrote) {
+        set_message(ph, true, "%s", recon_fs_last_error());
+        return false;
+    }
+
+    int named = r->characters - r->unrecognised;
+    if (a_reading) {
+        if (r->unrecognised > 0) {
+            set_message(ph, false, "Read %d of %d marks. '%s' is in your "
+                "Documents.", named, r->characters, leaf);
+        } else {
+            set_message(ph, false, "Read %d characters. '%s' is in your "
+                "Documents.", named, leaf);
+        }
+    } else {
+        set_message(ph, true, "Saved the guess as '%s' in your Documents.",
+            leaf);
+    }
+
+    /* Written first, opened second. If opening fails the text is on disk and
+     * the line above says where. */
+    recon_shell_open_file(ph->shell, path);
+    return true;
+}
+
+static void on_guess_answer(void *user, int choice) {
+    struct recon_photos *ph = user;
+
+    if (ph->holding) {
+        if (choice == 0) {
+            save_reading(ph, &ph->held, false);
+        } else {
+            set_message(ph, false, "Not saved.");
+        }
+        recon_ocr_result_free(&ph->held);
+        ph->holding = false;
+    }
+    recon_appwin_refresh(ph->win);
+}
+
+/*
+ * What came back, and whether to keep it.
+ *
+ * Four outcomes, and three of them write nothing. That ratio is the feature: a
+ * wrong transcription that looks right is worse than none, so the only case
+ * that saves without asking is the one the engine itself calls a reading.
+ */
+static void handle_result(struct recon_photos *ph, struct recon_ocr_result *r) {
+    int named = r->characters - r->unrecognised;
+
+    if (named == 0) {
+        /*
+         * Marks were found and none could be named. A file whose entire
+         * contents are replacement characters is not a result, and offering to
+         * save one would be offering somebody a page of nothing.
+         */
+        /* Short enough to fit the bar. The bar truncates with an ellipsis,
+         * and a refusal somebody has to widen a window to read is a refusal
+         * they will not read. */
+        set_message(ph, true, "Found %d marks and could name none. Nothing "
+            "saved.", r->characters);
+        recon_ocr_result_free(r);
+        return;
+    }
+
+    if (recon_ocr_result_is_a_reading(r) && !r->truncated) {
+        save_reading(ph, r, true);
+        recon_ocr_result_free(r);
+        return;
+    }
+
+    /*
+     * A guess, or cut short. Held, and asked about, with the real numbers --
+     * and deliberately without a sample of the text.
+     *
+     * A plausible-looking excerpt turns the question into a rubber stamp: it
+     * reads as evidence, and the whole reason to ask is that the engine cannot
+     * tell whether it is. There is no setting to skip this and no remembered
+     * answer, because it was a guess every time.
+     */
+    char question[400];
+    if (r->truncated && !recon_ocr_result_is_a_reading(r)) {
+        snprintf(question, sizeof(question),
+            "This picture holds more text than can be read in one go, and of "
+            "what was read only %d of %d marks could be named -- confidence "
+            "%d out of 100. That is a guess, not a reading, and letters it did "
+            "name may still be wrong.",
+            named, r->characters, r->confidence);
+    } else if (r->truncated) {
+        snprintf(question, sizeof(question),
+            "This picture holds more text than can be read in one go. What is "
+            "here was read; the rest was not looked at.");
+    } else {
+        snprintf(question, sizeof(question),
+            "Only %d of %d marks could be named, and confidence is %d out of "
+            "100. That is a guess, not a reading -- letters it did name may "
+            "still be wrong. Saving writes that warning into the file.",
+            named, r->characters, r->confidence);
+    }
+
+    ph->held = *r;
+    ph->holding = true;
+
+    /* "Don't Save" last, so it is what Return and Escape both do. */
+    static const char *const CHOICES[] = { "Save the Guess", "Don't Save" };
+    recon_appwin_ask(ph->win, r->truncated ? "Only part of it" : "This is a "
+        "guess", question, CHOICES, 2, on_guess_answer);
+}
+
+static int on_read_tick(void *user) {
+    struct recon_photos *ph = user;
+
+    int asked_for = ph->reading_at;
+    ph->reading_at = -1;
+
+    if (ph->pixels == NULL || asked_for != ph->at) {
+        set_message(ph, true, "The picture changed, so nothing was read.");
+        recon_appwin_refresh(ph->win);
+        return 0;
+    }
+
+    if (ph->ocr == NULL) {
+        ph->ocr = recon_ocr_font_find();
+    }
+    if (ph->ocr == NULL) {
+        /*
+         * Reported here rather than by dimming the button. Finding out costs
+         * parsing a typeface, and a machine that gains one should not need
+         * this window reopened.
+         */
+        set_message(ph, true, "There is no typeface on this machine to read "
+            "with.");
+        recon_appwin_refresh(ph->win);
+        return 0;
+    }
+
+    struct recon_ocr_result result;
+    if (!recon_ocr_read(ph->pixels, ph->width, ph->height, ph->ocr, &result)) {
+        /* The engine's own sentence. It knows which of several things went
+         * wrong and this does not. */
+        set_message(ph, true, "%s", recon_ocr_match_last_error());
+        recon_appwin_refresh(ph->win);
+        return 0;
+    }
+
+    handle_result(ph, &result);
+    recon_appwin_refresh(ph->win);
+    return 0;
+}
+
+static void begin_reading(struct recon_photos *ph) {
+    ph->reading_at = ph->at;
+    recon_text_copy(ph->reading_name, sizeof(ph->reading_name),
+        ph->names[ph->at]);
+
+    set_message(ph, false, "Reading.");
+    recon_appwin_refresh(ph->win);
+
+    wl_event_source_timer_update(ph->read_timer, READ_SETTLE_MS);
+}
+
+static void on_size_answer(void *user, int choice) {
+    struct recon_photos *ph = user;
+
+    if (choice == 0) {
+        begin_reading(ph);
+    } else {
+        set_message(ph, false, "Not read.");
+        recon_appwin_refresh(ph->win);
+    }
+}
+
 static void photos_draw(void *user, struct recon_panel *panel,
         int x, int y, int w, int h) {
     struct recon_photos *ph = user;
@@ -355,6 +692,27 @@ static void photos_draw(void *user, struct recon_panel *panel,
     recon_hit_add(panel, bx, by + 4, how_w, BAR_HEIGHT - 9, HIT_FIT);
     bx += how_w + 12;
 
+    /*
+     * Registered even when it cannot be pressed, and dimmed.
+     *
+     * A button that vanishes when it is unavailable is a button somebody has to
+     * discover twice; one that is there and explains itself costs three lines.
+     */
+    const char *read_label = "Read Text";
+    int read_w = recon_text_width(ph->font, read_label) + 16;
+    bool can_read = ph->pixels != NULL && ph->reading_at < 0 && !ph->holding;
+
+    recon_fill_rect(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, COLOR_BG);
+    recon_draw_button_edge(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, false,
+        COLOR_BAR);
+    recon_draw_text(panel, ph->font, bx + 8, baseline, read_w, read_label,
+        can_read ? COLOR_TEXT : COLOR_DIM);
+    recon_hit_add(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, HIT_READ);
+    recon_hit_tip(panel, ph->pixels == NULL ? "Nothing open to read"
+        : can_read ? "Read the text in this picture into a file in Documents"
+                   : "Still reading");
+    bx += read_w + 12;
+
     if (ph->message[0] != '\0') {
         recon_draw_text(panel, ph->font, bx, baseline, x + w - bx - PADDING,
             ph->message,
@@ -385,6 +743,42 @@ static bool photos_click(void *user, uint32_t hit_id, int cx, int cy,
             ? "Fitted to the window."
             : "At its own size. The window shows as much as it holds.");
         return true;
+    case HIT_READ:
+        if (ph->pixels == NULL) {
+            set_message(ph, false, "Nothing open to read.");
+            return true;
+        }
+        if (ph->reading_at >= 0 || ph->holding) {
+            set_message(ph, false, "Still reading.");
+            return true;
+        }
+        if (ph->read_timer == NULL) {
+            set_message(ph, true, "This machine could not start the reader.");
+            return true;
+        }
+        if ((long long)ph->width * ph->height > ASK_ABOVE_PIXELS) {
+            /*
+             * Big enough to be noticed. The read is synchronous, so for the
+             * time it takes nothing else on the desktop answers -- worth
+             * mentioning before it happens rather than explaining afterwards.
+             *
+             * "Not Now" last, so Return and Escape both decline.
+             */
+            static const char *const CHOICES[] = { "Read It Anyway",
+                "Not Now" };
+            char question[256];
+            snprintf(question, sizeof(question),
+                "This picture is %d by %d. Reading something that size takes "
+                "long enough that the desktop will stop answering while it "
+                "works. Nothing is harmed by waiting.",
+                ph->width, ph->height);
+            recon_appwin_ask(ph->win, "Read Text", question, CHOICES, 2,
+                on_size_answer);
+            return true;
+        }
+        begin_reading(ph);
+        return true;
+
     case HIT_PICTURE:
         /* Clicking the picture moves on, the way a slideshow does. */
         step(ph, 1);
@@ -450,6 +844,26 @@ static void photos_describe(void *user, char *out, size_t size) {
 
 static void photos_destroy(void *user) {
     struct recon_photos *ph = user;
+
+    /*
+     * The question goes first.
+     *
+     * Photos is the first application here that can both ask something and be
+     * closed while it asks. A dialog left standing holds a callback into this
+     * struct, and the struct is two lines from being freed.
+     */
+    recon_shell_cancel_dialog(ph->shell, ph);
+
+    if (ph->holding) {
+        recon_ocr_result_free(&ph->held);
+    }
+    if (ph->read_timer != NULL) {
+        wl_event_source_remove(ph->read_timer);
+    }
+    if (ph->ocr != NULL) {
+        recon_ocr_font_close(ph->ocr);
+    }
+
     forget_picture(ph);
     free(ph);
 }
@@ -460,7 +874,7 @@ static const struct recon_appwin_impl PHOTOS_IMPL = {
     .icon = RECON_ICON_PHOTOS,
     .default_width = 640,
     .default_height = 480,
-    .min_width = 280,
+    .min_width = 380,
     .min_height = 200,
     .draw = photos_draw,
     .click = photos_click,
@@ -480,6 +894,9 @@ struct recon_appwin *recon_photos_create(struct recon_server *server,
     ph->font = font;
     ph->fit = true;
 
+    /* Zero is a real picture index, so idle has to be said explicitly. */
+    ph->reading_at = -1;
+
     /*
      * Opens on the account's own Pictures folder, because that is where a
      * person's pictures are and an empty window asking them to go and find
@@ -498,5 +915,10 @@ struct recon_appwin *recon_photos_create(struct recon_server *server,
         free(ph);
         return NULL;
     }
+
+    ph->shell = server->shell;
+    ph->read_timer = wl_event_loop_add_timer(
+        wl_display_get_event_loop(server->wl_display), on_read_tick, ph);
+
     return ph->win;
 }

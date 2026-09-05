@@ -185,6 +185,43 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**A Read Text button in Photos.** It reads the picture on screen, writes the
+text to a new file in Documents named after the picture, and opens it in
+Notepad. Verified end to end on a running system: 46 of 46 marks, confidence
+100, a file on disk with a provenance line at the top of it.
+
+**Three of the four outcomes write nothing, and that ratio is the feature.**
+The only case that saves without asking is the one the engine itself calls a
+reading. A picture where marks were found and none could be named says so and
+saves nothing -- a file whose entire contents are replacement characters is not
+a result. A guess is held and asked about, with the real numbers, and
+**deliberately without showing a sample of the text**: an excerpt reads as
+evidence, and the whole reason to ask is that the engine cannot tell whether it
+is. There is no setting to skip the question and no remembered answer, because
+it was a guess every time.
+
+The provenance line goes on **every** file, not only the doubtful ones. A note
+that appears solely on uncertain output makes its absence a claim of
+confidence, and absence is erased by one edit.
+
+**The reading happens on a timer rather than on the click.** It is synchronous
+and the desktop is single-threaded, so doing it inside the click handler would
+freeze with the *previous* status showing -- the one moment the machine is busy
+would be the one moment it had not said so. Forty milliseconds is enough for
+"Reading." to reach the glass first. Above twelve megapixels it asks before
+starting, and that threshold comes from measurement rather than caution: a
+1920x1080 screenshot reads in about 40ms and a 2400-pixel page in about 100.
+
+**And the header now says what this cannot read.** A screenshot of a *whole
+desktop* comes back as almost nothing, and it is worth stating plainly because
+it is the picture people will try first: `recon_ocr_lines` treats a row with any
+ink as part of a line, which is true of a cropped page and false of a screen
+where window borders put something on nearly every row. The display collapses
+into a few enormous bands and every mark in them is a blob, correctly refused.
+Fixing it needs a stage that finds text regions before finding lines, and that
+stage does not exist yet. Until it does, this reads a picture of some text and
+not a picture of a screen.
+
 **Reading text out of a picture, finished.** On a real screenshot of ReconOS's
 own text -- through the compositor and a PNG encoder, not a buffer the test drew
 for itself -- it reads **52 characters of 52, refuses nothing, and reports a

@@ -76,25 +76,47 @@ struct recon_ocr_result {
      * read -- more so than the confidence, which averages.
      */
     int unrecognised;
+
+    /*
+     * True when the picture had more lines, or a line more marks, than there
+     * was room for. The text is the part that fitted.
+     *
+     * Reported rather than dropped, because a page that was cut short and does
+     * not say so is the same lie as a mark named wrongly -- and it is the more
+     * convincing of the two, since everything present is correct.
+     */
+    bool truncated;
 };
 
 /*
- * --- What is here, and what is not ---
+ * --- Where the halves live ---
  *
- * The first three stages are written and tested: ink, lines, marks. They are
- * the half that is arithmetic on a bitmap, they need no font, and they are
- * exposed below because being testable without a display is worth more than
- * being tidy.
+ * The three stages below -- ink, lines, marks -- are arithmetic on a bitmap and
+ * need no font, which is why they are here and why they are testable without a
+ * display. The matching needs a typeface and lives in recon_ocr_match.h, along
+ * with `recon_ocr_read`, which runs all five.
  *
- * The matching is not written. So there is deliberately no `recon_ocr_read`
- * yet: a whole-picture entry point that found marks and could name none of them
- * would be a function that works and returns nothing, which is a worse thing to
- * ship than a header that says which half is finished.
+ * --- What this can and cannot read ---
  *
- * `struct recon_ocr_result` is here because it is the shape the answer will
- * take, and because `confidence` and `unrecognised` are the part of the design
- * worth settling first rather than last. A reader that cannot say "I am
- * guessing" is a reader that lies on every picture it was not built for.
+ * Measured, on real pictures, rather than claimed:
+ *
+ *   - A screenshot of ReconOS's own text, cropped to the text: every character,
+ *     nothing refused, full confidence.
+ *   - The same light-on-dark: nearly all of it, with the letters this typeface
+ *     genuinely cannot separate at that size refused rather than guessed.
+ *   - The same scaled to 40%: most marks refused, and it says so.
+ *
+ *   - **A screenshot of a whole desktop: almost nothing.** Worth stating
+ *     plainly because it is the picture people will try first. `recon_ocr_lines`
+ *     treats a row with any ink at all as part of a line, which is true of a
+ *     cropped page and false of a screen where window borders and icons put
+ *     something on nearly every row -- so the whole display collapses into a
+ *     few enormous bands and every mark in them is a blob. The engine refuses
+ *     them, correctly, and reads nothing.
+ *
+ * Fixing that means finding the text regions before finding lines, which is a
+ * stage that does not exist here yet. Until it does, this reads a picture of
+ * some text and not a picture of a screen.
  */
 
 const char *recon_ocr_last_error(void);
