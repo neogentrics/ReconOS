@@ -21,6 +21,8 @@
 #include "recon_icons.h"
 #include "recon_explorer.h"
 #include "recon_fonts.h"
+#include "recon_modules.h"
+#include "recon_package.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 #include "recon_server.h"
@@ -171,6 +173,7 @@ enum explorer_context {
     EXCTX_EMPTY_BIN,
     EXCTX_SET_WALLPAPER,
     EXCTX_INSTALL_FONT,
+    EXCTX_INSTALL_PROGRAM,
 };
 
 /*
@@ -2238,6 +2241,28 @@ static bool looks_like_a_picture(const char *name) {
     return false;
 }
 
+/*
+ * And one ReconOS can install as a program: a module, or a package folder.
+ *
+ * A package is a folder rather than a file, which is why this is asked of
+ * directories too -- the one context-menu entry that is offered on something
+ * you can also open.
+ */
+static bool looks_like_a_program(const char *name) {
+    static const char *const KINDS[] = { RECON_APP_EXT, RECON_MODULE_EXT,
+        RECON_PACKAGE_EXT, NULL };
+
+    size_t length = strlen(name);
+    for (int i = 0; KINDS[i] != NULL; i++) {
+        size_t kind = strlen(KINDS[i]);
+        if (length > kind &&
+                strcasecmp(name + length - kind, KINDS[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* And one ReconOS can install as a typeface. Beside its neighbour above,
  * because the two answer the same shape of question about a file name. */
 static bool looks_like_a_font(const char *name) {
@@ -2302,6 +2327,13 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         if (!is_dir && looks_like_a_font(entry->name)) {
             recon_menu_add(menu, "Install Font", EXCTX_INSTALL_FONT, true,
                 true);
+        }
+
+        /* And a program. A package is a folder, so this one is offered on
+         * directories as well. */
+        if (looks_like_a_program(entry->name)) {
+            recon_menu_add(menu, "Install Program", EXCTX_INSTALL_PROGRAM,
+                true, true);
         }
 
         recon_menu_add(menu, "Cut", EXCTX_CUT, !protectedd, false);
@@ -2390,6 +2422,43 @@ static void explorer_context_action(void *user, uint32_t id) {
          */
         set_status(ex, false, "'%s' is installed. Display Settings can draw "
             "with it.", name);
+        break;
+    }
+
+    case EXCTX_INSTALL_PROGRAM: {
+        if (ex->selected < 0 || ex->selected >= ex->entry_count) {
+            break;
+        }
+
+        char path[RECON_PATH_MAX];
+        if (!recon_fs_join(path, sizeof(path), ex->cwd,
+                ex->entries[ex->selected].name)) {
+            set_status(ex, true, "That path is too long.");
+            break;
+        }
+
+        /*
+         * A package if it is one, a bare module otherwise. The two arrive
+         * differently and are told apart by the name, which is the same thing
+         * the menu entry was decided on.
+         */
+        size_t length = strlen(path);
+        size_t kind = strlen(RECON_PACKAGE_EXT);
+        bool package = length > kind &&
+            strcasecmp(path + length - kind, RECON_PACKAGE_EXT) == 0;
+
+        if (package) {
+            if (!recon_package_install(path)) {
+                set_status(ex, true, "%s", recon_package_last_error());
+                break;
+            }
+        } else if (!recon_modules_install(path)) {
+            set_status(ex, true, "%s", recon_modules_last_error());
+            break;
+        }
+
+        set_status(ex, false, "'%s' is installed.",
+            ex->entries[ex->selected].name);
         break;
     }
 

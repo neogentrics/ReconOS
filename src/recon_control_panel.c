@@ -5099,19 +5099,36 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
     }
 
-    case ACTION_INSTALL_PROGRAM:
+    case ACTION_INSTALL_PROGRAM: {
         /*
-         * A path to type, rather than a file dialog. The dialog draws itself
-         * inside the window that asked for it and this page already has a
-         * list in that space; a field is the smaller change and does the same
-         * job. A browse button is worth having and is not this.
+         * The File Explorer, at Downloads, which is where a program somebody
+         * fetched is.
+         *
+         * It was a path to type. Typing a path is the thing a person is worst
+         * at and a file list is best at, and the same right-click that adds a
+         * picture or a font now installs a program -- three ways of saying
+         * "take this file into the system", said one way.
          */
-        cp->installing = true;
-        recon_edit_begin(&cp->name, recon_fs_user_dir("Downloads"), false);
-        set_status(cp, false,
-            "The path to a %s or %s, then Enter.",
-            RECON_APP_EXT, RECON_MODULE_EXT);
+        recon_shell_open_named(cp->server->shell, "File Explorer");
+
+        struct recon_appwin *win =
+            recon_installed_app_existing("File Explorer");
+        if (win == NULL) {
+            /* Turned off, most likely -- it is in the list above and can be.
+             * The field still works, so offer it rather than stopping. */
+            cp->installing = true;
+            recon_edit_begin(&cp->name, recon_fs_user_dir("Downloads"), false);
+            set_status(cp, true, "The File Explorer would not open, so type "
+                "the path to a %s, %s or %s instead.",
+                RECON_APP_EXT, RECON_MODULE_EXT, RECON_PACKAGE_EXT);
+            break;
+        }
+
+        recon_explorer_open_at(win, recon_fs_user_dir("Downloads"));
+        set_status(cp, false, "Right-click a %s, %s or %s and choose Install "
+            "Program.", RECON_APP_EXT, RECON_MODULE_EXT, RECON_PACKAGE_EXT);
         break;
+    }
 
     case ACTION_CONFIRM_INSTALL: {
         /*
