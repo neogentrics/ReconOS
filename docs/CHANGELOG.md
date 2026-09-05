@@ -9,6 +9,15 @@ way for the two to disagree.
 
 ---
 
+## v0.3.0 — in progress
+
+Nothing yet. The number moves because v0.2.17 shipped and because phase 2 has
+started: the kernel boots on x86_64 and aarch64, in `kernel/`, built by its own
+Makefile against no libc and no wlroots. Nothing in the desktop runs on it
+yet, and this file will say so plainly when something does.
+
+---
+
 ## v0.2.17
 
 **An application can be turned off.** Programs → System Apps → Disable. It

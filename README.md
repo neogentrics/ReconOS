@@ -8,8 +8,9 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.17.** The version number tracks what works, not what is
-planned.
+**Status: v0.3.0, in progress.** The version number tracks what works, not
+what is planned. [v0.2.17](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
+is the most recent release.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
 first run, asks who you are on every run after, and gives that person a desktop
