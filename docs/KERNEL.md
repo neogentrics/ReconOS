@@ -64,7 +64,7 @@ header is forty bytes and comes out with it.
 | 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | |
 | 17 | Boots on real hardware: both architectures, both firmwares | |
 
-Seventeen is a lot to hold in your head, so they group into four stages: **the
+Eighteen, numbered 0 to 17, is a lot to hold in your head, so they group into four stages: **the
 kernel exists** (0–3, done), **the kernel owns the machine** (4–10),
 **the kernel owns the disk** (11–15), and **it runs on real iron** (16–17).
 
@@ -322,6 +322,15 @@ surface: a struct of callbacks holding pointers into the compositor's own
 memory, which is the part that cannot survive a process boundary unchanged.
 
 The kernel claims error-code area letter `N` in `recon_errors.def`.
+
+## Where this is tracked, at a glance
+
+A status board carrying the checkpoint list, what works today, and the evidence
+behind each completed one:
+<https://claude.ai/code/artifact/781c0e1d-e3ed-4d35-848e-9e808e8625dc>
+
+It is regenerated when a checkpoint lands, so it never disagrees with this file
+for long. This file is the source; the board is the view.
 
 ## How this is tracked
 
