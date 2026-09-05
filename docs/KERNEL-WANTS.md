@@ -159,3 +159,37 @@ compute it from.
 
 **What would replace it:** a real-time clock the kernel reads, and a monotonic
 clock that does not go backwards.
+
+---
+
+## Memory that will not leak a secret
+
+**Where:** `src/recon_mail.c`, `src/recon_mailwin.c`.
+
+The Mail window asks for a password every time it connects and stores it
+nowhere. That is the honest answer today and it is not the right one for long:
+a mail client that cannot remember a password is a mail client somebody stops
+opening.
+
+The right answer is a keyring — a key that exists only while somebody is
+signed in, derived from their account password at sign-in, used to encrypt
+saved secrets and held in memory until they sign out. That much can be built
+on this side. What cannot is the guarantee underneath it.
+
+While the password is in memory, three things can happen to it that nothing
+here can prevent:
+
+- it can be written to swap, and swap outlives the process
+- it can be read by anything with permission to read this process's memory
+- it can be left in a freed page that is handed to something else
+
+The third is the only one ReconOS can do anything about today, and it does:
+the buffers are cleared rather than merely freed. The other two are the host's
+to give away and the host does give them away.
+
+**What would replace it:** memory the kernel will not page out, will not hand
+to another process without clearing, and will not let another process read.
+Named here rather than in a comment because it is the thing standing between
+this and a mail client somebody would use daily, and because it is a kernel
+feature that a desktop feature is waiting on -- which is exactly what this
+file is for.
