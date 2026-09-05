@@ -223,3 +223,40 @@ than reinvented by every caller who needs one.
 
 Named here rather than in a comment because it is a kernel feature that a
 desktop feature is waiting on, which is what this file is for.
+
+---
+
+## Running another operating system inside this one
+
+**Where:** nowhere yet. Asked for on 2026-09-05 as a thing for later, with the
+question "is that a kernel thing or a system thing".
+
+**It is a kernel thing, and almost entirely.** Worth writing down now precisely
+because it is far off: the parts of it that constrain earlier work are the
+parts that get made impossible by accident.
+
+A hypervisor needs three things, and a desktop can supply none of them:
+
+- **The processor's virtualization extensions.** VT-x on Intel, AMD-V on AMD,
+  EL2 on aarch64. Entering them is privileged, so it happens in the kernel or
+  it does not happen. Checkpoint 3 already reads what the processor can do;
+  whether these are present is one more question to ask it, and asking early
+  costs nothing.
+- **Second-level address translation** — EPT, NPT, stage-2. A guest builds its
+  own page tables believing it owns physical memory, and something underneath
+  has to translate again. That is the existing page-table work with another
+  level under it, which is much easier to design for now than to retrofit onto
+  a memory manager that assumed one translation.
+- **Trapping and emulating.** A guest touching a device traps to the host, and
+  the host has to answer as the device would. That needs the fault path
+  (checkpoint 7) and the device model, and it is the part that is genuinely
+  large: a hypervisor is mostly device emulation by volume.
+
+What the desktop side owes it is small by comparison -- a window showing a
+guest's framebuffer, a list of virtual machines, a way to start and stop one.
+That is an application, and it is the last thing to build rather than the
+first.
+
+**The one thing worth deciding early:** whether the memory manager keeps the
+*option* of a second translation level. Not building it, and not closing the
+door on it. Everything else here can wait until there is a kernel to put it in.
