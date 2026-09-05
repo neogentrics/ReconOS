@@ -11,10 +11,29 @@ way for the two to disagree.
 
 ## v0.3.0 — in progress
 
-Nothing yet. The number moves because v0.2.17 shipped and because phase 2 has
-started: the kernel boots on x86_64 and aarch64, in `kernel/`, built by its own
-Makefile against no libc and no wlroots. Nothing in the desktop runs on it
-yet, and this file will say so plainly when something does.
+**The network port is encrypted.** Remote access over TCP 7420 speaks TLS. The
+key is offered over the encrypted channel rather than in front of it, and
+every warning saying otherwise has come down.
+
+There is no certificate authority and no expiry theatre. A machine that owns
+itself has no upstream to ask for an identity, so it asserts its own: a
+self-signed certificate made the first time the port opens. What stands in for
+an authority is the **fingerprint** — `remote` prints it, and so does Control
+Panel → Network — which the client pins on first connect and checks from then
+on. That is how SSH does it, for the same reason: a chain answers "did
+somebody vouch for this name", and nobody has vouched for this machine.
+Pinning answers "is this the same machine as last time".
+
+Outgoing connections are **not** encrypted and `https://` still does not work.
+That is a separate gap and is still written down as one.
+
+The port still ships closed and the firewall still decides whether it may open
+at all. Encryption removes one reason it is off by default; it does not make
+opening a port to the world a default.
+
+Phase 2 has also started: the kernel boots on x86_64 and aarch64, in `kernel/`,
+built by its own Makefile against no libc and no wlroots. Nothing in the
+desktop runs on it yet, and this file will say so plainly when something does.
 
 ---
 
