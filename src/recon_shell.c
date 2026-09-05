@@ -160,6 +160,15 @@
  * itself once a minute is a bar that catches the eye for no reason.
  */
 #define CLOCK_WIDTH 96
+
+/*
+ * The clock's own face, smaller than the bar's.
+ *
+ * Two lines have to fit inside BUTTON_HEIGHT, which is 28. At the bar's 14 the
+ * two lines come to about 34 and the date is cut off at the bottom -- which
+ * looks like a rendering fault rather than a font that is too big.
+ */
+#define CLOCK_FONT_HEIGHT 11
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
 #define HIT_DIALOG_BASE 500
@@ -1965,14 +1974,60 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
  * zone, whether it has been checked against a time server -- is on the
  * tooltip, which is what somebody looks at when the glance was not enough.
  */
+/*
+ * Today, short enough for a corner.
+ *
+ * recon_clock_date writes "Friday, 5 September 2026", which is the right thing
+ * for a page and four times too wide for a taskbar. Same numbers, written the
+ * way a clock in a corner writes them.
+ */
+static void short_date(char *out, size_t size) {
+    struct recon_clock_time t;
+    recon_clock_now(&t);
+    snprintf(out, size, "%d/%d/%d", t.month, t.day, t.year);
+}
+
 static void draw_clock(struct recon_shell *shell, struct recon_panel *bar,
         int x, int baseline) {
     char now[32];
     recon_clock_short(now, sizeof(now));
 
-    int width = recon_text_width(shell->font, now);
-    recon_draw_text(bar, shell->font, x + (CLOCK_WIDTH - width) / 2, baseline,
+    char today[32];
+    short_date(today, sizeof(today));
+
+    /*
+     * A smaller face, because two lines do not fit in a 28-pixel button at the
+     * size the task buttons use -- and because a clock is glanced at rather
+     * than read, so competing with the window titles beside it would be wrong
+     * even if it fitted.
+     *
+     * Falls back to the bar's own font if the smaller one will not load, which
+     * puts the two lines on top of each other rather than losing the clock. A
+     * cramped clock is legible; a missing one is a corner that stopped
+     * answering.
+     */
+    struct recon_font *small = recon_font_system(CLOCK_FONT_HEIGHT);
+    if (small == NULL) {
+        small = shell->font;
+    }
+
+    int line = recon_font_line_height(small);
+    int ascent = recon_font_ascent(small);
+
+    /* Both lines centred as a block in the button, rather than each one placed
+     * from the top: the block is what somebody sees, and a two-line thing
+     * pinned to the top of a button looks like it fell. */
+    int top = TASKBAR_PADDING + (BUTTON_HEIGHT - line * 2) / 2;
+
+    int width = recon_text_width(small, now);
+    recon_draw_text(bar, small, x + (CLOCK_WIDTH - width) / 2, top + ascent,
         CLOCK_WIDTH, now, COLOR_TEXT);
+
+    width = recon_text_width(small, today);
+    recon_draw_text(bar, small, x + (CLOCK_WIDTH - width) / 2,
+        top + line + ascent, CLOCK_WIDTH, today, COLOR_TEXT_DIM);
+
+    (void)baseline;
 
     recon_hit_add(bar, x, TASKBAR_PADDING, CLOCK_WIDTH, BUTTON_HEIGHT,
         HIT_CLOCK);
@@ -1995,8 +2050,18 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
 
         recon_fill_role(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON, BUTTON_HEIGHT,
             current ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
-        recon_draw_bevel(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
-            BUTTON_HEIGHT, current);
+
+        /*
+         * The button edge rather than a bare bevel, so these round with the
+         * skin like every other button. They were the last square things on a
+         * desktop whose windows and task buttons had rounded since v0.2.10 --
+         * and being in the corner is exactly where that gets noticed.
+         *
+         * Filled back to the bar rather than cleared, because a hole here shows
+         * the wallpaper through the middle of the taskbar.
+         */
+        recon_draw_button_edge(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
+            BUTTON_HEIGHT, current, THEME(BAR));
 
         char label[4];
         snprintf(label, sizeof(label), "%d", i + 1);
@@ -2112,8 +2177,17 @@ static void draw_taskbar(struct recon_shell *shell) {
         }
     }
 
-    draw_clock(shell, bar, width - pager_w - CLOCK_WIDTH, baseline);
-    draw_pager(shell, bar, width - pager_w + TASKBAR_PADDING, baseline);
+    /*
+     * The clock in the corner, with the pager inboard of it.
+     *
+     * These were the other way round, and it read as a mistake because it was
+     * one: the corner is where a clock goes, and four numbered squares in the
+     * place a clock goes are four numbered squares somebody has to look at
+     * twice.
+     */
+    draw_pager(shell, bar, width - CLOCK_WIDTH - pager_w + TASKBAR_PADDING,
+        baseline);
+    draw_clock(shell, bar, width - CLOCK_WIDTH, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
         finish_chrome(bar);

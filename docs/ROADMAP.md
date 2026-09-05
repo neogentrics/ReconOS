@@ -118,6 +118,31 @@ Nothing changes until the kernel has address spaces per process. It has to be
 settled before checkpoint 15, because an installer is what fixes the meaning of
 the word.
 
+### Asked for, and not started
+
+**Reading text out of a picture.** A screenshot of a document, a photograph of
+a page, a diagram with a label too small to read -- the system should be able to
+turn any of them into text it can put in a file. It matters more here than it
+would elsewhere: ReconOS has no word processor and cannot run anybody else's
+yet, so a picture of text is currently text that cannot be got at.
+
+The honest shape is probably not a research project. ReconOS renders its own
+text and has a font rasterizer, so it can *draw* the shapes it is trying to
+recognise -- which makes clean, rendered text (screenshots, scans of ordinary
+documents) a matching problem rather than a machine-learning one. Photographs of
+signs and handwriting are a different thing entirely, and the tool should say so
+rather than return confident nonsense.
+
+**A colour for the glass.** The frosted look is one tint today. Choosing the
+skin should let somebody choose what colour the glass is, which is a change to
+how a skin is chosen rather than eleven more skins in the list.
+
+**Rounded taskbar buttons**, including the Apps button and the ones in the
+bottom-right corner, with a visible difference between an application that is
+open and one that is minimized. The window frames round; the strip along the
+bottom does not, which makes it the one part of the desktop that did not get
+the change.
+
 ### Parallel tracks
 
 These develop alongside the main line and never block it:
@@ -125,6 +150,22 @@ These develop alongside the main line and never block it:
 - **Application compatibility** — improving Wine upstream rather than
   reimplementing it, once its internals are well enough understood to contribute
   meaningfully.
+- **Runtimes other people's software needs** — the C++ redistributables, .NET,
+  Java, Python and git. Each is a different problem wearing the same sentence:
+  Python and git are programs that need a POSIX-shaped system underneath them,
+  .NET and Java are runtimes that need one *and* bring their own, and the C++
+  redistributables are libraries a Windows binary expects to find. Nothing here
+  is possible before processes and a filesystem, so it sits behind the kernel
+  rather than beside it.
+
+- **Running software not built for ReconOS** — the compatibility layer, and the
+  reason the runtimes above are wanted. Word and LibreOffice are the examples
+  worth naming, because a system with no word processor and no way to run
+  somebody else's is a system where a document is something you look at rather
+  than something you edit. Explicitly a later phase: the application
+  compatibility track below is where it starts, and it starts by improving Wine
+  rather than by reimplementing it.
+
 - **Virtualization** — running another operating system in a window. Asked for
   early and deliberately deferred: it is a kernel capability before it is a
   system one, and it wants the same three things the client migration wants —
