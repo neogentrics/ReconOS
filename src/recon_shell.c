@@ -918,10 +918,20 @@ static bool tip_under(struct recon_shell *shell, double lx, double ly,
         return true;
     }
 
+    /*
+     * Front to back, stopping at the first window the point is inside.
+     *
+     * Stopping matters more than finding: a blank patch of the window in
+     * front is not a hole to read the one behind through, and without this
+     * the Control Panel's icons answered for empty space in a window sitting
+     * on top of them.
+     */
     for (int i = 0; i < shell->app_count; i++) {
-        if (recon_appwin_tip_at(shell->apps[shell->app_order[i]], lx, ly,
-                out, size)) {
-            return true;
+        bool owned = false;
+        bool found = recon_appwin_tip_at(shell->apps[shell->app_order[i]],
+            lx, ly, out, size, &owned);
+        if (owned) {
+            return found;
         }
     }
 

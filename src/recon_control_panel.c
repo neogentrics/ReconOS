@@ -94,6 +94,8 @@
 #define HIT_VOLUME_BASE (RECON_APPWIN_HIT_USER + 950)
 /* Installed / System Apps, at the top of the Programs page. */
 #define HIT_PROGRAMS_TAB_BASE (RECON_APPWIN_HIT_USER + 1100)
+#define HIT_NET_TAB_BASE (RECON_APPWIN_HIT_USER + 1140)
+#define HIT_NET_ROW_BASE (RECON_APPWIN_HIT_USER + 1160)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -126,6 +128,8 @@ enum action {
     ACTION_REGISTRY_REMOVE,
     /* Network */
     ACTION_TEST_NETWORK,
+    ACTION_OPEN_FIREWALL,
+    ACTION_TOGGLE_NET_APP,
     ACTION_REFRESH_NETWORK,
     /* Reading */
     ACTION_SPACING_LESS,
@@ -423,6 +427,26 @@ static const char *const APPEARANCE_SECTION_NAMES[APPEARANCE_SECTIONS] = {
 };
 
 /*
+ * Network, split the same way and for the same reason.
+ *
+ * It was one page holding the machine's name, every interface, the gateway,
+ * every resolver, the last test and two buttons -- which fitted only because
+ * this machine has two interfaces. Four sections each get the whole window,
+ * so none of them is squeezed by another growing.
+ */
+enum network_section {
+    NETWORK_STATUS,
+    NETWORK_ADAPTERS,
+    NETWORK_USAGE,
+    NETWORK_APPS,
+    NETWORK_SECTIONS,
+};
+
+static const char *const NETWORK_SECTION_NAMES[NETWORK_SECTIONS] = {
+    "Status", "Adapters", "Data Used", "Applications",
+};
+
+/*
  * --- Firewall presets ---
  *
  * The rules people actually want, written out so nobody has to know that
@@ -682,6 +706,11 @@ struct control_panel {
      */
     int theme_scroll;
     int paper_scroll;
+
+    /* Which part of Network is showing, and which row in it is picked. */
+    enum network_section net_section;
+    int net_selected;
+    int net_scroll;
 
     bool naming_skin;
 
@@ -1401,19 +1430,27 @@ static const char *help_topic_for(enum page page) {
  * because they do the same job, and two things that behave alike should not
  * look like two different inventions.
  */
-static int draw_sections(struct control_panel *cp, struct recon_panel *p,
-        int x, int y, int w) {
+/*
+ * A row of tabs, and the y to carry on drawing from.
+ *
+ * Written for Appearance and then wanted by Network, so it takes the names,
+ * which one is on, and where its clicks land rather than knowing any of them.
+ * Two copies of a tab bar is two places for a tab bar to be wrong.
+ */
+static int draw_tabs(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, const char *const *names, int count,
+        int current, uint32_t base) {
     int ascent = recon_font_ascent(cp->font);
     int bx = x;
 
-    for (int i = 0; i < APPEARANCE_SECTIONS; i++) {
-        const char *label = APPEARANCE_SECTION_NAMES[i];
+    for (int i = 0; i < count; i++) {
+        const char *label = names[i];
         int width = recon_text_width(cp->font, label) + 28;
         if (bx + width > x + w) {
             break;
         }
 
-        bool on = (int)cp->section == i;
+        bool on = current == i;
         recon_fill_rect(p, bx, y, width, SECTION_HEIGHT,
             on ? COLOR_PANEL : COLOR_BG);
         recon_stroke_rect(p, bx, y, width, SECTION_HEIGHT, COLOR_SEPARATOR);
@@ -1423,7 +1460,7 @@ static int draw_sections(struct control_panel *cp, struct recon_panel *p,
             y + (SECTION_HEIGHT + ascent) / 2 - 2, width - 8, label,
             on ? COLOR_TEXT : COLOR_DIM);
 
-        recon_hit_add(p, bx, y, width, SECTION_HEIGHT, HIT_SECTION_BASE + i);
+        recon_hit_add(p, bx, y, width, SECTION_HEIGHT, base + (uint32_t)i);
         bx += width;
     }
 
@@ -1431,6 +1468,12 @@ static int draw_sections(struct control_panel *cp, struct recon_panel *p,
      * is under it and the others as sitting behind. */
     recon_fill_rect(p, x, y + SECTION_HEIGHT - 1, w, 1, COLOR_SEPARATOR);
     return y + SECTION_HEIGHT + PADDING;
+}
+
+static int draw_sections(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w) {
+    return draw_tabs(cp, p, x, y, w, APPEARANCE_SECTION_NAMES,
+        APPEARANCE_SECTIONS, (int)cp->section, HIT_SECTION_BASE);
 }
 
 /* --- Themes --- */
@@ -3476,78 +3519,64 @@ static void draw_modules(struct control_panel *cp, struct recon_panel *p,
  * rather than letting a list of addresses imply that ReconOS is doing the
  * networking. It is not; see include/recon_net.h.
  */
-static void draw_network(struct control_panel *cp, struct recon_panel *p,
+/* Written for System Information, below; Network asks the same question of
+ * a chosen adapter and gets to ask it the same way. */
+static void info_row(struct control_panel *cp, struct recon_panel *p,
+    int x, int *y, int w, const char *label, const char *value);
+static int info_group(struct control_panel *cp, struct recon_panel *p,
+    int x, int y, int w, const char *title);
+
+/*
+ * How many rows fit between here and the buttons at the foot, and where the
+ * list starts. Shared by the sections that show one, so the three of them
+ * cannot drift apart about how tall a list is.
+ */
+static int net_rows(struct control_panel *cp, int y, int h, int reserve) {
+    (void)cp;
+    int rows = (h - y - reserve) / ROW_HEIGHT;
+    return rows < 1 ? 1 : rows;
+}
+
+/* Every interface, real ones first: loopback is real and is never the answer
+ * to "am I connected". */
+static bool net_interface_in_order(int index, struct recon_net_interface *out) {
+    int count = recon_net_interface_count();
+    int seen = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        for (int i = 0; i < count; i++) {
+            struct recon_net_interface interface;
+            if (!recon_net_interface_at(i, &interface)) {
+                continue;
+            }
+            if (interface.loopback != (pass == 1)) {
+                continue;
+            }
+            if (seen++ == index) {
+                *out = interface;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* --- Network: Status --- */
+
+static void draw_net_status(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
+    (void)h;
     int ascent = recon_font_ascent(cp->font);
     int line = recon_font_line_height(cp->font);
     if (line <= 0) {
         line = 18;
     }
 
-    /* Read again every time the page is drawn: an address that was true when
-     * the window opened is not a fact, it is a memory. */
-    recon_net_refresh();
-
-    bool online = recon_net_online();
-    y = draw_heading(cp, p, x, y, w, "Network",
-        online ? "This machine has a way out."
-               : "This machine has no way out at the moment.");
-
-    /* The machine's own name, which is ReconOS's rather than the host's. */
     char summary[192];
     snprintf(summary, sizeof(summary), "Called          %s",
         recon_net_machine_name());
     recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_TEXT);
-    y += line + 6;
-
-    /* Interfaces. Loopback last and dimmed: it is real, and it is never the
-     * answer to "am I connected". */
-    int count = recon_net_interface_count();
-    int rows = (h - y - BUTTON_HEIGHT - PADDING * 3) / ROW_HEIGHT;
-    if (rows < 1) {
-        rows = 1;
-    }
-
-    cp->list_x = x;
-    cp->list_y = y;
-    cp->list_w = w;
-    cp->list_h = (rows < count ? rows : count) * ROW_HEIGHT;
-    if (cp->list_h > 0) {
-        recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
-    }
-
-    int drawn = 0;
-    for (int pass = 0; pass < 2 && drawn < rows; pass++) {
-        for (int i = 0; i < count && drawn < rows; i++) {
-            struct recon_net_interface interface;
-            if (!recon_net_interface_at(i, &interface)) {
-                continue;
-            }
-            /* Real interfaces first, loopback second. */
-            if (interface.loopback != (pass == 1)) {
-                continue;
-            }
-
-            char detail[128];
-            snprintf(detail, sizeof(detail), "%s%s%s",
-                interface.address[0] != '\0' ? interface.address
-                                             : "no address",
-                interface.up ? "" : "   down",
-                interface.loopback ? "   this machine only"
-                    : (interface.wireless ? "   wireless" : ""));
-
-            draw_row(cp, p, x, y + drawn * ROW_HEIGHT, w, drawn,
-                interface.name, detail, false);
-            drawn++;
-        }
-    }
-
-    if (count == 0) {
-        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
-            w - 20, "No interfaces at all.", COLOR_DIM);
-    }
-
-    y += cp->list_h + PADDING;
+    y += line + 2;
 
     const char *gateway = recon_net_gateway();
     snprintf(summary, sizeof(summary), "Gateway         %s",
@@ -3568,14 +3597,13 @@ static void draw_network(struct control_panel *cp, struct recon_panel *p,
         y += line + 2;
     }
 
-    /* The last test, if one has been run. */
     char host[128];
     enum recon_net_result result;
     int elapsed = 0;
     if (recon_net_last_probe(host, sizeof(host), &result, &elapsed)) {
         if (result == RECON_NET_OK) {
-            snprintf(summary, sizeof(summary), "Last test       %s answered "
-                "in %d ms", host, elapsed);
+            snprintf(summary, sizeof(summary),
+                "Last test       %s: reached in %d ms", host, elapsed);
         } else {
             snprintf(summary, sizeof(summary), "Last test       %s: %s",
                 host, recon_net_result_name(result));
@@ -3586,16 +3614,25 @@ static void draw_network(struct control_panel *cp, struct recon_panel *p,
     }
 
     if (recon_net_probe_count() > 0) {
-        recon_draw_text(p, cp->font, x, y + ascent, w,
-            "Testing...", COLOR_DIM);
+        recon_draw_text(p, cp->font, x, y + ascent, w, "Testing...",
+            COLOR_DIM);
         y += line + 2;
     }
 
     y += PADDING;
     int bx = draw_button(cp, p, x, y, "Test the connection",
         HIT_ACTION_BASE + ACTION_TEST_NETWORK, true);
-    draw_button(cp, p, bx, y, "Read again",
+    bx = draw_button(cp, p, bx, y, "Read again",
         HIT_ACTION_BASE + ACTION_REFRESH_NETWORK, true);
+
+    /*
+     * The firewall is a page of its own and belongs to the network as much as
+     * anything here does. Reaching it meant going back to the front page and
+     * finding a second icon, which is two steps to arrive somewhere the
+     * reader was already looking at.
+     */
+    draw_button(cp, p, bx, y, "Firewall",
+        HIT_ACTION_BASE + ACTION_OPEN_FIREWALL, true);
     y += BUTTON_HEIGHT + PADDING;
 
     recon_draw_text(p, cp->font, x, y + ascent, w,
@@ -3605,6 +3642,310 @@ static void draw_network(struct control_panel *cp, struct recon_panel *p,
     recon_draw_text(p, cp->font, x, y + ascent, w,
         "reported through ReconOS. Its own comes with its own kernel.",
         COLOR_DIM);
+}
+
+/* --- Network: Adapters --- */
+
+/*
+ * Every interface, and everything the host will say about the one picked.
+ *
+ * This is the "hardware properties" question: not "am I online" but "what is
+ * this thing and what is it doing". A machine with a wired port, a wireless
+ * card and a virtual bridge has three answers to that and they are different.
+ */
+static void draw_net_adapters(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int count = recon_net_interface_count();
+
+    /* Room kept below for the picked one's details, so choosing a row never
+     * pushes the list about. */
+    int detail_h = line * 5 + PADDING * 2;
+    int rows = net_rows(cp, y, h, detail_h);
+    if (rows > count) {
+        rows = count;
+    }
+    /*
+     * One row's worth even when there is nothing in it. An empty list with no
+     * height is a list box that is not there, and the line saying why it is
+     * empty then lands on top of whatever was drawn under it.
+     */
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    clamp_scroll(&cp->net_scroll, rows, count);
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->net_scroll, rows, count);
+    int lw = w - bar;
+
+    if (cp->list_h > 0) {
+        recon_fill_rect(p, x, y, lw, cp->list_h, COLOR_PANEL);
+    }
+
+    for (int row = 0; row < rows; row++) {
+        struct recon_net_interface interface;
+        if (!net_interface_in_order(cp->net_scroll + row, &interface)) {
+            break;
+        }
+
+        char detail[128];
+        snprintf(detail, sizeof(detail), "%s%s",
+            interface.address[0] != '\0' ? interface.address : "no address",
+            interface.up ? "" : "   down");
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, lw, row, interface.name,
+            detail, row == cp->net_selected);
+        recon_hit_add(p, x, y + row * ROW_HEIGHT, lw, ROW_HEIGHT,
+            HIT_NET_ROW_BASE + (uint32_t)row);
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, "No interfaces at all.", COLOR_DIM);
+    }
+
+    y += cp->list_h + PADDING;
+
+    struct recon_net_interface chosen;
+    if (cp->net_selected < 0 ||
+            !net_interface_in_order(cp->net_scroll + cp->net_selected,
+                &chosen)) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Choose an adapter to see what the host says about it.",
+            COLOR_DIM);
+        return;
+    }
+
+    y = info_group(cp, p, x, y, w, chosen.name);
+    info_row(cp, p, x, &y, w, "Address",
+        chosen.address[0] != '\0' ? chosen.address : "none");
+    info_row(cp, p, x, &y, w, "Netmask",
+        chosen.netmask[0] != '\0' ? chosen.netmask : "none");
+    info_row(cp, p, x, &y, w, "State", chosen.up ? "up" : "down");
+    info_row(cp, p, x, &y, w, "Kind",
+        chosen.loopback ? "loopback -- this machine only"
+            : (chosen.wireless ? "wireless" : "wired, or the host is not "
+                "saying"));
+}
+
+/* --- Network: Data Used --- */
+
+/*
+ * What each interface has carried. The host counts it, which means the count
+ * starts when the interface came up and not when anybody started watching --
+ * so the page says that rather than implying a figure it does not have.
+ */
+static void draw_net_usage(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Since each adapter came up, as the host counts it.", COLOR_DIM);
+    y += line + PADDING;
+
+    int count = recon_net_interface_count();
+    int rows = net_rows(cp, y, h, PADDING * 2 + line * 2);
+    if (rows > count) {
+        rows = count;
+    }
+    /*
+     * One row's worth even when there is nothing in it. An empty list with no
+     * height is a list box that is not there, and the line saying why it is
+     * empty then lands on top of whatever was drawn under it.
+     */
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    clamp_scroll(&cp->net_scroll, rows, count);
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->net_scroll, rows, count);
+    int lw = w - bar;
+
+    if (cp->list_h > 0) {
+        recon_fill_rect(p, x, y, lw, cp->list_h, COLOR_PANEL);
+    }
+
+    unsigned long long rx_total = 0;
+    unsigned long long tx_total = 0;
+
+    for (int row = 0; row < rows; row++) {
+        struct recon_net_interface interface;
+        if (!net_interface_in_order(cp->net_scroll + row, &interface)) {
+            break;
+        }
+
+        char received[32];
+        char sent[32];
+        storage_size(interface.rx_bytes, received, sizeof(received));
+        storage_size(interface.tx_bytes, sent, sizeof(sent));
+
+        char detail[96];
+        snprintf(detail, sizeof(detail), "%s in, %s out", received, sent);
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, lw, row, interface.name,
+            detail, false);
+    }
+
+    /* The total counts every interface, not only the ones on screen -- a
+     * total that changed when you scrolled would not be a total. */
+    for (int i = 0; i < count; i++) {
+        struct recon_net_interface interface;
+        if (net_interface_in_order(i, &interface) && !interface.loopback) {
+            rx_total += interface.rx_bytes;
+            tx_total += interface.tx_bytes;
+        }
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, "No interfaces at all.", COLOR_DIM);
+    }
+
+    y += cp->list_h + PADDING;
+
+    char received[32];
+    char sent[32];
+    storage_size(rx_total, received, sizeof(received));
+    storage_size(tx_total, sent, sizeof(sent));
+
+    char total[128];
+    snprintf(total, sizeof(total), "In and out of this machine:  %s in, "
+        "%s out", received, sent);
+    recon_draw_text(p, cp->font, x, y + ascent, w, total, COLOR_TEXT);
+    y += line + 2;
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Loopback left out: it never left the machine.", COLOR_DIM);
+}
+
+/* --- Network: Applications --- */
+
+/*
+ * Which programs may use the network.
+ *
+ * This is the sharing question turned round. ReconOS has no stack to share,
+ * and it does have a list of applications that are allowed to open a
+ * connection -- which is the decision somebody actually gets to make.
+ */
+static void draw_net_apps(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Programs that have asked to use the network, and whether they may.",
+        COLOR_DIM);
+    y += line + PADDING;
+
+    int count = recon_net_allowed_count();
+    int rows = net_rows(cp, y, h, BUTTON_HEIGHT + PADDING * 3);
+    if (rows > count) {
+        rows = count;
+    }
+    /*
+     * One row's worth even when there is nothing in it. An empty list with no
+     * height is a list box that is not there, and the line saying why it is
+     * empty then lands on top of whatever was drawn under it.
+     */
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    clamp_scroll(&cp->net_scroll, rows, count);
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->net_scroll, rows, count);
+    int lw = w - bar;
+
+    if (cp->list_h > 0) {
+        recon_fill_rect(p, x, y, lw, cp->list_h, COLOR_PANEL);
+    }
+
+    for (int row = 0; row < rows; row++) {
+        char name[96];
+        bool allowed = false;
+        if (!recon_net_allowed_at(cp->net_scroll + row, name, sizeof(name),
+                &allowed)) {
+            break;
+        }
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, lw, row, name,
+            allowed ? "may use the network" : "blocked",
+            row == cp->net_selected);
+        recon_hit_add(p, x, y + row * ROW_HEIGHT, lw, ROW_HEIGHT,
+            HIT_NET_ROW_BASE + (uint32_t)row);
+    }
+
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, "Nothing has asked yet.", COLOR_DIM);
+    }
+
+    y += cp->list_h + PADDING;
+
+    char name[96];
+    bool allowed = false;
+    bool have = cp->net_selected >= 0 &&
+        recon_net_allowed_at(cp->net_scroll + cp->net_selected, name,
+            sizeof(name), &allowed);
+
+    draw_button(cp, p, x, y, have && allowed ? "Block" : "Allow",
+        HIT_ACTION_BASE + ACTION_TOGGLE_NET_APP, have);
+}
+
+/* --- Network --- */
+
+static void draw_network(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    /* Read again every time the page is drawn: an address that was true when
+     * the window opened is not a fact, it is a memory. */
+    recon_net_refresh();
+
+    bool online = recon_net_online();
+    y = draw_heading(cp, p, x, y, w, "Network",
+        online ? "This machine has a way out."
+               : "This machine has no way out at the moment.");
+
+    y = draw_tabs(cp, p, x, y, w, NETWORK_SECTION_NAMES, NETWORK_SECTIONS,
+        (int)cp->net_section, HIT_NET_TAB_BASE);
+
+    switch (cp->net_section) {
+    case NETWORK_STATUS:   draw_net_status(cp, p, x, y, w, h); break;
+    case NETWORK_ADAPTERS: draw_net_adapters(cp, p, x, y, w, h); break;
+    case NETWORK_USAGE:    draw_net_usage(cp, p, x, y, w, h); break;
+    case NETWORK_APPS:     draw_net_apps(cp, p, x, y, w, h); break;
+    case NETWORK_SECTIONS: break;
+    }
 }
 
 /*
@@ -4803,6 +5144,31 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_edit_end(&cp->reg_value);
         break;
 
+    case ACTION_OPEN_FIREWALL:
+        open_page_window(cp, PAGE_FIREWALL);
+        break;
+
+    case ACTION_TOGGLE_NET_APP: {
+        char name[96];
+        bool allowed = false;
+        if (cp->net_selected < 0 ||
+                !recon_net_allowed_at(cp->net_scroll + cp->net_selected, name,
+                    sizeof(name), &allowed)) {
+            set_status(cp, true, "Choose a program first.");
+            break;
+        }
+
+        if (!recon_net_set_allowed(name, !allowed)) {
+            set_status(cp, true, "%s", recon_net_last_error());
+            break;
+        }
+
+        set_status(cp, false, allowed
+            ? "'%s' can no longer use the network."
+            : "'%s' may use the network.", name);
+        break;
+    }
+
     case ACTION_TEST_NETWORK: {
         /*
          * Asks whether something out there answers, and does not wait for the
@@ -5655,6 +6021,31 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
     }
 
     /* A wallpaper chosen from the Appearance page. */
+    /*
+     * Network's rows and tabs come first: their bases are higher than the
+     * ones below, and every test here is an unbounded >=. Put after, they
+     * would be answered by whichever branch happened to be tested first.
+     */
+    if (hit_id >= HIT_NET_ROW_BASE) {
+        int row = (int)(hit_id - HIT_NET_ROW_BASE);
+        cp->net_selected = (cp->net_selected == row) ? -1 : row;
+        clear_status(cp);
+        return true;
+    }
+
+    if (hit_id >= HIT_NET_TAB_BASE) {
+        int tab = (int)(hit_id - HIT_NET_TAB_BASE);
+        if (tab >= 0 && tab < NETWORK_SECTIONS) {
+            cp->net_section = (enum network_section)tab;
+            /* A different list: neither the selection nor the scroll from the
+             * one before means anything in it. */
+            cp->net_selected = -1;
+            cp->net_scroll = 0;
+            clear_status(cp);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_PROGRAMS_TAB_BASE) {
         int tab = (int)(hit_id - HIT_PROGRAMS_TAB_BASE);
         if (tab >= 0 && tab < PROGRAMS_TABS) {
@@ -6175,6 +6566,16 @@ static void panel_scroll(void *user, double delta) {
         return;
     }
 
+    if (cp->page == PAGE_NETWORK) {
+        /* Three of the four sections show a list; Status does not, and
+         * scrolling a page with no list is not an error worth a message. */
+        cp->net_scroll += step;
+        if (cp->net_scroll < 0) {
+            cp->net_scroll = 0;
+        }
+        return;
+    }
+
     if (cp->page == PAGE_FIREWALL) {
         cp->fw_scroll += step;
         if (cp->fw_scroll < 0) {
@@ -6435,6 +6836,8 @@ struct recon_appwin *recon_control_panel_create(struct recon_server *server,
     /* The window the menus open is the front page: the icons, and no page.
      * Every other one is built by open_page_window when a tile is clicked. */
     cp->home = true;
+    /* Nothing chosen in Network either, for the same reason. */
+    cp->net_selected = -1;
     /*
      * Nothing chosen. calloc leaves this at zero, which is a real row -- the
      * front page opened with Accounts looking picked before anybody had

@@ -252,11 +252,17 @@ void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size);
 /*
  * The tooltip under a point, if the window has one there.
  *
+ * `owned` says whether the point is over this window at all, which is a
+ * different question from whether there is a tip there. A caller walking a
+ * stack of windows has to stop at the first one that owns the point -- an
+ * empty patch of the window in front is not a hole to read the window behind
+ * through.
+ *
  * False for a window that is shut or minimized, so the shell can walk every
  * window it has without checking each one first.
  */
 bool recon_appwin_tip_at(struct recon_appwin *win, double lx, double ly,
-    char *out, size_t size);
+    char *out, size_t size, bool *owned);
 
 /* List the window's clickable regions, for diagnosis. */
 void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size);

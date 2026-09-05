@@ -1264,12 +1264,21 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
 }
 
 bool recon_appwin_tip_at(struct recon_appwin *win, double lx, double ly,
-        char *out, size_t size) {
+        char *out, size_t size, bool *owned) {
     if (out != NULL && size > 0) {
         out[0] = '\0';
     }
+    if (owned != NULL) {
+        *owned = false;
+    }
     if (win == NULL || !win->open || win->minimized) {
         return false;
+    }
+    if (!recon_appwin_contains_point(win, lx, ly)) {
+        return false;
+    }
+    if (owned != NULL) {
+        *owned = true;
     }
     return recon_panel_tip_at(win->panel, lx, ly, out, size);
 }
