@@ -20,6 +20,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "recon_crypt.h"
 #include "recon_mail.h"
 #include "recon_net.h"
 #include "recon_registry.h"
@@ -795,8 +796,9 @@ struct recon_mail_session *recon_mail_open(
         account->port, &STREAM_HANDLERS, s);
     if (s->stream == NULL) {
         set_error("%s", recon_net_last_error());
-        /* The password was in this memory a moment ago. */
-        memset(s, 0, sizeof(*s));
+        /* The password was in this memory a moment ago. Erased rather than
+         * memset: see recon_crypt.h. */
+        recon_secure_erase(s, sizeof(*s));
         free(s);
         return NULL;
     }
@@ -863,8 +865,12 @@ void recon_mail_close(struct recon_mail_session *session) {
     }
     free(session->body);
 
-    /* The password lived here. Cleared rather than merely freed, because freed
-     * memory keeps whatever was in it until something else uses it. */
-    memset(session, 0, sizeof(*session));
+    /*
+     * The password lived here. Freed memory keeps whatever was in it until
+     * something else uses it, so it is erased first -- and erased with
+     * recon_secure_erase rather than memset, because a memset whose result
+     * nothing reads is one the compiler may legally delete. See BG-090.
+     */
+    recon_secure_erase(session, sizeof(*session));
     free(session);
 }

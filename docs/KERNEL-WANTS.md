@@ -164,32 +164,62 @@ clock that does not go backwards.
 
 ## Memory that will not leak a secret
 
-**Where:** `src/recon_mail.c`, `src/recon_mailwin.c`.
+**Where:** `src/recon_mail.c`, `src/recon_mailwin.c`, `src/recon_crypt.c`.
 
 The Mail window asks for a password every time it connects and stores it
 nowhere. That is the honest answer today and it is not the right one for long:
-a mail client that cannot remember a password is a mail client somebody stops
-opening.
+a mail client that cannot remember a password is one somebody stops opening.
 
-The right answer is a keyring — a key that exists only while somebody is
+The right answer is a keyring -- a key that exists only while somebody is
 signed in, derived from their account password at sign-in, used to encrypt
-saved secrets and held in memory until they sign out. That much can be built
-on this side. What cannot is the guarantee underneath it.
+saved secrets and held in memory until they sign out. That much is buildable
+here. What is not is the guarantee underneath it, and it is three separate
+guarantees that arrive at different times.
 
-While the password is in memory, three things can happen to it that nothing
-here can prevent:
+### 1. Memory that cannot be paged out
 
-- it can be written to swap, and swap outlives the process
-- it can be read by anything with permission to read this process's memory
-- it can be left in a freed page that is handed to something else
+A secret written to swap outlives the session, on a disk, and nothing above the
+kernel can prevent it. The page allocator needs to be able to pin a page.
 
-The third is the only one ReconOS can do anything about today, and it does:
-the buffers are cleared rather than merely freed. The other two are the host's
-to give away and the host does give them away.
+Worth having **before** paging exists rather than after. Nothing is paged yet,
+so the discipline costs nothing now; retrofitting it means retrofitting it onto
+a system that has already leaked, and there is no way to find out what it
+leaked or to whom.
 
-**What would replace it:** memory the kernel will not page out, will not hand
-to another process without clearing, and will not let another process read.
-Named here rather than in a comment because it is the thing standing between
-this and a mail client somebody would use daily, and because it is a kernel
-feature that a desktop feature is waiting on -- which is exactly what this
-file is for.
+### 2. Memory another process cannot read
+
+The address space boundary. There is nothing to say about it until there are
+address spaces.
+
+### 3. Memory that is actually erased
+
+The one that looks solved and is not, and the one that had already bitten this
+side of the project before anybody went looking. See BG-090.
+
+`memset(p, 0, n); free(p);` is the obvious way to erase a secret. Those stores
+are never read afterwards, so the standard permits a compiler to delete the
+call as dead, and at higher optimisation levels compilers do. The source says
+the password was erased; the binary leaves it in the heap. CWE-14.
+
+It is the same class of fault as the kernel's `&&label` block being deleted for
+being unreachable: **a compiler removing something because nothing observable
+depends on it, where the thing that depended on it was not expressible in the
+language.** Both were found by looking at the compiled output rather than
+reasoning about the source, and in this case the answer was the less obvious
+one -- the `memset` had *not* been removed at this project's current
+optimisation level, so the property held by accident of flags and would have
+stopped holding silently.
+
+The fix here is a volatile-pointer loop, which the standard does not permit to
+be elided. That is enough for a userspace erase and it is not enough for a
+kernel one: a kernel that hands a freed page to another process without
+clearing it has leaked the secret regardless of how carefully the previous
+owner erased its own copy.
+
+**What would replace all three:** memory the kernel will not page out, will not
+hand to another process without clearing, and will not let another process
+read -- plus an erase primitive the optimiser cannot remove, provided rather
+than reinvented by every caller who needs one.
+
+Named here rather than in a comment because it is a kernel feature that a
+desktop feature is waiting on, which is what this file is for.

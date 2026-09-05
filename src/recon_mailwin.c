@@ -15,6 +15,7 @@
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_crypt.h"
 #include "recon_icons.h"
 #include "recon_mail.h"
 #include "recon_mailwin.h"
@@ -760,8 +761,9 @@ static void mailwin_describe(void *user, char *out, size_t size) {
 static void mailwin_destroy(void *user) {
     struct recon_mailwin *m = user;
     disconnect(m);
-    /* The password was in this memory. Cleared rather than merely freed. */
-    memset(m, 0, sizeof(*m));
+    /* The password was in this memory. Erased rather than memset, because a
+     * memset nothing reads afterwards is one the compiler may delete. */
+    recon_secure_erase(m, sizeof(*m));
     free(m);
 }
 

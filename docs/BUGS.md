@@ -76,6 +76,42 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-090 — A password erased with memset, which a compiler may delete
+
+[#257](https://github.com/neogentrics/ReconOS/issues/257)
+
+- **Found in** v0.3.0, hours after it shipped. **Found by** the kernel session,
+  from the other direction entirely: they were describing what a keyring would
+  need from a kernel and named "memory that is actually erased when the session
+  ends" as the hard one, because zeroing a buffer is a store nothing reads
+  afterwards and a compiler may legally remove it.
+
+  They were right, and it was already in my code.
+- **Was** the Mail session and the Mail window both hold a password, and both
+  did `memset(p, 0, sizeof(*p)); free(p);` on the way out, with a comment
+  saying the memory was cleared because freed memory keeps what was in it.
+
+  Those stores are never read. The standard permits deleting the call as dead,
+  and at higher optimisation levels compilers do -- which produces a program
+  whose source says the password was erased and whose binary leaves it in the
+  heap for whatever gets that memory next. It has a number: CWE-14.
+
+  **It had not actually been deleted.** `objdump` on the object file showed the
+  `memset` call still there, immediately before the `free`. So this was not a
+  live fault; it was a security property that happened to hold because of the
+  flags this project builds with, and would have stopped holding on the day
+  somebody added `-O3` -- silently, with nothing to notice.
+
+  Worth recording for that reason rather than in spite of it. "Correct in this
+  build" and "correct" are different claims, and the gap between them is where
+  this kind of fault lives. Checking the binary was also what turned a guess
+  into a fact in either direction: had it been removed, the comment would have
+  been a lie for as long as it had been there.
+- **Fixed in** v0.3.0. `recon_secure_erase` writes through a volatile pointer,
+  which the standard does not permit to be elided, and the three places that
+  held a secret use it. Verified in the object file: the call is there, before
+  the free.
+
 ### BG-089 — A tooltip kept showing over the window that opened on top of it
 
 [#256](https://github.com/neogentrics/ReconOS/issues/256)

@@ -265,6 +265,28 @@ bool recon_equal_constant_time(const void *a, const void *b, size_t size) {
     return differences == 0;
 }
 
+void recon_secure_erase(void *data, size_t size) {
+    if (data == NULL || size == 0) {
+        return;
+    }
+
+    /*
+     * Written through a volatile pointer, one byte at a time.
+     *
+     * `volatile` tells the compiler that these stores have an effect it cannot
+     * see, so it may not decide they are dead and remove them -- which is
+     * exactly what it is entitled to do to a plain memset whose result nothing
+     * reads. See the note in recon_crypt.h.
+     *
+     * A byte at a time, and slowly, and that is fine: this runs when a window
+     * closes or an account is forgotten, not in a loop.
+     */
+    volatile unsigned char *at = data;
+    while (size-- > 0) {
+        *at++ = 0;
+    }
+}
+
 void recon_to_hex(const uint8_t *bytes, size_t size, char *out) {
     static const char DIGITS[] = "0123456789abcdef";
     for (size_t i = 0; i < size; i++) {

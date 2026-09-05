@@ -72,6 +72,30 @@ bool recon_random_bytes(void *out, size_t size);
  */
 bool recon_equal_constant_time(const void *a, const void *b, size_t size);
 
+/*
+ * Erase memory that held a secret, in a way the compiler may not remove.
+ *
+ * `memset(p, 0, n); free(p);` is the obvious way to write this and it is not
+ * reliable. Those stores are never read afterwards, so a compiler is entitled
+ * to delete the whole call as dead -- and at higher optimisation levels they
+ * do. The result is a program whose source says the password was erased and
+ * whose binary leaves it in the heap for whatever gets that memory next.
+ *
+ * It is a known enough mistake to have a number: CWE-14, "compiler removal of
+ * code to clear buffers".
+ *
+ * Checked rather than assumed, because the interesting part is that it is not
+ * always wrong: the calls in recon_mail.c survived at this project's current
+ * optimisation level, verified with objdump. Correct today and not guaranteed
+ * tomorrow is not the same as correct, and a security property that depends on
+ * which flags somebody built with is not a property.
+ *
+ * This writes through a volatile pointer, which the standard does not allow to
+ * be elided. It is slower than memset by a good deal and is used only where
+ * something secret was.
+ */
+void recon_secure_erase(void *data, size_t size);
+
 /* Hex, for writing a hash into a text file and reading it back. */
 void recon_to_hex(const uint8_t *bytes, size_t size, char *out);
 bool recon_from_hex(const char *text, uint8_t *out, size_t size);
