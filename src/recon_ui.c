@@ -787,17 +787,38 @@ void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
 
     const int SAMPLES = 4;
 
+    /*
+     * Sampled in integers, not in doubles.
+     *
+     * `(sx + 0.5) / SAMPLES` is a fraction, and multiplying the whole
+     * comparison through by `2 * SAMPLES` clears it exactly: twice
+     * `sx + 0.5` is `2 * sx + 1`, with nothing left over. So this is not a
+     * fixed-point approximation of what was here before -- it is the same
+     * test with the floating-point rounding taken out.
+     *
+     * Integers because this file is headed for `freestanding/`, where there
+     * is no floating point at all: the kernel builds with
+     * `-mgeneral-regs-only` on ARM, where a `double` is a compile error, and
+     * with the FPU off on x86, where it is silent corruption instead.
+     *
+     * The squares are 64-bit. At a radius of 2048 the sum still fits in 32,
+     * but "still fits" is a fact about today's window sizes rather than about
+     * this code, and it costs nothing here to stop it being a question.
+     */
+    const int UNIT = SAMPLES * 2;
+    const long long REACH = (long long)radius * UNIT;
+
     for (int dy = 0; dy < radius; dy++) {
         for (int dx = 0; dx < radius; dx++) {
             int inside = 0;
 
             for (int sy = 0; sy < SAMPLES; sy++) {
                 for (int sx = 0; sx < SAMPLES; sx++) {
-                    double px = dx + (sx + 0.5) / SAMPLES;
-                    double py = dy + (sy + 0.5) / SAMPLES;
-                    double ox = radius - px;
-                    double oy = radius - py;
-                    if (ox * ox + oy * oy <= (double)radius * radius) {
+                    long long ox = (long long)(radius - dx) * UNIT
+                        - (2 * sx + 1);
+                    long long oy = (long long)(radius - dy) * UNIT
+                        - (2 * sy + 1);
+                    if (ox * ox + oy * oy <= REACH * REACH) {
                         inside++;
                     }
                 }
@@ -858,6 +879,27 @@ void recon_round_top_corners(struct recon_panel *panel, int radius,
      */
     const int SAMPLES = 4;
 
+    /*
+     * Sampled in integers, not in doubles.
+     *
+     * `(sx + 0.5) / SAMPLES` is a fraction, and multiplying the whole
+     * comparison through by `2 * SAMPLES` clears it exactly: twice
+     * `sx + 0.5` is `2 * sx + 1`, with nothing left over. So this is not a
+     * fixed-point approximation of what was here before -- it is the same
+     * test with the floating-point rounding taken out.
+     *
+     * Integers because this file is headed for `freestanding/`, where there
+     * is no floating point at all: the kernel builds with
+     * `-mgeneral-regs-only` on ARM, where a `double` is a compile error, and
+     * with the FPU off on x86, where it is silent corruption instead.
+     *
+     * The squares are 64-bit. At a radius of 2048 the sum still fits in 32,
+     * but "still fits" is a fact about today's window sizes rather than about
+     * this code, and it costs nothing here to stop it being a question.
+     */
+    const int UNIT = SAMPLES * 2;
+    const long long REACH = (long long)radius * UNIT;
+
     for (int y = 0; y < radius; y++) {
         uint32_t *row = panel->pixels + (size_t)y * panel->width;
 
@@ -869,11 +911,11 @@ void recon_round_top_corners(struct recon_panel *panel, int radius,
                     /* The corner's circle is centred at (radius, radius), so
                      * a point is in the frame when it is no further from that
                      * centre than the radius. */
-                    double px = x + (sx + 0.5) / SAMPLES;
-                    double py = y + (sy + 0.5) / SAMPLES;
-                    double dx = radius - px;
-                    double dy = radius - py;
-                    if (dx * dx + dy * dy <= (double)radius * radius) {
+                    long long dx = (long long)(radius - x) * UNIT
+                        - (2 * sx + 1);
+                    long long dy = (long long)(radius - y) * UNIT
+                        - (2 * sy + 1);
+                    if (dx * dx + dy * dy <= REACH * REACH) {
                         inside++;
                     }
                 }
