@@ -5,6 +5,7 @@
  * looks identical no matter what booted it.
  */
 #include <recon/kernel/arch.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 
@@ -28,6 +29,7 @@ void kmain(void)
 {
 	arch_early_init();
 	banner();
+	boot_print_summary();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

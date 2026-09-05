@@ -1,8 +1,11 @@
 #include <recon/kernel/arch.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/kstring.h>
 
+#include "aarch64.h"
+
 /* Set by boot.S from x0. The device tree is the only description of this
- * machine that exists before any driver runs; nothing parses it yet. */
+ * machine that exists before any driver runs. */
 u64 arch_dtb_pointer;
 
 /* --- PL011 UART -------------------------------------------------------- */
@@ -42,6 +45,21 @@ void arch_early_init(void)
 	 * user's terminal is watching, and reprogramming it before we can print
 	 * means a mistake here is silent. Left alone deliberately until there is
 	 * a reason to own it. */
+
+	if (!fdt_parse(arch_dtb_pointer)) {
+		/* Without a device tree this architecture has no other way to
+		 * learn what memory exists -- there is no equivalent of E820 to
+		 * fall back on. Report the absence rather than assume a size. */
+		boot_info_reset("none", BOOT_FIRMWARE_UNKNOWN);
+
+		/* Record whatever we were handed even though it did not parse.
+		 * A zero here means the firmware passed no device tree at all;
+		 * a non-zero one means it passed something that was not a blob,
+		 * and those are different faults with different fixes. */
+		boot_info()->dtb = (paddr_t)arch_dtb_pointer;
+	}
+
+	boot_finish_regions();
 }
 
 void arch_console_putc(char c)

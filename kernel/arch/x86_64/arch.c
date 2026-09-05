@@ -1,10 +1,8 @@
 #include <recon/kernel/arch.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/kstring.h>
 
-/* Filled in by boot.S from whichever boot protocol was used. */
-extern u32 boot_protocol;
-extern u32 boot_info_phys;
-extern u32 boot_magic;
+#include "x86_64.h"
 
 /* --- Port I/O ---------------------------------------------------------- */
 
@@ -62,9 +60,56 @@ const char *arch_name(void)
 	return "x86_64";
 }
 
+/* E820's type numbers, which both Multiboot2 and PVH pass through unchanged.
+ * Anything not listed is reserved: an unknown type is memory whose owner we do
+ * not know, and the safe reading of that is "not ours". */
+void x86_add_e820_region(u64 base, u64 len, u32 e820_type)
+{
+	enum mem_kind kind;
+
+	switch (e820_type) {
+	case 1:  kind = MEM_USABLE;       break;
+	case 2:  kind = MEM_RESERVED;     break;
+	case 3:  kind = MEM_ACPI_RECLAIM; break;
+	case 4:  kind = MEM_ACPI_NVS;     break;
+	case 5:  kind = MEM_BAD;          break;
+	default: kind = MEM_RESERVED;     break;
+	}
+
+	boot_add_region((paddr_t)base, len, kind);
+}
+
 void arch_early_init(void)
 {
+	bool ok = false;
+
+	/* The console first, so that a failure to understand the boot protocol
+	 * can be reported rather than merely happening. */
 	uart_init();
+
+	switch (boot_protocol) {
+	case BOOT_PROTOCOL_MULTIBOOT2:
+		/* The magic number is the loader's assertion that it really did
+		 * follow the specification. Checked, because a wrong value means
+		 * the pointer in the other register is not what we think. */
+		if (boot_magic == MULTIBOOT2_BOOTLOADER_MAGIC)
+			ok = mb2_parse(boot_info_phys);
+		break;
+	case BOOT_PROTOCOL_PVH:
+		ok = pvh_parse(boot_info_phys);
+		break;
+	default:
+		break;
+	}
+
+	if (!ok) {
+		/* No memory map. Say so, and record nothing rather than invent
+		 * something -- a kernel that guesses at what memory exists is a
+		 * kernel that will corrupt whatever it guessed wrong about. */
+		boot_info_reset("unrecognised", BOOT_FIRMWARE_UNKNOWN);
+	}
+
+	boot_finish_regions();
 }
 
 void arch_console_putc(char c)

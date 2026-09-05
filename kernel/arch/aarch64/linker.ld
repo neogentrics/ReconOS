@@ -7,7 +7,11 @@
 
 ENTRY(_start)
 
-KERNEL_LOAD_ADDR = 0x40000000;
+/* RAM begins at 0x40000000 on QEMU's `virt` machine; the 0x80000 is the
+ * text_offset the Image header asks for, and leaves the loader room to put the
+ * device tree below us. The two numbers must agree -- boot.S declares the
+ * offset, this adds it to the base of RAM. */
+KERNEL_LOAD_ADDR = 0x40080000;
 
 SECTIONS
 {
@@ -43,6 +47,10 @@ SECTIONS
 	}
 
 	__kernel_end = .;
+
+	/* Named in the Image header so the loader reserves room for BSS and the
+	 * stack, not merely for the bytes it copied out of the file. */
+	__image_size = __kernel_end - __kernel_start;
 
 	/DISCARD/ : {
 		*(.comment)

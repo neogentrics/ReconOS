@@ -15,7 +15,7 @@
 #   make check-portable       fail if core/ has learned about a machine
 #   make clean
 
-VERSION := 0.0.1
+VERSION := 0.0.2
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -27,12 +27,18 @@ ifeq ($(ARCH),x86_64)
   ARCHFLAGS := -m64 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
                -mcmodel=small
   QEMU     := qemu-system-x86_64
-  QEMUFLAGS = -kernel $(KERNEL) -no-reboot
+  # The ELF carries its own boot headers -- Multiboot2 and a PVH note -- so it
+  # is what gets booted directly.
+  BOOT_IMAGE = $(KERNEL)
+  QEMUFLAGS = -kernel $(KERNEL) -m 512M -no-reboot
 else ifeq ($(ARCH),aarch64)
   CROSS   ?= aarch64-linux-gnu-
   ARCHFLAGS := -mgeneral-regs-only
   QEMU     := qemu-system-aarch64
-  QEMUFLAGS = -M virt -cpu cortex-a72 -m 256M -kernel $(KERNEL)
+  # aarch64 loaders read a header at the front of a *flat* image, not an ELF.
+  # The ELF is kept for debugging; the .img is what boots.
+  BOOT_IMAGE = $(BUILD)/reconos-kernel.img
+  QEMUFLAGS = -M virt -cpu cortex-a72 -m 512M -kernel $(BOOT_IMAGE)
 else
   $(error Unknown ARCH '$(ARCH)'. Supported: x86_64 aarch64)
 endif
@@ -71,7 +77,11 @@ KERNEL := $(BUILD)/reconos-kernel.elf
 
 .PHONY: all all-arches run clean check-portable info
 
-all: $(KERNEL)
+all: $(BOOT_IMAGE)
+
+$(BUILD)/reconos-kernel.img: $(KERNEL)
+	$(OBJCOPY) -O binary $< $@
+	@echo "  built $@"
 
 $(KERNEL): $(OBJS) $(LINKER_SCRIPT)
 	@mkdir -p $(dir $@)
@@ -94,16 +104,28 @@ all-arches:
 	$(MAKE) ARCH=x86_64
 	$(MAKE) ARCH=aarch64
 
-run: $(KERNEL)
+run: $(BOOT_IMAGE)
 	$(QEMU) $(QEMUFLAGS) -display none -serial mon:stdio
 
 # The rule that keeps arch.h meaningful: nothing under core/ may name a
 # machine, embed assembly, or reach a hardware address. When this fails, the
 # fix is a new function in include/recon/kernel/arch.h, not an #ifdef.
+#
+# Comments are stripped before the check runs. The rule is about what the code
+# does, not what the prose is allowed to mention -- a portable file explaining
+# *why* it is portable will name the machines it is avoiding, and failing the
+# build for that teaches people to write worse comments.
 check-portable:
-	@bad=$$(grep -nE '__asm__|asm volatile|x86|aarch64|0x[0-9a-fA-F]{6,}' core/*.c core/*.h 2>/dev/null || true); \
+	@bad=""; \
+	for f in core/*.c core/*.h; do \
+		[ -e "$$f" ] || continue; \
+		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' "$$f" \
+		      | grep -nE '__asm__|asm volatile|\bx86|\baarch64|\briscv|0x[0-9a-fA-F]{6,}' \
+		      | sed "s|^|$$f:|"); \
+		[ -n "$$hit" ] && bad="$$bad$$hit\n"; \
+	done; \
 	if [ -n "$$bad" ]; then \
-		echo "core/ is not portable any more:"; echo "$$bad"; exit 1; \
+		echo "core/ is not portable any more:"; printf "$$bad"; exit 1; \
 	fi; \
 	echo "core/ is clean: no machine-specific code outside arch/"
 
