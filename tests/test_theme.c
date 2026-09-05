@@ -349,6 +349,99 @@ static void test_glass(void) {
         "chrome never fades past what can still be read");
 }
 
+/* --- Tints --- */
+
+static void test_tint(void) {
+    printf("Tints\n");
+
+    const recon_color AMBER = RECON_RGB(0xC8, 0x90, 0x3A);
+
+    /* Nothing at zero, so a caller need not ask whether a tint is set. */
+    check(recon_color_tint(0xFF3366CCu, AMBER, 0) == 0xFF3366CCu,
+        "strength zero changes nothing");
+
+    /*
+     * Lightness is kept. This is the property the whole design rests on: a
+     * palette's *structure* is in its lightness -- which surfaces sit above
+     * which, which text reads against which -- and only its appearance is in
+     * its hue. A tint that moved lightness would change whether the skin
+     * works, not what it looks like.
+     *
+     * Checked across the range rather than at one value, because the two sides
+     * of the calculation are different code: below the tint's own lightness it
+     * scales towards black, above it towards white, and an error in either one
+     * is invisible from the other side of the branch.
+     */
+    bool kept = true;
+    int worst = 0;
+    for (int v = 0; v <= 255; v += 5) {
+        recon_color grey = RECON_RGB(v, v, v);
+        recon_color got = recon_color_tint(grey, AMBER, 255);
+
+        int before = recon_color_luminance(grey);
+        int after = recon_color_luminance(got);
+        int off = (after > before) ? after - before : before - after;
+
+        if (off > worst) {
+            worst = off;
+        }
+        if (off > 6) {
+            kept = false;
+        }
+    }
+    char label[128];
+    snprintf(label, sizeof(label),
+        "lightness survives the tint at every level (worst %d)", worst);
+    check(kept, label);
+
+    /* And the hue actually arrives. A mid grey tinted amber must come out
+     * warmer than it went in, or the whole thing is an expensive no-op. */
+    recon_color warm = recon_color_tint(RECON_RGB(0x80, 0x80, 0x80),
+        AMBER, 200);
+    check(((warm >> 16) & 0xFF) > (warm & 0xFF) + 20,
+        "a grey tinted amber comes out warm");
+
+    recon_color cool = recon_color_tint(RECON_RGB(0x80, 0x80, 0x80),
+        RECON_RGB(0x4A, 0x86, 0xC8), 200);
+    check((cool & 0xFF) > ((cool >> 16) & 0xFF) + 20,
+        "a grey tinted blue comes out cool");
+
+    /*
+     * Black and white have no room to take a hue and must not be given one.
+     * They are the ends of every palette's range, and a tint that lifted black
+     * off zero would raise the floor of every skin it touched.
+     */
+    check((recon_color_tint(RECON_RGB(0, 0, 0), AMBER, 255) & 0xFFFFFFu) == 0,
+        "black stays black");
+    check((recon_color_tint(RECON_RGB(255, 255, 255), AMBER, 255) & 0xFFFFFFu)
+        == 0xFFFFFFu, "white stays white");
+
+    /* A tint changes what colour a thing is, not whether it is there. */
+    check((recon_color_tint(0x80336699u, AMBER, 255) >> 24) == 0x80u,
+        "the alpha is left alone");
+
+    /*
+     * And the rule that matters most, which is not about colour at all: a skin
+     * whose palette was chosen for colour vision must not accept a tint. Glass
+     * is the only skin that does.
+     */
+    check(recon_theme_set("Deuteran"), "Deuteran can be put on");
+    check(!recon_tint_available(), "a colour-vision skin takes no tint");
+    check(!recon_tint_set("Amber"), "and refuses one when asked");
+
+    check(recon_theme_set("Glass"), "Glass can be put on");
+    check(recon_tint_available(), "Glass takes a tint");
+    check(recon_tint_set("Amber"), "and accepts one");
+    check(strcasecmp(recon_tint_current(), "Amber") == 0, "which is remembered");
+
+    check(!recon_tint_set("Chartreuse"), "a tint nobody defined is refused");
+    check(strcasecmp(recon_tint_current(), "Amber") == 0,
+        "and the one in use is left alone");
+
+    check(recon_tint_set("none"), "'none' takes it off");
+    check(recon_tint_current()[0] == '\0', "and then there is none");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-theme-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -374,6 +467,7 @@ int main(void) {
     test_files();
     test_metrics();
     test_glass();
+    test_tint();
     test_damaged_file();
 
     recon_theme_finish();

@@ -185,6 +185,36 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**The glass can be a colour.** Six tints -- Blue, Amber, Rose, Jade, Violet,
+Graphite -- chosen beside the skin rather than as skins of their own. Eleven
+skins times six colours is sixty-six entries in a list somebody has to read,
+every one differing from its neighbours in a single respect.
+
+**A tint keeps the lightness and moves only the hue**, which is the whole
+design. A palette's *structure* is in its lightness -- which surfaces sit above
+which, which text reads against which -- and only its appearance is in its hue.
+Recolouring by rotating hues changes what a skin looks like; doing it the other
+way round changes whether it works. So the tint is used as a hue reference: a
+colour at the tint's own lightness comes out as the tint, darker ones as darker
+versions, lighter ones as lighter. Pinned by a test across the whole range,
+because the two sides of that calculation are different code and an error in
+either is invisible from the other side of the branch.
+
+**Only the chrome moves, and only a skin that opts in.** Text roles are excluded
+so a tint can never be the reason a label became hard to read; the accent, the
+selection and the warning colour are excluded because they mean something, and a
+meaning that changes hue with the decor is one nobody can learn. And a skin has
+to say `metric.tintable` -- which the colour-vision skins never will, because
+their palettes are chosen so particular pairs stay distinguishable and moving
+the hues would undo exactly that, silently, to whoever picked the colour.
+
+The first six screenshots of six different tints came out pixel-for-pixel
+identical. The setting was stored, the lens was applied at the point a colour is
+asked for, and nothing had asked for a colour since -- `recon_shell_restyle` was
+missing. A change nothing is told about is a change that did not happen, which
+is the same shape as the icon cache keyed on a name after the name stopped
+deciding the file.
+
 **A `dialog` command on the control socket**, which exists because of how the
 change below was tested. Getting a dialog on screen to look at cost four
 attempts at aiming a click, and every one failed silently -- a click that misses

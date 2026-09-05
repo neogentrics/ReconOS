@@ -316,6 +316,9 @@ target_include_directories(recon_version_tests PRIVATE
 add_executable(recon_access_tests
     tests/test_access.c
     src/recon_theme.c
+    # The theme colours a role through the tint lens now, so it needs the
+    # arithmetic that does it. Costs nothing: recon_color.c has no dependencies.
+    src/recon_color.c
     src/recon_registry.c
     src/recon_fs.c
     src/recon_users.c

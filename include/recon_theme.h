@@ -196,6 +196,21 @@ enum recon_theme_metric {
      */
     RECON_METRIC_ICON_GLOSS,
 
+    /*
+     * Whether this skin may be given a tint: 1 for yes.
+     *
+     * Off for every skin but Glass, and the important case is *why* it is off
+     * for three of them. Contrast, Deuteran, Protan and Tritan have palettes
+     * chosen so that particular pairs of colours stay distinguishable to
+     * particular eyes. Rotating their hues would undo the one thing they are
+     * for, and it would undo it invisibly to whoever chose the tint.
+     *
+     * So a skin opts in rather than a tint being applied to whatever is
+     * current. A colour-vision skin cannot be tinted at all, which is a
+     * property of the design rather than a warning somebody has to read.
+     */
+    RECON_METRIC_TINTABLE,
+
     RECON_METRIC_COUNT,
 };
 
@@ -209,6 +224,42 @@ int recon_theme_metric(enum recon_theme_metric metric);
 
 /* The name a skin file uses for a metric, for writing the defaults out. */
 const char *recon_theme_metric_name(enum recon_theme_metric metric);
+
+/*
+ * --- Tints ---
+ *
+ * A tint is a hue the chrome is moved towards, keeping the lightness it had.
+ * It is *not* a skin: eleven skins times six colours would be sixty-six
+ * entries in a list somebody has to read, and every one of them would differ
+ * from its neighbours in one respect. So it sits beside the skin, remembered
+ * per account like the skin is.
+ *
+ * Only the chrome moves -- frames, bars, buttons, menus. Text does not, because
+ * a tint must not decide whether a label is readable; and neither do the
+ * accent, the selection or the warning colour, because those carry meaning and
+ * a meaning that changes hue with the decor is a meaning nobody can learn.
+ */
+#define RECON_THEME_TINT_KEY "theme/tint"
+#define RECON_TINT_NAME_MAX 24
+
+int recon_tint_count(void);
+bool recon_tint_at(int index, char *name, size_t size);
+
+/* The tint in use, or "" when none is. Never NULL. */
+const char *recon_tint_current(void);
+
+/*
+ * Put one on. The empty string, or "None", takes it off again.
+ *
+ * False when there is no such tint, or when the current skin does not accept
+ * one -- which is not a failure to report so much as a question that does not
+ * apply. recon_theme_last_error says which.
+ */
+bool recon_tint_set(const char *name);
+
+/* Whether the current skin accepts a tint at all, for a page that should not
+ * offer a choice that cannot be made. */
+bool recon_tint_available(void);
 
 /* Where skins live, and how they are named. */
 #define RECON_DIR_THEMES "/System/Themes"

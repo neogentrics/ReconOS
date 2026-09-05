@@ -15,6 +15,70 @@
 
 #include "recon_ui.h"
 
+int recon_color_luminance(recon_color color) {
+    int r = (int)((color >> 16) & 0xFF);
+    int g = (int)((color >> 8) & 0xFF);
+    int b = (int)(color & 0xFF);
+
+    /* 0.299, 0.587, 0.114, in 1024ths. The classic weights, and integer so
+     * this can run anywhere the drawing code runs. */
+    return (306 * r + 601 * g + 117 * b) >> 10;
+}
+
+recon_color recon_color_tint(recon_color base, recon_color tint, int strength) {
+    if (strength <= 0) {
+        return base;
+    }
+    if (strength > 255) {
+        strength = 255;
+    }
+
+    int want = recon_color_luminance(base);
+    int have = recon_color_luminance(tint);
+
+    int tr = (int)((tint >> 16) & 0xFF);
+    int tg = (int)((tint >> 8) & 0xFF);
+    int tb = (int)(tint & 0xFF);
+
+    /*
+     * The tint, moved to the base's lightness.
+     *
+     * Below the tint's own lightness this scales towards black; above it, it
+     * scales towards white. Two ranges rather than one multiply, because a
+     * multiply cannot make a colour lighter than the tint without pushing a
+     * channel past 255 -- and clamping there is what turns a light surface
+     * into a saturated one.
+     */
+    if (want <= have && have > 0) {
+        tr = tr * want / have;
+        tg = tg * want / have;
+        tb = tb * want / have;
+    } else if (have < 255) {
+        int room = 255 - have;
+        int over = want - have;
+        tr += (255 - tr) * over / room;
+        tg += (255 - tg) * over / room;
+        tb += (255 - tb) * over / room;
+    }
+
+    int br = (int)((base >> 16) & 0xFF);
+    int bg = (int)((base >> 8) & 0xFF);
+    int bb = (int)(base & 0xFF);
+
+    int r = br + (tr - br) * strength / 255;
+    int g = bg + (tg - bg) * strength / 255;
+    int b = bb + (tb - bb) * strength / 255;
+
+    if (r < 0) { r = 0; } if (r > 255) { r = 255; }
+    if (g < 0) { g = 0; } if (g > 255) { g = 255; }
+    if (b < 0) { b = 0; } if (b > 255) { b = 255; }
+
+    /* The alpha is the base's. A tint changes what colour something is, not
+     * whether it is there. */
+    return (base & 0xFF000000u) | ((recon_color)r << 16) |
+        ((recon_color)g << 8) | (recon_color)b;
+}
+
 recon_color recon_color_fade(recon_color color, uint8_t alpha) {
     if (alpha == 255) {
         return color;

@@ -46,6 +46,34 @@ typedef uint32_t recon_color;
  */
 recon_color recon_color_fade(recon_color color, uint8_t alpha);
 
+/*
+ * How light a colour is, 0 to 255.
+ *
+ * Weighted the way an eye weights it rather than as a plain average: green
+ * carries most of the apparent brightness and blue almost none, so an average
+ * calls pure blue and pure green equally bright and they are nothing alike.
+ */
+int recon_color_luminance(recon_color color);
+
+/*
+ * Move a colour towards a hue while keeping how light it was.
+ *
+ * The point of keeping the lightness is that a palette's *structure* is in its
+ * lightness, not its hue: which surfaces are above which, which text reads
+ * against which. Recolouring a skin by rotating hues and leaving lightness
+ * alone changes what it looks like; doing it the other way round changes
+ * whether it works.
+ *
+ * So `tint` is used as a hue reference rather than as a colour to blend in.
+ * A base at the tint's own lightness comes out as the tint; darker bases come
+ * out as darker versions of it, lighter ones as lighter -- which is what stops
+ * a light grey turning into a mid-tone just because the tint is one.
+ *
+ * `strength` is 0 to 255. Zero returns the base untouched, so a caller does
+ * not have to ask whether a tint is set.
+ */
+recon_color recon_color_tint(recon_color base, recon_color tint, int strength);
+
 #define RECON_RGB(r, g, b)     ((recon_color)(0xFF000000u | ((r) << 16) | ((g) << 8) | (b)))
 #define RECON_RGBA(r, g, b, a) ((recon_color)(((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
 

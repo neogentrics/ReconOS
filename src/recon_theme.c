@@ -627,6 +627,7 @@ static const struct {
     { "metric.button-corner", 0,  0,   8 },
     { "metric.chrome-opacity", 255, 140, 255 },
     { "metric.icon-gloss",       0,   0,   1 },
+    { "metric.tintable",         0,   0,   1 },
 };
 
 _Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
@@ -787,6 +788,7 @@ static const struct metric_spec SHAPE_GLASS[] = {
     { RECON_METRIC_BUTTON_CORNER,  5 },
     { RECON_METRIC_CHROME_OPACITY, 210 },
     { RECON_METRIC_ICON_GLOSS, 1 },
+    { RECON_METRIC_TINTABLE, 1 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -1850,18 +1852,189 @@ void recon_theme_finish(void) {
 
 /* --- Asking --- */
 
+/* --- Tints --- */
+
+/*
+ * Six, and they are hue references rather than colours anything is painted.
+ *
+ * Each is picked at a middling lightness on purpose. recon_color_tint moves a
+ * base colour to the tint's hue while keeping the base's lightness, and it does
+ * that by scaling towards black below the tint's own lightness and towards
+ * white above it -- so a tint that is nearly black or nearly white has almost
+ * no room on one side and flattens half the palette into it.
+ *
+ * Presets, all of them, which under this system's rule means none can be
+ * deleted. There is nothing to delete: a tint is six numbers in this file, not
+ * a file somebody installed.
+ */
+static const struct {
+    const char *name;
+    recon_color hue;
+} TINTS[] = {
+    { "Blue",     RECON_RGB(0x4A, 0x86, 0xC8) },
+    { "Amber",    RECON_RGB(0xC8, 0x90, 0x3A) },
+    { "Rose",     RECON_RGB(0xC4, 0x5E, 0x74) },
+    { "Jade",     RECON_RGB(0x3C, 0xA8, 0x84) },
+    { "Violet",   RECON_RGB(0x8A, 0x6C, 0xC8) },
+    { "Graphite", RECON_RGB(0x78, 0x80, 0x88) },
+};
+
+#define TINT_COUNT ((int)(sizeof(TINTS) / sizeof(TINTS[0])))
+
+/*
+ * How far the chrome moves. Not a setting.
+ *
+ * At 255 the palette becomes the tint and the skin stops being Glass; at 60 it
+ * is a rumour. 150 is where the hue is unmistakable and the greys the skin
+ * chose are still recognisably greys -- and one number that was chosen by
+ * looking is better than a slider that makes everybody choose for themselves.
+ */
+#define TINT_STRENGTH 150
+
+/*
+ * Which roles move.
+ *
+ * The chrome, and nothing that has to be read or that carries a meaning. Text
+ * roles are absent because a tint must never be the reason a label became hard
+ * to read. The accent, the selection and the warning colour are absent because
+ * they mean something -- and a meaning whose colour changes with the decor is
+ * one nobody can learn.
+ */
+static bool role_takes_tint(enum recon_theme_role role) {
+    switch (role) {
+    case RECON_THEME_WINDOW_FRAME:
+    case RECON_THEME_WINDOW_EDGE:
+    case RECON_THEME_TITLE_ACTIVE:
+    case RECON_THEME_TITLE_INACTIVE:
+    case RECON_THEME_WINDOW_BUTTON:
+    case RECON_THEME_BAR:
+    case RECON_THEME_BUTTON:
+    case RECON_THEME_BUTTON_ACTIVE:
+    case RECON_THEME_MENU:
+    case RECON_THEME_MENU_BORDER:
+    case RECON_THEME_MENU_SEPARATOR:
+    case RECON_THEME_DIALOG:
+    case RECON_THEME_DIALOG_TITLE:
+    case RECON_THEME_SURFACE_ALT:
+    case RECON_THEME_SURFACE_HEADER:
+        return true;
+    default:
+        return false;
+    }
+}
+
+int recon_tint_count(void) {
+    return TINT_COUNT;
+}
+
+bool recon_tint_at(int index, char *name, size_t size) {
+    if (index < 0 || index >= TINT_COUNT || name == NULL || size == 0) {
+        return false;
+    }
+    snprintf(name, size, "%s", TINTS[index].name);
+    return true;
+}
+
+bool recon_tint_available(void) {
+    return recon_theme_metric(RECON_METRIC_TINTABLE) > 0;
+}
+
+const char *recon_tint_current(void) {
+    if (!recon_tint_available()) {
+        return "";
+    }
+
+    /* Returns the fallback rather than NULL when unset, which is what makes
+     * the loop below the only place a name is checked. */
+    const char *name = recon_registry_get(RECON_REG_USER,
+        RECON_THEME_TINT_KEY, "");
+
+    for (int i = 0; i < TINT_COUNT; i++) {
+        if (strcasecmp(TINTS[i].name, name) == 0) {
+            return TINTS[i].name;
+        }
+    }
+    /* A name nothing recognises is no tint rather than a guess. A registry is
+     * a text file somebody can edit. */
+    return "";
+}
+
+bool recon_tint_set(const char *name) {
+    if (name == NULL || *name == '\0' || strcasecmp(name, "None") == 0) {
+        recon_registry_set(RECON_REG_USER, RECON_THEME_TINT_KEY, "");
+        g_generation++;
+        return true;
+    }
+
+    if (!recon_tint_available()) {
+        set_error("'%s' does not take a tint",
+            g_current >= 0 ? g_themes[g_current].info.name : "this skin");
+        return false;
+    }
+
+    for (int i = 0; i < TINT_COUNT; i++) {
+        if (strcasecmp(TINTS[i].name, name) != 0) {
+            continue;
+        }
+        recon_registry_set(RECON_REG_USER, RECON_THEME_TINT_KEY,
+            TINTS[i].name);
+        g_generation++;
+        return true;
+    }
+
+    set_error("there is no tint called '%s'", name);
+    return false;
+}
+
+/* The hue in use, or 0 when none is. */
+static recon_color tint_hue(void) {
+    const char *name = recon_tint_current();
+    if (*name == '\0') {
+        return 0;
+    }
+    for (int i = 0; i < TINT_COUNT; i++) {
+        if (strcasecmp(TINTS[i].name, name) == 0) {
+            return TINTS[i].hue;
+        }
+    }
+    return 0;
+}
+
 recon_color recon_theme_color(enum recon_theme_role role) {
     if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
         /* Magenta, on purpose. A colour nobody chose should be obvious on
          * screen rather than blending in as a shadow. */
         return RECON_RGB(0xFF, 0x00, 0xFF);
     }
-    if (g_current < 0 || !g_themes[g_current].used) {
-        return THEME_RECON[role];
+    recon_color chosen = (g_current < 0 || !g_themes[g_current].used)
+        ? THEME_RECON[role] : g_themes[g_current].colors[role];
+
+    /*
+     * Applied here rather than baked into the palette when a tint is chosen.
+     *
+     * Baking it in would mean the skin's stored colours were no longer the
+     * skin's -- so taking the tint off again would need the originals kept
+     * somewhere, and editing a role under a tint would save the tinted value
+     * as if somebody had chosen it. Doing it at the point of asking means the
+     * palette is always the palette and the tint is always a lens.
+     */
+    if (role_takes_tint(role)) {
+        recon_color hue = tint_hue();
+        if (hue != 0) {
+            chosen = recon_color_tint(chosen, hue, TINT_STRENGTH);
+        }
     }
-    return g_themes[g_current].colors[role];
+    return chosen;
 }
 
+/*
+ * The far end of a ramp takes the tint too.
+ *
+ * Missing this is the kind of bug that looks like a gradient bug: the title
+ * bar's top edge is the tint and its bottom edge is the skin's original blue,
+ * so the bar reads as a colour fading into an unrelated one. The roles and the
+ * ramps have to agree, and they only agree if both go through the same lens.
+ */
 bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
         recon_color *to) {
     if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
@@ -1873,8 +2046,24 @@ bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
     if (!g_themes[g_current].has_gradient[role]) {
         return false;
     }
-    if (from != NULL) { *from = g_themes[g_current].colors[role]; }
-    if (to != NULL) { *to = g_themes[g_current].gradient[role]; }
+    /*
+     * Both ends through the same lens as the flat colours.
+     *
+     * Tinting the role and not the ramp gives a title bar whose top edge is
+     * the tint and whose bottom edge is the skin's original blue -- a bar
+     * fading into an unrelated colour, which reads as a gradient bug rather
+     * than as a missed call.
+     */
+    recon_color hue = role_takes_tint(role) ? tint_hue() : 0;
+
+    if (from != NULL) {
+        *from = recon_color_tint(g_themes[g_current].colors[role], hue,
+            hue != 0 ? TINT_STRENGTH : 0);
+    }
+    if (to != NULL) {
+        *to = recon_color_tint(g_themes[g_current].gradient[role], hue,
+            hue != 0 ? TINT_STRENGTH : 0);
+    }
     return true;
 }
 

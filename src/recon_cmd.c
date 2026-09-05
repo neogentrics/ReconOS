@@ -2030,9 +2030,68 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
                 info.built_in ? "built in" : "file",
                 info.description);
         }
+        if (recon_tint_available()) {
+            const char *tint = recon_tint_current();
+            out(s, "\nTint: %s\n", *tint != '\0' ? tint : "none");
+        }
+
         out(s, "\n'theme <name>' puts one on. 'theme roles' lists what a skin "
             "can colour.\n'theme copy <new name>' starts one from the one you "
-            "are using.\n");
+            "are using.\n'theme tint' is what colour the glass is.\n");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "tint") == 0) {
+        /*
+         * A tint sits beside the skin rather than being one. Eleven skins
+         * times six colours is sixty-six entries in a list somebody has to
+         * read, every one differing from its neighbours in a single respect.
+         */
+        if (!recon_tint_available()) {
+            out(s, "'%s' does not take a tint.\n", recon_theme_current());
+            out(s, "\nOnly a skin built for one does. The colour-vision skins "
+                   "never will:\ntheir palettes are chosen so particular pairs "
+                   "stay apart, and\nmoving the hues would undo that without "
+                   "looking like it had.\n");
+            return;
+        }
+
+        if (argc < 3) {
+            const char *now = recon_tint_current();
+            out(s, "Tint: %s\n\n", *now != '\0' ? now : "none");
+
+            for (int i = 0; i < recon_tint_count(); i++) {
+                char name[RECON_TINT_NAME_MAX];
+                if (recon_tint_at(i, name, sizeof(name))) {
+                    out(s, "  %s%s\n",
+                        strcasecmp(name, now) == 0 ? "* " : "  ", name);
+                }
+            }
+            out(s, "\n'theme tint <name>' puts one on. "
+                   "'theme tint none' takes it off.\n");
+            return;
+        }
+
+        if (!recon_tint_set(argv[2])) {
+            out(s, "%s\n", recon_theme_last_error());
+            return;
+        }
+
+        /*
+         * The whole desktop, the same as changing the skin does.
+         *
+         * The tint is a lens applied when a colour is asked for, so nothing
+         * changes on screen until something asks. Without this the setting is
+         * stored, is correct, and is invisible.
+         */
+        recon_shell_restyle(s->server->shell);
+
+        const char *now = recon_tint_current();
+        if (*now == '\0') {
+            out(s, "Tint removed.\n");
+        } else {
+            out(s, "Tint is now '%s'.\n", now);
+        }
         return;
     }
 
