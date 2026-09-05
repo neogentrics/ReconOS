@@ -17,7 +17,9 @@
 
 #include "recon_fs.h"
 #include "recon_ico.h"
+#include "recon_icon_gen.h"
 #include "recon_icons.h"
+#include "recon_theme.h"
 #include "stb_image.h"
 
 #define CACHE_MAX 32
@@ -58,7 +60,30 @@ static unsigned char *try_load(const char *path, int *width, int *height) {
     return pixels;
 }
 
+/*
+ * Throw the cache away if the skin has changed since it was filled.
+ *
+ * Which file a name resolves to now depends on the skin -- a glossy skin looks
+ * in a different directory first -- so a cache filled under one skin is wrong
+ * under the next. The generation counter is the theme's own and goes up for an
+ * edit as well as a switch, which is what makes this correct for somebody
+ * changing metric.icon-gloss on a skin they are already using.
+ */
+static void forget_if_the_skin_moved(void) {
+    static unsigned seen;
+    static bool ever;
+
+    unsigned now = recon_theme_generation();
+    if (ever && now == seen) {
+        return;
+    }
+    ever = true;
+    seen = now;
+    recon_icons_forget();
+}
+
 const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
+    forget_if_the_skin_moved();
     if (name == NULL || *name == '\0') {
         return NULL;
     }
@@ -88,11 +113,32 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
      * .png for anything produced by a tool that does not write icons.
      */
     static const char *const EXTENSIONS[] = { "ico", "png", NULL };
-    for (int i = 0; EXTENSIONS[i] != NULL && entry->pixels == NULL; i++) {
-        char path[RECON_PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s.%s",
-            RECON_DIR_SYSTEM_ICONS, name, EXTENSIONS[i]);
-        entry->pixels = try_load(path, &entry->width, &entry->height);
+
+    /*
+     * The glossy set first, when the skin asks for it -- and the flat one
+     * underneath either way.
+     *
+     * A fallback rather than a switch, deliberately. An icon that only exists
+     * in the flat set, because somebody added it or replaced it there, still
+     * appears under a glossy skin. The alternative is a skin that silently
+     * loses icons, which looks like the icons are broken rather than like the
+     * skin is.
+     */
+    bool glossy = recon_theme_metric(RECON_METRIC_ICON_GLOSS) > 0;
+
+    for (int pass = glossy ? 0 : 1; pass < 2 && entry->pixels == NULL; pass++) {
+        for (int i = 0; EXTENSIONS[i] != NULL && entry->pixels == NULL; i++) {
+            char path[RECON_PATH_MAX];
+            if (pass == 0) {
+                snprintf(path, sizeof(path), "%s/%s/%s.%s",
+                    RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, name,
+                    EXTENSIONS[i]);
+            } else {
+                snprintf(path, sizeof(path), "%s/%s.%s",
+                    RECON_DIR_SYSTEM_ICONS, name, EXTENSIONS[i]);
+            }
+            entry->pixels = try_load(path, &entry->width, &entry->height);
+        }
     }
 
     /* A missing icon is remembered as missing, so a name that has no file is

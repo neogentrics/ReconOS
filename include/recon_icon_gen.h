@@ -13,8 +13,21 @@
 #include <stdbool.h>
 
 /*
+ * The subdirectory holding the same icons with a curved-glass treatment.
+ *
+ * A skin asks for them by setting metric.icon-gloss, and recon_icons looks here
+ * before it looks at the flat set. Named here rather than written out in both
+ * places, because the generator and the loader agreeing about it is the whole
+ * of how this works.
+ */
+#define RECON_ICONS_GLOSSY "Glossy"
+
+/*
  * Write the default icons, returning how many were written. Existing files are
  * left alone unless overwrite is set: a replaced icon should stay replaced.
+ *
+ * Every icon is written twice -- flat, and again into RECON_ICONS_GLOSSY -- so
+ * the count is about double the number of icons.
  */
 int recon_icons_write_defaults(bool overwrite);
 

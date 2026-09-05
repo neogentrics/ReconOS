@@ -185,6 +185,17 @@ enum recon_theme_metric {
      */
     RECON_METRIC_CHROME_OPACITY,
 
+    /*
+     * Whether to use the glossy icon set: 1 for yes, 0 for the flat one.
+     *
+     * A choice between two sets of files rather than an amount, because that
+     * is what it really is -- icons are written to disk once and replaceable
+     * by dropping a different file over them, so there is nothing here that
+     * could vary continuously. A 0-to-100 knob would be a promise the shape of
+     * the thing cannot keep.
+     */
+    RECON_METRIC_ICON_GLOSS,
+
     RECON_METRIC_COUNT,
 };
 

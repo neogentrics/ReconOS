@@ -164,6 +164,27 @@ it wants once and the rule that follows is a sentence -- chrome you read a list
 from gets half. The tooltip and the dim behind a dialog stay solid, for the same
 reason stated the other way round.
 
+**And a second icon set, lit.** Every generated icon is written twice: flat, and
+again into `/System/Icons/Glossy` with a curved-glass treatment -- a vertical
+ramp that makes a flat shape read as curved, the lower arc of a large ellipse
+centred above the icon for the specular, and one lighter row along the top of
+the shape for the rim. It follows the icon's own alpha rather than a rectangle,
+which is the whole difference between a glossy icon and an icon with a glossy
+box behind it.
+
+Two sets rather than one treatment applied everywhere, because the flat idiom is
+what Classic and Recon are *for* and 95 did not gleam. Two sets rather than a
+gloss applied on the way to the screen, because these are files precisely so any
+one of them can be replaced -- and a gloss at draw time would be applied to the
+replacement too.
+
+A skin says which it wants with `metric.icon-gloss`, and the glossy set falls
+back to the flat one rather than switching to it: an icon that only exists flat,
+because somebody added or replaced it, still appears under a glossy skin. And
+the icon cache now watches the theme's generation counter, because which file a
+name resolves to is no longer decided by the name alone -- BG-089's shape
+exactly, caught before it shipped this time.
+
 **No backdrop blur, and that is the honest gap.** Real Aero blurred what was
 behind the glass, which is what let it be far more transparent than this is. A
 window's buffer cannot see what is under it, so blurring would mean either

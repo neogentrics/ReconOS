@@ -626,6 +626,7 @@ static const struct {
     { "metric.button-size",  16, 10,  32 },
     { "metric.button-corner", 0,  0,   8 },
     { "metric.chrome-opacity", 255, 140, 255 },
+    { "metric.icon-gloss",       0,   0,   1 },
 };
 
 _Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
@@ -785,6 +786,7 @@ static const struct metric_spec SHAPE_GLASS[] = {
     { RECON_METRIC_BUTTON_SIZE,   18 },
     { RECON_METRIC_BUTTON_CORNER,  5 },
     { RECON_METRIC_CHROME_OPACITY, 210 },
+    { RECON_METRIC_ICON_GLOSS, 1 },
     { RECON_METRIC_COUNT, 0 },
 };
 

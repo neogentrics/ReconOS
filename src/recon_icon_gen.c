@@ -9,6 +9,19 @@
  *
  * They are drawn in the chunky, high-contrast idiom of the era ReconOS is
  * styled after: flat colour, hard edges, a light source at the top left.
+ *
+ * --- And a second set, with a gloss on it ---
+ *
+ * Every icon is also written a second time with a curved-glass treatment, into
+ * a subdirectory, and a skin says which set it wants. Two sets rather than one
+ * treatment applied to everything: the flat idiom is what Classic and Recon are
+ * *for*, and 95 did not gleam.
+ *
+ * Two sets rather than glossing on the way to the screen, as well. These are
+ * files, and the reason they are files is that any one of them can be replaced
+ * by dropping a different image over it. A gloss applied at draw time would be
+ * applied to the replacement too, which is the one thing a replaced icon exists
+ * to avoid.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -46,6 +59,101 @@ typedef uint32_t color;
 #define C_BLUE RGB(0x28, 0x48, 0x98)
 #define C_BLUE_LIGHT RGB(0x58, 0x80, 0xD0)
 #define C_KEY RGB(0xE0, 0xE0, 0xE0)
+
+/* --- The gloss --- */
+
+/*
+ * Move a colour towards white or black by a fraction in 256ths.
+ *
+ * Towards, not to: a highlight that reaches white loses the colour underneath
+ * it, and an icon whose top half is a white smear is not a shiny icon, it is a
+ * damaged one.
+ */
+static color shade(color c, int towards_white, int towards_black) {
+    int r = (int)((c >> 16) & 0xFF);
+    int g = (int)((c >> 8) & 0xFF);
+    int b = (int)(c & 0xFF);
+
+    r += ((255 - r) * towards_white) >> 8;
+    g += ((255 - g) * towards_white) >> 8;
+    b += ((255 - b) * towards_white) >> 8;
+
+    r -= (r * towards_black) >> 8;
+    g -= (g * towards_black) >> 8;
+    b -= (b * towards_black) >> 8;
+
+    return (c & 0xFF000000u) | ((color)r << 16) | ((color)g << 8) | (color)b;
+}
+
+/*
+ * A curved, lit surface over whatever has already been drawn.
+ *
+ * Three things, and each is doing a different job:
+ *
+ *   - a vertical ramp, lighter at the top and darker at the bottom, which is
+ *     what makes a flat shape read as curved rather than as tilted;
+ *   - a specular highlight, the bottom arc of a large ellipse centred well
+ *     above the icon, so it crosses the top third the way a reflection on a
+ *     convex surface does;
+ *   - a single lighter row along the very top of the shape, which is the rim
+ *     of the glass catching the light.
+ *
+ * Applied only where something has been drawn. Following the icon's own alpha
+ * rather than a rectangle is the whole difference between a glossy icon and an
+ * icon with a glossy box behind it.
+ */
+static void gloss(color *px) {
+    for (int y = 0; y < ICON_SIZE; y++) {
+        for (int x = 0; x < ICON_SIZE; x++) {
+            color c = px[y * ICON_SIZE + x];
+            if ((c >> 24) == 0) {
+                continue;              /* nothing here to light */
+            }
+
+            /*
+             * The ramp. Strongest at the very top and the very bottom, nothing
+             * across the middle, so the two halves meet without a seam.
+             */
+            int light = 0, dark = 0;
+            if (y < ICON_SIZE / 2) {
+                light = 56 * (ICON_SIZE / 2 - y) / (ICON_SIZE / 2);
+            } else {
+                dark = 40 * (y - ICON_SIZE / 2) / (ICON_SIZE / 2);
+            }
+
+            /*
+             * The highlight, as an ellipse centred eleven rows above the icon.
+             * Only its lower arc reaches the pixels, which is why the centre is
+             * off the top: a highlight centred *on* the icon is a circle in the
+             * middle of it, and reads as a hole rather than as a reflection.
+             *
+             * Integer throughout, scaled by 1024, because this runs at build-
+             * of-the-filesystem time on a machine that may have no floating
+             * point worth relying on -- and because the shape is not sensitive
+             * enough to need any more precision than this.
+             */
+            int dx = (x - ICON_SIZE / 2) * 1024 / 19;
+            int dy = (y + 11) * 1024 / 21;
+            int inside = 1024 * 1024 - (dx * dx + dy * dy);
+            if (inside > 0) {
+                /* Falls off towards the arc rather than stopping at it, so the
+                 * edge of the highlight is an edge of light and not a line. */
+                light += 58 * inside / (1024 * 1024);
+            }
+
+            /* The rim: the topmost drawn pixel of this column. */
+            bool rim = (y == 0) || ((px[(y - 1) * ICON_SIZE + x] >> 24) == 0);
+            if (rim) {
+                light += 46;
+            }
+
+            if (light > 200) {
+                light = 200;
+            }
+            px[y * ICON_SIZE + x] = shade(c, light, dark);
+        }
+    }
+}
 
 /* --- Drawing --- */
 
@@ -670,6 +778,13 @@ int recon_icons_write_defaults(bool overwrite) {
         return 0;
     }
 
+    /* Where the glossy set goes. Created here rather than assumed, because
+     * this runs on a filesystem that may have been made a moment ago. */
+    char glossy_dir[RECON_PATH_MAX];
+    snprintf(glossy_dir, sizeof(glossy_dir), "%s/%s",
+        RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY);
+    recon_fs_mkdir("/", glossy_dir);
+
     int written = 0;
     for (size_t i = 0; i < sizeof(ICONS) / sizeof(ICONS[0]); i++) {
         char path[RECON_PATH_MAX];
@@ -678,12 +793,30 @@ int recon_icons_write_defaults(bool overwrite) {
 
         /* A replaced icon stays replaced: the generated set is a default, not
          * something the system re-imposes on every start. */
+        if (overwrite || !recon_fs_exists("/", path)) {
+            memset(px, 0, (size_t)ICON_SIZE * ICON_SIZE * sizeof(color));
+            ICONS[i].draw(px);
+            if (write_ico(path, px)) {
+                written++;
+            }
+        }
+
+        /*
+         * And the same icon again, lit.
+         *
+         * Drawn from scratch rather than glossed from the copy above: that copy
+         * may be one somebody replaced, and putting a highlight on a picture
+         * whose whole point was to not be ours is worse than not offering the
+         * glossy version of it at all.
+         */
+        snprintf(path, sizeof(path), "%s/%s/%s.ico",
+            RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, ICONS[i].name);
         if (!overwrite && recon_fs_exists("/", path)) {
             continue;
         }
-
         memset(px, 0, (size_t)ICON_SIZE * ICON_SIZE * sizeof(color));
         ICONS[i].draw(px);
+        gloss(px);
         if (write_ico(path, px)) {
             written++;
         }
