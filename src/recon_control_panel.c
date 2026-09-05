@@ -234,7 +234,7 @@ static const struct {
     { "Recovery", RECON_ICON_RECOVERY, "Back to what worked" },
     { "Registry", RECON_ICON_NOTEPAD, "Every setting, raw" },
 
-    { "About", RECON_ICON_TASKMGR, "This machine" },
+    { "System Information", RECON_ICON_TASKMGR, "What this machine is" },
 };
 
 /*
@@ -257,6 +257,18 @@ struct pending_item {
     const char *label;
     const char *detail;   /* What it is for. */
     const char *blocked;  /* What has to exist first. */
+};
+
+static const struct pending_item ABOUT_ITEMS[] = {
+    { "Device Manager", "The hardware, and the drivers for it.",
+      "Drivers are .rts modules and none exist. Enumerating hardware is a "
+      "kernel's job; ReconOS would be reading the host's list." },
+    { "Product key and activation", "Whether this copy is licensed.",
+      "There is nothing to license against. It arrives with the server the "
+      "additional-features system needs." },
+    { "Disk encryption", "Keep what is on the disk unreadable without a key.",
+      "Needs the volume layer to sit on something it can encrypt, which "
+      "means partitions, which means the kernel." },
 };
 
 static const struct pending_item DISPLAY_ITEMS[] = {
@@ -350,6 +362,8 @@ static const struct {
     const struct pending_item *items;
     int count;
 } PENDING[PAGE_COUNT] = {
+    [PAGE_ABOUT] = { "Related, and not built yet.", ABOUT_ITEMS,
+        (int)(sizeof(ABOUT_ITEMS) / sizeof(ABOUT_ITEMS[0])) },
     [PAGE_DISPLAY] = { "How text is sized and spaced, and how big the screen "
         "is.", DISPLAY_ITEMS,
         (int)(sizeof(DISPLAY_ITEMS) / sizeof(DISPLAY_ITEMS[0])) },
@@ -3684,67 +3698,164 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_REGISTRY_REMOVE, have);
 }
 
-static void draw_system(struct control_panel *cp, struct recon_panel *p,
-        int x, int y, int w, int h) {
-    (void)h;
+/*
+ * --- System Information ---
+ *
+ * It was eight lines and a paragraph, called About. Joshua's read of it:
+ *
+ *   It should say system information and just have a bunch of system
+ *   information.
+ *
+ * So it does, in three groups, and the groups are the point. What the machine
+ * is, what ReconOS is, and what is underneath -- because the third is the one
+ * that explains why the first is readable at all, and running them together
+ * would let somebody believe ReconOS had found the processor itself.
+ */
+static void info_row(struct control_panel *cp, struct recon_panel *p,
+        int x, int *y, int w, const char *label, const char *value) {
     int ascent = recon_font_ascent(cp->font);
     int line = recon_font_line_height(cp->font);
     if (line <= 0) {
         line = 18;
     }
 
-    y = draw_heading(cp, p, x, y, w, RECONOS_FULL_NAME,
-        "Version " RECONOS_VERSION);
+    recon_draw_text(p, cp->font, x, *y + ascent, 150, label, COLOR_DIM);
+    recon_draw_text(p, cp->font, x + 160, *y + ascent, w - 168, value,
+        COLOR_TEXT);
+    *y += line + 2;
+}
+
+static int info_group(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, const char *title) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    y += 6;
+    recon_draw_text(p, cp->font, x, y + ascent, w, title, THEME(ACCENT));
+    y += line;
+    recon_fill_rect(p, x, y, w, 1, COLOR_SEPARATOR);
+    return y + 6;
+}
+
+static void draw_system(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+
+    y = draw_heading(cp, p, x, y, w, "System Information",
+        "What this machine is, and what is running on it.");
+
+    char value[192];
+
+    /* --- The machine --- */
+    y = info_group(cp, p, x, y, w, "This machine");
+
+    char cpu[160];
+    if (recon_proc_cpu_name(cpu, sizeof(cpu))) {
+        int cores = recon_proc_cpu_cores();
+        if (cores > 0) {
+            snprintf(value, sizeof(value), "%s  (%d core%s)", cpu, cores,
+                cores == 1 ? "" : "s");
+        } else {
+            snprintf(value, sizeof(value), "%s", cpu);
+        }
+    } else {
+        snprintf(value, sizeof(value), "not readable");
+    }
+    info_row(cp, p, x, &y, w, "Processor", value);
 
     struct recon_proc_snapshot *snapshot = recon_proc_snapshot_create();
-    size_t total_mb = 0, used_mb = 0;
+    size_t total_mb = 0;
+    size_t used_mb = 0;
     if (snapshot != NULL && recon_proc_snapshot_refresh(snapshot)) {
         total_mb = recon_proc_total_memory_kb(snapshot) / 1024;
         used_mb = recon_proc_used_memory_kb(snapshot) / 1024;
     }
     recon_proc_snapshot_destroy(snapshot);
 
-    char lines[8][160];
-    int count = 0;
+    snprintf(value, sizeof(value), "%zu MB, %zu MB in use", total_mb,
+        used_mb);
+    info_row(cp, p, x, &y, w, "Memory", value);
 
-    snprintf(lines[count++], sizeof(lines[0]), "Filesystem      %s",
-        recon_fs_host_root());
-    snprintf(lines[count++], sizeof(lines[0]), "Signed in as    %s (%s)",
+    snprintf(value, sizeof(value), "%d by %d", cp->server->screen_width,
+        cp->server->screen_height);
+    info_row(cp, p, x, &y, w, "Display", value);
+
+    /* Every space, so the one number here is the one the Storage page adds
+     * up to rather than a different total nobody can reconcile. */
+    unsigned long long across = 0;
+    for (int i = 0; i < RECON_VOLUME_COUNT; i++) {
+        unsigned long long used = 0;
+        recon_volume_usage((enum recon_volume)i, &used, NULL);
+        across += used;
+    }
+    char size[32];
+    storage_size(across, size, sizeof(size));
+    snprintf(value, sizeof(value), "%s used across three spaces", size);
+    info_row(cp, p, x, &y, w, "Storage", value);
+
+    /* --- ReconOS --- */
+    y = info_group(cp, p, x, y, w, RECONOS_FULL_NAME);
+
+    info_row(cp, p, x, &y, w, "Version", RECONOS_VERSION);
+    info_row(cp, p, x, &y, w, "Built", __DATE__);
+    info_row(cp, p, x, &y, w, "Filesystem", recon_fs_host_root());
+
+    snprintf(value, sizeof(value), "%s (%s)",
         recon_users_current() != NULL ? recon_users_current() : "nobody",
         recon_users_current_is_admin() ? "administrator" : "limited");
-    snprintf(lines[count++], sizeof(lines[0]), "Accounts        %d",
-        recon_users_count());
-    snprintf(lines[count++], sizeof(lines[0]), "Memory          %zu of %zu MB",
-        used_mb, total_mb);
-    snprintf(lines[count++], sizeof(lines[0]), "Skin            %s",
-        recon_theme_current());
-    snprintf(lines[count++], sizeof(lines[0]), "Applications    %d installed",
-        recon_installed_app_count());
-    snprintf(lines[count++], sizeof(lines[0]), "Modules         %d loaded",
-        recon_modules_count());
+    info_row(cp, p, x, &y, w, "Signed in as", value);
 
-    for (int i = 0; i < count; i++) {
-        recon_draw_text(p, cp->font, x, y + ascent, w, lines[i], COLOR_TEXT);
-        y += line + 2;
+    snprintf(value, sizeof(value), "%d", recon_users_count());
+    info_row(cp, p, x, &y, w, "Accounts", value);
+
+    info_row(cp, p, x, &y, w, "Skin", recon_theme_current());
+
+    snprintf(value, sizeof(value), "%d installed, %d loaded as modules",
+        recon_installed_app_count(), recon_modules_count());
+    info_row(cp, p, x, &y, w, "Applications", value);
+
+    snprintf(value, sizeof(value), "%d, %d switched on",
+        recon_firewall_count(), recon_firewall_is_on() ? 1 : 0);
+    info_row(cp, p, x, &y, w, "Firewall", recon_firewall_is_on()
+        ? "on" : "off");
+
+    /* --- The host --- */
+    y = info_group(cp, p, x, y, w, "Underneath");
+
+    info_row(cp, p, x, &y, w, "Runs on", recon_net_machine_name());
+    info_row(cp, p, x, &y, w, "Kernel", "the host's, until Phase 2");
+
+    y += 6;
+    if (y + line * 2 <= bottom) {
+        recon_draw_text(p, cp->font, x, y + recon_font_ascent(cp->font), w,
+            "Everything above the last group is read through the host. "
+            "ReconOS has no kernel of", COLOR_DIM);
+        y += line;
+        recon_draw_text(p, cp->font, x, y + recon_font_ascent(cp->font), w,
+            "its own yet, so accounts are enforced by ReconOS inside ReconOS "
+            "-- a program running", COLOR_DIM);
+        y += line;
+        recon_draw_text(p, cp->font, x, y + recon_font_ascent(cp->font), w,
+            "on the host underneath is not subject to them.", COLOR_DIM);
+        y += line;
     }
 
-    y += 8;
-    recon_draw_text(p, cp->font, x, y + ascent, w,
-        "Accounts are enforced by ReconOS, inside ReconOS. A program running",
-        COLOR_DIM);
-    y += line;
-    recon_draw_text(p, cp->font, x, y + ascent, w,
-        "on the host underneath is not subject to them.", COLOR_DIM);
+    y += PADDING;
+    draw_pending_list(cp, p, x, y, w, bottom - y, PAGE_ABOUT, false);
 }
 
-/* --- The window --- */
-
 /*
- * --- The front page ---
- *
- * How many tiles fit across, and where one of them sits. Worked out from the
- * width the window happens to be rather than fixed, so widening the window
- * puts more on a row instead of leaving a margin down the side.
+ * How many tiles fit across the front page, and where one of them sits.
+ * Worked out from the width the window happens to be rather than fixed, so
+ * widening it puts more on a row instead of leaving a margin down the side.
  */
 static int tiles_across(int w) {
     int across = (w + TILE_GAP) / (TILE_W + TILE_GAP);

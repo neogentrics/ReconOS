@@ -362,6 +362,72 @@ void recon_proc_sort_by_name(struct recon_proc_snapshot *snapshot) {
 
 /* --- Ending processes --- */
 
+/* --- The machine --- */
+
+bool recon_proc_cpu_name(char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+
+    FILE *file = fopen("/proc/cpuinfo", "r");
+    if (file == NULL) {
+        return false;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        /* "model name" on x86, "Hardware" or "Model" on ARM. The first that
+         * appears is taken, because a machine only has one answer and the
+         * file repeats it once per core. */
+        const char *colon = NULL;
+        if (strncmp(line, "model name", 10) == 0 ||
+                strncmp(line, "Hardware", 8) == 0 ||
+                strncmp(line, "Model", 5) == 0) {
+            colon = strchr(line, ':');
+        }
+        if (colon == NULL) {
+            continue;
+        }
+
+        colon++;
+        while (*colon == ' ' || *colon == '\t') {
+            colon++;
+        }
+
+        size_t used = 0;
+        while (colon[used] != '\0' && colon[used] != '\n' &&
+                used < size - 1) {
+            out[used] = colon[used];
+            used++;
+        }
+        out[used] = '\0';
+        fclose(file);
+        return used > 0;
+    }
+
+    fclose(file);
+    return false;
+}
+
+int recon_proc_cpu_cores(void) {
+    FILE *file = fopen("/proc/cpuinfo", "r");
+    if (file == NULL) {
+        return 0;
+    }
+
+    int cores = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), file) != NULL) {
+        if (strncmp(line, "processor", 9) == 0) {
+            cores++;
+        }
+    }
+
+    fclose(file);
+    return cores;
+}
+
 bool recon_proc_terminate(pid_t pid) {
     if (pid <= 1) {
         /* Refuse pid 1: on Linux that is init, and killing it takes the

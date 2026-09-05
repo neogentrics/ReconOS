@@ -73,6 +73,21 @@ size_t recon_proc_used_memory_kb(const struct recon_proc_snapshot *snapshot);
  * Forcing gives it no such chance, so it is a separate, deliberate call.
  */
 bool recon_proc_terminate(pid_t pid);
+
+/* --- The machine --- */
+
+/*
+ * What the processor calls itself, and how many of it there are.
+ *
+ * Read from the host, which is where it comes from until ReconOS has a kernel
+ * of its own to ask. Said plainly on the page that shows it: this is the
+ * machine ReconOS is running on, and reporting it as though ReconOS had found
+ * it itself would be a claim about hardware nothing here has touched.
+ *
+ * Returns false when there is nothing to read, and leaves `out` empty.
+ */
+bool recon_proc_cpu_name(char *out, size_t size);
+int recon_proc_cpu_cores(void);
 bool recon_proc_kill(pid_t pid);
 
 #endif
