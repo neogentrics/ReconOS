@@ -179,6 +179,19 @@ add_executable(recon_theme_tests
 target_include_directories(recon_theme_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# The font list's failures are rules about what must not happen: a font that
+# ships must not be removable, and neither must the one being drawn with.
+# Both are a couple of ifs, and neither failure is visible until somebody's
+# desktop has no typeface left.
+add_executable(recon_fonts_tests
+    tests/test_fonts.c
+    src/recon_fonts.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_fonts_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 # Whether the accessibility skins work is a question about people who are not
 # in the room. It is answered by simulating each deficiency and measuring, not
 # by looking at the palette and deciding it seems fine.
@@ -244,6 +257,7 @@ enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
+add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)
