@@ -107,13 +107,14 @@ static void put_signed(i64 value)
 	put_unsigned(magnitude, 10, false, 0);
 }
 
-void kprintf(const char *fmt, ...)
+/* The formatter itself, holding no lock.
+ *
+ * Split out from kprintf when the fault reporter needed to print without
+ * locking -- which is exactly the condition the original version of this file
+ * named for splitting it: "when a second caller wants vkprintf, that is the
+ * moment". */
+static void kvprintf_raw(const char *fmt, va_list ap)
 {
-	va_list ap;
-	u64 flags = spin_lock_irq(&console_lock);
-
-	va_start(ap, fmt);
-
 	for (const char *p = fmt; *p; p++) {
 		unsigned longness = 0;
 
@@ -166,8 +167,6 @@ void kprintf(const char *fmt, ...)
 			/* Trailing '%' with nothing after it: say so rather than
 			 * reading past the end of the format string. */
 			kputc('%');
-			va_end(ap);
-			spin_unlock_irq(&console_lock, flags);
 			return;
 		default:
 			/* An unsupported conversion is a bug in the caller. Print it
@@ -177,7 +176,29 @@ void kprintf(const char *fmt, ...)
 			break;
 		}
 	}
+}
 
+void kprintf(const char *fmt, ...)
+{
+	va_list ap;
+	u64 flags = spin_lock_irq(&console_lock);
+
+	va_start(ap, fmt);
+	kvprintf_raw(fmt, ap);
 	va_end(ap);
+
 	spin_unlock_irq(&console_lock, flags);
+}
+
+/* For the fault reporter. Same reasoning as kputs_unlocked(): a fault can be
+ * taken by code that is holding the console lock, and a reporter that waits for
+ * that lock turns a fault into a hang. Output may interleave with another
+ * processor's -- a garbled report can be read, a missing one cannot. */
+void kprintf_unlocked(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	kvprintf_raw(fmt, ap);
+	va_end(ap);
 }

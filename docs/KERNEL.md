@@ -485,11 +485,19 @@ Serialising it produced a *second* bug of its own, and a better one.
 `kprintf` took the lock and then called `kputs` to print the `0x` before a
 pointer — and `kputs` took the lock again. **A spinlock taken twice by the same
 processor is a processor waiting for itself**, and it presented as the kernel
-stopping mid-word on the exact line it was printing. Panic and the fault
-reporter now use a path that never locks at all: they run when something has
-already gone wrong, possibly while that lock is held by the code that went
-wrong, and taking it would turn a report into a hang — which is the one outcome
-worse than the fault.
+stopping mid-word on the exact line it was printing.
+
+Panic and the fault reporter now use a path that never locks at all: they run
+when something has already gone wrong, possibly while that lock is held by the
+code that went wrong, and taking it would turn a report into a hang — which is
+the one outcome worse than the fault.
+
+*That sentence was written before it was true.* Panic used the lock-free path;
+the fault reporter still called `kprintf`, so a fault taken while the console
+lock was held would have hung inside the very code meant to explain it. The fix
+splits the formatter into a locked wrapper and an unlocked core — which is
+exactly the condition the file's own comment had named for doing it: "when a
+second caller wants a `vkprintf`, that is the moment to split it out".
 
 ### The locking, which came first
 

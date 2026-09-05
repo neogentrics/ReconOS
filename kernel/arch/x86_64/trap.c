@@ -133,8 +133,11 @@ static void describe_page_fault(u64 error)
 
 	__asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
 
-	kprintf("  touched      : %p\n", (void *)(uintptr_t)cr2);
-	kprintf("  what happened: %s, %s, in %s mode%s\n",
+	/* Unlocked like the rest of the report: this is only ever reached from
+	 * the fault path, where waiting for the console lock could mean waiting
+	 * for the code that just faulted while holding it. */
+	kprintf_unlocked("  touched      : %p\n", (void *)(uintptr_t)cr2);
+	kprintf_unlocked("  what happened: %s, %s, in %s mode%s\n",
 		(error & 1) ? "protection violation" : "page not present",
 		(error & 2) ? "on a write" : "on a read",
 		(error & 4) ? "user" : "kernel",
@@ -168,20 +171,20 @@ void trap_dispatch(struct trap_frame *f)
 		return;
 	}
 
-	kputs("\n=== ReconOS kernel fault ===\n");
-	kprintf("  exception    : %lu, %s\n", f->vector,
+	kputs_unlocked("\n=== ReconOS kernel fault ===\n");
+	kprintf_unlocked("  exception    : %lu, %s\n", f->vector,
 		f->vector < 32 ? exception_name[f->vector] : "unknown");
-	kprintf("  error code   : %lu\n", f->error);
-	kprintf("  at           : %p\n", (void *)(uintptr_t)f->rip);
+	kprintf_unlocked("  error code   : %lu\n", f->error);
+	kprintf_unlocked("  at           : %p\n", (void *)(uintptr_t)f->rip);
 
 	if (f->vector == 14)
 		describe_page_fault(f->error);
 
-	kprintf("  rax %p  rbx %p\n", (void *)(uintptr_t)f->rax, (void *)(uintptr_t)f->rbx);
-	kprintf("  rcx %p  rdx %p\n", (void *)(uintptr_t)f->rcx, (void *)(uintptr_t)f->rdx);
-	kprintf("  rsi %p  rdi %p\n", (void *)(uintptr_t)f->rsi, (void *)(uintptr_t)f->rdi);
-	kprintf("  rbp %p  rsp %p\n", (void *)(uintptr_t)f->rbp, (void *)(uintptr_t)f->rsp);
-	kprintf("  flags %p  cs %lu\n", (void *)(uintptr_t)f->rflags, f->cs);
+	kprintf_unlocked("  rax %p  rbx %p\n", (void *)(uintptr_t)f->rax, (void *)(uintptr_t)f->rbx);
+	kprintf_unlocked("  rcx %p  rdx %p\n", (void *)(uintptr_t)f->rcx, (void *)(uintptr_t)f->rdx);
+	kprintf_unlocked("  rsi %p  rdi %p\n", (void *)(uintptr_t)f->rsi, (void *)(uintptr_t)f->rdi);
+	kprintf_unlocked("  rbp %p  rsp %p\n", (void *)(uintptr_t)f->rbp, (void *)(uintptr_t)f->rsp);
+	kprintf_unlocked("  flags %p  cs %lu\n", (void *)(uintptr_t)f->rflags, f->cs);
 
 	panic("unhandled exception");
 }

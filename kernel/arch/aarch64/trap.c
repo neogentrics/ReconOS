@@ -102,9 +102,9 @@ void trap_dispatch(struct trap_frame *f)
 		return;
 	}
 
-	kputs("\n=== ReconOS kernel fault ===\n");
-	kprintf("  exception    : %s\n", slot_name[f->x[0] & 15]);
-	kprintf("  class        : %s\n", exception_class(ec));
+	kputs_unlocked("\n=== ReconOS kernel fault ===\n");
+	kprintf_unlocked("  exception    : %s\n", slot_name[f->x[0] & 15]);
+	kprintf_unlocked("  class        : %s\n", exception_class(ec));
 
 	if (ec == 0x24 || ec == 0x25) {
 		/* Bit 6 of a data abort's syndrome is the direction, and it is
@@ -114,24 +114,24 @@ void trap_dispatch(struct trap_frame *f)
 		 * sitting there holding it. Reading a specification's
 		 * "valid" bit as covering more than it covers is its own small
 		 * class of bug. */
-		kprintf("  touched      : %p\n", (void *)(uintptr_t)f->far);
-		kprintf("  what happened: %s, on a %s\n", abort_reason(iss),
+		kprintf_unlocked("  touched      : %p\n", (void *)(uintptr_t)f->far);
+		kprintf_unlocked("  what happened: %s, on a %s\n", abort_reason(iss),
 			(iss & (1u << 6)) ? "write" : "read");
 	} else if (ec == 0x20 || ec == 0x21) {
 		/* An instruction abort: the address is the one it tried to
 		 * fetch from, and there is no direction to report. */
-		kprintf("  fetching from: %p\n", (void *)(uintptr_t)f->far);
-		kprintf("  what happened: %s\n", abort_reason(iss));
+		kprintf_unlocked("  fetching from: %p\n", (void *)(uintptr_t)f->far);
+		kprintf_unlocked("  what happened: %s\n", abort_reason(iss));
 	}
 
-	kprintf("  at           : %p\n", (void *)(uintptr_t)f->elr);
-	kprintf("  esr          : %p\n", (void *)(uintptr_t)f->esr);
+	kprintf_unlocked("  at           : %p\n", (void *)(uintptr_t)f->elr);
+	kprintf_unlocked("  esr          : %p\n", (void *)(uintptr_t)f->esr);
 
 	/* kprintf supports no field widths, so the register numbers are padded
 	 * by hand. The alternative was to add widths to the formatter for the
 	 * sake of one caller. */
 	for (unsigned i = 1; i < 31; i += 2)
-		kprintf("  x%s%u %p   x%s%u %p\n",
+		kprintf_unlocked("  x%s%u %p   x%s%u %p\n",
 			i < 10 ? " " : "", i, (void *)(uintptr_t)f->x[i],
 			(i + 1) < 10 ? " " : "", i + 1,
 			(void *)(uintptr_t)f->x[i + 1]);
