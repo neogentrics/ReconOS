@@ -67,7 +67,7 @@ The plan and its eighteen checkpoints (0 to 17) are in [KERNEL.md](KERNEL.md). F
 stages: the kernel exists (done), the kernel owns the machine, the kernel owns
 the disk, it runs on real iron.
 
-**Where it is now — version 0.0.11, checkpoint 10 of 17 done.** It boots on
+**Where it is now — version 0.0.11, checkpoint 11 of 17 done.** It boots on
 x86_64 and aarch64, under legacy BIOS, under UEFI, via device tree, and through
 its own UEFI bootloader. It knows which firmware is underneath it, what the
 processor can do, and where memory is; it manages physical pages and virtual
@@ -90,9 +90,21 @@ Eleven boot paths are run on every change and their self-test counts read rather
 than their absence of a crash: `scripts/verify-kernel.sh`. At checkpoint 10 that
 is 110 self-tests with no failures.
 
-It runs nothing of the desktop's yet. The next four checkpoints are storage: a
-block device, partition tables, a filesystem of its own, and enough of other
-people's filesystems to install beside them.
+**And since checkpoint 11 it can reach a disk.** Three drivers, on both
+architectures: virtio for anything virtual, NVMe for every machine built since
+about 2016, and AHCI for the SATA era before it — which is most of the machines
+people actually own. Reaching them meant building PCI, and on aarch64 that meant
+reading ACPI tables, because a machine booted through UEFI has no device tree to
+read instead.
+
+The block layer above them is deliberately small: it answers "give me these
+blocks" and "put these blocks there" and knows nothing about partitions,
+filesystems or names. Every one of those is a data format that belongs above the
+kernel, which is the same line THIRD_PARTY.md already draws for PNG and TLS.
+
+It runs nothing of the desktop's yet. The next three checkpoints are what turns
+sectors into storage somebody can use: partition tables, a filesystem of its
+own, and enough of other people's filesystems to install beside them.
 
 **What "finished" means for this phase:** a machine with nothing on it, or with
 Windows or Linux or macOS already on it, boots from ReconOS media, is told where
