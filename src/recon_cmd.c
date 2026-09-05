@@ -1319,6 +1319,130 @@ static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
  * pass here means the thing a user touches works, not that a shortcut around
  * it works.
  */
+/*
+ * Questions the desktop is asking, and a way to answer one.
+ *
+ * This exists because getting a dialog on screen to look at cost four attempts
+ * at aiming a click, and every one failed silently: a click that misses a close
+ * button by three pixels does nothing, reports nothing, and is indistinguishable
+ * from a dialog that never opened.
+ *
+ * So the useful half is not `ask` -- it is the bare `dialog`, which says what is
+ * being asked and where each button is. Driving a desktop from outside means
+ * never having to guess a coordinate, and every coordinate guessed is a test
+ * that can fail for a reason unrelated to what it tests.
+ */
+static void cmd_dialog(struct recon_cmd_session *s, int argc, char **argv) {
+    struct recon_server *server = s->server;
+    if (server == NULL || server->shell == NULL) {
+        out(s, "No shell is running.\n");
+        return;
+    }
+    struct recon_shell *shell = server->shell;
+
+    /* --- What is being asked --- */
+
+    if (argc < 2) {
+        if (!recon_shell_dialog_open(shell)) {
+            out(s, "Nothing is being asked.\n");
+            return;
+        }
+
+        out(s, "\"%s\"\n%s\n\n",
+            recon_shell_dialog_title(shell),
+            recon_shell_dialog_message(shell));
+
+        const char *labels[RECON_DIALOG_BUTTONS_MAX];
+        int count = recon_shell_dialog_buttons(shell, labels,
+            RECON_DIALOG_BUTTONS_MAX);
+
+        for (int i = 0; i < count; i++) {
+            int x = 0, y = 0;
+            if (recon_shell_dialog_button_at(shell, labels[i], &x, &y)) {
+                out(s, "  %-12s at %d,%d\n", labels[i], x, y);
+            } else {
+                out(s, "  %-12s (not drawn)\n", labels[i]);
+            }
+        }
+        out(s, "\n'dialog press <label>' answers it.\n");
+        return;
+    }
+
+    /* --- Raising one on purpose --- */
+
+    if (strcasecmp(argv[1], "ask") == 0) {
+        /*
+         * Gated the way 'raise' is, and for the same reason: this puts a
+         * question on screen that nothing actually asked. Useful for looking
+         * at how a dialog is drawn, and not something a running system should
+         * be able to be told to do from a socket.
+         */
+        if (getenv("RECONOS_ALLOW_SPAWN") == NULL) {
+            out(s, "'dialog ask' puts a question on screen that nothing "
+                   "asked.\nIt is here for testing, and is only available "
+                   "when RECONOS_ALLOW_SPAWN is set.\n");
+            return;
+        }
+        if (argc < 4) {
+            out(s, "Usage: dialog ask <title> <message> [button ...]\n");
+            out(s, "Quote anything with a space in it.\n");
+            return;
+        }
+
+        const char *buttons[RECON_DIALOG_BUTTONS_MAX];
+        int count = 0;
+        for (int i = 4; i < argc && count < RECON_DIALOG_BUTTONS_MAX; i++) {
+            buttons[count++] = argv[i];
+        }
+        if (count == 0) {
+            /* A question with no way to answer it is a window somebody has to
+             * kill the desktop to escape. */
+            buttons[count++] = "Close";
+        }
+
+        recon_shell_ask(shell, argv[2], argv[3], buttons, count, NULL, NULL);
+        out(s, "Asked.\n");
+        return;
+    }
+
+    /* --- Answering one --- */
+
+    if (strcasecmp(argv[1], "press") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: dialog press <label>\n");
+            return;
+        }
+        if (!recon_shell_dialog_open(shell)) {
+            out(s, "Nothing is being asked.\n");
+            return;
+        }
+
+        int x = 0, y = 0;
+        if (!recon_shell_dialog_button_at(shell, argv[2], &x, &y)) {
+            out(s, "This question has no button called '%s'. "
+                   "'dialog' lists them.\n", argv[2]);
+            return;
+        }
+
+        /*
+         * A real click at the button's real position, rather than calling the
+         * answer callback directly.
+         *
+         * Calling the callback would test the callback. What is worth testing
+         * is that the button is where it is drawn and that its hit region
+         * agrees -- which is the thing that was wrong every time a click was
+         * aimed by hand.
+         */
+        recon_inject_pointer(server, x, y);
+        recon_inject_button(server, BTN_LEFT, true);
+        recon_inject_button(server, BTN_LEFT, false);
+        out(s, "Pressed '%s' at %d,%d.\n", argv[2], x, y);
+        return;
+    }
+
+    out(s, "No 'dialog' action called '%s'.\n", argv[1]);
+}
+
 static void cmd_ui(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "Usage: ui move|click|rclick|press|release|key|type ...\n");
@@ -2954,6 +3078,7 @@ static const struct command COMMANDS[] = {
     { "get",      "get <host> [path]",     "Fetch a page over HTTP",             cmd_get },
     { "capture",  "capture [path]",        "Save a picture of the screen",       cmd_capture },
     { "ui",       "ui <action> ...",       "Drive the desktop, for testing",    cmd_ui },
+    { "dialog",   "dialog [ask|press] ...", "What is being asked, and answer it", cmd_dialog },
     { "state",    "state",                 "What the shell has open",           cmd_state },
     { "echo",     "echo <text>",           "Print text",                        cmd_echo },
     { "exit",     "exit",                  "End this session",                  cmd_exit },

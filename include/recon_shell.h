@@ -386,6 +386,23 @@ bool recon_shell_menu_entry_at(struct recon_shell *shell, const char *label,
 bool recon_shell_dialog_button_at(struct recon_shell *shell, const char *label,
     int *x, int *y);
 
+/*
+ * The labels of the open dialog's buttons, in order. Returns how many.
+ *
+ * The companion to the call above, which can find a button once you already
+ * know its name. Something driving the desktop from outside does not, and
+ * guessing is what makes a test press nothing and report nothing.
+ *
+ * The pointers are into the shell and are valid until the dialog closes.
+ */
+int recon_shell_dialog_buttons(struct recon_shell *shell,
+    const char **labels, int max);
+
+/* What the open dialog asks, for something reporting on it. NULL when none
+ * is open. */
+const char *recon_shell_dialog_title(struct recon_shell *shell);
+const char *recon_shell_dialog_message(struct recon_shell *shell);
+
 enum recon_context_kind {
     RECON_CONTEXT_DESKTOP,
     RECON_CONTEXT_DESKTOP_ITEM,

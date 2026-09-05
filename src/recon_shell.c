@@ -1477,6 +1477,36 @@ struct recon_appwin *recon_shell_focused_app(struct recon_shell *shell) {
     return shell->apps[shell->focused_app];
 }
 
+int recon_shell_dialog_buttons(struct recon_shell *shell,
+        const char **labels, int max) {
+    if (shell == NULL || !shell->dialog_open || labels == NULL) {
+        return 0;
+    }
+
+    int count = shell->dialog_button_count;
+    if (count > max) {
+        count = max;
+    }
+    for (int i = 0; i < count; i++) {
+        labels[i] = shell->dialog_buttons[i];
+    }
+    return count;
+}
+
+const char *recon_shell_dialog_title(struct recon_shell *shell) {
+    if (shell == NULL || !shell->dialog_open) {
+        return NULL;
+    }
+    return shell->dialog_title;
+}
+
+const char *recon_shell_dialog_message(struct recon_shell *shell) {
+    if (shell == NULL || !shell->dialog_open) {
+        return NULL;
+    }
+    return shell->dialog_message;
+}
+
 bool recon_shell_dialog_button_at(struct recon_shell *shell, const char *label,
         int *x, int *y) {
     if (shell == NULL || !shell->dialog_open || shell->dialog == NULL ||

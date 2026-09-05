@@ -185,6 +185,24 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**A `dialog` command on the control socket**, which exists because of how the
+change below was tested. Getting a dialog on screen to look at cost four
+attempts at aiming a click, and every one failed silently -- a click that misses
+a close button by three pixels does nothing, reports nothing, and is
+indistinguishable from a dialog that never opened.
+
+The useful half is not `dialog ask`. It is the bare `dialog`, which prints what
+is being asked and **where each button is**, so nothing driving the desktop from
+outside has to guess a coordinate. Every guessed coordinate is a test that can
+fail for a reason unrelated to what it tests.
+
+`dialog press <label>` answers by name, and does it by clicking the button at
+its real position rather than by calling the answer callback -- calling the
+callback would test the callback, and what is worth testing is that the button
+is where it is drawn and that its hit region agrees. `dialog ask` is gated
+behind `RECONOS_ALLOW_SPAWN` like `raise`, because it puts a question on screen
+that nothing asked.
+
 **Glass reaches the dialogs, and stops at one of them.** The context menu and
 All Programs take the same half-strength glass the Apps menu does. A dialog
 takes it *only on its title strip*, which is the rule window frames already
