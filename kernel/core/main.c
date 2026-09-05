@@ -11,6 +11,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/heap.h>
+#include <recon/kernel/trap.h>
 #include <recon/kernel/vm.h>
 
 #ifndef RECONOS_KERNEL_VERSION
@@ -45,6 +46,10 @@ void kmain(void)
 	heap_init();
 	heap_print_summary();
 
+	/* After the heap, because a fault report is more useful than a fault,
+	 * and before anything that might fault. */
+	trap_init();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -56,6 +61,8 @@ void kmain(void)
 		vm_self_test() ? "pass" : "FAIL");
 	kprintf("  kernel heap        : %s\n",
 		heap_self_test() ? "pass" : "FAIL");
+	kprintf("  fault handling     : %s\n",
+		trap_self_test() ? "pass" : "FAIL");
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

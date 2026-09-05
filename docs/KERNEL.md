@@ -14,10 +14,11 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.7`. The number says what works. What works: it boots four ways across two
+`0.0.8`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
 can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
-the byte, and is started by a bootloader we wrote.
+the byte, says where and why it faulted instead of resetting, and is started by
+a bootloader we wrote.
 
 ## What "finished" means
 
@@ -54,7 +55,7 @@ courtesy now rather than a dependency.
 | 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | **Done** |
 | 5 | Its own page tables, a direct map, and large pages where the CPU has them | **Done** |
 | 6 | A kernel heap | **Done** |
-| 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
+| 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
 | 8 | A timer, a tick, and time | |
 | 9 | Threads, a scheduler, and every core in use | |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | |
@@ -288,6 +289,85 @@ question is whether the guard or the code is easier to make right.*
 realloc written before its first caller gets the semantics wrong. No locking:
 one CPU runs kernel code until checkpoint 9, and a lock invented before the
 concurrency it guards is a lock in the wrong place.
+
+### Checkpoint 7 — done
+
+**A fault now says what happened.** Before this, a mistake in kernel code
+triple-faulted and the machine reset. The only reason the previous three bugs
+were findable is that they happened inside an emulator that keeps its own log of
+every exception; real hardware keeps no such log.
+
+A genuine bug, injected into a throwaway build to see what it produces:
+
+```
+=== ReconOS kernel fault ===
+  exception    : 14, page fault
+  error code   : 2
+  at           : 0x0000000000101ca0
+  touched      : 0x00000deadbeef000
+  what happened: page not present, on a write, in kernel mode
+  rax 0x00000deadbeef000  rbx 0x00000000001042b1
+  ...
+```
+
+and on aarch64, where the hardware says more and the decoding is worth the
+space:
+
+```
+  class        : data abort
+  touched      : 0x00000deadbeef000
+  what happened: translation fault, level 0, on a write
+```
+
+*Level 0* means the walk failed at the very first table — nothing is mapped
+anywhere near it. Level 3 would mean the tables exist all the way down and only
+the last entry is missing. That distinction is the difference between "wild
+pointer" and "off-by-one in the mapping code", and it is free.
+
+**The GDT had to become ours too, and that is not obvious.** On the boot paths
+through our own trampoline it is already in the kernel image. On the UEFI path
+it is the *firmware's* — sitting in memory the firmware marked as boot-services
+data, which we correctly treat as free, and which the allocator will hand out
+and something will write over. Nothing breaks immediately. It breaks at the
+next interrupt, when the CPU reloads a segment descriptor from memory that now
+belongs to somebody else.
+
+**Three bugs, and the third is the interesting one.**
+
+*The aarch64 exception frame was one slot short.* ESR landed on top of SPSR, so
+the handler restored the processor state from the fault syndrome and `ERET`
+returned into nonsense. It presented as a *second* fault after the first was
+handled correctly — a long way from the cause.
+
+*A syndrome's "valid" bit covered less than assumed.* Bit 24 of a data abort's
+syndrome says whether the *other* syndrome fields are valid; the direction bit
+is valid on its own. Gating the direction on bit 24 made every report say the
+direction was unknown while the register sat there holding it.
+
+*And the one worth generalising: you cannot resume execution somewhere else in
+C.* The self-test was written portably, taking a label's address with `&&label`
+and having the handler set the program counter to it. The compiler deleted the
+label's block as unreachable — taking a label's address does not make its block
+reachable — and left the recovery address pointing at the function prologue. So
+every recovery re-ran the setup, re-armed the handler, and faulted again,
+forever, at full speed, printing nothing.
+
+The disassembly is what settled it: `resumed:` was not merely in the wrong
+place, it was *absent*, and `trap_recovery` held the address of the instruction
+that loads a variable in the prologue. Reading the generated code took two
+minutes after an hour of reasoning about what the optimiser might have done.
+
+The fix is that provoking a fault and resuming from it lives in `arch/`, with
+the resume label **inside the same assembly block as the faulting
+instruction** — where nothing can move it, delete it, or come between them.
+Which is the honest conclusion: "continue at this other address" is not
+something C can express, and code that pretends otherwise depends on the
+optimiser's mood.
+
+A runaway is now a failed test rather than a hang: the handler counts its
+catches, and more than one per expected fault is reported. An infinite loop at
+full speed with no output is the single least informative failure a kernel can
+have.
 
 ## Using the machine you are on
 
