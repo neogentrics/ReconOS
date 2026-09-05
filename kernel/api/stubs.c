@@ -57,6 +57,12 @@ STUB(recon_status recon_kernel_block_write(uint64_t id, uint64_t first_sector,
 					   size_t count, const void *buf,
 					   size_t buf_size))
 STUB(recon_status recon_kernel_block_flush(uint64_t id))
+STUB(recon_status recon_kernel_block_claim_raw(uint64_t id))
+STUB(recon_status recon_kernel_block_release_raw(uint64_t id))
+STUB(recon_status recon_kernel_block_check_layout(uint64_t id,
+						  const struct recon_k_extent *plan,
+						  size_t count))
+STUB(recon_status recon_kernel_block_rescan(uint64_t id))
 
 /* Time */
 STUB(recon_status recon_kernel_time_monotonic_ns(uint64_t *out))

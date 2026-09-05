@@ -18,6 +18,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/vm.h>
+#include <recon/kernel/partition.h>
 
 static struct block_device devices[BLOCK_MAX_DEVICES];
 static unsigned device_count;
@@ -38,8 +39,19 @@ const char *block_status_name(enum block_status s)
 	case BLOCK_ERR_ALIGN:       return "the buffer is not reachable by the hardware";
 	case BLOCK_ERR_IO:          return "the hardware reported a failure";
 	case BLOCK_ERR_TIMEOUT:     return "the hardware did not answer";
-	case BLOCK_ERR_BUSY:        return "the queue is full";
+	case BLOCK_ERR_BUSY:        return "the queue is full, or the disk is not claimed";
 	default:                    return "unrecognised status";
+	}
+}
+
+const char *block_scheme_name(enum block_scheme s)
+{
+	switch (s) {
+	case BLOCK_SCHEME_NONE:       return "no partition table";
+	case BLOCK_SCHEME_GPT:        return "gpt";
+	case BLOCK_SCHEME_MBR:        return "mbr";
+	case BLOCK_SCHEME_UNREADABLE: return "a table that could not be believed";
+	default:                      return "unrecognised";
 	}
 }
 
@@ -75,6 +87,66 @@ struct block_device *block_register(const char *name, const struct block_ops *op
 	d->driver      = driver;
 	d->present     = true;
 
+	return d;
+}
+
+struct block_device *block_register_slice(struct block_device *parent,
+					  u8 index, u64 first_lba, u64 count,
+					  enum block_scheme scheme)
+{
+	struct block_device *d;
+	char name[BLOCK_NAME_MAX];
+	size_t n;
+
+	if (!parent || !count)
+		return 0;
+
+	if (parent->slice_count >= BLOCK_MAX_SLICES) {
+		kprintf("block: %s has more than %u partitions; the rest are "
+			"not registered, so nothing will protect them\n",
+			parent->name, (unsigned)BLOCK_MAX_SLICES);
+		return 0;
+	}
+
+	/* Inside the parent, checked the same way a request is: the sum is
+	 * never formed, because a table on a hostile or damaged disk can name a
+	 * partition whose start plus length wraps. */
+	if (first_lba >= parent->block_count ||
+	    count > parent->block_count - first_lba) {
+		kprintf("block: %s partition %u runs past the end of the "
+			"device; ignored\n", parent->name, index);
+		return 0;
+	}
+
+	/* "nvme0n1" + "p1". The convention the drivers already set by naming
+	 * whole devices after what they are. */
+	n = kstrlcpy(name, parent->name, sizeof(name));
+	if (n + 3 < sizeof(name)) {
+		name[n] = 'p';
+		name[n + 1] = (char)('0' + (index % 10));
+		name[n + 2] = '\0';
+		if (index >= 10) {
+			name[n + 1] = (char)('0' + (index / 10));
+			name[n + 2] = (char)('0' + (index % 10));
+			name[n + 3] = '\0';
+		}
+	}
+
+	d = block_register(name, parent->ops, parent->driver,
+			   parent->block_size, count);
+	if (!d)
+		return 0;
+
+	d->parent            = parent->id;
+	d->parent_generation = parent->generation;
+	d->first_lba         = first_lba;
+	d->slice_index       = index;
+	d->scheme            = (u8)scheme;
+	d->removable         = parent->removable;
+	d->read_only         = parent->read_only;
+	d->max_blocks_per_request = parent->max_blocks_per_request;
+
+	parent->slice_count++;
 	return d;
 }
 
@@ -122,6 +194,34 @@ static enum block_status check_range(const struct block_device *dev, u64 lba, u3
 	return BLOCK_OK;
 }
 
+/* Translates a request on a slice into one on the disk underneath it.
+ *
+ * Walked to the root rather than assuming one level, so that a volume nested
+ * inside a partition -- an encrypted one, eventually -- costs nothing here.
+ *
+ * Called only AFTER check_range has run against the device the caller named.
+ * That order is the whole safety property: the bound is checked against the
+ * slice's own length, in the caller's own coordinates, before the address is
+ * translated into somebody else's. Translating first and checking after would
+ * check the wrong number. */
+static struct block_device *to_root(struct block_device *dev, u64 *lba)
+{
+	unsigned guard = 0;
+
+	while (dev->parent && guard++ < BLOCK_MAX_DEVICES) {
+		struct block_device *p =
+			block_device_by_id(dev->parent, dev->parent_generation);
+
+		if (!p)
+			return 0;	/* the disk went away underneath us */
+
+		*lba += dev->first_lba;
+		dev = p;
+	}
+
+	return dev;
+}
+
 enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void *buf)
 {
 	enum block_status s = check_range(dev, lba, count);
@@ -131,6 +231,10 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 
 	if (!buf)
 		return BLOCK_ERR_ALIGN;
+
+	dev = to_root(dev, &lba);
+	if (!dev)
+		return BLOCK_ERR_NO_DEVICE;
 
 	/* Split, if the device has an opinion about how much it can take at
 	 * once. Done here rather than in each driver: the arithmetic is the
@@ -178,6 +282,21 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 	if (!dev->ops->write)
 		return BLOCK_ERR_READ_ONLY;
 
+	/* A write to a whole disk that has partitions on it, by somebody who
+	 * has not said they mean to rewrite the disk. Refused.
+	 *
+	 * The partitions are right there in the registry, addressable by name,
+	 * with their own bounds. Writing through the parent instead is either a
+	 * partitioner -- which claims the device first, once, deliberately --
+	 * or a mistake that lands in the middle of somebody's filesystem and
+	 * reports success. */
+	if (dev->slice_count && !dev->claimed_raw)
+		return BLOCK_ERR_BUSY;
+
+	dev = to_root(dev, &lba);
+	if (!dev)
+		return BLOCK_ERR_NO_DEVICE;
+
 	while (count) {
 		u32 chunk = count;
 
@@ -216,6 +335,134 @@ enum block_status block_flush(struct block_device *dev)
 	return dev->ops->flush(dev);
 }
 
+/* --- Claiming a whole disk -------------------------------------------------
+ *
+ * Nothing here is clever. What it buys is that the question gets asked at a
+ * moment somebody chose, rather than being the permanent ambient state of every
+ * device in the machine.
+ */
+enum block_status block_claim_raw(struct block_device *dev)
+{
+	if (!dev || !dev->present)
+		return BLOCK_ERR_NO_DEVICE;
+
+	/* A slice is already a bounded view; claiming one would mean nothing,
+	 * and allowing it would let a caller believe it had claimed the disk. */
+	if (dev->parent)
+		return BLOCK_ERR_RANGE;
+
+	if (dev->read_only)
+		return BLOCK_ERR_READ_ONLY;
+
+	if (dev->claimed_raw)
+		return BLOCK_ERR_BUSY;
+
+	dev->claimed_raw = true;
+	return BLOCK_OK;
+}
+
+void block_release_raw(struct block_device *dev)
+{
+	if (dev)
+		dev->claimed_raw = false;
+}
+
+/* --- Checking a layout before any of it is written -------------------------
+ *
+ * The per-request range check cannot catch a plan that is internally
+ * inconsistent. Four writes that each land inside the disk can still describe
+ * two partitions that overlap, and every one of those writes succeeds, and the
+ * disk they overlap on has somebody's installation on it.
+ *
+ * So the whole plan is checked as a plan, once, by something that can see the
+ * device. It writes nothing and it composes nothing: what the layout should be
+ * is the caller's decision, and this is the arithmetic being checked.
+ */
+enum block_status block_check_layout(const struct block_device *dev,
+				     const struct block_extent *plan, unsigned n)
+{
+	if (!dev || !dev->present)
+		return BLOCK_ERR_NO_DEVICE;
+
+	if (dev->parent)
+		return BLOCK_ERR_RANGE;	/* a layout goes on a disk, not a slice */
+
+	if (!plan && n)
+		return BLOCK_ERR_ALIGN;
+
+	for (unsigned i = 0; i < n; i++) {
+		u64 a_first = plan[i].first_lba;
+		u64 a_count = plan[i].count;
+
+		if (!a_count)
+			return BLOCK_ERR_RANGE;
+
+		/* Inside the device, and never by forming the sum -- a plan
+		 * that came from arithmetic above the kernel is exactly the
+		 * thing that can hand down a length which wraps. */
+		if (a_first >= dev->block_count ||
+		    a_count > dev->block_count - a_first)
+			return BLOCK_ERR_RANGE;
+
+		for (unsigned j = i + 1; j < n; j++) {
+			u64 b_first = plan[j].first_lba;
+			u64 b_count = plan[j].count;
+
+			/* Two half-open ranges overlap unless one ends at or
+			 * before the other begins. Written as two comparisons
+			 * on the ends rather than as a sum, for the same
+			 * reason. */
+			if (!(a_first >= b_first && a_first - b_first >= b_count) &&
+			    !(b_first >= a_first && b_first - a_first >= a_count))
+				return BLOCK_ERR_RANGE;
+		}
+	}
+
+	/* What is deliberately not checked yet: whether an extent lands on a
+	 * volume the kernel has mounted, or on the one it booted from. Both
+	 * need a filesystem to exist before they mean anything, and both are
+	 * part of checkpoint 13. Named here so that the gap is a known one
+	 * rather than an assumption -- a caller reading this today gets
+	 * geometry checked and nothing else, and should be told so. */
+
+	return BLOCK_OK;
+}
+
+/* --- What the partition reader found ---------------------------------------
+ *
+ * Printed in its own shape, separately from the human summary, because the
+ * fixture harness compares this against what sgdisk and sfdisk say is on the
+ * same disk. A format that has to be both readable and parseable ends up being
+ * neither, and the one that gets quietly reformatted is the one under test.
+ *
+ * Geometry only: which slice, where it starts, where it ends. Not names, not
+ * type codes. Those are what the table *means*, and meaning is the caller's.
+ */
+void block_print_tables(void)
+{
+	for (unsigned i = 0; i < device_count; i++) {
+		const struct block_device *d = &devices[i];
+
+		if (d->parent)
+			continue;	/* slices are listed under their disk */
+
+		kprintf("table %s %s %u\n", d->name,
+			block_scheme_name((enum block_scheme)d->scheme),
+			d->slice_count);
+
+		for (unsigned j = 0; j < device_count; j++) {
+			const struct block_device *sl = &devices[j];
+
+			if (sl->parent != d->id)
+				continue;
+
+			kprintf("slice %s %u %lu %lu\n", d->name,
+				sl->slice_index, sl->first_lba,
+				sl->first_lba + sl->block_count - 1);
+		}
+	}
+}
+
 void block_init(void)
 {
 	device_count = 0;
@@ -225,6 +472,17 @@ void block_init(void)
 	 * of memory-mapped virtio slots, nothing at all -- is its business, and
 	 * every device it finds arrives back here through block_register(). */
 	arch_storage_probe();
+
+	/* Then read what is written on each of them. Iterated over a snapshot of
+	 * the count taken first, because reading a table registers slices and
+	 * would otherwise walk into the partitions it is creating and try to
+	 * find partitions inside those. */
+	{
+		unsigned whole = device_count;
+
+		for (unsigned i = 0; i < whole; i++)
+			partition_scan(&devices[i]);
+	}
 }
 
 static void print_size(u64 bytes)
@@ -277,32 +535,149 @@ void block_print_summary(void)
  * else's data*, so the test is written to catch the failures that matter rather
  * than the ones that are easy.
  *
- * Three choices in it are deliberate.
+ * Four choices in it are deliberate.
  *
- * It works on the *last* blocks of the device. A driver with an off-by-one in
- * its range arithmetic fails there and nowhere else, and a test that writes to
- * block zero tests the one address every bug agrees on.
+ * It works on the *last* blocks of whatever it is given. A driver with an
+ * off-by-one in its range arithmetic fails there and nowhere else, and a test
+ * that writes to block zero tests the one address every bug agrees on.
  *
  * It transfers sixteen kilobytes, not one block. A one-block request fits
  * inside a single page, and a single page is the case every scatter scheme
  * gets right: NVMe describes a transfer as a list of pages, with one page in
  * the first pointer, two in the second, and three or more in a separate list --
  * so a test that never exceeds one page never reaches the code where a driver
- * goes wrong. Sixteen kilobytes crosses both boundaries.
+ * goes wrong.
  *
  * It puts back every byte it borrowed. This is somebody's disk.
+ *
+ * And it chooses what to write to, which it did not used to.
+ *
+ * --- Why choosing matters, and how this test was caught by the kernel ---
+ *
+ * It used to write to block_device_at(0) unconditionally. The moment partition
+ * reading landed, device zero became a *partitioned disk*, and the last sixteen
+ * kilobytes of a GPT disk are its backup header and entry array. The test was
+ * about to destroy the table it had just read, on every run.
+ *
+ * It did not, because the rule added in the same checkpoint refused the write:
+ * a disk with partitions on it will not take one until somebody claims it. So
+ * the first thing that safety check ever caught was this file. That is worth
+ * recording rather than quietly fixing -- a check whose first catch is the test
+ * suite is a check that was needed.
+ *
+ * The choice below is not an off-switch for that rule, which this project does
+ * not allow. It is the test finding a surface it is entitled to write to: a
+ * disk with no table on it, or failing that a single partition. What it can do
+ * depends on what the disk is, the same way the read-only case already worked.
  */
 #define BLOCK_TEST_PAGES 4
 
+/* Where it is safe and meaningful to write.
+ *
+ * Preference order, and each step is a fallback rather than a nicety:
+ *
+ *   an unpartitioned disk   -- the whole surface, which is what the rig builds
+ *                              and what an installer meets on a new machine
+ *   a partition             -- bounded, and exercises the slice arithmetic
+ *   anything at all         -- read-only test, better than no test
+ */
+static struct block_device *pick_test_device(bool *writable)
+{
+	struct block_device *whole_blank = 0, *slice = 0, *anything = 0;
+
+	for (unsigned i = 0; i < device_count; i++) {
+		struct block_device *d = &devices[i];
+
+		if (!d->present)
+			continue;
+
+		if (!anything)
+			anything = d;
+
+		if (d->read_only)
+			continue;
+
+		if (!d->parent && !d->slice_count && !whole_blank)
+			whole_blank = d;
+
+		if (d->parent && !slice)
+			slice = d;
+	}
+
+	*writable = true;
+
+	if (whole_blank)
+		return whole_blank;
+	if (slice)
+		return slice;
+
+	*writable = false;
+	return anything;
+}
+
+/* The one bug slicing introduces, and it is silent.
+ *
+ * A slice whose length is one block too long lets a write run into whatever
+ * comes after it -- the next partition, or a GPT's backup structures -- and
+ * report success. Nothing above the block layer can see it. So: write to the
+ * last block of a slice, then read the block immediately after it *through the
+ * parent* and check it did not move.
+ *
+ * Reading through the parent is the part that makes this a real test. Reading
+ * through the slice would be asking the same arithmetic whether it agrees with
+ * itself.
+ */
+static bool neighbour_untouched(struct block_device *slice, u8 *scratch, u8 *keep)
+{
+	struct block_device *parent;
+	u64 after;
+
+	if (!slice->parent)
+		return true;
+
+	parent = block_device_by_id(slice->parent, slice->parent_generation);
+	if (!parent)
+		return true;
+
+	after = slice->first_lba + slice->block_count;
+	if (after >= parent->block_count)
+		return true;	/* the slice ends at the end of the disk */
+
+	if (block_read(parent, after, 1, keep) != BLOCK_OK)
+		return true;	/* cannot check; not a failure of the bound */
+
+	for (u32 i = 0; i < slice->block_size; i++)
+		scratch[i] = (u8)(i * 31 + 17);
+
+	if (block_write(slice, slice->block_count - 1, 1, scratch) != BLOCK_OK)
+		return true;
+
+	if (block_read(parent, after, 1, scratch) != BLOCK_OK)
+		return true;
+
+	for (u32 i = 0; i < parent->block_size; i++) {
+		if (scratch[i] != keep[i]) {
+			kputs("  block: writing the last block of a partition "
+			      "changed the block after it, so a slice is one "
+			      "block too long\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 bool block_self_test(void)
 {
-	struct block_device *d = block_device_at(0);
+	struct block_device *d;
 	u8 *buf, *back;
 	paddr_t buf_pages, back_pages;
-	bool ok = true;
+	bool ok = true, writable;
 	enum block_status s;
 	u64 first;
 	u32 count, bytes;
+
+	d = pick_test_device(&writable);
 
 	if (!d) {
 		/* Not a failure. A machine with no disk attached is a machine
@@ -349,20 +724,25 @@ bool block_self_test(void)
 
 	s = block_read(d, first, count, back);
 	if (s != BLOCK_OK) {
-		kprintf("  block: could not read the last %u blocks: %s\n",
-			count, block_status_name(s));
+		kprintf("  block: could not read the last %u blocks of %s: %s\n",
+			count, d->name, block_status_name(s));
 		ok = false;
 		goto out;
 	}
 
-	if (d->read_only) {
-		kputs("  block: read-only device, so the read is the whole test\n");
+	if (!writable) {
+		/* Framed the way this file already frames a read-only disk:
+		 * a fact about the device changing what the test can do, not a
+		 * switch that turns a check off. */
+		kprintf("  block: %s cannot be written to, so the read is the "
+			"whole test\n", d->name);
 		goto out;
 	}
 
 	s = block_write(d, first, count, buf);
 	if (s != BLOCK_OK) {
-		kprintf("  block: could not write: %s\n", block_status_name(s));
+		kprintf("  block: could not write to %s: %s\n", d->name,
+			block_status_name(s));
 		ok = false;
 		goto out;
 	}
@@ -387,6 +767,9 @@ bool block_self_test(void)
 			break;
 		}
 	}
+
+	if (!neighbour_untouched(d, buf, back + d->block_size))
+		ok = false;
 
 	/* Put it back, and only then report. A test that leaves the disk
 	 * modified is a test that can only be run once. */

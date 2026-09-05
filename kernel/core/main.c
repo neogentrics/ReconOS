@@ -12,6 +12,7 @@
 #include <recon/kernel/crc32.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/partition.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -90,6 +91,13 @@ void kmain(void)
 	block_print_summary();
 	acpi_print_summary();
 
+	/* The machine-readable version of the same thing, for the fixture
+	 * harness to compare against what sgdisk and sfdisk say is on the same
+	 * disk. Separate from the summary above on purpose: a format that has
+	 * to be both readable and parseable ends up being neither, and the one
+	 * that gets quietly reformatted is the one under test. */
+	block_print_tables();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -119,6 +127,8 @@ void kmain(void)
 		block_self_test() ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
 		crc32_self_test() ? "pass" : "FAIL");
+	kprintf("  partitions         : %s\n",
+		partition_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 	user_print_summary();

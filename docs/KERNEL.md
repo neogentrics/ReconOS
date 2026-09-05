@@ -63,7 +63,7 @@ courtesy now rather than a dependency.
 | 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
 | 11 | Block devices — storage the kernel can read and write | **Done** |
 | 11b | USB mass storage — a USB stack, and a disk on the end of it | |
-| 12 | Partition tables — GPT and MBR, and every layout it will meet | |
+| 12 | Partition tables — GPT and MBR, and every layout it will meet | **Done** |
 | 13 | ReconFS — a filesystem of its own | |
 | 14 | Reads foreign filesystems well enough to install beside them | |
 | 15 | The installer | |
@@ -1171,10 +1171,15 @@ looks impossible:
    | **MBR** | Old PCs, and removable media formatted by anything old |
    | **APM** (Apple Partition Map) | PowerPC Macs, and some old Mac external drives |
 
-   **This is a data format, not a kernel service**, so it is parsed above the
-   block layer — the same line [THIRD_PARTY.md](../THIRD_PARTY.md) already
-   draws for PNG and TLS. The desktop owns the parser; the kernel owes it
-   sectors, a sector size, a sector count, and whether the device is removable.
+   **This said "a data format, not a kernel service", and checkpoint 12
+   narrowed it.** The kernel reads a partition table for its *geometry* and
+   nothing else; everything the table means stays above. The argument and the
+   line inside the format are under checkpoint 12 below.
+
+   The citation of [THIRD_PARTY.md](../THIRD_PARTY.md) is also withdrawn. That
+   document's line is about code borrowed versus code written here, and its
+   subject is libraries. Citing it as a kernel-versus-userspace boundary
+   transposes two different axes and borrows authority it does not have.
 
    *Worth separating carefully, because the two are easy to conflate:* a
    **partition table** says where the partitions are, and a **filesystem** says
@@ -1189,9 +1194,23 @@ looks impossible:
    known about it is recorded below.
 4. **Reading foreign filesystems** (checkpoint 14). NTFS, ext4, APFS, HFS+,
    FAT32. Much bigger than it sounds, and **mostly not needed for the goal.**
-   Installing beside Windows requires reading the *partition table* and
-   possibly resizing a partition; it does not require reading a single NTFS
-   file. FAT32 is the exception and is required, because the UEFI System
+   Installing beside Windows requires reading the *partition table*; it does
+   not require reading a single NTFS file.
+
+   **That sentence used to say "and possibly resizing a partition", and it
+   contradicted the installer's own description two sections down**, which
+   asks for a partitioner that can "shrink a partition without losing what is
+   in it". Both cannot be true. Shrinking an NTFS volume in place means moving
+   `$MFT` and `$Bitmap`, which is an NTFS *write* — the largest thing on this
+   page, wearing the word "resize".
+
+   So it is split, with the reason recorded rather than the checkpoint quietly
+   growing. **Checkpoint 15 installs into free space or into space the person
+   has already shrunk with Windows' own tool, and the installer says so in its
+   own words.** In-place shrink moves to checkpoint 14, where the NTFS
+   knowledge to do it safely lives. Refusing to shrink is an installer a person
+   can work around in ten minutes; shrinking badly is an installer that eats a
+   Windows partition. FAT32 is the exception and is required, because the UEFI System
    Partition is FAT32 and that is where our own bootloader has to be written.
    That holds on a Mac too: Apple uses a standard FAT32 EFI System Partition,
    so installing beside macOS needs GPT and FAT32 and nothing Apple-specific.
@@ -1218,6 +1237,158 @@ up:
   Windows assigns letters to partitions; Linux mounts them into one tree. The
   decision belongs with the filesystem and the installer together, and is not
   taken yet.
+
+
+### Checkpoint 12 — partition tables
+
+**The checkpoint that changed a rule, and said so.**
+
+`recon_kernel.h` had a sentence in it, written at checkpoint 4, that this
+checkpoint contradicts:
+
+> Partition tables are read by the caller, not here: GPT and MBR are data
+> formats, and a kernel that parses them has taken on a parser it did not need
+> to. What the kernel owes is sectors.
+
+Before writing anything, four independent designs argued the question and three
+judges scored them on different lenses — does it boot, does the boundary age,
+is it honest about the rule it changes. Two judges picked the same design; the
+third dissented for a reason that turned out to be right and fixable by
+grafting rather than by choosing differently. What follows is that outcome.
+
+#### Two arguments, and only the second one settles it
+
+The first is that the kernel must answer *where does the root filesystem begin*
+before anything exists above it to answer. That is the same class of question as
+*where is memory* and *where is the PCI bus*, and the kernel already parses a
+device tree for one and an ACPI table for the other. The repository had been
+arguing with its own sentence for two checkpoints: `crc32.c` is in the kernel
+because a GPT header carries a CRC.
+
+That argument is true and it is the kind that ends a discussion without settling
+it. **The one that settles it is the bound.**
+
+If the kernel does not know where partitions are, then every write to a disk is
+a whole-disk write, and the bound on it is computed above the kernel and passed
+down. That is arithmetic the kernel cannot verify, on the one call where getting
+it wrong writes into somebody else's filesystem *and reports success*.
+
+Make a partition a block device with a parent and an offset, and the bound stops
+being a thing anyone has to remember: the range check that already refuses a
+read past the end of a disk refuses one past the end of a partition, in the same
+line, without knowing the difference. That is not the kernel taking work. It is
+the kernel being the only place the check can be made.
+
+#### Where the line inside the format falls
+
+The kernel reads the fixed-width integers that say **where sectors are** — first
+block, last block, how many entries and how far apart, where the two headers
+live. Every disk already written froze those and they cannot move.
+
+It does not read type identifiers, partition names, or attribute bits, because
+those are specified to *grow*, and a kernel you have to ship again to recognise
+a new partition type is the wrong shape.
+
+**The test for any field a later change wants to add:** can somebody change what
+this field means without changing the format? If yes, it belongs to the caller.
+
+That test draws the line through the middle of one format, which is the strongest
+evidence it is a real seam — a rebrand would have drawn it neatly around the
+whole thing. Apple's partition map is entirely the caller's and stays there.
+
+#### What the kernel will not do
+
+It composes no partition table and chooses no layout. It reads one for geometry;
+it will **check** a layout it is handed — nothing overlapping, everything inside
+the disk, nothing where the kernel is working — and answer yes or no; and it
+**refuses a write to a disk that has partitions on it** until the caller has
+said out loud that it means to rewrite the disk.
+
+There is no flag to turn that refusal off, which is this project's existing rule
+about safety checks. The reason for the claim is not distrust of the caller: it
+is that *am I allowed to destroy this disk* is a question with one right moment
+to ask it — once, at the top of an install — and without this it is the ambient
+property of every block device, asked never.
+
+#### The first thing that refusal caught was the test suite
+
+`block_self_test` wrote sixteen kilobytes to the end of `block_device_at(0)`.
+The moment partitions existed, device zero became a *partitioned disk*, and the
+last sixteen kilobytes of a GPT disk are its backup header and entry array. The
+test was about to destroy the table it had just read, on every run.
+
+It did not, because the write was refused. **A check whose first catch is the
+test suite is a check that was needed.** The test now chooses what to write to —
+an unpartitioned disk if there is one, a partition if not, read-only otherwise —
+and that is not an off-switch but the same shape the file already used for a
+read-only disk: a fact about the device changing what the test can do.
+
+It also gained the one test slicing makes necessary: **write the last block of a
+partition, then read the block after it through the parent and check it did not
+move.** Reading it through the slice would be asking the same arithmetic whether
+it agrees with itself.
+
+#### The fixtures are made by tools that share no code with this
+
+The obvious way to test a partition reader is to write a table with your own
+code and read it back. That tests nothing: a writer and a reader built from the
+same misunderstanding agree perfectly.
+
+So `scripts/make-partition-fixtures.sh` builds three disks with `sgdisk` and
+`sfdisk`, and the harness boots the kernel against each and compares:
+
+| Fixture | What it is there to break |
+|---|---|
+| **gpt.img** | free space after the last partition, so a reader that assumes the last one runs to the end of the disk is caught |
+| **mbr.img** | an extended partition holding two logicals — a linked list whose two numbers are relative to *different* bases, which is the most misparsed structure in the format |
+| **hybrid.img** | a protective entry covering 2047 sectors, sitting beside two entries that describe real partitions **correctly** |
+
+The hybrid is the one that matters. Apple ships them, and every wrong reader
+produces a *plausible* answer: checking only slot zero for the protective entry
+misses it, and demanding that the protective entry span the whole disk rejects
+it and falls through to reading the MBR — which is the wrong table, read
+convincingly.
+
+The rule is therefore blunt: **any** entry of type 0xEE means the GPT is the
+truth, no sanity check on its size, and a GPT header that fails goes to the
+backup header at the last block and never to the MBR.
+
+#### The three things that were written down before the code
+
+1. **Both GPT ends are inclusive**, so the length is `last - first + 1`. One
+   short makes the final block of every partition unreachable, which presents as
+   a failing disk. One long lets a write into the neighbour and reports success.
+2. **The header CRC is over `HeaderSize` bytes with the CRC field read as
+   zero** — not over the block, not over the size of any structure here — and
+   the entry-array CRC uses the **stride from the header**, not `sizeof(entry)`.
+   And `MyLBA` must equal the block the header was read from, which is what
+   stops a stale backup being believed as a primary.
+3. **Every loop is capped and the extended chain must move forwards.** A chain
+   that loops is not a theoretical disk; it is what a half-overwritten one looks
+   like, and without the cap it is an infinite loop inside `block_init()` — the
+   earliest point in the boot, with the least left to report it.
+
+#### Verification
+
+**224 self-tests across seventeen boot paths, no failures**, plus three table
+comparisons against the tools that wrote the disks. All three matched on the
+first attempt, including the hybrid.
+
+#### What is deliberately not here
+
+**Root resolution.** The design's central rule is *no boot path may require the
+locator: discovery is the mechanism and a boot token is only a tiebreaker* —
+because a design where being told is mandatory strands a user whose token was
+lost, and one where discovery is the fallback leaves the discovery path
+untested. Implementing it means searching every slice for a ReconFS superblock,
+and ReconFS is checkpoint 13. The rule is recorded now so that 13 inherits it
+rather than reinventing it.
+
+**Mount-aware layout checks.** `block_check_layout` checks geometry today —
+overlaps, bounds, alignment — and deliberately does not yet check whether an
+extent lands on a volume the kernel has mounted or booted from. Both need a
+filesystem to exist. Named in the code as a known gap rather than left as an
+assumption.
 
 ### The installer
 

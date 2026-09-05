@@ -110,6 +110,44 @@ check_for() {
 	check "$@"
 }
 
+# Boots against one partition fixture and compares what the kernel read with
+# what wrote the disk. A different kind of check from the ones above: those
+# count self-tests the kernel ran on itself, and this one holds the kernel's
+# answer up against a second opinion from outside it.
+check_table() {
+	local label=$1 img=$2 expected=$3
+	local log="$WORK/table_$label.log"
+	local got="$WORK/table_$label.got"
+
+	printf '%-46s' "  reads $label the same as its tool"
+
+	timeout "$TIMEOUT" qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF" \
+		-drive "file=$img,format=raw,if=none,id=t0" \
+		-device nvme,serial=recon0,drive=t0 >"$log" 2>&1
+
+	sed -e 's/\r$//' "$log" \
+	  | awk '/^table / { print $3, $4 } /^slice / { print $3, $4, $5 }' >"$got"
+
+	if [ ! -s "$got" ]; then
+		echo "read nothing at all -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("table $label")
+		return
+	fi
+
+	if diff -q "$expected" "$got" >/dev/null 2>&1; then
+		echo "matches"
+		passes=$((passes + 1))
+		return
+	fi
+
+	echo "DIFFERS -- $log"
+	diff --side-by-side --width=64 "$expected" "$got" | sed 's/^/      /'
+	failures=$((failures + 1))
+	FAILED_PATHS+=("table $label")
+}
+
 skip() {
 	printf '%-46s%s\n' "$1" "skipped: $2"
 	skipped=$((skipped + 1))
@@ -288,6 +326,24 @@ if [ "$ONLY" = all ] || [ "$ONLY" = aarch64 ]; then
 	else
 		skip "  reconboot, UEFI" "the loader did not build"
 	fi
+fi
+
+# --- Partition tables ------------------------------------------------------
+#
+# Three disks written by sgdisk and sfdisk, read by the kernel, compared. The
+# hybrid is the one that matters: its protective entry covers a fraction of the
+# disk and sits beside two entries that describe real partitions correctly, so
+# every wrong reader produces a plausible answer on it.
+
+echo
+echo "partition tables"
+
+if bash scripts/make-partition-fixtures.sh "$WORK/fixtures" >/dev/null 2>&1; then
+	check_table gpt        "$WORK/fixtures/gpt.img"    "$WORK/fixtures/gpt.expected"
+	check_table mbr        "$WORK/fixtures/mbr.img"    "$WORK/fixtures/mbr.expected"
+	check_table hybrid-mbr "$WORK/fixtures/hybrid.img" "$WORK/fixtures/hybrid.expected"
+else
+	skip "  partition tables" "sgdisk or sfdisk is missing"
 fi
 
 echo

@@ -35,7 +35,14 @@
 #               MBR and believes that.
 #
 # Each image gets a .expected file listing what the tools say is on it, in the
-# same form the kernel prints. The harness compares the two.
+# same form the kernel prints, and scripts/verify-kernel.sh boots the kernel
+# against each image and compares.
+#
+# That last sentence was false for one commit: this script said the harness
+# compared the two and nothing wired it in. A file that describes a check nobody
+# runs is worse than no file, because it reads as coverage. Wired in before the
+# reader it checks was written, so the harness failed first and had to be made
+# to pass.
 
 set -eu
 
@@ -113,19 +120,29 @@ sgdisk --print "$hybrid" > "$out/hybrid.sgdisk.txt" 2>/dev/null || true
 # about anything sgdisk got wrong, and the point of this file is to be a second
 # opinion.
 
+# The kernel prints geometry and nothing else: which slice, where it starts,
+# where it ends. Not names, not type codes -- those are what the table *means*,
+# and meaning belongs to the caller. So the expectations name no names, and the
+# richer columns move to a second file when there is a desktop-side parser to
+# check against them.
 cat > "$out/gpt.expected" <<-'EOF'
 	gpt 3
-	1 2048 18431 ESP
-	2 18432 67583 recon-root
-	3 67584 100351 data
+	1 2048 18431
+	2 18432 67583
+	3 67584 100351
 EOF
 
+# Four, not five. sfdisk's layout has five entries, but one of them -- number
+# three, at 67584 -- is the extended *container*, which is not a partition and
+# holds no filesystem. It exists to be walked, and what is found inside it is
+# numbered from five. A count that included it would be counting the box as one
+# of the things in the box.
 cat > "$out/mbr.expected" <<-'EOF'
-	mbr 5
-	1 2048 34815 0c
-	2 34816 67583 83
-	5 69632 98303 83
-	6 100352 131071 83
+	mbr 4
+	1 2048 34815
+	2 34816 67583
+	5 69632 98303
+	6 100352 131071
 EOF
 
 # The hybrid must read exactly like the plain GPT disk. That is the whole test:
@@ -136,9 +153,9 @@ EOF
 # that and read the GPT".
 cat > "$out/hybrid.expected" <<-'EOF'
 	gpt 3
-	1 2048 18431 ESP
-	2 18432 67583 recon-root
-	3 67584 100351 data
+	1 2048 18431
+	2 18432 67583
+	3 67584 100351
 EOF
 
 echo "fixtures in $out:"
