@@ -782,6 +782,66 @@ above the cursor, which reads as "not here" and is wrong. Searching starts one
 past the selection rather than at the cursor, because a match is left
 selected and searching from the cursor would find the same one for ever.
 
+## v0.3.0 — encryption both ways, and things to use it for
+
+### The network stops being one-directional
+
+Encryption arrived at the listener first, because that was the part that was
+sending a key in the clear. Going out is the opposite problem and has the
+opposite answer, and getting that right was the interesting part.
+
+Listening, the identity question is "is this the same machine as last time".
+Nobody has vouched for this machine and nobody is going to, so it asserts its
+own identity with a self-signed certificate and the client pins the
+fingerprint. Connecting out, the question is "is this really
+imap.example.com" — which is exactly what a certificate authority exists for,
+and somebody *has* vouched for that name. So outgoing verifies a chain and
+checks the hostname, with no switch to turn either off.
+
+The verify-off switch is worth naming as a thing deliberately not built. It is
+the switch that ends up on, and what it produces looks exactly like success:
+an encrypted connection to whoever answered.
+
+The handshake is driven a step at a time from the event loop rather than run
+inline. Several round trips to somebody else's network, and a desktop that
+freezes for the duration is a desktop that freezes for as long as a stranger's
+server feels like taking.
+
+### Mail
+
+IMAP and POP3, both encrypted, both refusing to send `DELE` and both fetching
+with `BODY.PEEK`. Nothing this reads changes anything on the server. That is a
+rule rather than an omission: a young mail client with a bug that alters
+somebody's mailbox is one nobody uses twice, and there is no undo on the far
+end.
+
+The password is asked for and not stored, and the window says so where the
+password is typed. The keyring that would change that is written down below
+under what is missing.
+
+### Applets that update on their own
+
+A system application is no longer welded to the release that shipped it. A
+module registering a name already taken, at a higher version, takes the name;
+the displaced one is kept and comes back if the replacement is removed.
+
+The built-ins carry the system's version, which makes the comparison decidable
+and gives it a property worth stating: an applet update applies until the
+release that catches up with it, and then the built-in wins again.
+
+Versions compare as numbers. The obvious implementation is strcmp, which says
+1.10 is older than 1.9 — right for nine releases of anything and wrong on the
+tenth, in the direction where an update system refuses the update it exists to
+install.
+
+### And the rest
+
+A clock in the corner that keeps twenty-six zones in minutes rather than hours,
+and reports what an NTP server said without setting anything from it. Photos
+and a Calendar. Five calculator modes and twelve families of unit conversion,
+with currency deliberately absent. A terminal that is fixed-width, colours its
+failures, and has four schemes.
+
 ## v0.2.17 — the parts that run, and a Control Panel you can open twice
 
 ### Everything a session of watching it run turned up
@@ -1353,9 +1413,12 @@ connection for a key. It exists because it is what people expect a system to
 be able to do, and because the SSH route needs an account on the host
 underneath — which a machine ReconOS owns will not have.
 
-It is honest about what it is: **the key crosses the network in the clear.**
-There is no TLS yet. `remote` says so every time and `remote on` says it
-again.
+As of v0.3.0 it speaks **TLS**, with a certificate the machine makes for
+itself the first time the port is opened, and the key is offered over the
+encrypted channel rather than in front of it. There is no certificate
+authority: the fingerprint is shown wherever remote access is turned on and
+the client pins it, the way SSH does. A chain would answer "did somebody vouch
+for this name", and nobody has vouched for this machine.
 
 Three things must be true before the port opens, and each refusal says which
 one and what to do: there is a key, the firewall allows incoming TCP on that
@@ -1748,12 +1811,18 @@ list, a text field and a menu are all still square whatever the skin says.
 **No paint program.** Nothing in ReconOS draws a picture; the icons and
 avatars it ships are drawn by code rather than by anybody.
 
-**No TLS.** Remote access over the network sends its key in the clear, which
-is why it is off by default and why every place that offers it also offers the
-SSH-forwarded socket. The forwarded socket is not a workaround — it is the
-right answer for reaching a machine across a network somebody else can see —
-but a system that owns its own machine will not have an SSH to lean on, and
-then this has to exist.
+**No password keyring.** The Mail window asks for a password every time it
+connects and holds it only while the window is open, because there is nowhere
+safe to put it: the registry means anything that can read a file can read it,
+and obfuscation is worse than plain because it looks like protection. Doing it
+properly needs a key that exists only while somebody is signed in, derived
+from the account password at sign-in and held in memory. That is a subsystem
+rather than a field, and it is the thing standing between this and a mail
+client somebody would use daily.
+
+**Nothing sends mail.** SMTP is a separate protocol on a separate port with
+its own set of ways to lose somebody's message. Reading came first because
+reading is the half that cannot destroy anything.
 
 **The firewall cannot filter packets**, and will not until ReconOS has a
 network stack of its own. What it governs is what ReconOS itself opens and
@@ -1786,8 +1855,11 @@ and knows about text; a picture has nowhere to go because nothing views one,
 and the mapping is a list in one function rather than anything a program can
 register itself with.
 
-**Nothing can listen, and nothing is encrypted.** Streams connect outwards in
-the clear; there is no TLS and no way to accept a connection.
+**Nothing can listen.** Streams connect outwards, plain or encrypted with the
+far end verified; there is still no way for an application to accept a
+connection. Accepting means deciding what may reach this machine, which is a
+larger question than deciding what it may reach, and it should not be answered
+by accident while building the outgoing half.
 
 **Where a title bar's buttons sit is fixed.** A skin can set the frame's
 height, border, corner radius and button size; it cannot move the buttons to

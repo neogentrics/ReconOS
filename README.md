@@ -52,11 +52,11 @@ written down as it was hit rather than guessed at in advance.
 | --- | --- |
 | **Written in** | C11, no framework |
 | **Draws** | its own windows, menus, icons and text — nothing is a toolkit widget |
-| **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for the network port |
-| **Applications** | File Explorer, Notepad, Terminal, Watchtower, Control Panel, Help, Calculator |
+| **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for encryption in both directions |
+| **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | ten, including three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 9 suites, no display needed |
+| **Tests** | 11 suites, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -70,7 +70,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
-| **0.3.0** *in progress* | TLS on the network port. Screen resolution. The kernel begins, alongside |
+| **0.3.0** *in progress* | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
 | **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
 | **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |
 | **0.2.15** | Help and the change log, in the system. Skins writable from inside it. Storage. Typing in the Start menu |
@@ -482,12 +482,27 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   of places, folders and files with icons, renaming in place, cut/copy/paste,
   and deletion that asks first
 - **Task Manager** — processes with CPU and memory, and a view of open windows
-- **Terminal** — the command interpreter, emulating nothing
+- **Terminal** — the command interpreter, emulating nothing. Fixed-width, so
+  the tables the interpreter writes line up, with failures in red and four
+  colour schemes: Recon, which follows the skin, PowerShell, Green Screen and
+  Paper
 - **Notepad** — text editing, with a File menu and a file dialog for opening
-  and saving. Undo by word, find and replace, and a clipboard shared with the
-  rest of the system. Closing with unsaved work asks where to put it rather
-  than throwing it away
-- **Calculator** — arithmetic by mouse or keyboard
+  and saving. Undo by word, find and replace, word wrap, its own font and
+  size, and a clipboard shared with the rest of the system. Closing with
+  unsaved work asks where to put it rather than throwing it away
+- **Mail** — IMAP and POP3, both over TLS with the server's certificate
+  checked. Nothing is ever deleted on the server, and the password is not
+  stored — it is asked for and forgotten when the window closes, and the
+  window says so
+- **Photos** — one picture at a time, fitted to the window and never enlarged
+  past its own size, on a dark mat
+- **Calendar** — a month at a time, with what is on each day kept as a text
+  file anything can read
+- **Calculator** — five modes: Standard, Scientific, Programmer, Date and
+  Convert. Programmer works in whole numbers rather than doubles, because a
+  bit pattern has to be exact in all sixty-four bits and a double is exact in
+  fifty-three. Convert covers twelve families with exact factors — and not
+  currency, which is a fact about this afternoon rather than a ratio
 - **Help** — a page for each part of the system, and under a rule, the change
   log back to the first version
 
@@ -592,9 +607,27 @@ deny` show and change it. This is not isolation and says so: ReconOS is one
 process, so it binds what goes through ReconOS, the same way accounts are
 bound.
 
-Deliberately not there yet: listening, and TLS. Accepting connections means
-deciding what may reach this machine, which is a bigger question than what
-this machine may reach. Without TLS this is `http://` only.
+**Encrypted, when asked for.** A stream is opened plain or encrypted, and an
+encrypted one has the far end's certificate checked against a bundle of
+trusted roots and against the name that was asked for. There is no verify-off
+switch: that is a switch that ends up on, and what it produces is an encrypted
+connection to whoever answered, which is not the same thing as an encrypted
+connection to who you meant.
+
+The handshake runs a step at a time between turns of the event loop, because it
+is several round trips to somebody else's network and doing it inline would
+freeze the screen for as long as they took to answer. A stream does not report
+itself open until the handshake finishes, so nothing can write a password into
+a socket that has proved nothing.
+
+A refused certificate is its own outcome and not "unreachable" — those mean
+opposite things to whoever reads them, and it says which check failed, because
+a wrong clock, a missing root and an interception are three different problems
+and only one of them is frightening.
+
+Deliberately not there yet: listening. Accepting connections means deciding
+what may reach this machine, which is a bigger question than what this machine
+may reach.
 
 **A firewall.** It cannot filter packets -- ReconOS has no network stack of
 its own -- and saying it could would be the same lie as a network page that
@@ -624,8 +657,12 @@ on first connect, the way SSH does. A chain would answer "did somebody vouch
 for this name", and nobody has vouched for this machine. Pinning answers "is
 this the same machine as last time", which is the question being asked.
 
-Outgoing connections are still in the clear, and `https://` still does not
-work. That half is a separate gap and is still listed as one.
+Going *out* is the opposite problem with the opposite answer, and it is built
+that way. Connecting to somebody's mail server, "is this really
+imap.example.com" is exactly the question a certificate authority exists for
+and somebody has vouched for that name — so outgoing verifies a chain, where
+incoming pins a fingerprint. Same file, two honest answers to two different
+questions.
 
 ### Driving it, and finding out what went wrong
 
