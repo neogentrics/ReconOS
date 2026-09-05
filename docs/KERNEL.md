@@ -14,12 +14,12 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.9`. The number says what works. What works: it boots four ways across two
+`0.0.10`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
 can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
 the byte, says where and why it faulted instead of resetting, keeps two
-clocks and services a hundred interrupts a second, and is started by a
-bootloader we wrote.
+clocks, services a hundred interrupts a second, runs threads and takes
+execution away from them, and is started by a bootloader we wrote.
 
 ## What "finished" means
 
@@ -58,7 +58,8 @@ courtesy now rather than a dependency.
 | 6 | A kernel heap | **Done** |
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
 | 8 | A timer, a tick, and time | **Done** |
-| 9 | Threads, a scheduler, and every core in use | |
+| 9 | Threads, a scheduler, and preemption | **Done** |
+| 9b | Every core in use — waking the other processors | |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | |
 | 11 | Block devices — storage the kernel can read and write | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
@@ -421,9 +422,77 @@ machine has run.
 **The tick is honest and not yet efficient.** A hundred wakeups a second on an
 idle machine is a hundred wakeups a second doing nothing, and that is how a
 laptop runs warm with nothing running. Stopping the tick when there is nothing
-to wake for is a real thing to build and it belongs with the scheduler at
-checkpoint 9, because "nothing to wake for" is a question only a scheduler can
-answer. Recorded here rather than left to be noticed.
+to wake for is a real thing to build and it belongs with the scheduler, because
+"nothing to wake for" is a question only a scheduler can answer. The scheduler
+now exists and the tick is still unconditional -- so this has moved from "not
+yet possible" to "not yet done", which is a different and more accountable kind
+of outstanding.
+
+### Checkpoint 9 — done, except the other cores
+
+**The kernel stops being one thing doing one thing.** Threads, a round-robin
+scheduler, and preemption driven by the tick. On both architectures, on all
+eight boot paths:
+
+```
+Scheduler
+  slice        : 5 ticks (50 ms)
+  switches     : 15, of which 8 were preemptions
+  thread 0     : boot, running, 3 ticks
+```
+
+The context switch is the one function in the kernel that genuinely cannot be
+written in C, and it is worth being exact about why: **it is called on one stack
+and returns on another.** C's whole model is that a function returns where it
+was called from with the stack it was called with. What makes it work is that
+the calling convention already names the registers a function must preserve — so
+saving exactly those, swapping the stack pointer, and restoring exactly those
+from the new stack leaves the CPU in a state the *other* thread's code believes
+is its own.
+
+**A self-test that passed without testing anything.** The first version ran
+three threads for a fixed count of four million increments each and asserted
+that the number of context switches had risen. Every thread finished inside its
+own slice, so none was ever preempted — each ran to completion and switched
+*voluntarily* on exit. Four switches for three threads: exactly what pure
+cooperation produces, reported as a pass for preemption that had not happened
+once.
+
+Two separate things were wrong, and fixing either alone would have left a test
+that still lied. The threads now run against the clock rather than a count, so
+they cannot finish inside a slice however fast the machine is. And preemptions
+are counted *apart* from voluntary switches, so the assertion is about the thing
+being claimed rather than a number both would move. It now reports 8 preemptions
+out of 15 switches, and would fail if that first number were zero.
+
+*The general form: an assertion that both the working and the broken case
+satisfy is not an assertion.*
+
+**A reaper that reaped exactly one.** Finished threads' stacks are freed by a
+scan, which restarted after each removal using `continue` inside a `do`-`while`
+— and `continue` in a do-while jumps to the *condition*, which the restart had
+just made false. One thread freed, the rest leaked. Caught only because the
+summary printed the ring and two finished threads were still in it. **The
+instrument again: nothing failed, a number was just wrong on screen.**
+
+**The ordering hazard, on both architectures.** The interrupt controller is
+acknowledged *before* the context switch, never after. A switch does not return
+to the interrupt handler — it returns on another thread's stack — so an
+acknowledgement placed after it would never happen, the controller would send
+nothing further, and the machine would freeze on the first preemption with every
+individual part of it looking correct.
+
+**Other cores are not done, and this is checkpoint 9b rather than a footnote.**
+Secondary processors are still parked in `boot.S` on both architectures. Waking
+them needs a way to start a CPU — a mailbox and PSCI on ARM, an interrupt
+sequence on x86 — and locking on everything the scheduler touches, because a run
+queue that two processors can edit at once is a run queue that will eventually
+contain a cycle. That is real work, it is where BG-088's lesson about ownership
+checks will first bite this kernel, and it is listed rather than assumed.
+
+Also absent by choice: priorities (a scheme invented before there is a workload
+to shape it around is fitted to nothing) and blocking (waiting for a key or a
+disk needs the key or the disk to exist).
 
 ## Using the machine you are on
 

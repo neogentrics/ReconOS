@@ -10,6 +10,7 @@
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
+#include <recon/kernel/sched.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/trap.h>
@@ -54,6 +55,10 @@ void kmain(void)
 	/* After the fault handlers, because enabling interrupts without
 	 * somewhere for them to go is how a machine resets while telling you
 	 * nothing. */
+	/* The scheduler before the timer, so that the first tick has something
+	 * to tick. Started here rather than earlier because it allocates. */
+	sched_init();
+
 	time_init();
 	time_print_summary();
 
@@ -72,6 +77,10 @@ void kmain(void)
 		trap_self_test() ? "pass" : "FAIL");
 	kprintf("  clock and tick     : %s\n",
 		time_self_test() ? "pass" : "FAIL");
+	kprintf("  threads            : %s\n",
+		sched_self_test() ? "pass" : "FAIL");
+
+	sched_print_summary();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

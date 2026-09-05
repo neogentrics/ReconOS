@@ -22,6 +22,7 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/sched.h>
 
 static inline void outb(u16 port, u8 v) { __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port)); }
 static inline u8  inb(u16 port) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port)); return v; }
@@ -246,8 +247,20 @@ u64 arch_monotonic_ns(void)
 /* Called from the interrupt stub for vector 32. */
 void x86_timer_interrupt(void)
 {
+	bool preempt;
+
 	time_tick();
+	preempt = sched_tick();
+
+	/* The controller is told *before* the switch, not after. A switch does
+	 * not return here -- it returns on another thread's stack, and the
+	 * acknowledgement would never happen. The controller would then send no
+	 * further interrupts, and the machine would freeze on the first
+	 * preemption with everything looking correct. */
 	x86_pic_end_of_interrupt(0);
+
+	if (preempt)
+		sched_switch();
 }
 
 void arch_time_init(void)
