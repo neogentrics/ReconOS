@@ -8,7 +8,7 @@ part you actually see and touch — the compositor, the window management, the
 shell. It runs on the Linux kernel today; replacing that substrate comes later,
 once the layer above it is worth running.
 
-**Status: v0.2.16.** The version number tracks what works, not what is
+**Status: v0.2.17.** The version number tracks what works, not what is
 planned.
 
 v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
@@ -66,6 +66,58 @@ and every entry is also a
 Still early. There is no kernel of its own, and the account roles are
 enforced by ReconOS inside ReconOS rather than by anything underneath it. What is here works and is tested; what
 is not here is listed at the end.
+
+## What it looks like
+
+Every one of these is a real screen capture of a running ReconOS, taken by
+ReconOS's own `capture` command with the system driven over its control
+socket. Nothing here is a mock-up, and nothing is arranged by hand -- the
+script that takes them is the same harness the tests use, so a picture that
+stops being true stops being taken.
+
+![The desktop, with the Start menu open](docs/images/desktop.png)
+
+The desktop and the Start menu: pinned programs on the left, the places that
+belong to the account on the right, All Programs with a fly-out beside it, and
+a search box in the footer. The bar along the bottom carries one button per
+window and four desktops at the right end.
+
+![The Control Panel](docs/images/control-panel.png)
+
+The Control Panel is fourteen icons. Clicking one opens it in a window of its
+own, named for the item and stepped clear of whatever opened it, so two
+settings can be worked on side by side. Hovering one says what it is for.
+
+![Appearance](docs/images/appearance.png)
+
+Ten skins ship, including three for colour vision and one for reading. A skin
+sets forty-eight semantic roles, the shape of a window frame, and a wallpaper.
+Any of them can be copied and changed; none of them can be deleted, because a
+preset that can be deleted is gone with nowhere to get it back from.
+
+![Two windows at once](docs/images/explorer.png)
+
+ReconOS draws its own windows: the frames, the title bars, the buttons, the
+menus. The File Explorer is looking at the root of the ReconOS filesystem,
+which is a real directory tree on disk.
+
+![The firewall](docs/images/firewall.png)
+
+A rule list rather than a page about one -- consulted in order, first match
+decides, and the ports most people would want are already written down and
+switched off. The rules are a text file, and the same list is reachable from
+the terminal.
+
+![Network](docs/images/network.png)
+
+Network in four sections. This is Adapters: every interface the host has, and
+for the one picked, its address, netmask, state and kind.
+
+![System Information](docs/images/system-information.png)
+
+What the machine is, what ReconOS is, and what is underneath -- three groups,
+kept apart on purpose, because the third is what explains how the first is
+readable at all.
 
 ## What works right now
 

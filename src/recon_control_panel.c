@@ -845,6 +845,11 @@ static void nothing_chosen(struct control_panel *cp) {
     cp->selected = -1;
     cp->net_selected = -1;
     cp->font_selected = -1;
+
+    /* And nothing under the pointer, which is the same kind of zero: the
+     * front page opened with its first icon lit as though the pointer were
+     * resting on it, before the pointer had been anywhere near the window. */
+    cp->hover_tile = -1;
 }
 
 static void open_page_window(struct control_panel *cp, enum page page);
