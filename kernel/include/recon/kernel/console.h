@@ -25,4 +25,10 @@ void kputs_unlocked(const char *s);
 
 RK_PRINTF(1, 2) void kprintf(const char *fmt, ...);
 
+/* The same, without taking the console lock. Only for the fault reporter, for
+ * the same reason as kputs_unlocked(): a fault can be taken by code that is
+ * holding the lock, and a reporter that waits for it turns a fault into a
+ * hang. */
+RK_PRINTF(1, 2) void kprintf_unlocked(const char *fmt, ...);
+
 #endif /* RECON_KERNEL_CONSOLE_H */
