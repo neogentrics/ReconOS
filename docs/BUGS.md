@@ -76,6 +76,25 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-081 — The page allocator counted a gigabyte of nothing as used
+
+[#234](https://github.com/neogentrics/ReconOS/issues/234)
+
+- **Found in** kernel 0.0.3. **Found by** the allocator's own self-test, run at
+  boot on real hardware rather than on the build machine.
+- **Was** the physical page bitmap was indexed from physical address zero. On
+  x86_64 that is invisible: RAM starts near zero, so the first bit and the
+  first page are the same thing and nothing looks wrong. On aarch64 RAM starts
+  at 1GB, so every bit below that stood for an address that is not memory --
+  262,433 pages reported as used that were never pages at all.
+
+  The shape of this is worth keeping: an assumption that is *true on the
+  machine you develop on* and false on the other one, in code written to be
+  portable. `make check-portable` catches machine-specific code in `core/`; it
+  cannot catch machine-specific *arithmetic* that compiles everywhere.
+- **Fixed in** kernel 0.0.3. The bitmap is based at the lowest usable address
+  rather than at zero.
+
 ### BG-080 — A font inside ReconOS could be set and would never load
 
 [#233](https://github.com/neogentrics/ReconOS/issues/233)

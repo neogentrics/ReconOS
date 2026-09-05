@@ -52,6 +52,9 @@ AREA = {
     72: 'settings', 73: 'display', 74: 'storage',
     75: 'input',   76: 'firewall', 77: 'input',
     78: 'display', 79: 'skins',  80: 'display',
+    # The kernel's own faults share this register, so a track record of
+    # the system is a track record of all of it.
+    81: 'kernel',
 }
 
 
