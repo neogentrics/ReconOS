@@ -33,3 +33,4 @@ Thumbs.db
 dist/
 kernel/build/disk.img
 kernel/build/fixtures/
+kernel/build/crash/

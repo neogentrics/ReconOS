@@ -11,6 +11,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/crc32.h>
 #include <recon/kernel/cpu.h>
+#include <recon/kernel/durability.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/partition.h>
 #include <recon/kernel/pmm.h>
@@ -132,6 +133,12 @@ void kmain(void)
 
 	sched_print_summary();
 	user_print_summary();
+
+	/* Only when asked for on the command line, because it writes to every
+	 * block it touches. See core/durability.c: it exists to find out whether
+	 * a flush on this kernel actually orders writes, which is the property
+	 * every crash-consistency scheme a filesystem could use rests on. */
+	durability_run();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 
