@@ -844,6 +844,20 @@ void recon_appwin_set_title(struct recon_appwin *win, const char *title) {
         snprintf(win->title, sizeof(win->title), "%s", title);
     }
     recon_appwin_refresh(win);
+
+    /*
+     * And the taskbar, which shows this title too.
+     *
+     * recon_appwin_refresh redraws the window and nothing else, so the button
+     * on the taskbar kept whatever name the window had when it opened. Nothing
+     * noticed while the only titles that changed were Notepad's filename --
+     * which changes at the same moment the window is saved and redrawn anyway.
+     * The web viewer changes its title on every page, and the taskbar sat
+     * there naming the page before.
+     */
+    if (win->server != NULL && win->server->shell != NULL) {
+        recon_shell_refresh(win->server->shell);
+    }
 }
 
 const char *recon_appwin_icon(struct recon_appwin *win) {

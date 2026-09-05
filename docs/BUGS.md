@@ -76,6 +76,33 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-091 — The taskbar kept the title a window had when it opened
+
+[#258](https://github.com/neogentrics/ReconOS/issues/258)
+
+- **Found in** v0.3.1. **Found by** the web viewer, in a screenshot: the title
+  bar read "In defense of simple architectures" and the taskbar button under
+  it still read "www.rfc-editor.org", which was the page before.
+- **Was** `recon_appwin_set_title` redrew the window and nothing else. The
+  taskbar is the shell's, and the shell redraws it when the window list or the
+  focus changes -- neither of which a rename is.
+
+  **Latent for as long as it existed, and not by luck.** The only thing that
+  had ever changed a title was Notepad, showing the file being edited -- and
+  that changes at the same moment the file is opened or saved, which is a
+  moment the window is being redrawn anyway for other reasons. The web viewer
+  changes its title on every page, with nothing else happening, and the fault
+  became visible immediately.
+
+  Worth keeping for that: a bug can be sitting in a shared function for months
+  because the only caller happens to do something else that hides it. The
+  second caller is what finds it, and there is no way to have found it sooner
+  except by having had one.
+- **Fixed in** v0.3.1. Setting a title refreshes the shell as well as the
+  window. `recon_shell_refresh` already existed and is documented as "call
+  when the window list or focus changes" -- a title is part of what that list
+  shows, so this was a missing call rather than a missing mechanism.
+
 ### BG-090 — A password erased with memset, which a compiler may delete
 
 [#257](https://github.com/neogentrics/ReconOS/issues/257)

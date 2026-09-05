@@ -2585,6 +2585,7 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/photos.png", RECON_ICON_PHOTOS);
     install_asset_icon("icons/calendar.png", RECON_ICON_CALENDAR);
     install_asset_icon("icons/mail.png", RECON_ICON_MAIL);
+    install_asset_icon("icons/web.png", RECON_ICON_WEB);
 
     /*
      * The help and the change log, rewritten every start rather than only

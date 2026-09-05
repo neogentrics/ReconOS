@@ -382,9 +382,9 @@ struct recon_font *recon_font_system(int pixel_height) {
 }
 
 /*
- * --- The fixed-width font ---
+ * --- The other faces ---
  *
- * Separate from the system font, and separate on purpose.
+ * Two of them, each in its own small cache, and one function behind both.
  *
  * A terminal in a proportional face cannot line anything up, and half of what
  * this system prints is a table: `apps` puts a name, a version, a state and an
@@ -392,9 +392,13 @@ struct recon_font *recon_font_system(int pixel_height) {
  * character or two on every row. The interpreter is already writing columns
  * with `%-20s`; the font was throwing that work away.
  *
- * Kept in its own small cache rather than sharing the system one, because they
- * are wanted at different sizes for different reasons and six slots between
- * them would have the terminal evicting the taskbar's font.
+ * Bold arrived with the web viewer, where a heading that is only *larger* than
+ * the text reads as text that is larger, rather than as a heading.
+ *
+ * Separate caches rather than one, because they are wanted at different sizes
+ * for different reasons and a shared pool would have the terminal evicting the
+ * taskbar's font. One *lookup* though: written twice, the second copy is the
+ * one that misses a fix.
  */
 static const char *const MONO_SEARCH_PATHS[] = {
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
@@ -406,51 +410,81 @@ static const char *const MONO_SEARCH_PATHS[] = {
     NULL,
 };
 
-#define MONO_FONTS_MAX 4
+static const char *const BOLD_SEARCH_PATHS[] = {
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+    NULL,
+};
 
-static struct {
-    int pixel_height;
-    struct recon_font *font;
-} g_mono_fonts[MONO_FONTS_MAX];
+#define FACE_FONTS_MAX 4
 
-struct recon_font *recon_font_monospace(int pixel_height) {
-    for (int i = 0; i < MONO_FONTS_MAX; i++) {
-        if (g_mono_fonts[i].font != NULL &&
-                g_mono_fonts[i].pixel_height == pixel_height) {
-            return g_mono_fonts[i].font;
+struct face_cache {
+    const char *const *paths;
+    /* An environment variable that overrides the search, so a machine with
+     * neither face can be given one without rebuilding. */
+    const char *override;
+    /* Said once when there is no such face, rather than on every lookup. */
+    const char *complaint;
+    bool complained;
+    struct {
+        int pixel_height;
+        struct recon_font *font;
+    } slots[FACE_FONTS_MAX];
+};
+
+static struct face_cache g_mono = {
+    .paths = MONO_SEARCH_PATHS,
+    .override = "RECONOS_MONO_FONT",
+    .complaint = "no fixed-width font found; columns will not line up",
+};
+
+static struct face_cache g_bold = {
+    .paths = BOLD_SEARCH_PATHS,
+    .override = "RECONOS_BOLD_FONT",
+    .complaint = "no bold font found; headings will be large but not bold",
+};
+
+static struct recon_font *face_at(struct face_cache *cache, int pixel_height) {
+    for (int i = 0; i < FACE_FONTS_MAX; i++) {
+        if (cache->slots[i].font != NULL &&
+                cache->slots[i].pixel_height == pixel_height) {
+            return cache->slots[i].font;
         }
     }
 
-    for (int i = 0; i < MONO_FONTS_MAX; i++) {
-        if (g_mono_fonts[i].font != NULL) {
+    for (int i = 0; i < FACE_FONTS_MAX; i++) {
+        if (cache->slots[i].font != NULL) {
             continue;
         }
 
         struct recon_font *font = NULL;
-        const char *chosen = getenv("RECONOS_MONO_FONT");
+        const char *chosen = getenv(cache->override);
         if (chosen != NULL && *chosen != '\0') {
             font = recon_font_load(chosen, pixel_height);
         }
-        for (int p = 0; font == NULL && MONO_SEARCH_PATHS[p] != NULL; p++) {
-            font = recon_font_load(MONO_SEARCH_PATHS[p], pixel_height);
+        for (int p = 0; font == NULL && cache->paths[p] != NULL; p++) {
+            font = recon_font_load(cache->paths[p], pixel_height);
         }
 
         /*
-         * No fixed-width face on this machine. The system font rather than
-         * nothing -- a terminal with wandering columns is worse than one with
-         * straight ones and better than a blank rectangle -- and said out
-         * loud, because "why are my columns crooked" should have an answer
-         * somewhere other than in somebody's head.
+         * No such face on this machine. The system font rather than nothing --
+         * text in the wrong weight is a cosmetic fault and a blank rectangle is
+         * not -- and said out loud once, because "why are my columns crooked"
+         * should have an answer somewhere other than in somebody's head.
          */
         if (font == NULL) {
-            wlr_log(WLR_INFO, "ReconOS: no fixed-width font found; the "
-                "terminal will use the system font and its columns will not "
-                "line up");
+            if (!cache->complained) {
+                cache->complained = true;
+                wlr_log(WLR_INFO, "ReconOS: %s", cache->complaint);
+            }
             return recon_font_system(pixel_height);
         }
 
-        g_mono_fonts[i].pixel_height = pixel_height;
-        g_mono_fonts[i].font = font;
+        cache->slots[i].pixel_height = pixel_height;
+        cache->slots[i].font = font;
         return font;
     }
 
@@ -458,30 +492,44 @@ struct recon_font *recon_font_monospace(int pixel_height) {
      * system font's version of this. */
     struct recon_font *nearest = NULL;
     int best = 0;
-    for (int i = 0; i < MONO_FONTS_MAX; i++) {
-        if (g_mono_fonts[i].font == NULL) {
+    for (int i = 0; i < FACE_FONTS_MAX; i++) {
+        if (cache->slots[i].font == NULL) {
             continue;
         }
-        int apart = g_mono_fonts[i].pixel_height - pixel_height;
+        int apart = cache->slots[i].pixel_height - pixel_height;
         if (apart < 0) {
             apart = -apart;
         }
         if (nearest == NULL || apart < best) {
-            nearest = g_mono_fonts[i].font;
+            nearest = cache->slots[i].font;
             best = apart;
         }
     }
     return nearest;
 }
 
-void recon_font_system_finish(void) {
-    for (int i = 0; i < MONO_FONTS_MAX; i++) {
-        if (g_mono_fonts[i].font != NULL) {
-            recon_font_destroy(g_mono_fonts[i].font);
-            g_mono_fonts[i].font = NULL;
-            g_mono_fonts[i].pixel_height = 0;
+static void face_finish(struct face_cache *cache) {
+    for (int i = 0; i < FACE_FONTS_MAX; i++) {
+        if (cache->slots[i].font != NULL) {
+            recon_font_destroy(cache->slots[i].font);
+            cache->slots[i].font = NULL;
+            cache->slots[i].pixel_height = 0;
         }
     }
+    cache->complained = false;
+}
+
+struct recon_font *recon_font_monospace(int pixel_height) {
+    return face_at(&g_mono, pixel_height);
+}
+
+struct recon_font *recon_font_bold(int pixel_height) {
+    return face_at(&g_bold, pixel_height);
+}
+
+void recon_font_system_finish(void) {
+    face_finish(&g_mono);
+    face_finish(&g_bold);
 
     for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
         recon_font_destroy(g_system_fonts[i].font);

@@ -29,6 +29,7 @@
 #include "recon_appwin.h"
 #include "recon_calendar.h"
 #include "recon_mailwin.h"
+#include "recon_web.h"
 #include "recon_clock.h"
 #include "recon_control_panel.h"
 #include "recon_desktop.h"
@@ -2982,6 +2983,9 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
           RECONOS_VERSION },
         { "Mail", RECON_ICON_MAIL, recon_mailwin_create, true,
           RECONOS_VERSION },
+        /* The name here and WEB_APPLICATION in recon_web.c must match:
+         * the network permission is by name. See the note there. */
+        { "Web", RECON_ICON_WEB, recon_web_create, true, RECONOS_VERSION },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing

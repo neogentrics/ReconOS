@@ -1,6 +1,32 @@
-A web viewer. Not a browser: a viewer for simple pages. HTTP and HTTPS,
-HTML structure and links, and no CSS, no JavaScript and no images. That
-boundary is stated here rather than discovered later, because "basic browser"
-and "browser" are a weekend and a decade apart.
+A web viewer. Not a browser, and it is called a viewer everywhere: HTTP
+and HTTPS, HTML structure, links, back and forward — and no CSS, no
+JavaScript, no images, no forms. That boundary is stated rather than
+discovered, because "a viewer for simple pages" and "a browser" are a weekend
+and a decade apart.
+
+Structure decides appearance, since there is no stylesheet: a heading is large
+because it is a heading. A page whose layout lives entirely in CSS renders as
+its underlying structure — readable for a well-written page, a column of text
+for a badly-written one. That is the honest failure rather than a hidden one,
+and a page that builds itself with JavaScript says so instead of showing blank.
+
+text/plain is read as text and not as markup, so an RFC or a README keeps its
+own line breaks and its own column alignment. A large fraction of what is worth
+reading is a plain file, and running one through an HTML parser eats every <
+in it.
+
+A redirect may go from http to https and may not go the other way. A server
+answering an encrypted request with "now ask me again in the clear" is broken
+or hostile, and following it would silently undo what the encryption was for.
+
+An image becomes its alt text, which is what alt text is for. A link is
+underlined as well as coloured, because a link that is only a different colour
+is invisible to a reader who cannot see that difference.
+
+The layout runs while the page is drawn, and the link regions are registered as
+the words are placed — so what is clickable is, by construction, exactly what
+was drawn. A separate layout pass is a second set of arithmetic that can
+disagree with the first, and the disagreement shows up as a link a few pixels
+from where it looks.
 
 ---

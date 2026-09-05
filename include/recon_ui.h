@@ -80,6 +80,17 @@ struct recon_font *recon_font_system(int pixel_height);
  */
 struct recon_font *recon_font_monospace(int pixel_height);
 
+/*
+ * The shared bold font at a given size, cached the same way.
+ *
+ * For a heading. A heading that is only *larger* than the text around it reads
+ * as text that is larger; the weight is what makes it a heading.
+ *
+ * Falls back to the system font, and says so once, when the machine has no
+ * bold face. Never NULL when recon_font_system is not NULL.
+ */
+struct recon_font *recon_font_bold(int pixel_height);
+
 /* At shutdown, once nothing is left that could still draw. Frees both. */
 void recon_font_system_finish(void);
 
