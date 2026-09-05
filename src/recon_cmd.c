@@ -18,6 +18,7 @@
 #include "recon_capture.h"
 #include "recon_cmd.h"
 #include "recon_control.h"
+#include "recon_tls.h"
 #include "recon_error.h"
 #include "recon_firewall.h"
 #include "recon_service.h"
@@ -1028,9 +1029,24 @@ static void cmd_remote(struct recon_cmd_session *s, int argc, char **argv) {
             out(s, "  'remote off' closes it.\n");
         }
 
-        out(s, "\n  The key crosses the network in the clear -- there is no\n"
-               "  TLS yet. On a trusted network that is a reasonable trade;\n"
-               "  across anything else, use the SSH route above.\n");
+        /*
+         * The fingerprint, where somebody deciding whether to trust a
+         * connection will look. Only when the port is open: before that
+         * there is no certificate, because one is made when the port first
+         * opens rather than on a machine that may never want it.
+         */
+        char print[RECON_TLS_FINGERPRINT_MAX];
+        if (recon_tls_fingerprint(print, sizeof(print))) {
+            out(s, "\n  Encrypted with TLS. This machine's fingerprint:\n\n"
+                   "    %s\n\n", print);
+            out(s, "  Check it matches what your client shows, the first\n"
+                   "  time you connect. After that the client should refuse\n"
+                   "  if it ever changes -- that is the whole protection.\n");
+        } else {
+            out(s, "\n  Connections are encrypted with TLS. The certificate\n"
+                   "  is made the first time the port opens; 'remote on'\n"
+                   "  then shows the fingerprint to check against.\n");
+        }
         return;
     }
 
@@ -1075,10 +1091,15 @@ static void cmd_remote(struct recon_cmd_session *s, int argc, char **argv) {
 
         recon_registry_set_bool(RECON_REG_SYSTEM, RECON_REMOTE_ON_KEY, true);
 
-        out(s, "Listening on %d. A connection is asked for the key before\n"
-               "it can run anything.\n\n", port);
-        out(s, "  The key crosses the network in the clear. There is no TLS\n"
-               "  yet, so this is for a network you trust.\n");
+        out(s, "Listening on %d. The connection is encrypted, and is\n"
+               "asked for the key before it can run anything.\n\n", port);
+
+        char print[RECON_TLS_FINGERPRINT_MAX];
+        if (recon_tls_fingerprint(print, sizeof(print))) {
+            out(s, "  This machine's fingerprint:\n\n    %s\n\n", print);
+            out(s, "  Check it the first time you connect from somewhere.\n"
+                   "  Nothing vouches for this machine but this number.\n");
+        }
         return;
     }
 

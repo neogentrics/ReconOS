@@ -284,10 +284,20 @@ opens TCP 7420, and every connection is asked for that key before it can run
 anything. The firewall rule has to be on as well — turning remote access on is
 not enough, and the refusal says which rule to turn on.
 
-**The key crosses the network in the clear.** There is no encryption yet. On a
-network you trust that is a reasonable trade; across anything else, use SSH.
+**The connection is encrypted.** ReconOS makes itself a certificate the first
+time the port opens, and the key is offered over that rather than in front of
+it.
 
-`remote` on its own says which way in is open.
+Nothing vouches for that certificate — there is no authority to ask, and a
+machine that owns itself has none to ask. What stands in for one is the
+**fingerprint**: `remote` prints it, and so does Control Panel → Network. Check
+it matches what your client shows the first time you connect from somewhere,
+and the client should refuse from then on if it ever changes. That check is
+the whole protection, and it only works if somebody does it once.
+
+This is how SSH does it, for the same reason.
+
+`remote` on its own says which way in is open, and what the fingerprint is.
 
 ## When something goes wrong
 

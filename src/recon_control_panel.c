@@ -33,6 +33,7 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
+#include "recon_tls.h"
 #include "recon_ui.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
@@ -3766,6 +3767,30 @@ static void draw_net_status(struct control_panel *cp, struct recon_panel *p,
     if (recon_net_probe_count() > 0) {
         recon_draw_text(p, cp->font, x, y + ascent, w, "Testing...",
             COLOR_DIM);
+        y += line + 2;
+    }
+
+    /*
+     * The fingerprint of this machine's own certificate, when there is one.
+     *
+     * Here rather than only in the terminal because this is the page somebody
+     * looks at when they are about to let a machine in, and the number is the
+     * only thing standing between "encrypted to somebody" and "encrypted to
+     * this machine". It is not shown when remote access has never been turned
+     * on, because there is no certificate until then and inventing a row that
+     * says "none" would be answering a question nobody asked.
+     */
+    char print[RECON_TLS_FINGERPRINT_MAX];
+    if (recon_tls_fingerprint(print, sizeof(print))) {
+        y += line / 2;
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "This machine's fingerprint, for remote access:", COLOR_TEXT);
+        y += line + 2;
+        recon_draw_text(p, cp->font, x, y + ascent, w, print, COLOR_DIM);
+        y += line + 2;
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Check it the first time you connect from somewhere else. "
+            "Nothing else vouches for this machine.", COLOR_DIM);
         y += line + 2;
     }
 

@@ -31,6 +31,24 @@ Included directly in the repository under `third_party/`.
 
 Linked at build time, not distributed with ReconOS.
 
+### mbedTLS
+
+- **License:** Apache-2.0
+- **Source:** https://github.com/Mbed-TLS/mbedtls
+- **Used for:** the encryption on the network control port -- the TLS protocol
+  itself, certificate parsing and writing, and the primitives underneath.
+  ReconOS keeps it behind `src/recon_tls.c`; nothing else in the tree includes
+  an mbedtls header.
+
+  This is the second place the line above applies. TLS is a wire format that
+  other people's clients have to understand, so it is parsing, not policy.
+  The policy -- no certificate authority, an identity the machine asserts for
+  itself, a fingerprint a person checks once -- is in `include/recon_tls.h`
+  and is ReconOS's.
+
+  Version 2.28, the long-term-support branch. 3.x moved several of the calls
+  used here.
+
 ### wlroots
 
 - **License:** MIT

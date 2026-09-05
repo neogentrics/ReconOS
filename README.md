@@ -589,11 +589,21 @@ rebuilt rather than only reported. A failure does not stop the start: a
 machine that refuses to boot because one icon folder is unreadable is worse
 than one that says so and carries on.
 
-**Remote access, two ways, and they are not equivalent.** SSH can forward the
-control socket, which is encrypted and needs nothing from ReconOS. Or TCP
-7420 with a key, off by default, which says plainly that the key crosses the
-network in the clear because there is no TLS yet. Only the key's hash is kept,
-stretched with PBKDF2; the key is shown once when it is made.
+**Remote access, two ways.** SSH can forward the control socket, which needs
+nothing from ReconOS at all. Or TCP 7420, off by default and gated by the
+firewall, which speaks TLS with a certificate the machine makes for itself and
+asks for a key over it. Only the key's hash is kept, stretched with PBKDF2;
+the key is shown once when it is made.
+
+There is no certificate authority, and no pretence of one. A machine that owns
+itself has no upstream to ask for an identity, so it asserts its own and the
+fingerprint is shown wherever remote access is turned on — the client pins it
+on first connect, the way SSH does. A chain would answer "did somebody vouch
+for this name", and nobody has vouched for this machine. Pinning answers "is
+this the same machine as last time", which is the question being asked.
+
+Outgoing connections are still in the clear, and `https://` still does not
+work. That half is a separate gap and is still listed as one.
 
 **A file dialog** shared by the applications that need one. It is drawn inside
 the window that asked for it, so it cannot be dragged away from its own

@@ -31,10 +31,16 @@
  * question than deciding what this machine may reach, and it should not be
  * answered by accident while building the outgoing half.
  *
- * There is also no TLS. A stream carries what it is given; nothing here
- * encrypts anything, and https:// does not work. That is a gap and is written
- * down as one -- see docs/ROADMAP.md -- rather than being papered over with a
- * plaintext connection to a port that expects otherwise.
+ * There is also no TLS *here*. Streams opened by this file carry what they
+ * are given: nothing on this side encrypts anything, and https:// does not
+ * work.
+ *
+ * Worth being exact about, because the incoming half is no longer like this.
+ * The control port in recon_control.h speaks TLS as of v0.3.0, which makes it
+ * easy to read "ReconOS has TLS" and assume it applies in both directions. It
+ * does not. Outgoing is still a gap and is still written down as one, rather
+ * than being papered over with a plaintext connection to a port that expects
+ * otherwise.
  */
 
 #ifndef RECON_NET_H

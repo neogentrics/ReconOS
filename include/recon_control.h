@@ -29,11 +29,14 @@
  * because the SSH route needs an account on the host underneath -- which a
  * machine ReconOS owns will not have.
  *
- * It is honest about what it is: **the key crosses the network in the clear.**
- * There is no TLS yet. On a trusted network that is a reasonable trade; across
- * anything else it is not, and the forwarded socket above is the answer. The
- * `remote` command says so every time it is turned on, and the help says so
- * where somebody reading about it will see it.
+ * **It is encrypted.** The connection speaks TLS, with a certificate this
+ * machine makes for itself the first time the port opens; see recon_tls.h for
+ * why there is no certificate authority and what is being trusted instead.
+ * The key is offered over that, not in front of it.
+ *
+ * What protects the connection is the fingerprint, and it only protects
+ * anything if somebody looks at it once. `remote` prints it, and so does the
+ * Control Panel, for that reason and no other.
  *
  * --- The firewall decides ---
  *
