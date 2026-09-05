@@ -18,6 +18,7 @@
 #include <recon/kernel/arch.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/sched.h>
 
 /* --- The generic interrupt controller ------------------------------------
  *
@@ -123,8 +124,22 @@ void aarch64_irq(void)
 		return;
 
 	if (id == TIMER_IRQ) {
+		bool preempt;
+
 		time_tick();
 		arm_timer();
+		preempt = sched_tick();
+
+		/* End-of-interrupt before the switch, never after: a switch does
+		 * not return here, it returns on another thread's stack, so the
+		 * acknowledgement would never happen and the controller would
+		 * send nothing further. The machine would freeze on the first
+		 * preemption with every part of it looking correct. */
+		mmio_w32(GICC_BASE, GICC_EOIR, iar);
+
+		if (preempt)
+			sched_switch();
+		return;
 	}
 
 	mmio_w32(GICC_BASE, GICC_EOIR, iar);
