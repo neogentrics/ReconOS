@@ -67,10 +67,32 @@ The plan and its eighteen checkpoints (0 to 17) are in [KERNEL.md](KERNEL.md). F
 stages: the kernel exists (done), the kernel owns the machine, the kernel owns
 the disk, it runs on real iron.
 
-**Where it is now — version 0.0.4.** It boots on x86_64 and aarch64, under
-legacy BIOS, under UEFI, and via device tree; reports which firmware is
-underneath it; reads what the processor can do; and manages physical memory. It
-runs nothing of the desktop's yet and will not until checkpoint 10.
+**Where it is now — version 0.0.11, checkpoint 10 of 17 done.** It boots on
+x86_64 and aarch64, under legacy BIOS, under UEFI, via device tree, and through
+its own UEFI bootloader. It knows which firmware is underneath it, what the
+processor can do, and where memory is; it manages physical pages and virtual
+ones through its own translation tables; it has a heap, a fault reporter, a
+clock, threads and preemption, and it uses every core on aarch64.
+
+And since checkpoint 10 it has a *boundary*. Programs run at a lower privilege
+level -- EL0 and ring 3 -- and come back through a system call or not at all.
+The kernel itself has moved to the top of the address space, which hands the
+entire lower half to whatever is running. A program that reaches where it should
+not is ended, and the machine is not.
+
+The system call table is a pointer on the process rather than a global, because
+what a call number *means* is a property of the program making it. Nothing needs
+that yet. It is the one thing the kernel owes the compatibility layers, and it
+is cheaper to have the shape right before there is anything to run than to
+retrofit it afterwards.
+
+Eleven boot paths are run on every change and their self-test counts read rather
+than their absence of a crash: `scripts/verify-kernel.sh`. At checkpoint 10 that
+is 110 self-tests with no failures.
+
+It runs nothing of the desktop's yet. The next four checkpoints are storage: a
+block device, partition tables, a filesystem of its own, and enough of other
+people's filesystems to install beside them.
 
 **What "finished" means for this phase:** a machine with nothing on it, or with
 Windows or Linux or macOS already on it, boots from ReconOS media, is told where
