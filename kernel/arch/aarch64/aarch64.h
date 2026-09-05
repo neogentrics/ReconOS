@@ -31,6 +31,15 @@ extern u64 reconboot_handoff;
 
 /* In time.c: the interrupt path, and what the console reports about the clock. */
 void aarch64_irq(void);
+
+/* The per-processor halves of the interrupt controller and the timer. Called by
+ * the boot processor on itself and by each secondary on itself. */
+void aarch64_gic_cpu_init(void);
+void aarch64_timer_cpu_init(void);
+
+/* This processor's own MPIDR-derived number, as opposed to the constant zero
+ * arch_cpu_id() returned before there were other processors. */
+unsigned arch_cpu_id_real(void);
 void aarch64_time_print_source(void);
 
 /* Reads the memory and the command line out of a flattened device tree.

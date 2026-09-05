@@ -4,6 +4,8 @@
 
 #include "aarch64.h"
 
+#include <recon/kernel/smp.h>
+
 /* Set by boot.S from x0. The device tree is the only description of this
  * machine that exists before any driver runs. */
 u64 arch_dtb_pointer;
@@ -80,4 +82,46 @@ void arch_halt(void)
 void arch_wait_for_interrupt(void)
 {
 	__asm__ volatile("wfi");
+}
+
+/* --- Processors and interrupts -------------------------------------------- */
+
+unsigned arch_cpu_id(void)
+{
+	unsigned id = arch_cpu_id_real();
+
+	/* Clamped rather than trusted. A machine whose processors are numbered
+	 * beyond what this kernel can hold would otherwise index past the
+	 * per-processor array -- and the failure would be a corrupted neighbour
+	 * rather than an error. smp_init() reports the ones it dropped. */
+	return (id < MAX_CPUS) ? id : 0;
+}
+
+u64 arch_irq_save(void)
+{
+	u64 flags;
+
+	/* DAIF holds the four exception masks. Saving all of them and putting
+	 * them back is what makes nesting safe. */
+	__asm__ volatile("mrs %0, daif; msr daifset, #2" : "=r"(flags) : : "memory");
+	return flags;
+}
+
+void arch_irq_restore(u64 flags)
+{
+	__asm__ volatile("msr daif, %0" : : "r"(flags) : "memory");
+}
+
+bool arch_irqs_enabled(void)
+{
+	u64 flags;
+
+	__asm__ volatile("mrs %0, daif" : "=r"(flags));
+	/* Bit 7 is the IRQ mask, and it is a *mask*: set means disabled. */
+	return (flags & (1ULL << 7)) == 0;
+}
+
+void arch_cpu_relax(void)
+{
+	__asm__ volatile("yield");
 }

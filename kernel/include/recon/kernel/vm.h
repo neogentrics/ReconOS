@@ -69,6 +69,11 @@ paddr_t virt_to_phys(const void *virt);
  * them. Needs the physical allocator, so it runs after pmm_init(). */
 void vm_init(void);
 
+/* Turns *this* processor's MMU on, using the tables vm_init() built. Called by
+ * the boot processor from vm_init(), and by every secondary on itself: the
+ * tables are shared, the registers pointing at them are not. */
+void vm_activate_this_cpu(void);
+
 /* Maps `size` bytes. Both addresses must be page-aligned and size a multiple of
  * a page. Uses the largest page the alignment and length allow, which is what
  * makes the direct map cost tens of entries rather than hundreds of thousands.

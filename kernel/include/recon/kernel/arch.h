@@ -68,6 +68,27 @@ u64 arch_monotonic_ns(void);
  * one. */
 u64 arch_wall_ns(void);
 
+/* --- Processors and interrupts --------------------------------------------
+ *
+ * Added for locking, which needs three things no portable code can express:
+ * which processor is asking, whether interrupts are on, and how to wait
+ * politely. */
+
+/* This processor's number. Zero on a machine with one, and zero until the
+ * others are woken. */
+unsigned arch_cpu_id(void);
+
+/* Masks interrupts and returns how they were, for arch_irq_restore(). Saving
+ * and restoring rather than disabling and enabling, because a lock taken inside
+ * another lock must not re-enable interrupts the outer one masked. */
+u64  arch_irq_save(void);
+void arch_irq_restore(u64 flags);
+bool arch_irqs_enabled(void);
+
+/* A hint that this is a spin loop: `pause` on x86_64, `yield` on aarch64.
+ * Without it a spinning processor draws as much power as a working one. */
+void arch_cpu_relax(void);
+
 /* --- Control ----------------------------------------------------------- */
 
 /* Stop this CPU forever, with interrupts masked. Used by panic(). */

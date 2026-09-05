@@ -11,7 +11,9 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
+#include <recon/kernel/smp.h>
 #include <recon/kernel/heap.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/trap.h>
 #include <recon/kernel/vm.h>
@@ -62,6 +64,11 @@ void kmain(void)
 	time_init();
 	time_print_summary();
 
+	/* After the timer, because a processor with no tick cannot be preempted
+	 * and the test for that has to have a clock to wait on. */
+	smp_init();
+	smp_print_summary();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -79,6 +86,10 @@ void kmain(void)
 		time_self_test() ? "pass" : "FAIL");
 	kprintf("  threads            : %s\n",
 		sched_self_test() ? "pass" : "FAIL");
+	kprintf("  locking            : %s\n",
+		lock_self_test() ? "pass" : "FAIL");
+	kprintf("  processors         : %s\n",
+		smp_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 
