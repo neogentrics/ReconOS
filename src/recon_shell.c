@@ -998,6 +998,25 @@ static void tip_track(struct recon_shell *shell, double lx, double ly) {
     }
 }
 
+/*
+ * Ask again without the pointer having moved. BG-089.
+ *
+ * tip_under is careful to answer front to back, so a tip never comes from a
+ * window behind another one -- but it was only ever asked when the pointer
+ * moved, and the pointer is not the only thing that moves. Open a window under
+ * a stationary cursor and the tip belonging to the window now *behind* it
+ * carried on showing, drawn over the top of the one in front.
+ *
+ * Which is how it was found: a screenshot of the Programs page had the Control
+ * Panel's "What is installed" sitting across the middle of it.
+ */
+static void tip_recheck(struct recon_shell *shell) {
+    if (shell == NULL || shell->tip == NULL) {
+        return;
+    }
+    tip_track(shell, shell->tip_x, shell->tip_y);
+}
+
 /* --- Asking the user something --- */
 
 /* The narrowest a dialog gets. It widens for its buttons; see below. */
@@ -1771,6 +1790,9 @@ static void raise_app_order(struct recon_shell *shell, int index) {
         shell->app_order[i] = shell->app_order[i - 1];
     }
     shell->app_order[0] = index;
+
+    /* What is under the pointer just changed without the pointer moving. */
+    tip_recheck(shell);
 }
 
 /*
@@ -3662,6 +3684,10 @@ void recon_shell_forget_window(struct recon_shell *shell,
 
     layout(shell);
     draw_taskbar(shell);
+
+    /* A window closing uncovers whatever was behind it, which may be under the
+     * pointer and may have a tip of its own. */
+    tip_recheck(shell);
 }
 
 static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
@@ -3687,6 +3713,9 @@ static int adopt_window(struct recon_shell *shell, struct recon_appwin *win) {
      * it was not there when the last resize went round. */
     recon_appwin_screen_changed(win, shell->screen_width, shell->screen_height,
         TASKBAR_HEIGHT);
+
+    /* And it may have appeared under the pointer. */
+    tip_recheck(shell);
     return index;
 }
 

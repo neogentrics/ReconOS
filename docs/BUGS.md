@@ -76,6 +76,29 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-089 — A tooltip kept showing over the window that opened on top of it
+
+[#256](https://github.com/neogentrics/ReconOS/issues/256)
+
+- **Found in** v0.3.0. **Found by** looking at a screenshot taken to prove
+  something else: the Programs page had the Control Panel's "What is
+  installed" lying across the middle of it.
+- **Was** `tip_under` asks every window front to back and stops at the first
+  one the point is inside, so a tip cannot come from a window behind another
+  one. That part was right and had already been fixed once.
+
+  What was wrong is that it was only ever *asked* when the pointer moved. The
+  pointer is not the only thing that moves. Open a window under a stationary
+  cursor and the tip belonging to the window now behind it carried on showing,
+  drawn on top of the window in front of it — and stayed until somebody moved
+  the mouse.
+
+  **A correct answer, cached against the wrong event.** The tip depends on two
+  things, where the pointer is and what is under it, and only one of them was
+  treated as able to change.
+- **Fixed in** v0.3.0. The same question is asked again, with the pointer where
+  it already is, whenever a window is opened, raised or closed.
+
 ### BG-088 — Installing an older applet deleted the newer one that refused it
 
 [#255](https://github.com/neogentrics/ReconOS/issues/255)
