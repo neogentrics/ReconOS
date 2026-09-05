@@ -101,6 +101,7 @@ add_executable(ReconOS
     src/recon_mp4.c
     src/recon_movie.c
     src/recon_ocr.c
+    src/recon_ocr_match.c
     src/recon_video.c
     src/recon_player.c
     src/recon_html.c
@@ -300,6 +301,23 @@ add_executable(recon_ocr_tests
 
 target_include_directories(recon_ocr_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# The matching half needs a typeface, so it needs the vendored rasteriser --
+# the first test target in the tree to reach into third_party. It still needs no
+# display: recon_ocr_match.c deliberately does not include recon_ui.h, whose
+# only implementation drags in wlroots.
+add_executable(recon_ocr_match_tests
+    tests/test_ocr_match.c
+    src/recon_ocr_match.c
+    # The marks being named come from the stages that need no font.
+    src/recon_ocr.c)
+
+target_include_directories(recon_ocr_match_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+# stb_truetype calls floor, ceil, sqrt, pow, fmod, cos and fabs.
+target_link_libraries(recon_ocr_match_tests PRIVATE m)
 
 # Colour conversion and scaling have a known right answer, so they are checked
 # against it rather than against another implementation. The decoder is verified

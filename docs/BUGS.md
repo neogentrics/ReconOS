@@ -76,6 +76,67 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-102 — A clock test that fails for two hours out of every twelve
+
+- **Found in** v0.3.1, at ten o'clock at night, by running the suite for an
+  unrelated reason.
+- **Was** the twelve-hour clock must never show a zero hour, and the check was
+  `strstr(twelve, "0:") == NULL`. That substring also occurs in `"10:"`.
+
+  So the test failed at ten in the morning and ten at night, and passed at the
+  other twenty hours of the day. It had been in the tree since the clock was
+  written and had never once been run inside either of those hours.
+
+- **Fixed by** asking about the field instead of about a substring. The hour is
+  the start of the string, so a zero hour is a leading `'0'`.
+- **Why it matters more than a one-character fix** nothing about this test was
+  meant to depend on the time. It became time-dependent by looking for a digit
+  and a colon rather than for the thing it meant, and a suite that is green
+  twenty hours a day is worse than one that is red: it teaches everybody that a
+  red run is a fluke.
+
+  **A test that reads a formatted string with `strstr` is testing the
+  formatting, not the value.** The general form is worth carrying, because it is
+  the same shape as BG-100 one layer up: both checks were written against an
+  example of the output instead of against the property.
+
+### BG-101 — The engine named an 'l' as an 'I', which is the one thing it must
+not do
+
+- **Found in** v0.3.1, before the matcher shipped, by reading a real screenshot
+  rather than the sample the test draws for itself.
+- **Was** the whole point of the design is that a wrong answer is worse than no
+  answer. It read `"the lazy dog"` as `"the Iazy dog"`.
+
+  There is a rule for exactly this. Two candidates that score 985 or more
+  against each other are recorded as twins -- the same shape in this face at
+  this size -- and a mark matching one is refused. Measured rather than
+  assumed: in DejaVu Sans `l` and `I` score **exactly 1000** at 10, 12, 14, 16
+  and 20 pixels. They are not similar. They are the same shape.
+
+  The rule did not fire because it only ever compared the winner against the
+  *runner-up*. `I` won, something else placed second, and nothing looked at `l`
+  at all.
+
+- **Fixed by** refusing any candidate that has a twin, rather than one whose
+  runner-up happens to be its twin.
+- **Why it survived** `include/recon_ocr_match.h` already stated the stronger
+  rule -- *"at or above RECON_OCR_TWINS they are one shape here, and no mark
+  will be named either of them"*. The header was right and the code was weaker
+  than its own documentation.
+
+  **That is the worst direction for those two to disagree in.** A comment that
+  overstates what the code does is not a stale comment, it is a promise the
+  reader checks against and stops verifying. BG-087 and BG-094 are the same
+  hazard with the error in the other direction; this one is more dangerous,
+  because a weaker implementation behind a stronger promise fails only on the
+  inputs nobody wrote the test for.
+
+  And the test could not have caught it: the sample string was chosen with no
+  `l`, no `I` and no `1` in it, deliberately, so that a first test would not
+  depend on a face-specific difference. That reasoning was sound and it also
+  removed the only characters that could have exposed this.
+
 ### BG-100 — One pixel of ascender decided whether a line kept its words
 
 - **Found in** v0.3.1, within an hour of the code being committed, by running

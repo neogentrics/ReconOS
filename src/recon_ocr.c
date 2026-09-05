@@ -93,6 +93,11 @@ static int otsu(const int *histogram, long total) {
 
 bool recon_ocr_ink(const unsigned char *rgba, int width, int height,
         unsigned char *ink) {
+    return recon_ocr_ink_detail(rgba, width, height, ink, NULL);
+}
+
+bool recon_ocr_ink_detail(const unsigned char *rgba, int width, int height,
+        unsigned char *ink, struct recon_ocr_polarity *out) {
     if (rgba == NULL || ink == NULL || width <= 0 || height <= 0) {
         fail("There is no picture to read.");
         return false;
@@ -140,6 +145,11 @@ bool recon_ocr_ink(const unsigned char *rgba, int width, int height,
             is_ink = false;
         }
         ink[i] = is_ink ? 1 : 0;
+    }
+
+    if (out != NULL) {
+        out->threshold = threshold;
+        out->ink_is_dark = ink_is_dark;
     }
     return true;
 }
@@ -198,6 +208,56 @@ int recon_ocr_lines(const unsigned char *ink, int width, int height,
         }
     }
     return found;
+}
+
+/* --- Comparing two shapes --- */
+
+int recon_ocr_mask_overlap(const unsigned char *a, int a_width, int a_height,
+        const unsigned char *b, int b_width, int b_height, int dx, int dy) {
+    if (a == NULL || b == NULL || a_width <= 0 || a_height <= 0 ||
+            b_width <= 0 || b_height <= 0) {
+        return 0;
+    }
+
+    long area_a = 0, area_b = 0, shared = 0;
+    for (long i = 0; i < (long)a_width * a_height; i++) {
+        area_a += a[i] != 0;
+    }
+    for (long i = 0; i < (long)b_width * b_height; i++) {
+        area_b += b[i] != 0;
+    }
+    if (area_a == 0 || area_b == 0) {
+        return 0;
+    }
+
+    /*
+     * Where the two rectangles actually meet, in b's coordinates. When they do
+     * not meet at all these bounds cross and the loop runs zero times, which
+     * is the right answer arrived at without a special case.
+     */
+    int x0 = (-dx > 0) ? -dx : 0;
+    int x1 = (b_width < a_width - dx) ? b_width : a_width - dx;
+    int y0 = (-dy > 0) ? -dy : 0;
+    int y1 = (b_height < a_height - dy) ? b_height : a_height - dy;
+
+    for (int by = y0; by < y1; by++) {
+        const unsigned char *brow = b + (long)by * b_width;
+        const unsigned char *arow = a + (long)(by + dy) * a_width + dx;
+        for (int bx = x0; bx < x1; bx++) {
+            shared += (brow[bx] != 0) && (arow[bx] != 0);
+        }
+    }
+
+    /*
+     * Union by inclusion and exclusion rather than by walking a bounding box
+     * around both. It is exact, it is two counts already taken, and it does
+     * not need the two masks to be in a common frame.
+     */
+    long covered = area_a + area_b - shared;
+    if (covered <= 0) {
+        return 0;
+    }
+    return (int)((1000 * shared + covered / 2) / covered);
 }
 
 /* --- Marks --- */

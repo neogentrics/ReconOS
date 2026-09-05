@@ -188,7 +188,18 @@ static void test_the_short_form(void) {
 
     check(strstr(twelve, "am") != NULL || strstr(twelve, "pm") != NULL,
         "12-hour says which half of the day it is");
-    check(strstr(twelve, "0:") == NULL,
+    /*
+     * The first character, not a substring.
+     *
+     * This was strstr(twelve, "0:"), which means "the hour is never zero" and
+     * also matches the '0' in "10:" -- so it failed at ten in the morning and
+     * ten at night, and passed at the other twenty hours of the day. It went
+     * years without being run in either of them.
+     *
+     * The hour is the start of the string, so this asks the question directly:
+     * a twelve-hour clock reads 12, never 0.
+     */
+    check(twelve[0] != '0',
         "and never shows a zero hour, because no clock face has one");
 
     recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_24H_KEY, true);

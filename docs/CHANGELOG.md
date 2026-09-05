@@ -185,6 +185,45 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**Reading text out of a picture, finished.** On a real screenshot of ReconOS's
+own text -- through the compositor and a PNG encoder, not a buffer the test drew
+for itself -- it reads **52 characters of 52, refuses nothing, and reports a
+confidence of 100.** The premise held.
+
+The matching is baseline-anchored template comparison. Each line's size and
+baseline are fitted from all its marks at once, because no single mark contains
+either -- an 'o' does not know where the baseline is and a 'T' does not know the
+x-height. Then every candidate has exactly one place it could sit, so three
+comparisons on position and width discard about nine tenths of the alphabet
+before a pixel is looked at. **Those three comparisons are what separate o from
+O from 0, and a comma from an apostrophe** -- and they are the payoff for
+refusing to normalise each mark into a common box, which is the standard move
+and which throws away exactly the height and width those pairs differ by.
+
+**The engine measures whether it can tell two letters apart, rather than
+assuming.** For every pair of candidates at a size it records whether they are
+the same shape, and refuses to name either when they are. In DejaVu Sans, `l`
+and `I` score exactly 1000 against each other at 10, 12, 14, 16 and 20 pixels.
+That is not a similar shape; it is the same shape, and picking one would be
+right about half the time and look identical to being right.
+
+Two faults found before shipping, both by looking rather than reasoning:
+
+The same letter came out **9x10 from the page and 7x9 from the rasteriser** --
+the mark systematically fatter, and every score sitting at 850 where it should
+have been a thousand. The two sides were cut at different thresholds: the page
+by Otsu, which on black-on-white lands near 200, and the candidate at a flat
+128. The mirrored cut is exact rather than tuned -- a page pixel is ink when its
+value is at or below the threshold, and coverage `c` is drawn as `255 - c`, so
+the candidate cut is `255 - threshold`.
+
+And it read `"the lazy dog"` as `"the Iazy dog"`, which is the one thing the
+design exists to prevent. The twins rule should have caught it and did not,
+because it compared the winner only against the runner-up. Fixed to refuse any
+candidate with a twin -- which is what `recon_ocr_match.h` already promised, and
+the header being stronger than the code is the worse direction for those two to
+disagree in.
+
 **Reading text out of a picture, begun.** ReconOS has no word processor and
 cannot yet run anybody else's, so a screenshot of a document is currently text
 that cannot be got at. That makes this worth more here than it would be

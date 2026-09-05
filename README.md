@@ -6,8 +6,8 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-13_suites-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-100-da3633?style=flat-square)](docs/BUGS.md)
+[![tests](https://img.shields.io/badge/tests-14_suites-238636?style=flat-square)](#tests)
+[![bugs](https://img.shields.io/badge/bugs_recorded-102-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -70,7 +70,7 @@ written down as it was hit rather than guessed at in advance.
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | eleven, including one see-through, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 13 suites, no display needed |
+| **Tests** | 14 suites, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
