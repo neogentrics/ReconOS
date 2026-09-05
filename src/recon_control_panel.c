@@ -2342,6 +2342,52 @@ static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
 
 /* --- Storage --- */
 
+/*
+ * A figure at the right-hand edge of a column.
+ *
+ * Sizes are read against each other -- is Icons bigger than Skins -- and that
+ * comparison is made on the digits, which only line up if the numbers end in
+ * the same place. Drawn from the left they do not: "0 bytes" and "262.3 KB"
+ * start together and end nowhere near each other.
+ */
+static void draw_figure(struct control_panel *cp, struct recon_panel *p,
+        int right, int baseline, const char *text, recon_color colour) {
+    int width = recon_text_width(cp->font, text);
+    recon_draw_text(p, cp->font, right - width, baseline, width + 2, text,
+        colour);
+}
+
+/*
+ * A share of the whole, as a bar.
+ *
+ * The track is the window's own background with a line round it, so it reads
+ * as a groove something sits in. Filled white, it read as an empty text field
+ * -- a place to type rather than a measurement of nothing.
+ *
+ * A category holding nothing draws no track at all. An empty groove is a
+ * measurement that came back zero, and a row already says "0 bytes" beside
+ * it; drawing the same fact twice, once as an outline, makes the page look
+ * like it is waiting for something.
+ */
+static void draw_share(struct recon_panel *p, int x, int y, int w, int h,
+        unsigned long long part, unsigned long long whole) {
+    if (part == 0 || whole == 0) {
+        return;
+    }
+
+    recon_fill_rect(p, x, y, w, h, COLOR_BG);
+    recon_stroke_rect(p, x, y, w, h, COLOR_SEPARATOR);
+
+    int filled = (int)((part * (unsigned long long)w) / whole);
+    if (filled > w) {
+        filled = w;      /* The bin, which is counted twice. */
+    }
+    if (filled < 2) {
+        filled = 2;      /* Present, however little. */
+    }
+    recon_fill_rect(p, x + 1, y + 1, filled - 1, h - 2, THEME(ACCENT));
+}
+
 /* A size a person can read, rather than a number of bytes. */
 static void storage_size(unsigned long long bytes, char *out, size_t size) {
     if (bytes >= 1024ULL * 1024ULL * 1024ULL) {
@@ -2492,35 +2538,27 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
      * Each button carries that space's size, so choosing between them does
      * not mean visiting all three to find out which one is the problem.
      */
-    int vx = x;
+    /*
+     * The same tab bar Appearance and Network use. These were buttons, which
+     * is not what they do: a button acts, and choosing which of three spaces
+     * you are looking at is choosing a view. Four pages now pick a section
+     * one way.
+     */
+    char labels[RECON_VOLUME_COUNT][64];
+    const char *names[RECON_VOLUME_COUNT];
     for (int i = 0; i < RECON_VOLUME_COUNT; i++) {
         unsigned long long used = 0;
         recon_volume_usage((enum recon_volume)i, &used, NULL);
 
         char size[32];
         storage_size(used, size, sizeof(size));
-
-        char label[64];
-        snprintf(label, sizeof(label), "%s  %s",
+        snprintf(labels[i], sizeof(labels[i]), "%s  %s",
             recon_volume_name((enum recon_volume)i), size);
-
-        int width = recon_text_width(cp->font, label) + 26;
-        bool on = cp->volume == (enum recon_volume)i;
-
-        recon_fill_rect(p, vx, y, width, BUTTON_HEIGHT,
-            on ? COLOR_SELECTED : COLOR_BUTTON);
-        recon_draw_button_edge(p, vx, y, width, BUTTON_HEIGHT, on,
-            COLOR_SEPARATOR);
-
-        int tw = recon_text_width(cp->font, label);
-        recon_draw_text(p, cp->font, vx + (width - tw) / 2,
-            y + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8, label,
-            on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
-
-        recon_hit_add(p, vx, y, width, BUTTON_HEIGHT, HIT_VOLUME_BASE + i);
-        vx += width + 6;
+        names[i] = labels[i];
     }
-    y += BUTTON_HEIGHT + 8;
+
+    y = draw_tabs(cp, p, x, y, w, names, RECON_VOLUME_COUNT, (int)cp->volume,
+        HIT_VOLUME_BASE);
 
     /*
      * The space's own total, not the sum of the rows.
@@ -2557,9 +2595,16 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
         y += line + 4;
     }
 
-    /* The rows. */
-    int bar_w = w / 4;
-    int size_w = 90;
+    /*
+     * The rows.
+     *
+     * The figures are drawn from their right-hand edge now, so the column
+     * they sit in only has to be as wide as the widest of them rather than as
+     * wide as the widest one plus wherever it started. What that gave back
+     * went to the descriptions, one of which was being cut off.
+     */
+    int bar_w = w / 5;
+    int size_w = 76;
     int row_h = line * 2 + 8;
 
     for (int i = 0; i < cp->storage_count; i++) {
@@ -2578,10 +2623,11 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
         snprintf(count, sizeof(count), "%d file%s", cp->storage[i].files,
             cp->storage[i].files == 1 ? "" : "s");
 
+        int label_w = w - bar_w - size_w - 32;
         recon_draw_text(p, cp->font, x + 8, y + 4 + ascent,
-            w - bar_w - size_w - 40, cp->storage[i].label, COLOR_TEXT);
+            label_w, cp->storage[i].label, COLOR_TEXT);
         recon_draw_text(p, cp->font, x + 8, y + 4 + line + ascent,
-            w - bar_w - size_w - 40, cp->storage[i].detail, COLOR_DIM);
+            label_w, cp->storage[i].detail, COLOR_DIM);
 
         /*
          * A share of the whole rather than of a disk. Without a volume layer
@@ -2590,23 +2636,12 @@ static void draw_storage(struct control_panel *cp, struct recon_panel *p,
          * have.
          */
         int bar_x = x + w - bar_w - size_w - 16;
-        recon_fill_rect(p, bar_x, y + 6, bar_w, line, COLOR_PANEL);
-        if (cp->storage_total > 0) {
-            int filled = (int)((cp->storage[i].bytes * (unsigned long long)bar_w)
-                / cp->storage_total);
-            if (filled > bar_w) {
-                filled = bar_w;    /* The bin, which is counted twice. */
-            }
-            if (filled < 1 && cp->storage[i].bytes > 0) {
-                filled = 1;        /* Present, however little. */
-            }
-            recon_fill_rect(p, bar_x, y + 6, filled, line, THEME(ACCENT));
-        }
+        draw_share(p, bar_x, y + 6, bar_w, line, cp->storage[i].bytes,
+            cp->storage_total);
 
-        recon_draw_text(p, cp->font, x + w - size_w - 8, y + 4 + ascent,
-            size_w, size, COLOR_TEXT);
-        recon_draw_text(p, cp->font, x + w - size_w - 8,
-            y + 4 + line + ascent, size_w, count, COLOR_DIM);
+        draw_figure(cp, p, x + w - 10, y + 4 + ascent, size, COLOR_TEXT);
+        draw_figure(cp, p, x + w - 10, y + 4 + line + ascent, count,
+            COLOR_DIM);
 
         y += row_h + 2;
     }
@@ -2752,27 +2787,15 @@ static void draw_cleanup(struct control_panel *cp, struct recon_panel *p,
         measure_cleanup(cp);
     }
 
-    /* The same three spaces as Storage, chosen the same way. */
-    int vx = x;
+    /* The same three spaces as Storage, chosen the same way -- and now
+     * drawn the same way too. */
+    const char *names[RECON_VOLUME_COUNT];
     for (int i = 0; i < RECON_VOLUME_COUNT; i++) {
-        const char *label = recon_volume_name((enum recon_volume)i);
-        int width = recon_text_width(cp->font, label) + 26;
-        bool on = cp->volume == (enum recon_volume)i;
-
-        recon_fill_rect(p, vx, y, width, BUTTON_HEIGHT,
-            on ? COLOR_SELECTED : COLOR_BUTTON);
-        recon_draw_button_edge(p, vx, y, width, BUTTON_HEIGHT, on,
-            COLOR_SEPARATOR);
-
-        int tw = recon_text_width(cp->font, label);
-        recon_draw_text(p, cp->font, vx + (width - tw) / 2,
-            y + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8, label,
-            on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
-
-        recon_hit_add(p, vx, y, width, BUTTON_HEIGHT, HIT_VOLUME_BASE + i);
-        vx += width + 6;
+        names[i] = recon_volume_name((enum recon_volume)i);
     }
-    y += BUTTON_HEIGHT + 8;
+
+    y = draw_tabs(cp, p, x, y, w, names, RECON_VOLUME_COUNT, (int)cp->volume,
+        HIT_VOLUME_BASE);
 
     int count = CLEAN[cp->volume].count;
     unsigned long long chosen_bytes = 0;
@@ -2833,14 +2856,15 @@ static void draw_cleanup(struct control_panel *cp, struct recon_panel *p,
 
         char size[32];
         storage_size(cp->clean[i].bytes, size, sizeof(size));
-        recon_draw_text(p, cp->font, x + w - 110, y + 5 + ascent, 100, size,
-            ink);
 
         char files[32];
         snprintf(files, sizeof(files), "%d file%s", cp->clean[i].files,
             cp->clean[i].files == 1 ? "" : "s");
-        recon_draw_text(p, cp->font, x + w - 110, y + 5 + ascent + line, 100,
-            files, faint);
+
+        /* Ended in the same place, so what one row costs can be compared
+         * against another by looking rather than by reading. */
+        draw_figure(cp, p, x + w - 10, y + 5 + ascent, size, ink);
+        draw_figure(cp, p, x + w - 10, y + 5 + ascent + line, files, faint);
 
         recon_hit_add(p, x, y, w, row_h, HIT_CLEAN_BASE + i);
         y += row_h + 2;
@@ -3213,9 +3237,6 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         rows = count;
     }
 
-    if (cp->selected < 0) {
-        cp->selected = 0;
-    }
     if (count > 0 && cp->selected >= count) {
         cp->selected = count - 1;
     }
@@ -3467,9 +3488,6 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
 
     clamp_scroll(&cp->programs_scroll, rows, count);
 
-    if (cp->selected < 0) {
-        cp->selected = 0;
-    }
     if (count > 0 && cp->selected >= count) {
         cp->selected = count - 1;
     }
@@ -4151,11 +4169,13 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
     cp->list_h = rows * ROW_HEIGHT;
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
+    /*
+     * Back inside a list that has shrunk. Not forced into existence, though:
+     * -1 means nobody has clicked yet, and a row lit before anybody pointed
+     * at it is the page answering a question it was not asked.
+     */
     if (cp->selected >= count) {
         cp->selected = count - 1;
-    }
-    if (cp->selected < 0) {
-        cp->selected = 0;
     }
 
     /* Follow the selection, so a key chosen and then scrolled past does not
@@ -4768,7 +4788,9 @@ static void answered(void *user, int choice) {
         if (!recon_modules_uninstall(name)) {
             set_status(cp, true, "%s", recon_modules_last_error());
         } else {
-            cp->selected = 0;
+            /* Nothing chosen: the row number would survive the removal
+             * and point at whichever program slid up into its place. */
+            cp->selected = -1;
             /* The Start menu listed it; it has to stop. */
             recon_shell_restyle(cp->server->shell);
             set_status(cp, false, "Removed '%s'.", name);
@@ -4783,7 +4805,7 @@ static void answered(void *user, int choice) {
     if (!recon_users_remove(name, delete_files)) {
         set_status(cp, true, "%s", recon_users_last_error());
     } else {
-        cp->selected = 0;
+        cp->selected = -1;
         set_status(cp, false, delete_files
             ? "Removed '%s' and its files."
             : "Removed '%s'. Its files are still there.", name);
@@ -5250,7 +5272,7 @@ static void do_action(struct control_panel *cp, enum action action) {
     case ACTION_REGISTRY_HIVE:
         cp->registry_hive = cp->registry_hive == 0 ? 1 : 0;
         cp->registry_scroll = 0;
-        cp->selected = 0;
+        cp->selected = -1;
         /* A field open on the other hive's key would save into this one. */
         cp->registry_editing = false;
         cp->registry_adding = false;
@@ -6148,12 +6170,10 @@ static void do_action(struct control_panel *cp, enum action action) {
             set_status(cp, true, "%s", recon_firewall_last_error());
             break;
         }
-        if (cp->selected >= recon_firewall_count()) {
-            cp->selected = recon_firewall_count() - 1;
-        }
-        if (cp->selected < 0) {
-            cp->selected = 0;
-        }
+        /* Nothing chosen: the row number would survive the removal and
+         * point at whichever rule slid up into its place, arming Remove
+         * against something nobody picked. */
+        cp->selected = -1;
         set_status(cp, false, "Removed '%s'.", going.name);
         break;
     }
@@ -6270,7 +6290,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             cp->programs = (enum programs_tab)tab;
             /* A different list: the selection and the scroll belong to the
              * one that was showing. */
-            cp->selected = 0;
+            cp->selected = -1;
             cp->programs_scroll = 0;
             cp->installing = false;
             clear_status(cp);
@@ -6314,7 +6334,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
                 cp->clean[i].ticked = false;
             }
 
-            cp->selected = 0;
+            cp->selected = -1;
             clear_status(cp);
         }
         return true;
