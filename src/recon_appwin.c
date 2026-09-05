@@ -275,6 +275,34 @@ static void draw_frame(struct recon_appwin *win) {
      * back. The contents are drawn below the title bar and inside the
      * border, so they never reach up here. */
     recon_round_top_corners(p, CORNER, COLOR_EDGE);
+
+    /*
+     * And the glass, if the skin asked for any.
+     *
+     * The chrome only -- the title bar and the four edges. Not the contents:
+     * a translucent title bar is a look, and translucent text in a document is
+     * somebody's work made harder to read for the sake of one.
+     *
+     * This runs after everything above it for the reason recon_panel_fade
+     * gives at length: by now the bar is one finished image, so its text, its
+     * icon, its buttons and its rounded corners all become see-through
+     * together and none of them had to know.
+     *
+     * The border strips are faded separately rather than as one rectangle over
+     * the whole window, because the middle of that rectangle is the contents.
+     */
+    int glass = recon_theme_metric(RECON_METRIC_CHROME_OPACITY);
+    if (glass < 255) {
+        uint8_t alpha = (uint8_t)glass;
+        int border = BORDER;
+        int below = win->height - TITLE_HEIGHT;
+
+        recon_panel_fade(p, 0, 0, win->width, TITLE_HEIGHT, alpha);
+        recon_panel_fade(p, 0, TITLE_HEIGHT, border, below, alpha);
+        recon_panel_fade(p, win->width - border, TITLE_HEIGHT, border, below,
+            alpha);
+        recon_panel_fade(p, 0, win->height - border, win->width, border, alpha);
+    }
 }
 
 void recon_appwin_refresh(struct recon_appwin *win) {

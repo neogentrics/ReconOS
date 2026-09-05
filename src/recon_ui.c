@@ -864,6 +864,23 @@ static bool clip_rect(const struct recon_panel *panel, int *x, int *y,
     return *w > 0 && *h > 0;
 }
 
+void recon_panel_fade(struct recon_panel *panel, int x, int y, int w, int h,
+        uint8_t alpha) {
+    if (alpha == 255) {
+        return;                        /* opaque: the ordinary case */
+    }
+    if (panel == NULL || !clip_rect(panel, &x, &y, &w, &h)) {
+        return;
+    }
+
+    for (int row = y; row < y + h; row++) {
+        uint32_t *p = panel->pixels + (size_t)row * panel->width + x;
+        for (int col = 0; col < w; col++) {
+            p[col] = recon_color_fade(p[col], alpha);
+        }
+    }
+}
+
 void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
         recon_color color) {
     if (panel == NULL || !clip_rect(panel, &x, &y, &w, &h)) {

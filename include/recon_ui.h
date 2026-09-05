@@ -31,6 +31,21 @@ struct wlr_scene_buffer;
  */
 typedef uint32_t recon_color;
 
+/*
+ * A colour scaled towards transparent, premultiplied.
+ *
+ * Wayland's ARGB8888 is premultiplied: the colour channels are already scaled
+ * by the alpha, so halving a pixel's opacity means halving its red, green and
+ * blue as well. A version that changed only the alpha byte would leave chrome
+ * that is both see-through and too bright, which reads as a deliberate glow
+ * rather than as a bug -- and would be found, if at all, by somebody
+ * wondering why the glass looks lit from inside.
+ *
+ * Alpha 255 returns the colour unchanged, so a caller may apply this without
+ * first asking whether there is anything to apply.
+ */
+recon_color recon_color_fade(recon_color color, uint8_t alpha);
+
 #define RECON_RGB(r, g, b)     ((recon_color)(0xFF000000u | ((r) << 16) | ((g) << 8) | (b)))
 #define RECON_RGBA(r, g, b, a) ((recon_color)(((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
 
@@ -220,6 +235,36 @@ void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
 /* A one-pixel outline just inside the given rectangle. */
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);
+
+/*
+ * Make a finished region see-through.
+ *
+ * --- Why this is a pass over the top rather than a colour ---
+ *
+ * The obvious way to build a translucent title bar is to give every fill an
+ * alpha and blend as you go. It is also the way that means touching every
+ * drawing primitive in the system, and getting one of them wrong produces a
+ * window with an opaque patch where a bevel is.
+ *
+ * So the title bar is drawn exactly as it always was -- opaque, by code that
+ * has not changed -- and then this runs once over the finished rectangle. Text,
+ * icons, bevels and rounded corners all become see-through together, because
+ * they are one image by the time this sees them, and nothing above had to learn
+ * a new rule.
+ *
+ * --- Premultiplied ---
+ *
+ * A panel's pixels reach the compositor as ARGB8888, which Wayland defines as
+ * *premultiplied*: the colour channels are already scaled by the alpha. So this
+ * scales them, and a version that only set the alpha byte would produce chrome
+ * that is both see-through and too bright -- which looks like a deliberate
+ * glow rather than like a bug, and is the reason this is spelled out here.
+ *
+ * `alpha` of 255 is a no-op and costs one comparison, so a caller does not have
+ * to ask whether the skin wanted glass before calling.
+ */
+void recon_panel_fade(struct recon_panel *panel, int x, int y, int w, int h,
+    uint8_t alpha);
 
 /*
  * A raised or sunken bevel, the Windows 95 look: light on the top and left,

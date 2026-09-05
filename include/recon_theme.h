@@ -169,6 +169,22 @@ enum recon_theme_metric {
      */
     RECON_METRIC_BUTTON_CORNER,
 
+    /*
+     * How solid the window chrome is, from 255 for opaque down to 140.
+     *
+     * The window's own buffer carries alpha and the compositor blends it, so
+     * this is a real see-through rather than a colour mixed with a guess at
+     * what is behind. Applied to the finished title bar and border rather than
+     * to each thing drawn into them, which is what keeps every other drawing
+     * primitive on the opaque path it has always taken.
+     *
+     * The floor is 140 and it is not shyness. Below about that the title text
+     * stops being reliably readable over a busy wallpaper, and a skin that can
+     * make a window unusable is a skin somebody installs once. Glass has to be
+     * something a person can still read a filename off.
+     */
+    RECON_METRIC_CHROME_OPACITY,
+
     RECON_METRIC_COUNT,
 };
 

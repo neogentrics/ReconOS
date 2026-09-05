@@ -97,6 +97,7 @@ add_executable(ReconOS
     src/recon_version.c
     src/recon_audio.c
     src/recon_codec.c
+    src/recon_color.c
     src/recon_mp4.c
     src/recon_movie.c
     src/recon_video.c
@@ -220,6 +221,7 @@ target_include_directories(recon_registry_tests PRIVATE
 add_executable(recon_theme_tests
     tests/test_theme.c
     src/recon_theme.c
+    src/recon_color.c
     src/recon_registry.c
     src/recon_fs.c
     # Installing a skin writes into /System, so recon_theme asks who is

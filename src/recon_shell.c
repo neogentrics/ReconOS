@@ -1951,6 +1951,34 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
     }
 }
 
+/*
+ * Fade a whole panel to the skin's chrome opacity, then publish it.
+ *
+ * A function rather than two lines because draw_taskbar has two exits and both
+ * need it -- and the one that would get missed is the early one, taken only
+ * when no windows are open, which is exactly the state a person sees first and
+ * a test sees least.
+ *
+ * `reads_as_a_list` halves the effect, and it is the difference between a
+ * taskbar and a menu. A taskbar is a strip with a few short labels on it and
+ * survives being see-through. A menu is a column of a dozen labels somebody is
+ * scanning, and at the same opacity the Apps menu put "Recon Core" on top of
+ * another window's "Line 1, Column 1" -- two things to read in one place, which
+ * is worse than either alone.
+ *
+ * Halved rather than given its own setting in the skin file. A skin says how
+ * much glass it wants once, and the rule that follows from it is statable in a
+ * sentence: chrome you read a list from gets half.
+ */
+static void finish_chrome(struct recon_panel *panel, bool reads_as_a_list) {
+    int chrome = recon_theme_metric(RECON_METRIC_CHROME_OPACITY);
+    int alpha = reads_as_a_list ? (chrome + 255) / 2 : chrome;
+
+    recon_panel_fade(panel, 0, 0, recon_panel_width(panel),
+        recon_panel_height(panel), (uint8_t)alpha);
+    recon_panel_commit(panel);
+}
+
 static void draw_taskbar(struct recon_shell *shell) {
     struct recon_panel *bar = shell->taskbar;
     if (bar == NULL) {
@@ -2040,7 +2068,7 @@ static void draw_taskbar(struct recon_shell *shell) {
     draw_pager(shell, bar, width - pager_w + TASKBAR_PADDING, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
-        recon_panel_commit(bar);
+        finish_chrome(bar, false);
         return;
     }
 
@@ -2118,7 +2146,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         x += button_width + TASKBAR_PADDING;
     }
 
-    recon_panel_commit(bar);
+    finish_chrome(bar, false);
 }
 
 /*
@@ -2591,7 +2619,7 @@ static void draw_menu(struct recon_shell *shell) {
         }
     }
 
-    recon_panel_commit(menu);
+    finish_chrome(menu, true);
 }
 
 /* --- All Programs --- */

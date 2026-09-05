@@ -19,6 +19,7 @@
 #include "recon_fs.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
+#include "recon_ui.h"
 
 static int g_failures;
 static int g_checks;
@@ -282,6 +283,72 @@ static void test_damaged_file(void) {
         "the unparseable colour was left at the default, not zeroed");
 }
 
+/* --- The see-through frame --- */
+
+static void fades_to(recon_color in, uint8_t alpha, recon_color want,
+        const char *what) {
+    recon_color got = recon_color_fade(in, alpha);
+    char label[160];
+    snprintf(label, sizeof(label), "%s: %08X at %u is %08X (got %08X)",
+        what, in, (unsigned)alpha, want, got);
+    check(got == want, label);
+}
+
+static void test_glass(void) {
+    printf("Glass\n");
+
+    /*
+     * Premultiplied, which is the whole of what this has to get right.
+     *
+     * Wayland's ARGB8888 has the colour channels already scaled by the alpha,
+     * so half-opacity white is half-grey, not white. A version that changed
+     * only the alpha byte would give chrome that is see-through *and* too
+     * bright -- which reads as a deliberate glow rather than as a fault, and
+     * is the reason this is pinned by a number rather than by looking at it.
+     */
+    fades_to(0xFFFFFFFFu, 128, 0x80808080u, "white at half");
+    fades_to(0xFF000000u, 128, 0x80000000u, "black at half stays black");
+    fades_to(0xFFFFFFFFu, 0, 0x00000000u, "nothing at zero");
+
+    /* Opaque is a no-op, so a caller may apply it without asking first. */
+    fades_to(0xFF3366CCu, 255, 0xFF3366CCu, "full opacity changes nothing");
+    fades_to(0x00000000u, 255, 0x00000000u, "already clear, and left alone");
+
+    /*
+     * Applied to what is there rather than replacing it, so nesting halves
+     * twice. A version that set the alpha instead would pass every check above
+     * and fail only where two translucent things overlap.
+     */
+    recon_color once = recon_color_fade(0xFFFFFFFFu, 128);
+    recon_color twice = recon_color_fade(once, 128);
+    check((twice >> 24) < (once >> 24), "fading twice is more transparent");
+
+    /*
+     * The colours never exceed the alpha. That is the invariant premultiplied
+     * really means, and a violation of it is what a compositor renders as a
+     * bright halo around otherwise correct chrome.
+     */
+    bool valid = true;
+    for (int a = 0; a <= 255; a += 5) {
+        recon_color got = recon_color_fade(0xFFFFFFFFu, (uint8_t)a);
+        uint32_t alpha = (got >> 24) & 0xFF;
+        for (int shift = 0; shift <= 16; shift += 8) {
+            if (((got >> shift) & 0xFF) > alpha) {
+                valid = false;
+            }
+        }
+    }
+    check(valid, "no channel ever exceeds the alpha, at any opacity");
+
+    /*
+     * And the metric, which is what a skin actually sets. The floor is 140
+     * rather than 0 because a skin that can make a title unreadable is a skin
+     * somebody installs once -- so a file asking for 40 gets 140, not 40.
+     */
+    check(recon_theme_metric(RECON_METRIC_CHROME_OPACITY) >= 140,
+        "chrome never fades past what can still be read");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-theme-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -306,6 +373,7 @@ int main(void) {
     test_remembered();
     test_files();
     test_metrics();
+    test_glass();
     test_damaged_file();
 
     recon_theme_finish();

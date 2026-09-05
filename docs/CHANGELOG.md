@@ -134,6 +134,43 @@ icon for every file says nothing, and saying what a thing is before its name is
 read is most of what an icon is for. The Type column and the desktop ask the
 same question the explorer does, so a file looks the same everywhere.
 
+**A window frame you can see through, and a skin built on it.** A skin can now
+say how solid the chrome is, and *Glass* says 210 of 255 -- see-through enough
+that the wallpaper moves under a title bar, solid enough that a filename stays
+readable over a photograph.
+
+The mechanism is one pass over a finished rectangle rather than an alpha on
+every fill. The title bar is drawn exactly as it always was, by code that has
+not changed, and then faded once at the end -- so its text, its icon, its
+buttons and its rounded corners all become see-through together and none of them
+had to learn a new rule. The alternative was touching every drawing primitive in
+the system, where getting one wrong leaves an opaque patch inside a translucent
+bar.
+
+**Premultiplied, which is the part that fails invisibly.** Wayland's ARGB8888
+has the colour channels already scaled by the alpha, so half-opacity white is
+half-grey. A version that set only the alpha byte would give chrome that is
+see-through *and* too bright -- which reads as a deliberate glow rather than as
+a fault, and would be found by somebody wondering why the glass looks lit from
+inside. It is pinned by a test rather than by looking at it, in a file that
+needs no compositor to run.
+
+**The taskbar and the Apps menu take it too, and the menu takes half.** At the
+same opacity as a window frame, the menu put "Recon Core" directly on top of
+another window's "Line 1, Column 1". That is not a tuning problem: a title bar
+carries one short label, and a menu is a column of a dozen somebody is scanning.
+Halved rather than given a second setting, so a skin still says how much glass
+it wants once and the rule that follows is a sentence -- chrome you read a list
+from gets half. The tooltip and the dim behind a dialog stay solid, for the same
+reason stated the other way round.
+
+**No backdrop blur, and that is the honest gap.** Real Aero blurred what was
+behind the glass, which is what let it be far more transparent than this is. A
+window's buffer cannot see what is under it, so blurring would mean either
+sampling only the wallpaper -- correct over the desktop and a lie over another
+window -- or reading back the composited scene every frame. Neither is worth
+doing badly, so the opacity is set where it is legible without it.
+
 **A web viewer.** Not a browser, and it is called a viewer everywhere: HTTP
 and HTTPS, HTML structure, links, back and forward — and no CSS, no
 JavaScript, no images, no forms. That boundary is stated rather than

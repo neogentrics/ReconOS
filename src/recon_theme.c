@@ -264,6 +264,52 @@ static const recon_color THEME_AQUA[] = {
     RGB(2A,6C,E0), RGB(FF,FF,FF), RGB(C0,3A,2A), RGB(2A,6C,E0),
 };
 
+/*
+ * Glass: the look the late 2000s spent on window chrome, and the one thing
+ * this system could not do until the frame learned to be see-through.
+ *
+ * The palette is cool and light because that is what glass is for -- a tinted
+ * pane picks up whatever is behind it, and a warm tint over a blue wallpaper
+ * reads as a dirty window rather than as a clear one. Everything in the chrome
+ * sits within a narrow range of blue-greys so that what shows through is the
+ * variation, not the paint.
+ *
+ * Two things are deliberately *not* subtle. The title text is nearly black,
+ * because it is about to be drawn on something see-through and the wallpaper
+ * behind it is not under anybody's control. And the active and inactive title
+ * bars are far enough apart to tell at a glance -- a translucent frame already
+ * gives up some of the contrast that says which window has the keyboard, and
+ * spending the rest of it on subtlety would leave nothing.
+ */
+static const recon_color THEME_GLASS[] = {
+    RGB(EE,F3,F8), RGB(9F,B6,C9), RGB(D6,E8,F7), RGB(E2,E9,EF),
+    RGB(14,20,2B), RGB(5E,6C,79), RGB(E6,EF,F7), RGB(24,34,42),
+
+    RGB(DE,E8,F1), RGB(14,20,2B), RGB(5A,68,74), RGB(E4,ED,F5),
+    RGB(C3,D8,EA),
+    RGB(14,20,2B),
+
+    RGB(F3,F8,FC), RGB(9F,B6,C9), RGB(14,20,2B), RGB(97,A5,B0),
+    RGB(2F,7F,D4), RGB(FF,FF,FF), RGB(CB,D8,E3),
+
+    RGB(F3,F8,FC), RGB(D6,E8,F7), RGB(14,20,2B), RGBA(00,00,00,55),
+
+    RGB(FF,FF,FF), RGB(F7,FA,FD), RGB(14,20,2B), RGB(66,73,7E),
+    RGB(E8,F0,F7), RGB(2F,7F,D4), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(8F,A9,BF), RGB(14,20,2B), RGB(C6,DE,F5),
+    RGB(14,20,2B),
+
+    RGB(17,22,2C), RGB(DC,E8,F2), RGB(46,C8,D2), RGB(FF,FF,FF),
+
+    /* Dark on light, with a white halo -- the reverse of what a dark skin
+     * wants. Glass ships with a pale wallpaper, and white text with a black
+     * shadow on a pale ground is not a label with a shadow, it is a smudge. */
+    RGB(14,20,2B), RGBA(FF,FF,FF,C8), RGBA(2F,7F,D4,90),
+
+    RGB(2F,7F,D4), RGB(FF,FF,FF), RGB(C0,39,2B), RGB(2F,7F,D4),
+};
+
 /* Dark and flat, the way a modern Linux desktop tends to look. */
 static const recon_color THEME_MIDNIGHT[] = {
     /* Active and inactive were three units apart -- a flat look taken far
@@ -579,6 +625,7 @@ static const struct {
     { "metric.corner",        0,  0,  16 },
     { "metric.button-size",  16, 10,  32 },
     { "metric.button-corner", 0,  0,   8 },
+    { "metric.chrome-opacity", 255, 140, 255 },
 };
 
 _Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
@@ -672,6 +719,22 @@ static const struct gradient_spec GRAD_AQUA[] = {
     { RECON_THEME_ROLE_COUNT, 0 },
 };
 
+/*
+ * A ramp down the title bar, light at the top.
+ *
+ * Steeper than any other skin's, and it has to be: a flat translucent bar
+ * looks like a fault in the compositor, because nothing in the real world is
+ * evenly lit and a pane of glass least of all. The ramp is what makes it read
+ * as a surface rather than as a hole.
+ */
+static const struct gradient_spec GRAD_GLASS[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(A4,C6,E4) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(C4,CE,D8) },
+    { RECON_THEME_BAR,            RGB(BE,CE,DE) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(A4,C6,E4) },
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
 /* --- Frame shapes --- */
 
 /*
@@ -700,6 +763,28 @@ static const struct metric_spec SHAPE_AQUA[] = {
     { RECON_METRIC_BORDER,        1 },
     { RECON_METRIC_CORNER,        9 },
     { RECON_METRIC_BUTTON_CORNER, 4 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Glass rounds furthest, sits on the thinnest border, and is the only shape
+ * that asks for a see-through frame.
+ *
+ * The three go together rather than being three choices. A thick border on a
+ * translucent window is a thick translucent stripe, which reads as a smear; a
+ * square corner on a pane of glass reads as a sheet of paper. The opacity is
+ * 210 of 255 -- enough that the wallpaper moves under the bar, and enough that
+ * a filename stays readable over a photograph. It was tried at 160 first, which
+ * looked better in a screenshot of an empty desktop and was worse at every
+ * other moment.
+ */
+static const struct metric_spec SHAPE_GLASS[] = {
+    { RECON_METRIC_TITLE_HEIGHT,  30 },
+    { RECON_METRIC_BORDER,         1 },
+    { RECON_METRIC_CORNER,        10 },
+    { RECON_METRIC_BUTTON_SIZE,   18 },
+    { RECON_METRIC_BUTTON_CORNER,  5 },
+    { RECON_METRIC_CHROME_OPACITY, 210 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -778,6 +863,8 @@ static const struct {
     { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL, NULL },
     { "Beacon", "Bright blue chrome and a green accent, early 2000s",
       THEME_BEACON, "Daybreak.png", GRAD_BEACON, SHAPE_BEACON },
+    { "Glass", "See-through chrome and rounded corners, the late 2000s",
+      THEME_GLASS, "Daybreak.png", GRAD_GLASS, SHAPE_GLASS },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
       THEME_DEUTERAN, "Night Sky.png", NULL, NULL },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",
