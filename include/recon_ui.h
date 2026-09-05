@@ -67,7 +67,20 @@ void recon_font_destroy(struct recon_font *font);
  */
 struct recon_font *recon_font_system(int pixel_height);
 
-/* At shutdown, once nothing is left that could still draw. */
+/*
+ * The shared fixed-width font at a given size, cached the same way.
+ *
+ * For anything that prints in columns, which here means the terminal: the
+ * interpreter already writes its tables with `%-20s`, and a proportional face
+ * throws that work away -- the columns wander by a character or two on every
+ * row, and a list of applications reads as a heap.
+ *
+ * Falls back to the system font, and logs, when the machine has no fixed-width
+ * face. Never NULL when recon_font_system is not NULL.
+ */
+struct recon_font *recon_font_monospace(int pixel_height);
+
+/* At shutdown, once nothing is left that could still draw. Frees both. */
 void recon_font_system_finish(void);
 
 /* --- Reading --- */

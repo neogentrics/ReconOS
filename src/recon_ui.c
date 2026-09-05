@@ -381,7 +381,108 @@ struct recon_font *recon_font_system(int pixel_height) {
     return nearest;
 }
 
+/*
+ * --- The fixed-width font ---
+ *
+ * Separate from the system font, and separate on purpose.
+ *
+ * A terminal in a proportional face cannot line anything up, and half of what
+ * this system prints is a table: `apps` puts a name, a version, a state and an
+ * origin in four columns, and in DejaVu Sans those columns wander by a
+ * character or two on every row. The interpreter is already writing columns
+ * with `%-20s`; the font was throwing that work away.
+ *
+ * Kept in its own small cache rather than sharing the system one, because they
+ * are wanted at different sizes for different reasons and six slots between
+ * them would have the terminal evicting the taskbar's font.
+ */
+static const char *const MONO_SEARCH_PATHS[] = {
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf",
+    "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+    NULL,
+};
+
+#define MONO_FONTS_MAX 4
+
+static struct {
+    int pixel_height;
+    struct recon_font *font;
+} g_mono_fonts[MONO_FONTS_MAX];
+
+struct recon_font *recon_font_monospace(int pixel_height) {
+    for (int i = 0; i < MONO_FONTS_MAX; i++) {
+        if (g_mono_fonts[i].font != NULL &&
+                g_mono_fonts[i].pixel_height == pixel_height) {
+            return g_mono_fonts[i].font;
+        }
+    }
+
+    for (int i = 0; i < MONO_FONTS_MAX; i++) {
+        if (g_mono_fonts[i].font != NULL) {
+            continue;
+        }
+
+        struct recon_font *font = NULL;
+        const char *chosen = getenv("RECONOS_MONO_FONT");
+        if (chosen != NULL && *chosen != '\0') {
+            font = recon_font_load(chosen, pixel_height);
+        }
+        for (int p = 0; font == NULL && MONO_SEARCH_PATHS[p] != NULL; p++) {
+            font = recon_font_load(MONO_SEARCH_PATHS[p], pixel_height);
+        }
+
+        /*
+         * No fixed-width face on this machine. The system font rather than
+         * nothing -- a terminal with wandering columns is worse than one with
+         * straight ones and better than a blank rectangle -- and said out
+         * loud, because "why are my columns crooked" should have an answer
+         * somewhere other than in somebody's head.
+         */
+        if (font == NULL) {
+            wlr_log(WLR_INFO, "ReconOS: no fixed-width font found; the "
+                "terminal will use the system font and its columns will not "
+                "line up");
+            return recon_font_system(pixel_height);
+        }
+
+        g_mono_fonts[i].pixel_height = pixel_height;
+        g_mono_fonts[i].font = font;
+        return font;
+    }
+
+    /* Out of slots: the nearest size loaded, for the reason given above the
+     * system font's version of this. */
+    struct recon_font *nearest = NULL;
+    int best = 0;
+    for (int i = 0; i < MONO_FONTS_MAX; i++) {
+        if (g_mono_fonts[i].font == NULL) {
+            continue;
+        }
+        int apart = g_mono_fonts[i].pixel_height - pixel_height;
+        if (apart < 0) {
+            apart = -apart;
+        }
+        if (nearest == NULL || apart < best) {
+            nearest = g_mono_fonts[i].font;
+            best = apart;
+        }
+    }
+    return nearest;
+}
+
 void recon_font_system_finish(void) {
+    for (int i = 0; i < MONO_FONTS_MAX; i++) {
+        if (g_mono_fonts[i].font != NULL) {
+            recon_font_destroy(g_mono_fonts[i].font);
+            g_mono_fonts[i].font = NULL;
+            g_mono_fonts[i].pixel_height = 0;
+        }
+    }
+
     for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
         recon_font_destroy(g_system_fonts[i].font);
         g_system_fonts[i].font = NULL;

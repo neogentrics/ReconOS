@@ -1,3 +1,70 @@
+A clock, bottom right. It shows the time, and asking it shows the date,
+the day, the zone and the region. It keeps twenty-six zones, in minutes rather
+than hours, because three-quarters of an hour is a real offset that half the
+world's software still cannot represent. It can be set to check an NTP server
+and will report what the server said — and will not set the clock from it,
+because a machine that quietly moves its own clock is a machine whose logs
+cannot be trusted about when anything happened.
+
+The tick is on the minute boundary, not once a second. A clock showing minutes
+that redraws sixty times for each one is fifty-nine drawings nobody asked for.
+
+Photos and a Calendar. Photos shows one picture at a time, fitted to the
+window and never enlarged past its actual size, on a dark mat so a bright
+image is not sitting in a bright frame. The Calendar is a month grid with
+what is on each day; the entries are a text file, so they can be read and
+edited by anything, including a person with a Notepad.
+
+The Calculator has five modes. Standard, Scientific, Programmer, Date and
+Convert. Programmer works in whole numbers rather than doubles, because a
+calculator showing you a bit pattern has to be exact about all sixty-four of
+them and a double is exact to fifty-three. Convert covers twelve families with
+factors that are exact where an exact value exists — an inch has been exactly
+0.0254 metres since 1959, and writing 0.0254001 would be inventing a
+disagreement with the rest of the world.
+
+Currency is deliberately absent. Every other family is a ratio fixed by
+definition; an exchange rate is a fact about this afternoon, and a calculator
+that shipped with one baked in would be confidently wrong about the one
+question where being wrong costs money.
+
+Applets can be updated on their own. A system application is no longer
+welded to the release that shipped it. Install a module registering a name
+that is already taken, at a higher version, and it takes the name; the one it
+displaced is kept and comes back if the replacement is removed. An update you
+cannot back out of is not an update.
+
+The built-in applications carry the system's version as their own, which gives
+this a property worth knowing about: when ReconOS is updated past an installed
+applet, the built-in wins again and the installed one steps aside. An applet
+update applies until the release that catches up with it.
+
+Versions are compared as numbers and not as text, because the obvious
+implementation says 1.10 is older than 1.9 — correct for nine releases of
+anything, and wrong on the tenth in the direction where an update system
+refuses the update it exists to install.
+
+The terminal is fixed-width, and has colours. The interpreter has always
+written its tables with %-20s and the terminal had always thrown that work
+away; in a proportional face the columns wandered by a character or two on
+every row. It uses a fixed-width font now, so apps and ls and firewall
+read as tables.
+
+Failures are drawn in red. The text stays plain and what each line *means* is
+carried beside it, because the interpreter's output goes two places — a window
+that has colours and a socket that has none — and an escape code in the middle
+of the text would be something the socket has to know to strip.
+
+Four schemes: Recon, which follows the system skin and is still the default;
+PowerShell, which is that console's blue and near-white exactly; Green Screen;
+and Paper. scheme lists them and scheme <name> chooses, and the choice
+survives a restart. They are presets and cannot be removed.
+
+The one colour not copied faithfully is PowerShell's error red, which on that
+blue is close to unreadable and is the single most complained-about thing
+about the console. Being faithful to a mistake is not a service to the person
+reading it.
+
 The network port is encrypted. Remote access over TCP 7420 speaks TLS. The
 key is offered over the encrypted channel rather than in front of it, and
 every warning saying otherwise has come down.

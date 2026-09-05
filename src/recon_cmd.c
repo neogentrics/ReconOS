@@ -43,6 +43,16 @@
 #define MAX_ARGS 16
 #define LIST_MAX 512
 
+/*
+ * How many lines of one command's output can be marked as something other than
+ * ordinary text.
+ *
+ * A command prints one failure, or a handful. `errors` prints a table of forty
+ * and none of them are failures -- they are the subject. Sixty-four is well
+ * past anything real, and running out costs the colour rather than the line.
+ */
+#define MARKS_MAX 64
+
 struct recon_cmd_session {
     struct recon_server *server;
     char cwd[RECON_PATH_MAX];
@@ -50,11 +60,34 @@ struct recon_cmd_session {
 
     char output[OUTPUT_MAX];
     size_t output_used;
+
+    /*
+     * Which lines of the output are not ordinary text.
+     *
+     * Recorded beside the text rather than marked up inside it. The
+     * interpreter's output goes two places -- a terminal window that can draw
+     * in colour, and a socket that cannot -- and an escape sequence in the
+     * middle of the text would be something the socket has to know to strip.
+     * A parallel list is ignorable by anything that does not care.
+     *
+     * Keyed by the byte offset the line starts at, because that is the one
+     * thing the caller can compute while splitting the text on newlines
+     * without the two of us having to agree on a line count.
+     */
+    struct {
+        size_t at;
+        enum recon_cmd_line kind;
+    } marks[MARKS_MAX];
+    int mark_count;
 };
 
 /* --- Output --- */
 
 static void out(struct recon_cmd_session *s, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static void out_err(struct recon_cmd_session *s, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static void out_note(struct recon_cmd_session *s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
 static void out(struct recon_cmd_session *s, const char *fmt, ...) {
@@ -73,6 +106,66 @@ static void out(struct recon_cmd_session *s, const char *fmt, ...) {
             s->output_used = sizeof(s->output) - 1;
         }
     }
+}
+
+/*
+ * Mark where the next line starts, then write it.
+ *
+ * The mark is taken *before* the text goes in, so it names the offset the line
+ * begins at rather than the one after it. Both of these otherwise behave
+ * exactly like out(), including doing nothing when the buffer is full -- a
+ * failure that cannot be printed should not become a mark pointing past the
+ * end of the text.
+ */
+static void out_marked(struct recon_cmd_session *s, enum recon_cmd_line kind,
+        const char *fmt, va_list args) {
+    if (s->output_used >= sizeof(s->output) - 1) {
+        return;
+    }
+
+    if (s->mark_count < MARKS_MAX) {
+        s->marks[s->mark_count].at = s->output_used;
+        s->marks[s->mark_count].kind = kind;
+        s->mark_count++;
+    }
+
+    int written = vsnprintf(s->output + s->output_used,
+        sizeof(s->output) - s->output_used, fmt, args);
+    if (written > 0) {
+        s->output_used += (size_t)written;
+        if (s->output_used >= sizeof(s->output)) {
+            s->output_used = sizeof(s->output) - 1;
+        }
+    }
+}
+
+/* Something did not work. */
+static void out_err(struct recon_cmd_session *s, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    out_marked(s, RECON_CMD_LINE_ERROR, fmt, args);
+    va_end(args);
+}
+
+/* Worth reading before the rest: a heading, a warning, a caveat. */
+static void out_note(struct recon_cmd_session *s, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    out_marked(s, RECON_CMD_LINE_NOTICE, fmt, args);
+    va_end(args);
+}
+
+enum recon_cmd_line recon_cmd_line_kind(struct recon_cmd_session *session,
+        size_t offset) {
+    if (session == NULL) {
+        return RECON_CMD_LINE_PLAIN;
+    }
+    for (int i = 0; i < session->mark_count; i++) {
+        if (session->marks[i].at == offset) {
+            return session->marks[i].kind;
+        }
+    }
+    return RECON_CMD_LINE_PLAIN;
 }
 
 /*
@@ -174,7 +267,7 @@ static void cmd_dir(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_dirent entries[LIST_MAX];
     int count = recon_fs_list(s->cwd, path, entries, LIST_MAX);
     if (count < 0) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
 
@@ -214,17 +307,17 @@ static void cmd_cd(struct recon_cmd_session *s, int argc, char **argv) {
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(s->cwd, argv[1], host, sizeof(host),
             canonical, sizeof(canonical))) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
 
     struct recon_dirent info;
     if (!recon_fs_stat(s->cwd, argv[1], &info)) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     if (info.kind != RECON_FILE_DIRECTORY) {
-        out(s, "'%s' is not a directory.\n", canonical);
+        out_err(s, "'%s' is not a directory.\n", canonical);
         return;
     }
 
@@ -240,7 +333,7 @@ static void cmd_type(struct recon_cmd_session *s, int argc, char **argv) {
     size_t size = 0;
     char *data = recon_fs_read(s->cwd, argv[1], &size);
     if (data == NULL) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "%s", data);
@@ -271,7 +364,7 @@ static void cmd_write(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (!recon_fs_write(s->cwd, argv[1], text, used)) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "Wrote %zu bytes.\n", used);
@@ -283,7 +376,7 @@ static void cmd_mkdir(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
     if (!recon_fs_mkdir(s->cwd, argv[1])) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
     }
 }
 
@@ -310,7 +403,7 @@ static void cmd_del(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
 
-    out(s, "%s\n", recon_fs_last_error());
+    out_err(s, "%s\n", recon_fs_last_error());
 }
 
 /*
@@ -365,7 +458,7 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         if (!recon_fs_trash_empty()) {
-            out(s, "%s\n", recon_fs_last_error());
+            out_err(s, "%s\n", recon_fs_last_error());
             return;
         }
         out(s, "Removed %d item%s permanently.\n", count,
@@ -379,7 +472,7 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         if (!recon_fs_trash_restore(argv[2])) {
-            out(s, "%s\n", recon_fs_last_error());
+            out_err(s, "%s\n", recon_fs_last_error());
             return;
         }
         out(s, "Put '%s' back.\n", argv[2]);
@@ -392,7 +485,7 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         if (!recon_fs_trash_purge(argv[2])) {
-            out(s, "%s\n", recon_fs_last_error());
+            out_err(s, "%s\n", recon_fs_last_error());
             return;
         }
         out(s, "Removed '%s' permanently.\n", argv[2]);
@@ -415,7 +508,7 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (!recon_fs_trash(s->cwd, path)) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "'%s' is in the bin. 'bin restore' puts it back.\n", path);
@@ -438,7 +531,7 @@ static void cmd_bin(struct recon_cmd_session *s, int argc, char **argv) {
 static void cmd_spawn(struct recon_cmd_session *s, int argc, char **argv) {
     struct recon_server *server = s->server;
     if (server == NULL) {
-        out(s, "Nothing to launch onto.\n");
+        out_err(s, "Nothing to launch onto.\n");
         return;
     }
 
@@ -491,7 +584,7 @@ static void cmd_errors(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc >= 2) {
         const struct recon_error_info *info = recon_error_find(argv[1]);
         if (info == NULL) {
-            out(s, "There is no error code '%s'. 'errors' lists them all.\n",
+            out_err(s, "There is no error code '%s'. 'errors' lists them all.\n",
                 argv[1]);
             return;
         }
@@ -563,7 +656,7 @@ static void cmd_raise(struct recon_cmd_session *s, int argc, char **argv) {
 
     const struct recon_error_info *info = recon_error_find(argv[1]);
     if (info == NULL) {
-        out(s, "There is no error code '%s'.\n", argv[1]);
+        out_err(s, "There is no error code '%s'.\n", argv[1]);
         return;
     }
 
@@ -811,7 +904,7 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
     if (strcasecmp(what, "on") == 0 || strcasecmp(what, "off") == 0) {
         bool on = (strcasecmp(what, "on") == 0);
         if (!recon_firewall_set_on(on)) {
-            out(s, "%s\n", recon_firewall_last_error());
+            out_err(s, "%s\n", recon_firewall_last_error());
             return;
         }
         out(s, "The firewall is %s.\n", on ? "on" : "off");
@@ -830,7 +923,7 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
                                                 : RECON_FW_BLOCK;
 
         if (!recon_firewall_set_default(direction, action)) {
-            out(s, "%s\n", recon_firewall_last_error());
+            out_err(s, "%s\n", recon_firewall_last_error());
             return;
         }
         out(s, "%s traffic is %s by default now.\n",
@@ -881,7 +974,7 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
         int index = atoi(argv[2]) - 1;
         struct recon_fw_rule rule;
         if (!recon_firewall_at(index, &rule)) {
-            out(s, "There is no rule %s. 'firewall' lists them.\n", argv[2]);
+            out_err(s, "There is no rule %s. 'firewall' lists them.\n", argv[2]);
             return;
         }
 
@@ -914,7 +1007,7 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         if (!done) {
-            out(s, "%s\n", recon_firewall_last_error());
+            out_err(s, "%s\n", recon_firewall_last_error());
             return;
         }
         out(s, "Done. '%s' is now:\n", rule.name);
@@ -970,7 +1063,7 @@ static void cmd_firewall(struct recon_cmd_session *s, int argc, char **argv) {
         rule.enabled = true;
 
         if (!recon_firewall_add(&rule)) {
-            out(s, "%s\n", recon_firewall_last_error());
+            out_err(s, "%s\n", recon_firewall_last_error());
             return;
         }
 
@@ -1071,7 +1164,7 @@ static void cmd_remote(struct recon_cmd_session *s, int argc, char **argv) {
         }
         int port = atoi(argv[2]);
         if (port <= 0 || port > 65535) {
-            out(s, "'%s' is not a port.\n", argv[2]);
+            out_err(s, "'%s' is not a port.\n", argv[2]);
             return;
         }
         recon_registry_set_int(RECON_REG_SYSTEM, RECON_REMOTE_PORT_KEY, port);
@@ -1127,7 +1220,7 @@ static void cmd_deltree(struct recon_cmd_session *s, int argc, char **argv) {
      * have meant to type.
      */
     if (!recon_fs_remove_tree(s->cwd, argv[1])) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "Removed '%s' and everything in it.\n", argv[1]);
@@ -1144,7 +1237,7 @@ static void cmd_rename(struct recon_cmd_session *s, int argc, char **argv) {
         return;
     }
     if (!recon_fs_rename(s->cwd, argv[1], argv[2])) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "Renamed '%s' to '%s'.\n", argv[1], argv[2]);
@@ -1187,12 +1280,12 @@ static void cmd_move(struct recon_cmd_session *s, int argc, char **argv) {
 
     char target[RECON_PATH_MAX];
     if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
 
     if (!recon_fs_rename(s->cwd, argv[1], target)) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "Moved '%s' to '%s'.\n", argv[1], target);
@@ -1206,12 +1299,12 @@ static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
 
     char target[RECON_PATH_MAX];
     if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
 
     if (!recon_fs_copy(s->cwd, argv[1], target)) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
     out(s, "Copied '%s' to '%s'.\n", argv[1], target);
@@ -1638,7 +1731,7 @@ static void cmd_modules(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         if (!recon_modules_load(argv[2])) {
-            out(s, "%s\n", recon_modules_last_error());
+            out_err(s, "%s\n", recon_modules_last_error());
             return;
         }
         out(s, "Loaded '%s'.\n", argv[2]);
@@ -1651,7 +1744,7 @@ static void cmd_modules(struct recon_cmd_session *s, int argc, char **argv) {
             return;
         }
         if (!recon_modules_unload(argv[2])) {
-            out(s, "%s\n", recon_modules_last_error());
+            out_err(s, "%s\n", recon_modules_last_error());
             return;
         }
         out(s, "Unloaded '%s'.\n", argv[2]);
@@ -1717,7 +1810,7 @@ static void cmd_reg(struct recon_cmd_session *s, int argc, char **argv) {
     } else if (strcasecmp(argv[1], "user") == 0) {
         scope = RECON_REG_USER;
     } else {
-        out(s, "'%s' is not a hive. Use 'system' or 'user'.\n", argv[1]);
+        out_err(s, "'%s' is not a hive. Use 'system' or 'user'.\n", argv[1]);
         return;
     }
 
@@ -1779,7 +1872,7 @@ static void cmd_reg(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         if (!recon_registry_set(scope, argv[3], value)) {
-            out(s, "%s\n", recon_registry_last_error());
+            out_err(s, "%s\n", recon_registry_last_error());
             return;
         }
         out(s, "%s = %s\n", argv[3], value);
@@ -1788,7 +1881,7 @@ static void cmd_reg(struct recon_cmd_session *s, int argc, char **argv) {
 
     if (strcasecmp(action, "del") == 0) {
         if (!recon_registry_remove(scope, argv[3])) {
-            out(s, "%s\n", recon_registry_last_error());
+            out_err(s, "%s\n", recon_registry_last_error());
             return;
         }
         out(s, "Removed '%s'.\n", argv[3]);
@@ -1856,7 +1949,7 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
 
         const char *from = recon_theme_current();
         if (!recon_theme_copy(NULL, name, NULL)) {
-            out(s, "%s\n", recon_theme_last_error());
+            out_err(s, "%s\n", recon_theme_last_error());
             return;
         }
 
@@ -1890,14 +1983,14 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
         if (path[0] != '/') {
             if (!recon_fs_join(joined, sizeof(joined), recon_cmd_cwd(s),
                     path)) {
-                out(s, "That path is too long.\n");
+                out_err(s, "That path is too long.\n");
                 return;
             }
             resolved = joined;
         }
 
         if (!recon_theme_install(resolved)) {
-            out(s, "%s\n", recon_theme_last_error());
+            out_err(s, "%s\n", recon_theme_last_error());
             return;
         }
         out(s, "Installed. 'theme' lists it; 'theme <name>' puts it on.\n");
@@ -1922,7 +2015,7 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         if (!recon_theme_uninstall(name)) {
-            out(s, "%s\n", recon_theme_last_error());
+            out_err(s, "%s\n", recon_theme_last_error());
             return;
         }
 
@@ -1934,7 +2027,7 @@ static void cmd_theme(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (!recon_theme_set(argv[1])) {
-        out(s, "%s\n", recon_theme_last_error());
+        out_err(s, "%s\n", recon_theme_last_error());
         return;
     }
 
@@ -2101,7 +2194,7 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
             ? RECON_ROLE_ADMINISTRATOR : RECON_ROLE_LIMITED;
 
         if (!recon_users_create(argv[2], password, role)) {
-            out(s, "%s\n", recon_users_last_error());
+            out_err(s, "%s\n", recon_users_last_error());
             return;
         }
         out(s, "Created '%s'.\n", argv[2]);
@@ -2117,7 +2210,7 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
          bool delete_files = (argc > 3 && strcasecmp(argv[3], "files") == 0);
 
         if (!recon_users_remove(argv[2], delete_files)) {
-            out(s, "%s\n", recon_users_last_error());
+            out_err(s, "%s\n", recon_users_last_error());
             return;
         }
         out(s, delete_files
@@ -2132,7 +2225,7 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
             ? RECON_ROLE_ADMINISTRATOR : RECON_ROLE_LIMITED;
 
         if (!recon_users_set_role(argv[2], role)) {
-            out(s, "%s\n", recon_users_last_error());
+            out_err(s, "%s\n", recon_users_last_error());
             return;
         }
         out(s, "'%s' is now %s.\n", argv[2],
@@ -2142,7 +2235,7 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
 
     if (strcasecmp(argv[1], "password") == 0 && argc >= 3) {
         if (!recon_users_set_password(argv[2], argc > 3 ? argv[3] : NULL)) {
-            out(s, "%s\n", recon_users_last_error());
+            out_err(s, "%s\n", recon_users_last_error());
             return;
         }
         out(s, "Password %s for '%s'.\n",
@@ -2282,7 +2375,7 @@ static void cmd_mem(struct recon_cmd_session *s, int argc, char **argv) {
 
     struct recon_proc_snapshot *snapshot = recon_proc_snapshot_create();
     if (snapshot == NULL || !recon_proc_snapshot_refresh(snapshot)) {
-        out(s, "Cannot read memory information.\n");
+        out_err(s, "Cannot read memory information.\n");
         recon_proc_snapshot_destroy(snapshot);
         return;
     }
@@ -2322,7 +2415,7 @@ static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
         } else {
             /* The error already names the host; saying it twice reads as a
              * stutter. */
-            out(s, "%s\n", recon_net_last_error());
+            out_err(s, "%s\n", recon_net_last_error());
         }
         return;
     }
@@ -2330,7 +2423,7 @@ static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc > 2 && strcasecmp(argv[1], "reach") == 0) {
         int port = (argc > 3) ? atoi(argv[3]) : 80;
         if (!recon_net_probe(argv[2], port, 3000, NULL, NULL)) {
-            out(s, "Cannot test that: %s\n", recon_net_last_error());
+            out_err(s, "Cannot test that: %s\n", recon_net_last_error());
             return;
         }
         out(s, "Asking %s on port %d. 'net' shows the answer.\n",
@@ -2374,7 +2467,7 @@ static void cmd_net(struct recon_cmd_session *s, int argc, char **argv) {
         }
 
         if (!recon_net_set_allowed(name, allow)) {
-            out(s, "%s\n", recon_net_last_error());
+            out_err(s, "%s\n", recon_net_last_error());
             return;
         }
         out(s, "'%s' %s use the network.\n", name,
@@ -2584,7 +2677,7 @@ static void cmd_get(struct recon_cmd_session *s, int argc, char **argv) {
      * up under that name in the Control Panel. */
     if (recon_net_stream_open("Terminal", g_fetch.host, port, &HANDLERS,
             NULL) == NULL) {
-        out(s, "%s\n", recon_net_last_error());
+        out_err(s, "%s\n", recon_net_last_error());
         if (!recon_net_may_use("Terminal")) {
             out(s, "Allow it with: net allow Terminal\n");
         }
@@ -2626,7 +2719,7 @@ static void cmd_capture(struct recon_cmd_session *s, int argc, char **argv) {
                 out(s, "%s\n", path);
             }
         } else {
-            out(s, "The last capture failed: %s\n",
+            out_err(s, "The last capture failed: %s\n",
                 recon_capture_last_error());
         }
         return;
@@ -2634,7 +2727,7 @@ static void cmd_capture(struct recon_cmd_session *s, int argc, char **argv) {
 
     const char *path = strcasecmp(argv[1], "here") == 0 ? NULL : argv[1];
     if (!recon_capture_request(s->server, path)) {
-        out(s, "%s\n", recon_capture_last_error());
+        out_err(s, "%s\n", recon_capture_last_error());
         return;
     }
     out(s, "Capturing. 'capture' with no arguments says where it went.\n");
@@ -2660,7 +2753,7 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(s->cwd, argv[1], host, sizeof(host), canonical,
             sizeof(canonical))) {
-        out(s, "%s\n", recon_fs_last_error());
+        out_err(s, "%s\n", recon_fs_last_error());
         return;
     }
 
@@ -2677,7 +2770,7 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
             entry.kind == RECON_FILE_DIRECTORY) {
         struct recon_package_info info;
         if (!recon_package_install(canonical)) {
-            out(s, "%s\n", recon_package_last_error());
+            out_err(s, "%s\n", recon_package_last_error());
             return;
         }
         if (recon_package_read(canonical, &info)) {
@@ -2690,7 +2783,7 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (!recon_modules_install(canonical)) {
-        out(s, "%s\n", recon_modules_last_error());
+        out_err(s, "%s\n", recon_modules_last_error());
         return;
     }
     out(s, "Installed. It is loaded and will load again on every start.\n");
@@ -2734,7 +2827,7 @@ static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
      */
     if (recon_package_installed(argv[1])) {
         if (!recon_package_uninstall(argv[1])) {
-            out(s, "%s\n", recon_package_last_error());
+            out_err(s, "%s\n", recon_package_last_error());
             return;
         }
         out(s, "Removed '%s' and everything it installed.\n", argv[1]);
@@ -2754,7 +2847,7 @@ static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
     }
 
     if (!recon_modules_uninstall(name)) {
-        out(s, "%s\n", recon_modules_last_error());
+        out_err(s, "%s\n", recon_modules_last_error());
         return;
     }
     out(s, "Removed '%s'.\n", name);
@@ -2791,7 +2884,7 @@ static void cmd_wallpaper(struct recon_cmd_session *s, int argc, char **argv) {
 
     bool follow = strcasecmp(name, "theme") == 0;
     if (!recon_wallpaper_set(follow ? NULL : name)) {
-        out(s, "There is no wallpaper called '%s'.\n", name);
+        out_err(s, "There is no wallpaper called '%s'.\n", name);
         return;
     }
 
@@ -2950,6 +3043,9 @@ const char *recon_cmd_run(struct recon_cmd_session *session, const char *line) {
 
     session->output[0] = '\0';
     session->output_used = 0;
+    /* The marks describe *this* command's output. Left over from the last one
+     * they would colour whatever happened to land at the same offset. */
+    session->mark_count = 0;
 
     if (line == NULL) {
         return session->output;
@@ -2989,6 +3085,6 @@ const char *recon_cmd_run(struct recon_cmd_session *session, const char *line) {
         }
     }
 
-    out(session, "'%s' is not a ReconOS command. Type 'help' for a list.\n", argv[0]);
+    out_err(session, "'%s' is not a ReconOS command. Type 'help' for a list.\n", argv[0]);
     return session->output;
 }
