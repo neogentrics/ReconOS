@@ -428,6 +428,57 @@ now exists and the tick is still unconditional -- so this has moved from "not
 yet possible" to "not yet done", which is a different and more accountable kind
 of outstanding.
 
+### Checkpoint 9b — in progress: locks first
+
+Secondary processors are still parked, but the locking they will need exists
+and passes on all eight boot paths. That order is deliberate: **a run queue two
+processors can edit is a run queue that will eventually contain a cycle, and the
+moment to make that safe is before there is a second processor to prove it.**
+Retrofitting locks onto a working single-processor kernel means finding every
+place that was safe only by accident.
+
+Spinlocks, with two forms rather than a flag: the interrupt-safe one masks
+interrupts while held, because a lock taken by ordinary code and also by an
+interrupt handler on the same processor deadlocks — the handler spins for a lock
+the code it interrupted is holding, and that code cannot continue until the
+handler returns.
+
+**The restore is by saved state, not by re-enabling.** `arch_irq_save()` returns
+how the interrupt flags were and `arch_irq_restore()` puts exactly that back, so
+an inner lock releasing cannot enable interrupts an outer one deliberately
+masked. The self-test takes a nested lock specifically to check it, because that
+is the case an unconditional enable gets wrong and it only shows up under
+nesting.
+
+**A deadlock reports rather than hangs.** Ten million spins is many
+milliseconds, which no correct caller reaches, so passing it means something is
+wrong — and a kernel that stops with no message is the least informative failure
+there is.
+
+**One finding that will bite anything freestanding.** GCC on aarch64 does not
+emit atomic instructions directly by default. It emits a *call* to a libgcc
+helper that checks at run time whether the CPU has the large-system-extension
+atomics and picks a path. That is a good default for a program and useless for a
+kernel: the link fails on `__aarch64_swp1_acq` with nothing to say where it came
+from. `-mno-outline-atomics` — and checkpoint 3 already detects that CPU feature
+for ourselves.
+
+### Pages are cleared on the way out of the allocator, not on the way in
+
+Decided here rather than at checkpoint 10, because deciding it later means
+deciding it about a system that has already leaked.
+
+The desktop found a password `memset` that survived only by accident of build
+flags (BG-090). Its fix protects the *previous owner's* copy — and that is a
+different obligation from the kernel's. **A kernel that hands a freed page to
+another process without clearing it has leaked the secret however carefully the
+previous owner scrubbed it.**
+
+Clearing on *free* trusts every caller to have called free. Clearing on
+*allocate* is unconditional and cannot be forgotten by anybody, including code
+that has not been written yet. It costs a page-zeroing on every allocation,
+which is real and is the right thing to pay.
+
 ### Checkpoint 9 — done, except the other cores
 
 **The kernel stops being one thing doing one thing.** Threads, a round-robin

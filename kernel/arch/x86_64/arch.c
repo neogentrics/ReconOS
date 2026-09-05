@@ -128,3 +128,44 @@ void arch_wait_for_interrupt(void)
 {
 	__asm__ volatile("hlt");
 }
+
+/* --- Processors and interrupts -------------------------------------------- */
+
+unsigned arch_cpu_id(void)
+{
+	/* One processor until checkpoint 9b wakes the others. When it does, this
+	 * reads the local APIC's identifier rather than returning a constant,
+	 * and every caller keeps working -- which is the reason it is a function
+	 * now rather than a zero written at each call site. */
+	return 0;
+}
+
+u64 arch_irq_save(void)
+{
+	u64 flags;
+
+	__asm__ volatile("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+	return flags;
+}
+
+void arch_irq_restore(u64 flags)
+{
+	/* Restores the whole flags register, which puts the interrupt bit back
+	 * exactly as it was -- masked stays masked. An unconditional `sti` here
+	 * would silently enable interrupts inside an outer critical section that
+	 * had deliberately masked them. */
+	__asm__ volatile("pushq %0; popfq" : : "r"(flags) : "memory", "cc");
+}
+
+bool arch_irqs_enabled(void)
+{
+	u64 flags;
+
+	__asm__ volatile("pushfq; popq %0" : "=r"(flags));
+	return (flags & (1ULL << 9)) != 0;	/* IF */
+}
+
+void arch_cpu_relax(void)
+{
+	__asm__ volatile("pause");
+}

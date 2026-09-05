@@ -12,6 +12,7 @@
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/heap.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/trap.h>
 #include <recon/kernel/vm.h>
@@ -79,6 +80,8 @@ void kmain(void)
 		time_self_test() ? "pass" : "FAIL");
 	kprintf("  threads            : %s\n",
 		sched_self_test() ? "pass" : "FAIL");
+	kprintf("  locking            : %s\n",
+		lock_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 

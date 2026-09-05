@@ -33,7 +33,14 @@ ifeq ($(ARCH),x86_64)
   QEMUFLAGS = -kernel $(KERNEL) -m 512M -no-reboot
 else ifeq ($(ARCH),aarch64)
   CROSS   ?= aarch64-linux-gnu-
-  ARCHFLAGS := -mgeneral-regs-only
+  # -mno-outline-atomics: by default gcc does not emit atomic instructions
+  # directly. It emits a *call* to a libgcc helper which checks at run time
+  # whether this CPU has the large-system-extension atomics and picks the fast
+  # or the slow path. That is a good default for a program and useless for a
+  # kernel: there is no libgcc, so the link fails on __aarch64_swp1_acq with no
+  # hint as to where it came from. Inline atomics work on every ARMv8, and
+  # checkpoint 3 already detects LSE for ourselves.
+  ARCHFLAGS := -mgeneral-regs-only -mno-outline-atomics
   QEMU     := qemu-system-aarch64
   # aarch64 loaders read a header at the front of a *flat* image, not an ELF.
   # The ELF is kept for debugging; the .img is what boots.
