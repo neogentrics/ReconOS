@@ -2241,7 +2241,7 @@ static void draw_display(struct control_panel *cp, struct recon_panel *p,
 
     for (int row = 0; row < sizes; row++) {
         struct recon_display_mode mode;
-        if (!recon_display_mode_at(0, row, &mode)) {
+        if (!recon_display_mode_at(screen.id, row, &mode)) {
             break;
         }
 
@@ -5653,14 +5653,27 @@ static void do_action(struct control_panel *cp, enum action action) {
             break;
         }
 
+        /*
+         * Asked for again by id rather than remembered from the draw. The
+         * screen this acts on is the one that is there now, and between
+         * drawing the list and pressing the button a display can go away --
+         * on hardware that can be unplugged, which is where this is headed.
+         */
+        struct recon_display screen;
+        if (!recon_display_at(0, &screen)) {
+            set_status(cp, true, "There is no display to change.");
+            break;
+        }
+
         struct recon_display_mode mode;
-        if (!recon_display_mode_at(0, cp->mode_selected, &mode)) {
+        if (!recon_display_mode_at(screen.id, cp->mode_selected, &mode)) {
             set_status(cp, true, "That size is no longer offered.");
             break;
         }
 
         char why[192];
-        if (!recon_display_set_mode(0, cp->mode_selected, why, sizeof(why))) {
+        if (!recon_display_set_mode(screen.id, cp->mode_selected, why,
+                sizeof(why))) {
             set_status(cp, true, "%s", why);
             break;
         }

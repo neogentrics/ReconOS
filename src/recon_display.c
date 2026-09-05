@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <libdrm/drm_fourcc.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/util/log.h>
@@ -26,15 +27,78 @@
 static struct recon_server *g_server;
 static char g_error[192];
 
-void recon_display_init(struct recon_server *server) {
-    g_server = server;
+/*
+ * Which id belongs to which display.
+ *
+ * Ids are handed out on first sight and remembered against the display's
+ * name, which is the only thing about an output that is stable and unique --
+ * a pointer is reused after an unplug, and a position changes when a
+ * neighbour goes away. A monitor unplugged and plugged back in gets the id it
+ * had, which is what somebody who set a resolution on it would expect.
+ *
+ * Small and fixed: a machine with more than sixteen displays is not the
+ * machine this is being written for, and the seventeenth simply has no id
+ * rather than corrupting the sixteen that do.
+ */
+#define DISPLAYS_MAX 16
+
+static struct {
+    char name[RECON_DISPLAY_NAME_MAX];
+    int id;
+} g_ids[DISPLAYS_MAX];
+
+static int g_next_id = 1;   /* Never zero: zero means "none". */
+
+void recon_display_init(void *backend) {
+    g_server = backend;
 }
 
 const char *recon_display_last_error(void) {
     return g_error;
 }
 
-/* The nth output in the layout, or NULL. */
+/* The id for a display, assigning one if this is the first time it is seen. */
+static int id_for(const char *name) {
+    if (name == NULL || *name == '\0') {
+        return 0;
+    }
+
+    for (int i = 0; i < DISPLAYS_MAX; i++) {
+        if (g_ids[i].id != 0 && strcmp(g_ids[i].name, name) == 0) {
+            return g_ids[i].id;
+        }
+    }
+
+    for (int i = 0; i < DISPLAYS_MAX; i++) {
+        if (g_ids[i].id == 0) {
+            snprintf(g_ids[i].name, sizeof(g_ids[i].name), "%s", name);
+            g_ids[i].id = g_next_id++;
+            return g_ids[i].id;
+        }
+    }
+
+    /* Full. Better than reusing an id, which would silently make one display
+     * answer for another. */
+    return 0;
+}
+
+/* The output with this id, or NULL. */
+static struct wlr_output *output_with_id(int id) {
+    if (g_server == NULL || g_server->output_layout == NULL || id <= 0) {
+        return NULL;
+    }
+
+    struct wlr_output_layout_output *entry;
+    wl_list_for_each(entry, &g_server->output_layout->outputs, link) {
+        if (entry->output != NULL && entry->output->name != NULL &&
+                id_for(entry->output->name) == id) {
+            return entry->output;
+        }
+    }
+    return NULL;
+}
+
+/* The nth output in the layout, for walking. */
 static struct wlr_output *output_at(int index) {
     if (g_server == NULL || g_server->output_layout == NULL || index < 0) {
         return NULL;
@@ -64,6 +128,22 @@ int recon_display_count(void) {
     return count;
 }
 
+/*
+ * A DRM fourcc as something this system has a name for.
+ *
+ * Only the two ReconOS could actually draw into are named; everything else is
+ * OTHER rather than being guessed at. A format nobody can use is not more
+ * useful for having been translated into a longer word.
+ */
+static enum recon_display_format format_of(uint32_t fourcc) {
+    switch (fourcc) {
+    case DRM_FORMAT_ARGB8888: return RECON_DISPLAY_FORMAT_ARGB8888;
+    case DRM_FORMAT_XRGB8888: return RECON_DISPLAY_FORMAT_XRGB8888;
+    case DRM_FORMAT_INVALID:  return RECON_DISPLAY_FORMAT_UNKNOWN;
+    default:                  return RECON_DISPLAY_FORMAT_OTHER;
+    }
+}
+
 bool recon_display_at(int index, struct recon_display *out) {
     struct wlr_output *output = output_at(index);
     if (output == NULL || out == NULL) {
@@ -73,6 +153,7 @@ bool recon_display_at(int index, struct recon_display *out) {
     memset(out, 0, sizeof(*out));
     snprintf(out->name, sizeof(out->name), "%s",
         output->name != NULL ? output->name : "display");
+    out->id = id_for(out->name);
 
     out->width = output->width;
     out->height = output->height;
@@ -95,9 +176,9 @@ bool recon_display_at(int index, struct recon_display *out) {
     return true;
 }
 
-bool recon_display_mode_at(int display, int index,
+bool recon_display_mode_at(int id, int index,
         struct recon_display_mode *out) {
-    struct wlr_output *output = output_at(display);
+    struct wlr_output *output = output_with_id(id);
     if (output == NULL || out == NULL || index < 0) {
         return false;
     }
@@ -115,21 +196,25 @@ bool recon_display_mode_at(int display, int index,
         out->refresh = mode->refresh;
         out->preferred = mode->preferred;
         out->current = (output->current_mode == mode);
+
+        /* The output's, not the mode's: wlroots does not vary format per
+         * mode. The header says so rather than leaving it to be found. */
+        out->format = format_of(output->render_format);
         return true;
     }
     return false;
 }
 
-bool recon_display_set_mode(int display, int mode_index, char *why_out,
+bool recon_display_set_mode(int id, int mode_index, char *why_out,
         size_t why_size) {
     if (why_out != NULL && why_size > 0) {
         why_out[0] = '\0';
     }
 
-    struct wlr_output *output = output_at(display);
+    struct wlr_output *output = output_with_id(id);
     if (output == NULL) {
-        snprintf(g_error, sizeof(g_error), "there is no display %d",
-            display + 1);
+        snprintf(g_error, sizeof(g_error),
+            "that display is not attached any more");
         goto refused;
     }
 
