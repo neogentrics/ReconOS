@@ -57,6 +57,7 @@ AREA = {
     81: 'kernel', 82: 'kernel', 83: 'kernel',
     84: 'kernel', 85: 'kernel', 86: 'kernel',
     87: 'display', 88: 'programs', 89: 'display', 90: 'build', 91: 'display', 92: 'kernel', 93: 'kernel',
+    94: 'kernel', 95: 'kernel', 96: 'applications',
 }
 
 

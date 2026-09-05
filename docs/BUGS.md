@@ -76,6 +76,84 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-096 — A video track's parameter sets vanished, eight bytes at a time
+
+[#261](https://github.com/neogentrics/ReconOS/issues/261)
+
+- **Found in** v0.3.1, by a test written for the MP4 demuxer, one check after
+  the check it was written for.
+- **Was** the fixed part of an MP4 video sample entry is seventy bytes. The
+  demuxer skipped seventy-eight -- eight too many, which lands inside the
+  `avcC` box that follows it. The scan for `avcC` therefore started in the
+  middle of one and found nothing, and the track reported no setup data at all.
+
+  Everything either side of it was right: the dimensions, the frame count, the
+  duration, the sample table, and every audio frame matching ffmpeg's byte for
+  byte. It would have looked like a working demuxer until the first thing that
+  tried to decode video -- at which point there would have been no parameter
+  sets to start from, and H.264 without its SPS and PPS does not fail loudly,
+  it produces nothing.
+
+  The count is written out in the comment now rather than stated: two
+  pre-defined, two reserved, twelve more, width, height, two resolutions, four
+  reserved, a frame count, a thirty-two byte name, a depth, a final
+  pre-defined. Seventy. A number that can be recounted is one somebody can
+  check; a number that is asserted is one they have to trust.
+- **Fixed in** v0.3.1, and the test now checks that a video track carries its
+  parameter sets rather than only that it has a size.
+
+### BG-095 — Page tables twenty-four bytes off a page boundary
+
+[#262](https://github.com/neogentrics/ReconOS/issues/262)
+
+- **Found in** v0.0.10, by the kernel session, after moving three scratch words
+  into the boot region.
+- **Was** the processor ignores the low twelve bits of every pointer to a page
+  table. Nudging the boot region by three words pushed the x86 page tables
+  twenty-four bytes off a page boundary — so the entries were written where the
+  code put them and read from where the hardware rounded to.
+
+  Everything about the code was correct. The alignment was structural, nothing
+  checked it, and the kernel printed nothing at all.
+
+  **The same family as BG-096's `avcC` offset**, and worth reading beside it:
+  in both, a number that describes *where something is* was wrong, everything
+  that used the number was right, and the result was silence rather than an
+  error. An offset has no natural place to be validated — it is not a value
+  anything computes twice — so a wrong one produces a system that reads
+  plausible garbage and carries on.
+- **Fixed in** v0.0.10. The tables are aligned explicitly, and the alignment is
+  asserted rather than arranged: an arrangement holds until somebody moves
+  something, which is exactly what happened here.
+
+### BG-094 — Secondary processors erased the page tables they were sharing
+
+[#263](https://github.com/neogentrics/ReconOS/issues/263)
+
+- **Found in** v0.0.10, by the kernel session, on four processors — and not on
+  two.
+- **Was** every aarch64 secondary processor zeroed the shared page tables in
+  order to rebuild them identically. The comment above it said that was
+  harmless, on the grounds that the result was the same either way.
+
+  The result was. The *interval* was not. Between the zeroing and the rebuild
+  the other processors' translations do not exist, and a processor that takes
+  an instruction fetch in that window is simply gone. It failed about a quarter
+  of the time on four processors and never on two.
+
+  **A comment and the code under it disagreed, and this time the comment was
+  wrong** — the mirror image of BG-087, where the comment described the correct
+  design and the code did something else. Both are the same underlying hazard:
+  the comment is what the next reader checks against instead of the behaviour,
+  so a confident wrong one is worse than none.
+- **Fixed in** v0.0.10. A secondary uses the tables that already exist rather
+  than rebuilding what is already correct.
+- **Why it is its own shape.** Not "true when computed, and nothing arranged to
+  notice when it stopped being true"; not "correct until a second caller
+  arrived". This one was wrong from the first line it was written, on every
+  machine that could expose it — and the machine it was tested on could not.
+  See the note at the end of this file.
+
 ### BG-093 — The aarch64 exception vectors destroyed the first argument
 
 [#259](https://github.com/neogentrics/ReconOS/issues/259)
@@ -1477,3 +1555,33 @@ worse to own than a fault, because a fault gets found.
 including the moment it starts being real — has no failing behaviour to notice
 and no test that can go red. Those belong in the register precisely because
 nothing else would ever record them.
+
+## Three ways a fault stays hidden
+
+Named because the same shapes keep arriving, from both halves of the project,
+and having a name for one makes the next one findable.
+
+**Something was true when it was computed, and nothing arranged to notice when
+it stopped being true.** A TLB entry, a tooltip cached against pointer motion,
+a font cache answering from a stale slot, hardware mapped at an address read
+once at boot, a `memset` the compiler removed because nothing observable
+depended on it. These are quiet because *nothing watches*. There is no moment
+of becoming wrong for anything to catch.
+
+**It was correct until a second caller arrived.** A window title that redrew
+the window and not the taskbar, because the only caller that ever changed a
+title also redrew everything. Exception vectors that clobbered the first
+argument register, harmless while every exception was a fault that did not need
+it. These are quiet because *nothing asks* — and there is no earlier moment at
+which they could have been caught, except by having had the second caller.
+
+**It was correct on the machine it was tested on.** Secondary processors
+erasing page tables they shared, which failed a quarter of the time on four
+processors and never on two. The fault is real from the first line; what is
+missing is the rig. These are the most dangerous of the three, because the
+green result is not a false negative — the test genuinely passed, on a machine
+where the bug cannot happen.
+
+The third shape has a practical consequence the other two do not: **it is
+answered by hardware, not by care.** Reading the code again finds nothing, and
+the only thing that helps is running it somewhere it can fail.
