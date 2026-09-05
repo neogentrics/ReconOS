@@ -48,11 +48,39 @@ first becomes visible: the shell, the window management, the interaction model.
 Linux supplies drivers, filesystems, and memory management so the work stays
 focused on the layer people actually touch.
 
-### Phase 2 — Kernel
+### Phase 2 — Kernel (started, running alongside phase 1)
 
-Replace the Linux substrate with a purpose-built kernel, once phase 1 is a real
-daily driver and its requirements are known from use rather than guesswork.
-Bootloader, memory management, scheduling, drivers. BIOS and UEFI both.
+Replace the Linux substrate with a purpose-built kernel. Bootloader, memory
+management, scheduling, drivers, storage, a filesystem, and an installer. BIOS
+and UEFI both, x86_64 and aarch64 both.
+
+**Begun early, deliberately, and in parallel rather than after.** The original
+plan was to start this once phase 1 was a daily driver. It was brought forward
+because the requirement it was waiting for is produced by phase 1 continuously:
+every time the compositor asks Linux for something and the answer is awkward,
+that is a note about what this kernel will have to provide. Those notes are
+collected in [KERNEL-WANTS.md](KERNEL-WANTS.md) as they happen, which is the
+"known from use rather than guesswork" the sequencing was for — and waiting
+would have thrown them away rather than gathered them.
+
+The plan and its seventeen checkpoints are in [KERNEL.md](KERNEL.md). Four
+stages: the kernel exists (done), the kernel owns the machine, the kernel owns
+the disk, it runs on real iron.
+
+**Where it is now — version 0.0.4.** It boots on x86_64 and aarch64, under
+legacy BIOS, under UEFI, and via device tree; reports which firmware is
+underneath it; reads what the processor can do; and manages physical memory. It
+runs nothing of the desktop's yet and will not until checkpoint 10.
+
+**What "finished" means for this phase:** a machine with nothing on it, or with
+Windows or Linux or macOS already on it, boots from ReconOS media, is told where
+to install, and comes up into the ReconOS desktop on its own kernel — without
+GRUB, without Linux, and without destroying what was already on the disk unless
+asked to.
+
+**ReconOS boots itself.** GRUB is in the test path and only there; checkpoint 4
+removes it. The bootloader is the first thing that runs and the project's claim
+is that it was built rather than assembled.
 
 ### Parallel tracks
 

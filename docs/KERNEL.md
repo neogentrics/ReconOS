@@ -8,62 +8,76 @@ no Linux underneath it.
 Starting it now, while the compositor is still the real system, is the point.
 The compositor is where the requirements come from — every time it asks Linux
 for something, that is a note about what this kernel will one day have to
-provide. Building both at once means the list is written from use rather than
-from memory of an operating systems course.
+provide. [KERNEL-WANTS.md](KERNEL-WANTS.md) is that list, written from hitting
+the seam rather than from imagining it, and it is the authority on what the
+desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.3`. Following the same rule as the rest of the project: the number says
-what works. What works is that it boots four ways across two architectures,
-knows which firmware is underneath it, can say what memory exists, and can
-hand pages of it out.
+`0.0.4`. The number says what works. What works: it boots four ways across two
+architectures, knows which firmware is underneath it, knows what the processor
+can do, knows what memory exists, and can hand pages of it out.
+
+## What "finished" means
+
+A machine with no operating system on it, or with Windows or Linux or macOS
+already on it, boots from ReconOS media, is told where to install, and comes up
+into the ReconOS desktop on its own kernel — on either architecture, under
+either firmware, without GRUB, without Linux, and without destroying whatever
+was already on the disk unless asked to.
+
+Every checkpoint below is a step on that path. None of them is a refactor.
 
 ## The rule about other people's code
 
 ReconOS boots itself. The bootloader is not an implementation detail to be
-delegated — it is the first thing that runs, and the project's whole claim is
-that it was built rather than assembled. Open-source components are used where
-there is genuinely no alternative, and are named in
-[THIRD_PARTY.md](../THIRD_PARTY.md) when they are.
+delegated — it is the first thing that runs, and the project's claim is that it
+was built rather than assembled. Open-source components are used where there is
+genuinely no alternative, and are named in [THIRD_PARTY.md](../THIRD_PARTY.md)
+when they are.
 
-GRUB is currently in the tree's *test* path, and only there. It boots the
-kernel today so that the Multiboot2 and firmware-detection code has something
-real to run against, and it is the thing checkpoint 3 removes. Nothing in the
-kernel depends on GRUB existing; the Multiboot2 header is forty bytes and comes
-out with it.
+GRUB is in the *test* path and only there. It boots the kernel today so the
+Multiboot2 and firmware-detection code has something real to run against, and
+checkpoint 4 removes it. Nothing depends on GRUB existing; the Multiboot2
+header is forty bytes and comes out with it.
 
 ## Checkpoints
-
-Each of these is a thing the kernel can *do* afterwards that it could not do
-before. None is a refactor.
 
 | # | Checkpoint | Status |
 |---|---|---|
 | 0 | Builds and boots on x86_64 and aarch64, prints its identity over serial | **Done** |
 | 1 | Knows what firmware booted it and what memory exists | **Done** |
 | 2 | A physical page allocator | **Done** |
-| 3 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | |
-| 4 | Its own page tables; the kernel moves to the higher half | |
-| 5 | A kernel heap | |
-| 6 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
-| 7 | A timer, and a tick | |
-| 8 | Threads and a scheduler | |
-| 9 | User mode, and the first system call | |
-| 10 | Its own BIOS bootloader on x86_64 — boots a machine with no UEFI at all | |
-| 11 | Boots on real hardware, both architectures | |
+| 3 | Reads what this processor can actually do | **Done** |
+| 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | |
+| 5 | Its own page tables, the higher half, and large pages where the CPU has them | |
+| 6 | A kernel heap | |
+| 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
+| 8 | A timer, a tick, and time | |
+| 9 | Threads, a scheduler, and every core in use | |
+| 10 | User mode, and the first system call | |
+| 11 | Block devices — storage the kernel can read and write | |
+| 12 | Partition tables — GPT and MBR, and every layout it will meet | |
+| 13 | ReconFS — a filesystem of its own | |
+| 14 | Reads foreign filesystems well enough to install beside them | |
+| 15 | The installer | |
+| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | |
+| 17 | Boots on real hardware: both architectures, both firmwares | |
 
-### Checkpoint 0 — done
+Seventeen is a lot to hold in your head, so they group into four stages: **the
+kernel exists** (0–3, done), **the kernel owns the machine** (4–10),
+**the kernel owns the disk** (11–15), and **it runs on real iron** (16–17).
 
-Two architectures, one portable core, and a rule enforced by the build that
-they stay separated. `arch.h` is six functions long. It is meant to be.
+### Checkpoints 0 to 3 — done
 
-### Checkpoint 1 — done
+**0 — two architectures, one portable core.** `arch.h` is six functions long
+and `make check-portable` fails the build if machine-specific code appears in
+`core/`. That discipline is why a third architecture is four files rather than
+a rewrite.
 
-The kernel can now answer three questions it could not answer before: what
-firmware is underneath, who loaded it, and what memory exists.
-
-Four boot paths were built and each was actually booted, because "the code
-handles UEFI" is a claim and a memory map printed under OVMF is evidence:
+**1 — firmware and memory.** Four boot paths, each actually booted, because
+"the code handles UEFI" is a claim and a memory map printed under OVMF is
+evidence:
 
 | Path | Firmware reported | Regions |
 |---|---|---|
@@ -72,228 +86,242 @@ handles UEFI" is a claim and a memory map printed under OVMF is evidence:
 | Multiboot2 via GRUB, OVMF | UEFI | 18 |
 | Image header + device tree, aarch64 | device tree | 5 |
 
-**Firmware detection, on x86_64, is by evidence rather than by asking.** There
-is no register that says "you were booted by UEFI". What there is: GRUB emits
-Multiboot2 tags carrying the EFI system table and image handle *only* when EFI
-is what started it. Their presence is the answer, and their absence on a
-machine that produced a memory map at all means legacy BIOS. That the UEFI run
-reports eighteen regions with ACPI NVS ranges and the BIOS run reports eight
-is the confirmation that this is reading reality and not a constant.
+Firmware detection on x86_64 is by *evidence*: no register says "UEFI started
+you", but GRUB emits Multiboot2 EFI tags only when EFI is what started it. The
+UEFI run reporting eighteen regions with ACPI NVS ranges where BIOS reports
+eight is what makes it evidence rather than a constant.
 
-**aarch64 needed a real Image header before any of it worked.** The first
-attempt read `x0` for a device tree pointer and got zero, because QEMU had
-loaded a bare ELF — and a loader handed a bare ELF has no handoff convention
-to follow, so it jumps to the entry point with the registers cleared and tells
-the kernel nothing. Adding the 64-byte arm64 Image header and emitting a flat
-binary changes that: the loader now places the image at the offset the header
-asks for, puts the device tree below it, and passes the pointer. This is the
-convention U-Boot and UEFI stubs implement too, so it is not a QEMU
-accommodation — it is the thing real hardware will do.
+aarch64 needed a real arm64 Image header before any of it worked. Reading `x0`
+for a device tree pointer got zero, because a loader handed a bare ELF has no
+handoff convention to follow — it clears the registers and tells the kernel
+nothing. Diagnosed by printing the pointer rather than theorising about it.
 
-**Overlapping regions are resolved, not reported.** Firmware describes memory
-in layers: a broad "this is RAM" range, and smaller ranges inside it that
-something already owns. Both are true. Left alone, the totals count owned
-memory as free and the allocator eventually hands out the device tree. So
-ownership is subtracted from availability — always in that direction, because
-unused free memory is a waste and reused owned memory is corruption.
+Overlapping regions are resolved, not reported: firmware describes memory in
+layers and ownership is subtracted from availability, always in that direction,
+because unused free memory is a waste and reused owned memory is corruption.
 
-### Checkpoint 2 — done
+**2 — a physical page allocator.** A bitmap, one bit per page. A free list
+allocates faster but stores its links *inside* the free pages, so a stale
+pointer corrupts the allocator itself and surfaces somewhere else entirely.
+Based at the lowest usable address rather than at zero — indexing from zero is
+invisible on x86 and describes 262,433 pages of nothing on ARM, where RAM
+starts at 1GB. Self-test runs at boot on the real machine and passes on all
+four paths.
 
-The kernel can hand out physical memory. A bitmap, one bit per page, and that
-is a choice rather than a placeholder: a free list allocates faster but cannot
-answer "is this page free" without walking, cannot find contiguous runs without
-a second structure, and stores its links *inside* the free pages — so a stale
-pointer corrupts the allocator itself and is discovered somewhere else
-entirely. The bitmap costs one page per 128MB and every question about it can
-be answered by looking.
+**3 — what the processor can do.** Not which architecture — the firmware
+settled that — but what this chip offers within it, because a 2008 Core 2 and a
+2024 Zen 5 are both x86_64 and differ in nearly everything that matters for
+going fast. The same binary, on two CPUs:
 
-| Path | Pages | Free | Bitmap |
-|---|---|---|---|
-| PVH / BIOS | 131,040 | 511MB | 16,380 bytes at `0x1000` |
-| UEFI | 130,804 | 505MB | 16,351 bytes at `0x1000` |
-| aarch64 | 131,072 | 510MB | 16,384 bytes at `0x40000000` |
+```
+-cpu qemu64   sse2 nx                                    1 core   2MB pages
+-cpu max      sse2 sse4.2 avx aes-ni rdrand avx2 rdseed  4 cores  1GB pages
+              sha-ni smep smap nx 1g-pages
+```
 
-**The bitmap is based at the lowest usable address, not at zero.** The first
-version indexed from physical zero, which is invisible on x86 because RAM
-starts near there — but ARM's starts at 1GB, so the bitmap described 393,216
-pages of which 262,433 were reported "used" when they were not memory at all.
-Wasteful, and a lie: nothing was using them and nothing could. Server-class ARM
-parts start RAM at 4GB or higher and it gets proportionally worse. Basing the
-bitmap at the first usable address made it 16KB describing 512MB instead of
-48KB describing 1.5GB of mostly-absent address space.
+Every field is there because something will branch on it. Large pages decide
+whether a gigabyte costs one page table entry or two hundred thousand. Hardware
+random decides whether the entropy pool has a real source. Physical address
+bits bound the page tables. Core count bounds the scheduler.
 
-**There is a self-test, and it runs at boot.** Allocate, check distinctness,
-take a contiguous run, verify every page in it is marked, free everything, and
-confirm the free count returned exactly to where it started. It runs on the
-real machine because there is no test harness that can run a kernel yet, and an
-allocator that is quietly wrong surfaces three checkpoints later as something
-else's bug.
+## Using the machine you are on
 
-### Why the bootloader is checkpoint 3 and not checkpoint 11
+The project's central claim is that a 4GB machine should not need 16GB to feel
+responsive. That is a design commitment, and these are the specific things it
+means at kernel level. They are listed here rather than left implicit because
+each one is a decision some checkpoint has to actually take.
 
-It could reasonably go last. It is put third because of what UEFI gives back.
+### Memory
 
-A UEFI application gets the memory map, a framebuffer at a known address, and
-the ability to read files off the boot volume — before the kernel exists. Every
-one of those is something the kernel would otherwise have to write a driver to
-obtain, and two of them are things it cannot obtain at all on ARM without
-firmware help. Writing the loader early means the kernel's own handoff protocol
-is designed by us rather than inherited from GRUB's, and it means the
-Multiboot2 code comes out while it is still forty bytes rather than after
-something has come to depend on it.
+**The kernel never sees DDR generations, and this is worth stating plainly
+because it is easy to expect otherwise.** Working out DIMM timings — the thing
+that genuinely differs between DDR1 and DDR5 — is memory *training*, and it
+happens in firmware before a single kernel instruction runs. By the time the
+kernel exists, RAM is a memory map. There is nothing to support and nothing to
+get wrong, on any generation.
 
-UEFI before BIOS because one design covers both architectures. A BIOS
-bootloader is 16-bit real-mode x86 and covers exactly one of them, so it is
-worth doing — the project's aim is to boot both kinds — but it is worth doing
-second.
+What does make memory use efficient, on every generation equally:
+
+- **Large pages where the CPU has them** (checkpoint 5). Mapping a gigabyte
+  with 4KB pages costs 262,144 page table entries and a TLB miss every time the
+  working set moves. With 1GB pages it costs one entry. This is the single
+  largest lever, it is free once the CPU has been asked, and checkpoint 3
+  already asks.
+- **Compressing cold pages when memory is scarce and the CPU is not**
+  (after checkpoint 9). This is exactly the trade of spending cycles to avoid
+  needing RAM — on a machine with a decent processor and little memory it is
+  strictly better than swapping to disk, and on a machine with plenty of RAM it
+  never triggers. It is adaptive by construction rather than by a setting.
+- **Not keeping what nothing asked for.** The anti-bloat principle applies to
+  the kernel first: no caches that exist because caches are traditional, no
+  daemons, no background work without a wakeup that justifies it.
+- **Reclaiming the bootloader.** Everything marked `MEM_BOOTLOADER` in the
+  memory map is memory somebody else was using, and after checkpoint 5 nobody
+  is. Already recorded so it can be handed back.
+
+### Processor
+
+**Use what the chip has, not what the oldest chip would have had.** Checkpoint
+3 reads the capabilities; the checkpoints that follow spend them:
+
+- **Every core** (checkpoint 9). A scheduler that leaves cores parked is
+  wasting the most expensive thing the machine has. Secondary cores are
+  currently parked in `boot.S` on both architectures, waiting for an SMP story
+  to wake them into.
+- **Crypto in silicon.** AES-NI and ARM's AES extension turn encryption from a
+  loop into an instruction. Disk encryption without it is a reason not to use
+  disk encryption.
+- **Hardware entropy** for the randomness service, where RDSEED or RNDR exists.
+- **The right idle instruction.** `hlt` and `wfi` are already what the idle
+  loop uses, which is why idle costs nothing rather than nearly nothing.
+- **Balancing, not maximising.** The goal is the least total resource for the
+  work, not the most of any one. A subsystem that can run at a lower duty cycle
+  and produce the same output should.
+
+## Firmware: BIOS, UEFI, and machines with both
+
+All three are supported, and the third is not a special case.
+
+| Machine | What it offers | What ReconOS boots with |
+|---|---|---|
+| Modern, UEFI only | UEFI, GPT, Secure Boot | The UEFI loader (checkpoint 4) |
+| Old, BIOS only | 16-bit real mode, MBR | The BIOS loader (checkpoint 16) |
+| Transitional, both | UEFI with a Compatibility Support Module | The UEFI loader, because it is better |
+
+A machine with both does not require a third loader. It requires that the
+install medium carry both, that each be findable by the firmware that looks for
+it — an `EFI/BOOT/BOOTX64.EFI` for UEFI and a boot sector for BIOS, on the same
+disk — and that the installer write whichever the machine will actually use.
+That is a media-layout problem, solved once, at checkpoint 15.
+
+UEFI is built first because one design covers both architectures and it hands
+back a memory map, a framebuffer at a known address, and file access on the
+boot volume before the kernel exists. A BIOS loader is 16-bit real-mode x86 and
+covers one architecture, so it is worth doing second rather than not at all.
+
+## Storage, partitions and filesystems
+
+The goal that shapes all of this: **install beside whatever is already there.**
+A disk with Windows on it is a disk ReconOS has to understand well enough not
+to damage.
+
+That splits into four separate problems, and conflating them is how the work
+looks impossible:
+
+1. **Reading and writing sectors** (checkpoint 11). Drivers: NVMe, AHCI, USB
+   mass storage, virtio. This is the kernel's job and nobody else's.
+2. **Understanding the partition layout** (checkpoint 12). GPT and MBR are the
+   only two schemes that matter — everything else sits inside them. Windows
+   uses GPT on any modern machine and MBR on old ones; Linux the same; macOS
+   uses GPT with an Apple partition scheme inside it. **This is a data format,
+   not a kernel service**, so it is parsed above the block layer, the same line
+   [THIRD_PARTY.md](../THIRD_PARTY.md) already draws for PNG and TLS. The
+   desktop owns the parser; the kernel owes it sectors, a sector size, a sector
+   count, and whether the device is removable.
+3. **A filesystem of our own** (checkpoint 13). ReconFS. Not designed yet, and
+   deliberately not designed yet: it should be designed when there is a block
+   layer to build it on and real use to shape it, not before. What is already
+   known about it is recorded below.
+4. **Reading foreign filesystems** (checkpoint 14). NTFS, ext4, APFS, HFS+,
+   FAT32. Much bigger than it sounds, and **mostly not needed for the goal.**
+   Installing beside Windows requires reading the *partition table* and
+   possibly resizing a partition; it does not require reading a single NTFS
+   file. FAT32 is the exception and is required, because the UEFI System
+   Partition is FAT32 and that is where our own bootloader has to be written.
+   So: FAT32 at checkpoint 14, the others when somebody actually wants to open
+   a file on them.
+
+### What is already known about ReconFS
+
+Not a design, just the constraints it has to satisfy, collected as they turned
+up:
+
+- **Create-with-mode.** The desktop currently writes a TLS private key and
+  *then* tightens it with `chmod`, leaving a window where a private key is
+  world-readable. Every secret ReconOS writes has that window. The first
+  filesystem calls this kernel defines take a mode at creation — decided now,
+  because now is when it is free.
+- **Recoverable after power loss.** Which means write ordering that survives an
+  unexpected reset, and a `flush` that returns when the data is on the medium
+  rather than when it was accepted.
+- **It has to hold `recon_fs`'s shape.** The desktop already has System,
+  Programs and User volumes with a recycle bin each, deliberately written so
+  they can sit on real volumes later.
+- **Case sensitivity, and whether drives have letters,** are open questions.
+  Windows assigns letters to partitions; Linux mounts them into one tree. The
+  decision belongs with the filesystem and the installer together, and is not
+  taken yet.
+
+### The installer
+
+Checkpoint 15, and the thing that turns all of the above into an operating
+system somebody can have. It needs: the boot medium to carry both loaders and
+both architectures; a partitioner that can read an existing layout and shrink a
+partition without losing what is in it; somewhere to write the bootloader that
+the machine's firmware will actually look at; and a first-run flow, which the
+desktop already has.
 
 ## Architecture support
 
 | Architecture | Status | Notes |
 |---|---|---|
-| x86_64 | Boots, BIOS and UEFI both | Multiboot2 for now; own loader at checkpoints 3 and 10 |
-| aarch64 | Boots | arm64 Image header, device tree parsed for memory and command line |
-| riscv64 | Not started | Four files and a Makefile stanza when it is wanted |
+| x86_64 | Boots, BIOS and UEFI both | Multiboot2 for now; own loader at 4 and 16 |
+| aarch64 | Boots | arm64 Image header, device tree parsed |
+| riscv64 | Not started | Four files and a Makefile stanza when wanted |
 | i686 (32-bit x86) | Not planned | See below |
 
 **32-bit x86 is not planned, and this is a decision rather than an oversight.**
-Supporting it is not a matter of one more directory: 32-bit means a different
-pointer size, which means every structure that holds an address, every page
-table format, and every assumption about how much can be mapped at once has to
-work two ways. It doubles the cost of most checkpoints ahead. Machines that can
-only run 32-bit code have not been sold for well over a decade. If the goal
-were reached and 32-bit still mattered, it could be added then — but paying for
-it through every checkpoint in between would slow all of them down.
+A different pointer size means every structure holding an address, every page
+table format, and every assumption about how much can be mapped has to work two
+ways. It roughly doubles the cost of most checkpoints ahead, for machines that
+have not been sold in over a decade.
 
-Note that this is a separate question from *running* 32-bit programs. A 64-bit
-x86 kernel can execute 32-bit user code, which is what a Windows 95 application
-would need. That capability is not affected by this decision.
-
-Adding **riscv64** costs almost nothing by comparison, because it is 64-bit and
-the abstraction already exists. It happens when there is a machine to run it on.
+This is a separate question from *running* 32-bit programs. A 64-bit x86 kernel
+can execute 32-bit user code, which is what a Windows 95 application needs.
+That capability is unaffected by this decision.
 
 ## Running old and foreign applications
 
-The long-term ambition — Windows 95-era applications, current Windows
-applications, Linux applications, macOS applications — is real but it is
-phase 3 and later, and it is worth writing down now *where* it attaches,
-because that shapes decisions taken much earlier.
+Phase 3 and later, recorded now because it constrains a decision taken much
+earlier. An application binary needs three things: an instruction set it can
+execute (an emulation problem, userspace, independent of the kernel); a loader
+for its file format (PE, ELF, Mach-O); and the system calls and libraries it
+expects — which is nearly all of the work, and why the plan is to contribute to
+Wine rather than reimplement it.
 
-An application binary needs three things from a kernel, and each is a separate
-problem:
-
-1. **An instruction set it can execute.** A Win95 program is 32-bit x86 code.
-   Running it on an aarch64 machine means emulating or translating those
-   instructions — the same problem Apple solved twice, with Rosetta. This is
-   independent of the kernel and belongs in userspace.
-2. **A loader that understands its file format** — PE for Windows, ELF for
-   Linux, Mach-O for macOS.
-3. **The system calls and libraries it expects.** This is nearly all of the
-   work. Wine is twenty-five thousand hours of exactly this, which is why the
-   roadmap says contribute to Wine rather than reimplement it.
-
-What the kernel owes all three is the same small thing: the ability for a
-process to be created with a *personality* — a loader and a system-call
-handler chosen per binary rather than fixed for the whole system. Linux calls
-this `binfmt`; Windows NT called them subsystems. It costs nothing to leave
-room for at checkpoint 9, when the first system call is written, and it is
-expensive to add afterwards.
-
-So: no compatibility work now, one design constraint recorded now. The
-constraint is that the system-call layer is a table selected per process, not
-a switch statement compiled into the kernel.
-
-## What userland is waiting on
-
-The compositor keeps its own list in [KERNEL-WANTS.md](KERNEL-WANTS.md),
-written from hitting the seam rather than from imagining it. That file is the
-authority on what the desktop needs; this table is only the mapping onto
-checkpoints.
-
-Two entries there are worth repeating because they change decisions here.
-`recon_fs_write` has no way to create a file with a mode, so a private key is
-written and *then* tightened — meaning the first filesystem calls this kernel
-defines must take a mode at creation, not after. And the desktop cannot ask how
-good the host's entropy is, which makes randomness a kernel service rather than
-a library: a machine generating its first long-lived key is exactly where a
-weak source produces quietly guessable ones.
-
-| Wanted | Needs | Earliest |
-|---|---|---|
-| Headers to compile against, stubs included | nothing | any time |
-| Device enumeration (Device Manager) | a device model | after checkpoint 6 |
-| Block devices and partitions (real volumes, encryption) | drivers, interrupts | after checkpoint 8 |
-| Display mode setting | a display driver | not blocked — being built against wlroots now |
-| Power states (sleep, hibernate) | ACPI, or firmware calls | after checkpoint 7 |
-| Processes — so End Task can end something | address spaces, scheduling | checkpoints 4 and 8 |
-| Randomness worth generating a key from | an entropy source and a CSPRNG | after checkpoint 7 |
-| Time | a clock and a timer | checkpoint 7 |
-| Creating a file with a mode | a filesystem, and syscalls that take one | checkpoint 9 |
-| Proof of who is on the control socket | identity the kernel enforces | checkpoint 9 |
-| Storage that knows its own size | block devices | after checkpoint 8 |
-| Packet filtering | a network stack | far out |
-| Recovery before boot | the bootloader | checkpoint 3 |
-| Users and permissions enforced beneath ReconOS | processes and identity | checkpoint 9 |
-
-The first row is the one worth acting on early, and it costs almost nothing:
-an interface the userland can compile against, even entirely stubbed, lets both
-halves proceed instead of taking turns.
+What the kernel owes all three is one small thing: a process created with a
+*personality* — a loader and a system-call table chosen per binary rather than
+fixed for the system. Linux calls this `binfmt`; Windows NT called them
+subsystems. Free to leave room for at checkpoint 10; expensive to retrofit.
 
 ## The interface the desktop compiles against
 
-`kernel/include/recon_kernel.h` and `kernel/api/stubs.c`, built by `make api`
-into a static library. Every call returns "not implemented", and the kernel
-version does not move for it, because the version says what works and stubs
-work at nothing.
+`kernel/include/recon_kernel.h` and `kernel/api/stubs.c`, built by `make api`.
+Every call returns "not implemented", and the version does not move for it,
+because the version says what works and stubs work at nothing.
 
-It exists so the desktop is written against a settled interface rather than
-waiting, and so the shape of each call is argued about while changing it costs
-a diff. Four rules hold across all of it, and each was paid for by something:
+Four rules hold across all of it, each paid for by something:
 
 - **Nothing allocates.** The caller owns every buffer. A kernel that allocates
   for a caller must decide what to do when it cannot, halfway through an
   operation the caller has already begun.
 - **Every call returns a status, never a bool.** "Failed" is not a sentence a
-  settings page can show. `recon_display.h` reached this independently, which
-  is a good sign it is right.
-- **Enumeration is by identity, not position.** Everything enumerable has an id
-  that stays with it, and listings carry a generation number. Hardware appears
-  and disappears while software is looking at it.
+  settings page can show. Above the boundary the desktop keeps its own
+  `bool` + `_last_error()` convention and converts, which is one conversion per
+  subsystem and is what a boundary is for.
+- **Enumeration is by identity, not position**, with a generation counter.
+  Hardware appears and disappears while software is looking at it.
 - **No callbacks into the kernel.** Asynchronous things leave a result to be
   collected, the way `recon_net` does with reachability.
 
 Processes are deliberately *not* stubbed. Applications are `dlopen`'d into the
 compositor's address space, so there is no boundary to write in advance — the
-boundary is an address space and there is not one. Stubbing it would be
-pretending otherwise, and the pretence would be found by whoever wrote code
-against it.
+boundary is an address space and there is not one. The module ABI is settled at
+checkpoint 5, where address spaces arrive, and `recon_appwin_impl` is its real
+surface: a struct of callbacks holding pointers into the compositor's own
+memory, which is the part that cannot survive a process boundary unchanged.
 
 The kernel claims error-code area letter `N` in `recon_errors.def`.
-
-### Four changes worth making to `recon_display.h`
-
-The desktop owns that interface and the kernel will implement it rather than
-inventing a second one for the same question. These are cheap now and awkward
-once there are two implementations:
-
-1. **`recon_display_init(struct recon_server *server)` leaks today's
-   implementation into the interface.** A kernel implementation has no
-   `recon_server` to be handed. This is the one place where the file knows what
-   is underneath it, which is the thing it exists not to do. `void` or an
-   opaque backend handle.
-2. **`recon_display_set_mode(int display, int mode, …)` addresses by
-   position.** Between listing the displays and setting one, a monitor can be
-   unplugged — and then the call sets a mode on the wrong screen, visibly.
-   Today the compositor is single-threaded and event-driven so it cannot
-   happen; a kernel with real hotplug is exactly where it starts to. A stable
-   `id` on `struct recon_display`, and `set_mode` taking it.
-3. **A mode on real hardware includes its pixel format.** ReconOS draws
-   ARGB8888, which a driver is under no obligation to offer; changing mode can
-   change stride and format together. Adding the field now costs nothing and is
-   ignored until something reads it. This does not pull drawing behind the
-   boundary — it records what the mode *is*.
-4. **`RECON_DISPLAY_MODES_MAX 32` is low**, and belongs to the caller's storage
-   rather than to the interface. Real outputs report more.
 
 ## How this is tracked
 
@@ -301,7 +329,9 @@ The same four places as everything else — this file for the plan,
 [CHANGELOG.md](CHANGELOG.md) for what shipped, [BUGS.md](BUGS.md) for faults,
 GitHub Issues for what is open. Kernel bugs take `BG-` numbers from the same
 sequence as the rest of the system, because a bug number is a place in the
-project's history and the kernel is part of the same project.
+project's history and the kernel is part of the same project. The kernel
+session sends the account; the desktop session writes the entry, so that one
+register does not become two across a branch.
 
-The kernel is developed in a git worktree on the `kernel` branch, so that two
-sessions can work the same repository without sharing a checkout.
+Developed in a git worktree on the `kernel` branch, merged to `main` when a
+checkpoint lands.
