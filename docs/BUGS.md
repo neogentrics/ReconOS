@@ -76,6 +76,73 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-084 — A page table stopped being reachable at the instant it was installed
+
+[#251](https://github.com/neogentrics/ReconOS/issues/251)
+
+- **Found in** kernel 0.0.6. **Found by** booting it: a page fault whose
+  faulting address was the root table's address plus the index being read.
+- **Was** every pointer to a page table had been obtained through the map the
+  kernel was handed on entry. Installing the kernel's own map replaced that
+  world with one where only the kernel image is identity mapped -- and the
+  root table is not in the kernel image, so the next read of it faulted. The
+  fault address said so exactly: `CR2=0x5800` for a root at `0x5000` and index
+  256, which is one of the rare faults that can be read straight off.
+
+  The general shape, and it is the same as BG-081 one level up: **a structure
+  that describes memory has to be reachable in the world it describes.** A map
+  that cannot be read after it is installed is a map that can only be built,
+  never maintained.
+- **Fixed in** kernel 0.0.6. The tables are reachable through the map they
+  themselves establish.
+
+### BG-085 — Supported is not enabled, and CPUID answers the wrong one
+
+[#252](https://github.com/neogentrics/ReconOS/issues/252)
+
+- **Found in** kernel 0.0.6. **Found by** two of the four boot paths working
+  and two not: the UEFI ones ran, the ones through our own trampoline faulted.
+- **Was** bit 63 of a page table entry is the no-execute bit **only once
+  `EFER.NXE` says so**. Until then it is a *reserved* bit, and setting a
+  reserved bit does not mean "this page is executable" -- it means every
+  access through that entry faults, whatever else the entry says. Firmware
+  enables NXE for itself, so the UEFI paths inherited it; our own trampoline
+  had never had a reason to.
+
+  Worth recording as a pattern rather than as a fact about NX, because the
+  fault is in the question: **CPUID reports that a feature is _supported_. It
+  does not report that it is _enabled_.** Code that reads the first as the
+  second is correct on every machine that happened to enable it already --
+  and when the thing doing the enabling is firmware, that is every machine in
+  a firmware-based test matrix.
+
+  This shape exists on the desktop side too. `recon_procinfo` reads
+  capabilities out of `/proc`, which is a place that answers "what does this
+  processor have" and not "what is currently switched on".
+- **Fixed in** kernel 0.0.6. NXE is enabled before any entry sets bit 63.
+
+### BG-086 — The direct map described a hole, twice the size of the machine
+
+[#253](https://github.com/neogentrics/ReconOS/issues/253)
+
+- **Found in** kernel 0.0.6. **Found by** the author, who had written BG-082
+  three days earlier and did not recognise it in a different coat.
+- **Was** the direct map was built as one span from zero to the highest
+  address in the memory map. This machine's map ends with twelve gigabytes of
+  reserved space near the 1TB mark, so that span was 524,288 entries and 4MB
+  of page tables, almost all of it describing memory that is not there.
+  Region by region it is 29 pages.
+
+  Recorded because it is the *second* time the same assumption cost something,
+  by the same author, within a week: **a memory map is not a range.** It is a
+  list of regions with holes between them, and the holes can be larger than
+  the machine. BG-082 was that assumption in a count and this is that
+  assumption in an extent.
+
+  Two of a kind is worth more written down than one, which is the whole
+  argument for a register that nobody prunes.
+- **Fixed in** kernel 0.0.6. The map is built region by region.
+
 ### BG-082 — A memory-map limit derived from three machines, wrong the first time our own loader ran
 
 [#249](https://github.com/neogentrics/ReconOS/issues/249)
