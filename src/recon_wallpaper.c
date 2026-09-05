@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "ReconOS.h"
 #include "recon_fs.h"
@@ -262,6 +263,140 @@ const char *recon_wallpaper_current(void) {
 
     g_current[0] = '\0';
     return g_current;
+}
+
+/* --- Pictures from elsewhere --- */
+
+/* Whether the name ends in something this system can draw. */
+static bool looks_like_a_picture(const char *name) {
+    static const char *const KINDS[] = { ".png", ".jpg", ".jpeg", ".bmp",
+        ".ico", NULL };
+
+    size_t length = strlen(name);
+    for (int i = 0; KINDS[i] != NULL; i++) {
+        size_t kind = strlen(KINDS[i]);
+        if (length > kind &&
+                strcasecmp(name + length - kind, KINDS[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool recon_wallpaper_origin(const char *name, char *out, size_t size) {
+    if (name == NULL || out == NULL || size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+
+    size_t length = 0;
+    char *text = recon_fs_read("/", RECON_WALLPAPER_ORIGINS, &length);
+    if (text == NULL) {
+        return false;
+    }
+
+    bool found = false;
+    char *line = text;
+    while (line != NULL && *line != '\0') {
+        char *end = strchr(line, '\n');
+        if (end != NULL) {
+            *end = '\0';
+        }
+
+        char *bar = strchr(line, '|');
+        if (bar != NULL) {
+            *bar = '\0';
+            if (strcmp(line, name) == 0) {
+                snprintf(out, size, "%s", bar + 1);
+                found = true;
+                break;
+            }
+        }
+
+        line = (end != NULL) ? end + 1 : NULL;
+    }
+
+    free(text);
+    return found;
+}
+
+static void remember_origin(const char *name, const char *origin) {
+    char line[RECON_PATH_MAX + RECON_NAME_MAX + 4];
+    int length = snprintf(line, sizeof(line), "%s|%s\n", name, origin);
+    if (length < 0) {
+        return;
+    }
+
+    /* Appended rather than rewritten: this file is a list of facts that only
+     * grows, and rewriting it to add one line is a chance to lose the rest. */
+    if (!recon_fs_append("/", RECON_WALLPAPER_ORIGINS, line,
+            (size_t)length)) {
+        recon_fs_write("/", RECON_WALLPAPER_ORIGINS, line, (size_t)length);
+    }
+}
+
+bool recon_wallpaper_add(const char *cwd, const char *path, char *name_out,
+        size_t name_size) {
+    if (path == NULL || *path == '\0') {
+        return false;
+    }
+
+    char canonical[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        return false;
+    }
+
+    const char *leaf = strrchr(canonical, '/');
+    leaf = (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : canonical;
+
+    if (!looks_like_a_picture(leaf)) {
+        return false;
+    }
+
+    recon_fs_mkdir("/", RECON_DIR_WALLPAPERS);
+
+    /* Two folders can hold a Sunset.png, and the second one to arrive must
+     * not replace the first. */
+    /*
+     * Refused rather than shortened. A name cut to fit is a different file
+     * name, and the list is looked up by name.
+     */
+    if (strlen(leaf) >= RECON_NAME_MAX) {
+        return false;
+    }
+
+    char base[RECON_NAME_MAX];
+    char extension[RECON_NAME_MAX] = "";
+    memcpy(base, leaf, strlen(leaf) + 1);
+    char *dot = strrchr(base, '.');
+    if (dot != NULL && dot != base) {
+        snprintf(extension, sizeof(extension), "%s", dot);
+        *dot = '\0';
+    }
+
+    char name[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", RECON_DIR_WALLPAPERS, base, extension,
+            name, sizeof(name))) {
+        return false;
+    }
+
+    char target[RECON_PATH_MAX];
+    if (!recon_fs_join(target, sizeof(target), RECON_DIR_WALLPAPERS, name)) {
+        return false;
+    }
+
+    if (!recon_fs_copy("/", canonical, target)) {
+        return false;
+    }
+
+    remember_origin(name, canonical);
+
+    if (name_out != NULL && name_size > 0) {
+        snprintf(name_out, name_size, "%s", name);
+    }
+    return true;
 }
 
 bool recon_wallpaper_set(const char *name) {

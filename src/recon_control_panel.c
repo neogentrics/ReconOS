@@ -1778,8 +1778,45 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
         }
 
         recon_draw_text(p, cp->font, x + 14,
-            ry + (ROW_HEIGHT + ascent) / 2 - 2, w - 28, name,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 20, name,
             on ? COLOR_SELECTED_TEXT : COLOR_TEXT);
+
+        /*
+         * Where it came from, on the right half.
+         *
+         * Two folders can both hold a Sunset.png, and a list of names alone
+         * cannot tell somebody which of theirs each row is. One that ships
+         * says so rather than leaving the space blank, because blank reads as
+         * missing rather than as "there is no answer to that here".
+         */
+        char origin[RECON_PATH_MAX];
+        const char *where = "ships with ReconOS";
+        if (recon_wallpaper_origin(name, origin, sizeof(origin))) {
+            /*
+             * Shortened from the left when it is long: the end of a path says
+             * which folder, and the beginning says things everybody already
+             * knows.
+             */
+            where = origin;
+            if (recon_text_width(cp->font, origin) > w / 2 - 30) {
+                const char *cut = strrchr(origin, '/');
+                if (cut != NULL && cut != origin) {
+                    /* Keep the last two parts: the folder, and what is above
+                     * it, which is usually enough to place it. */
+                    const char *above = cut - 1;
+                    while (above > origin && *above != '/') {
+                        above--;
+                    }
+                    static char shortened[RECON_PATH_MAX];
+                    snprintf(shortened, sizeof(shortened), "*%s", above);
+                    where = shortened;
+                }
+            }
+        }
+
+        recon_draw_text(p, cp->font, x + w / 2,
+            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 16, where,
+            on ? COLOR_SELECTED_TEXT : COLOR_DIM);
 
         recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_WALLPAPER_BASE + row);
     }
@@ -4879,17 +4916,30 @@ static void do_action(struct control_panel *cp, enum action action) {
 
     /* --- Skins --- */
 
-    case ACTION_ADD_WALLPAPER:
+    case ACTION_ADD_WALLPAPER: {
         /*
-         * Not built. The picture has to be chosen from the filesystem, which
-         * means the file dialog, and the wallpaper list has to be able to
-         * hold something from outside /System/Wallpapers -- neither of which
-         * exists yet.
+         * The File Explorer, at Pictures, where the picture is.
+         *
+         * A file dialog that hands a path back would be tidier and does not
+         * exist; what does exist is a right-click on any picture anywhere
+         * that makes it the background. So this opens the place they are and
+         * says what to do there, which is the same number of clicks and one
+         * fewer thing to build.
          */
-        set_status(cp, true, "Not built yet: choosing a picture needs the "
-            "file dialog, and the list can only hold what is in "
-            "/System/Wallpapers.");
+        recon_shell_open_named(cp->server->shell, "File Explorer");
+
+        struct recon_appwin *win =
+            recon_installed_app_existing("File Explorer");
+        if (win == NULL) {
+            set_status(cp, true, "Could not open the File Explorer.");
+            break;
+        }
+
+        recon_explorer_open_at(win, recon_fs_user_dir("Pictures"));
+        set_status(cp, false, "Right-click a picture and choose Set as "
+            "Desktop Background. It joins this list.");
         break;
+    }
 
     case ACTION_USE_SKIN: {
         struct recon_theme_info info;

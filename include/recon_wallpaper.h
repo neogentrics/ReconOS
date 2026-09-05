@@ -47,4 +47,37 @@ const char *recon_wallpaper_current(void);
  * skin. False if there is no such file. */
 bool recon_wallpaper_set(const char *name);
 
+/* Where the origins of added pictures are written down. */
+#define RECON_WALLPAPER_ORIGINS "/System/Config/wallpaper-origins.txt"
+
+/*
+ * Take a picture from anywhere on the system and make it a wallpaper.
+ *
+ * Copied into /System/Wallpapers rather than pointed at. A wallpaper that
+ * lived at the far end of a path would stop existing the moment somebody
+ * tidied their Pictures folder, and a desktop that loses its background
+ * because a file moved is a desktop nobody trusts. The copy also keeps every
+ * other part of this working unchanged: wallpapers are chosen by name, and a
+ * name only means something inside one folder.
+ *
+ * Where it came from is written down beside it, because "Daybreak.png" and
+ * "Daybreak.png" are the same name and different pictures, and somebody
+ * looking at a list of names deserves to know which of their folders each one
+ * came out of.
+ *
+ * `name_out` receives the name it was filed under, which may differ from the
+ * file's own if that name was taken. False if the file cannot be read or is
+ * not a picture.
+ */
+bool recon_wallpaper_add(const char *cwd, const char *path, char *name_out,
+    size_t name_size);
+
+/*
+ * Where an added wallpaper came from, or "" for one that ships.
+ *
+ * Shortened from the left when it is long: the end of a path says which
+ * folder, and the beginning says things everybody already knows.
+ */
+bool recon_wallpaper_origin(const char *name, char *out, size_t size);
+
 #endif

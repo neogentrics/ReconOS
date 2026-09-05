@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
@@ -27,6 +28,7 @@
 #include "recon_registry.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_wallpaper.h"
 
 #define MENUBAR_HEIGHT 20
 #define MENU_TITLE_PAD 10
@@ -166,6 +168,7 @@ enum explorer_context {
     EXCTX_PURGE,        /* delete permanently, skipping the bin */
     EXCTX_RESTORE,      /* put back where it came from */
     EXCTX_EMPTY_BIN,
+    EXCTX_SET_WALLPAPER,
 };
 
 /*
@@ -2217,6 +2220,22 @@ static void explorer_scroll(void *user, double delta) {
  * right answer for the toolbar or the path bar, where there is nothing of the
  * explorer's to do.
  */
+/* Whether a name ends in something ReconOS can draw as a background. */
+static bool looks_like_a_picture(const char *name) {
+    static const char *const KINDS[] = { ".png", ".jpg", ".jpeg", ".bmp",
+        NULL };
+
+    size_t length = strlen(name);
+    for (int i = 0; KINDS[i] != NULL; i++) {
+        size_t kind = strlen(KINDS[i]);
+        if (length > kind &&
+                strcasecmp(name + length - kind, KINDS[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         struct recon_menu_spec *menu) {
     struct recon_explorer *ex = user;
@@ -2249,6 +2268,18 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         }
 
         recon_menu_add(menu, is_dir ? "Open" : "Select", EXCTX_OPEN, true, true);
+
+        /*
+         * A picture can become the background from wherever it is. Offered
+         * only for something that looks like one: a menu entry that appears
+         * on every file and fails on most of them teaches people to ignore
+         * it.
+         */
+        if (!is_dir && looks_like_a_picture(entry->name)) {
+            recon_menu_add(menu, "Set as Desktop Background",
+                EXCTX_SET_WALLPAPER, true, true);
+        }
+
         recon_menu_add(menu, "Cut", EXCTX_CUT, !protectedd, false);
         recon_menu_add(menu, "Copy", EXCTX_COPY, true, false);
         recon_menu_add(menu, "Paste", EXCTX_PASTE, has_clip && is_dir, true);
@@ -2291,6 +2322,30 @@ static void explorer_context_action(void *user, uint32_t id) {
     struct recon_explorer *ex = user;
 
     switch ((enum explorer_context)id) {
+    case EXCTX_SET_WALLPAPER: {
+        if (ex->selected < 0 || ex->selected >= ex->entry_count) {
+            break;
+        }
+
+        char name[RECON_NAME_MAX];
+        if (!recon_wallpaper_add(ex->cwd, ex->entries[ex->selected].name,
+                name, sizeof(name))) {
+            set_status(ex, true, "%s cannot be used as a background.",
+                ex->entries[ex->selected].name);
+            break;
+        }
+
+        /*
+         * Put on straight away. Somebody who asked for a picture to be the
+         * background did not ask for it to be added to a list they would
+         * then have to go and find it in.
+         */
+        recon_wallpaper_set(name);
+        recon_background_reload(recon_appwin_server(ex->win));
+        set_status(ex, false, "'%s' is the desktop background.", name);
+        break;
+    }
+
     case EXCTX_OPEN:        do_open_selected(ex); break;
     case EXCTX_RENAME:      do_begin_rename(ex); break;
     case EXCTX_DELETE:      do_delete(ex); break;
