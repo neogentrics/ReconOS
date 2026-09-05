@@ -61,6 +61,7 @@ add_executable(ReconOS
     src/recon_appwin.c
     src/recon_cmd.c
     src/recon_control.c
+    src/recon_tls.c
     src/recon_control_panel.c
     src/recon_decor.c
     src/recon_desktop.c
@@ -121,12 +122,26 @@ set_target_properties(ReconOS PROPERTIES ENABLE_EXPORTS ON)
 # promise.
 pkg_check_modules(ZLIB REQUIRED zlib)
 
+# mbedTLS, for the network port's encryption. Found by name rather than by
+# pkg-config because 2.x does not ship a .pc file on the distributions this
+# builds on -- which is worth saying, because the obvious first assumption on
+# seeing find_library here is that somebody did not know about pkg_check_modules.
+#
+# Three libraries, and all three are needed: mbedtls is the protocol,
+# mbedx509 is the certificate parsing, mbedcrypto is the primitives.
+find_library(MBEDTLS_LIB mbedtls REQUIRED)
+find_library(MBEDX509_LIB mbedx509 REQUIRED)
+find_library(MBEDCRYPTO_LIB mbedcrypto REQUIRED)
+
 target_link_libraries(ReconOS PRIVATE
     ${WLR_LIBRARIES}
     ${WAYLAND_LIBRARIES}
     ${XKB_LIBRARIES}
     ${PIXMAN_LIBRARIES}
     ${ZLIB_LIBRARIES}
+    ${MBEDTLS_LIB}
+    ${MBEDX509_LIB}
+    ${MBEDCRYPTO_LIB}
     ${CMAKE_DL_LIBS}
     m)
 
@@ -191,6 +206,21 @@ add_executable(recon_fonts_tests
 
 target_include_directories(recon_fonts_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# The encryption's failures are invisible from a running system: a certificate
+# remade on every start still works, and breaks every client that pinned the
+# old one. A world-readable private key works perfectly too.
+add_executable(recon_tls_tests
+    tests/test_tls.c
+    src/recon_tls.c
+    src/recon_crypt.c
+    src/recon_fs.c)
+
+target_include_directories(recon_tls_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_tls_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 # Whether the accessibility skins work is a question about people who are not
 # in the room. It is answered by simulating each deficiency and measuring, not
@@ -258,6 +288,7 @@ add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME fonts COMMAND recon_fonts_tests)
+add_test(NAME tls COMMAND recon_tls_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)
