@@ -40,7 +40,16 @@
 #include <recon/kernel/pmm.h>
 
 #define BLOCK_NAME_MAX 24
-#define BLOCK_MAX_DEVICES 8
+
+/* Sixty-four, because a partition is a block device here and a machine with
+ * four disks of eight partitions is ordinary. Eight was enough while a device
+ * meant a whole disk and is not any more. */
+#define BLOCK_MAX_DEVICES 64
+
+/* Refused loudly at the cap, never truncated. A slice the kernel cannot see is
+ * a partition it cannot protect from a whole-device write, so silently dropping
+ * the sixteenth is the one failure that turns a safety check into a hazard. */
+#define BLOCK_MAX_SLICES 16
 
 /* Why a request failed. A status rather than a bool, for the same reason the
  * desktop-facing API takes one: "it did not work" is not a fault report, and
@@ -58,6 +67,23 @@ enum block_status {
 };
 
 const char *block_status_name(enum block_status s);
+
+/* What kind of table a device's first sectors turned out to hold.
+ *
+ * NONE and UNREADABLE are deliberately different values and print as different
+ * lines. "There is no table here" and "there is a table here and it cannot be
+ * believed" call for opposite responses -- the first disk is a blank one an
+ * installer may use, and the second is somebody's data with a damaged header,
+ * which an installer must not touch. Collapsing them is how a corrupt GPT gets
+ * treated as an empty disk. */
+enum block_scheme {
+	BLOCK_SCHEME_NONE = 0,	/* looked, and there was no table */
+	BLOCK_SCHEME_GPT,
+	BLOCK_SCHEME_MBR,
+	BLOCK_SCHEME_UNREADABLE,/* a table was there and did not check out */
+};
+
+const char *block_scheme_name(enum block_scheme s);
 
 struct block_device;
 
@@ -92,6 +118,31 @@ struct block_device {
 	bool removable;
 	bool read_only;
 
+	/* --- Slices ------------------------------------------------------
+	 *
+	 * A partition is a block device with a parent and an offset, in the
+	 * same registry as the disk it lives on, addressed from its own zero.
+	 * Not a separate kind of object: a filesystem should not care whether
+	 * it was given a disk or a piece of one, and an encrypted volume
+	 * should be able to be a child of a partition without anything above
+	 * it changing.
+	 *
+	 * `block_count` on a slice is the *partition's* length. That one fact
+	 * is what makes the bound free: the range check that already refuses a
+	 * read past the end of a disk refuses a read past the end of a
+	 * partition, in the same line, without knowing the difference. */
+	u32 parent;		/* 0 for a whole device; else the parent's id */
+	u32 parent_generation;
+	u64 first_lba;		/* where this slice starts inside its parent */
+	u8  slice_index;	/* 1-based, as the table numbers it; 0 if whole */
+	u8  scheme;		/* enum block_scheme: the table this came from */
+	unsigned slice_count;	/* how many children are registered under this */
+
+	/* Somebody has said out loud that they intend to rewrite this whole
+	 * device. Without it, a write to a disk that has partitions on it is
+	 * refused -- see block_write. */
+	bool claimed_raw;
+
 	/* What the device can accept in one request. Zero means "no opinion",
 	 * and the block layer will not split. */
 	u32 max_blocks_per_request;
@@ -108,6 +159,13 @@ struct block_device {
 struct block_device *block_register(const char *name, const struct block_ops *ops,
 				    void *driver, u32 block_size, u64 block_count);
 
+/* Registers one partition of `parent` as a device of its own. Called by the
+ * partition reader; drivers never call it. Returns null at the cap or on a
+ * range that does not fit inside the parent. */
+struct block_device *block_register_slice(struct block_device *parent,
+					  u8 index, u64 first_lba, u64 count,
+					  enum block_scheme scheme);
+
 /* By index, for enumeration, and by identity, for holding on to one. */
 unsigned block_device_count(void);
 struct block_device *block_device_at(unsigned index);
@@ -120,9 +178,47 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf);
 enum block_status block_flush(struct block_device *dev);
 
+/* --- Rewriting a disk, which is the dangerous direction ---------------------
+ *
+ * A write to a device that has partitions on it is refused unless the caller
+ * has claimed it. That is not paranoia about the caller; it is about *which
+ * question gets asked*. "Am I allowed to destroy this disk" is a question with
+ * one right moment to ask it -- once, out loud, at the top of an install -- and
+ * today it is the ambient property of every block device, asked never.
+ *
+ * There is no flag to turn the refusal off, in keeping with the rule this
+ * project already follows about safety checks. A caller that means it claims
+ * the device; a caller that does not mean it gets an error it can read. */
+enum block_status block_claim_raw(struct block_device *dev);
+void block_release_raw(struct block_device *dev);
+
+/* One extent of an intended layout, in the parent device's own blocks. */
+struct block_extent {
+	u64 first_lba;
+	u64 count;
+};
+
+/* Checks a whole intended layout before any of it is written: nothing overlaps,
+ * everything is inside the device, nothing lands on a slice the kernel is
+ * using. Writes nothing and composes nothing -- the caller decides the layout,
+ * and this is the arithmetic being checked by something that can see the disk.
+ *
+ * It exists because the range check on a single write cannot catch a plan that
+ * is internally inconsistent: four writes that each land on the disk can still
+ * describe two partitions that overlap, and the disk they overlap on has
+ * somebody's Windows installation on it. */
+enum block_status block_check_layout(const struct block_device *dev,
+				     const struct block_extent *plan, unsigned n);
+
 void block_init(void);
 void block_print_summary(void);
 bool block_self_test(void);
+
+/* What the partition reader prints, and what the fixture harness compares
+ * against: the scheme, how many slices, and one line of geometry each. Kept
+ * separate from block_print_summary so that a machine-readable claim and a
+ * human-readable one do not have to be the same string. */
+void block_print_tables(void);
 
 /* --- What a driver's transport must provide --------------------------------
  *

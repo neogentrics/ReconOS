@@ -30,6 +30,25 @@
 
 /* "RCNBOOT\0" read as a little-endian 64-bit value. */
 #define RECONBOOT_MAGIC   0x00544f4f424e4352ULL
+/* The handoff version, and a trap worth naming at its definition rather than
+ * discovering at a halt.
+ *
+ * This one constant governs three things, and only one of them can include this
+ * header:
+ *
+ *   - the version field the loader writes into struct reconboot (main.c)
+ *   - the version the kernel refuses to accept anything else for (reconboot.c)
+ *   - the version in the *kernel image header* the loader scans for, which is
+ *     emitted as a bare `.long 1` by kernel/arch/x86_64/boot.S and again by
+ *     kernel/arch/aarch64/boot.S, because an assembler cannot include this file
+ *
+ * So raising it here without editing both assembly files makes the loader stop
+ * recognising the kernel as a kernel: it scans the image, finds a header whose
+ * magic matches and whose version does not, and reports that the kernel has no
+ * ReconBoot header at all. The failure is a hard halt with a message that
+ * points at the wrong thing, on two architectures at once.
+ *
+ * Raise all three, or none. */
 #define RECONBOOT_VERSION 1
 
 /* --- The header the kernel carries ---------------------------------------
