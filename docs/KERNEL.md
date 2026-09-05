@@ -13,9 +13,10 @@ from memory of an operating systems course.
 
 ## Version
 
-`0.0.2`. Following the same rule as the rest of the project: the number says
+`0.0.3`. Following the same rule as the rest of the project: the number says
 what works. What works is that it boots four ways across two architectures,
-knows which firmware is underneath it, and can say what memory exists.
+knows which firmware is underneath it, can say what memory exists, and can
+hand pages of it out.
 
 ## The rule about other people's code
 
@@ -40,7 +41,7 @@ before. None is a refactor.
 |---|---|---|
 | 0 | Builds and boots on x86_64 and aarch64, prints its identity over serial | **Done** |
 | 1 | Knows what firmware booted it and what memory exists | **Done** |
-| 2 | A physical page allocator | |
+| 2 | A physical page allocator | **Done** |
 | 3 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | |
 | 4 | Its own page tables; the kernel moves to the higher half | |
 | 5 | A kernel heap | |
@@ -95,6 +96,38 @@ something already owns. Both are true. Left alone, the totals count owned
 memory as free and the allocator eventually hands out the device tree. So
 ownership is subtracted from availability — always in that direction, because
 unused free memory is a waste and reused owned memory is corruption.
+
+### Checkpoint 2 — done
+
+The kernel can hand out physical memory. A bitmap, one bit per page, and that
+is a choice rather than a placeholder: a free list allocates faster but cannot
+answer "is this page free" without walking, cannot find contiguous runs without
+a second structure, and stores its links *inside* the free pages — so a stale
+pointer corrupts the allocator itself and is discovered somewhere else
+entirely. The bitmap costs one page per 128MB and every question about it can
+be answered by looking.
+
+| Path | Pages | Free | Bitmap |
+|---|---|---|---|
+| PVH / BIOS | 131,040 | 511MB | 16,380 bytes at `0x1000` |
+| UEFI | 130,804 | 505MB | 16,351 bytes at `0x1000` |
+| aarch64 | 131,072 | 510MB | 16,384 bytes at `0x40000000` |
+
+**The bitmap is based at the lowest usable address, not at zero.** The first
+version indexed from physical zero, which is invisible on x86 because RAM
+starts near there — but ARM's starts at 1GB, so the bitmap described 393,216
+pages of which 262,433 were reported "used" when they were not memory at all.
+Wasteful, and a lie: nothing was using them and nothing could. Server-class ARM
+parts start RAM at 4GB or higher and it gets proportionally worse. Basing the
+bitmap at the first usable address made it 16KB describing 512MB instead of
+48KB describing 1.5GB of mostly-absent address space.
+
+**There is a self-test, and it runs at boot.** Allocate, check distinctness,
+take a contiguous run, verify every page in it is marked, free everything, and
+confirm the free count returned exactly to where it started. It runs on the
+real machine because there is no test harness that can run a kernel yet, and an
+allocator that is quietly wrong surfaces three checkpoints later as something
+else's bug.
 
 ### Why the bootloader is checkpoint 3 and not checkpoint 11
 
@@ -172,19 +205,35 @@ a switch statement compiled into the kernel.
 
 ## What userland is waiting on
 
-The compositor side has a list, in the order that unblocks the most work.
-Recorded here so the kernel's checkpoints can be checked against it:
+The compositor keeps its own list in [KERNEL-WANTS.md](KERNEL-WANTS.md),
+written from hitting the seam rather than from imagining it. That file is the
+authority on what the desktop needs; this table is only the mapping onto
+checkpoints.
+
+Two entries there are worth repeating because they change decisions here.
+`recon_fs_write` has no way to create a file with a mode, so a private key is
+written and *then* tightened — meaning the first filesystem calls this kernel
+defines must take a mode at creation, not after. And the desktop cannot ask how
+good the host's entropy is, which makes randomness a kernel service rather than
+a library: a machine generating its first long-lived key is exactly where a
+weak source produces quietly guessable ones.
 
 | Wanted | Needs | Earliest |
 |---|---|---|
 | Headers to compile against, stubs included | nothing | any time |
 | Device enumeration (Device Manager) | a device model | after checkpoint 6 |
 | Block devices and partitions (real volumes, encryption) | drivers, interrupts | after checkpoint 8 |
-| Display mode setting | a display driver | not blocked — wlroots can do it today |
+| Display mode setting | a display driver | not blocked — being built against wlroots now |
 | Power states (sleep, hibernate) | ACPI, or firmware calls | after checkpoint 7 |
+| Processes — so End Task can end something | address spaces, scheduling | checkpoints 4 and 8 |
+| Randomness worth generating a key from | an entropy source and a CSPRNG | after checkpoint 7 |
+| Time | a clock and a timer | checkpoint 7 |
+| Creating a file with a mode | a filesystem, and syscalls that take one | checkpoint 9 |
+| Proof of who is on the control socket | identity the kernel enforces | checkpoint 9 |
+| Storage that knows its own size | block devices | after checkpoint 8 |
 | Packet filtering | a network stack | far out |
 | Recovery before boot | the bootloader | checkpoint 3 |
-| Users and permissions enforced beneath ReconOS | checkpoint 9 | checkpoint 9 |
+| Users and permissions enforced beneath ReconOS | processes and identity | checkpoint 9 |
 
 The first row is the one worth acting on early, and it costs almost nothing:
 an interface the userland can compile against, even entirely stubbed, lets both

@@ -15,7 +15,7 @@
 #   make check-portable       fail if core/ has learned about a machine
 #   make clean
 
-VERSION := 0.0.2
+VERSION := 0.0.3
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

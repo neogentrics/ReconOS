@@ -8,6 +8,7 @@
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/pmm.h>
 
 #ifndef RECONOS_KERNEL_VERSION
 #define RECONOS_KERNEL_VERSION "0.0.0"
@@ -30,6 +31,17 @@ void kmain(void)
 	arch_early_init();
 	banner();
 	boot_print_summary();
+
+	pmm_init();
+	pmm_print_summary();
+
+	/* Run at boot rather than in a test harness, because there is no test
+	 * harness that can run a kernel yet, and an allocator that is quietly
+	 * wrong is the kind of fault that surfaces three checkpoints later as
+	 * something else's bug. */
+	kputs("\nSelf-tests\n");
+	kprintf("  physical allocator : %s\n",
+		pmm_self_test() ? "pass" : "FAIL");
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 
