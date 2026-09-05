@@ -270,6 +270,58 @@ Features, patches and releases are tracked the same way: see
 - **Note** the same shape as BG-067, a day apart: a thing with two names is a
   thing that will eventually be two different things.
 
+### BG-074 — Every folder in the Start menu opened the same folder
+
+[#222](https://github.com/neogentrics/ReconOS/issues/222)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"if I click documents, it should
+  be loading me into... the documents folder. Instead, it just takes me to the
+  user folder."*
+- **Was** `recon_fs_user_dir` returns a pointer into one shared static buffer.
+  The menu built the path, then called `recon_shell_open_named` on the next
+  line to make sure the File Explorer existed — and building the explorer
+  calls `recon_fs_user_dir(NULL)` to decide where to start, overwriting
+  `/Users/Joshua/Documents` with `/Users/Joshua` before the pointer was ever
+  read. Every place opened the account's own folder.
+- **Fixed in** v0.2.17, `7426d91`. The path is copied into a local before
+  anything else runs.
+- **Note** the fault is not the shared buffer, which is a reasonable thing for
+  a path accessor to have. It is holding the pointer across a call that could
+  reach the same accessor. Worth checking the other callers for the same
+  shape.
+
+### BG-075 — Clicking the Start menu's search box closed the menu
+
+[#223](https://github.com/neogentrics/ReconOS/issues/223)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"you can't click in it. When I
+  click on it, it just closes the app's menu."*
+- **Was** the box had a hit region and nothing handled it, so a click on it
+  fell through to "somewhere in the menu that is not an entry", which closes
+  the menu. Typing had always worked; what was missing was the box not
+  throwing the menu away when somebody did the obvious thing and clicked it
+  first.
+- **Fixed in** v0.2.17, `7426d91`. The box takes the click and keeps the menu.
+  Its phantom text was also drawn in the disabled ink — the colour of a thing
+  that cannot be used — which on a warm skin made the box read as switched
+  off; it is the dim surface ink now.
+- **Note** introduced with the box itself, one commit earlier. A region added
+  without a handler is a control that looks alive and is not.
+
+### BG-076 — The firewall's rule list could not be scrolled
+
+[#224](https://github.com/neogentrics/ReconOS/issues/224)
+
+- **Found in** v0.2.17. **Found by** Joshua: *"Doesn't have the scroll
+  ability, so you can't scroll through the different rules."*
+- **Was** the same gap as BG-072, in the one list that had not been swept:
+  `panel_scroll` did not know about the firewall page. With nine rules it
+  happened to fit; the moment more shipped it did not.
+- **Fixed in** v0.2.17, `7426d91`. It scrolls, with a bar, and the list
+  follows the selection only when the selection moves — following it on every
+  draw pinned the list and made the wheel do nothing at all, which was the
+  first attempt.
+
 ### BG-001 — The screen stayed blank
 
 [#3](https://github.com/neogentrics/ReconOS/issues/3)
