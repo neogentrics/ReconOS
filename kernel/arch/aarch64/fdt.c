@@ -350,3 +350,156 @@ void fdt_each_compatible(u64 dtb_phys, const char *compat,
 		}
 	}
 }
+
+/* The same walk as fdt_each_compatible, reporting a named property's bytes
+ * rather than the node's `reg`.
+ *
+ * Two walkers rather than one general one with a switch: the caller of each
+ * wants a different shape of answer, and a single function returning both would
+ * have to hand back a pointer into the blob for one of them anyway.
+ */
+void fdt_each_property(u64 dtb_phys, const char *compat, const char *prop_name,
+		       void (*fn)(const u8 *value, u32 len))
+{
+	const u8 *dtb = (const u8 *)phys_to_virt((paddr_t)dtb_phys);
+	const struct fdt_header *h = (const struct fdt_header *)dtb;
+	const u8 *strings, *p, *end;
+
+	bool matched = false;
+	const u8 *want_value = 0;
+	u32 want_len = 0;
+
+	if (!dtb_phys || be32(&h->magic) != FDT_MAGIC)
+		return;
+
+	strings = dtb + be32(&h->off_dt_strings);
+	p       = dtb + be32(&h->off_dt_struct);
+	end     = p + be32(&h->size_dt_struct);
+
+	while (p + 4 <= end) {
+		u32 token = be32(p);
+
+		p += 4;
+
+		switch (token) {
+		case FDT_BEGIN_NODE: {
+			const char *name = (const char *)p;
+
+			p += (kstrlen(name) + 1 + 3) & ~3u;
+			matched = false;
+			want_value = 0;
+			want_len = 0;
+			break;
+		}
+
+		case FDT_END_NODE:
+			if (matched && want_value)
+				fn(want_value, want_len);
+			matched = false;
+			want_value = 0;
+			break;
+
+		case FDT_NOP:
+			break;
+
+		case FDT_END:
+			return;
+
+		case FDT_PROP: {
+			u32 len, nameoff;
+			const char *prop;
+			const u8 *value;
+
+			if (p + 8 > end)
+				return;
+
+			len     = be32(p);
+			nameoff = be32(p + 4);
+			value   = p + 8;
+			prop    = (const char *)(strings + nameoff);
+
+			p = value + ((len + 3) & ~3u);
+
+			if (name_is(prop, "compatible"))
+				matched = compatible_contains((const char *)value,
+							      len, compat);
+			else if (name_is(prop, prop_name)) {
+				want_value = value;
+				want_len   = len;
+			}
+			break;
+		}
+
+		default:
+			return;
+		}
+	}
+}
+
+/* The memory window a PCI host bridge forwards.
+ *
+ * Needed for the same reason x86_64 needs one: on a machine booted directly,
+ * with no firmware, nothing has placed any device's registers and the kernel
+ * has to. The difference is where the answer comes from. There is no
+ * architectural hole in the address space here -- an ARM machine can put RAM
+ * anywhere -- so guessing is not available, and the device tree says instead.
+ *
+ * The `ranges` property of the bridge node is a list of windows it forwards,
+ * each one three cells of child address, two of parent address, two of size.
+ * The top byte of the first child cell says which kind of space it is:
+ *
+ *   0x01  I/O ports, which this architecture does not have
+ *   0x02  32-bit memory
+ *   0x03  64-bit memory
+ *
+ * The 32-bit window is the one to use. Every device can decode an address in
+ * it, including the many that implement only a 32-bit base address register,
+ * and it is the window firmware would have used.
+ */
+static u64 pci_window_base, pci_window_size;
+
+static void note_pci_ranges(const u8 *value, u32 len)
+{
+	/* Seven cells per entry: three child, two parent, two size. Fixed by
+	 * the binding rather than read from the node, because a host bridge
+	 * that declared anything else would not be this binding. */
+	const u32 entry = 7 * 4;
+
+	if (pci_window_base)
+		return;		/* the first bridge is the only one walked */
+
+	for (u32 off = 0; off + entry <= len; off += entry) {
+		const u8 *e = value + off;
+		u32 flags = be32(e);
+		u64 parent, size;
+
+		if ((flags >> 24) != 0x02)
+			continue;	/* not the 32-bit memory window */
+
+		parent = ((u64)be32(e + 12) << 32) | be32(e + 16);
+		size   = ((u64)be32(e + 20) << 32) | be32(e + 24);
+
+		if (!size)
+			continue;
+
+		pci_window_base = parent;
+		pci_window_size = size;
+		return;
+	}
+}
+
+bool fdt_pci_window(u64 dtb_phys, u64 *base, u64 *size)
+{
+	pci_window_base = 0;
+	pci_window_size = 0;
+
+	fdt_each_property(dtb_phys, "pci-host-ecam-generic", "ranges",
+			  note_pci_ranges);
+
+	if (!pci_window_base)
+		return false;
+
+	*base = pci_window_base;
+	*size = pci_window_size;
+	return true;
+}

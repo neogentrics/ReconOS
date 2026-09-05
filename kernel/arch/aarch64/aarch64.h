@@ -88,4 +88,12 @@ bool fdt_parse(u64 dtb_phys);
 void fdt_each_compatible(u64 dtb_phys, const char *compat,
 			 void (*fn)(u64 base, u64 size));
 
+/* The same, reporting one named property's raw bytes instead of `reg`. */
+void fdt_each_property(u64 dtb_phys, const char *compat, const char *prop_name,
+		       void (*fn)(const u8 *value, u32 len));
+
+/* The 32-bit memory window a PCI host bridge forwards, out of its `ranges`.
+ * False when there is no bridge in the tree, or none that forwards memory. */
+bool fdt_pci_window(u64 dtb_phys, u64 *base, u64 *size);
+
 #endif /* RECON_ARCH_AARCH64_H */

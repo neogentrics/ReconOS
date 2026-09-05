@@ -97,12 +97,16 @@ check() {
 	passes=$((passes + ran))
 }
 
-# The same, for a run that was given a disk. A separate function rather than a
-# variable assignment in front of the call: bash restores a prefix assignment
-# after a *function* returns, so the flag would survive into the next check and
-# fail the diskless run for not finding a disk it was never offered.
-checkd() {
-	EXPECT=virtio0
+# The same, for a run that was given a disk: the first argument is the name the
+# kernel must report having found.
+#
+# A function rather than a variable assignment in front of the call, because
+# bash restores a prefix assignment after a *function* returns -- so the flag
+# would survive into the next check and fail the diskless run for not finding a
+# disk it was never offered.
+check_for() {
+	EXPECT=$1
+	shift
 	check "$@"
 }
 
@@ -170,24 +174,33 @@ echo "x86_64"
 # ones where the kernel has to place the device's registers itself. Everything
 # else on this architecture arrives with the base address registers already
 # assigned by SeaBIOS or OVMF.
-checkd "  PVH, direct kernel load" \
+check_for virtio0 "  PVH, direct kernel load" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
 		"${X64_DISK[@]}"
 
-checkd "  PVH, -cpu max" \
+check_for virtio0 "  PVH, -cpu max" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -cpu max -kernel "$X64_ELF" \
 		"${X64_DISK[@]}"
 
 check "  PVH, no disk attached" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
+# The controller real hardware has, rather than the one a hypervisor offers.
+# Worth a path of its own because almost nothing about it is shared with virtio:
+# a different queue format, a different way of describing where the data goes,
+# and a controller that must be stopped before it can be configured.
+check_for nvme0n1 "  PVH, NVMe" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		-drive "file=$DISK,format=raw,if=none,id=n0" \
+		-device nvme,serial=recon0,drive=n0
+
 if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	if command -v grub-mkrescue >/dev/null && make_iso; then
-		checkd "  Multiboot2 via GRUB, BIOS" \
+		check_for virtio0 "  Multiboot2 via GRUB, BIOS" \
 			qemu-system-x86_64 -m 512M -nographic -no-reboot \
 				-cdrom "$WORK/reconos.iso" "${X64_DISK[@]}"
 		if [ -f "$OVMF_X64" ]; then
-			checkd "  Multiboot2 via GRUB, UEFI" \
+			check_for virtio0 "  Multiboot2 via GRUB, UEFI" \
 				qemu-system-x86_64 -m 512M -nographic -no-reboot \
 					-bios "$OVMF_X64" -cdrom "$WORK/reconos.iso" \
 					"${X64_DISK[@]}"
@@ -200,7 +213,7 @@ if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	fi
 
 	if [ -f "$OVMF_X64" ] && make -C boot ARCH=x86_64 esp >/dev/null 2>&1; then
-		checkd "  reconboot, UEFI" \
+		check_for virtio0 "  reconboot, UEFI" \
 			qemu-system-x86_64 -m 512M -nographic -no-reboot \
 				-bios "$OVMF_X64" \
 				-drive format=raw,file="$ROOT/boot/build/x86_64/esp.img" \
@@ -213,11 +226,11 @@ fi
 echo
 echo "aarch64"
 
-checkd "  device tree, cortex-a72" \
+check_for virtio0 "  device tree, cortex-a72" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 		-kernel "$ARM_IMG" "${ARM_DISK[@]}"
 
-checkd "  device tree, -cpu max" \
+check_for virtio0 "  device tree, -cpu max" \
 	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic -kernel "$ARM_IMG" \
 		"${ARM_DISK[@]}"
 
@@ -228,8 +241,17 @@ check "  device tree, no disk attached" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 		-kernel "$ARM_IMG"
 
+# NVMe on this architecture too, which exercises a path nothing else does: the
+# device is on PCI, and on the device-tree boot the configuration window comes
+# from the host bridge node rather than from an ACPI table.
+check_for nvme0n1 "  device tree, NVMe" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+		-kernel "$ARM_IMG" \
+		-drive "file=$DISK,format=raw,if=none,id=n0" \
+		-device nvme,serial=recon0,drive=n0
+
 for n in 2 4 8; do
-	checkd "  device tree, $n processors" \
+	check_for virtio0 "  device tree, $n processors" \
 		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
 			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
 done
@@ -241,7 +263,7 @@ if [ "$ONLY" = all ] || [ "$ONLY" = aarch64 ]; then
 		# device tree, so the configuration window is read out of the
 		# MCFG table -- which is the same walk x86_64 will need for its
 		# processor list, and the reason it was worth writing here.
-		checkd "  reconboot, UEFI" \
+		check_for virtio0 "  reconboot, UEFI" \
 			qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 				-bios "$OVMF_ARM" \
 				-drive format=raw,file="$ROOT/boot/build/aarch64/esp.img" \

@@ -131,18 +131,24 @@ void arch_pci_config_write(u8 bus, u8 slot, u8 func, u8 offset, u32 value)
 
 /* Where to put registers nobody placed.
  *
- * Nowhere, on this architecture, and that is a real answer rather than a gap. A
- * machine reached through this file was booted by UEFI or by a firmware that
- * wrote a device tree, and both assign every base address register before
- * handing over. The case x86_64 has to handle -- a hypervisor booting a kernel
- * directly with no firmware at all -- does not arise here, because the direct
- * boot path on this architecture is the device tree one, and that reaches its
- * devices through the memory-mapped transport instead.
+ * This function said "nowhere" and gave a reason, and the reason was wrong.
+ * It argued that every machine reached through this file was booted by
+ * something that assigns base address registers -- true of UEFI, false of a
+ * hypervisor starting the kernel directly with a device tree, which is one of
+ * this kernel's boot paths and has no firmware at all. An NVMe controller on
+ * that path came up with every register unassigned, and the kernel could not
+ * reach a disk that was plainly there.
  *
- * A device found with no registers assigned is therefore reported unusable
- * rather than placed on a guess. Guessing is how a device lands on top of RAM.
+ * The answer is in the device tree. Unlike x86_64 there is no architectural
+ * hole in the address space to fall back on -- an ARM machine may put RAM
+ * anywhere -- so guessing is not available, and the host bridge node says which
+ * window it forwards. That is a better answer than the guess: it is what the
+ * machine says about itself rather than what its architecture usually does.
  */
 bool arch_pci_mmio_window(u64 *base, u64 *size)
 {
-	return false;
+	if (!boot_info()->dtb)
+		return false;
+
+	return fdt_pci_window(boot_info()->dtb, base, size);
 }

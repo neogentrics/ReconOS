@@ -131,6 +131,15 @@ bool block_self_test(void);
  * architecture that has no such bus. */
 void arch_storage_probe(void);
 
+/* --- Drivers ---------------------------------------------------------------
+ *
+ * Each takes something the architecture found and registers a block device if
+ * it recognises it. Declared here rather than in a header of their own because
+ * the list of them is the interesting thing, and it is short. */
+struct pci_device;
+
+bool nvme_attach(const struct pci_device *d);
+
 /* One line saying how the architecture went looking, printed above the devices
  * it found. Worth its own hook because "no devices" has two very different
  * causes -- nothing was plugged in, or nothing was looked at -- and a summary

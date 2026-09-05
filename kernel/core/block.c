@@ -132,12 +132,30 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 	if (!buf)
 		return BLOCK_ERR_ALIGN;
 
-	s = dev->ops->read(dev, lba, count, buf);
-	if (s == BLOCK_OK) {
+	/* Split, if the device has an opinion about how much it can take at
+	 * once. Done here rather than in each driver: the arithmetic is the
+	 * same everywhere and getting it wrong means a short read that reports
+	 * success, which is silent data loss rather than an error. */
+	while (count) {
+		u32 chunk = count;
+
+		if (dev->max_blocks_per_request &&
+		    chunk > dev->max_blocks_per_request)
+			chunk = dev->max_blocks_per_request;
+
+		s = dev->ops->read(dev, lba, chunk, buf);
+		if (s != BLOCK_OK)
+			return s;
+
 		reads++;
-		blocks_read += count;
+		blocks_read += chunk;
+
+		lba   += chunk;
+		count -= chunk;
+		buf    = (u8 *)buf + (size_t)chunk * dev->block_size;
 	}
-	return s;
+
+	return BLOCK_OK;
 }
 
 enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
@@ -160,12 +178,26 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 	if (!dev->ops->write)
 		return BLOCK_ERR_READ_ONLY;
 
-	s = dev->ops->write(dev, lba, count, buf);
-	if (s == BLOCK_OK) {
+	while (count) {
+		u32 chunk = count;
+
+		if (dev->max_blocks_per_request &&
+		    chunk > dev->max_blocks_per_request)
+			chunk = dev->max_blocks_per_request;
+
+		s = dev->ops->write(dev, lba, chunk, buf);
+		if (s != BLOCK_OK)
+			return s;
+
 		writes++;
-		blocks_written += count;
+		blocks_written += chunk;
+
+		lba   += chunk;
+		count -= chunk;
+		buf    = (const u8 *)buf + (size_t)chunk * dev->block_size;
 	}
-	return s;
+
+	return BLOCK_OK;
 }
 
 enum block_status block_flush(struct block_device *dev)
@@ -241,61 +273,84 @@ void block_print_summary(void)
 /* --- The self-test ---------------------------------------------------------
  *
  * Writes a pattern, reads it back, and checks it. Which sounds trivial and is
- * not: it is the first code in this kernel whose failure mode is *somebody
+ * not: this is the first code in this kernel whose failure mode is *somebody
  * else's data*, so the test is written to catch the failures that matter rather
  * than the ones that are easy.
  *
- * It uses the last block on the device on purpose. A driver that has an
- * off-by-one in its range check fails there and nowhere else, and a test that
- * writes to block 0 would be testing the one address every bug agrees on.
+ * Three choices in it are deliberate.
+ *
+ * It works on the *last* blocks of the device. A driver with an off-by-one in
+ * its range arithmetic fails there and nowhere else, and a test that writes to
+ * block zero tests the one address every bug agrees on.
+ *
+ * It transfers sixteen kilobytes, not one block. A one-block request fits
+ * inside a single page, and a single page is the case every scatter scheme
+ * gets right: NVMe describes a transfer as a list of pages, with one page in
+ * the first pointer, two in the second, and three or more in a separate list --
+ * so a test that never exceeds one page never reaches the code where a driver
+ * goes wrong. Sixteen kilobytes crosses both boundaries.
+ *
+ * It puts back every byte it borrowed. This is somebody's disk.
  */
+#define BLOCK_TEST_PAGES 4
+
 bool block_self_test(void)
 {
 	struct block_device *d = block_device_at(0);
 	u8 *buf, *back;
-	paddr_t buf_page, back_page;
+	paddr_t buf_pages, back_pages;
 	bool ok = true;
 	enum block_status s;
-	u64 last;
+	u64 first;
+	u32 count, bytes;
 
 	if (!d) {
 		/* Not a failure. A machine with no disk attached is a machine
-		 * this kernel should still boot on, and saying "pass" for a
+		 * this kernel should still boot on, and reporting "pass" for a
 		 * test that did not run would be worse than saying so. */
 		kputs("  block: no device to test against\n");
 		return true;
 	}
 
-	if (d->block_size > PAGE_SIZE) {
-		kputs("  block: a block larger than a page needs a bigger test buffer\n");
+	bytes = BLOCK_TEST_PAGES * (u32)PAGE_SIZE;
+
+	if (d->block_size > bytes) {
+		kputs("  block: a block bigger than the test buffer\n");
 		return false;
 	}
 
-	buf_page  = pmm_alloc_page();
-	back_page = pmm_alloc_page();
-	if (!buf_page || !back_page) {
+	count = bytes / d->block_size;
+	if ((u64)count > d->block_count)
+		count = (u32)d->block_count;
+	bytes = count * d->block_size;
+
+	buf_pages  = pmm_alloc_pages(BLOCK_TEST_PAGES);
+	back_pages = pmm_alloc_pages(BLOCK_TEST_PAGES);
+	if (!buf_pages || !back_pages) {
 		kputs("  block: no memory to test with\n");
+		if (buf_pages)
+			pmm_free_pages(buf_pages, BLOCK_TEST_PAGES);
+		if (back_pages)
+			pmm_free_pages(back_pages, BLOCK_TEST_PAGES);
 		return false;
 	}
 
-	buf  = phys_to_virt(buf_page);
-	back = phys_to_virt(back_page);
+	buf   = phys_to_virt(buf_pages);
+	back  = phys_to_virt(back_pages);
+	first = d->block_count - count;
 
-	last = d->block_count - 1;
-
-	/* A pattern that fails loudly. All zeroes or all 0xFF would read back
+	/* A pattern that fails loudly. All zeroes or all ones would read back
 	 * correctly from a driver that transferred nothing at all, because the
-	 * page allocator hands out cleared pages -- so every byte differs from
-	 * its neighbour and from what an untouched buffer holds. */
-	for (u32 i = 0; i < d->block_size; i++)
+	 * page allocator hands out cleared pages. Every byte differs from its
+	 * neighbour, and the sequence does not repeat within a page, so a
+	 * transfer that got the right bytes in the wrong order is caught too. */
+	for (u32 i = 0; i < bytes; i++)
 		buf[i] = (u8)(i * 7 + 3);
 
-	/* What was there first, so the test puts it back. This is somebody's
-	 * disk. */
-	s = block_read(d, last, 1, back);
+	s = block_read(d, first, count, back);
 	if (s != BLOCK_OK) {
-		kprintf("  block: could not read the last block: %s\n",
-			block_status_name(s));
+		kprintf("  block: could not read the last %u blocks: %s\n",
+			count, block_status_name(s));
 		ok = false;
 		goto out;
 	}
@@ -305,29 +360,29 @@ bool block_self_test(void)
 		goto out;
 	}
 
-	s = block_write(d, last, 1, buf);
+	s = block_write(d, first, count, buf);
 	if (s != BLOCK_OK) {
-		kprintf("  block: could not write the last block: %s\n",
-			block_status_name(s));
+		kprintf("  block: could not write: %s\n", block_status_name(s));
 		ok = false;
 		goto out;
 	}
 
-	/* Between the write and the read, so that a driver which quietly
-	 * returns the caller's own buffer is caught rather than congratulated. */
-	kmemset(buf, 0, d->block_size);
+	/* Between the write and the read, so that a driver which quietly hands
+	 * back the caller's own buffer is caught rather than congratulated. */
+	kmemset(buf, 0, bytes);
 
-	s = block_read(d, last, 1, buf);
+	s = block_read(d, first, count, buf);
 	if (s != BLOCK_OK) {
 		kprintf("  block: could not read back: %s\n", block_status_name(s));
 		ok = false;
 		goto out;
 	}
 
-	for (u32 i = 0; i < d->block_size; i++) {
+	for (u32 i = 0; i < bytes; i++) {
 		if (buf[i] != (u8)(i * 7 + 3)) {
-			kprintf("  block: byte %u read back as %u, not %u\n",
-				i, buf[i], (unsigned)(u8)(i * 7 + 3));
+			kprintf("  block: byte %u of %u read back as %u, not "
+				"%u\n", i, bytes, buf[i],
+				(unsigned)(u8)(i * 7 + 3));
 			ok = false;
 			break;
 		}
@@ -335,13 +390,14 @@ bool block_self_test(void)
 
 	/* Put it back, and only then report. A test that leaves the disk
 	 * modified is a test that can only be run once. */
-	if (block_write(d, last, 1, back) != BLOCK_OK) {
-		kputs("  block: could not restore the block it borrowed\n");
+	if (block_write(d, first, count, back) != BLOCK_OK) {
+		kputs("  block: could not restore what it borrowed\n");
 		ok = false;
 	}
 
 	if (block_flush(d) != BLOCK_OK) {
-		kputs("  block: flush failed, so nothing written can be relied on\n");
+		kputs("  block: flush failed, so nothing written can be relied "
+		      "on\n");
 		ok = false;
 	}
 
@@ -354,18 +410,17 @@ bool block_self_test(void)
 		ok = false;
 	}
 
-	/* Every block there could be. On a device with fewer than four billion
-	 * blocks -- which is every device -- adding this to any starting point
-	 * overflows a 64-bit sum only if the check is written the naive way, so
-	 * this is the case that separates a real range check from one that
-	 * looks like a range check. */
+	/* Every block there could be. Asked from the last block, so that a
+	 * check written as `lba + count > block_count` overflows and passes --
+	 * which is what separates a real range check from one that looks like
+	 * one. */
 	if (block_read(d, d->block_count - 1, (u32)-1, buf) != BLOCK_ERR_RANGE) {
 		kputs("  block: a length that wraps past the end was allowed\n");
 		ok = false;
 	}
 
 out:
-	pmm_free_page(buf_page);
-	pmm_free_page(back_page);
+	pmm_free_pages(buf_pages, BLOCK_TEST_PAGES);
+	pmm_free_pages(back_pages, BLOCK_TEST_PAGES);
 	return ok;
 }

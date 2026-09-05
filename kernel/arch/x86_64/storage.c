@@ -31,6 +31,9 @@ void arch_storage_probe(void)
 		const struct pci_device *d = pci_device_at(i);
 		struct virtio_device v;
 
+		if (nvme_attach(d))
+			continue;
+
 		if (!virtio_pci_probe(d, &v))
 			continue;
 
