@@ -108,13 +108,19 @@ bool recon_tls_fingerprint(char *out, size_t size);
 struct recon_tls_conn *recon_tls_accept(int fd);
 
 /*
- * Read and write, with the same shape as read(2) and write(2): the number of
- * bytes moved, 0 for a closed connection, negative for an error.
+ * "Nothing right now, ask again when the socket says so."
  *
- * Retries are handled inside. mbedTLS returns WANT_READ and WANT_WRITE for a
- * renegotiation that has nothing to do with the caller, and a caller that
- * treated those as failure would drop connections for reasons it could not
- * have explained.
+ * Distinct from an error, and distinct from zero. On a blocking socket it
+ * never comes back; on a non-blocking one it is the ordinary state of a
+ * connection with no data waiting, and a caller that treated it as failure
+ * would close a perfectly good connection every time it was quiet.
+ */
+#define RECON_TLS_AGAIN (-2)
+
+/*
+ * Read and write, with the same shape as read(2) and write(2): the number of
+ * bytes moved, 0 for a closed connection, negative for an error --
+ * RECON_TLS_AGAIN for the not-an-error above.
  */
 int recon_tls_read(struct recon_tls_conn *conn, void *out, size_t size);
 int recon_tls_write(struct recon_tls_conn *conn, const void *data, size_t size);
@@ -164,6 +170,43 @@ int recon_tls_write(struct recon_tls_conn *conn, const void *data, size_t size);
  * bundle is missing, or they are being intercepted.
  */
 struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname);
+
+/*
+ * --- The same thing, driven from an event loop ---
+ *
+ * recon_tls_connect above runs the handshake to completion before it returns,
+ * which is right for a blocking socket and wrong for everything the desktop
+ * does. A handshake is several round trips; doing it inline would freeze the
+ * screen for as long as the far end takes to answer, and the far end is on
+ * somebody else's network.
+ *
+ * So the stream layer uses these instead: begin, then step whenever the socket
+ * says it can make progress, and open the connection when a step says DONE.
+ */
+enum recon_tls_step {
+    RECON_TLS_STEP_DONE,
+    RECON_TLS_STEP_WANT_READ,
+    RECON_TLS_STEP_WANT_WRITE,
+    RECON_TLS_STEP_FAILED,
+};
+
+/*
+ * Set up a client connection without starting the handshake.
+ *
+ * The socket may be non-blocking; this does not touch it. NULL means the
+ * connection could not be set up at all, and `fd` remains the caller's.
+ */
+struct recon_tls_conn *recon_tls_client_begin(int fd, const char *hostname);
+
+/*
+ * Push the handshake as far as it will go right now.
+ *
+ * WANT_READ and WANT_WRITE say which way the socket has to become ready before
+ * it is worth calling again -- watch for that and call again then, rather than
+ * calling in a loop. FAILED leaves recon_tls_last_error() saying why, and the
+ * connection must be closed with recon_tls_close.
+ */
+enum recon_tls_step recon_tls_handshake_step(struct recon_tls_conn *conn);
 
 /*
  * Whether outgoing TLS can be used at all -- that is, whether there is a

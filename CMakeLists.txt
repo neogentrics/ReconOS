@@ -240,12 +240,17 @@ add_executable(recon_clock_tests
     src/recon_firewall.c
     src/recon_error.c
     src/recon_registry.c
+    # recon_net can open an encrypted stream, so it reaches the TLS layer --
+    # and the linker wants that whether or not this test opens one.
+    src/recon_tls.c
+    src/recon_crypt.c
     src/recon_fs.c)
 
 target_include_directories(recon_clock_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES})
+target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES}
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.
@@ -306,6 +311,10 @@ add_executable(recon_net_tests
     # targets exist to protect.
     src/recon_firewall.c
     src/recon_error.c
+    # An encrypted stream is opened from here, so the TLS layer comes along.
+    # It brings mbedTLS and no compositor, which keeps the property below.
+    src/recon_tls.c
+    src/recon_crypt.c
     src/recon_fs.c)
 
 target_include_directories(recon_net_tests PRIVATE
@@ -314,7 +323,8 @@ target_include_directories(recon_net_tests PRIVATE
 # Only wayland-server, because that is genuinely all recon_net needs: an
 # event loop to hang a socket on. No wlroots, no generated protocol headers,
 # no compositor.
-target_link_libraries(recon_net_tests PRIVATE ${WAYLAND_LIBRARIES})
+target_link_libraries(recon_net_tests PRIVATE ${WAYLAND_LIBRARIES}
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 target_include_directories(recon_net_tests PRIVATE ${WAYLAND_INCLUDE_DIRS})
 
 enable_testing()

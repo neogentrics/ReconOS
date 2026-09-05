@@ -31,6 +31,7 @@
 #include "recon_error.h"
 #include "recon_firewall.h"
 #include "recon_net.h"
+#include "recon_tls.h"
 #include "recon_registry.h"
 
 #define INTERFACES_MAX 16
@@ -81,6 +82,7 @@ const char *recon_net_result_name(enum recon_net_result result) {
     case RECON_NET_UNREACHABLE:   return "unreachable";
     case RECON_NET_TIMED_OUT:     return "timed out";
     case RECON_NET_NO_NETWORK:    return "no network";
+    case RECON_NET_UNTRUSTED:     return "could not prove who it is";
     }
     return "unknown";
 }
@@ -720,6 +722,19 @@ struct recon_net_stream {
     int fd;
     bool connected;
 
+    /*
+     * The encryption, when there is any.
+     *
+     * `tls` is NULL for a plain stream and everything below behaves as it
+     * always did. When it is set, `connected` means the TCP connection is up
+     * and the handshake is still running -- `opened` does not fire until
+     * `secure` is true, so nothing above ever writes a password into a socket
+     * that has not finished proving who is on the other end.
+     */
+    struct recon_tls_conn *tls;
+    bool secure;
+    char hostname[256];
+
     char application[64];
     char peer[192];
 
@@ -779,7 +794,16 @@ static void stream_end(struct recon_net_stream *stream,
     if (stream->deadline != NULL) {
         wl_event_source_remove(stream->deadline);
     }
-    if (stream->fd >= 0) {
+
+    /*
+     * The TLS connection owns the descriptor once it exists -- closing it says
+     * goodbye properly and closes the socket -- so closing here as well would
+     * be a double close, which in a process with an event loop means closing
+     * whatever descriptor got that number next.
+     */
+    if (stream->tls != NULL) {
+        recon_tls_close(stream->tls);
+    } else if (stream->fd >= 0) {
         close(stream->fd);
     }
 
@@ -856,8 +880,23 @@ bool recon_net_stream_send_text(struct recon_net_stream *stream,
 /* Push out whatever is queued that the socket will take. */
 static bool stream_flush(struct recon_net_stream *stream) {
     while (stream->outgoing_used > 0) {
-        ssize_t written = send(stream->fd, stream->outgoing,
-            stream->outgoing_used, MSG_NOSIGNAL);
+        ssize_t written;
+
+        if (stream->tls != NULL) {
+            int rc = recon_tls_write(stream->tls, stream->outgoing,
+                stream->outgoing_used);
+            if (rc == RECON_TLS_AGAIN) {
+                return true;   /* Full for now, same as EAGAIN below. */
+            }
+            if (rc < 0) {
+                set_error("%s", recon_tls_last_error());
+                return false;
+            }
+            written = rc;
+        } else {
+            written = send(stream->fd, stream->outgoing,
+                stream->outgoing_used, MSG_NOSIGNAL);
+        }
 
         if (written > 0) {
             stream->sent += (size_t)written;
@@ -911,7 +950,19 @@ static int stream_event(int fd, uint32_t mask, void *data) {
             stream->deadline = NULL;
         }
 
-        if (stream->handlers.opened != NULL) {
+        /*
+         * An encrypted stream is not open yet. The TCP connection is up and
+         * the handshake has not started, and `opened` firing here would let
+         * the owner write a password into a socket that has proved nothing.
+         */
+        if (stream->hostname[0] != '\0') {
+            stream->tls = recon_tls_client_begin(stream->fd, stream->hostname);
+            if (stream->tls == NULL) {
+                set_error("%s", recon_tls_last_error());
+                stream_end(stream, RECON_NET_UNREACHABLE, true);
+                return 0;
+            }
+        } else if (stream->handlers.opened != NULL) {
             stream->in_handler = true;
             stream->handlers.opened(stream->user, stream);
             stream->in_handler = false;
@@ -923,6 +974,54 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         }
     }
 
+    /*
+     * The handshake, one step per turn of the event loop.
+     *
+     * Stepped rather than looped: on a non-blocking socket WANT_READ means
+     * "nothing has arrived", and calling again immediately would spin at full
+     * speed with the desktop inside the loop. Each step says which way the
+     * socket has to become ready, and that is what the loop is asked for.
+     */
+    if (stream->tls != NULL && !stream->secure) {
+        switch (recon_tls_handshake_step(stream->tls)) {
+        case RECON_TLS_STEP_WANT_READ:
+            wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+            return 0;
+        case RECON_TLS_STEP_WANT_WRITE:
+            wl_event_source_fd_update(stream->source,
+                WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+            return 0;
+        case RECON_TLS_STEP_FAILED:
+            set_error("%s", recon_tls_last_error());
+            stream_end(stream, RECON_NET_UNTRUSTED, true);
+            return 0;
+        case RECON_TLS_STEP_DONE:
+            break;
+        }
+
+        stream->secure = true;
+        wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+
+        if (stream->handlers.opened != NULL) {
+            stream->in_handler = true;
+            stream->handlers.opened(stream->user, stream);
+            stream->in_handler = false;
+            if (stream->close_wanted) {
+                stream->close_wanted = false;
+                stream_end(stream, RECON_NET_OK, false);
+                return 0;
+            }
+        }
+
+        /* Whatever the owner queued from `opened` wants writing, and this
+         * turn's writability has already been consumed by the handshake. */
+        if (stream->outgoing_used > 0) {
+            wl_event_source_fd_update(stream->source,
+                WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+        }
+        return 0;
+    }
+
     if ((mask & WL_EVENT_WRITABLE) != 0 && !stream_flush(stream)) {
         stream_end(stream, RECON_NET_UNREACHABLE, true);
         return 0;
@@ -931,7 +1030,22 @@ static int stream_event(int fd, uint32_t mask, void *data) {
     if ((mask & WL_EVENT_READABLE) != 0) {
         char buffer[4096];
         for (;;) {
-            ssize_t got = recv(stream->fd, buffer, sizeof(buffer), 0);
+            ssize_t got;
+
+            if (stream->tls != NULL) {
+                int rc = recon_tls_read(stream->tls, buffer, sizeof(buffer));
+                if (rc == RECON_TLS_AGAIN) {
+                    break;
+                }
+                if (rc < 0) {
+                    set_error("%s", recon_tls_last_error());
+                    stream_end(stream, RECON_NET_UNREACHABLE, true);
+                    return 0;
+                }
+                got = rc;
+            } else {
+                got = recv(stream->fd, buffer, sizeof(buffer), 0);
+            }
 
             if (got == 0) {
                 /* The other end finished. Not a failure: a server that has
@@ -971,8 +1085,36 @@ static int stream_expired(void *data) {
     return 0;
 }
 
+/*
+ * Both open calls come through here; `encrypted` is the only difference.
+ *
+ * One function rather than two that drift, because the firewall check, the
+ * permission check, the resolution and the timeout are the same questions
+ * whether or not the bytes are encrypted afterwards.
+ */
+static struct recon_net_stream *stream_open(const char *application,
+        const char *host, int port, bool encrypted,
+        const struct recon_net_stream_handlers *handlers, void *user);
+
 struct recon_net_stream *recon_net_stream_open(const char *application,
         const char *host, int port,
+        const struct recon_net_stream_handlers *handlers, void *user) {
+    return stream_open(application, host, port, false, handlers, user);
+}
+
+struct recon_net_stream *recon_net_stream_open_tls(const char *application,
+        const char *host, int port,
+        const struct recon_net_stream_handlers *handlers, void *user) {
+    char why[256];
+    if (!recon_tls_can_connect(why, sizeof(why))) {
+        set_error("%s", why);
+        return NULL;
+    }
+    return stream_open(application, host, port, true, handlers, user);
+}
+
+static struct recon_net_stream *stream_open(const char *application,
+        const char *host, int port, bool encrypted,
         const struct recon_net_stream_handlers *handlers, void *user) {
     if (g_loop == NULL) {
         set_error("networking is not up");
@@ -1065,6 +1207,22 @@ struct recon_net_stream *recon_net_stream_open(const char *application,
     snprintf(stream->application, sizeof(stream->application), "%s",
         application != NULL ? application : "");
     snprintf(stream->peer, sizeof(stream->peer), "%s:%d", host, port);
+
+    /*
+     * The name as asked for, not the address it resolved to.
+     *
+     * This is what the certificate gets checked against, so it has to be the
+     * name a person typed. Checking against the address would pass for
+     * anything holding a certificate for that IP, which is the check not
+     * happening.
+     *
+     * Empty for a plain stream, which is also how stream_event knows there is
+     * a handshake to run.
+     */
+    if (encrypted) {
+        snprintf(stream->hostname, sizeof(stream->hostname), "%s", host);
+    }
+
     clock_gettime(CLOCK_MONOTONIC, &stream->started);
 
     stream->source = wl_event_loop_add_fd(g_loop, fd,

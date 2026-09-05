@@ -31,16 +31,15 @@
  * question than deciding what this machine may reach, and it should not be
  * answered by accident while building the outgoing half.
  *
- * There is also no TLS *here*. Streams opened by this file carry what they
- * are given: nothing on this side encrypts anything, and https:// does not
- * work.
+ * Streams come both ways as of v0.3.0: plain, and encrypted with the far end
+ * verified. The encryption itself is recon_tls.h's; what is here is driving
+ * the handshake from the event loop, which is the part that has to live beside
+ * the socket.
  *
- * Worth being exact about, because the incoming half is no longer like this.
- * The control port in recon_control.h speaks TLS as of v0.3.0, which makes it
- * easy to read "ReconOS has TLS" and assume it applies in both directions. It
- * does not. Outgoing is still a gap and is still written down as one, rather
- * than being papered over with a plaintext connection to a port that expects
- * otherwise.
+ * A plain stream is still a plain stream. Nothing upgrades itself quietly --
+ * a caller asks for one or the other, and a caller that asks for encryption
+ * gets verification with it, because there is no version of this that
+ * encrypts to whoever answered.
  */
 
 #ifndef RECON_NET_H
@@ -126,6 +125,17 @@ enum recon_net_result {
     RECON_NET_UNREACHABLE,    /* it resolved and refused or did not answer */
     RECON_NET_TIMED_OUT,
     RECON_NET_NO_NETWORK,     /* nothing is configured to try with */
+
+    /*
+     * It answered, and could not prove it was who was asked for.
+     *
+     * Its own outcome rather than UNREACHABLE, because they mean opposite
+     * things to the person reading them. "Your mail server is unreachable"
+     * sends somebody to check their connection; the machine is reachable, and
+     * what is wrong is the certificate -- a wrong clock, a missing root, or
+     * something answering in its place. recon_net_last_error says which.
+     */
+    RECON_NET_UNTRUSTED,
 };
 
 const char *recon_net_result_name(enum recon_net_result result);
@@ -273,6 +283,27 @@ struct recon_net_stream_handlers {
  * did, later, from the event loop.
  */
 struct recon_net_stream *recon_net_stream_open(const char *application,
+    const char *host, int port,
+    const struct recon_net_stream_handlers *handlers, void *user);
+
+/*
+ * The same, encrypted, with the far end's identity checked.
+ *
+ * `host` is used twice and both matter: to connect, and as the name the
+ * server's certificate has to be for. That is why it is the name rather than
+ * an address -- a certificate check against an address passes for anything
+ * holding a certificate for that address, which is the check not happening.
+ *
+ * `opened` does not fire until the handshake has finished, so anything written
+ * from it goes into a connection that has already proved who is on the other
+ * end. A failed handshake arrives as `closed` with RECON_NET_UNTRUSTED, and
+ * recon_net_last_error says which check failed -- a wrong clock, a missing
+ * root and an interception are three different problems and only one of them
+ * is frightening.
+ *
+ * There is no way to ask for this without verification. See recon_tls.h.
+ */
+struct recon_net_stream *recon_net_stream_open_tls(const char *application,
     const char *host, int port,
     const struct recon_net_stream_handlers *handlers, void *user);
 

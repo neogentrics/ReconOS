@@ -66,6 +66,9 @@
 struct recon_tls_conn {
     mbedtls_ssl_context ssl;
     int fd;
+    /* Kept for the message a failed verification prints. mbedTLS holds the
+     * name too, but not anywhere worth reaching into. Empty when listening. */
+    char hostname[256];
 };
 
 static struct {
@@ -683,7 +686,41 @@ bool recon_tls_can_connect(char *why_out, size_t why_size) {
     return false;
 }
 
-struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
+/*
+ * Turn a failed handshake into a sentence, and say which check failed.
+ *
+ * "Certificate error" leaves somebody with three very different possibilities
+ * and no way to tell them apart: their clock is wrong, their bundle is short a
+ * root, or somebody is sitting in the middle of the connection. The last of
+ * those is the reason this code exists and it deserves its own sentence.
+ */
+static void handshake_failed(struct recon_tls_conn *conn, int rc) {
+    if (rc != MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+        fail(rc, "the handshake");
+        return;
+    }
+
+    uint32_t flags = mbedtls_ssl_get_verify_result(&conn->ssl);
+    const char *why = "the certificate did not check out";
+
+    if ((flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) != 0) {
+        why = "the certificate is for a different name -- either the wrong "
+              "address, or something is answering in its place";
+    } else if ((flags & MBEDTLS_X509_BADCERT_EXPIRED) != 0) {
+        why = "the certificate has expired, or this machine's clock is wrong";
+    } else if ((flags & MBEDTLS_X509_BADCERT_FUTURE) != 0) {
+        why = "the certificate is not valid yet, which usually means this "
+              "machine's clock is behind";
+    } else if ((flags & MBEDTLS_X509_BADCERT_NOT_TRUSTED) != 0) {
+        why = "nothing this machine trusts has vouched for that certificate";
+    } else if ((flags & MBEDTLS_X509_BADCERT_REVOKED) != 0) {
+        why = "that certificate has been revoked";
+    }
+
+    snprintf(g_error, sizeof(g_error), "%.96s: %s", conn->hostname, why);
+}
+
+struct recon_tls_conn *recon_tls_client_begin(int fd, const char *hostname) {
     if (fd < 0 || hostname == NULL || *hostname == '\0') {
         snprintf(g_error, sizeof(g_error),
             "a connection needs a socket and the name to check it against");
@@ -700,6 +737,7 @@ struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
     }
 
     conn->fd = fd;
+    snprintf(conn->hostname, sizeof(conn->hostname), "%s", hostname);
     mbedtls_ssl_init(&conn->ssl);
 
     int rc = mbedtls_ssl_setup(&conn->ssl, &g_out.config);
@@ -715,7 +753,7 @@ struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
      * many names knows which certificate to offer -- and records it as the
      * name to check the certificate against. Skipping this call does not fail;
      * it turns the name check off, which is the quiet half of the mistake this
-     * whole function exists to avoid.
+     * whole file exists to avoid.
      */
     rc = mbedtls_ssl_set_hostname(&conn->ssl, hostname);
     if (rc != 0) {
@@ -725,49 +763,6 @@ struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
 
     mbedtls_ssl_set_bio(&conn->ssl, &conn->fd, mbedtls_net_send,
         mbedtls_net_recv, NULL);
-
-    while ((rc = mbedtls_ssl_handshake(&conn->ssl)) != 0) {
-        if (rc == MBEDTLS_ERR_SSL_WANT_READ ||
-                rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
-            continue;
-        }
-
-        /*
-         * Say which check failed, not that one did.
-         *
-         * "Certificate error" leaves somebody with three very different
-         * possibilities and no way to tell them apart: their clock is wrong,
-         * their bundle is short a root, or somebody is sitting in the middle
-         * of the connection. The last of those is the reason this code exists
-         * and it deserves its own sentence.
-         */
-        if (rc == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
-            uint32_t flags = mbedtls_ssl_get_verify_result(&conn->ssl);
-            const char *why = "the certificate did not check out";
-
-            if ((flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) != 0) {
-                why = "the certificate is for a different name -- either the "
-                      "wrong address, or something is answering in its place";
-            } else if ((flags & MBEDTLS_X509_BADCERT_EXPIRED) != 0) {
-                why = "the certificate has expired, or this machine's clock "
-                      "is wrong";
-            } else if ((flags & MBEDTLS_X509_BADCERT_FUTURE) != 0) {
-                why = "the certificate is not valid yet, which usually means "
-                      "this machine's clock is behind";
-            } else if ((flags & MBEDTLS_X509_BADCERT_NOT_TRUSTED) != 0) {
-                why = "nothing this machine trusts has vouched for that "
-                      "certificate";
-            } else if ((flags & MBEDTLS_X509_BADCERT_REVOKED) != 0) {
-                why = "that certificate has been revoked";
-            }
-
-            snprintf(g_error, sizeof(g_error), "%s: %s", hostname, why);
-        } else {
-            fail(rc, "the handshake");
-        }
-        goto failed;
-    }
-
     return conn;
 
 failed:
@@ -776,18 +771,80 @@ failed:
     return NULL;
 }
 
+enum recon_tls_step recon_tls_handshake_step(struct recon_tls_conn *conn) {
+    if (conn == NULL) {
+        return RECON_TLS_STEP_FAILED;
+    }
+
+    int rc = mbedtls_ssl_handshake(&conn->ssl);
+    if (rc == 0) {
+        return RECON_TLS_STEP_DONE;
+    }
+    if (rc == MBEDTLS_ERR_SSL_WANT_READ) {
+        return RECON_TLS_STEP_WANT_READ;
+    }
+    if (rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        return RECON_TLS_STEP_WANT_WRITE;
+    }
+
+    handshake_failed(conn, rc);
+    return RECON_TLS_STEP_FAILED;
+}
+
+struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
+    struct recon_tls_conn *conn = recon_tls_client_begin(fd, hostname);
+    if (conn == NULL) {
+        return NULL;
+    }
+
+    /*
+     * Spun rather than waited on, which is correct only because this entry
+     * point is for a *blocking* socket: mbedTLS returns WANT_READ when the
+     * underlying read would block, and on a blocking socket it does not, so
+     * these arrive only for a renegotiation and clear immediately.
+     *
+     * Anything on the event loop uses recon_tls_client_begin and steps the
+     * handshake itself, because spinning here on a non-blocking socket would
+     * be a busy loop with the desktop inside it.
+     */
+    for (;;) {
+        switch (recon_tls_handshake_step(conn)) {
+        case RECON_TLS_STEP_DONE:
+            return conn;
+        case RECON_TLS_STEP_WANT_READ:
+        case RECON_TLS_STEP_WANT_WRITE:
+            continue;
+        case RECON_TLS_STEP_FAILED:
+            mbedtls_ssl_free(&conn->ssl);
+            free(conn);
+            return NULL;
+        }
+    }
+}
+
 int recon_tls_read(struct recon_tls_conn *conn, void *out, size_t size) {
     if (conn == NULL) {
         return -1;
     }
 
-    int rc;
-    do {
-        rc = mbedtls_ssl_read(&conn->ssl, out, size);
-    } while (rc == MBEDTLS_ERR_SSL_WANT_READ ||
-             rc == MBEDTLS_ERR_SSL_WANT_WRITE);
+    int rc = mbedtls_ssl_read(&conn->ssl, out, size);
 
-    /* A client that said goodbye is a closed connection, not a fault. The
+    /*
+     * WANT_READ and WANT_WRITE are reported, not spun on.
+     *
+     * These used to loop until the call gave a real answer, which is right on
+     * a blocking socket -- there they only arrive during a renegotiation and
+     * clear at once. On a *non*-blocking socket WANT_READ is the ordinary way
+     * of saying "nothing has arrived", and looping on it is a busy wait with
+     * the whole desktop inside it. So the answer goes back to the caller, who
+     * either knows to wait for the event loop or is on a blocking socket and
+     * will never see it.
+     */
+    if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        return RECON_TLS_AGAIN;
+    }
+
+    /* A peer that said goodbye is a closed connection, not a fault. The
      * caller treats 0 as "gone", which is what it is. */
     if (rc == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
         return 0;
@@ -801,12 +858,10 @@ int recon_tls_write(struct recon_tls_conn *conn, const void *data,
         return -1;
     }
 
-    int rc;
-    do {
-        rc = mbedtls_ssl_write(&conn->ssl, data, size);
-    } while (rc == MBEDTLS_ERR_SSL_WANT_READ ||
-             rc == MBEDTLS_ERR_SSL_WANT_WRITE);
-
+    int rc = mbedtls_ssl_write(&conn->ssl, data, size);
+    if (rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        return RECON_TLS_AGAIN;
+    }
     return rc < 0 ? -1 : rc;
 }
 

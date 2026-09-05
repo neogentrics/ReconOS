@@ -101,6 +101,18 @@ the host keeps its bundle — borrowed once, owned afterwards, the same as the
 icons. Nothing at runtime looks at a host path, so the day this boots on its
 own kernel the roots are already a file it owns.
 
+Applications get this as an encrypted stream, handshaked a step at a time
+between turns of the event loop rather than inline — a handshake is several
+round trips to somebody else's network, and doing it in one go would freeze
+the screen for as long as they took to answer. A stream's opened does not
+fire until the handshake finishes, so nothing can write a password into a
+socket that has proved nothing.
+
+A refused certificate is its own outcome and not "unreachable". They mean
+opposite things to the person reading them: "your mail server is unreachable"
+sends somebody to check their connection, when the machine is reachable and
+what is wrong is a clock, a missing root, or something answering in its place.
+
 The port still ships closed and the firewall still decides whether it may open
 at all. Encryption removes one reason it is off by default; it does not make
 opening a port to the world a default.
