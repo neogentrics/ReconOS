@@ -31,9 +31,24 @@ The port still ships closed and the firewall still decides whether it may open
 at all. Encryption removes one reason it is off by default; it does not make
 opening a port to the world a default.
 
-Phase 2 has also started: the kernel boots on x86_64 and aarch64, in `kernel/`,
-built by its own Makefile against no libc and no wlroots. Nothing in the
-desktop runs on it yet, and this file will say so plainly when something does.
+**Screen resolution**, the last row on Display Settings that was not built.
+The page lists the sizes a display offers and sets one, and a display that
+cannot be changed says so rather than offering a control that could only fail
+-- which is every nested and headless backend, where ReconOS is whatever size
+the window is.
+
+How it is built matters more than that it is. Nothing above
+`include/recon_display.h` knows wlroots exists: the page asks ReconOS what the
+screen can do, and ReconOS asks wlroots today and its own kernel later. The
+same shape `recon_volume_*` already uses for three directories that will one
+day be partitions. The point is that swapping what is underneath is one file
+rather than every page that ever asked a question.
+
+Phase 2 has also started. The kernel, in `kernel/`, boots on x86_64 and
+aarch64 under BIOS, UEFI and device tree, reports the firmware underneath it,
+and manages physical memory. It is built by its own Makefile against no libc
+and no wlroots. It runs nothing of the desktop yet, and this file will say so
+plainly when it does.
 
 ---
 
