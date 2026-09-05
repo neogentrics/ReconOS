@@ -18,6 +18,9 @@
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_access.h"
+#include "recon_fonts.h"
+#include "recon_registry.h"
 #include "recon_filedlg.h"
 #include "recon_clip.h"
 #include "recon_fs.h"
@@ -87,6 +90,12 @@ enum file_command {
     EDIT_FIND,
     EDIT_FIND_NEXT,
     EDIT_REPLACE,
+
+    VIEW_WRAP,
+    VIEW_BIGGER,
+    VIEW_SMALLER,
+    VIEW_NEXT_FONT,
+    VIEW_SYSTEM_FONT,
 };
 
 struct menu_item {
@@ -125,6 +134,21 @@ static const struct menu_item EDIT_MENU[] = {
  * menu bar written for one starts drawing the first one's items under the
  * second one's name.
  */
+/*
+ * View: how the text is shown rather than what it says.
+ *
+ * Word wrap first because it is the one people look for, and because it is
+ * the only entry here that changes what the document appears to be rather
+ * than only how big it is.
+ */
+static const struct menu_item VIEW_MENU[] = {
+    { "Word Wrap",      "",  VIEW_WRAP,        true  },
+    { "Larger Text",    "",  VIEW_BIGGER,      false },
+    { "Smaller Text",   "",  VIEW_SMALLER,     true  },
+    { "Next Font",      "",  VIEW_NEXT_FONT,   false },
+    { "The System's Font", "", VIEW_SYSTEM_FONT, false },
+};
+
 static const struct {
     const char *name;
     const struct menu_item *items;
@@ -132,6 +156,7 @@ static const struct {
 } MENUS[] = {
     { "File", FILE_MENU, (int)(sizeof(FILE_MENU) / sizeof(FILE_MENU[0])) },
     { "Edit", EDIT_MENU, (int)(sizeof(EDIT_MENU) / sizeof(EDIT_MENU[0])) },
+    { "View", VIEW_MENU, (int)(sizeof(VIEW_MENU) / sizeof(VIEW_MENU[0])) },
 };
 
 #define MENU_COUNT ((int)(sizeof(MENUS) / sizeof(MENUS[0])))
@@ -201,6 +226,29 @@ struct recon_notepad {
     int scroll_line;
     int visible_lines;
     bool modified;
+
+    /*
+     * Wrapping, and how wide a row may be before it wraps.
+     *
+     * The width is set while drawing, because only the draw knows how wide
+     * the text area is. Everything that asks about rows reads it, so a
+     * question asked before the first draw gets a width of zero and is
+     * answered as though wrapping were off -- which is the right answer,
+     * because nothing has been laid out yet.
+     */
+    bool wrap;
+    int wrap_width;
+
+    /*
+     * The typeface this window draws with, when it is not the system's.
+     *
+     * Owned here and freed with the window. `size` is applied either way:
+     * recon_font_system caches by size, so changing it costs nothing the
+     * second time a size is used.
+     */
+    struct recon_font *own_font;
+    char font_name[96];
+    int size;
 
     /* Where this text came from, and where Save writes. Empty means it has
      * never been saved, which is what makes Save fall through to Save As. */
@@ -977,6 +1025,107 @@ static size_t line_end(struct recon_notepad *np, size_t pos) {
     return pos;
 }
 
+/* How wide the text from `from` to `to` draws. */
+static int width_between(struct recon_notepad *np, size_t from, size_t to) {
+    if (to <= from) {
+        return 0;
+    }
+    /* recon_text_width needs a terminated string; borrow the byte after the
+     * run and put it back, the way the drawing code does. */
+    char saved = np->text[to];
+    np->text[to] = '\0';
+    int width = recon_text_width(np->font, np->text + from);
+    np->text[to] = saved;
+    return width;
+}
+
+/*
+ * Where the display row starting at `start` ends.
+ *
+ * With wrapping off this is the end of the line, and everything above behaves
+ * as it always did. With wrapping on it is the last point that fits, moved
+ * back to a space if there is one -- breaking mid-word is what a terminal
+ * does, and a text editor that did it would look broken rather than terse.
+ *
+ * A single word longer than the whole width has nowhere to break, so it
+ * breaks where it runs out. That is the one case where mid-word is correct:
+ * the alternative is a row that overflows the window.
+ */
+static size_t row_end(struct recon_notepad *np, size_t start) {
+    size_t hard = line_end(np, start);
+
+    if (!np->wrap || np->wrap_width <= 0) {
+        return hard;
+    }
+    if (width_between(np, start, hard) <= np->wrap_width) {
+        return hard;
+    }
+
+    /* The longest run that fits. Walked forward a byte at a time: the text is
+     * UTF-8 and a continuation byte measures as nothing on its own, so
+     * stepping by bytes lands on the same answer as stepping by characters
+     * and needs no decoder here. */
+    size_t fits = start;
+    for (size_t at = start + 1; at <= hard; at++) {
+        if (width_between(np, start, at) > np->wrap_width) {
+            break;
+        }
+        fits = at;
+    }
+
+    if (fits <= start) {
+        /* Not even one character fits, which means the window is narrower
+         * than a letter. Take one anyway; a row that never advances is a
+         * draw loop that never ends. */
+        return start + 1 <= hard ? start + 1 : hard;
+    }
+
+    /* Back up to the last space, so words stay whole. */
+    for (size_t at = fits; at > start; at--) {
+        if (np->text[at - 1] == ' ' || np->text[at - 1] == '\t') {
+            return at;
+        }
+    }
+
+    return fits;   /* One long word; break where it runs out. */
+}
+
+/* The start of the display row containing `pos`. */
+static size_t row_start(struct recon_notepad *np, size_t pos) {
+    size_t at = line_start(np, pos);
+    if (!np->wrap || np->wrap_width <= 0) {
+        return at;
+    }
+
+    while (at < pos) {
+        size_t end = row_end(np, at);
+        if (end >= pos || end <= at) {
+            return at;
+        }
+        at = end;
+    }
+    return at;
+}
+
+/* How many display rows come before `pos`. */
+static int row_number(struct recon_notepad *np, size_t pos) {
+    int rows = 0;
+    size_t at = 0;
+    while (at < pos) {
+        size_t end = row_end(np, at);
+        if (end >= pos) {
+            break;
+        }
+        /* Past the newline, or past the wrap point. */
+        at = (end < np->length && np->text[end] == '\n') ? end + 1 : end;
+        if (at == 0) {
+            break;
+        }
+        rows++;
+    }
+    return rows;
+}
+
 static int line_number(struct recon_notepad *np, size_t pos) {
     int line = 0;
     for (size_t i = 0; i < pos && i < np->length; i++) {
@@ -991,35 +1140,48 @@ static int column_number(struct recon_notepad *np, size_t pos) {
     return (int)(pos - line_start(np, pos));
 }
 
+/*
+ * Up and down move by what is on the screen, not by what is in the file.
+ *
+ * With wrapping on, a paragraph is one line and several rows, and an arrow
+ * that jumped the whole paragraph would be an arrow that skipped most of the
+ * document. What somebody means by "up" is the row above the one they can
+ * see.
+ */
 static void move_up(struct recon_notepad *np) {
-    size_t start = line_start(np, np->cursor);
+    size_t start = row_start(np, np->cursor);
     if (start == 0) {
         return;
     }
-    int column = (int)(np->cursor - start);
+    size_t column = np->cursor - start;
 
-    size_t previous_start = line_start(np, start - 1);
-    size_t previous_end = start - 1;
-    size_t target = previous_start + (size_t)column;
+    /* The row before this one: found by walking from the start of the row
+     * above the previous character, which is inside it by construction. */
+    size_t previous = row_start(np, start - 1);
+    size_t previous_end = row_end(np, previous);
+
+    size_t target = previous + column;
     np->cursor = target < previous_end ? target : previous_end;
 }
 
 static void move_down(struct recon_notepad *np) {
-    size_t end = line_end(np, np->cursor);
+    size_t start = row_start(np, np->cursor);
+    size_t end = row_end(np, start);
     if (end >= np->length) {
         return;
     }
-    int column = column_number(np, np->cursor);
+    size_t column = np->cursor - start;
 
-    size_t next_start = end + 1;
-    size_t next_end = line_end(np, next_start);
-    size_t target = next_start + (size_t)column;
+    size_t next = (np->text[end] == '\n') ? end + 1 : end;
+    size_t next_end = row_end(np, next);
+
+    size_t target = next + column;
     np->cursor = target < next_end ? target : next_end;
 }
 
 /* Keep the cursor's line on screen after it moves. */
 static void scroll_to_cursor(struct recon_notepad *np) {
-    int line = line_number(np, np->cursor);
+    int line = row_number(np, np->cursor);
 
     if (line < np->scroll_line) {
         np->scroll_line = line;
@@ -1144,6 +1306,9 @@ static void do_save(struct recon_notepad *np, enum pending_action pending) {
     }
 }
 
+static bool apply_font(struct recon_notepad *np, char *why, size_t why_size);
+static void next_font(struct recon_notepad *np, char *why, size_t why_size);
+
 static void run_command(struct recon_notepad *np, enum file_command command) {
     np->menu_open = -1;
 
@@ -1203,6 +1368,74 @@ static void run_command(struct recon_notepad *np, enum file_command command) {
     case EDIT_REPLACE:
         open_replace(np);
         break;
+
+    case VIEW_WRAP:
+        np->wrap = !np->wrap;
+        /*
+         * The cursor's row number changes when wrapping does, so where the
+         * view is scrolled to has to be worked out again. Without this,
+         * turning wrap on in a long document leaves the window looking at a
+         * part of it the cursor is no longer in.
+         */
+        scroll_to_cursor(np);
+        set_message(np, false, np->wrap
+            ? "Word wrap is on. Long lines fold at the window's edge."
+            : "Word wrap is off. Long lines run past the edge.");
+        break;
+
+    case VIEW_BIGGER:
+    case VIEW_SMALLER: {
+        int was = np->size;
+        np->size += (command == VIEW_BIGGER) ? 1 : -1;
+
+        char why[160];
+        if (!apply_font(np, why, sizeof(why))) {
+            np->size = was;
+            apply_font(np, NULL, 0);
+            set_message(np, true, "%s", why);
+            break;
+        }
+
+        if (np->size == was) {
+            set_message(np, false, command == VIEW_BIGGER
+                ? "That is as large as it goes."
+                : "That is as small as it goes.");
+            break;
+        }
+
+        /* A different size is a different number of rows, and a different
+         * place for every wrap point. */
+        scroll_to_cursor(np);
+        set_message(np, false, "Text size %d.", np->size);
+        break;
+    }
+
+    case VIEW_NEXT_FONT: {
+        char why[160];
+        why[0] = '\0';
+        next_font(np, why, sizeof(why));
+
+        if (why[0] != '\0') {
+            set_message(np, true, "%s", why);
+            break;
+        }
+        scroll_to_cursor(np);
+        set_message(np, false, "Drawing with %s.",
+            np->font_name[0] != '\0' ? np->font_name : "the system's font");
+        break;
+    }
+
+    case VIEW_SYSTEM_FONT: {
+        np->font_name[0] = '\0';
+        char why[160];
+        if (!apply_font(np, why, sizeof(why))) {
+            set_message(np, true, "%s", why);
+            break;
+        }
+        scroll_to_cursor(np);
+        set_message(np, false, "Back to the system's font.");
+        break;
+    }
 
     case FILE_CLOSE:
         /*
@@ -1330,6 +1563,111 @@ static void draw_file_menu(struct recon_notepad *np, struct recon_panel *panel,
     }
 }
 
+/* --- How it is shown --- */
+
+#define NOTEPAD_SIZE_MIN 9
+#define NOTEPAD_SIZE_MAX 32
+
+/*
+ * Point the window at the typeface it should be drawing with.
+ *
+ * One place, called after any change, so the two ways of choosing -- a size
+ * and a family -- cannot get out of step. A family that will not load leaves
+ * the previous one in place and says so, rather than leaving the window with
+ * nothing to draw text with.
+ */
+static bool apply_font(struct recon_notepad *np, char *why, size_t why_size) {
+    if (why != NULL && why_size > 0) {
+        why[0] = '\0';
+    }
+
+    if (np->size < NOTEPAD_SIZE_MIN) {
+        np->size = NOTEPAD_SIZE_MIN;
+    }
+    if (np->size > NOTEPAD_SIZE_MAX) {
+        np->size = NOTEPAD_SIZE_MAX;
+    }
+
+    if (np->font_name[0] == '\0') {
+        /* The system's, at the chosen size. recon_font_system caches by size,
+         * so this is free the second time a size is used and the result is
+         * not ours to free. */
+        struct recon_font *shared = recon_font_system(np->size);
+        if (shared == NULL) {
+            recon_text_copy(why, why_size, "The system font could not be "
+                "loaded at that size.");
+            return false;
+        }
+        if (np->own_font != NULL) {
+            recon_font_destroy(np->own_font);
+            np->own_font = NULL;
+        }
+        np->font = shared;
+        return true;
+    }
+
+    char path[RECON_PATH_MAX];
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fonts_path(np->font_name, path, sizeof(path)) ||
+            !recon_fs_resolve("/", path, host, sizeof(host), canonical,
+                sizeof(canonical))) {
+        recon_text_copy(why, why_size, "That font could not be found.");
+        return false;
+    }
+
+    struct recon_font *loaded = recon_font_load(host, np->size);
+    if (loaded == NULL) {
+        recon_text_copy(why, why_size, "That font could not be read.");
+        return false;
+    }
+
+    if (np->own_font != NULL) {
+        recon_font_destroy(np->own_font);
+    }
+    np->own_font = loaded;
+    np->font = loaded;
+    return true;
+}
+
+/*
+ * The next installed font after the current one, wrapping round to the
+ * system's own.
+ *
+ * A menu that cycles rather than a list to pick from: Notepad has a menu bar
+ * and no room for a chooser, the Control Panel already has the list, and
+ * cycling is two clicks to see what a document looks like in something else.
+ */
+static void next_font(struct recon_notepad *np, char *why, size_t why_size) {
+    int count = recon_fonts_count();
+    if (count == 0) {
+        recon_text_copy(why, why_size, "No fonts are installed. Display "
+            "Settings can add one.");
+        return;
+    }
+
+    int at = -1;   /* -1 means the system's own, which comes before the rest. */
+    for (int i = 0; i < count; i++) {
+        char name[96];
+        if (recon_fonts_at(i, name, sizeof(name)) &&
+                strcmp(name, np->font_name) == 0) {
+            at = i;
+            break;
+        }
+    }
+
+    if (at + 1 >= count) {
+        np->font_name[0] = '\0';   /* Round the loop, back to the system's. */
+    } else {
+        char name[96];
+        if (recon_fonts_at(at + 1, name, sizeof(name))) {
+            recon_text_copy(np->font_name, sizeof(np->font_name), name);
+        }
+    }
+
+    apply_font(np, why, why_size);
+}
+
 static void notepad_draw(void *user, struct recon_panel *panel,
         int x, int y, int w, int h) {
     struct recon_notepad *np = user;
@@ -1349,6 +1687,14 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     int text_h = h - MENUBAR_HEIGHT - STATUS_HEIGHT - find_h;
     np->visible_lines = text_h > 0 ? text_h / line_height : 0;
 
+    /*
+     * Set before anything asks a question about rows, because every one of
+     * those questions is answered against this number. The text area's
+     * padding comes off both sides, and one character's slack keeps the last
+     * letter of a full row clear of the bevel.
+     */
+    np->wrap_width = w - PADDING * 2 - 4;
+
     recon_fill_rect(panel, x, content_y, w, text_h, COLOR_BG);
     recon_draw_bevel(panel, x, content_y, w, text_h, true);
     recon_hit_add(panel, x, content_y, w, text_h, HIT_TEXT);
@@ -1356,16 +1702,22 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     /* Everything below draws relative to the text area, not the window. */
     y = content_y;
 
-    /* Walk the buffer a line at a time, drawing the visible window of it. */
+    /*
+     * Walk the buffer a display row at a time.
+     *
+     * A row is a line when wrapping is off, and part of one when it is on.
+     * Everything below is written against rows, so the two cases are one path
+     * rather than two that have to be kept in step.
+     */
     size_t pos = 0;
     int line = 0;
-    int cursor_line = line_number(np, np->cursor);
+    int cursor_line = row_number(np, np->cursor);
 
     size_t sel_from, sel_to;
     selection_range(np, &sel_from, &sel_to);
 
     while (pos <= np->length && line < np->scroll_line + np->visible_lines) {
-        size_t end = line_end(np, pos);
+        size_t end = row_end(np, pos);
 
         if (line >= np->scroll_line) {
             int row = line - np->scroll_line;
@@ -1425,8 +1777,9 @@ static void notepad_draw(void *user, struct recon_panel *panel,
             }
 
             if (line == cursor_line) {
-                /* Measure the text before the cursor to place the caret. */
-                size_t start = line_start(np, np->cursor);
+                /* Measured from the start of the row the cursor is on. On a
+                 * wrapped line that is not the start of the line. */
+                size_t start = row_start(np, np->cursor);
                 char saved = np->text[np->cursor];
                 np->text[np->cursor] = '\0';
                 int caret_x = x + PADDING +
@@ -1441,7 +1794,15 @@ static void notepad_draw(void *user, struct recon_panel *panel,
         if (end >= np->length) {
             break;
         }
-        pos = end + 1;
+
+        /*
+         * Past the newline, or straight on from the wrap point.
+         *
+         * A wrapped row ends *at* a character rather than at a separator, so
+         * skipping one here would eat a letter from the start of every
+         * continuation row.
+         */
+        pos = (np->text[end] == '\n') ? end + 1 : end;
         line++;
     }
 
@@ -1532,8 +1893,18 @@ static void notepad_draw(void *user, struct recon_panel *panel,
     if (np->message[0] != '\0') {
         snprintf(status, sizeof(status), "%s", np->message);
     } else {
+        /*
+         * The position in the *file*, not on the screen.
+         *
+         * `cursor_line` above is a display row, which is what the drawing
+         * loop needs. Somebody reading "Line 4" means the fourth line of the
+         * document, and with wrapping on those are different numbers -- a
+         * status line mixing one with a column counted the other way is
+         * two facts that cannot both be about the same place.
+         */
         snprintf(status, sizeof(status), "Line %d, Column %d   %zu characters%s",
-            cursor_line + 1, column_number(np, np->cursor) + 1, np->length,
+            line_number(np, np->cursor) + 1,
+            column_number(np, np->cursor) + 1, np->length,
             np->modified ? "   (modified)" : "");
     }
     recon_draw_text(panel, np->font, x + PADDING,
@@ -1939,6 +2310,12 @@ static void notepad_context_action(void *user, uint32_t id) {
 static void notepad_destroy(void *user) {
     struct recon_notepad *np = user;
     forget_history(np);
+    /* Only the one this window loaded for itself. The system's font is shared
+     * and cached by size, and freeing it would take it from every other
+     * window drawing at that size. */
+    if (np->own_font != NULL) {
+        recon_font_destroy(np->own_font);
+    }
     free(np->text);
     free(np);
 }
@@ -2003,6 +2380,19 @@ struct recon_appwin *recon_notepad_create(struct recon_server *server,
     np->menu_open = -1;
     np->menu_hover = -1;
     np->anchor = NO_ANCHOR;
+
+    /*
+     * Wrapping on, which is the opposite of what Notepad has historically
+     * done and is the right default anyway: a line that runs off the edge is
+     * a line somebody has to scroll sideways to read, and sideways scrolling
+     * to read a sentence is the worst way to read a sentence.
+     */
+    np->wrap = true;
+
+    /* The size the window came up with, so Larger and Smaller move from
+     * wherever the reader's settings put it rather than from a constant. */
+    np->size = recon_registry_get_int(RECON_REG_USER,
+        RECON_ACCESS_FONT_SIZE_KEY, RECON_ACCESS_FONT_SIZE_DEFAULT);
 
     if (!ensure_capacity(np, 0)) {
         free(np);
