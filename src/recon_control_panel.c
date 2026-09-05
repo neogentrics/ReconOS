@@ -19,6 +19,7 @@
 #include "recon_appwin.h"
 #include "recon_avatar.h"
 #include "recon_control_panel.h"
+#include "recon_clock.h"
 #include "recon_display.h"
 #include "recon_firewall.h"
 #include "recon_fonts.h"
@@ -101,6 +102,7 @@
 #define HIT_NET_ROW_BASE (RECON_APPWIN_HIT_USER + 1160)
 #define HIT_FONT_BASE (RECON_APPWIN_HIT_USER + 1200)
 #define HIT_MODE_BASE (RECON_APPWIN_HIT_USER + 1240)
+#define HIT_ZONE_BASE (RECON_APPWIN_HIT_USER + 1280)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -145,6 +147,8 @@ enum action {
     ACTION_SIZE_MORE,
     ACTION_RESET_READING,
     ACTION_SET_RESOLUTION,
+    ACTION_CHECK_TIME,
+    ACTION_TOGGLE_24H,
     ACTION_ADD_FONT,
     ACTION_REMOVE_FONT,
     ACTION_USE_FONT,
@@ -194,6 +198,7 @@ enum action {
 enum page {
     PAGE_ACCOUNTS,
     PAGE_APPEARANCE,
+    PAGE_CLOCK,
     PAGE_DISPLAY,
 
     PAGE_PROGRAMS,
@@ -234,6 +239,7 @@ static const struct {
 } PAGES[PAGE_COUNT] = {
     { "Accounts", RECON_ICON_APP, "Who may sign in" },
     { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
+    { "Date and Time", RECON_ICON_CLOCK, "The clock and its zone" },
     { "Display Settings", RECON_ICON_NOTEPAD, "Text, size, resolution" },
 
     { "Programs", RECON_ICON_PROGRAMS, "What is installed" },
@@ -703,6 +709,9 @@ struct control_panel {
      */
     int theme_scroll;
     int paper_scroll;
+
+    /* How far the zone list is scrolled. */
+    int zone_scroll;
 
     /* Which screen size is picked, before it is applied. */
     int mode_selected;
@@ -1444,6 +1453,7 @@ static const char *help_topic_for(enum page page) {
     case PAGE_ACCOUNTS:   return "Accounts";
     case PAGE_APPEARANCE: return "How it looks";
     case PAGE_CLEANUP:    return "Storage";
+    case PAGE_CLOCK:      return "How it looks";
     case PAGE_DISPLAY:    return "How it looks";
     case PAGE_PROGRAMS:   return "Programs";
     case PAGE_MODULES:    return "Programs";
@@ -2411,6 +2421,135 @@ static void draw_pending_list(struct control_panel *cp, struct recon_panel *p,
 
         recon_hit_add(p, x, y, w, row_h, HIT_PENDING_BASE + i);
         y += row_h + 2;
+    }
+}
+
+/* --- Date and Time --- */
+
+static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+    if (line <= 0) {
+        line = 18;
+    }
+
+    int bottom = y + h;
+    y = draw_heading(cp, p, x, y, w, "Date and Time",
+        "What time this machine thinks it is, and where it thinks it is.");
+
+    /* What it currently says, in full, because that is the thing being
+     * changed and it should be visible while changing it. */
+    char now[32];
+    char date[96];
+    char zone[RECON_CLOCK_ZONE_NAME_MAX];
+    recon_clock_short(now, sizeof(now));
+    recon_clock_date(date, sizeof(date));
+    recon_clock_zone_label(zone, sizeof(zone));
+
+    recon_draw_text(p, cp->font, x, y + ascent, w, date, COLOR_TEXT);
+    y += line + 2;
+
+    char summary[160];
+    snprintf(summary, sizeof(summary), "%s   %s", now, zone);
+    recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_DIM);
+    y += line + PADDING;
+
+    int bx = draw_button(cp, p, x, y, recon_registry_get_bool(RECON_REG_USER,
+            RECON_CLOCK_24H_KEY, true) ? "Show am and pm" : "Show a 24-hour clock",
+        HIT_ACTION_BASE + ACTION_TOGGLE_24H, true);
+    draw_button(cp, p, bx, y, "Check Against a Time Server",
+        HIT_ACTION_BASE + ACTION_CHECK_TIME, recon_clock_can_check());
+    y += BUTTON_HEIGHT + 6;
+
+    /*
+     * What the last check found. Shown only once there has been one: a
+     * machine that has never been asked to check is not in a state worth
+     * reporting, and "never checked" beside a button offering to check reads
+     * as a fault rather than as the default.
+     */
+    char detail[192];
+    recon_clock_sync_detail(detail, sizeof(detail));
+    if (detail[0] != '\0') {
+        recon_color ink = recon_clock_sync_state() == RECON_CLOCK_DRIFTED ||
+            recon_clock_sync_state() == RECON_CLOCK_UNREACHABLE
+            ? COLOR_WARNING : COLOR_DIM;
+        recon_draw_text(p, cp->font, x, y + ascent, w, detail, ink);
+        y += line + 2;
+    } else if (!recon_clock_can_check()) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Checking is off. Turn on 'clock/ask-the-network' in the "
+            "Registry to allow it.", COLOR_DIM);
+        y += line + 2;
+    }
+    y += PADDING;
+
+    recon_draw_text(p, cp->font, x, y + ascent, w, "Time zone", COLOR_TEXT);
+    y += line + 4;
+
+    int count = recon_clock_zone_count();
+    int current = recon_clock_zone_current();
+
+    int rows = (bottom - y - line * 3 - PADDING * 2) / ROW_HEIGHT;
+    if (rows > count) {
+        rows = count;
+    }
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    clamp_scroll(&cp->zone_scroll, rows, count);
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->zone_scroll, rows, count);
+    int lw = w - bar;
+
+    recon_fill_rect(p, x, y, lw, cp->list_h, COLOR_PANEL);
+
+    for (int row = 0; row < rows; row++) {
+        struct recon_clock_zone z;
+        if (!recon_clock_zone_at(cp->zone_scroll + row, &z)) {
+            break;
+        }
+
+        /*
+         * What the clock would read there, on every row.
+         *
+         * A list of offsets asks somebody to do arithmetic to find their own
+         * zone. A list of times lets them look for the one that matches the
+         * watch on their wrist, which is the actual question.
+         */
+        int minutes = z.minutes;
+        int here = recon_registry_get_int(RECON_REG_USER,
+            RECON_CLOCK_ZONE_KEY, 0);
+        recon_registry_set_int(RECON_REG_USER, RECON_CLOCK_ZONE_KEY, minutes);
+        char there[32];
+        recon_clock_short(there, sizeof(there));
+        recon_registry_set_int(RECON_REG_USER, RECON_CLOCK_ZONE_KEY, here);
+
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, lw, row, z.name, there,
+            cp->zone_scroll + row == current);
+        recon_hit_add(p, x, y + row * ROW_HEIGHT, lw, ROW_HEIGHT,
+            HIT_ZONE_BASE + (uint32_t)row);
+    }
+
+    y += cp->list_h + 6;
+
+    if (y + line <= bottom) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Nothing here follows daylight saving. The offset is what is "
+            "kept and what is applied.", COLOR_DIM);
+        y += line;
+    }
+    if (y + line <= bottom) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "ReconOS reads the host's clock and does not set it. Its own "
+            "comes with its own kernel.", COLOR_DIM);
     }
 }
 
@@ -4667,6 +4806,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
     case PAGE_ACCOUNTS:   draw_accounts(cp, p, x, y, w, h); break;
     case PAGE_POWER:      draw_power(cp, p, x, y, w, h); break;
     case PAGE_APPEARANCE: draw_appearance(cp, p, x, y, w, h); break;
+    case PAGE_CLOCK:      draw_clock_page(cp, p, x, y, w, h); break;
     case PAGE_DISPLAY:    draw_display(cp, p, x, y, w, h); break;
     case PAGE_PROGRAMS:   draw_programs(cp, p, x, y, w, h); break;
     case PAGE_MODULES:    draw_modules(cp, p, x, y, w, h); break;
@@ -5647,6 +5787,28 @@ static void do_action(struct control_panel *cp, enum action action) {
         set_status(cp, false, "Back to the system's own font.");
         break;
 
+    case ACTION_TOGGLE_24H: {
+        bool was = recon_registry_get_bool(RECON_REG_USER,
+            RECON_CLOCK_24H_KEY, true);
+        recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_24H_KEY, !was);
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, was ? "Showing am and pm."
+            : "Showing a 24-hour clock.");
+        break;
+    }
+
+    case ACTION_CHECK_TIME: {
+        char why[192];
+        if (!recon_clock_check(why, sizeof(why))) {
+            set_status(cp, true, "%s", why);
+            break;
+        }
+        /* The answer arrives on the event loop, so this says what is
+         * happening rather than what happened. */
+        set_status(cp, false, "Asking the time server...");
+        break;
+    }
+
     case ACTION_SET_RESOLUTION: {
         if (cp->mode_selected < 0) {
             set_status(cp, true, "Choose a size first.");
@@ -6532,6 +6694,20 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
      * unbounded >=, so an id that belongs to a base above the one being
      * tested is answered by the wrong branch and vanishes without a trace.
      */
+    if (hit_id >= HIT_ZONE_BASE) {
+        int row = (int)(hit_id - HIT_ZONE_BASE);
+        if (recon_clock_set_zone(cp->zone_scroll + row)) {
+            char zone[RECON_CLOCK_ZONE_NAME_MAX];
+            recon_clock_zone_label(zone, sizeof(zone));
+
+            /* The taskbar shows the time too, and it is the reason somebody
+             * came here. It has to change while they are looking at it. */
+            recon_shell_restyle(cp->server->shell);
+            set_status(cp, false, "The clock is now on %s.", zone);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_MODE_BASE) {
         int row = (int)(hit_id - HIT_MODE_BASE);
         cp->mode_selected = (cp->mode_selected == row) ? -1 : row;

@@ -142,6 +142,15 @@ enum recon_net_result recon_net_resolve(const char *host, char *out,
     size_t size);
 
 /*
+ * The event loop networking was started with.
+ *
+ * For a subsystem that has to watch a socket of its own -- the clock's time
+ * check, so far -- and would otherwise need the loop passed down to it
+ * separately from wherever the server is. NULL before `recon_net_init`.
+ */
+struct wl_event_loop *recon_net_event_loop(void);
+
+/*
  * Ask whether a host answers on a port, and call back when the answer is
  * known.
  *

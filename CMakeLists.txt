@@ -60,6 +60,7 @@ add_executable(ReconOS
     src/recon_wallpaper.c
     src/recon_appwin.c
     src/recon_cmd.c
+    src/recon_clock.c
     src/recon_control.c
     src/recon_display.c
     src/recon_tls.c
@@ -223,6 +224,26 @@ target_include_directories(recon_tls_tests PRIVATE
 target_link_libraries(recon_tls_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
+# Calendar arithmetic is wrong in 2100 or it is not, and nothing but a test
+# finds out which for seventy years. The twelve-hour clock's two special cases
+# are wrong twice a day and nobody notices either.
+add_executable(recon_clock_tests
+    tests/test_clock.c
+    src/recon_clock.c
+    # The clock asks recon_net whether there is a way out before it offers to
+    # check the time, and recon_net asks the firewall before it opens
+    # anything -- so both come along, the same way the network tests take them.
+    src/recon_net.c
+    src/recon_firewall.c
+    src/recon_error.c
+    src/recon_registry.c
+    src/recon_fs.c)
+
+target_include_directories(recon_clock_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_clock_tests PRIVATE ${WAYLAND_LIBRARIES})
+
 # Whether the accessibility skins work is a question about people who are not
 # in the room. It is answered by simulating each deficiency and measuring, not
 # by looking at the palette and deciding it seems fine.
@@ -290,6 +311,7 @@ add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME tls COMMAND recon_tls_tests)
+add_test(NAME clock COMMAND recon_clock_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)

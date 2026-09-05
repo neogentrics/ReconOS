@@ -336,6 +336,10 @@ const char *recon_net_machine_name(void) {
 
 /* --- Reaching --- */
 
+struct wl_event_loop *recon_net_event_loop(void) {
+    return g_loop;
+}
+
 enum recon_net_result recon_net_resolve(const char *host, char *out,
         size_t size) {
     if (host == NULL || *host == '\0' || out == NULL || size == 0) {

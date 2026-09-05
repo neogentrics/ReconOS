@@ -27,6 +27,7 @@
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_appwin.h"
+#include "recon_clock.h"
 #include "recon_control_panel.h"
 #include "recon_desktop.h"
 #include "recon_explorer.h"
@@ -132,6 +133,9 @@
 /* The desktop pager at the right end of the taskbar. */
 #define HIT_DESKTOP_BASE 291
 
+/* The clock. Two above the desktop buttons, which run 291 to 294. */
+#define HIT_CLOCK 296
+
 /*
  * Four desktops.
  *
@@ -142,6 +146,15 @@
  */
 #define DESKTOP_COUNT 4
 #define DESKTOP_BUTTON 22
+
+/*
+ * Room for the clock, to the left of the pager.
+ *
+ * Fixed rather than measured, so the task buttons beside it do not change
+ * width every minute as the time goes from 9:59 to 10:00. A bar that reflows
+ * itself once a minute is a bar that catches the eye for no reason.
+ */
+#define CLOCK_WIDTH 96
 #define HIT_SEC_BASE 300
 #define HIT_CONTEXT_BASE 400
 #define HIT_DIALOG_BASE 500
@@ -713,6 +726,9 @@ struct recon_shell {
      */
     struct recon_panel *blank;
     struct wl_event_source *blank_timer;
+
+    /* Redraws the taskbar when the displayed minute changes. */
+    struct wl_event_source *clock_timer;
 
     /*
      * The tooltip: one panel for the whole desktop.
@@ -1838,6 +1854,36 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
  * turns the pager from four identical buttons into somewhere you can see the
  * shape of what you have open.
  */
+/*
+ * The time, and what it is for.
+ *
+ * Two lines would fit and one is right: a taskbar clock is read at a glance
+ * and the glance wants the time. Everything else about it -- the date, the
+ * zone, whether it has been checked against a time server -- is on the
+ * tooltip, which is what somebody looks at when the glance was not enough.
+ */
+static void draw_clock(struct recon_shell *shell, struct recon_panel *bar,
+        int x, int baseline) {
+    char now[32];
+    recon_clock_short(now, sizeof(now));
+
+    int width = recon_text_width(shell->font, now);
+    recon_draw_text(bar, shell->font, x + (CLOCK_WIDTH - width) / 2, baseline,
+        CLOCK_WIDTH, now, COLOR_TEXT);
+
+    recon_hit_add(bar, x, TASKBAR_PADDING, CLOCK_WIDTH, BUTTON_HEIGHT,
+        HIT_CLOCK);
+
+    char date[96];
+    char zone[RECON_CLOCK_ZONE_NAME_MAX];
+    recon_clock_date(date, sizeof(date));
+    recon_clock_zone_label(zone, sizeof(zone));
+
+    char tip[160];
+    snprintf(tip, sizeof(tip), "%s -- %s", date, zone);
+    recon_hit_tip(bar, tip);
+}
+
 static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
         int x, int baseline) {
     for (int i = 0; i < DESKTOP_COUNT; i++) {
@@ -1946,6 +1992,9 @@ static void draw_taskbar(struct recon_shell *shell) {
     int pager_w = DESKTOP_COUNT * (DESKTOP_BUTTON + 2) + TASKBAR_PADDING;
     available -= pager_w;
 
+    /* And the clock, which sits between the windows and the pager. */
+    available -= CLOCK_WIDTH;
+
     int window_count = 0;
     struct recon_toplevel *counted;
     wl_list_for_each(counted, &shell->server->toplevels, link) {
@@ -1960,6 +2009,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         }
     }
 
+    draw_clock(shell, bar, width - pager_w - CLOCK_WIDTH, baseline);
     draw_pager(shell, bar, width - pager_w + TASKBAR_PADDING, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
@@ -2747,6 +2797,44 @@ static void layout(struct recon_shell *shell) {
 static int adopt_window(struct recon_shell *shell, struct recon_appwin *win);
 /* Defined with the rest of the blanking, below the shell it acts on. */
 static int blank_expired(void *data);
+static int clock_ticked(void *data);
+
+/*
+ * Wake at the top of the next minute, not sixty seconds from now.
+ *
+ * A timer set to sixty seconds drifts: each round trip through the event loop
+ * adds a little, and after an hour the clock changes several seconds after
+ * the minute does. Aiming at the boundary re-aims every time, so the error
+ * never accumulates -- and it means the displayed minute changes when the
+ * minute changes, which is the only moment anybody would notice.
+ *
+ * The extra 200ms is slack. Firing a few milliseconds early would redraw the
+ * same minute and then have to wait again.
+ */
+static void clock_arm(struct recon_shell *shell) {
+    if (shell == NULL || shell->clock_timer == NULL) {
+        return;
+    }
+
+    struct recon_clock_time now;
+    recon_clock_now(&now);
+
+    int ms = (60 - now.second) * 1000 + 200;
+    wl_event_source_timer_update(shell->clock_timer, ms);
+}
+
+static int clock_ticked(void *data) {
+    struct recon_shell *shell = data;
+
+    /*
+     * Only the taskbar. The clock is the one thing on screen that changes
+     * without anybody doing anything, and redrawing the desktop for it would
+     * mean the whole screen repaints once a minute forever.
+     */
+    draw_taskbar(shell);
+    clock_arm(shell);
+    return 0;
+}
 
 struct recon_shell *recon_shell_create(struct recon_server *server,
         int screen_width, int screen_height) {
@@ -2793,6 +2881,10 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
     shell->blank_timer = wl_event_loop_add_timer(
         wl_display_get_event_loop(server->wl_display), blank_expired, shell);
+
+    shell->clock_timer = wl_event_loop_add_timer(
+        wl_display_get_event_loop(server->wl_display), clock_ticked, shell);
+    clock_arm(shell);
 
     /* Small to start with; it is resized to whatever it has to say. */
     shell->tip = recon_panel_create(&server->scene->tree, 120, 24);
@@ -3101,6 +3193,10 @@ void recon_shell_destroy(struct recon_shell *shell) {
      * destroying it -- which is what makes a shell restart survivable for
      * whatever somebody was in the middle of typing.
      */
+    if (shell->clock_timer != NULL) {
+        wl_event_source_remove(shell->clock_timer);
+        shell->clock_timer = NULL;
+    }
     if (shell->tip_timer != NULL) {
         wl_event_source_remove(shell->tip_timer);
         shell->tip_timer = NULL;
@@ -5219,6 +5315,14 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
 
         if (hit == HIT_APPS_BUTTON) {
             toggle_menu(shell);
+        } else if (hit == HIT_CLOCK) {
+            /*
+             * Opens the page that can change it. A popup panel showing the
+             * date would be the familiar answer and is a second thing to
+             * build and keep; the Control Panel already draws lists and
+             * already knows how to be one window per item.
+             */
+            recon_shell_open_named(shell, "Control Panel");
         } else if (hit >= HIT_DESKTOP_BASE &&
                 hit < HIT_DESKTOP_BASE + (uint32_t)DESKTOP_COUNT) {
             recon_shell_set_desktop(shell, (int)(hit - HIT_DESKTOP_BASE));

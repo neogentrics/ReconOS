@@ -56,6 +56,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "ReconOS.h"
+#include "recon_clock.h"
 #include "recon_decor.h"
 #include "recon_display.h"
 #include "recon_control.h"
@@ -2429,6 +2430,10 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         /* The screens, so the Control Panel can ask about them without
          * knowing what is answering. */
         recon_display_init(server);
+
+        /* And the clock, which wants networking up before it can offer to
+         * check itself against a time server. */
+        recon_clock_init();
 
         wlr_log(WLR_INFO, "ReconOS: network %s, %d interface%s, gateway %s",
             recon_net_online() ? "up" : "down",
