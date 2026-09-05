@@ -119,6 +119,73 @@ struct recon_tls_conn *recon_tls_accept(int fd);
 int recon_tls_read(struct recon_tls_conn *conn, void *out, size_t size);
 int recon_tls_write(struct recon_tls_conn *conn, const void *data, size_t size);
 
+/*
+ * --- Going out, which is the opposite problem ---
+ *
+ * Everything above is about somebody connecting *to* this machine, where the
+ * identity question is "is this the same machine as last time" and pinning a
+ * self-signed certificate is the honest answer.
+ *
+ * Connecting out is the other question, and it has the other answer. When
+ * ReconOS talks to somebody's mail server, "is this really imap.example.com"
+ * is exactly the question a certificate authority exists for, and somebody
+ * *has* vouched for that name. So this verifies: a chain to a trusted root,
+ * and the hostname checked against the certificate. A client that skips either
+ * has an encrypted connection to whoever answered, which is not the same thing
+ * as an encrypted connection to who it meant.
+ *
+ * There is no option to turn that off. A verify-off switch is a switch that
+ * ends up on, and the failure it causes is silent.
+ */
+
+/*
+ * Where the trusted roots live, inside ReconOS.
+ *
+ * A file in the ReconOS filesystem rather than a path on the host, so that
+ * nothing at runtime depends on this being Linux. It is copied in on first use
+ * from wherever the host keeps its bundle, which is the same shape as the
+ * icons and the wallpapers: borrowed once at install, owned afterwards.
+ */
+#define RECON_TLS_CA_FILE "/System/Config/ca-certificates.crt"
+
+/*
+ * Wrap an already-connected socket as a client, and verify the far end.
+ *
+ * `hostname` is the name that was asked for, not the address it resolved to.
+ * It is used twice and both matter: sent as SNI, because a server hosting many
+ * names needs to know which certificate to present, and checked against the
+ * certificate afterwards, because otherwise any valid certificate for any
+ * name would pass.
+ *
+ * `fd` is handed over on success and stays the caller's on failure, the same
+ * as recon_tls_accept. NULL with recon_tls_last_error() saying why -- and for
+ * a verification failure it says which check failed, because "certificate
+ * error" tells somebody nothing about whether their clock is wrong, their
+ * bundle is missing, or they are being intercepted.
+ */
+struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname);
+
+/*
+ * Whether outgoing TLS can be used at all -- that is, whether there is a
+ * bundle of trusted roots to check against.
+ *
+ * Asked before offering anything that would need it, so a machine with no
+ * bundle says so up front instead of failing at the moment somebody tries to
+ * fetch their mail.
+ */
+bool recon_tls_can_connect(char *why_out, size_t why_size);
+
+/*
+ * How many trusted roots are loaded, and how many in the bundle would not
+ * parse. Zero for both until something has connected out.
+ *
+ * A number rather than a log line, because this file has no wlroots in it and
+ * should keep none -- that is what lets its tests build without a compositor.
+ * Worth showing somewhere: a bundle that lost a dozen roots explains a
+ * verification failure that otherwise looks like an attack.
+ */
+void recon_tls_roots(int *loaded_out, int *rejected_out);
+
 /* Say goodbye properly and close. A TLS connection that just vanishes is
  * indistinguishable from one that was cut, which is worth telling apart. */
 void recon_tls_close(struct recon_tls_conn *conn);

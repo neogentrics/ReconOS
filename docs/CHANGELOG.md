@@ -91,8 +91,28 @@ on. That is how SSH does it, for the same reason: a chain answers "did
 somebody vouch for this name", and nobody has vouched for this machine.
 Pinning answers "is this the same machine as last time".
 
-Outgoing connections are **not** encrypted and `https://` still does not work.
-That is a separate gap and is still written down as one.
+**Outgoing connections are encrypted too**, and this is the opposite problem
+with the opposite answer. Listening, the identity question is "is this the same
+machine as last time", and pinning a self-signed certificate answers it
+honestly. Connecting out, the question is "is this really imap.example.com" —
+which is exactly what a certificate authority is for, and somebody *has*
+vouched for that name. So going out verifies: a chain to a trusted root, and
+the hostname checked against the certificate.
+
+There is no switch to turn that off. A verify-off switch is a switch that ends
+up on, and the failure it causes is silent — an encrypted connection to
+whoever answered, which is not the same thing as an encrypted connection to
+who you asked for.
+
+When it refuses it says *which* check failed. "Certificate error" leaves
+somebody with three very different possibilities and no way to tell them
+apart: a wrong clock, a short bundle, or somebody sitting in the middle. The
+last of those is the reason the code exists and it gets its own sentence.
+
+The trusted roots are copied into `/System/Config` on first use from wherever
+the host keeps its bundle — borrowed once, owned afterwards, the same as the
+icons. Nothing at runtime looks at a host path, so the day this boots on its
+own kernel the roots are already a file it owns.
 
 The port still ships closed and the firewall still decides whether it may open
 at all. Encryption removes one reason it is off by default; it does not make

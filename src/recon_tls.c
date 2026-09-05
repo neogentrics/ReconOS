@@ -473,6 +473,309 @@ struct recon_tls_conn *recon_tls_accept(int fd) {
     return conn;
 }
 
+/* --- Going out --- */
+
+/*
+ * The client side, set up separately from the server side and on first use.
+ *
+ * Separate because almost nothing is shared: a different role, a different
+ * verification mode, a bundle of somebody else's roots instead of this
+ * machine's own certificate. Folding the two into one config would mean a
+ * field meaning one thing when connecting and another when listening, which is
+ * how a verify mode ends up NONE on the wrong side of a connection.
+ *
+ * On first use because most machines never connect out, and reading and
+ * parsing a hundred and fifty root certificates is real work to do during
+ * startup for something nobody has asked for.
+ */
+static struct {
+    bool ready;
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context drbg;
+    mbedtls_x509_crt roots;
+    mbedtls_ssl_config config;
+
+    /* How many roots are trusted, and how many in the bundle would not
+     * parse. Kept because this file has no logging in it; see below. */
+    int loaded;
+    int rejected;
+} g_out;
+
+/*
+ * Where a host might keep its bundle of trusted roots.
+ *
+ * Read once, at the moment ReconOS first needs to connect out, and copied
+ * inside. After that the copy is the one used and this list is not consulted
+ * again -- so the day ReconOS boots on its own kernel, the bundle is already a
+ * file it owns rather than a path into a system that is no longer underneath.
+ *
+ * The same shape as the icons: borrowed once at install, owned afterwards.
+ */
+static const char *const HOST_CA_BUNDLES[] = {
+    "/etc/ssl/certs/ca-certificates.crt",     /* Debian, Ubuntu, Alpine */
+    "/etc/pki/tls/certs/ca-bundle.crt",       /* Fedora, RHEL */
+    "/etc/ssl/ca-bundle.pem",                 /* openSUSE */
+    "/etc/ssl/cert.pem",                      /* BSD, macOS */
+    NULL,
+};
+
+/* Put a bundle inside ReconOS if there is not one there already. */
+static bool install_roots(void) {
+    if (recon_fs_exists("/", RECON_TLS_CA_FILE)) {
+        return true;
+    }
+
+    for (int i = 0; HOST_CA_BUNDLES[i] != NULL; i++) {
+        FILE *f = fopen(HOST_CA_BUNDLES[i], "rb");
+        if (f == NULL) {
+            continue;
+        }
+
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        rewind(f);
+
+        /* A bundle is a few hundred kilobytes. Something enormous under this
+         * name is not a bundle and should not be read into memory to find
+         * out. */
+        if (size <= 0 || size > 4 * 1024 * 1024) {
+            fclose(f);
+            continue;
+        }
+
+        char *bytes = malloc((size_t)size);
+        if (bytes == NULL) {
+            fclose(f);
+            snprintf(g_error, sizeof(g_error), "out of memory");
+            return false;
+        }
+
+        size_t got = fread(bytes, 1, (size_t)size, f);
+        fclose(f);
+
+        if (got == (size_t)size &&
+                recon_fs_write("/", RECON_TLS_CA_FILE, bytes, got)) {
+            free(bytes);
+            return true;
+        }
+        free(bytes);
+    }
+
+    snprintf(g_error, sizeof(g_error),
+        "there is no bundle of trusted certificates on this machine, so "
+        "there is no way to check who a server claims to be");
+    return false;
+}
+
+static bool out_ready(void) {
+    if (g_out.ready) {
+        return true;
+    }
+    if (!install_roots()) {
+        return false;
+    }
+
+    size_t size = 0;
+    char *pem = recon_fs_read("/", RECON_TLS_CA_FILE, &size);
+    if (pem == NULL || size == 0) {
+        free(pem);
+        snprintf(g_error, sizeof(g_error), "could not read %s",
+            RECON_TLS_CA_FILE);
+        return false;
+    }
+
+    mbedtls_entropy_init(&g_out.entropy);
+    mbedtls_ctr_drbg_init(&g_out.drbg);
+    mbedtls_x509_crt_init(&g_out.roots);
+    mbedtls_ssl_config_init(&g_out.config);
+
+    int rc = mbedtls_ctr_drbg_seed(&g_out.drbg, mbedtls_entropy_func,
+        &g_out.entropy, (const unsigned char *)TLS_SEED, strlen(TLS_SEED));
+    if (rc != 0) {
+        fail(rc, "seeding the random number generator");
+        goto failed;
+    }
+
+    /*
+     * The length includes the terminator: mbedTLS decides PEM versus DER by
+     * looking for one, and a bundle passed without it is read as DER and
+     * rejected as garbage.
+     */
+    rc = mbedtls_x509_crt_parse(&g_out.roots, (const unsigned char *)pem,
+        size + 1);
+    if (rc < 0) {
+        fail(rc, "reading the trusted certificates");
+        goto failed;
+    }
+    /*
+     * A positive return is the number that failed to parse, with the rest
+     * loaded. Not an error: a bundle of a hundred and fifty roots picked up
+     * from any real machine usually has one or two the library will not take,
+     * and refusing the whole bundle over them would leave nothing trusted.
+     *
+     * Counted rather than logged, and readable through recon_tls_roots().
+     * This file has no wlroots in it and should not gain any -- that is what
+     * lets the TLS tests build and run without a compositor -- so what would
+     * have been a log line is a number the Network page can show instead.
+     * "Some of your roots did not load" explains a verification failure that
+     * otherwise makes no sense.
+     */
+    g_out.rejected = rc > 0 ? rc : 0;
+    for (const mbedtls_x509_crt *at = &g_out.roots; at != NULL; at = at->next) {
+        g_out.loaded++;
+    }
+
+    free(pem);
+    pem = NULL;
+
+    rc = mbedtls_ssl_config_defaults(&g_out.config, MBEDTLS_SSL_IS_CLIENT,
+        MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+    if (rc != 0) {
+        fail(rc, "setting up the client");
+        goto failed;
+    }
+
+    mbedtls_ssl_conf_min_version(&g_out.config, MBEDTLS_SSL_MAJOR_VERSION_3,
+        MBEDTLS_SSL_MINOR_VERSION_3);
+
+    /*
+     * REQUIRED, and there is no way to ask for less.
+     *
+     * OPTIONAL would let the handshake finish and leave the result in a flag
+     * for the caller to check -- which is the arrangement where somebody
+     * forgets to check it, and the connection is encrypted to whoever
+     * answered rather than to who was asked for. REQUIRED fails the handshake,
+     * so forgetting is not available.
+     */
+    mbedtls_ssl_conf_authmode(&g_out.config, MBEDTLS_SSL_VERIFY_REQUIRED);
+    mbedtls_ssl_conf_ca_chain(&g_out.config, &g_out.roots, NULL);
+    mbedtls_ssl_conf_rng(&g_out.config, mbedtls_ctr_drbg_random, &g_out.drbg);
+
+    g_out.ready = true;
+    return true;
+
+failed:
+    free(pem);
+    mbedtls_ssl_config_free(&g_out.config);
+    mbedtls_x509_crt_free(&g_out.roots);
+    mbedtls_ctr_drbg_free(&g_out.drbg);
+    mbedtls_entropy_free(&g_out.entropy);
+    memset(&g_out, 0, sizeof(g_out));
+    return false;
+}
+
+void recon_tls_roots(int *loaded_out, int *rejected_out) {
+    if (loaded_out != NULL) {
+        *loaded_out = g_out.loaded;
+    }
+    if (rejected_out != NULL) {
+        *rejected_out = g_out.rejected;
+    }
+}
+
+bool recon_tls_can_connect(char *why_out, size_t why_size) {
+    if (out_ready()) {
+        return true;
+    }
+    if (why_out != NULL && why_size > 0) {
+        snprintf(why_out, why_size, "%s", g_error);
+    }
+    return false;
+}
+
+struct recon_tls_conn *recon_tls_connect(int fd, const char *hostname) {
+    if (fd < 0 || hostname == NULL || *hostname == '\0') {
+        snprintf(g_error, sizeof(g_error),
+            "a connection needs a socket and the name to check it against");
+        return NULL;
+    }
+    if (!out_ready()) {
+        return NULL;
+    }
+
+    struct recon_tls_conn *conn = calloc(1, sizeof(*conn));
+    if (conn == NULL) {
+        snprintf(g_error, sizeof(g_error), "out of memory");
+        return NULL;
+    }
+
+    conn->fd = fd;
+    mbedtls_ssl_init(&conn->ssl);
+
+    int rc = mbedtls_ssl_setup(&conn->ssl, &g_out.config);
+    if (rc != 0) {
+        fail(rc, "starting the connection");
+        goto failed;
+    }
+
+    /*
+     * The name, set once and used twice.
+     *
+     * mbedtls_ssl_set_hostname both sends it as SNI -- so a server holding
+     * many names knows which certificate to offer -- and records it as the
+     * name to check the certificate against. Skipping this call does not fail;
+     * it turns the name check off, which is the quiet half of the mistake this
+     * whole function exists to avoid.
+     */
+    rc = mbedtls_ssl_set_hostname(&conn->ssl, hostname);
+    if (rc != 0) {
+        fail(rc, "setting the server name");
+        goto failed;
+    }
+
+    mbedtls_ssl_set_bio(&conn->ssl, &conn->fd, mbedtls_net_send,
+        mbedtls_net_recv, NULL);
+
+    while ((rc = mbedtls_ssl_handshake(&conn->ssl)) != 0) {
+        if (rc == MBEDTLS_ERR_SSL_WANT_READ ||
+                rc == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            continue;
+        }
+
+        /*
+         * Say which check failed, not that one did.
+         *
+         * "Certificate error" leaves somebody with three very different
+         * possibilities and no way to tell them apart: their clock is wrong,
+         * their bundle is short a root, or somebody is sitting in the middle
+         * of the connection. The last of those is the reason this code exists
+         * and it deserves its own sentence.
+         */
+        if (rc == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED) {
+            uint32_t flags = mbedtls_ssl_get_verify_result(&conn->ssl);
+            const char *why = "the certificate did not check out";
+
+            if ((flags & MBEDTLS_X509_BADCERT_CN_MISMATCH) != 0) {
+                why = "the certificate is for a different name -- either the "
+                      "wrong address, or something is answering in its place";
+            } else if ((flags & MBEDTLS_X509_BADCERT_EXPIRED) != 0) {
+                why = "the certificate has expired, or this machine's clock "
+                      "is wrong";
+            } else if ((flags & MBEDTLS_X509_BADCERT_FUTURE) != 0) {
+                why = "the certificate is not valid yet, which usually means "
+                      "this machine's clock is behind";
+            } else if ((flags & MBEDTLS_X509_BADCERT_NOT_TRUSTED) != 0) {
+                why = "nothing this machine trusts has vouched for that "
+                      "certificate";
+            } else if ((flags & MBEDTLS_X509_BADCERT_REVOKED) != 0) {
+                why = "that certificate has been revoked";
+            }
+
+            snprintf(g_error, sizeof(g_error), "%s: %s", hostname, why);
+        } else {
+            fail(rc, "the handshake");
+        }
+        goto failed;
+    }
+
+    return conn;
+
+failed:
+    mbedtls_ssl_free(&conn->ssl);
+    free(conn);
+    return NULL;
+}
+
 int recon_tls_read(struct recon_tls_conn *conn, void *out, size_t size) {
     if (conn == NULL) {
         return -1;
