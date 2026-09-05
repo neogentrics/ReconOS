@@ -76,6 +76,51 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-082 — A memory-map limit derived from three machines, wrong the first time our own loader ran
+
+[#249](https://github.com/neogentrics/ReconOS/issues/249)
+
+- **Found in** kernel 0.0.5. **Found by** running the new UEFI loader against
+  OVMF, and a warning that had been added defensively and had never fired.
+- **Was** `BOOT_MAX_REGIONS` was 64, with a comment reasoning that real
+  machines report well under thirty regions. That was true of every machine
+  tested when it was written. Booting through our own loader, OVMF reported
+  **86**; the kernel silently kept 64 and dropped 22, then reported 487MB
+  usable where the truth was 505MB.
+
+  The general shape is the part worth keeping: **firmware fragments its memory
+  map as it allocates, so the region count reflects how much work the firmware
+  did before handing over, not how much memory the machine has.** A limit
+  derived from observing three machines is a guess wearing evidence's clothes,
+  and it fails the moment the thing doing the handing-over changes -- which is
+  exactly what replacing GRUB was.
+
+  It was caught only because a warning existed for a case nobody expected to
+  happen. Silently keeping 64 of 86 is the failure that produces a wrong
+  number rather than an error.
+- **Fixed in** kernel 0.0.5. The limit is 256, and the warning stays, because
+  the next thing to hand over a memory map will not be OVMF either.
+
+### BG-083 — The same range of memory, claimed twice, with nothing saying which claim won
+
+[#250](https://github.com/neogentrics/ReconOS/issues/250)
+
+- **Found in** kernel 0.0.5. **Found by** reading the loader's own memory map
+  output, where one range appeared under two names.
+- **Was** a range could be described as loader memory *and* as kernel image,
+  both truthfully, and the printed map showed both with nothing to say which
+  described what the memory actually is now. Underneath, the carve-out only
+  subtracted non-usable from usable, so overlapping claims of the same kind
+  resolved by whichever happened to be applied last.
+
+  This generalises past the kernel and is worth writing down as a pattern: two
+  true statements about one thing, with no rule for which is operative, is not
+  a display problem. It is a missing decision, and printing both is what a
+  program does when it has not made one.
+- **Fixed in** kernel 0.0.5. An explicit priority: kernel over bad over ACPI
+  over reserved over bootloader over usable. The more specific claim wins, and
+  the map shows one answer per range.
+
 ### BG-081 — The page allocator counted a gigabyte of nothing as used
 
 [#234](https://github.com/neogentrics/ReconOS/issues/234)
