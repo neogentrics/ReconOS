@@ -52,6 +52,10 @@ SECTIONS
 		boot_pd   = .; . += 4096;
 		__pagetables_end = .;
 	}
+	/* An absolute symbol whose *value* is the size. boot.S cannot subtract
+	 * two linker-defined symbols itself -- the assembler sees both as
+	 * undefined and refuses -- so the arithmetic happens here instead. */
+	__pagetables_size = __pagetables_end - __pagetables_start;
 
 	. = ALIGN(4096);
 	.stack (NOLOAD) : {

@@ -88,7 +88,8 @@ common_entry:
 	 * the CPU is currently walking would end the boot immediately. */
 	movl	$__pagetables_start, %edi
 	xorl	%eax, %eax
-	movl	$((__pagetables_end - __pagetables_start) / 4), %ecx
+	movl	$__pagetables_size, %ecx
+	shrl	$2, %ecx		/* bytes -> 32-bit words */
 	rep stosl
 
 	/* One PML4 entry -> one PDPT entry -> a page directory of 512 entries,

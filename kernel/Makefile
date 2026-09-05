@@ -27,12 +27,12 @@ ifeq ($(ARCH),x86_64)
   ARCHFLAGS := -m64 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
                -mcmodel=small
   QEMU     := qemu-system-x86_64
-  QEMUFLAGS := -kernel $(KERNEL) -no-reboot
+  QEMUFLAGS = -kernel $(KERNEL) -no-reboot
 else ifeq ($(ARCH),aarch64)
   CROSS   ?= aarch64-linux-gnu-
   ARCHFLAGS := -mgeneral-regs-only
   QEMU     := qemu-system-aarch64
-  QEMUFLAGS := -M virt -cpu cortex-a72 -m 256M -kernel $(KERNEL)
+  QEMUFLAGS = -M virt -cpu cortex-a72 -m 256M -kernel $(KERNEL)
 else
   $(error Unknown ARCH '$(ARCH)'. Supported: x86_64 aarch64)
 endif
