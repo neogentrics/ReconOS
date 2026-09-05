@@ -1,72 +1,124 @@
 # ReconOS
 
-A Wayland compositor and desktop shell, built from scratch in C on [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots).
+**An operating system built from its own parts, rather than assembled from
+somebody else's.**
 
-ReconOS is the first phase of a longer project: an operating system built up
-from its own parts rather than assembled from someone else's. Phase one is the
-part you actually see and touch — the compositor, the window management, the
-shell. It runs on the Linux kernel today; replacing that substrate comes later,
-once the layer above it is worth running.
+[![version](https://img.shields.io/badge/version-0.3.0_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
+[![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
+[![tests](https://img.shields.io/badge/tests-9_suites-238636?style=flat-square)](#tests)
+[![bugs](https://img.shields.io/badge/bugs_recorded-81-da3633?style=flat-square)](docs/BUGS.md)
+[![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
-**Status: v0.3.0, in progress.** The version number tracks what works, not
-what is planned. [v0.2.17](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
-is the most recent release.
+---
 
-v0.1.0 was the milestone defined as "a usable desktop": it sets itself up on
-first run, asks who you are on every run after, and gives that person a desktop
-of their own. v0.1.1 made that last part true -- see *One account at a time*
-below -- and put the shape of the rest of the system into the Control Panel,
-most of it marked plainly as not built yet. v0.1.2 and v0.1.3 are the rounds
-that came out of somebody actually using it: setup that looks like it belongs
-to something, accounts with faces, a login that asks who you are before it
-asks anything else, and a long list of things that were wrong once a person
-clicked them.
+## The two phases
 
-v0.2.0 added the first networking: ReconOS can see the network and reach
-across it. It does not implement one -- see *The network* below, which is
-blunt about the difference. v0.2.1 added connections that carry data, the
-rule about which programs may open one, screen capture, installing and
-removing programs, and wallpapers the system draws for itself. v0.2.2 gave
-the Start menu an All Programs list and restricted the control socket to the
-account that owns it. v0.2.3 added gradients to the skin system, a boot
-splash, and fixed the unreadable labels that finding the gradients turned up.
-v0.2.4 made skins installable, which the file format had been waiting for
-since the skin system was built. v0.2.5 made the registry changeable from the
-Control Panel rather than only readable there. v0.2.6 added window snapping,
-and fixed Alt+Tab, which had been quietly dead since ReconOS started drawing
-its own windows. v0.2.7 added four desktops, which was the last thing the
-Multitasking page said was missing. v0.2.8 made Properties work, and made the
-explorer and the properties box agree about how big a file is and what it
-is. v0.2.9 let desktop icons be moved and remembered, and made a file open
-when you click it — which nothing in the system did before. v0.2.10 let a
-skin set the *shape* of a window frame and not only its colours, and v0.2.11
-gave Notepad undo and a menu to find it in. v0.2.12 added a text clipboard,
-which the system did not have at all. v0.2.13 came out of watching it run:
-removing an account can now take its files, and the Start menu's footer is
-icons rather than five words. v0.2.14 gave programs a way to arrive: a
-package format with a manifest and a receipt, so an install can place more
-than one file and removing it takes back exactly what it placed. v0.2.15
-gave the system a way to explain itself: a Help application holding both the
-written help and the change log, and a window that says what changed the
-first time an account reaches the desktop on a new version. It also made
-Storage work, gave the Recycle Bin a command so it can be reached from
-outside a window, settled on one button shape for the whole system, let the
-Start menu be typed into, and -- at last -- let a skin be written from
-inside ReconOS rather than only installed into it. v0.2.16 gave the system a
-way to say what went wrong and a boundary around what it opens: error codes
-with a screen and a log, a firewall, a startup screen that checks rather
-than counts, and remote access two ways.
+ReconOS is being built in two halves, and **both are being worked on at the
+same time.**
 
-[docs/ROADMAP.md](docs/ROADMAP.md) has the full plan, what each version did,
-and the list of what is known to be missing.
-[docs/BUGS.md](docs/BUGS.md) has every fault ever found in it -- what it
-actually was, how it surfaced, who found it, and what was done about it --
-and every entry is also a
+| | **Phase 1 — the desktop** | **Phase 2 — the kernel** |
+| --- | --- | --- |
+| What it is | The compositor, window management, the shell, the applications | Boot, memory, drivers, processes |
+| Where | `src/`, `include/`, `modules/` | `kernel/` |
+| Built against | wlroots and the Linux kernel | no libc, no wlroots, nothing |
+| State | A usable desktop. v0.2.17 released | Boots and knows its machine. v0.0.4 |
+
+**The kernel today** boots on x86_64 and aarch64 — under legacy BIOS, under
+UEFI, and via device tree — reports which firmware is underneath it, reads what
+the processor can actually do, and manages physical memory. It runs nothing of
+the desktop's yet.
+
+**Phase 1 currently runs on Linux, and that is temporary.** wlroots and the
+Linux kernel underneath are scaffolding, not architecture. Every place the
+desktop calls them is a place that will be removed — not a second backend to
+be kept working alongside the real one.
+
+That is why the desktop keeps putting its own interface in front of borrowed
+answers. `recon_display_*` asks what size the screen can be; `recon_volume_*`
+asks what storage there is. Today those questions are answered by wlroots and
+by three directories. When phase 2 can answer them, the file in between is
+deleted rather than adapted, and nothing above it changes.
+
+[docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md) is where the two halves meet:
+every place the desktop currently works around not having its own kernel,
+written down as it was hit rather than guessed at in advance.
+
+---
+
+## At a glance
+
+| | |
+| --- | --- |
+| **Written in** | C11, no framework |
+| **Draws** | its own windows, menus, icons and text — nothing is a toolkit widget |
+| **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for the network port |
+| **Applications** | File Explorer, Notepad, Terminal, Watchtower, Control Panel, Help, Calculator |
+| **Skins** | ten, including three for colour vision and one for reading |
+| **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
+| **Tests** | 9 suites, no display needed |
+
+Everything here works and is tested. What is *not* here is listed plainly —
+in the Control Panel itself, page by page, and in
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+---
+
+## Version history
+
+Newest first. The number tracks what works, not what is planned.
+
+| Version | What it brought |
+| --- | --- |
+| **0.3.0** *in progress* | TLS on the network port. Screen resolution. The kernel begins, alongside |
+| **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
+| **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |
+| **0.2.15** | Help and the change log, in the system. Skins writable from inside it. Storage. Typing in the Start menu |
+| **0.2.14** | Packages — a manifest and a receipt, so removing takes back exactly what installing placed. Find |
+| **0.2.13** | Removing an account can take its files. The menu footer becomes icons |
+| **0.2.12** | A text clipboard, which the system did not have at all |
+| **0.2.11** | Notepad can undo, and a menu to find it in |
+| **0.2.10** | A skin can set the *shape* of a window frame, not only its colours |
+| **0.2.9** | Desktop icons move and are remembered. Files open when you click them |
+| **0.2.8** | Properties — and the explorer and the box agreeing about what a file is |
+| **0.2.7** | Four desktops, the last thing the Multitasking page said was missing |
+| **0.2.6** | Window snapping, and Alt+Tab — which had been quietly dead for months |
+| **0.2.5** | The registry can be changed, not only read |
+| **0.2.4** | Skins can be installed, which the file format had been waiting for |
+| **0.2.3** | Gradients, a boot splash, and the unreadable labels that finding them revealed |
+| **0.2.2** | All Programs. The control socket restricted to the account that owns it |
+| **0.2.1** | Connections that carry data. Screen capture. Installing programs. Wallpapers |
+| **0.2.0** | The network — seen and reached across, not implemented |
+| **0.1.3** | Choose an account, then sign in |
+| **0.1.2** | Setup that looks like it belongs to something. Accounts with faces |
+| **0.1.1** | One account at a time, properly. The shape of the rest, in the Control Panel |
+| **0.1.0** | The milestone defined as *a usable desktop* |
+
+[docs/ROADMAP.md](docs/ROADMAP.md) has what each version did in full, and what
+is known to be missing. [docs/BUGS.md](docs/BUGS.md) has every fault ever
+found — what it actually was, how it surfaced, who found it, and what was done
+about it. Every entry is also a
 [GitHub issue](https://github.com/neogentrics/ReconOS/issues).
 
-Still early. There is no kernel of its own, and the account roles are
-enforced by ReconOS inside ReconOS rather than by anything underneath it. What is here works and is tested; what
-is not here is listed at the end.
+---
+
+## Contents
+
+- [What it looks like](#what-it-looks-like) — screenshots of a running system
+- [What works right now](#what-works-right-now)
+  - [Starting up, and signing in](#starting-up-and-signing-in)
+  - [The desktop](#the-desktop)
+  - [Files](#files)
+  - [Settings, and how it looks](#settings-and-how-it-looks)
+  - [Applications](#applications)
+  - [The network](#the-network)
+  - [Driving it, and finding out what went wrong](#driving-it-and-finding-out-what-went-wrong)
+- [Controls](#controls) — every keyboard shortcut
+- [Building](#building) · [Running](#running) · [Configuration](#configuration)
+- [Bugs](#bugs) — how faults are recorded
+- [Where this is going](#where-this-is-going)
+
+---
 
 ## What it looks like
 
@@ -122,12 +174,22 @@ readable at all.
 
 ## What works right now
 
+### Starting up, and signing in
+
 **It announces itself.** A splash with the Recon Towers mark, two rings
 turning around it at different speeds, and a line naming each part of the
 system as it is counted — icons, skins, wallpapers, applications, accounts.
 Those are real numbers rather than a bar pretending to drive work that has
 already finished, so a zero means something is genuinely missing.
 `RECONOS_NO_SPLASH` skips it.
+
+**A startup screen that checks.** It used to count what had been brought up.
+Now each line looks at the part of the system it names -- every folder the
+system needs, the skins, the accounts, the programs, the firewall -- says what
+it found, and raises a code when what it found is wrong. A missing folder is
+rebuilt rather than only reported. A failure does not stop the start: a
+machine that refuses to boot because one icon folder is unreadable is worse
+than one that says so and carries on.
 
 **It sets itself up.** A system with no accounts walks through five short
 screens: welcome, who you are, what the machine is called, whether anything
@@ -164,6 +226,13 @@ did not work in v0.1.0 -- the hive was written per account and read once at
 boot, and application windows were built once and reused -- so the second
 person to sign in got the first one's File Explorer, still in their folder.
 
+### The desktop
+
+**A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
+right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a
+window, a taskbar button, a desktop icon or the desktop itself all offer what
+can be done there.
+
 **A Start menu** in two columns: applications on the left, places and the
 Control Panel on the right, who is signed in across the top, and Lock / Sign
 Out / Switch User / Restart / Shut Down along the bottom. Lock covers the
@@ -183,98 +252,16 @@ mouse. Now typing filters the list, the arrows move the highlight, Enter opens
 it, and Escape steps back one thing at a time: what was typed, then the long
 list, then the menu.
 
-**A Control Panel** with thirteen pages. Nine do something: Accounts,
-Appearance, Reading, Programs, Modules, Storage, Update, Registry, About. Modules
-loads and unloads code in the running system and says why anything refused to
-load.
-
-Storage walks what ReconOS owns and says where the room went -- the system,
-the programs, each account by name, the scratch space and the Recycle Bin --
-and can empty the bin. The bars are a share of the total rather than of a
-disk: without a volume layer there is no capacity to be a fraction of, and
-drawing one anyway would be inventing the number the page opens by saying it
-does not have.
-
-The Registry page asks for the administrator's password before showing what
-the system remembers, locks itself again when you leave it, and can change
-what it shows — the key of an existing setting is not editable, because a key
-you can type over is a rename, and a rename here is a delete and an add that
-look like one act. Saving redraws everything, since a setting here is one
-something is already using: set `theme` by hand and the desktop restyles
-while you watch.
-
-The other three -- Power, Troubleshoot and Recovery -- are there and say
-plainly that they are not built, and what has to exist first. So do the parts
-of Storage that need more than one volume to mean anything, and the parts of
-Update that need somewhere to fetch one from.
-
-Update says what version is running, whether the installed version matches it,
-and the first few lines of what this version brought, with a way through to
-the whole log in Help. Usually a kernel: a hosted
-process cannot suspend a machine, partition a disk, or reinstall itself. A
-gap nobody can see is a gap nobody remembers.
-
-The Control Panel is built into ReconOS rather than shipped as a module,
-deliberately: this is where somebody goes to repair a system, and it should not
-be a thing that can fail to load.
-
-**A Task Manager** with three tabs. Applications is what is running and can
-close it, politely or by force. Processes is the machine's. Users is who has an
-account and what they are using, expandable to what each has open. Columns can
-be dragged wider. Two buttons there do nothing yet and say so.
-
-**A File Explorer** with an address bar you can type into and a drop-down of
-everywhere worth going, a toolbar of icons in groups, and a sidebar that
-separates your own folders from the machine's. It hides the system's own
-bookkeeping from your home folder.
-
-**The network — seen, not implemented.** ReconOS has no kernel, so it has no
-ARP, no IP and no TCP. What it has is `recon_net`, which presents the host's
-network in ReconOS's own terms: which interfaces exist, their addresses, the
-gateway, the resolvers, and whether there is a way out. It can resolve a name
-and ask whether a host answers, without freezing the desktop while a dead
-host times out.
-
-That is the same bargain `recon_fs` makes with the filesystem, and it buys the
-same thing: one file knows Linux is underneath, and when ReconOS has a stack
-of its own that file is what changes. The Control Panel's Network page and the
-`net` command both say so on screen, because a page listing an IP address and
-a gateway looks exactly like an operating system doing networking, and this
-one is not.
-
-**Connections that carry data**, with a rule about who may open one. Every
-stream is opened in the name of an application, and one nobody has allowed
-cannot open it; the default is no, because a system that never asks has
-answered "all of them" without saying so. `net apps`, `net allow` and `net
-deny` show and change it. This is not isolation and says so: ReconOS is one
-process, so it binds what goes through ReconOS, the same way accounts are
-bound.
-
-Deliberately not there yet: listening, and TLS. Accepting connections means
-deciding what may reach this machine, which is a bigger question than what
-this machine may reach. Without TLS this is `http://` only.
-
-**Screen capture.** Print Screen, or `capture` from the terminal, writes a PNG
-into the account's Pictures folder. It asks for the *next* frame rather than
-grabbing the last one, because a compositor keeps no copy of what it drew.
-ReconOS writes the PNG itself -- 8-bit RGB, no interlacing, no palette -- since
-the alternative was a second image library for one direction of one format.
-
-**Installing and removing programs.** A `.rex` is copied into `/Apps` and
-loaded; removing unloads it and deletes the file. Both from the Control Panel
-or from `install` and `uninstall`. Administrator-only: a module runs inside
-ReconOS with everything ReconOS can do, so installing one is closer to
-installing a driver than to saving a file.
-
-**A desktop** — wallpaper, icons, a taskbar listing every window, an apps menu,
-right-click menus with hover feedback, and a Ctrl+Alt+Del box. Right-clicking a
-window, a taskbar button, a desktop icon or the desktop itself all offer what
-can be done there.
-
 **Its own icons**, drawn by ReconOS at first run and written to
 `/System/Icons` as `.ico` files. Nothing is bundled and nothing is borrowed,
 and any icon can be replaced by dropping a different file over it — a replaced
 one stays replaced.
+
+**A desktop you can arrange.** Icons are a view of your Desktop folder, so
+anything that writes a file there puts it on the desktop. Drag one and it
+stays where you put it — the arrangement is remembered as grid positions, so
+it survives a change of screen size rather than falling off the edge. Only
+icons you moved are recorded; the grid fills in around them.
 
 **Windows the system owns** — minimize, maximize, close, dragging and resizing
 belong to the window framework rather than to each application, so a program
@@ -297,15 +284,16 @@ current window along and follows it. A window on another desktop is off the
 screen *and* off the taskbar — a bar listing every window everywhere would
 make these a way of hiding windows rather than of arranging them.
 
+### Files
+
 **A filesystem** with one root it cannot see outside of: `/System`, `/Apps`,
 `/Users`, `/Temp`. `/System` is protected, and a path that would climb out of
 the root is refused rather than quietly clamped.
 
-**A desktop you can arrange.** Icons are a view of your Desktop folder, so
-anything that writes a file there puts it on the desktop. Drag one and it
-stays where you put it — the arrangement is remembered as grid positions, so
-it survives a change of screen size rather than falling off the edge. Only
-icons you moved are recorded; the grid fills in around them.
+**A File Explorer** with an address bar you can type into and a drop-down of
+everywhere worth going, a toolbar of icons in groups, and a sidebar that
+separates your own folders from the machine's. It hides the system's own
+bookkeeping from your home folder.
 
 **Files open when you click them.** A text file opens in Notepad, from the
 desktop or the explorer. Something with nothing to open it says so — "Nothing
@@ -327,28 +315,64 @@ window could look at it, put anything back, or empty it -- and so nothing
 could test that emptying it works. `del` is deliberately not this: it has
 meant "gone" since DOS.
 
-**Dialogs.** Anything destructive asks in a window, with Cancel last so it is
-what both Enter and Escape choose. Clicking outside does not dismiss one.
+**A file dialog** shared by the applications that need one. It is drawn inside
+the window that asked for it, so it cannot be dragged away from its own
+question or left behind its own parent.
 
-**Text is UTF-8.** Accents, dashes, quotation marks and other alphabets draw
-the way they are written, in file names as well as in the help. Text used to
-be walked a byte at a time with glyphs cached only for 32..126, so any
-multi-byte character was three or four bytes each of which drew nothing --
-not a box, not a question mark, nothing -- and the typeface had the glyphs
-the whole time. A character the font has no drawing for now shows as an empty
-box. A keyboard laid out for a language with accents in it types them: the
-caret is still a byte offset, because that is what the text is, but the arrow
-keys and Backspace step over whole characters by walking off the continuation
-bytes.
+### Settings, and how it looks
 
-**Skins you can write here.** *Copy This Skin* on the Appearance page writes
-the chosen skin out under a name of your own and opens it for editing; the
-editor lists every role with a swatch of what it currently is, and a colour
-changed there is on screen and in the file at the same moment. A copy rather
-than a blank file, because the questions a skin has to answer are the part
-nobody knows in advance. The ten that ship are compiled in and are refused
-rather than written over -- a file cannot shadow a built-in, so the edit
-would be saved, ignored, and lost on the next start.
+**A Control Panel of fifteen icons.** Clicking one opens it in a window of
+its own, named for the item and stepped clear of whatever opened it — so a
+wallpaper and a set of colours can be worked on side by side. One window per
+item and no more: two windows both editing the registry would be two views of
+one file, each unaware the other had written to it.
+
+| | | |
+| --- | --- | --- |
+| **Accounts** | who may sign in | ✅ |
+| **Appearance** | skins, colours and wallpaper | ✅ |
+| **Display Settings** | text size and spacing, fonts, screen resolution | ✅ |
+| **Programs** | what is installed, and what ships | ✅ |
+| **Modules** | code the system loads, and why anything refused | ✅ |
+| **Network** | adapters, data used, which programs may connect | ✅ |
+| **Firewall** | what may be opened, and to what | ✅ |
+| **Storage** | three spaces, and where the room went | ✅ |
+| **Disk Cleanup** | what can be freed, and what it costs | ✅ |
+| **Registry** | what the system remembers between runs | ✅ |
+| **System Information** | what the machine is, and what is underneath | ✅ |
+| **Power** | sleep, hibernate, power modes | needs a kernel |
+| **Update** | fetching and applying one | needs somewhere to fetch from |
+| **Troubleshoot** | finding and fixing a fault | needs the parts it would fix |
+| **Recovery** | going back to a working system | needs a kernel |
+
+The four that are not built say so on the page, and say what has to exist
+first. A gap nobody can see is a gap nobody remembers.
+
+The Registry page asks for the administrator's password before showing what
+the system remembers, locks itself again when you leave it, and can change
+what it shows — the key of an existing setting is not editable, because a key
+you can type over is a rename, and a rename here is a delete and an add that
+look like one act. Saving redraws everything, since a setting here is one
+something is already using: set `theme` by hand and the desktop restyles while
+you watch.
+
+The Control Panel is built into ReconOS rather than shipped as a module,
+deliberately: this is where somebody goes to repair a system, and it should
+not be a thing that can fail to load.
+
+**A registry** — what the system remembers between runs. Two hives, for the
+reason Windows has two: `/System/Config/system.reg` belongs to the machine and
+`/Users/<name>/user.reg` to one account, because a theme is a person's and a
+module policy is not. Keys are paths (`apps/explorer/last-folder`,
+`windows/Notepad/x`), values are text, and the typed accessors give the
+fallback rather than zero when a value will not parse — a damaged file should
+look like missing settings, not like a real setting of 0 that puts every window
+in the corner.
+
+Windows reopen where they were left, at the size they were, maximized if they
+were — with the restore size kept separately, so unmaximizing gives back the
+window rather than a screen-sized one. The file explorer opens where you left
+it. Read and change any of it with `reg`.
 
 **Skins.** Every colour is asked for by what it means rather than what it looks
 like — `title.active`, not "dark blue" — so a skin is a set of answers and
@@ -371,6 +395,15 @@ bar = 802020
 `theme roles` prints all 48 roles with what they currently resolve to — which
 is what to start from when writing one. The choice is per-account and
 remembered.
+
+**Skins you can write here.** *Copy This Skin* on the Appearance page writes
+the chosen skin out under a name of your own and opens it for editing; the
+editor lists every role with a swatch of what it currently is, and a colour
+changed there is on screen and in the file at the same moment. A copy rather
+than a blank file, because the questions a skin has to answer are the part
+nobody knows in advance. The ten that ship are compiled in and are refused
+rather than written over -- a file cannot shadow a built-in, so the edit
+would be saved, ignored, and lost on the next start.
 
 **Gradients** are opt-in per role. A `.to` beside a colour makes that surface
 ramp from one to the other, top to bottom:
@@ -427,19 +460,61 @@ A palette is only half of accessibility. The other half is never encoding
 meaning in colour alone, which is why "Not responding" says so in words and a
 folder has an icon and a Type column as well as a colour.
 
-**A registry** — what the system remembers between runs. Two hives, for the
-reason Windows has two: `/System/Config/system.reg` belongs to the machine and
-`/Users/<name>/user.reg` to one account, because a theme is a person's and a
-module policy is not. Keys are paths (`apps/explorer/last-folder`,
-`windows/Notepad/x`), values are text, and the typed accessors give the
-fallback rather than zero when a value will not parse — a damaged file should
-look like missing settings, not like a real setting of 0 that puts every window
-in the corner.
+**Text is UTF-8.** Accents, dashes, quotation marks and other alphabets draw
+the way they are written, in file names as well as in the help. Text used to
+be walked a byte at a time with glyphs cached only for 32..126, so any
+multi-byte character was three or four bytes each of which drew nothing --
+not a box, not a question mark, nothing -- and the typeface had the glyphs
+the whole time. A character the font has no drawing for now shows as an empty
+box. A keyboard laid out for a language with accents in it types them: the
+caret is still a byte offset, because that is what the text is, but the arrow
+keys and Backspace step over whole characters by walking off the continuation
+bytes.
 
-Windows reopen where they were left, at the size they were, maximized if they
-were — with the restore size kept separately, so unmaximizing gives back the
-window rather than a screen-sized one. The file explorer opens where you left
-it. Read and change any of it with `reg`.
+**Dialogs.** Anything destructive asks in a window, with Cancel last so it is
+what both Enter and Escape choose. Clicking outside does not dismiss one.
+
+### Applications
+
+**Applications**, all native:
+
+- **File Explorer** — back and forward through where you have been, a sidebar
+  of places, folders and files with icons, renaming in place, cut/copy/paste,
+  and deletion that asks first
+- **Task Manager** — processes with CPU and memory, and a view of open windows
+- **Terminal** — the command interpreter, emulating nothing
+- **Notepad** — text editing, with a File menu and a file dialog for opening
+  and saving. Undo by word, find and replace, and a clipboard shared with the
+  rest of the system. Closing with unsaved work asks where to put it rather
+  than throwing it away
+- **Calculator** — arithmetic by mouse or keyboard
+- **Help** — a page for each part of the system, and under a rule, the change
+  log back to the first version
+
+**A Task Manager** with three tabs. Applications is what is running and can
+close it, politely or by force. Processes is the machine's. Users is who has an
+account and what they are using, expandable to what each has open. Columns can
+be dragged wider. Two buttons there do nothing yet and say so.
+
+**An application table** — what is *running*, which is a different question
+from what processes exist. Several built-in applications share ReconOS's
+process, so no process list could show them separately, and a client program
+can own several windows. The task manager works from this: End Task closes a
+built-in, asks a client through its own window, and only offers to force one
+that has been asked and has not answered.
+
+Files can be **renamed, moved, copied and deleted**, from the file explorer, the
+desktop, or the command line. Renaming happens in place — the row or the label
+becomes a text box. Deleting asks first, and emptying a folder is a separate
+question from deleting a file, so a tree is never lost to one stray click.
+Cut, copy and paste share a single clipboard, so something copied in the
+explorer pastes onto the desktop.
+
+**Installing and removing programs.** A `.rex` is copied into `/Apps` and
+loaded; removing unloads it and deletes the file. Both from the Control Panel
+or from `install` and `uninstall`. Administrator-only: a module runs inside
+ReconOS with everything ReconOS can do, so installing one is closer to
+installing a driver than to saving a file.
 
 **Modules** — code ReconOS loads at runtime, so a feature can arrive without
 the core being rebuilt. `.rts` is a system module (a subsystem, driver or
@@ -475,19 +550,84 @@ is most of the argument for modules over compiling everything in. The built-in
 applications register through the same call a module uses — an extension path
 that only outsiders take is an extension path nobody keeps working.
 
-**An application table** — what is *running*, which is a different question
-from what processes exist. Several built-in applications share ReconOS's
-process, so no process list could show them separately, and a client program
-can own several windows. The task manager works from this: End Task closes a
-built-in, asks a client through its own window, and only offers to force one
-that has been asked and has not answered.
+**Client windows** via `xdg-shell`, for programs written against Wayland --
+**framed by ReconOS**, not by the toolkit that built them. A client used to
+arrive with a frame of its own in somebody else's colours; it now gets the
+same title bar every other window has, reading the same skin metrics, and
+drags, resizes, minimizes, maximizes and closes the same way. A client that
+insists on drawing its own frame still may, and is not given a second one on
+top of it.
 
-Files can be **renamed, moved, copied and deleted**, from the file explorer, the
-desktop, or the command line. Renaming happens in place — the row or the label
-becomes a text box. Deleting asks first, and emptying a folder is a separate
-question from deleting a file, so a tree is never lost to one stray click.
-Cut, copy and paste share a single clipboard, so something copied in the
-explorer pastes onto the desktop.
+Resizing is by a six-pixel margin *outside* the window rather than a border
+inside it: inside belongs to the client, and a terminal's last column of text
+is not a resize handle. The cursor changes over the margin, because an
+invisible grab region nobody can see is one nobody finds.
+
+`tests/decor_client.c` is the smallest Wayland client that uses
+xdg-decoration, built alongside ReconOS. It exists because weston's demos do
+not use the protocol at all -- so without it, nothing on hand could tell the
+difference between this working and this not existing.
+
+### The network
+
+**The network — seen, not implemented.** ReconOS has no kernel, so it has no
+ARP, no IP and no TCP. What it has is `recon_net`, which presents the host's
+network in ReconOS's own terms: which interfaces exist, their addresses, the
+gateway, the resolvers, and whether there is a way out. It can resolve a name
+and ask whether a host answers, without freezing the desktop while a dead
+host times out.
+
+That is the same bargain `recon_fs` makes with the filesystem, and it buys the
+same thing: one file knows Linux is underneath, and when ReconOS has a stack
+of its own that file is what changes. The Control Panel's Network page and the
+`net` command both say so on screen, because a page listing an IP address and
+a gateway looks exactly like an operating system doing networking, and this
+one is not.
+
+**Connections that carry data**, with a rule about who may open one. Every
+stream is opened in the name of an application, and one nobody has allowed
+cannot open it; the default is no, because a system that never asks has
+answered "all of them" without saying so. `net apps`, `net allow` and `net
+deny` show and change it. This is not isolation and says so: ReconOS is one
+process, so it binds what goes through ReconOS, the same way accounts are
+bound.
+
+Deliberately not there yet: listening, and TLS. Accepting connections means
+deciding what may reach this machine, which is a bigger question than what
+this machine may reach. Without TLS this is `http://` only.
+
+**A firewall.** It cannot filter packets -- ReconOS has no network stack of
+its own -- and saying it could would be the same lie as a network page that
+pretended to implement one. What it does is decide what ReconOS itself opens
+and accepts, which is a real boundary: every outgoing connection asks first,
+and the remote listener cannot open a port the firewall has not been told to
+allow.
+
+The shape most systems have, because that is the shape people already know: a
+switch, a default per direction, and a numbered list where the first match
+decides -- not the most specific, because reading top to bottom is the only
+way a person can work out what it does. Nine rules ship, the incoming ones
+written down and off. The rules are a text file in `/System/Config`, because
+a firewall whose rules cannot be read outside the program that wrote them is
+a firewall nobody can audit.
+
+**Remote access, two ways.** SSH can forward the control socket, which needs
+nothing from ReconOS at all. Or TCP 7420, off by default and gated by the
+firewall, which speaks TLS with a certificate the machine makes for itself and
+asks for a key over it. Only the key's hash is kept, stretched with PBKDF2;
+the key is shown once when it is made.
+
+There is no certificate authority, and no pretence of one. A machine that owns
+itself has no upstream to ask for an identity, so it asserts its own and the
+fingerprint is shown wherever remote access is turned on — the client pins it
+on first connect, the way SSH does. A chain would answer "did somebody vouch
+for this name", and nobody has vouched for this machine. Pinning answers "is
+this the same machine as last time", which is the question being asked.
+
+Outgoing connections are still in the clear, and `https://` still does not
+work. That half is a separate gap and is still listed as one.
+
+### Driving it, and finding out what went wrong
 
 **A command interpreter** — ReconOS commands acting on ReconOS. Not a Unix
 shell: nothing here reaches the host or runs host programs. Reachable from the
@@ -513,20 +653,11 @@ watched, and asking a person to click while somebody else reads the code is
 not that. Input goes through the same entry points real input uses, so a pass
 here means the thing a user touches works.
 
-**Applications**, all native:
-
-- **File Explorer** — back and forward through where you have been, a sidebar
-  of places, folders and files with icons, renaming in place, cut/copy/paste,
-  and deletion that asks first
-- **Task Manager** — processes with CPU and memory, and a view of open windows
-- **Terminal** — the command interpreter, emulating nothing
-- **Notepad** — text editing, with a File menu and a file dialog for opening
-  and saving. Undo by word, find and replace, and a clipboard shared with the
-  rest of the system. Closing with unsaved work asks where to put it rather
-  than throwing it away
-- **Calculator** — arithmetic by mouse or keyboard
-- **Help** — a page for each part of the system, and under a rule, the change
-  log back to the first version
+**Screen capture.** Print Screen, or `capture` from the terminal, writes a PNG
+into the account's Pictures folder. It asks for the *next* frame rather than
+grabbing the last one, because a compositor keeps no copy of what it drew.
+ReconOS writes the PNG itself -- 8-bit RGB, no interlacing, no palette -- since
+the alternative was a second image library for one direction of one format.
 
 **F1 opens the help at the page about whatever is in front.** An application
 declares which page is about it, and one with views of its own -- the Control
@@ -565,67 +696,6 @@ crash cannot be drawn at all, so the signal handler writes the record with
 The list lives in `include/recon_errors.def`, once: the header builds an
 enumeration from it, `errors` reads it, the screen quotes it, and
 `scripts/make-errors.sh` writes [docs/ERRORS.md](docs/ERRORS.md) from it.
-
-**A firewall.** It cannot filter packets -- ReconOS has no network stack of
-its own -- and saying it could would be the same lie as a network page that
-pretended to implement one. What it does is decide what ReconOS itself opens
-and accepts, which is a real boundary: every outgoing connection asks first,
-and the remote listener cannot open a port the firewall has not been told to
-allow.
-
-The shape most systems have, because that is the shape people already know: a
-switch, a default per direction, and a numbered list where the first match
-decides -- not the most specific, because reading top to bottom is the only
-way a person can work out what it does. Nine rules ship, the incoming ones
-written down and off. The rules are a text file in `/System/Config`, because
-a firewall whose rules cannot be read outside the program that wrote them is
-a firewall nobody can audit.
-
-**A startup screen that checks.** It used to count what had been brought up.
-Now each line looks at the part of the system it names -- every folder the
-system needs, the skins, the accounts, the programs, the firewall -- says what
-it found, and raises a code when what it found is wrong. A missing folder is
-rebuilt rather than only reported. A failure does not stop the start: a
-machine that refuses to boot because one icon folder is unreadable is worse
-than one that says so and carries on.
-
-**Remote access, two ways.** SSH can forward the control socket, which needs
-nothing from ReconOS at all. Or TCP 7420, off by default and gated by the
-firewall, which speaks TLS with a certificate the machine makes for itself and
-asks for a key over it. Only the key's hash is kept, stretched with PBKDF2;
-the key is shown once when it is made.
-
-There is no certificate authority, and no pretence of one. A machine that owns
-itself has no upstream to ask for an identity, so it asserts its own and the
-fingerprint is shown wherever remote access is turned on — the client pins it
-on first connect, the way SSH does. A chain would answer "did somebody vouch
-for this name", and nobody has vouched for this machine. Pinning answers "is
-this the same machine as last time", which is the question being asked.
-
-Outgoing connections are still in the clear, and `https://` still does not
-work. That half is a separate gap and is still listed as one.
-
-**A file dialog** shared by the applications that need one. It is drawn inside
-the window that asked for it, so it cannot be dragged away from its own
-question or left behind its own parent.
-
-**Client windows** via `xdg-shell`, for programs written against Wayland --
-**framed by ReconOS**, not by the toolkit that built them. A client used to
-arrive with a frame of its own in somebody else's colours; it now gets the
-same title bar every other window has, reading the same skin metrics, and
-drags, resizes, minimizes, maximizes and closes the same way. A client that
-insists on drawing its own frame still may, and is not given a second one on
-top of it.
-
-Resizing is by a six-pixel margin *outside* the window rather than a border
-inside it: inside belongs to the client, and a terminal's last column of text
-is not a resize handle. The cursor changes over the margin, because an
-invisible grab region nobody can see is one nobody finds.
-
-`tests/decor_client.c` is the smallest Wayland client that uses
-xdg-decoration, built alongside ReconOS. It exists because weston's demos do
-not use the protocol at all -- so without it, nothing on hand could tell the
-difference between this working and this not existing.
 
 ## Controls
 
@@ -668,7 +738,8 @@ Requires a Linux system with wlroots 0.17 and its development headers.
 
 ```bash
 sudo apt install -y build-essential cmake ninja-build pkg-config \
-    libwlroots-dev libwayland-dev libxkbcommon-dev wayland-protocols
+    libwlroots-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+    libmbedtls-dev
 ```
 
 ```bash
@@ -764,13 +835,14 @@ modules/      applications and subsystems built as .rex / .rts
 tests/        tests that need no display
 scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
-third_party/  vendored dependencies (stb_image)
+kernel/       the kernel — phase 2, its own build
+third_party/  vendored dependencies (stb)
 docs/         roadmap, bug register, module interface, development notes
 ```
 
 ## Bugs
 
-Sixty-nine faults have been found in ReconOS so far. Every one of them has a
+Eighty-one faults have been found in ReconOS so far. Every one of them has a
 number -- `BG-001` upward, assigned in the order it was found and never
 reused -- and an entry in [docs/BUGS.md](docs/BUGS.md) saying what was
 actually wrong rather than what it looked like.
@@ -789,9 +861,16 @@ is why ReconOS can drive its own input now.
 
 ## Where this is going
 
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the full plan. The near-term target
-is a bare-bones desktop — taskbar, start button, real window management — that
-stays lightweight enough to run well on modest hardware.
+Both phases are being built at once now. The desktop keeps growing; the kernel
+has begun underneath it. They meet when the kernel can hold a framebuffer and
+a filesystem, and the first thing to cross over will be small — a recovery
+screen, most likely, because it needs almost nothing but somewhere to draw.
+
+[docs/ROADMAP.md](docs/ROADMAP.md) has the full plan.
+[docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md) is the other half of it: every
+place the desktop currently works around not having its own kernel, written
+down as it was hit rather than guessed at in advance. That file is the list
+the kernel is being built against.
 
 ## License
 
