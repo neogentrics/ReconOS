@@ -231,12 +231,93 @@ static void test_marks(void) {
     }
 }
 
+/* --- Word breaks --- */
+
+static void test_spaces(void) {
+    printf("Word breaks\n");
+
+    struct page p;
+    struct recon_ocr_line lines[4];
+    struct recon_ocr_mark marks[32];
+
+    /*
+     * Ten marks, evenly spaced, in a short band. This is "0123456789", and the
+     * right answer is that it contains no spaces.
+     *
+     * The old rule -- a quarter of the band's height -- could not give that
+     * answer. Its threshold was a number of pixels, and every gap in this line
+     * is the same number of pixels, so it either called all of them spaces or
+     * none, depending on a band height that has nothing to do with the gaps.
+     */
+    paper(&p, 240);
+    for (int i = 0; i < 10; i++) {
+        blot(&p, 10 + i * 9, 20, 6, 11, 20);
+    }
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+    recon_ocr_lines(p.ink, PAGE_W, PAGE_H, lines, 4);
+
+    int count = recon_ocr_marks(p.ink, PAGE_W, &lines[0], marks, 32);
+    check(count == 10, "ten evenly spaced marks");
+
+    int spaces = 0;
+    for (int i = 0; i < count; i++) {
+        spaces += marks[i].space_before ? 1 : 0;
+    }
+    check(spaces == 0, "evenly spaced marks are one word");
+
+    /*
+     * The same ten marks with two of the gaps widened. Now there are word
+     * breaks, and there are exactly two of them -- the point being that the
+     * threshold came from this line's own gaps rather than from its height,
+     * which has not changed between the two halves of this test.
+     */
+    paper(&p, 240);
+    int x = 10;
+    for (int i = 0; i < 10; i++) {
+        blot(&p, x, 20, 6, 11, 20);
+        x += 9;
+        if (i == 2 || i == 6) {
+            x += 8;              /* a word ends here */
+        }
+    }
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+    recon_ocr_lines(p.ink, PAGE_W, PAGE_H, lines, 4);
+    count = recon_ocr_marks(p.ink, PAGE_W, &lines[0], marks, 32);
+
+    check(count == 10, "still ten marks");
+
+    spaces = 0;
+    for (int i = 0; i < count; i++) {
+        spaces += marks[i].space_before ? 1 : 0;
+    }
+    check(spaces == 2, "two wide gaps are two word breaks");
+    if (count == 10) {
+        check(marks[3].space_before && marks[7].space_before,
+            "and they are the two that were widened");
+    }
+
+    /*
+     * Two marks is one gap, and one number is not a population. The fallback
+     * has to decide something, and the something is that an ordinary gap
+     * between two letters is not a space.
+     */
+    paper(&p, 240);
+    blot(&p, 10, 20, 6, 12, 20);
+    blot(&p, 18, 20, 6, 12, 20);
+    recon_ocr_ink(p.rgba, PAGE_W, PAGE_H, p.ink);
+    recon_ocr_lines(p.ink, PAGE_W, PAGE_H, lines, 4);
+    count = recon_ocr_marks(p.ink, PAGE_W, &lines[0], marks, 32);
+    check(count == 2 && !marks[1].space_before,
+        "two marks close together are one word");
+}
+
 int main(void) {
     printf("OCR tests\n\n");
 
     test_ink();
     test_lines();
     test_marks();
+    test_spaces();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return (g_failures == 0) ? 0 : 1;

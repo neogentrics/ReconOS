@@ -202,6 +202,57 @@ int recon_ocr_lines(const unsigned char *ink, int width, int height,
 
 /* --- Marks --- */
 
+static int compare_ints(const void *a, const void *b) {
+    int x = *(const int *)a, y = *(const int *)b;
+    return (x > y) - (x < y);
+}
+
+/*
+ * How wide a gap has to be before it separates two words.
+ *
+ * Measured from the line's own gaps rather than from its height. In rendered
+ * text the gaps fall into two populations -- between letters and between words
+ * -- and letter gaps are the large majority, so the median gap *is* a letter
+ * gap and a word gap is a multiple of it.
+ *
+ * When the widest gap is not much bigger than the median, the line has no word
+ * breaks: that is the right answer for "0123456789" and it is one that no fixed
+ * threshold can give, because a threshold that admits a word break in one line
+ * invents them in another.
+ *
+ * The height-based fallback is for a line with too few gaps to have a
+ * distribution. Two marks give one gap, and one number is not a population.
+ */
+static int space_threshold(const int *gaps, int count, int line_height) {
+    if (count < 3) {
+        int fallback = line_height / 3;
+        return fallback < 3 ? 3 : fallback;
+    }
+
+    int sorted[256];
+    int n = count < 256 ? count : 256;
+    memcpy(sorted, gaps, (size_t)n * sizeof(int));
+    qsort(sorted, (size_t)n, sizeof(int), compare_ints);
+
+    int median = sorted[n / 2];
+    int widest = sorted[n - 1];
+
+    if (median < 1) {
+        median = 1;
+    }
+
+    /*
+     * Twice the median is the line between "these letters are close together"
+     * and "something deliberate happened here". Below it, treat the line as one
+     * unbroken run: a line whose widest gap is barely wider than its typical
+     * one is a line with no spaces in it.
+     */
+    if (widest < median * 2) {
+        return widest + 1;          /* nothing reaches this */
+    }
+    return (median + widest) / 2;
+}
+
 int recon_ocr_marks(const unsigned char *ink, int width,
         const struct recon_ocr_line *line, struct recon_ocr_mark *out,
         int max) {
@@ -217,19 +268,12 @@ int recon_ocr_marks(const unsigned char *ink, int width,
     int previous_end = -1;
 
     /*
-     * The width a gap has to reach before it is a space rather than the
-     * ordinary distance between two letters.
-     *
-     * Taken from the line's own height rather than fixed, because the only
-     * thing here that scales with the text is the text. A quarter of the
-     * height is comfortably wider than inter-letter spacing at every size this
-     * can read and comfortably narrower than a word space.
+     * Two passes, because the width of a word break cannot be known until the
+     * marks are known. The first pass finds them and records the gap before
+     * each; the second decides which of those gaps were spaces.
      */
-    int line_height = line->bottom - line->top;
-    int space_gap = line_height / 4;
-    if (space_gap < 2) {
-        space_gap = 2;
-    }
+    int gaps[256];
+    int gap_count = 0;
 
     for (int x = line->left; x <= line->right; x++) {
         bool has_ink = false;
@@ -246,8 +290,16 @@ int recon_ocr_marks(const unsigned char *ink, int width,
                 struct recon_ocr_mark *mark = &out[found];
                 mark->left = start;
                 mark->right = x;
-                mark->space_before = previous_end >= 0 &&
-                    (start - previous_end) >= space_gap;
+
+                /* Recorded now, judged later. The gap is kept in the flag's
+                 * field until the second pass turns it into a decision. */
+                mark->space_before = false;
+                if (previous_end >= 0) {
+                    int gap = start - previous_end;
+                    if (gap_count < 256) {
+                        gaps[gap_count++] = gap;
+                    }
+                }
 
                 /*
                  * Trimmed to this mark's own rows, not the line's.
@@ -274,6 +326,16 @@ int recon_ocr_marks(const unsigned char *ink, int width,
             previous_end = x;
             start = -1;
         }
+    }
+
+    /* --- Which of those gaps were words --- */
+
+    int threshold = space_threshold(gaps, gap_count,
+        line->bottom - line->top);
+
+    for (int i = 1; i < found; i++) {
+        int gap = out[i].left - out[i - 1].right;
+        out[i].space_before = gap >= threshold;
     }
     return found;
 }

@@ -76,6 +76,44 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-100 — One pixel of ascender decided whether a line kept its words
+
+- **Found in** v0.3.1, within an hour of the code being committed, by running
+  it on a screenshot of ReconOS's own text instead of on rectangles.
+- **Was** the width a gap had to reach before it counted as a space was a
+  quarter of the text band's height.
+
+  Three lines were read. The second and third came out perfectly — nineteen
+  marks in groups of 5, 4, 3, 4, 3, which is exactly *"jumps over the lazy
+  dog"*. The first split almost every letter into its own word.
+
+  The difference between them was one pixel. Line one's band is 11 rows tall,
+  so its threshold was 2; line two's is 12, so its threshold was 3. At
+  14-pixel text the ordinary gap between two letters is 2.
+
+- **Fixed by** measuring the thing being split. In a line of rendered text the
+  gaps fall into two populations — between letters, and between words — and the
+  letter gaps are the large majority. So the median gap *is* a letter gap, and a
+  word gap is a multiple of it. When no gap is much wider than the median, the
+  line has no word breaks at all, which is the right answer for `0123456789` and
+  is one that no fixed threshold can give: a threshold admitting a word break in
+  one line invents them in another.
+- **Why it survived the tests** the synthetic test used a 20-pixel band with
+  2-pixel letter gaps and a 30-pixel word gap. That passes at **any threshold
+  between 3 and 29**. The test was not weak by accident — it was built to check
+  that wide gaps and narrow gaps are told apart, and it checks exactly that.
+
+  **A test built from a made-up example tests the example.** The rectangles were
+  drawn with the gaps a person would draw to make the two cases obvious, and
+  obvious cases are the ones no threshold gets wrong. What the fault needed was
+  a *typical* case — gaps 2 and 5 rather than 2 and 30 — and nobody invents a
+  typical case, because typical is the thing you have to go and measure.
+
+  The general form, and the reason this register keeps saying it: the synthetic
+  test pins the arithmetic and the real input finds the fault. Neither replaces
+  the other, and a project with only the first has a suite that goes green on
+  a system nobody could use.
+
 ### BG-099 — The position bar never moved on its own
 
 - **Found in** v0.3.1, by noticing that the video's position advanced and the
