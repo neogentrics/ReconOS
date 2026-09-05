@@ -1,3 +1,33 @@
+Mail. IMAP and POP3, both over TLS, both through the encrypted streams
+above — so the certificate of whatever answers is checked before a password
+goes near it. There is no unencrypted option for either. Those ports exist,
+the passwords they carry are readable by anything in between, and a switch for
+it is a switch somebody eventually flicks.
+
+Both protocols, because they answer different questions. POP3 collects: it
+downloads what is waiting and the mail is yours, on one machine. IMAP reads:
+the mail stays on the server and this is a view onto it, so the same account
+opened from two machines shows the same thing.
+
+ReconOS never deletes on the server, on either protocol. DELE is not
+sent, and the IMAP fetches use BODY.PEEK rather than BODY, so opening the
+list does not mark forty messages read. A young mail client with a bug that
+alters somebody's mailbox is a young mail client nobody uses twice, and there
+is no undo on the far end.
+
+The password is not stored. It is asked for when a connection is made and
+kept in memory until the window closes. That is an inconvenience and it is the
+honest position: the registry would mean anything that can read a file can read
+somebody's mail password, obfuscating it is worse because it looks like
+protection, and doing it properly needs a keyring — a key that exists only
+while somebody is signed in — which is a subsystem rather than a field. It is
+written down as work to do. The window says so on the screen where the
+password is typed, because somebody typing one into a new program is entitled
+to know what happens to it.
+
+It does not send. SMTP is a separate protocol with its own ways of losing a
+message, and this does not pretend otherwise.
+
 A clock, bottom right. It shows the time, and asking it shows the date,
 the day, the zone and the region. It keeps twenty-six zones, in minutes rather
 than hours, because three-quarters of an hour is a real offset that half the

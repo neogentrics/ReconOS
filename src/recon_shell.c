@@ -28,6 +28,7 @@
 #include "recon_shell.h"
 #include "recon_appwin.h"
 #include "recon_calendar.h"
+#include "recon_mailwin.h"
 #include "recon_clock.h"
 #include "recon_control_panel.h"
 #include "recon_desktop.h"
@@ -2978,6 +2979,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true,
           RECONOS_VERSION },
         { "Calendar", RECON_ICON_CALENDAR, recon_calendar_create, true,
+          RECONOS_VERSION },
+        { "Mail", RECON_ICON_MAIL, recon_mailwin_create, true,
           RECONOS_VERSION },
         /*
          * Not in the applications column: it is reached from the right of the

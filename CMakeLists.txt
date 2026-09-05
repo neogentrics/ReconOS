@@ -95,6 +95,8 @@ add_executable(ReconOS
     src/recon_terminal.c
     src/recon_ui.c
     src/recon_version.c
+    src/recon_mail.c
+    src/recon_mailwin.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
 
