@@ -97,6 +97,7 @@ add_executable(ReconOS
     src/recon_version.c
     src/recon_audio.c
     src/recon_codec.c
+    src/recon_mp4.c
     src/recon_player.c
     src/recon_html.c
     src/recon_web.c

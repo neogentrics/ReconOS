@@ -39,3 +39,26 @@ function(recon_add_module NAME EXTENSION)
 endfunction()
 
 recon_add_module(Calculator ".rex" calculator/recon_calc.c)
+
+# --- The codec pack ---
+#
+# Decoders ReconOS does not write, in a module it can do without. Built only
+# where libavcodec is present, and the desktop is complete without it: it plays
+# WAV and MP3 either way and says which decoder is missing when it cannot play
+# something.
+#
+# A module rather than part of the core so that somebody who never plays video
+# does not carry the dependency, and so that it can be taken off again -- a
+# codec pack that cannot be removed is not a pack.
+pkg_check_modules(AVCODEC libavcodec libavutil)
+
+if(AVCODEC_FOUND)
+    message(STATUS "libavcodec found (${AVCODEC_libavcodec_VERSION}); "
+                   "building the codec pack")
+    recon_add_module(CodecPack ".rts" codecpack/recon_codecpack.c)
+    target_include_directories(CodecPack PRIVATE ${AVCODEC_INCLUDE_DIRS})
+    target_link_libraries(CodecPack PRIVATE ${AVCODEC_LIBRARIES})
+else()
+    message(STATUS "libavcodec not found; the codec pack will not be built, "
+                   "and ReconOS will play only what it decodes itself")
+endif()

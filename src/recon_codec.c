@@ -24,11 +24,33 @@
 #include "minimp3_ex.h"
 
 #include "recon_codec.h"
+#include "recon_mp4.h"
+
+#include <stdarg.h>
+
+static char g_error[224];
+
+static void set_error(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+static void set_error(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(g_error, sizeof(g_error), fmt, args);
+    va_end(args);
+}
+
+const char *recon_codec_last_error(void) {
+    return g_error[0] != '\0' ? g_error : "that file could not be read";
+}
 
 #define CODECS_MAX 16
+#define FRAME_CODECS_MAX 16
 
 static struct recon_codec g_codecs[CODECS_MAX];
 static int g_count;
+
+static struct recon_codec_frames g_frames[FRAME_CODECS_MAX];
+static int g_frame_count;
 
 /* --- The registry --- */
 
@@ -142,6 +164,61 @@ const struct recon_codec *recon_codec_for(const char *name,
         }
     }
     return NULL;
+}
+
+/* --- Decoders that live inside a container --- */
+
+bool recon_codec_register_frames(const struct recon_codec_frames *codec) {
+    if (codec == NULL || codec->name[0] == '\0' || codec->open == NULL ||
+            codec->decode == NULL) {
+        return false;
+    }
+    for (int i = 0; i < g_frame_count; i++) {
+        if (strcasecmp(g_frames[i].name, codec->name) == 0) {
+            return false;          /* the name is taken; see above */
+        }
+    }
+    if (g_frame_count >= FRAME_CODECS_MAX) {
+        return false;
+    }
+    g_frames[g_frame_count++] = *codec;
+    return true;
+}
+
+bool recon_codec_unregister_frames(const char *name) {
+    for (int i = 0; i < g_frame_count; i++) {
+        if (strcasecmp(g_frames[i].name, name) == 0) {
+            memmove(&g_frames[i], &g_frames[i + 1],
+                sizeof(g_frames[0]) * (size_t)(g_frame_count - i - 1));
+            g_frame_count--;
+            return true;
+        }
+    }
+    return false;
+}
+
+const struct recon_codec_frames *recon_codec_frames_for(const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < g_frame_count; i++) {
+        if (strcasecmp(g_frames[i].name, name) == 0) {
+            return &g_frames[i];
+        }
+    }
+    return NULL;
+}
+
+int recon_codec_frames_count(void) {
+    return g_frame_count;
+}
+
+bool recon_codec_frames_at(int index, struct recon_codec_frames *out) {
+    if (index < 0 || index >= g_frame_count || out == NULL) {
+        return false;
+    }
+    *out = g_frames[index];
+    return true;
 }
 
 /* --- WAV --- */
@@ -423,6 +500,255 @@ static void mp3_close(struct recon_codec_reader *reader) {
     free(r);
 }
 
+/* --- MP4 --- */
+
+/*
+ * The join between the two kinds of decoder.
+ *
+ * This is a *file* codec, so the player opens it like any other. Inside, it
+ * demuxes with recon_mp4 -- which is ReconOS's own code, because a container
+ * is structure -- and hands each compressed frame to whichever *frame* codec
+ * is registered for the format it finds.
+ *
+ * On a system with no AAC decoder this opens, reports what is in the file, and
+ * refuses with the format named. That is the point of splitting it this way:
+ * "there is no AAC decoder installed" is something somebody can act on, and
+ * "this file will not play" is not.
+ */
+
+/* One AAC frame is 1024 samples, and HE-AAC doubles it. Two channels of the
+ * larger, with room to spare, so a decoder is never asked to write into
+ * something too small. */
+#define FRAME_PCM_MAX (4096 * 2)
+
+struct mp4_reader {
+    struct recon_mp4 *mp4;
+    int track;
+    int sample;
+    int sample_count;
+
+    const uint8_t *bytes;
+    const struct recon_codec_frames *decoder;
+    struct recon_codec_frame_reader *frames;
+
+    int channels;
+
+    /*
+     * What one decoded frame produced but the caller has not taken yet.
+     *
+     * A caller asks for whatever number of frames suits it; a decoder produces
+     * whatever number the format uses. The two never agree, so the remainder
+     * waits here rather than being decoded again or thrown away.
+     */
+    int16_t pcm[FRAME_PCM_MAX];
+    int pcm_frames;
+    int pcm_taken;
+};
+
+static bool mp4_sniff(const uint8_t *bytes, size_t length) {
+    /* The second box in an MP4 is ftyp, at offset 4. Checking the brand
+     * rather than the first four bytes, which are a length. */
+    return length >= 12 && (memcmp(bytes + 4, "ftyp", 4) == 0 ||
+        memcmp(bytes + 4, "moov", 4) == 0);
+}
+
+static struct recon_codec_reader *mp4_open(const uint8_t *bytes, size_t length,
+        struct recon_codec_format *format) {
+    struct recon_mp4 *mp4 = recon_mp4_open(bytes, length);
+    if (mp4 == NULL) {
+        set_error("%s", recon_mp4_last_error());
+        return NULL;
+    }
+
+    int track = recon_mp4_first(mp4, RECON_MP4_AUDIO);
+    if (track < 0) {
+        int video = recon_mp4_first(mp4, RECON_MP4_VIDEO);
+        struct recon_mp4_track v;
+        if (video >= 0 && recon_mp4_track_at(mp4, video, &v)) {
+            set_error("that is %s video with no sound in it, and there is "
+                "nothing here that shows video yet",
+                v.name[0] != '\0' ? v.name : v.format);
+        } else {
+            set_error("there is no audio in that file");
+        }
+        recon_mp4_close(mp4);
+        return NULL;
+    }
+
+    struct recon_mp4_track info;
+    recon_mp4_track_at(mp4, track, &info);
+
+    const struct recon_codec_frames *decoder =
+        recon_codec_frames_for(info.name);
+    if (decoder == NULL) {
+        /*
+         * The file is fine. What is missing is a decoder, and saying which one
+         * is the entire reason the codec pack is a separate module -- somebody
+         * can install the thing that is named and cannot act on "damaged".
+         */
+        int video = recon_mp4_first(mp4, RECON_MP4_VIDEO);
+        struct recon_mp4_track v;
+        if (video >= 0 && recon_mp4_track_at(mp4, video, &v)) {
+            set_error("that file holds %s video and %s sound. There is no %s "
+                "decoder installed, and nothing here shows video yet.",
+                v.name[0] != '\0' ? v.name : v.format,
+                info.name[0] != '\0' ? info.name : info.format,
+                info.name[0] != '\0' ? info.name : info.format);
+        } else {
+            set_error("that file holds %s sound, and there is no %s decoder "
+                "installed.",
+                info.name[0] != '\0' ? info.name : info.format,
+                info.name[0] != '\0' ? info.name : info.format);
+        }
+        recon_mp4_close(mp4);
+        return NULL;
+    }
+
+    struct mp4_reader *r = calloc(1, sizeof(*r));
+    if (r == NULL) {
+        recon_mp4_close(mp4);
+        return NULL;
+    }
+
+    int rate = info.rate;
+    int channels = info.channels;
+
+    r->frames = decoder->open(info.setup, info.setup_length, &rate, &channels);
+    if (r->frames == NULL) {
+        set_error("the %s decoder would not start on that file",
+            info.name[0] != '\0' ? info.name : info.format);
+        recon_mp4_close(mp4);
+        free(r);
+        return NULL;
+    }
+
+    r->mp4 = mp4;
+    r->track = track;
+    r->sample_count = info.sample_count;
+    r->bytes = bytes;
+    r->decoder = decoder;
+    r->channels = channels;
+
+    format->rate = rate;
+    format->channels = channels;
+    /*
+     * The track's duration in its own timescale, converted. Taken from the
+     * container rather than counted from the frames, because the last frame
+     * of an AAC track is usually padding the encoder added and counting it
+     * makes every file a fraction of a second too long.
+     */
+    format->frames = (info.timescale > 0 && rate > 0)
+        ? info.duration * (uint64_t)rate / info.timescale : 0;
+
+    return (struct recon_codec_reader *)r;
+}
+
+static int mp4_read(struct recon_codec_reader *reader, int16_t *out,
+        int frames) {
+    struct mp4_reader *r = (struct mp4_reader *)reader;
+    int written = 0;
+
+    while (written < frames) {
+        /* Anything left over from the last decode goes first. */
+        if (r->pcm_taken < r->pcm_frames) {
+            int available = r->pcm_frames - r->pcm_taken;
+            int take = (frames - written < available)
+                ? frames - written : available;
+
+            memcpy(out + (size_t)written * r->channels,
+                r->pcm + (size_t)r->pcm_taken * r->channels,
+                (size_t)take * (size_t)r->channels * sizeof(int16_t));
+
+            r->pcm_taken += take;
+            written += take;
+            continue;
+        }
+
+        if (r->sample >= r->sample_count) {
+            break;
+        }
+
+        size_t offset = 0, length = 0;
+        if (!recon_mp4_sample(r->mp4, r->track, r->sample, &offset, &length,
+                NULL)) {
+            break;
+        }
+        r->sample++;
+
+        int got = r->decoder->decode(r->frames, r->bytes + offset, length,
+            r->pcm, FRAME_PCM_MAX / (r->channels > 0 ? r->channels : 1));
+
+        /*
+         * Zero is not the end. Several formats begin with frames that prime
+         * the decoder and produce no sound, and treating the first of those
+         * as the end of the file would play nothing at all.
+         */
+        r->pcm_frames = (got > 0) ? got : 0;
+        r->pcm_taken = 0;
+    }
+
+    return written;
+}
+
+static bool mp4_seek(struct recon_codec_reader *reader, uint64_t frame) {
+    struct mp4_reader *r = (struct mp4_reader *)reader;
+
+    /*
+     * Approximate, and honestly so.
+     *
+     * An MP4 audio track has no index from sound-sample to compressed frame,
+     * so this divides: every AAC frame is the same number of samples, which is
+     * true for every file anybody has and is not guaranteed by the format. The
+     * error is at most one frame, which is a fiftieth of a second.
+     */
+    struct recon_mp4_track info;
+    if (!recon_mp4_track_at(r->mp4, r->track, &info) ||
+            info.sample_count <= 0) {
+        return false;
+    }
+
+    uint64_t total = info.timescale > 0
+        ? info.duration : 0;
+    if (total == 0) {
+        return false;
+    }
+
+    /* Frames per compressed sample, from the track's own numbers. */
+    uint64_t per_sample = total / (uint64_t)info.sample_count;
+    if (per_sample == 0) {
+        return false;
+    }
+
+    /* frame is in output samples; convert through the timescale. */
+    uint64_t in_timescale = (info.timescale > 0)
+        ? frame * info.timescale / (uint64_t)(info.rate > 0 ? info.rate : 1)
+        : frame;
+    uint64_t which = in_timescale / per_sample;
+
+    if (which >= (uint64_t)info.sample_count) {
+        which = (uint64_t)info.sample_count - 1;
+    }
+
+    r->sample = (int)which;
+    r->pcm_frames = 0;
+    r->pcm_taken = 0;
+
+    /* The decoder is carrying state from somewhere else in the file. */
+    if (r->decoder->reset != NULL) {
+        r->decoder->reset(r->frames);
+    }
+    return true;
+}
+
+static void mp4_close(struct recon_codec_reader *reader) {
+    struct mp4_reader *r = (struct mp4_reader *)reader;
+    if (r->decoder != NULL && r->frames != NULL) {
+        r->decoder->close(r->frames);
+    }
+    recon_mp4_close(r->mp4);
+    free(r);
+}
+
 /* --- The ones that ship --- */
 
 void recon_codec_init_builtin(void) {
@@ -445,6 +771,25 @@ void recon_codec_init_builtin(void) {
         .close = mp3_close,
     };
 
+    /*
+     * MP4 is registered whether or not anything can decode what is inside it.
+     *
+     * The demuxer is ReconOS's own and always works; whether the file plays
+     * depends on a frame decoder being installed. Registering it regardless is
+     * what lets the player say "this is H.264 video and AAC audio, and there
+     * is no AAC decoder installed" rather than "unknown file".
+     */
+    static const struct recon_codec MP4 = {
+        .name = "MP4",
+        .extensions = ".mp4 .m4a .m4v .mov",
+        .sniff = mp4_sniff,
+        .open = mp4_open,
+        .read = mp4_read,
+        .seek = mp4_seek,
+        .close = mp4_close,
+    };
+
     recon_codec_register(&WAV);
     recon_codec_register(&MP3);
+    recon_codec_register(&MP4);
 }

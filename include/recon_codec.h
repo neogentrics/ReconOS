@@ -115,6 +115,83 @@ struct recon_codec {
 bool recon_codec_register(const struct recon_codec *codec);
 bool recon_codec_unregister(const char *name);
 
+/*
+ * --- Decoders that live inside a container ---
+ *
+ * A different shape, for a different situation. A file codec is handed a whole
+ * file and finds its own way through it. A frame codec is handed one
+ * compressed frame at a time by something that already knows where the frames
+ * are -- a demuxer -- plus the setup bytes the container holds and the frames
+ * do not.
+ *
+ * Forcing both through one interface would mean the container synthesising a
+ * file for the decoder to parse: wrapping every AAC frame in an ADTS header so
+ * a decoder can find a frame it was just handed. That is inventing a format to
+ * feed a decoder that already has what it needs.
+ *
+ * This is where a codec pack plugs in. AAC and H.264 are not written here --
+ * they are a hundred and seven hundred pages of specification respectively --
+ * so a module registers them, and ReconOS says plainly which one is missing
+ * when it cannot play something.
+ */
+
+struct recon_codec_frame_reader;
+
+struct recon_codec_frames {
+    /* Matched against the name a demuxer reports: "AAC", "H.264". */
+    char name[RECON_CODEC_NAME_MAX];
+
+    /*
+     * `setup` is the container's own setup data -- AAC's two bytes saying its
+     * real rate and channel count, H.264's parameter sets. Most decoders
+     * cannot start without it, which is why it is not optional here.
+     *
+     * `rate` and `channels` are what the container *claims*; a decoder that
+     * learns better from the setup data should write the truth back.
+     */
+    struct recon_codec_frame_reader *(*open)(const uint8_t *setup,
+        size_t setup_length, int *rate, int *channels);
+
+    /*
+     * Decode one compressed frame into `out`, returning frames written.
+     *
+     * Zero is not an error: several formats begin with frames that prime the
+     * decoder and produce no sound, and a caller that treated that as the end
+     * would play nothing.
+     */
+    int (*decode)(struct recon_codec_frame_reader *reader,
+        const uint8_t *frame, size_t length, int16_t *out, int max_frames);
+
+    /* Throw away what the decoder is carrying between frames, after a seek --
+     * without it the first frames after a jump are decoded against the state
+     * of somewhere else entirely. May be NULL. */
+    void (*reset)(struct recon_codec_frame_reader *reader);
+
+    void (*close)(struct recon_codec_frame_reader *reader);
+};
+
+bool recon_codec_register_frames(const struct recon_codec_frames *codec);
+bool recon_codec_unregister_frames(const char *name);
+
+/* The frame decoder for a format, or NULL when none is installed. The caller
+ * says which one is missing, by name -- "there is no AAC decoder installed" is
+ * something to act on. */
+const struct recon_codec_frames *recon_codec_frames_for(const char *name);
+
+int recon_codec_frames_count(void);
+bool recon_codec_frames_at(int index, struct recon_codec_frames *out);
+
+/*
+ * Why the last open() failed, in a sentence.
+ *
+ * A decoder returns NULL for reasons that are nothing like each other -- the
+ * file is not that format, the file is damaged, or the file is fine and the
+ * decoder for what is inside it is not installed. A caller that cannot tell
+ * them apart has to guess, and the guess it reached for was "or it is
+ * damaged", which accused somebody's perfectly good video of being broken.
+ */
+const char *recon_codec_last_error(void);
+
 /* Everything ReconOS itself can decode. Called once at startup. */
 void recon_codec_init_builtin(void);
 

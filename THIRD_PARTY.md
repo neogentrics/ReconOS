@@ -66,6 +66,26 @@ Linked at build time, not distributed with ReconOS.
   time: without it ReconOS builds and says it cannot play anything, which is
   the same path a machine with no sound card takes.
 
+### libavcodec and libavutil
+
+- **License:** LGPL-2.1 or later
+- **Source:** https://ffmpeg.org/
+- **Used for:** decoding AAC, in the optional `CodecPack.rts` module and
+  nowhere else. It is handed one compressed frame and asked for samples;
+  none of its demuxing, scaling, filtering or conversion is used, because
+  ReconOS does those itself.
+
+  **A module rather than part of the system, deliberately.** Somebody who never
+  plays video should not carry the dependency; a codec pack should be removable;
+  and keeping the borrowed part to one file keeps the line in THIRD_PARTY.md
+  visible rather than assumed. The desktop builds and runs without it and says
+  which decoder is missing when it cannot play something.
+
+  This is the "may parse formats" half of the line above, in its largest
+  application so far. Writing AAC here was considered and rejected for the
+  same reason as MP3, only more so: a hundred pages of specification, where
+  ninety-five per cent correct is noise rather than nearly right.
+
 ### mbedTLS
 
 - **License:** Apache-2.0

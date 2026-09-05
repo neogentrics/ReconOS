@@ -35,8 +35,32 @@ a real fault: the float conversion scaled by 32767 instead of 32768 and
 truncated instead of rounding, so every sample came out fractionally quiet and
 biased towards silence.
 
-There is no video, and recon_codec.h says why at length rather than
-leaving a gap. Sound is a stream of numbers and a speaker. Video is that, plus
+MP4 files play their sound, and the split that makes that work is the
+answer to what a codec pack is here.
+
+ReconOS demuxes the container itself. An MP4 is a tree of boxes and three
+run-length tables saying where each compressed piece lives — that is structure,
+and structure is what this system writes for itself. Verified by pulling every
+audio frame out of a real video and comparing it byte for byte with the frames
+ffmpeg extracts from the same file: all 3307 of them match exactly.
+
+The *decoding* is a module. CodecPack.rts wraps libavcodec to register an AAC
+decoder, and it is genuinely optional — built only where libavcodec is present,
+removable afterwards, and the desktop plays WAV and MP3 without it. A codec
+pack that cannot be taken off again is not a pack, it is a decision somebody
+made for you.
+
+Which means a file that cannot be played says which decoder is missing:
+*"that file holds H.264 video and AAC sound. There is no AAC decoder installed,
+and nothing here shows video yet."* That sentence is the entire reason the two
+halves are separate, and it was wrong until it was tested — open() returned
+NULL for three unrelated reasons with no way to tell them apart, so the player
+guessed, and guessed "or it is damaged" about a perfectly good file.
+
+There is still no video, and recon_codec.h says why at length rather than
+leaving a gap. What changed is that the container is no longer part of the
+problem: the demuxer already reads the video track's dimensions, frame count
+and parameter sets. What is missing is a decoder and a clock, not a parser. Sound is a stream of numbers and a speaker. Video is that, plus
 a container interleaving it with the sound, plus a clock keeping the two
 together, plus a decoder whose output is thirty megabytes a second that has to
 be scaled and colour-converted before anything can look at it. The place it

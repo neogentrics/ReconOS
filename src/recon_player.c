@@ -235,8 +235,13 @@ static void play_index(struct recon_player *p, int index) {
         length, &format);
     if (reader == NULL) {
         free(bytes);
-        set_status(p, true, "'%s' is not a %s file after all, or it is "
-            "damaged.", p->tracks[index].name, codec->name);
+        /*
+         * The decoder's own words. It said "not a %s file after all, or it is
+         * damaged" here, which is a guess -- and the guess was wrong for the
+         * commonest case, a perfectly good video file with no decoder for what
+         * is inside it.
+         */
+        set_status(p, true, "%s", recon_codec_last_error());
         return;
     }
 
