@@ -1588,10 +1588,19 @@ static bool apply_font(struct recon_notepad *np, char *why, size_t why_size) {
         np->size = NOTEPAD_SIZE_MAX;
     }
 
-    if (np->font_name[0] == '\0') {
-        /* The system's, at the chosen size. recon_font_system caches by size,
-         * so this is free the second time a size is used and the result is
-         * not ours to free. */
+    int usual = recon_registry_get_int(RECON_REG_USER,
+        RECON_ACCESS_FONT_SIZE_KEY, RECON_ACCESS_FONT_SIZE_DEFAULT);
+
+    /*
+     * Shares the system's font, but only at the size everything else draws
+     * at, where the one already loaded is the one wanted.
+     *
+     * The shared cache holds six sizes. A text size somebody can walk from 9
+     * to 32 would fill it and then start handing back a size nobody asked
+     * for, so a window resized away from the default loads its own below
+     * rather than competing for slots with the chrome.
+     */
+    if (np->font_name[0] == '\0' && np->size == usual) {
         struct recon_font *shared = recon_font_system(np->size);
         if (shared == NULL) {
             recon_text_copy(why, why_size, "The system font could not be "
@@ -1606,17 +1615,26 @@ static bool apply_font(struct recon_notepad *np, char *why, size_t why_size) {
         return true;
     }
 
+    /* Its own copy: either an installed family, or the system's typeface at
+     * a size of this window's choosing. */
+    const char *file = NULL;
     char path[RECON_PATH_MAX];
     char host[RECON_PATH_MAX];
     char canonical[RECON_PATH_MAX];
-    if (!recon_fonts_path(np->font_name, path, sizeof(path)) ||
-            !recon_fs_resolve("/", path, host, sizeof(host), canonical,
-                sizeof(canonical))) {
-        recon_text_copy(why, why_size, "That font could not be found.");
-        return false;
+
+    if (np->font_name[0] != '\0') {
+        if (!recon_fonts_path(np->font_name, path, sizeof(path)) ||
+                !recon_fs_resolve("/", path, host, sizeof(host), canonical,
+                    sizeof(canonical))) {
+            recon_text_copy(why, why_size, "That font could not be found.");
+            return false;
+        }
+        file = host;
     }
 
-    struct recon_font *loaded = recon_font_load(host, np->size);
+    /* NULL means "find the system's", which is what the loader does when it
+     * is given no path. */
+    struct recon_font *loaded = recon_font_load(file, np->size);
     if (loaded == NULL) {
         recon_text_copy(why, why_size, "That font could not be read.");
         return false;

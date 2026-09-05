@@ -352,9 +352,33 @@ struct recon_font *recon_font_system(int pixel_height) {
     /*
      * Out of slots. The nearest size already loaded, rather than NULL: text
      * slightly the wrong size is a cosmetic fault, and no text at all is not.
+     *
+     * Actually nearest, which it was not. This returned slot zero -- the
+     * *first* size ever loaded, which is only the nearest by coincidence --
+     * while the comment above it claimed otherwise. Nothing had reached this
+     * path until Notepad gained a text size somebody can drive from 9 to 32,
+     * at which point the seventh size would have come back as whatever the
+     * splash screen happened to want.
      */
-    wlr_log(WLR_ERROR, "ReconOS: no room for a %dpx font", pixel_height);
-    return g_system_fonts[0].font;
+    struct recon_font *nearest = NULL;
+    int best = 0;
+    for (int i = 0; i < SYSTEM_FONTS_MAX; i++) {
+        if (g_system_fonts[i].font == NULL) {
+            continue;
+        }
+        int apart = g_system_fonts[i].pixel_height - pixel_height;
+        if (apart < 0) {
+            apart = -apart;
+        }
+        if (nearest == NULL || apart < best) {
+            nearest = g_system_fonts[i].font;
+            best = apart;
+        }
+    }
+
+    wlr_log(WLR_ERROR, "ReconOS: no room for a %dpx font; using %dpx",
+        pixel_height, pixel_height + best);
+    return nearest;
 }
 
 void recon_font_system_finish(void) {

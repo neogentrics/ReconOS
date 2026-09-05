@@ -76,6 +76,34 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-087 — The font cache's fallback claimed "nearest" and returned "first"
+
+[#254](https://github.com/neogentrics/ReconOS/issues/254)
+
+- **Found in** v0.3.0. **Found by** the kernel session, indirectly: they asked
+  whether anything on this side pools or caches, and whether it gives the
+  *pages* back rather than merely the bytes. Going to look answered a
+  different question.
+- **Was** `recon_font_system` caches six sizes. Its out-of-slots path carried
+  a comment saying it returns the nearest size already loaded -- and returned
+  `g_system_fonts[0]`, the size loaded *first*, which is the nearest only by
+  coincidence.
+
+  Latent until the same session's own change made it reachable: Notepad gained
+  a text size somebody can walk from 9 to 32, so the seventh distinct size in
+  a session would have come back as whatever the splash screen happened to
+  want, silently, with the window reporting the size it had asked for.
+
+  Two faults, and the second is the more interesting: **a comment and the code
+  under it disagreed, and the comment was the correct design.** Code that does
+  not do what the line above it says is worse than code with no comment,
+  because the comment is what the next reader checks against instead of the
+  behaviour.
+- **Fixed in** v0.3.0. The fallback is actually nearest, and says which size
+  it substituted. Notepad shares the system's font only at the size everything
+  else draws at, and loads its own at any other -- so a window resized away
+  from the default is not competing for cache slots with the chrome.
+
 ### BG-084 — A page table stopped being reachable at the instant it was installed
 
 [#251](https://github.com/neogentrics/ReconOS/issues/251)

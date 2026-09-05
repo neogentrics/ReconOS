@@ -56,6 +56,7 @@ AREA = {
     # the system is a track record of all of it.
     81: 'kernel', 82: 'kernel', 83: 'kernel',
     84: 'kernel', 85: 'kernel', 86: 'kernel',
+    87: 'display',
 }
 
 
