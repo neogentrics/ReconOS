@@ -119,8 +119,11 @@ static void test_a_preset_cannot_be_removed(void) {
         "a name inside the folder can be built");
     check(make_file(path, "shipped typeface"), "and written to");
 
-    check(!recon_fonts_remove("Shipped.ttf"),
-        "removing it is refused");
+    char origin[RECON_PATH_MAX];
+    check(!recon_fonts_origin("Shipped.ttf", origin, sizeof(origin)),
+        "nothing says where it came from, which is what shipping looks like");
+
+    check(!recon_fonts_remove("Shipped.ttf"), "removing it is refused");
     check(recon_fs_exists("/", path), "and it is still there");
 
     const char *why = recon_fonts_last_error();
@@ -174,8 +177,7 @@ static void test_removing_leaves_the_others_alone(void) {
             continue;   /* One that ships. */
         }
 
-        check(strchr(origin, '|') == NULL,
-            "no origin has a bar left in it");
+        check(strchr(origin, '|') == NULL, "no origin has a bar left in it");
         check(origin[0] == '/', "and every one is still a path");
     }
 }
