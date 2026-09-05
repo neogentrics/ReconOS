@@ -9,6 +9,15 @@ way for the two to disagree.
 
 ---
 
+## v0.3.1 — in progress
+
+**A web viewer.** Not a browser: a viewer for simple pages. HTTP and HTTPS,
+HTML structure and links, and no CSS, no JavaScript and no images. That
+boundary is stated here rather than discovered later, because "basic browser"
+and "browser" are a weekend and a decade apart.
+
+---
+
 ## v0.3.0
 
 **Mail.** IMAP and POP3, both over TLS, both through the encrypted streams

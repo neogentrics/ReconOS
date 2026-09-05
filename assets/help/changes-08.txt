@@ -1,2 +1,5 @@
-Notepad can undo, by word rather than by keystroke, and has an Edit menu
-so the shortcuts are findable.
+A text clipboard. Cut, copy and paste work in Notepad, in every text field
+in the system, and into the Terminal. Before this, text could not be moved
+from one place to another at all.
+
+Notepad can select text — with the mouse, or Shift and the arrow keys.
