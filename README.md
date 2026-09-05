@@ -835,6 +835,7 @@ modules/      applications and subsystems built as .rex / .rts
 tests/        tests that need no display
 scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
+boot/         reconboot — the UEFI bootloader, its own build (clang, PE)
 kernel/       the kernel — phase 2, its own build
 third_party/  vendored dependencies (stb)
 docs/         roadmap, bug register, module interface, development notes
