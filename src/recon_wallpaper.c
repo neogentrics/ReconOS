@@ -20,6 +20,7 @@
 #include "recon_png.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
+#include "recon_help.h"      /* recon_asset_read */
 #include "recon_wallpaper.h"
 
 /* Big enough to look right on the screens ReconOS runs on, small enough that
@@ -159,6 +160,57 @@ static bool draw_one(const struct drawn_wallpaper *style) {
     return ok;
 }
 
+/*
+ * The ones that are pictures rather than gradients.
+ *
+ * Made for ReconOS and shipped with it, in assets/wallpapers. They are copied
+ * in rather than drawn, and everything downstream treats them identically --
+ * the same directory, the same scan, the same picker. Which also means they
+ * cannot be deleted without being replaced first, because recon_wallpaper_remove
+ * refuses anything with no recorded origin and only an *added* wallpaper has
+ * one. The preset rule falls out of the existing design rather than needing a
+ * second one.
+ */
+static const char *const BUNDLED[] = {
+    "Aurora.jpg",
+    NULL,
+};
+
+static int install_bundled(void) {
+    int written = 0;
+
+    for (int i = 0; BUNDLED[i] != NULL; i++) {
+        char path[RECON_PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", RECON_DIR_WALLPAPERS,
+            BUNDLED[i]);
+
+        /* One somebody replaced stays replaced, exactly as for the drawn set. */
+        if (recon_fs_exists("/", path)) {
+            continue;
+        }
+
+        char asset[RECON_PATH_MAX];
+        snprintf(asset, sizeof(asset), "wallpapers/%s", BUNDLED[i]);
+
+        size_t size = 0;
+        char *data = recon_asset_read(asset, &size);
+        if (data == NULL) {
+            /*
+             * Not an error worth reporting. A build run from somewhere its
+             * assets are not is a development arrangement, and a desktop that
+             * refused to start over a missing wallpaper would be worse than one
+             * with four backgrounds instead of five.
+             */
+            continue;
+        }
+        if (size > 0 && recon_fs_write("/", path, data, size)) {
+            written++;
+        }
+        free(data);
+    }
+    return written;
+}
+
 int recon_wallpapers_write_defaults(void) {
     recon_fs_mkdir("/", RECON_DIR_WALLPAPERS);
 
@@ -176,6 +228,8 @@ int recon_wallpapers_write_defaults(void) {
             written++;
         }
     }
+
+    written += install_bundled();
     return written;
 }
 

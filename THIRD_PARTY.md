@@ -140,10 +140,21 @@ Linked at build time, not distributed with ReconOS.
 
 ## Assets
 
-### Wallpaper
+### Wallpapers
 
-`assets/wallpaper.jpg` is a placeholder photograph, not an original work, and
-should be replaced before ReconOS is distributed.
+`assets/wallpapers/Aurora.jpg` was made for ReconOS and is not borrowed from
+anywhere. It is worth saying how, because "made for" and "drawn by hand" are
+different claims and only the first one is true: it was produced by an image
+model from a written description, and the description asked for a quiet upper
+left specifically so window chrome stays readable over it. Nobody else has a
+claim on it, and nobody painted it either.
+
+The four other wallpapers ReconOS offers are not files at all -- they are drawn
+at first run from two colours, a ramp and some stars, in `recon_wallpaper.c`.
+
+`assets/wallpaper.jpg` remains a placeholder photograph, not an original work,
+and should be replaced before ReconOS is distributed. Aurora is the beginning
+of replacing it.
 
 ### Fonts
 

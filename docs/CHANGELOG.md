@@ -185,6 +185,20 @@ the icon cache now watches the theme's generation counter, because which file a
 name resolves to is no longer decided by the name alone -- BG-089's shape
 exactly, caught before it shipped this time.
 
+**And the first wallpaper made for this system rather than drawn by it.** The
+four that existed are two colours, a ramp and some stars, generated at first run
+-- the right default, and not artwork. Glass is see-through *to* the wallpaper,
+which makes the wallpaper matter more than it did before it existed.
+
+*Aurora* is installed at first run alongside the drawn ones, into the same
+directory, listed by the same scan, chosen the same way. It also cannot be
+deleted, and not because anything new says so: removal already refuses anything
+with no recorded origin, and only a wallpaper somebody *added* has one. The
+preset rule fell out of the existing design rather than needing a second one.
+
+How it was made is written down in THIRD_PARTY.md, because "made for ReconOS"
+and "drawn by hand" are different claims and only the first is true.
+
 **No backdrop blur, and that is the honest gap.** Real Aero blurred what was
 behind the glass, which is what let it be far more transparent than this is. A
 window's buffer cannot see what is under it, so blurring would mean either
