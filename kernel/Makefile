@@ -25,7 +25,7 @@ BUILD := build/$(ARCH)
 ifeq ($(ARCH),x86_64)
   CROSS   ?=
   ARCHFLAGS := -m64 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387 \
-               -mcmodel=small
+               -mcmodel=kernel
   QEMU     := qemu-system-x86_64
   # The ELF carries its own boot headers -- Multiboot2 and a PVH note -- so it
   # is what gets booted directly.
@@ -65,7 +65,7 @@ CFLAGS := -std=c11 -O2 -g \
           -DRECONOS_KERNEL_VERSION=\"$(VERSION)\" \
           $(ARCHFLAGS)
 
-ASFLAGS := $(ARCHFLAGS) -Iinclude
+ASFLAGS := $(ARCHFLAGS) -fno-pic -Iinclude
 LDFLAGS := -nostdlib -no-pie -z noexecstack -z max-page-size=4096
 
 # --- Sources -----------------------------------------------------------------

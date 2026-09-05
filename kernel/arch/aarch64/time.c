@@ -46,16 +46,6 @@
  * discovery, which is one of the few ARM numbers that genuinely is fixed. */
 #define TIMER_IRQ 30
 
-static inline void mmio_w32(u64 base, u64 off, u32 v)
-{
-	*(volatile u32 *)(base + off) = v;
-}
-
-static inline u32 mmio_r32(u64 base, u64 off)
-{
-	return *(volatile u32 *)(base + off);
-}
-
 static void arm_timer(void);
 
 /* The parts of the interrupt controller that are per-processor.

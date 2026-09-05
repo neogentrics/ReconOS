@@ -41,8 +41,10 @@
 /* Lower attributes. */
 #define ATTR_IDX(n)  ((u64)(n) << 2)
 #define ATTR_NS      (1ULL << 5)
-#define ATTR_AP_RW   (0ULL << 6)	/* read/write at EL1, nothing at EL0 */
-#define ATTR_AP_RO   (2ULL << 6)	/* read-only at EL1 */
+#define ATTR_AP_RW      (0ULL << 6)	/* read/write at EL1, nothing at EL0 */
+#define ATTR_AP_USER_RW (1ULL << 6)	/* read/write at both levels */
+#define ATTR_AP_RO      (2ULL << 6)	/* read-only at EL1, nothing at EL0 */
+#define ATTR_AP_USER_RO (3ULL << 6)	/* read-only at both levels */
 #define ATTR_SH_INNER (3ULL << 8)	/* inner shareable */
 #define ATTR_AF      (1ULL << 10)
 #define ATTR_NG      (1ULL << 11)
@@ -144,6 +146,39 @@ static u64 *next_level(u64 *table, unsigned index, bool create)
 	}
 }
 
+/* Replacing a live mapping means the old translation may still be sitting in
+ * the processor's cache of them, and a cached translation is consulted before
+ * the table it came from. So the entry has to be knocked out by hand.
+ *
+ * This was missing until user mode arrived, and it could not have been noticed
+ * before: every mapping the kernel had ever made was made once, at an address
+ * nothing had touched yet, and there was nothing stale to find. The second user
+ * program, mapped at the same address as the first, read the first program's
+ * page and ran it -- correct tables, wrong memory.
+ *
+ * Only replacements are invalidated. A first mapping has nothing cached, and
+ * invalidating unconditionally would mean five hundred invalidations while
+ * building the direct map for no reason at all.
+ */
+static void invalidate_if_live(u64 entry, vaddr_t va)
+{
+	if ((entry & 3) == DESC_INVALID)
+		return;
+
+	/* The address goes in as a page number, not a byte address, and the
+	 * ordering around it is not optional: the table write has to be visible
+	 * before the invalidation, and the invalidation complete before any
+	 * instruction that might use the new translation is fetched. */
+	__asm__ volatile(
+		"dsb ishst\n"
+		"tlbi vaae1is, %0\n"
+		"dsb ish\n"
+		"isb\n"
+		:
+		: "r"(va >> 12)
+		: "memory");
+}
+
 static u64 leaf_attrs(unsigned flags, bool block)
 {
 	u64 a = block ? DESC_BLOCK : DESC_PAGE;
@@ -158,15 +193,34 @@ static u64 leaf_attrs(unsigned flags, bool block)
 		a |= ATTR_IDX(MAIR_NORMAL) | ATTR_SH_INNER;
 	}
 
-	a |= (flags & VM_WRITE) ? ATTR_AP_RW : ATTR_AP_RO;
+	/* The access permission bits carry both questions at once on this
+	 * architecture: who may reach it, and whether they may write. Four
+	 * combinations, and picking the wrong one is the difference between a
+	 * page a user program cannot see and one it can rewrite. */
+	if (flags & VM_USER)
+		a |= (flags & VM_WRITE) ? ATTR_AP_USER_RW : ATTR_AP_USER_RO;
+	else
+		a |= (flags & VM_WRITE) ? ATTR_AP_RW : ATTR_AP_RO;
 
-	/* Never executable from EL0 -- nothing the kernel maps is user code.
-	 * Executable from EL1 only where asked. Device memory is never
-	 * executable, which matters: a speculative instruction fetch from a
-	 * memory-mapped register is a real way to hang a bus. */
-	a |= ATTR_UXN;
-	if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
-		a |= ATTR_PXN;
+	/* Execute-never, separately for each privilege level.
+	 *
+	 * A kernel mapping is never executable from EL0 -- nothing the kernel
+	 * maps is user code. A *user* mapping is never executable from EL1,
+	 * which is the more important half: it means the kernel cannot be talked
+	 * into running a user program's bytes with kernel privilege, which is
+	 * the shape of a whole family of exploits.
+	 *
+	 * Device memory is never executable at all: a speculative instruction
+	 * fetch from a memory-mapped register is a real way to hang a bus. */
+	if (flags & VM_USER) {
+		a |= ATTR_PXN;			/* never executable by the kernel */
+		if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
+			a |= ATTR_UXN;
+	} else {
+		a |= ATTR_UXN;			/* never executable by user mode */
+		if (!(flags & VM_EXEC) || (flags & VM_DEVICE))
+			a |= ATTR_PXN;
+	}
 
 	return a;
 }
@@ -198,6 +252,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 		if (caps.page_1g && size >= SIZE_1G &&
 		    !((va | pa) & (SIZE_1G - 1))) {
+			invalidate_if_live(l1[i1], va);
 			l1[i1] = (pa & ADDR_MASK) | leaf_attrs(flags, true);
 			mapped_1g++;
 			va += SIZE_1G; pa += SIZE_1G; size -= SIZE_1G;
@@ -210,6 +265,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 		if (caps.page_2m && size >= SIZE_2M &&
 		    !((va | pa) & (SIZE_2M - 1))) {
+			invalidate_if_live(l2[i2], va);
 			l2[i2] = (pa & ADDR_MASK) | leaf_attrs(flags, true);
 			mapped_2m++;
 			va += SIZE_2M; pa += SIZE_2M; size -= SIZE_2M;
@@ -220,6 +276,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 		if (!l3)
 			return false;
 
+		invalidate_if_live(l3[i3], va);
 		l3[i3] = (pa & ADDR_MASK) | leaf_attrs(flags, false);
 		mapped_4k++;
 		va += PAGE_SIZE; pa += PAGE_SIZE; size -= PAGE_SIZE;
@@ -344,14 +401,20 @@ void vm_init(void)
 	if (!ttbr0_root || !ttbr1_root)
 		panic("vm: no memory for the root translation tables");
 
-	/* The kernel image, identity mapped in the low half. This is the
-	 * mapping the switch itself stands on: the instruction after the one
-	 * that changes TTBR is fetched through the new tables. */
+	/* The kernel image, at the address it is linked at. This is the mapping
+	 * the switch itself stands on: the instruction after the one that
+	 * changes TTBR is fetched through the new tables, and by the time this
+	 * runs the processor is already executing high -- boot.S moved it there
+	 * before any C ran.
+	 *
+	 * There is deliberately no identity mapping of it. Leaving one would
+	 * keep a copy of the kernel in the lower half of every address space,
+	 * which is exactly what moving the kernel was meant to stop. */
 	{
-		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_start);
-		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_end) - start;
+		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_phys_start);
+		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_phys_end) - start;
 
-		if (!vm_map((vaddr_t)start, start, len,
+		if (!vm_map((vaddr_t)(KERNEL_VMA + start), start, len,
 			    VM_READ | VM_WRITE | VM_EXEC | VM_GLOBAL))
 			panic("vm: could not map the kernel image");
 	}
@@ -375,8 +438,8 @@ void vm_init(void)
 		};
 
 		for (unsigned i = 0; i < RK_ARRAY_LEN(fixed_devices); i++)
-			if (!vm_map((vaddr_t)fixed_devices[i], fixed_devices[i],
-				    PAGE_SIZE * 16,
+			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i],
+				    fixed_devices[i], PAGE_SIZE * 16,
 				    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
 				panic("vm: could not map the machine's fixed hardware");
 	}
@@ -423,6 +486,13 @@ void vm_init(void)
 
 	vm_activate_this_cpu();
 
+	/* First, and before anything can want to print. The map that was live a
+	 * moment ago had the UART at its physical address; this one has it in
+	 * the direct map, and between these two statements a single kprintf
+	 * would fault on a device that no longer exists where the driver
+	 * believes it is. */
+	aarch64_device_offset = DIRECT_MAP_BASE;
+
 	direct_map_live = true;
 
 	/* Both roots were reached through the map we were handed. Re-point them
@@ -467,9 +537,20 @@ bool vm_self_test(void)
 		ok = false;
 	}
 
-	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_start) !=
-	    (paddr_t)(uintptr_t)__kernel_start) {
-		kputs("  vm: the kernel image is no longer identity mapped\n");
+	if (vm_lookup((vaddr_t)(KERNEL_VMA + (u64)(uintptr_t)__kernel_phys_start)) !=
+	    (paddr_t)(uintptr_t)__kernel_phys_start) {
+		kputs("  vm: the kernel image is not where it is linked\n");
+		ok = false;
+	}
+
+	/* And the other half of the same claim, which is the one checkpoint 10
+	 * actually bought: the address the kernel was *loaded* at means nothing
+	 * any more. Without this the move would be half done -- the kernel
+	 * reachable from the top and still sitting in the middle of every
+	 * program's address space -- and nothing would say so. */
+	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_phys_start) != 0) {
+		kputs("  vm: the kernel is still mapped where it was loaded, so "
+		      "the lower half is not free after all\n");
 		ok = false;
 	}
 

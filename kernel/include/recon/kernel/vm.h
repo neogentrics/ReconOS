@@ -53,6 +53,13 @@
  * across an address space switch. Every kernel mapping is global. */
 #define VM_GLOBAL (1u << 4)
 
+/* Reachable from user mode.
+ *
+ * Its *absence* is the load-bearing part. Every kernel mapping omits it, and
+ * that omission is what makes the kernel unreachable from a user program --
+ * not a check in any code, but a bit the processor consults on every access. */
+#define VM_USER   (1u << 5)
+
 /* --- The direct map -----------------------------------------------------
  *
  * All of physical memory at a fixed virtual offset. The offset is per

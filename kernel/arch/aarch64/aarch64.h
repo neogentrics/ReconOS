@@ -4,6 +4,40 @@
 
 #include <recon/kernel/types.h>
 
+/* Where the kernel image is linked, and where boot.S puts the processor before
+ * any C runs. The linker script holds the same number; they are two statements
+ * of one fact and must not drift.
+ *
+ * Nothing on this architecture requires this particular address -- aarch64 code
+ * is PC-relative and links anywhere. It is x86_64's -mcmodel=kernel that
+ * requires the top two gigabytes, and one number in two architectures is easier
+ * to hold than two. */
+#define KERNEL_VMA 0xFFFFFFFF80000000ULL
+
+/* What to add to a device's physical address to reach it.
+ *
+ * Zero while the kernel is running on the map boot.S built, which is an
+ * identity map; DIRECT_MAP_BASE once vm_init has installed the real one, which
+ * is not. It is a variable rather than a constant because both are true, at
+ * different times, and the drivers should not have to know which time it is.
+ *
+ * Set exactly once, immediately after the tables change, and read by every
+ * mmio access below. */
+extern u64 aarch64_device_offset;
+
+/* Reading and writing a hardware register. Volatile so the compiler does not
+ * decide a write nobody reads is dead, and through the offset above so that
+ * one assignment moves every driver from the identity map to the direct one. */
+static inline void mmio_w32(u64 base, u64 off, u32 v)
+{
+	*(volatile u32 *)(base + aarch64_device_offset + off) = v;
+}
+
+static inline u32 mmio_r32(u64 base, u64 off)
+{
+	return *(volatile u32 *)(base + aarch64_device_offset + off);
+}
+
 /* Saved by boot.S from x0, where the firmware left it. */
 extern u64 arch_dtb_pointer;
 

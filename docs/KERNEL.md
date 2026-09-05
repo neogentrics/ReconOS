@@ -60,7 +60,7 @@ courtesy now rather than a dependency.
 | 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and preemption | **Done** |
 | 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
-| 10 | User mode, the first system call, and the kernel moves to the higher half | |
+| 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
 | 11 | Block devices — storage the kernel can read and write | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
 | 13 | ReconFS — a filesystem of its own | |
@@ -239,8 +239,10 @@ itself and our trampoline never had a reason to. CPUID reports the feature is
 *supported*; it does not report that it is *enabled*, and code that reads the
 first as the second works only on machines that happened to enable it already.
 
-**The higher half is deferred to checkpoint 10, deliberately.** It was in this
-checkpoint's title and it is not done. The kernel still runs identity-mapped.
+**The higher half was deferred to checkpoint 10, deliberately, and done
+there.** It was in this checkpoint's title and it was not done here. The
+paragraphs below are the reasoning at the time, kept because the reasoning was
+the point.
 
 The reason to move it is to leave the low half of the address space free for
 user processes — and there are no user processes until checkpoint 10, so today
@@ -615,6 +617,206 @@ checks will first bite this kernel, and it is listed rather than assumed.
 Also absent by choice: priorities (a scheme invented before there is a workload
 to shape it around is fitted to nothing) and blocking (waiting for a key or a
 disk needs the key or the disk to exist).
+
+
+### Checkpoint 10 — user mode, the first system call, and the higher half
+
+**This is the checkpoint the desktop's accounts have been waiting for.**
+
+Everything before it ran at one privilege level. A bug anywhere could write
+anywhere, and "this account may not do that" was a decision code made about
+itself — which meant any program that simply did not ask was not bound by it.
+ReconOS declines to install software for a standard account because its Control
+Panel declines to. After this checkpoint the processor declines.
+
+**Entering.** The two architectures are barely comparable here.
+
+On aarch64 a privilege level is a *number in the saved processor state*, and the
+same `eret` that returns from an exception is what enters user mode: set SPSR to
+say EL0, set ELR to the entry point, set SP_EL0, and return from an exception
+that never happened. `arch/aarch64/user.c` is fifty lines and most of them are
+comment.
+
+On x86_64 it is descriptors. The GDT grew user code and user data entries, and
+their *order* is not free: SYSRET rebuilds both user selectors by adding 8 and
+16 to a single base held in one MSR, so user data must follow kernel data and
+user code must follow that. A GDT laid out the way a person would find natural —
+code, code, data, data — does not work, and fails by loading a plausible wrong
+segment rather than by refusing. Entry itself is `iretq` against a hand-built
+interrupt frame, because `iretq` can set RFLAGS to anything and there are no
+saved flags to restore the first time.
+
+**Returning.** `svc` on ARM lands in vector slot 8, one of the sixteen the
+exception table has filled since checkpoint 7 and nothing had used. `syscall` on
+x86 needs an entry point of its own, and the interesting thing about it is what
+it does *not* do: it does not switch stacks. The processor arrives in the kernel
+still standing on the user program's stack, at whatever address the user program
+chose. Three instructions — `swapgs`, save, switch — get off it, and the window
+before them is why SFMASK clears the interrupt flag on entry.
+
+**The register conventions are Linux's, deliberately.** x8 and x0–x5 on ARM;
+RAX and RDI/RSI/RDX/R10/R8/R9 on x86. Matching them costs nothing today and
+means a compatibility layer for Linux binaries has one less thing to translate,
+which is the whole argument for the next paragraph.
+
+**Personality: the one thing the kernel owes the compatibility layers.** A
+system call arrives as a number. What that number *means* is a property of the
+program making it — 1 is `write` to a Linux binary and something else entirely
+to a Windows one. So the syscall table is a pointer on the process rather than a
+global, and a process is created with a personality that selects it. Nothing
+needs it yet; there is one table and everything uses it. It is built this way
+now because it costs one pointer now and a rewrite later. Linux calls this
+`binfmt`; Windows NT called them subsystems.
+
+**Two defences, and both are tested by a program written to attack them.**
+
+The first is code: `user_range_ok` checks every pointer a system call is handed,
+for overflow first — a pointer near the top of the address space with a huge
+length otherwise produces an end address that wrapped below the start, and every
+subsequent range test passes.
+
+The second is the processor: kernel mappings do not carry `VM_USER`, and its
+absence is what makes the kernel unreachable. Not a check in any code — a bit
+consulted on every access.
+
+So the second test program tries both. It asks the kernel to `write` from the
+direct map's base, which is every byte of physical memory laid out conveniently;
+that is refused. Then, having been refused, it reads the address itself; that
+faults. It is killed, and the kernel is not — which is the first time in this
+kernel's life that something can go wrong without the machine stopping.
+
+The test treats the program *exiting normally* as the failure, because exiting
+normally is what it does when the first attempt succeeds.
+
+**Two bugs, both older than this checkpoint, both found by the second program.**
+
+`vm_map` never invalidated the TLB when it replaced a live mapping. It could not
+have been noticed before: every mapping the kernel had ever made was made once,
+at an address nothing had touched, and there was nothing stale to find. The
+second user program, mapped at the same virtual address as the first, read and
+ran the first program's page — correct page tables, wrong memory. Only
+replacements are invalidated now; invalidating unconditionally would mean five
+hundred invalidations while building the direct map for no reason.
+
+The aarch64 exception vectors destroyed `x0` before saving it — each of the
+sixteen slots began `mov x0, #index`. That was harmless for as long as every
+exception was a fault, because nobody wanted the register, only the report. It
+stopped being harmless the moment a system call needed its first argument:
+`write(1, buf, len)` would have been `write(8, buf, len)`. The frame gained a
+slot for the vector number, and `x0` is now stored before anything can clobber
+it.
+
+**Verification.** `scripts/verify-kernel.sh` boots the kernel eleven ways and
+reads the self-test counts rather than the absence of a crash:
+
+| Path | Self-tests |
+|---|---|
+| x86_64 PVH, direct kernel load | 10 |
+| x86_64 PVH, `-cpu max` | 10 |
+| x86_64 Multiboot2 via GRUB, BIOS | 10 |
+| x86_64 Multiboot2 via GRUB, UEFI | 10 |
+| x86_64 reconboot, UEFI | 10 |
+| aarch64 device tree, cortex-a72 | 10 |
+| aarch64 device tree, `-cpu max` | 10 |
+| aarch64 device tree, 2 / 4 / 8 processors | 10 each |
+| aarch64 reconboot, UEFI | 10 |
+
+110 self-tests, no failures. The script itself cost one confusing run to get
+right: its patterns were anchored with `$`, and QEMU's serial console ends every
+line with a carriage return as well as a newline, so every path reported no
+output at all — which reads exactly like a kernel that never booted.
+
+---
+
+#### The higher half
+
+Deferred from checkpoint 5 with a reason, and the reason arrived here: the point
+of moving the kernel image out of the low half is to leave that half to user
+processes, and there were no user processes until this checkpoint. Now there
+are, and a kernel identity-mapped at its load address would put a hole in the
+middle of every program's address space, in the same place, that no program may
+touch.
+
+**The kernel is loaded low and linked high.** 1MB and 0x40080000 are where the
+two architectures are *loaded*, because that is where every loader puts them.
+0xFFFFFFFF80000000 is where both now *run*.
+
+The address is the same on both architectures and that is a choice, not a
+coincidence. aarch64 does not care -- its code is PC-relative and links
+anywhere. x86_64 does: `-mcmodel=kernel` generates references that assume the
+top two gigabytes, and it is the only model that produces sensible code for a
+high kernel. One number in two linker scripts is easier to hold than two. It
+also means the direct map at 0xFFFF800000000000 and the kernel image are two
+separate windows rather than one, which costs a mapping and saves an argument.
+
+**Getting there is the whole of the boot code, and it differs completely.**
+
+x86_64 keeps a low region. The trampoline that gets from 32-bit protected mode
+to long mode runs before paging exists, so it must be linked where it is loaded,
+and so must the descriptor table it loads and the page tables it builds. Those
+live in `.boot`; everything after is linked high and loaded low. The map it
+builds contains the kernel twice, through two chains to one page directory,
+because paging takes effect on the *next instruction fetch* and that fetch has
+to still find the trampoline. Then `movabsq` and an indirect jump, which is the
+one instruction that moves the kernel to the higher half.
+
+aarch64 keeps nothing low. It starts in the mode the kernel wants, so its boot
+code only has to avoid *absolute* addresses until the MMU is on -- and `adrp`
+gives the address a symbol has right now rather than the one the linker assigned
+it. So the whole image is linked high and `AT()` places every byte of it low.
+The rule this creates is worth stating because the failure is silent: `ldr xN,
+=symbol` loads a linked address out of a literal pool and may not be used until
+the MMU is on. It is the natural thing to write and it is wrong there.
+
+**Three surprises, one per boot path that has firmware.**
+
+*OVMF's page tables are read-only.* The ReconBoot path on x86_64 does not build
+an address space; it adds one entry to the one the firmware is already using --
+entry 511, which no firmware uses and which is exactly where 0xFFFFFFFF80000000
+looks. That keeps the firmware's map of everything else, including wherever it
+put the handoff structure. The write faulted with error code 3: present, write.
+`CR0.WP` is what makes a read-only page read-only *to ring 0 as well*, and it
+has to come off for the length of one store. The error code reads like a bug in
+the address, and the address was perfectly correct.
+
+*A page table that is not page-aligned is not a page table.* Moving three
+scratch words into the boot region pushed the tables twenty-four bytes along.
+The processor ignores the low twelve bits of every pointer to a table, so the
+entries were written in one place and read from another, and the kernel simply
+never printed anything.
+
+*Every secondary processor was zeroing the tables it was about to share.* The
+aarch64 secondaries need the MMU on before they can reach their own stacks,
+which are linked addresses. The first version had them run the same routine the
+boot processor ran -- build, then install -- and the comment said rebuilding
+identical tables was harmless. It is not: between the zeroing and the rebuild
+there is a window in which the other processors' translations do not exist, and
+one that takes an instruction fetch in that window is gone. It failed about a
+quarter of the time on four processors and never on two, which is the
+characteristic shape of a race a smaller machine hides. Building is now the boot
+processor's job and happens once; installing touches no memory and may be run by
+anyone.
+
+**One consequence worth its own paragraph.** On aarch64 the fixed devices --
+UART, interrupt controller, real-time clock -- were identity-mapped, and the
+low half is no longer there to hold them. They live in the direct map now, and
+every driver reaches them through a single variable that is zero while the
+kernel runs on the map `boot.S` built and `DIRECT_MAP_BASE` afterwards. It is
+assigned in the statement immediately after the tables change, because between
+those two statements a single `kprintf` would fault on a device that no longer
+exists where the driver believes it is.
+
+**The test that says it worked.** Two lookups rather than one:
+
+```
+vm_lookup(KERNEL_VMA + phys) == phys     the kernel is where it is linked
+vm_lookup(phys)              == 0        and nowhere else
+```
+
+The second is the one that matters. Without it the move would be half done --
+the kernel reachable from the top and still sitting in the middle of every
+program's address space -- and nothing would say so.
+
 
 ## Using the machine you are on
 

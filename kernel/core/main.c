@@ -16,6 +16,7 @@
 #include <recon/kernel/lock.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/trap.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
 
 #ifndef RECONOS_KERNEL_VERSION
@@ -69,6 +70,12 @@ void kmain(void)
 	smp_init();
 	smp_print_summary();
 
+	/* Last, because it is the one thing that needs everything: pages to map,
+	 * page tables that can express "user may reach this", a fault handler to
+	 * catch the program when it is wrong, a thread to run it in, and a timer
+	 * to take it back off the processor. */
+	user_init();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -90,8 +97,13 @@ void kmain(void)
 		lock_self_test() ? "pass" : "FAIL");
 	kprintf("  processors         : %s\n",
 		smp_self_test() ? "pass" : "FAIL");
+	kprintf("  user mode          : %s\n",
+		user_self_test() ? "pass" : "FAIL");
+	kprintf("  the boundary holds : %s\n",
+		user_boundary_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
+	user_print_summary();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

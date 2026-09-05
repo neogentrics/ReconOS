@@ -19,6 +19,8 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
+#include <recon/kernel/user.h>
+#include <recon/kernel/sched.h>
 
 /* Pushed by the stubs in isr.S, in the order that file pushes them. The two
  * declarations have to agree exactly; a mismatch is a dump of the wrong
@@ -50,11 +52,26 @@ struct table_descriptor {
 static struct idt_entry idt[256];
 
 /* Our own, so that nothing depends on firmware memory staying untouched.
- * Null, then 64-bit code, then data -- the minimum a 64-bit kernel needs. */
-static u64 gdt[3] RK_ALIGNED(16) = {
+ *
+ * The order is not free. SYSRET reconstructs both user selectors by *adding to*
+ * a single base held in one MSR: the stack selector is base + 8 and the code
+ * selector is base + 16. So user data must sit immediately after kernel data,
+ * and user code immediately after that, or returning to user mode lands on
+ * whatever descriptor happens to be there. A GDT laid out in the order a person
+ * would find natural -- code, code, data, data -- does not work, and fails by
+ * loading a plausible wrong segment rather than by refusing.
+ *
+ * The last two entries are one descriptor: a task-state segment is sixteen
+ * bytes in 64-bit mode, because its base address no longer fits in one. It is
+ * filled in at run time by user.c, which is the only code that needs it. */
+u64 x86_gdt[7] RK_ALIGNED(16) = {
 	0,
-	0x00AF9A000000FFFFULL,	/* code: executable, readable, long mode */
-	0x00CF92000000FFFFULL,	/* data: writable */
+	0x00AF9A000000FFFFULL,	/* 0x08 kernel code: executable, long mode */
+	0x00CF92000000FFFFULL,	/* 0x10 kernel data: writable */
+	0x00CFF2000000FFFFULL,	/* 0x18 user data: writable, DPL 3 */
+	0x00AFFA000000FFFFULL,	/* 0x20 user code: executable, long mode, DPL 3 */
+	0,			/* 0x28 task-state segment, low half */
+	0,			/*      and high half */
 };
 
 static struct table_descriptor gdt_ptr, idt_ptr;
@@ -161,6 +178,31 @@ void trap_dispatch(struct trap_frame *f)
 		return;
 	}
 
+	/* A fault in a user program rather than in the kernel.
+	 *
+	 * The bottom two bits of the saved CS are the privilege the code was
+	 * running at, and three means ring 3. It is the saved CS and not the
+	 * current one that matters: by the time this runs the processor is in
+	 * ring 0 either way, and asking where it *is* would answer every time.
+	 *
+	 * A user program that faults is ended, and nothing else happens. That
+	 * sentence is the whole return on this checkpoint -- before it, any
+	 * wrong pointer anywhere stopped the machine. */
+	if ((f->cs & 3) == 3) {
+		kprintf("\nuser program fault: %s at %p\n",
+			f->vector < 32 ? exception_name[f->vector] : "unknown",
+			(void *)(uintptr_t)f->rip);
+		if (f->vector == 14) {
+			u64 cr2;
+
+			__asm__ volatile("movq %%cr2, %0" : "=r"(cr2));
+			kprintf("  it touched %p, which is not its to touch\n",
+				(void *)(uintptr_t)cr2);
+		}
+		user_note_fault();
+		thread_exit();
+	}
+
 	/* Somebody was expecting this. Record it and resume where they said,
 	 * rather than reporting a fault that is not a fault. */
 	if (trap_expecting) {
@@ -222,8 +264,8 @@ void trap_init(void)
 {
 	kmemset(idt, 0, sizeof(idt));
 
-	gdt_ptr.limit = sizeof(gdt) - 1;
-	gdt_ptr.base  = (u64)(uintptr_t)gdt;
+	gdt_ptr.limit = sizeof(x86_gdt) - 1;
+	gdt_ptr.base  = (u64)(uintptr_t)x86_gdt;
 
 	/* Selector 0x08: the second entry of our GDT, which is the code
 	 * segment. Written as a constant rather than read from CS, because the
