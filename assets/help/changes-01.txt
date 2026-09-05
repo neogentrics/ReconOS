@@ -1,3 +1,62 @@
+Tooltips, on anything with a clickable region. A control says what it is
+when somebody stops on it for half a second. The Control Panel's fourteen
+icons carry one -- which is where the line of description under each name
+went, because that line had to fit under an icon and so was cut off mid-word.
+So do the window buttons, whose middle one says which of its two meanings it
+currently has; the taskbar's window buttons, which lose their titles as more
+windows open; the pager; and the Apps button.
+
+Network is four sections: Status, Adapters, Data Used, Applications. It
+was one page holding the machine's name, every interface, the gateway, every
+resolver, the last test and two buttons, which fitted only because this
+machine has two interfaces.
+
+Adapters is the hardware question: every interface, and for the one picked,
+its address, netmask, state and kind. Data Used is what each has carried since
+it came up, with a total that leaves loopback out because loopback never left
+the machine. Applications is which programs may open a connection, and Allow
+and Block -- the sharing decision somebody actually gets to make, given
+ReconOS has no stack of its own to share. Status keeps the rest and gains a
+Firewall button, because the firewall belongs to the network and reaching it
+meant going back to the front page to find a second icon.
+
+Fonts can be chosen and installed. Display Settings lists what is
+installed, where each came from, and which one is being drawn with. Installing
+one is a right-click on any .ttf, .otf or .ttc anywhere -- the way a
+picture becomes the background. It installs without switching to it: changing
+every letter on the desktop without being asked is a different act from being
+asked to keep a file.
+
+Wallpapers can be added and removed. A picture anywhere becomes the
+background from its right-click menu, and joins the list. The list says where
+each one came from, so two folders that both hold a Sunset.png can be told
+apart. One somebody added can be removed; one that ships cannot, and neither
+can the one currently showing.
+
+New Skin, which does not need a skin selected first. That is the whole
+point of it: Customize Skin copies the row you are pointing at, and somebody
+who wants to make their own had to work out that pointing at somebody else's
+was how. It asks which of three starting points -- light, dark or high
+contrast -- because a skin has forty-eight roles and every one has to hold a
+colour, so there is no blank to start from.
+
+One click chooses, two acts, in the lists that were doing both at once.
+
+Reading is Display Settings, which is what the page is. Screen resolution
+is still the one thing on it that is not built.
+
+About is System Information: what the machine is, what ReconOS is, and
+what is underneath. Three groups, kept apart on purpose, because the third is
+what explains how the first is readable at all. The processor and its core
+count are read from the host rather than described in the abstract.
+
+Programs splits into Installed and System Apps. They are different things
+and the buttons that apply to them are different buttons.
+
+All Programs is a fly-out, beside the menu rather than replacing what is
+in it. Anything in it can be pinned to the Start menu from its right-click
+menu, and anything pinned can be unpinned the same way.
+
 Disk Cleanup, as its own Control Panel item: a space to clean, categories
 with sizes and counts and a tick box each, View Files, and Clean Up System
 Files. Each row says what it costs to tick it, because a size is not a

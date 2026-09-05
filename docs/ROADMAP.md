@@ -756,6 +756,82 @@ selected and searching from the cursor would find the same one for ever.
 
 ## v0.2.17 — the parts that run, and a Control Panel you can open twice
 
+### Everything a session of watching it run turned up
+
+Joshua used the desktop for an evening and wrote down what was wrong with it.
+The list ran to a dozen things, half of them faults nothing but a person could
+have found. What follows is what came out of it.
+
+**Tooltips, at the layer that makes them possible for everything.** A tooltip
+is attached to a hit region -- written on the line after the `recon_hit_add`
+it belongs to -- and the shell draws whichever one is under the pointer. One
+panel for the whole desktop rather than one per window, so a tip can hang past
+the edge of the thing it describes, which the Control Panel's own could not.
+
+His read of it:
+
+> One click to highlight it and a double click because we need to install the
+> double click system... system wide tool tips... I don't even think we need
+> the subtext here because if we install tool tips, there's no need for the
+> text below.
+
+Both halves of that landed. The line under each Control Panel icon is gone and
+the tooltip says it instead; the lists that were applying a choice on a single
+click now choose on one and act on two.
+
+Finding the right layer for it found two faults in the shell. A tooltip could
+be read out of a window *behind* the one in front, because an empty patch of
+the window on top was being treated as a hole; a window now answers for its
+own area whether or not it has a tip there. And a dialog asked for four
+buttons silently got three, dropping the one that was the way out.
+
+**Network is four sections**, on the shape he described:
+
+> Under network... It should have different buttons... data usage, advanced
+> network settings, sharing, hardware properties, network reset, internet
+> options, firewall.
+
+What is real got built and what is not was left out rather than stubbed:
+Status, Adapters, Data Used, Applications. Adapters is the hardware-properties
+question. Data Used is real byte counts the host keeps. Applications is the
+sharing question turned round -- ReconOS has no stack to share, and it does
+have a list of programs allowed to open a connection, which is the decision
+somebody actually gets to make. Network reset is `Read again`, which is what a
+reset would honestly be at this layer.
+
+**Fonts**, which Display Settings had been named for and could not do:
+
+> the size of the text... the font... system fonts... upload custom fonts
+
+`recon_fonts` is deliberately the same module as `recon_wallpaper` with a
+different extension list, down to the origins file. Both answer the same
+question -- what files of this kind does the system have, and which of them
+did somebody put there -- and two shapes would have meant two sets of rules
+about what can be removed.
+
+That turned up **BG-080**, which had been true since the font setting existed:
+setting a font wrote the key, named the font on the page, and left every
+letter on the screen unchanged, because the loader opens the file itself and
+wants the host's path.
+
+### The rule about presets
+
+Stated once, and applied everywhere at once:
+
+> Any preset options that the user can switch from or choose from can't be
+> deleted. Okay? Only custom options can be deleted.
+
+What the system provides can be switched, reordered, turned off and copied,
+and cannot be deleted. What somebody made can be deleted. Skins, firewall
+rules, wallpapers and now fonts all follow it, and each of them greys the
+button rather than refusing after the fact -- a button that argues after being
+pressed is a button that should not have been pressable.
+
+Two corollaries fell out of it. A wallpaper somebody added can be removed, but
+not while it is the one on the desktop. A font somebody installed can be
+removed, but not while it is the one being drawn with. Deleting the thing a
+running desktop is reading from leaves it with nothing to draw.
+
 ### The Control Panel is icons
 
 Joshua's read of it, while watching it run:
