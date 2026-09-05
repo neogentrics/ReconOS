@@ -14,11 +14,12 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.8`. The number says what works. What works: it boots four ways across two
+`0.0.9`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
 can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
-the byte, says where and why it faulted instead of resetting, and is started by
-a bootloader we wrote.
+the byte, says where and why it faulted instead of resetting, keeps two
+clocks and services a hundred interrupts a second, and is started by a
+bootloader we wrote.
 
 ## What "finished" means
 
@@ -56,7 +57,7 @@ courtesy now rather than a dependency.
 | 5 | Its own page tables, a direct map, and large pages where the CPU has them | **Done** |
 | 6 | A kernel heap | **Done** |
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
-| 8 | A timer, a tick, and time | |
+| 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and every core in use | |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | |
 | 11 | Block devices — storage the kernel can read and write | |
@@ -368,6 +369,61 @@ A runaway is now a failed test rather than a hang: the handler counts its
 catches, and more than one per expected fault is reported. An infinite loop at
 full speed with no output is the single least informative failure a kernel can
 have.
+
+### Checkpoint 8 — done
+
+**Two clocks and a tick**, on both architectures, on all eight boot paths.
+
+The date is read from real hardware and is correct: the x86 run reports
+`1788588634 seconds since 1970`, which is today. That number came out of a CMOS
+chip through two 1981-era I/O ports, in binary-coded decimal, with a
+two-digit year.
+
+| | x86_64 | aarch64 |
+|---|---|---|
+| Counter | Time stamp counter, calibrated against the PIT | Generic timer, frequency read from `CNTFRQ_EL0` |
+| Tick | 8259 controller remapped, 8254 timer at 100Hz | GICv2 configured, EL1 physical timer |
+| Date | CMOS real-time clock | PL031 |
+
+**Two clocks, not one, and they are two functions with two names.** Monotonic
+never goes backwards and has no relationship to the calendar; wall clock is what
+a person reads and it jumps. Anything that measures an interval with the second
+one will eventually measure a negative one. The desktop already needs both —
+its clock shows wall time and its network probe times out on a duration.
+
+**ARM is kinder in one respect and harsher in another**, and the contrast is the
+useful part. Kinder: the generic timer is architectural, runs at a fixed
+frequency the CPU will tell you, and needs no calibration — x86's entire
+calibration dance is one register read. Harsher: an interrupt does not arrive
+because a device raised it, it arrives because the *interrupt controller* was
+configured to route it, so the tick needs a GIC driver before it needs a timer.
+
+**The first thing the fault reporter paid for.** The GIC was configured before
+it was mapped, and the kernel took a translation fault. Checkpoint 7 printed:
+
+```
+  class        : data abort
+  touched      : 0x0000000008010004
+  what happened: translation fault, level 2, on a write
+```
+
+`0x08010004` is the GIC's priority mask register. Two minutes, no theorising,
+no emulator log. That is exactly what checkpoint 7 was for, and it is the first
+time it has been used in anger rather than tested.
+
+**Overflow, written down because it is the classic one.** Converting a counter
+to nanoseconds as `elapsed * 1000000000 / hz` overflows after about eighteen
+seconds at 62.5MHz — which is long enough for everything to look fine during
+testing and to fail on a machine that has been up a minute. Whole units first,
+then the remainder scaled, so no intermediate can overflow however long the
+machine has run.
+
+**The tick is honest and not yet efficient.** A hundred wakeups a second on an
+idle machine is a hundred wakeups a second doing nothing, and that is how a
+laptop runs warm with nothing running. Stopping the tick when there is nothing
+to wake for is a real thing to build and it belongs with the scheduler at
+checkpoint 9, because "nothing to wake for" is a question only a scheduler can
+answer. Recorded here rather than left to be noticed.
 
 ## Using the machine you are on
 

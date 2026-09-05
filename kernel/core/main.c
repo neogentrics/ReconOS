@@ -11,6 +11,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/heap.h>
+#include <recon/kernel/time.h>
 #include <recon/kernel/trap.h>
 #include <recon/kernel/vm.h>
 
@@ -50,6 +51,12 @@ void kmain(void)
 	 * and before anything that might fault. */
 	trap_init();
 
+	/* After the fault handlers, because enabling interrupts without
+	 * somewhere for them to go is how a machine resets while telling you
+	 * nothing. */
+	time_init();
+	time_print_summary();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -63,13 +70,21 @@ void kmain(void)
 		heap_self_test() ? "pass" : "FAIL");
 	kprintf("  fault handling     : %s\n",
 		trap_self_test() ? "pass" : "FAIL");
+	kprintf("  clock and tick     : %s\n",
+		time_self_test() ? "pass" : "FAIL");
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 
 	/* The idle loop, and the first thing in the kernel that has to be right
 	 * about the project's central claim: it sleeps until hardware wakes it,
-	 * rather than spinning. There are no interrupt sources configured yet,
-	 * so this parks the CPU for good -- which is correct, and measurable. */
+	 * rather than spinning.
+	 *
+	 * As of checkpoint 8 there is something to wake it: the tick, a hundred
+	 * times a second. That is the simple correct thing and it is also, on an
+	 * idle machine, a hundred wakeups a second doing nothing -- which is how
+	 * a laptop runs warm with nothing running. Making the tick stop when
+	 * there is nothing to wake for belongs with the scheduler, and is
+	 * recorded in docs/KERNEL.md rather than left to be noticed. */
 	for (;;)
 		arch_wait_for_interrupt();
 }

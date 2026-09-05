@@ -19,6 +19,12 @@ extern u64 reconboot_handoff;
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289u
 #define PVH_START_INFO_MAGIC        0x336ec578u
 
+/* In time.c: the tick, telling the interrupt controller an interrupt was
+ * handled, and what the console reports about the clock. */
+void x86_timer_interrupt(void);
+void x86_pic_end_of_interrupt(unsigned irq);
+void x86_time_print_source(void);
+
 /* Each translates one boot protocol's account of the machine into the kernel's
  * own. Returns false if the structure did not look like what it claimed. */
 bool mb2_parse(u32 info_phys);

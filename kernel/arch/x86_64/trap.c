@@ -76,11 +76,23 @@ extern void isr_24(void);  extern void isr_25(void);  extern void isr_26(void);
 extern void isr_27(void);  extern void isr_28(void);  extern void isr_29(void);
 extern void isr_30(void);  extern void isr_31(void);
 
+extern void irq_0(void);   extern void irq_1(void);   extern void irq_2(void);
+extern void irq_3(void);   extern void irq_4(void);   extern void irq_5(void);
+extern void irq_6(void);   extern void irq_7(void);   extern void irq_8(void);
+extern void irq_9(void);   extern void irq_10(void);  extern void irq_11(void);
+extern void irq_12(void);  extern void irq_13(void);  extern void irq_14(void);
+extern void irq_15(void);
+
 static void (*const stubs[32])(void) = {
 	isr_0,  isr_1,  isr_2,  isr_3,  isr_4,  isr_5,  isr_6,  isr_7,
 	isr_8,  isr_9,  isr_10, isr_11, isr_12, isr_13, isr_14, isr_15,
 	isr_16, isr_17, isr_18, isr_19, isr_20, isr_21, isr_22, isr_23,
 	isr_24, isr_25, isr_26, isr_27, isr_28, isr_29, isr_30, isr_31,
+};
+
+static void (*const irq_stubs[16])(void) = {
+	irq_0,  irq_1,  irq_2,  irq_3,  irq_4,  irq_5,  irq_6,  irq_7,
+	irq_8,  irq_9,  irq_10, irq_11, irq_12, irq_13, irq_14, irq_15,
 };
 
 static const char *const exception_name[32] = {
@@ -135,6 +147,17 @@ static void describe_page_fault(u64 error)
 
 void trap_dispatch(struct trap_frame *f)
 {
+	/* A hardware interrupt rather than a fault. Handled and acknowledged;
+	 * an interrupt the controller is not told about is the last one it
+	 * ever sends. */
+	if (f->vector >= 32 && f->vector < 48) {
+		if (f->vector == 32)
+			x86_timer_interrupt();
+		else
+			x86_pic_end_of_interrupt((unsigned)(f->vector - 32));
+		return;
+	}
+
 	/* Somebody was expecting this. Record it and resume where they said,
 	 * rather than reporting a fault that is not a fault. */
 	if (trap_expecting) {
@@ -204,6 +227,8 @@ void trap_init(void)
 	 * point is to stop depending on whatever GDT we inherited. */
 	for (unsigned v = 0; v < 32; v++)
 		set_gate(v, stubs[v], 0x08);
+	for (unsigned i = 0; i < 16; i++)
+		set_gate(32 + i, irq_stubs[i], 0x08);
 
 	idt_ptr.limit = sizeof(idt) - 1;
 	idt_ptr.base  = (u64)(uintptr_t)idt;
