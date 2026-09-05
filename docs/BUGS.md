@@ -146,6 +146,17 @@ broken says nothing about the work.
   design and the code did something else. Both are the same underlying hazard:
   the comment is what the next reader checks against instead of the behaviour,
   so a confident wrong one is worse than none.
+
+  Worth recording in the author's own account: the comment was written
+  deliberately, while looking straight at the code, and it said *"harmless: it
+  rebuilds them identically"*. That is a true statement about the end state.
+  The bug lives in the interval, and the sentence never mentions one.
+
+  **A comment that reasons about the destination will always miss a bug that
+  lives in the journey.** Worth carrying because it is checkable: when a
+  comment explains why something is safe, ask whether it describes a *result*
+  or a *duration*. Concurrency, interrupts and reentrancy all live in the
+  second, and none of them are visible from the first.
 - **Fixed in** v0.0.10. A secondary uses the tables that already exist rather
   than rebuilding what is already correct.
 - **Why it is its own shape.** Not "true when computed, and nothing arranged to
@@ -1585,3 +1596,27 @@ where the bug cannot happen.
 The third shape has a practical consequence the other two do not: **it is
 answered by hardware, not by care.** Reading the code again finds nothing, and
 the only thing that helps is running it somewhere it can fail.
+
+### What that makes a verification rig for
+
+`scripts/verify-kernel.sh` runs two, four and eight processors, both firmwares,
+and two processor models. Not because eight is more thorough than four —
+because **a fault of the third kind is invisible below some particular size,
+and there is no way to know in advance which size.** Four processors found the
+shared page-table erasure; two never would have, and the difference between
+them is not thoroughness, it is whether the bug can exist at all.
+
+Which reframes what a rig is doing. **It is not measuring quality. It is
+manufacturing the conditions under which a class of bug can exist**, so that
+there is something to be caught.
+
+That distinction has a direction, and it is the useful part. A rig built to
+*measure* adds cases resembling the ones it already has. A rig built to
+*manufacture conditions* adds cases that are unlike them: a different processor
+count, a different firmware, a different optimisation level, a machine with no
+sound card, a compiler at a different `-O`.
+
+The desktop's own rig has the same gaps, named here so they are a list rather
+than an omission: everything runs on one screen size, one renderer, one
+account, and one build configuration. Each of those is a condition that has not
+been manufactured yet, and BG-090 is what the last of them already cost.
