@@ -67,7 +67,7 @@ The plan and its eighteen checkpoints (0 to 17) are in [KERNEL.md](KERNEL.md). F
 stages: the kernel exists (done), the kernel owns the machine, the kernel owns
 the disk, it runs on real iron.
 
-**Where it is now — version 0.0.11, checkpoint 11 of 17 done.** It boots on
+**Where it is now — version 0.0.11, checkpoint 12 of 17 done.** It boots on
 x86_64 and aarch64, under legacy BIOS, under UEFI, via device tree, and through
 its own UEFI bootloader. It knows which firmware is underneath it, what the
 processor can do, and where memory is; it manages physical pages and virtual
@@ -102,9 +102,20 @@ blocks" and "put these blocks there" and knows nothing about partitions,
 filesystems or names. Every one of those is a data format that belongs above the
 kernel, which is the same line THIRD_PARTY.md already draws for PNG and TLS.
 
-It runs nothing of the desktop's yet. The next three checkpoints are what turns
-sectors into storage somebody can use: partition tables, a filesystem of its
-own, and enough of other people's filesystems to install beside them.
+**And since checkpoint 12 it can read a disk that already has an operating
+system on it** without damaging it. A partition is a block device with a parent
+and an offset, which means the check that refuses a read past the end of a disk
+refuses one past the end of a partition, in the same line -- and a write to a
+partitioned disk is refused outright until somebody claims it, because "am I
+allowed to destroy this disk" is a question with one right moment to ask it.
+
+That changed a rule this project had written down, and the change is documented
+as a change. The kernel reads a partition table for its *geometry*; what the
+table means is still the desktop's, and Apple's partition scheme is entirely so.
+
+It runs nothing of the desktop's yet. The next two checkpoints are what turns
+sectors into storage somebody can use: a filesystem of its own, and enough of
+other people's filesystems to install beside them.
 
 **What "finished" means for this phase:** a machine with nothing on it, or with
 Windows or Linux or macOS already on it, boots from ReconOS media, is told where
