@@ -1,3 +1,36 @@
+An application can be turned off. Programs → System Apps → Disable. It
+stays registered and listed there, marked, and is offered nowhere else: not in
+the menus, and not openable by any route. The list of turned-off names lives
+in the system registry, so it survives a restart. This is distinct from
+removed on purpose -- a built-in cannot be removed, it is compiled in, and "I
+do not want this and cannot delete it" is a real thing to want.
+
+Repair says what it found. For a program installed from a package, the
+receipt names every file the install placed and each is checked. For one that
+arrived as a bare .rex in /Apps, whether that module is still there and
+loaded is the whole question. Neither puts a file back: that needs the package
+it came from, and nothing keeps one, which is worth saying rather than having
+a button that quietly does nothing.
+
+Install a Program opens the File Explorer. It was a path to type. The same
+right-click that adds a picture or a font now installs a program, on .rex,
+.rts and .rpk -- three ways of saying "take this file into the system",
+said one way.
+
+Storage and Disk Cleanup line up. Figures are drawn from their right-hand
+edge, because sizes are read against each other and that comparison is made on
+the digits. A share bar's track is a groove rather than an empty text field,
+and a category holding nothing draws no track at all. The volume selector is
+the same tab bar Appearance and Network use -- these were buttons, and
+choosing which of three spaces you are looking at is choosing a view, not
+acting.
+
+One click highlights, everywhere. Three pages forced a selection into
+existence every frame, so they opened with the first row lit and the buttons
+that act on it already armed. Switching lists, switching hives and removing a
+row all reset to row zero, which is a real row -- so a Remove button came back
+armed against whichever neighbour slid up into the gap.
+
 Tooltips, on anything with a clickable region. A control says what it is
 when somebody stops on it for half a second. The Control Panel's fourteen
 icons carry one -- which is where the line of description under each name
