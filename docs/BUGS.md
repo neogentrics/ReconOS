@@ -76,6 +76,74 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-105 — A register that says nothing until the port is already running
+
+- **Found in** v0.0.12, by the kernel session, on the one boot path where no
+  firmware had touched the hardware first.
+- **Was** AHCI's port signature register does not describe the socket. It holds
+  the first four bytes the attached device *sent*, in a frame — so it means
+  nothing until the port is receiving them, and reads as all ones before that.
+  The driver read it early and rejected a plainly attached disk as "not a disk".
+- **Why it survived** three of the four boot paths had firmware that had already
+  started every port, so reading it early worked.
+
+  **This is the third failure shape's nastier sibling, and it is worth
+  separating from its parent.** The ordinary third-shape bug is *correct code on
+  hardware that cannot show the fault* — answered by running it somewhere it can
+  fail. This one is different: the code was wrong from its first line, and
+  something else was quietly doing the setup that made wrong code work.
+
+  Not *nothing to run on* but **something else was covering for it**, and that is
+  worse in two ways. The covering party is invisible from inside the code — the
+  driver cannot tell that the port it is reading was started by somebody else.
+  And the covering gets *more* reliable over time rather than less, because
+  firmware improves. A fault of this kind becomes harder to find every year it
+  survives.
+
+  The remedy is the same in form and stricter in practice: the rig has to keep a
+  path with **nothing helpful on it**. `scripts/verify-kernel.sh` now keeps a
+  boot with no firmware at all and one with no disk at all, and requires that a
+  run given a disk says it found one. The last of those caught something on its
+  first run.
+
+  The desktop's equivalent gaps, named so they are a list rather than an
+  omission: everything here still runs on one screen size, one renderer, one
+  account, one build configuration — and, now, always with a font present.
+
+### BG-104 — An unimplemented region reporting exactly four gigabytes
+
+- **Found in** v0.0.12, by the kernel session, the moment the sizes were
+  printed.
+- **Was** sizing a PCI base address register fills the high half with ones so
+  that one code path can serve both register widths. For an unimplemented
+  register that produced a reported size of exactly four gigabytes.
+- **Why the finding matters as much as the fault** nothing had gone wrong yet.
+  A four-gigabyte region never fits the window, so it was never placed, and the
+  bug had sat through two commits doing no damage.
+
+  It became obvious the instant the value was printed rather than reasoned
+  about: **a host bridge with six four-gigabyte regions is not a thing.** No
+  amount of reading the sizing arithmetic says that; one line of output says it
+  immediately, because the reader knows what PCI devices look like and the code
+  does not.
+
+  Both of this session's OCR faults were found the same way and neither would
+  have been found by reading. A letter that came out 9x10 from a page and 7x9
+  from the rasteriser that drew it is a sentence; the antialiasing argument
+  behind it is a paragraph nobody would have got right.
+
+### BG-103 — A 64-bit base address restored only in its low half
+
+- **Found in** v0.0.12, by the kernel session.
+- **Was** sizing a 64-bit PCI base address register requires writing all ones
+  and reading back, then restoring what was there. Only the low half was
+  restored. The size came out right; the base then read as
+  `0xFFFFFFFF_FE000000`, which the direct map turned into a non-canonical
+  pointer and the processor into a general protection fault three functions
+  later.
+- **Why it was hard to see from the crash** the fault surfaced three functions
+  away from the register that caused it, in code that was correct.
+
 ### BG-102 — A clock test that fails for two hours out of every twelve
 
 - **Found in** v0.3.1, at ten o'clock at night, by running the suite for an
