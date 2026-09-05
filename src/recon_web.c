@@ -19,9 +19,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_fs.h"
 #include "recon_html.h"
 #include "recon_http.h"
 #include "recon_icons.h"
@@ -139,6 +141,11 @@ static void on_progress(void *user, size_t received) {
  * frame. Defined after the layout it shares. */
 static int measure(struct recon_web *w, int width);
 
+/* Everything that happens once a document has been read, from wherever.
+ * Defined below, beside the one other thing that reads one. */
+static void show_document(struct recon_web *w, struct recon_html_document *page,
+    const char *shown, size_t length);
+
 static void on_done(void *user, bool ok, char *body, size_t length,
         const char *content_type, const struct recon_http_url *final_url,
         const char *error) {
@@ -153,8 +160,6 @@ static void on_done(void *user, bool ok, char *body, size_t length,
         return;
     }
 
-    recon_html_free(w->page);
-
     /*
      * text/plain is read as text rather than as markup. A large fraction of
      * what is worth reading is a plain file -- an RFC, a changelog, a README
@@ -162,8 +167,8 @@ static void on_done(void *user, bool ok, char *body, size_t length,
      */
     bool is_html = (content_type == NULL || content_type[0] == '\0' ||
         strstr(content_type, "html") != NULL);
-    w->page = is_html ? recon_html_parse(body, length)
-                      : recon_html_plain(body, length);
+    struct recon_html_document *page = is_html
+        ? recon_html_parse(body, length) : recon_html_plain(body, length);
     free(body);
 
     /* Where it actually came from, which a redirect may have changed. */
@@ -175,50 +180,7 @@ static void on_done(void *user, bool ok, char *body, size_t length,
 
     char text[RECON_HTTP_URL_MAX];
     recon_http_format_url(&w->url, text, sizeof(text));
-    recon_edit_begin(&w->address, text, false);
-    w->address.active = false;
-
-    /*
-     * The window's title comes from the page, which means it comes from
-     * somebody else.
-     *
-     * Truncated, because a title bar is not the place for a paragraph, and
-     * stripped of control characters -- a title containing a newline or a
-     * backspace is not a title, it is somebody finding out what this system's
-     * title bar does with one. What it does is nothing interesting, and it
-     * costs four lines to keep it that way.
-     */
-    const char *title = recon_html_title(w->page);
-    const char *source = (title != NULL && title[0] != '\0')
-        ? title : w->url.host;
-
-    char window_title[160];
-    size_t used = 0;
-    for (const unsigned char *c = (const unsigned char *)source;
-            *c != '\0' && used < sizeof(window_title) - 1; c++) {
-        /* Anything below a space, and the delete character. UTF-8 sequences
-         * are all above 0x7F, so they pass through untouched. */
-        if (*c >= 0x20 && *c != 0x7F) {
-            window_title[used++] = (char)*c;
-        }
-    }
-    window_title[used] = '\0';
-    recon_appwin_set_title(w->win, window_title);
-
-    w->scroll = 0;
-    w->content_height = 0;
-
-    if (recon_html_needs_scripting(w->page)) {
-        set_status(w, true, "That page builds itself with JavaScript, which "
-            "this does not have. There is nothing to show.");
-    } else if (recon_html_block_count(w->page) == 0) {
-        set_status(w, true, "There is nothing readable on that page.");
-    } else {
-        set_status(w, false, "%d blocks, %zu KB",
-            recon_html_block_count(w->page), length / 1024);
-    }
-
-    recon_appwin_refresh(w->win);
+    show_document(w, page, text, length);
 }
 
 static const struct recon_http_handlers HANDLERS = {
@@ -858,6 +820,102 @@ static const struct recon_appwin_impl WEB_IMPL = {
     .describe = web_describe,
     .destroy = web_destroy,
 };
+
+/*
+ * Everything that has to happen once a document has been read, from wherever.
+ *
+ * Shared by the fetch and by opening a file, because the two differ only in
+ * where the bytes came from -- and a second copy of "work out the title, reset
+ * the scroll, say how big it is" is a second copy that gets one of them wrong.
+ */
+static void show_document(struct recon_web *w, struct recon_html_document *page,
+        const char *shown, size_t length) {
+    recon_html_free(w->page);
+    w->page = page;
+
+    recon_edit_begin(&w->address, shown, false);
+    w->address.active = false;
+
+    /*
+     * The window's title comes from the document, which means it comes from
+     * somebody else. Truncated, and stripped of control characters -- a title
+     * containing a newline or a backspace is not a title, it is somebody
+     * finding out what this system's title bar does with one.
+     */
+    const char *title = recon_html_title(w->page);
+    const char *source = (title != NULL && title[0] != '\0') ? title : shown;
+
+    char window_title[160];
+    size_t used = 0;
+    for (const unsigned char *c = (const unsigned char *)source;
+            *c != '\0' && used < sizeof(window_title) - 1; c++) {
+        /* UTF-8 sequences are all above 0x7F, so they pass through. */
+        if (*c >= 0x20 && *c != 0x7F) {
+            window_title[used++] = (char)*c;
+        }
+    }
+    window_title[used] = '\0';
+    recon_appwin_set_title(w->win, window_title);
+
+    w->scroll = 0;
+    w->content_height = 0;
+
+    if (recon_html_needs_scripting(w->page)) {
+        set_status(w, true, "That page builds itself with JavaScript, which "
+            "this does not have. There is nothing to show.");
+    } else if (recon_html_block_count(w->page) == 0) {
+        set_status(w, true, "There is nothing readable there.");
+    } else {
+        set_status(w, false, "%d blocks, %zu KB",
+            recon_html_block_count(w->page), length / 1024);
+    }
+
+    recon_appwin_refresh(w->win);
+}
+
+bool recon_web_open_path(struct recon_appwin *win, const char *path) {
+    if (win == NULL || path == NULL) {
+        return false;
+    }
+    struct recon_web *w = recon_appwin_user(win);
+    if (w == NULL) {
+        return false;
+    }
+
+    if (w->request != NULL) {
+        recon_http_cancel(w->request);
+        w->request = NULL;
+        w->loading = false;
+    }
+
+    size_t length = 0;
+    char *text = recon_fs_read("/", path, &length);
+    if (text == NULL) {
+        set_status(w, true, "%s", recon_fs_last_error());
+        recon_appwin_refresh(w->win);
+        return false;
+    }
+
+    /*
+     * There is no address, so relative links in this document have nothing to
+     * resolve against. Said by leaving have_url false, which the link handler
+     * reads -- rather than inventing a base, which would send somebody to a
+     * server that has nothing to do with the file they opened.
+     */
+    w->have_url = false;
+    w->history_count = 0;
+    w->at = -1;
+
+    const char *dot = strrchr(path, '.');
+    bool markup = dot != NULL &&
+        (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0);
+
+    show_document(w, markup ? recon_html_parse(text, length)
+                            : recon_html_plain(text, length),
+        path, length);
+    free(text);
+    return true;
+}
 
 struct recon_appwin *recon_web_create(struct recon_server *server,
         struct recon_font *font) {

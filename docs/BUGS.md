@@ -76,6 +76,55 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-093 — The aarch64 exception vectors destroyed the first argument
+
+[#259](https://github.com/neogentrics/ReconOS/issues/259)
+
+- **Found in** v0.0.10, by the kernel session, at the moment user mode needed
+  it.
+- **Was** each vector slot began `mov x0, #index` to record which exception had
+  been taken, and only then saved the registers. `x0` was already gone.
+
+  Harmless for as long as every exception was a fault: a fault handler wants to
+  know *which* fault, and nothing it does depends on what the faulting code had
+  in its first register. A system call is the opposite — `x0` is the first
+  argument, and it was being overwritten by the vector number before anything
+  could read it.
+
+  **The same shape as BG-091 two entries down, in a different language.** A bug
+  that sat correctly in shared code because the only caller happened not to
+  exercise the broken part, and that became visible the instant a second caller
+  arrived. Neither was findable earlier except by having had the second caller,
+  which is worth saying plainly: some bugs have no earlier moment at which they
+  could have been caught.
+- **Fixed in** v0.0.10. The frame gained a slot for the vector number, and
+  `x0` is saved before anything writes to it.
+
+### BG-092 — A page table that was right, over memory that was not
+
+[#260](https://github.com/neogentrics/ReconOS/issues/260)
+
+- **Found in** v0.0.10, by the kernel session, when a second user program was
+  loaded.
+- **Was** `vm_map` never invalidated the TLB when it replaced a mapping that
+  was already live.
+
+  Invisible for nine checkpoints, and not by luck: every mapping the kernel had
+  ever made was made *once*, at an address nothing had touched, so there was
+  never a stale translation to leave behind. The second user program was mapped
+  at the same virtual address as the first — and read and ran the first
+  program's page.
+
+  **Correct page tables, wrong memory.** Everything the kernel could inspect
+  about its own state was right; the processor was working from a copy of an
+  answer that had been true earlier. That is the same shape as BG-089's tooltip
+  and BG-084's page table, and it is the third instance on the kernel's side:
+  something true when it was computed, with nothing arranged to notice when it
+  stopped being true.
+- **Fixed in** v0.0.10, on both architectures, invalidating only on
+  replacement — a flush on every map would be correct and would also throw away
+  the translations of everything else on every allocation.
+
 ### BG-091 — The taskbar kept the title a window had when it opened
 
 [#258](https://github.com/neogentrics/ReconOS/issues/258)

@@ -23,6 +23,17 @@ An image becomes its alt text, which is what alt text is for. A link is
 underlined as well as coloured, because a link that is only a different colour
 is invisible to a reader who cannot see that difference.
 
+It opens a file from this machine as well as one from the network. .html and
+.htm open in the viewer; .xml, .json, .csv, .ini and .conf open in
+Notepad, which shows them as what they are. XML is deliberately *not* given to
+the viewer: it reads HTML's tag vocabulary, so an XML document would come out
+as its text with every tag silently dropped — which looks like a viewer that
+works rather than one that does not understand the file.
+
+The Type column in File Explorer knows about all of them now. It had been
+saying "File" for a JPEG that Photos would open perfectly happily, which is the
+column disagreeing with the rest of the system about what it is looking at.
+
 The layout runs while the page is drawn, and the link regions are registered as
 the words are placed — so what is clickable is, by construction, exactly what
 was drawn. A separate layout pass is a second set of arithmetic that can

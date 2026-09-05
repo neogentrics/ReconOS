@@ -3994,6 +3994,9 @@ bool recon_shell_open_file(struct recon_shell *shell, const char *path) {
     if (strcmp(opener, "Photos") == 0) {
         return recon_photos_open_path(win, path);
     }
+    if (strcmp(opener, "Web") == 0) {
+        return recon_web_open_path(win, path);
+    }
     return false;
 }
 

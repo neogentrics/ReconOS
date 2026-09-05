@@ -83,12 +83,41 @@ const char *recon_props_kind(const struct recon_dirent *entry,
         return "File";
     }
     if (strcasecmp(dot, ".txt") == 0)   { return "Text file"; }
-    if (strcasecmp(dot, ".png") == 0)   { return "Picture"; }
+    if (strcasecmp(dot, ".md") == 0)    { return "Text file"; }
+    if (strcasecmp(dot, ".log") == 0)   { return "Log"; }
+
+    /*
+     * Pictures, all of them, rather than only PNG. The Type column said "File"
+     * for a JPEG that Photos would happily open -- which is the column
+     * disagreeing with the rest of the system about what it is looking at.
+     */
+    if (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+            strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".bmp") == 0 ||
+            strcasecmp(dot, ".gif") == 0 || strcasecmp(dot, ".tga") == 0) {
+        return "Picture";
+    }
+
+    if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) {
+        return "Web page";
+    }
+    if (strcasecmp(dot, ".xml") == 0)   { return "XML document"; }
+    if (strcasecmp(dot, ".json") == 0)  { return "JSON data"; }
+    if (strcasecmp(dot, ".csv") == 0)   { return "Table"; }
+    if (strcasecmp(dot, ".ini") == 0 || strcasecmp(dot, ".conf") == 0) {
+        return "Settings";
+    }
+
+    if (strcasecmp(dot, ".ttf") == 0 || strcasecmp(dot, ".otf") == 0 ||
+            strcasecmp(dot, ".ttc") == 0) {
+        return "Font";
+    }
+
     if (strcasecmp(dot, ".ico") == 0)   { return "Icon"; }
     if (strcasecmp(dot, ".theme") == 0) { return "Skin"; }
     if (strcasecmp(dot, ".reg") == 0)   { return "Settings"; }
     if (strcasecmp(dot, ".rex") == 0)   { return "Application"; }
     if (strcasecmp(dot, ".rts") == 0)   { return "System module"; }
+    if (strcasecmp(dot, ".rpk") == 0)   { return "Package"; }
     if (strcasecmp(dot, ".lnk") == 0)   { return "Shortcut"; }
     return "File";
 }
@@ -129,6 +158,32 @@ const char *recon_props_opener(const char *name) {
             strcasecmp(dot, ".gif") == 0 ||
             strcasecmp(dot, ".tga") == 0) {
         return "Photos";
+    }
+
+    /*
+     * Marked-up documents, which now have somewhere to go.
+     *
+     * The web viewer could read HTML off the network from the day it existed
+     * and a file on this machine had nowhere to open -- which nobody would
+     * have found by using it, because the two halves are reached from
+     * different places.
+     *
+     * XML is not here. The viewer reads HTML's tag vocabulary; handing it an
+     * XML document would show the text with every tag silently dropped, which
+     * looks like a viewer that works rather than one that does not understand
+     * the file. Notepad shows XML as what it is, which is the honest answer
+     * until something reads it properly.
+     */
+    if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) {
+        return "Web";
+    }
+
+    if (strcasecmp(dot, ".xml") == 0 ||
+            strcasecmp(dot, ".json") == 0 ||
+            strcasecmp(dot, ".csv") == 0 ||
+            strcasecmp(dot, ".ini") == 0 ||
+            strcasecmp(dot, ".conf") == 0) {
+        return "Notepad";
     }
 
     /*
