@@ -234,6 +234,31 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
 void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
     const unsigned char *rgba, int image_width, int image_height);
 
+/* --- Double clicks --- */
+
+/*
+ * Whether this click is the second of a pair.
+ *
+ * Kept here rather than added to the window's click callback, because that
+ * callback is part of the module ABI: a new argument would mean every module
+ * built before today reading past the end of its own arguments, which is
+ * exactly the fault BG-050 was. A shared answer to "was that a double click"
+ * costs nothing and breaks nothing.
+ *
+ * `id` is whatever the caller uses to tell one target from another -- a hit
+ * region, a row number. Two clicks count as a pair when they land on the same
+ * id inside the interval below. Call it once per click and act on the answer:
+ * asking twice for one click reports the second ask as a single.
+ */
+#define RECON_DOUBLE_CLICK_MS 400
+
+bool recon_click_is_double(uint32_t id);
+
+/* Forget the last click, so the next one cannot pair with it. For a list that
+ * has just been rebuilt under the pointer, where "the same id" no longer
+ * means the same thing. */
+void recon_click_forget(void);
+
 /* --- Text entry --- */
 
 /*

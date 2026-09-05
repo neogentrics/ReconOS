@@ -275,12 +275,36 @@ static const struct recon_fw_rule DEFAULTS[] = {
           RECON_FW_ALLOW, false },
         { "Printing", RECON_FW_IN, RECON_FW_TCP, 631, 631, "",
           RECON_FW_ALLOW, false },
+        { "Web server", RECON_FW_IN, RECON_FW_TCP, 80, 80, "",
+          RECON_FW_ALLOW, false },
+        { "Web server (secure)", RECON_FW_IN, RECON_FW_TCP, 443, 443, "",
+          RECON_FW_ALLOW, false },
+        { "File transfer (FTP)", RECON_FW_IN, RECON_FW_TCP, 20, 21, "",
+          RECON_FW_ALLOW, false },
+        { "Mail, incoming (IMAP)", RECON_FW_IN, RECON_FW_TCP, 143, 143, "",
+          RECON_FW_ALLOW, false },
+        { "Mail, incoming (SMTP)", RECON_FW_IN, RECON_FW_TCP, 25, 25, "",
+          RECON_FW_ALLOW, false },
+        { "Name service (DNS)", RECON_FW_IN, RECON_FW_UDP, 53, 53, "",
+          RECON_FW_ALLOW, false },
+        { "Network discovery", RECON_FW_IN, RECON_FW_UDP, 137, 138, "",
+          RECON_FW_ALLOW, false },
+        { "Database (PostgreSQL)", RECON_FW_IN, RECON_FW_TCP, 5432, 5432, "",
+          RECON_FW_ALLOW, false },
+        { "Database (MySQL)", RECON_FW_IN, RECON_FW_TCP, 3306, 3306, "",
+          RECON_FW_ALLOW, false },
+        { "Remote desktop (RDP)", RECON_FW_IN, RECON_FW_TCP, 3389, 3389, "",
+          RECON_FW_ALLOW, false },
 
         /*
          * And the outgoing ones, on. These are what the default policy would
          * allow anyway -- they are here so that somebody who changes the
          * outgoing default to block still has a working machine, and can see
          * at a glance what it is that has to keep working.
+         *
+         * The outgoing ones below the line are off for the same reason the
+         * incoming ones are: written down so nobody has to know the number,
+         * and not in force until somebody wants them.
          */
         { "Web", RECON_FW_OUT, RECON_FW_TCP, 80, 80, "", RECON_FW_ALLOW,
           true },
@@ -290,6 +314,15 @@ static const struct recon_fw_rule DEFAULTS[] = {
           RECON_FW_ALLOW, true },
         { "Time", RECON_FW_OUT, RECON_FW_UDP, 123, 123, "", RECON_FW_ALLOW,
           true },
+
+        { "Secure shell, out", RECON_FW_OUT, RECON_FW_TCP, 22, 22, "",
+          RECON_FW_ALLOW, false },
+        { "Mail, sending", RECON_FW_OUT, RECON_FW_TCP, 587, 587, "",
+          RECON_FW_ALLOW, false },
+        { "Mail, collecting", RECON_FW_OUT, RECON_FW_TCP, 993, 993, "",
+          RECON_FW_ALLOW, false },
+        { "File transfer, out", RECON_FW_OUT, RECON_FW_TCP, 20, 21, "",
+          RECON_FW_ALLOW, false },
 };
 
 #define DEFAULT_COUNT ((int)(sizeof(DEFAULTS) / sizeof(DEFAULTS[0])))

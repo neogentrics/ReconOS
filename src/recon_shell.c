@@ -2042,15 +2042,23 @@ static void draw_menu(struct recon_shell *shell) {
             THEME(FIELD_BORDER));
 
         /*
-         * A small magnifier, so the box reads as a search rather than as a
-         * place to type a file name. Drawn as a ring and a handle out of
-         * rectangles: there is no circle to stroke here, and at eight pixels
-         * across a square ring reads as a lens anyway.
+         * A magnifier. A square ring read as a square, so the four corners
+         * are painted back out to round it -- at nine pixels across that is
+         * the difference between a lens and a box.
          */
-        int gx = box_x + 8;
-        int gy = by + box_h / 2 - 4;
-        recon_stroke_rect(menu, gx, gy, 8, 8, THEME(FIELD_TEXT));
-        recon_fill_rect(menu, gx + 8, gy + 8, 4, 2, THEME(FIELD_TEXT));
+        int gx = box_x + 7;
+        int gy = by + box_h / 2 - 5;
+        recon_color glass = THEME(FIELD_TEXT);
+
+        recon_stroke_rect(menu, gx, gy, 9, 9, glass);
+        recon_fill_rect(menu, gx, gy, 1, 1, THEME(FIELD));
+        recon_fill_rect(menu, gx + 8, gy, 1, 1, THEME(FIELD));
+        recon_fill_rect(menu, gx, gy + 8, 1, 1, THEME(FIELD));
+        recon_fill_rect(menu, gx + 8, gy + 8, 1, 1, THEME(FIELD));
+
+        /* The handle, on the diagonal. */
+        recon_fill_rect(menu, gx + 9, gy + 9, 2, 2, glass);
+        recon_fill_rect(menu, gx + 10, gy + 10, 2, 2, glass);
 
         int tx = box_x + 22;
         int tw = box_w - 22 - 6;
@@ -2068,9 +2076,14 @@ static void draw_menu(struct recon_shell *shell) {
                     THEME(FIELD_TEXT));
             }
         } else {
+            /*
+             * Dim, not disabled. The disabled ink is the colour of a thing
+             * that cannot be used, and this is a box that can -- on a warm
+             * skin it came out so faint the box read as switched off.
+             */
             recon_draw_text(menu, shell->font, tx,
                 by + (box_h + ascent) / 2 - 2, tw, "Search programs",
-                THEME(MENU_TEXT_DISABLED));
+                THEME(SURFACE_TEXT_DIM));
         }
 
         recon_hit_add(menu, box_x, by, box_w, box_h, HIT_MENU_SEARCH);
@@ -4361,6 +4374,19 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                 return true;
             }
 
+            /*
+             * The search box keeps the menu open.
+             *
+             * It had a region and nothing handled it, so a click on it fell
+             * through to "somewhere in the menu that is not an entry" and
+             * closed the whole thing. Typing already narrows the list; what
+             * was missing was the box not throwing away the menu when
+             * somebody did the obvious thing and clicked it first.
+             */
+            if (hit == HIT_MENU_SEARCH) {
+                return true;
+            }
+
             if (hit >= HIT_PLACE_BASE) {
                 int which = (int)(hit - HIT_PLACE_BASE);
                 recon_shell_close_menu(shell);
@@ -4372,13 +4398,23 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                 if (MENU_PLACES[which].kind == PLACE_APP) {
                     recon_shell_open_named(shell, MENU_PLACES[which].target);
                 } else if (MENU_PLACES[which].kind == PLACE_FOLDER) {
-                    /* A place opens where it is, not wherever the explorer
+                    /*
+                     * A place opens where it is, not wherever the explorer
                      * happened to be left. A target beginning with a slash is
                      * an absolute path -- the root of the filesystem is a
-                     * place too, and it is not inside anybody's folder. */
+                     * place too, and it is not inside anybody's folder.
+                     *
+                     * Copied, not pointed at. recon_fs_user_dir hands back a
+                     * pointer into one shared buffer, and building the File
+                     * Explorer on the next line calls it again to work out
+                     * where to start -- which overwrote "Documents" with the
+                     * account's own folder before it was ever read. Every
+                     * place opened the same folder.
+                     */
                     const char *target = MENU_PLACES[which].target;
-                    const char *path = (target[0] == '/')
-                        ? target : recon_fs_user_dir(target);
+                    char path[RECON_PATH_MAX];
+                    snprintf(path, sizeof(path), "%s", (target[0] == '/')
+                        ? target : recon_fs_user_dir(target));
 
                     recon_shell_open_named(shell, "File Explorer");
                     recon_explorer_open_at(

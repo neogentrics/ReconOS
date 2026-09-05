@@ -580,6 +580,22 @@ struct control_panel {
     /* Which of System, Programs, User the Storage and Cleanup pages show. */
     enum recon_volume volume;
 
+    /* Where the firewall's rule list is scrolled to, and which rule the list
+     * was last dragged to keep in view. */
+    int fw_scroll;
+    int fw_followed;
+
+    /*
+     * Which tile the pointer is over on the front page, and where it is.
+     *
+     * For the tooltip. The name under an icon had to be short enough to fit
+     * under an icon, which meant "Code the system lo..." -- a label cut off
+     * mid-word says less than no label at all. A tooltip has the width of the
+     * window to say it in, and only appears for the one being pointed at.
+     */
+    int hover_tile;
+    int hover_x, hover_y;
+
     /*
      * What Disk Cleanup last measured, and what is ticked.
      *
@@ -2896,19 +2912,50 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         cp->selected = count - 1;
     }
 
+    /*
+     * Keep the chosen rule in view, but only when the choice has just moved.
+     *
+     * Following it on every draw meant the wheel could not go anywhere: the
+     * selection sat at the top, the list was dragged straight back to it, and
+     * scrolling did nothing at all. Following it only when it changes lets
+     * Move Up and Move Down carry the list with them -- which is what that
+     * rule was for -- without pinning it the rest of the time.
+     */
+    clamp_scroll(&cp->fw_scroll, rows, count);
+    if (cp->selected != cp->fw_followed) {
+        if (cp->selected < cp->fw_scroll) {
+            cp->fw_scroll = cp->selected;
+        }
+        if (cp->selected >= cp->fw_scroll + rows) {
+            cp->fw_scroll = cp->selected - rows + 1;
+        }
+        cp->fw_followed = cp->selected;
+        clamp_scroll(&cp->fw_scroll, rows, count);
+    }
+
     cp->list_x = x;
     cp->list_y = y;
     cp->list_w = w;
     cp->list_h = rows * ROW_HEIGHT;
     recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
 
-    for (int i = 0; i < rows; i++) {
+    int bar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->fw_scroll, rows, count);
+    w -= bar;
+
+    for (int row = 0; row < rows; row++) {
+        int i = cp->fw_scroll + row;
+        if (i >= count) {
+            break;
+        }
+
         struct recon_fw_rule rule;
         if (!recon_firewall_at(i, &rule)) {
             break;
         }
 
-        int ry = y + i * ROW_HEIGHT;
+        /* Where it sits on screen, not where it sits in the list. */
+        int ry = y + row * ROW_HEIGHT;
         bool chosen = (i == cp->selected);
 
         if (chosen) {
@@ -2966,7 +3013,7 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         recon_draw_text(p, cp->font, x + 268, baseline, w - 276, rule.name,
             ink);
 
-        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+        recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + row);
     }
 
     if (count == 0) {
@@ -3573,14 +3620,27 @@ static void tile_rect(int index, int x, int y, int w, int *tx, int *ty) {
 static void draw_home(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
-    int line = recon_font_line_height(cp->font);
-    if (line <= 0) {
-        line = 18;
-    }
 
     int bottom = y + h;
-    y = draw_heading(cp, p, x, y, w, "Control Panel",
-        "Each one opens in a window of its own, so two can be open at once.");
+
+    /*
+     * The window's name, centred and larger, and nothing else.
+     *
+     * It used to carry a line explaining that each item opens in its own
+     * window. That is true and it is not what a heading is for: somebody
+     * reading the top of a window wants to know which window it is, and a
+     * sentence there is read once and then in the way forever.
+     */
+    struct recon_font *big = recon_font_system(recon_font_line_height(cp->font)
+        + 8);
+    if (big == NULL) {
+        big = cp->font;
+    }
+
+    int title_w = recon_text_width(big, "Control Panel");
+    recon_draw_text(p, big, x + (w - title_w) / 2,
+        y + recon_font_ascent(big), w, "Control Panel", COLOR_TEXT);
+    y += recon_font_line_height(big) + PADDING;
 
     for (int i = 0; i < PAGE_COUNT; i++) {
         int tx, ty;
@@ -3590,41 +3650,74 @@ static void draw_home(struct control_panel *cp, struct recon_panel *p,
         }
 
         /*
-         * A tile whose window is already open says so, because clicking it
-         * again brings that window forward rather than making a second one,
-         * and a control that does something other than what it looks like it
-         * will do is worth a mark on screen.
+         * Three states, and they mean different things. Open is a fact about
+         * the system; chosen is a fact about this window; and hovered is
+         * neither, it is the pointer. Drawn strongest to weakest, so the one
+         * that matters most is the one that reads first.
          */
-        if (page_window_open((enum page)i)) {
+        bool open = page_window_open((enum page)i);
+        bool chosen = cp->selected == i;
+
+        if (chosen) {
+            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_SELECTED);
+        } else if (open) {
             recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_ROW_ALT);
+        } else if (cp->hover_tile == i) {
+            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_PANEL);
         }
 
         int icon_x = tx + (TILE_W - TILE_ICON) / 2;
-        if (!recon_icon_draw(p, PAGES[i].icon, icon_x, ty + 10, TILE_ICON)) {
-            recon_fill_rect(p, icon_x, ty + 10, TILE_ICON, TILE_ICON,
+        int icon_y = ty + (TILE_H - TILE_ICON - recon_font_line_height(cp->font)) / 2;
+        if (!recon_icon_draw(p, PAGES[i].icon, icon_x, icon_y, TILE_ICON)) {
+            recon_fill_rect(p, icon_x, icon_y, TILE_ICON, TILE_ICON,
                 COLOR_SELECTED);
         }
 
-        int label_y = ty + 10 + TILE_ICON + 8 + ascent;
         int label_w = recon_text_width(cp->font, PAGES[i].label);
         int label_x = tx + (TILE_W - label_w) / 2;
         if (label_x < tx + 4) {
             label_x = tx + 4;
         }
-        recon_draw_text(p, cp->font, label_x, label_y, TILE_W - 8,
-            PAGES[i].label, COLOR_TEXT);
-
-        if (PAGES[i].summary != NULL) {
-            int sw = recon_text_width(cp->font, PAGES[i].summary);
-            int sx = tx + (TILE_W - sw) / 2;
-            if (sx < tx + 4) {
-                sx = tx + 4;
-            }
-            recon_draw_text(p, cp->font, sx, label_y + line, TILE_W - 8,
-                PAGES[i].summary, COLOR_DIM);
-        }
+        recon_draw_text(p, cp->font, label_x,
+            icon_y + TILE_ICON + 8 + ascent, TILE_W - 8, PAGES[i].label,
+            chosen ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
         recon_hit_add(p, tx, ty, TILE_W, TILE_H, HIT_TILE_BASE + i);
+    }
+
+    /*
+     * The tooltip last, over everything, because that is what a tooltip is.
+     *
+     * It replaces the line of description that used to sit under every name.
+     * That line had to fit under an icon and so was cut off -- "Code the
+     * system lo..." -- and it was drawn fourteen times whether anybody wanted
+     * it or not. This is drawn once, for the one being pointed at.
+     */
+    if (cp->hover_tile >= 0 && cp->hover_tile < PAGE_COUNT &&
+            PAGES[cp->hover_tile].summary != NULL) {
+        const char *text = PAGES[cp->hover_tile].summary;
+        int tip_w = recon_text_width(cp->font, text) + 16;
+        int tip_h = recon_font_line_height(cp->font) + 8;
+
+        int tip_x = cp->hover_x + 12;
+        int tip_y = cp->hover_y + 18;
+
+        /* Kept inside the window: a tip drawn past the edge is a tip nobody
+         * can read, and it is only there to be read. */
+        if (tip_x + tip_w > x + w) {
+            tip_x = x + w - tip_w;
+        }
+        if (tip_x < x) {
+            tip_x = x;
+        }
+        if (tip_y + tip_h > bottom) {
+            tip_y = cp->hover_y - tip_h - 6;
+        }
+
+        recon_fill_rect(p, tip_x, tip_y, tip_w, tip_h, COLOR_PANEL);
+        recon_stroke_rect(p, tip_x, tip_y, tip_w, tip_h, COLOR_SEPARATOR);
+        recon_draw_text(p, cp->font, tip_x + 8,
+            tip_y + (tip_h + ascent) / 2 - 2, tip_w - 16, text, COLOR_TEXT);
     }
 }
 
@@ -5073,6 +5166,30 @@ static void do_action(struct control_panel *cp, enum action action) {
     }
 }
 
+static void panel_motion(void *user, uint32_t hit_id, int cx, int cy) {
+    struct control_panel *cp = user;
+    if (!cp->home) {
+        return;
+    }
+
+    int was = cp->hover_tile;
+    cp->hover_tile = (hit_id >= HIT_TILE_BASE &&
+        hit_id < HIT_TILE_BASE + PAGE_COUNT)
+        ? (int)(hit_id - HIT_TILE_BASE) : -1;
+    cp->hover_x = cx;
+    cp->hover_y = cy;
+
+    /*
+     * Redrawn only when the tile under the pointer changes, not on every
+     * pixel of movement. The tooltip does not follow the pointer around
+     * inside a tile, and repainting fourteen icons sixty times a second to
+     * move a box eight pixels is a desktop that feels heavy for no reason.
+     */
+    if (was != cp->hover_tile) {
+        recon_appwin_refresh(cp->win);
+    }
+}
+
 static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         bool pressed) {
     struct control_panel *cp = user;
@@ -5156,7 +5273,25 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
      * runs before this one -- the click went to the row branch and vanished.
      */
     if (hit_id >= HIT_TILE_BASE) {
-        open_page_window(cp, (enum page)(hit_id - HIT_TILE_BASE));
+        int tile = (int)(hit_id - HIT_TILE_BASE);
+        if (tile < 0 || tile >= PAGE_COUNT) {
+            return true;
+        }
+
+        /*
+         * One click chooses, two opens.
+         *
+         * A single click that opened a window meant there was no way to point
+         * at something and find out what it was without also going into it.
+         * Now the first click picks it out and the tooltip says what it does;
+         * the second opens it.
+         */
+        cp->selected = tile;
+        if (recon_click_is_double(hit_id)) {
+            open_page_window(cp, (enum page)tile);
+        } else {
+            clear_status(cp);
+        }
         return true;
     }
 
@@ -5243,7 +5378,8 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         int index = (int)(hit_id - HIT_ROW_BASE);
 
         if (cp->page == PAGE_FIREWALL) {
-            cp->selected = index;
+            /* Screen row plus where the list is scrolled to. */
+            cp->selected = cp->fw_scroll + index;
             return true;
         }
 
@@ -5543,6 +5679,14 @@ static void panel_scroll(void *user, double delta) {
         return;
     }
 
+    if (cp->page == PAGE_FIREWALL) {
+        cp->fw_scroll += step;
+        if (cp->fw_scroll < 0) {
+            cp->fw_scroll = 0;
+        }
+        return;
+    }
+
     if (cp->page == PAGE_REGISTRY && cp->registry_unlocked) {
         cp->registry_scroll += (delta > 0) ? 3 : -3;
         if (cp->registry_scroll < 0) {
@@ -5586,6 +5730,7 @@ static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
     .min_height = 420,
     .draw = panel_draw,
     .click = panel_click,
+    .motion = panel_motion,
     .key = panel_key,
     .scroll = panel_scroll,
     .describe = panel_describe,
@@ -5691,7 +5836,12 @@ static void open_page_window(struct control_panel *cp, enum page page) {
         g_page_windows++;
     }
 
-    set_status(cp, false, "%s is open.", PAGES[page].label);
+    /*
+     * Nothing said. The window is on screen and on the taskbar; a line at the
+     * bottom of a different window saying so is the system narrating what
+     * somebody just watched happen.
+     */
+    clear_status(cp);
 }
 
 /*

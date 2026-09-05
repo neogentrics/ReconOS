@@ -7,6 +7,8 @@
 
 #define _POSIX_C_SOURCE 200112L
 
+#include <time.h>
+
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
@@ -1215,6 +1217,44 @@ uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
         }
     }
     return RECON_HIT_NONE;
+}
+
+/* --- Double clicks --- */
+
+static uint32_t g_last_click_id;
+static uint64_t g_last_click_ms;
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+bool recon_click_is_double(uint32_t id) {
+    uint64_t at = now_ms();
+    bool paired = (id == g_last_click_id) && g_last_click_id != 0 &&
+        at >= g_last_click_ms && (at - g_last_click_ms) <= RECON_DOUBLE_CLICK_MS;
+
+    if (paired) {
+        /*
+         * Forgotten after a pair, so three clicks are a double and then a
+         * single rather than two overlapping doubles.
+         */
+        g_last_click_id = 0;
+        g_last_click_ms = 0;
+        return true;
+    }
+
+    g_last_click_id = id;
+    g_last_click_ms = at;
+    return false;
+}
+
+void recon_click_forget(void) {
+    g_last_click_id = 0;
+    g_last_click_ms = 0;
 }
 
 /* --- Text entry --- */
