@@ -24,14 +24,16 @@
 /* Compile-time name of the architecture: "x86_64", "aarch64", ... */
 const char *arch_name(void);
 
-/* What this particular CPU says it is, read at run time. On x86_64 that is
- * the CPUID brand string; on aarch64 the MIDR_EL1 implementer and part.
+/* What this particular CPU is and what it can do, read at run time.
  *
  * Note the distinction, because it matters for the install story: *which*
  * architecture is not something the kernel discovers -- the firmware already
  * decided that when it chose which binary to load. What is discovered at run
- * time is which CPU *within* that architecture, and which features it has. */
-void arch_cpu_identify(char *buf, size_t len);
+ * time is which CPU *within* that architecture, and which features it has --
+ * and that is the difference between using a machine and using the least
+ * capable machine that could have run this code. */
+struct cpu_caps;
+void arch_cpu_caps(struct cpu_caps *out);
 
 /* --- Bring-up ---------------------------------------------------------- */
 

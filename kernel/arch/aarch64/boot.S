@@ -13,7 +13,32 @@
 	.section .text.boot, "ax"
 	.global _start
 
+/* The arm64 Image header.
+ *
+ * aarch64 has no equivalent of x86's Multiboot: what it has instead is a
+ * 64-byte header at the front of a flat binary, and every loader that matters
+ * -- U-Boot, UEFI stubs, QEMU -- reads it to decide where to place the image
+ * and what to pass in. Without it a loader treats the file as bare metal,
+ * jumps to it with every register zeroed, and hands over no device tree at
+ * all. That is exactly what QEMU did before this header existed, and it is
+ * why the first memory map on this architecture came back empty.
+ *
+ * With it, the handoff is the documented one: the image is loaded at the base
+ * of RAM plus text_offset, and x0 holds the device tree.
+ */
 _start:
+	b	real_start		/* code0: must be a valid instruction */
+	.long	0			/* code1: reserved */
+	.quad	0x80000			/* text_offset: where in RAM we want to be */
+	.quad	__image_size		/* how much to reserve, BSS and stack included */
+	.quad	0			/* flags: little-endian, load at text_offset */
+	.quad	0			/* reserved */
+	.quad	0			/* reserved */
+	.quad	0			/* reserved */
+	.ascii	"ARM\x64"		/* magic */
+	.long	0			/* reserved (PE header offset, if EFI) */
+
+real_start:
 	/* Which core is this? MPIDR_EL1's low byte is the CPU number within its
 	 * cluster. QEMU releases every configured core at the entry point at
 	 * once, so without this, four CPUs race to run the same kernel with the
