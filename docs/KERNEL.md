@@ -239,6 +239,62 @@ The first row is the one worth acting on early, and it costs almost nothing:
 an interface the userland can compile against, even entirely stubbed, lets both
 halves proceed instead of taking turns.
 
+## The interface the desktop compiles against
+
+`kernel/include/recon_kernel.h` and `kernel/api/stubs.c`, built by `make api`
+into a static library. Every call returns "not implemented", and the kernel
+version does not move for it, because the version says what works and stubs
+work at nothing.
+
+It exists so the desktop is written against a settled interface rather than
+waiting, and so the shape of each call is argued about while changing it costs
+a diff. Four rules hold across all of it, and each was paid for by something:
+
+- **Nothing allocates.** The caller owns every buffer. A kernel that allocates
+  for a caller must decide what to do when it cannot, halfway through an
+  operation the caller has already begun.
+- **Every call returns a status, never a bool.** "Failed" is not a sentence a
+  settings page can show. `recon_display.h` reached this independently, which
+  is a good sign it is right.
+- **Enumeration is by identity, not position.** Everything enumerable has an id
+  that stays with it, and listings carry a generation number. Hardware appears
+  and disappears while software is looking at it.
+- **No callbacks into the kernel.** Asynchronous things leave a result to be
+  collected, the way `recon_net` does with reachability.
+
+Processes are deliberately *not* stubbed. Applications are `dlopen`'d into the
+compositor's address space, so there is no boundary to write in advance — the
+boundary is an address space and there is not one. Stubbing it would be
+pretending otherwise, and the pretence would be found by whoever wrote code
+against it.
+
+The kernel claims error-code area letter `N` in `recon_errors.def`.
+
+### Four changes worth making to `recon_display.h`
+
+The desktop owns that interface and the kernel will implement it rather than
+inventing a second one for the same question. These are cheap now and awkward
+once there are two implementations:
+
+1. **`recon_display_init(struct recon_server *server)` leaks today's
+   implementation into the interface.** A kernel implementation has no
+   `recon_server` to be handed. This is the one place where the file knows what
+   is underneath it, which is the thing it exists not to do. `void` or an
+   opaque backend handle.
+2. **`recon_display_set_mode(int display, int mode, …)` addresses by
+   position.** Between listing the displays and setting one, a monitor can be
+   unplugged — and then the call sets a mode on the wrong screen, visibly.
+   Today the compositor is single-threaded and event-driven so it cannot
+   happen; a kernel with real hotplug is exactly where it starts to. A stable
+   `id` on `struct recon_display`, and `set_mode` taking it.
+3. **A mode on real hardware includes its pixel format.** ReconOS draws
+   ARGB8888, which a driver is under no obligation to offer; changing mode can
+   change stride and format together. Adding the field now costs nothing and is
+   ignored until something reads it. This does not pull drawing behind the
+   boundary — it records what the mode *is*.
+4. **`RECON_DISPLAY_MODES_MAX 32` is low**, and belongs to the caller's storage
+   rather than to the interface. Real outputs report more.
+
 ## How this is tracked
 
 The same four places as everything else — this file for the plan,

@@ -129,6 +129,24 @@ check-portable:
 	fi; \
 	echo "core/ is clean: no machine-specific code outside arch/"
 
+# The interface the desktop compiles against, built for the *host* rather than
+# for the kernel image: it is userland code that will one day call into a
+# kernel, and today it links against stubs that say so. Kept honest by being
+# compiled with the same warnings-as-errors as everything else, so a header
+# that does not compile is found here rather than in the compositor's build.
+API_LIB := build/api/librecon_kernel_stubs.a
+HOSTCC  ?= cc
+
+.PHONY: api
+api: $(API_LIB)
+
+$(API_LIB): api/stubs.c include/recon_kernel.h
+	@mkdir -p build/api
+	$(HOSTCC) -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
+	          -Iinclude -c api/stubs.c -o build/api/stubs.o
+	ar rcs $@ build/api/stubs.o
+	@echo "  built $@"
+
 info:
 	@echo "ARCH    = $(ARCH)"
 	@echo "CC      = $(CC)"
