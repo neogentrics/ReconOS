@@ -63,7 +63,7 @@ collected in [KERNEL-WANTS.md](KERNEL-WANTS.md) as they happen, which is the
 "known from use rather than guesswork" the sequencing was for — and waiting
 would have thrown them away rather than gathered them.
 
-The plan and its seventeen checkpoints are in [KERNEL.md](KERNEL.md). Four
+The plan and its eighteen checkpoints (0 to 17) are in [KERNEL.md](KERNEL.md). Four
 stages: the kernel exists (done), the kernel owns the machine, the kernel owns
 the disk, it runs on real iron.
 
