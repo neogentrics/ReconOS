@@ -1384,3 +1384,20 @@ Areas, matching the [error code](ERRORS.md) letters where they apply:
 
 The **Was** field is the one that matters. A register full of symptoms is a
 list of complaints; a register full of causes is something to learn from.
+
+## Two things this register has learned about finding things
+
+**The disassembly disagreeing with the theory is a result, not a null result.**
+Three times now this project has gone to an instrument expecting to confirm
+something and learned something else instead — the flickering that led to the
+renderer, a kernel label the compiler had deleted rather than misplaced, and a
+`memset` that was still there when it was expected to be gone. In the last of
+those the instrument said "you are wrong about the bug", and the honest
+response was to look harder rather than to be relieved: what it actually found
+(BG-090) was a security property holding by accident of build flags, which is
+worse to own than a fault, because a fault gets found.
+
+**Some entries here never misbehaved.** A bug whose entire lifetime is silent —
+including the moment it starts being real — has no failing behaviour to notice
+and no test that can go red. Those belong in the register precisely because
+nothing else would ever record them.
