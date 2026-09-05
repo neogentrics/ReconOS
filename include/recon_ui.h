@@ -228,8 +228,12 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
 /*
  * Draw RGBA pixels into a rectangle, scaling to fit and blending by alpha.
  *
- * Nearest-neighbour, which suits icons: they are drawn at or near their own
- * size, and smoothing a 16-colour icon costs more than it gains.
+ * Shrinking averages the source pixels that fall inside each destination
+ * pixel; growing takes the nearest one. Averaging when shrinking is what
+ * makes a small icon look small rather than damaged, and what makes a
+ * photograph fitted to a window look like the photograph. Growing is left
+ * alone, because icons are pixel art and blurring them upward is worse than
+ * the steps.
  */
 void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
     const unsigned char *rgba, int image_width, int image_height);

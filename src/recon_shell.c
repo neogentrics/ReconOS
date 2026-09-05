@@ -32,6 +32,7 @@
 #include "recon_desktop.h"
 #include "recon_explorer.h"
 #include "recon_notepad.h"
+#include "recon_photos.h"
 #include "recon_terminal.h"
 #include "recon_taskmgr.h"
 #include "recon_fs.h"
@@ -2941,6 +2942,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true },
         { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true },
         { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true },
+        { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing
@@ -3936,6 +3938,9 @@ bool recon_shell_open_file(struct recon_shell *shell, const char *path) {
      * inventing it before it is understood. */
     if (strcmp(opener, "Notepad") == 0) {
         return recon_notepad_open_path(win, path);
+    }
+    if (strcmp(opener, "Photos") == 0) {
+        return recon_photos_open_path(win, path);
     }
     return false;
 }

@@ -76,6 +76,7 @@ add_executable(ReconOS
     src/recon_icons.c
     src/recon_filedlg.c
     src/recon_notepad.c
+    src/recon_photos.c
     src/recon_registry.c
     src/recon_crypt.c
     src/recon_users.c

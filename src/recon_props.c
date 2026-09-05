@@ -118,9 +118,23 @@ const char *recon_props_opener(const char *name) {
     }
 
     /*
-     * A picture has nowhere to go yet, and a module is not a document. Both
-     * return NULL rather than being handed to Notepad, which would show a
-     * screen of binary and look like the file was damaged.
+     * Pictures, which have somewhere to go now. The list is what stb_image
+     * decodes, because a name that opens an empty window is worse than a
+     * name nothing offers to open.
+     */
+    if (strcasecmp(dot, ".png") == 0 ||
+            strcasecmp(dot, ".jpg") == 0 ||
+            strcasecmp(dot, ".jpeg") == 0 ||
+            strcasecmp(dot, ".bmp") == 0 ||
+            strcasecmp(dot, ".gif") == 0 ||
+            strcasecmp(dot, ".tga") == 0) {
+        return "Photos";
+    }
+
+    /*
+     * A module is not a document. It returns NULL rather than being handed to
+     * Notepad, which would show a screen of binary and look like the file was
+     * damaged.
      */
     return NULL;
 }
