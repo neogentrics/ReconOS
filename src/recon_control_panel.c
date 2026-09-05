@@ -20,6 +20,7 @@
 #include "recon_avatar.h"
 #include "recon_control_panel.h"
 #include "recon_firewall.h"
+#include "recon_fonts.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_help.h"
@@ -96,6 +97,7 @@
 #define HIT_PROGRAMS_TAB_BASE (RECON_APPWIN_HIT_USER + 1100)
 #define HIT_NET_TAB_BASE (RECON_APPWIN_HIT_USER + 1140)
 #define HIT_NET_ROW_BASE (RECON_APPWIN_HIT_USER + 1160)
+#define HIT_FONT_BASE (RECON_APPWIN_HIT_USER + 1200)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -139,6 +141,10 @@ enum action {
     ACTION_SIZE_LESS,
     ACTION_SIZE_MORE,
     ACTION_RESET_READING,
+    ACTION_ADD_FONT,
+    ACTION_REMOVE_FONT,
+    ACTION_USE_FONT,
+    ACTION_DEFAULT_FONT,
     /* Storage */
     ACTION_MEASURE_STORAGE,
     ACTION_CLEAN_NOW,
@@ -282,13 +288,6 @@ static const struct pending_item DISPLAY_ITEMS[] = {
       "ReconOS takes whatever size the window or the screen it was given is. "
       "Asking a display for a different mode is a kernel's conversation with "
       "a driver." },
-    { "Choose a font", "Pick from the fonts on this machine.",
-      "There is no list to pick from. ReconOS draws with whichever font the "
-      "host has, found by searching the usual places, and ships none of its "
-      "own." },
-    { "Add a font", "Install one for this system.",
-      "Needs somewhere for fonts to live and something that reads the common "
-      "formats. The same piece of work as the list above." },
 };
 
 static const struct pending_item POWER_ITEMS[] = {
@@ -707,6 +706,10 @@ struct control_panel {
     int theme_scroll;
     int paper_scroll;
 
+    /* Which installed font is picked, and how far the list is scrolled. */
+    int font_selected;
+    int font_scroll;
+
     /* Which part of Network is showing, and which row in it is picked. */
     enum network_section net_section;
     int net_selected;
@@ -826,6 +829,24 @@ static struct control_panel *g_skin_editor;
 static void open_skin_editor(struct control_panel *cp, const char *skin);
 
 /* Defined after the window description it builds windows from. */
+/*
+ * Nothing picked yet, in every list this window has.
+ *
+ * calloc leaves each of these at zero, which is a real row: a window opened
+ * with its first row already highlighted and the buttons that act on a
+ * selection already armed, before anybody had pointed at anything. One click
+ * highlights is the rule; this is what "no clicks yet" means.
+ *
+ * Called from both constructors, because there are two -- the front page and
+ * a window per item -- and a rule written in only one of them is a rule half
+ * the windows do not follow.
+ */
+static void nothing_chosen(struct control_panel *cp) {
+    cp->selected = -1;
+    cp->net_selected = -1;
+    cp->font_selected = -1;
+}
+
 static void open_page_window(struct control_panel *cp, enum page page);
 
 static bool page_window_open(enum page page) {
@@ -2059,20 +2080,108 @@ static void draw_display(struct control_panel *cp, struct recon_panel *p,
         y += 10;
     }
 
-    const char *font = recon_registry_get(RECON_REG_USER,
-        RECON_ACCESS_FONT_KEY, "");
-    char summary[256];
-    snprintf(summary, sizeof(summary), "Font: %s",
-        *font != '\0' ? font : "the system's");
-    recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_DIM);
-    y += line + 4;
-
-    recon_draw_text(p, cp->font, x, y + ascent, w,
-        "Change it with 'access font <path>' in the terminal.", COLOR_DIM);
-    y += line + 10;
-
     draw_button(cp, p, x, y, "Back to the defaults",
         HIT_ACTION_BASE + ACTION_RESET_READING, true);
+    y += BUTTON_HEIGHT + PADDING * 2;
+
+    /* --- The font --- */
+
+    const char *chosen = recon_registry_get(RECON_REG_USER,
+        RECON_ACCESS_FONT_KEY, "");
+
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Font", COLOR_TEXT);
+    y += line + 4;
+
+    int installed = recon_fonts_count();
+
+    /*
+     * Room kept for the buttons under it, so the list never grows into them.
+     * Four rows at most: this is one section of a page, not the page.
+     */
+    int shown = (bottom - y - BUTTON_HEIGHT - PADDING * 4) / ROW_HEIGHT;
+    if (shown > 4) {
+        shown = 4;
+    }
+    if (shown > installed) {
+        shown = installed;
+    }
+    if (shown < 1) {
+        shown = 1;
+    }
+
+    clamp_scroll(&cp->font_scroll, shown, installed);
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = shown * ROW_HEIGHT;
+
+    int fbar = draw_scrollbar(p, x + w - SCROLLBAR_WIDTH, y, cp->list_h,
+        cp->font_scroll, shown, installed);
+    int flw = w - fbar;
+
+    recon_fill_rect(p, x, y, flw, cp->list_h, COLOR_PANEL);
+
+    for (int row = 0; row < shown; row++) {
+        char name[96];
+        if (!recon_fonts_at(cp->font_scroll + row, name, sizeof(name))) {
+            break;
+        }
+
+        char path[RECON_PATH_MAX];
+        bool in_use = recon_fonts_path(name, path, sizeof(path)) &&
+            strcmp(path, chosen) == 0;
+
+        char origin[RECON_PATH_MAX];
+        draw_row(cp, p, x, y + row * ROW_HEIGHT, flw, row, name,
+            recon_fonts_origin(name, origin, sizeof(origin))
+                ? origin : "ships with ReconOS",
+            row == cp->font_selected);
+
+        /* The one being drawn with, marked the way the wallpaper list marks
+         * the picture on the desktop: chosen and in use are two facts. */
+        if (in_use) {
+            recon_fill_rect(p, x + 5, y + row * ROW_HEIGHT + ROW_HEIGHT / 2 - 3,
+                6, 6, row == cp->font_selected
+                    ? COLOR_SELECTED_TEXT : COLOR_SELECTED);
+        }
+
+        recon_hit_add(p, x, y + row * ROW_HEIGHT, flw, ROW_HEIGHT,
+            HIT_FONT_BASE + (uint32_t)row);
+    }
+
+    if (installed == 0) {
+        recon_draw_text(p, cp->font, x + 10, y + (ROW_HEIGHT + ascent) / 2 - 2,
+            w - 20, "None installed. The system's own is being used.",
+            COLOR_DIM);
+    }
+
+    y += cp->list_h + 6;
+
+    char summary[256];
+    snprintf(summary, sizeof(summary), "Drawing with: %s",
+        *chosen != '\0' ? chosen : "the system's own");
+    recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_DIM);
+    y += line + 6;
+
+    char picked[96];
+    bool have = cp->font_selected >= 0 &&
+        recon_fonts_at(cp->font_scroll + cp->font_selected, picked,
+            sizeof(picked));
+
+    char picked_origin[RECON_PATH_MAX];
+    bool own = have &&
+        recon_fonts_origin(picked, picked_origin, sizeof(picked_origin));
+
+    int fbx = draw_button(cp, p, x, y, "Use This Font",
+        HIT_ACTION_BASE + ACTION_USE_FONT, have);
+    fbx = draw_button(cp, p, fbx, y, "Add a Font",
+        HIT_ACTION_BASE + ACTION_ADD_FONT, true);
+    fbx = draw_button(cp, p, fbx, y, "Remove",
+        HIT_ACTION_BASE + ACTION_REMOVE_FONT, own);
+    draw_button(cp, p, fbx, y, "Use the System's",
+        HIT_ACTION_BASE + ACTION_DEFAULT_FONT, *chosen != '\0');
     y += BUTTON_HEIGHT + PADDING * 2;
 
     /* And the three things this page is named for and cannot do yet, said
@@ -5227,6 +5336,103 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
     }
 
+    case ACTION_USE_FONT: {
+        char name[96];
+        char path[RECON_PATH_MAX];
+        if (cp->font_selected < 0 ||
+                !recon_fonts_at(cp->font_scroll + cp->font_selected, name,
+                    sizeof(name)) ||
+                !recon_fonts_path(name, path, sizeof(path))) {
+            set_status(cp, true, "Choose a font first.");
+            break;
+        }
+
+        recon_registry_set(RECON_REG_USER, RECON_ACCESS_FONT_KEY, path);
+        recon_access_apply(cp->font);
+        recon_shell_restyle(cp->server->shell);
+
+        /*
+         * Reported honestly if it did not take. A font file the drawing code
+         * cannot read leaves the old one in place, and a page that says
+         * "changed" over text that has not changed is the page lying about
+         * the only thing the reader can check for themselves.
+         */
+        /*
+         * Checked through the same resolution the loader will use, so the
+         * answer is the loader's answer rather than a second opinion about a
+         * path the loader never sees.
+         */
+        char host[RECON_PATH_MAX];
+        char canonical[RECON_PATH_MAX];
+        const char *readable = recon_fs_resolve("/", path, host, sizeof(host),
+            canonical, sizeof(canonical)) ? host : path;
+
+        struct recon_font *check = recon_font_load(readable,
+            RECON_ACCESS_FONT_SIZE_DEFAULT);
+        if (check == NULL) {
+            set_status(cp, true, "'%s' could not be read as a font, so the "
+                "old one is still on.", name);
+            break;
+        }
+        /* Loaded only to find out whether it loads. The desktop has its own
+         * copy by now; this one has nothing left to do. */
+        recon_font_destroy(check);
+
+        set_status(cp, false, "Drawing with '%s'.", name);
+        break;
+    }
+
+    case ACTION_DEFAULT_FONT:
+        recon_registry_remove(RECON_REG_USER, RECON_ACCESS_FONT_KEY);
+        recon_access_apply(cp->font);
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "Back to the system's own font.");
+        break;
+
+    case ACTION_ADD_FONT: {
+        /*
+         * The File Explorer, the same way a wallpaper is added.
+         *
+         * A file dialog that hands a path back would be tidier and does not
+         * exist; what does exist is a right-click on a file. This opens
+         * somewhere fonts plausibly are and says what to do there.
+         */
+        recon_shell_open_named(cp->server->shell, "File Explorer");
+
+        struct recon_appwin *win =
+            recon_installed_app_existing("File Explorer");
+        if (win == NULL) {
+            set_status(cp, true, "Could not open the File Explorer.");
+            break;
+        }
+
+        recon_explorer_open_at(win, recon_fs_user_dir("Documents"));
+        set_status(cp, false, "Right-click a .ttf or .otf file and choose "
+            "Install Font. It joins this list.");
+        break;
+    }
+
+    case ACTION_REMOVE_FONT: {
+        char name[96];
+        if (cp->font_selected < 0 ||
+                !recon_fonts_at(cp->font_scroll + cp->font_selected, name,
+                    sizeof(name))) {
+            set_status(cp, true, "Choose a font first.");
+            break;
+        }
+
+        if (!recon_fonts_remove(name)) {
+            set_status(cp, true, "%s", recon_fonts_last_error());
+            break;
+        }
+
+        /* Nothing chosen afterwards: the row number would survive and point
+         * at whichever font slid up into its place. */
+        cp->font_selected = -1;
+        set_status(cp, false, "Removed '%s'.", name);
+        break;
+    }
+
     case ACTION_RESET_READING:
         recon_registry_remove(RECON_REG_USER, RECON_ACCESS_LETTER_KEY);
         recon_registry_remove(RECON_REG_USER, RECON_ACCESS_LINE_KEY);
@@ -6022,10 +6228,17 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
 
     /* A wallpaper chosen from the Appearance page. */
     /*
-     * Network's rows and tabs come first: their bases are higher than the
-     * ones below, and every test here is an unbounded >=. Put after, they
-     * would be answered by whichever branch happened to be tested first.
+     * Highest base first, all the way down. Every test in this ladder is an
+     * unbounded >=, so an id that belongs to a base above the one being
+     * tested is answered by the wrong branch and vanishes without a trace.
      */
+    if (hit_id >= HIT_FONT_BASE) {
+        int row = (int)(hit_id - HIT_FONT_BASE);
+        cp->font_selected = (cp->font_selected == row) ? -1 : row;
+        clear_status(cp);
+        return true;
+    }
+
     if (hit_id >= HIT_NET_ROW_BASE) {
         int row = (int)(hit_id - HIT_NET_ROW_BASE);
         cp->net_selected = (cp->net_selected == row) ? -1 : row;
@@ -6566,6 +6779,14 @@ static void panel_scroll(void *user, double delta) {
         return;
     }
 
+    if (cp->page == PAGE_DISPLAY) {
+        cp->font_scroll += step;
+        if (cp->font_scroll < 0) {
+            cp->font_scroll = 0;
+        }
+        return;
+    }
+
     if (cp->page == PAGE_NETWORK) {
         /* Three of the four sections show a list; Status does not, and
          * scrolling a page with no list is not an error worth a message. */
@@ -6668,6 +6889,7 @@ static void open_page_window(struct control_panel *cp, enum page page) {
         sub->font = cp->font;
         sub->home = false;
         sub->page = page;
+        nothing_chosen(sub);
 
         recon_edit_begin(&sub->unlock, "", false);
         sub->unlock.masked = true;
@@ -6836,14 +7058,7 @@ struct recon_appwin *recon_control_panel_create(struct recon_server *server,
     /* The window the menus open is the front page: the icons, and no page.
      * Every other one is built by open_page_window when a tile is clicked. */
     cp->home = true;
-    /* Nothing chosen in Network either, for the same reason. */
-    cp->net_selected = -1;
-    /*
-     * Nothing chosen. calloc leaves this at zero, which is a real row -- the
-     * front page opened with Accounts looking picked before anybody had
-     * pointed at it, and one click highlights is the rule everywhere else.
-     */
-    cp->selected = -1;
+    nothing_chosen(cp);
 
     recon_edit_begin(&cp->unlock, "", false);
     cp->unlock.masked = true;

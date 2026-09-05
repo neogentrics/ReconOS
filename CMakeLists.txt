@@ -56,6 +56,7 @@ add_executable(ReconOS
     src/recon_capture.c
     src/recon_net.c
     src/recon_png.c
+    src/recon_fonts.c
     src/recon_wallpaper.c
     src/recon_appwin.c
     src/recon_cmd.c

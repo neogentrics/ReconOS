@@ -20,6 +20,7 @@
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_explorer.h"
+#include "recon_fonts.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 #include "recon_server.h"
@@ -169,6 +170,7 @@ enum explorer_context {
     EXCTX_RESTORE,      /* put back where it came from */
     EXCTX_EMPTY_BIN,
     EXCTX_SET_WALLPAPER,
+    EXCTX_INSTALL_FONT,
 };
 
 /*
@@ -2236,6 +2238,22 @@ static bool looks_like_a_picture(const char *name) {
     return false;
 }
 
+/* And one ReconOS can install as a typeface. Beside its neighbour above,
+ * because the two answer the same shape of question about a file name. */
+static bool looks_like_a_font(const char *name) {
+    static const char *const KINDS[] = { ".ttf", ".otf", ".ttc", NULL };
+
+    size_t length = strlen(name);
+    for (int i = 0; KINDS[i] != NULL; i++) {
+        size_t kind = strlen(KINDS[i]);
+        if (length > kind &&
+                strcasecmp(name + length - kind, KINDS[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         struct recon_menu_spec *menu) {
     struct recon_explorer *ex = user;
@@ -2278,6 +2296,12 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
         if (!is_dir && looks_like_a_picture(entry->name)) {
             recon_menu_add(menu, "Set as Desktop Background",
                 EXCTX_SET_WALLPAPER, true, true);
+        }
+
+        /* And a font, for the same reason and on the same terms. */
+        if (!is_dir && looks_like_a_font(entry->name)) {
+            recon_menu_add(menu, "Install Font", EXCTX_INSTALL_FONT, true,
+                true);
         }
 
         recon_menu_add(menu, "Cut", EXCTX_CUT, !protectedd, false);
@@ -2343,6 +2367,29 @@ static void explorer_context_action(void *user, uint32_t id) {
         recon_wallpaper_set(name);
         recon_background_reload(recon_appwin_server(ex->win));
         set_status(ex, false, "'%s' is the desktop background.", name);
+        break;
+    }
+
+    case EXCTX_INSTALL_FONT: {
+        if (ex->selected < 0 || ex->selected >= ex->entry_count) {
+            break;
+        }
+
+        char name[RECON_NAME_MAX];
+        if (!recon_fonts_add(ex->cwd, ex->entries[ex->selected].name,
+                name, sizeof(name))) {
+            set_status(ex, true, "%s", recon_fonts_last_error());
+            break;
+        }
+
+        /*
+         * Installed, not switched to. A wallpaper somebody right-clicked is
+         * the one they want on the screen; a font is a thing they want the
+         * system to have, and changing every letter on the desktop out from
+         * under them without being asked is a different act.
+         */
+        set_status(ex, false, "'%s' is installed. Display Settings can draw "
+            "with it.", name);
         break;
     }
 

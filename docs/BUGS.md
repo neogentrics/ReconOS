@@ -76,6 +76,28 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-080 — A font inside ReconOS could be set and would never load
+
+[#233](https://github.com/neogentrics/ReconOS/issues/233)
+
+- **Found in** v0.2.17. **Found by** screen capture, testing the new font
+  picker: the page said which font was on and every letter on the screen was
+  still the old one.
+- **Was** `recon_font_load` opens the file itself, so it wants the path the
+  *host* keeps it at. `recon_access_apply` passed it whatever the setting held
+  -- and a font installed into ReconOS is named by its place inside ReconOS,
+  which is not that. Everything above the loader reported success: the key was
+  written, the page named the font, and `recon_font_reload` was documented to
+  leave the old typeface in place when a file cannot be read, which is exactly
+  what it did. The terminal's `access font /System/...` had the same fault and
+  nobody had tried it, because until this version there was nowhere inside
+  ReconOS for a font to be.
+- **Fixed in** v0.2.17. `recon_access_apply` resolves the setting to a host
+  path before loading, and passes anything that does not resolve through
+  untouched so a host path somebody typed still works. The Control Panel
+  checks through the same resolution, so what it reports is the loader's
+  answer rather than a second opinion about a path the loader never sees.
+
 ### BG-078 — A dialog asked for four buttons and silently got three
 
 [#231](https://github.com/neogentrics/ReconOS/issues/231)
