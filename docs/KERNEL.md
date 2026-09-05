@@ -14,7 +14,7 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.10`. The number says what works. What works: it boots four ways across two
+`0.0.11`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
 can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
 the byte, says where and why it faulted instead of resetting, keeps two
@@ -59,7 +59,7 @@ courtesy now rather than a dependency.
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
 | 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and preemption | **Done** |
-| 9b | Every core in use — waking the other processors | |
+| 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | |
 | 11 | Block devices — storage the kernel can read and write | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
@@ -428,10 +428,73 @@ now exists and the tick is still unconditional -- so this has moved from "not
 yet possible" to "not yet done", which is a different and more accountable kind
 of outstanding.
 
-### Checkpoint 9b — in progress: locks first
+### Checkpoint 9b — aarch64 done
 
-Secondary processors are still parked, but the locking they will need exists
-and passes on all eight boot paths. That order is deliberate: **a run queue two
+**Eight processors, all running, all being preempted.** Verified at two, four
+and eight, on the device-tree path and through our own bootloader under UEFI:
+
+```
+Processors
+  found        : 4, 4 online
+Scheduler
+  switches     : 103, of which 18 were preemptions
+  thread 0     : boot,   running, 2 ticks
+  thread 1     : idle-1, running, 19 ticks
+  thread 2     : idle-2, running, 19 ticks
+  thread 3     : idle-3, running, 20 ticks
+```
+
+**x86_64 is honestly not done** and reports one processor rather than pretending.
+It needs three things ARM did not: reading the processor list out of ACPI, a
+real-mode trampoline placed below one megabyte (because the startup message
+carries a page number in a single byte), and the hand-timed INIT/SIPI sequence.
+None of it is hard so much as long. PSCI, by contrast, is one call into
+firmware.
+
+**Three bugs, and each is the same shape wearing different clothes: a thing that
+looked global because there had only ever been one processor to have one.**
+
+*The stack was a direct-map address.* A processor started by PSCI begins with
+its MMU off, so the address the allocator hands back means nothing to it —
+setting the stack pointer to one and pushing faults instantly. It gets the
+physical address instead. But that stops meaning anything the moment the
+processor turns its own MMU on, because the kernel identity-maps only its image,
+so the stack is identity mapped as well and the same pointer is right on both
+sides of the switch.
+
+*One shared word for the stack pointer was a race* — the boot processor writes
+the next one's while the previous may not have read its own. One slot each.
+
+*And the one that took longest: `VBAR_EL1` is per-processor.* Three secondaries
+came online, reported healthy, enabled interrupts and armed their timers — and
+took not one tick between them, because their exception vector base was still
+whatever the firmware left. Every interrupt vanished into firmware code with no
+idea what this kernel is. **Nothing failed. They simply never came back.**
+
+**And the console had to be serialised, which four processors demonstrated
+immediately:**
+
+```
+[[cpu 3:cp online, iu d says 3,2: ir oqs online, n]
+```
+
+Three messages plaited together. Funny once, and then it is the console you have
+to read a fault report on.
+
+Serialising it produced a *second* bug of its own, and a better one.
+`kprintf` took the lock and then called `kputs` to print the `0x` before a
+pointer — and `kputs` took the lock again. **A spinlock taken twice by the same
+processor is a processor waiting for itself**, and it presented as the kernel
+stopping mid-word on the exact line it was printing. Panic and the fault
+reporter now use a path that never locks at all: they run when something has
+already gone wrong, possibly while that lock is held by the code that went
+wrong, and taking it would turn a report into a hang — which is the one outcome
+worse than the fault.
+
+### The locking, which came first
+
+Written and passing before there was a second processor to need it. That order
+was deliberate: **a run queue two
 processors can edit is a run queue that will eventually contain a cycle, and the
 moment to make that safe is before there is a second processor to prove it.**
 Retrofitting locks onto a working single-processor kernel means finding every

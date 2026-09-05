@@ -4,6 +4,8 @@
 
 #include "aarch64.h"
 
+#include <recon/kernel/smp.h>
+
 /* Set by boot.S from x0. The device tree is the only description of this
  * machine that exists before any driver runs. */
 u64 arch_dtb_pointer;
@@ -86,10 +88,13 @@ void arch_wait_for_interrupt(void)
 
 unsigned arch_cpu_id(void)
 {
-	/* One processor until checkpoint 9b. When the others are woken this
-	 * reads MPIDR_EL1's affinity fields; a function now means no caller
-	 * changes then. */
-	return 0;
+	unsigned id = arch_cpu_id_real();
+
+	/* Clamped rather than trusted. A machine whose processors are numbered
+	 * beyond what this kernel can hold would otherwise index past the
+	 * per-processor array -- and the failure would be a corrupted neighbour
+	 * rather than an error. smp_init() reports the ones it dropped. */
+	return (id < MAX_CPUS) ? id : 0;
 }
 
 u64 arch_irq_save(void)

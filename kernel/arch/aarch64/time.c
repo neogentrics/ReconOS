@@ -56,6 +56,41 @@ static inline u32 mmio_r32(u64 base, u64 off)
 	return *(volatile u32 *)(base + off);
 }
 
+static void arm_timer(void);
+
+/* The parts of the interrupt controller that are per-processor.
+ *
+ * The distributor is shared and is configured once. The CPU interface and the
+ * timer's private interrupt are *banked* -- each processor has its own copy at
+ * the same address -- so every processor must enable its own. A secondary that
+ * skips this is online, healthy, and permanently uninterruptible. */
+void aarch64_gic_cpu_init(void)
+{
+	mmio_w32(GICC_BASE, GICC_PMR, 0xF0);
+	mmio_w32(GICC_BASE, GICC_CTLR, 1);
+
+	{
+		u64 off = GICD_IPRIORITYR + (TIMER_IRQ & ~3u);
+		u32 v = mmio_r32(GICD_BASE, off);
+		unsigned shift = (TIMER_IRQ & 3) * 8;
+
+		v &= ~(0xFFu << shift);
+		v |= (0xA0u << shift);
+		mmio_w32(GICD_BASE, off, v);
+	}
+
+	mmio_w32(GICD_BASE, GICD_ISENABLER + (TIMER_IRQ / 32) * 4,
+		 1u << (TIMER_IRQ % 32));
+}
+
+/* This processor's own timer, armed and unmasked. Also per-processor: the
+ * generic timer's registers are banked exactly like the controller's. */
+void aarch64_timer_cpu_init(void)
+{
+	arm_timer();
+	__asm__ volatile("msr daifclr, #2");
+}
+
 static void gic_init(void)
 {
 	/* Priority mask: only interrupts of higher priority than this reach the
@@ -197,12 +232,12 @@ void arch_time_init(void)
 	tick_interval = timer_hz / TIME_TICK_HZ;
 
 	gic_init();
-	arm_timer();
+	aarch64_gic_cpu_init();
 
-	/* Unmask IRQs. Everything up to here ran with them masked, which is why
-	 * the order matters: an interrupt arriving before the controller is
+	/* Unmask IRQs last. Everything up to here ran with them masked, which is
+	 * why the order matters: an interrupt arriving before the controller is
 	 * configured is an interrupt nothing can identify. */
-	__asm__ volatile("msr daifclr, #2");
+	aarch64_timer_cpu_init();
 }
 
 void aarch64_time_print_source(void)

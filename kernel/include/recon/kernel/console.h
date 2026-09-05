@@ -16,6 +16,13 @@
 void kputc(char c);
 void kputs(const char *s);
 
+/* The same, without taking the console lock. Only for panic and the fault
+ * reporter: they run when something has already gone wrong, possibly while the
+ * lock is held by the code that went wrong, and taking it would turn a report
+ * into a hang. Output may interleave, which is the right trade -- a garbled
+ * report can be read, a missing one cannot. */
+void kputs_unlocked(const char *s);
+
 RK_PRINTF(1, 2) void kprintf(const char *fmt, ...);
 
 #endif /* RECON_KERNEL_CONSOLE_H */

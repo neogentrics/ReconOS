@@ -81,6 +81,36 @@ secondary_park:
 	wfe
 	b	secondary_park
 
+/* --- Where a processor started by PSCI begins ----------------------------
+ *
+ * Arrives with the MMU off, caches off, at EL1, with x0 holding the context
+ * identifier the boot processor passed -- which this kernel uses for the
+ * processor's own index.
+ *
+ * Almost nothing may happen here. There is no stack yet, so no C, and the only
+ * memory that can be trusted is what the boot processor cleaned out of its
+ * cache before starting us. That is exactly one word: the stack pointer.
+ */
+	.global secondary_entry
+secondary_entry:
+	mov	x19, x0			/* our index, kept across the loads below */
+
+	/* Our own slot, not a shared word. One word shared between every
+	   processor being started is a race: the boot processor writes the next
+	   one's stack while this one may not have read its own yet. */
+	ldr	x1, =secondary_stacks
+	lsl	x2, x19, #3
+	add	x1, x1, x2
+	ldr	x1, [x1]
+	mov	sp, x1
+
+	mov	x0, x19
+	bl	smp_secondary_main
+
+	/* smp_secondary_main does not return. */
+1:	wfi
+	b	1b
+
 /* --- ReconBoot ----------------------------------------------------------
  *
  * Our own UEFI loader's way in. aarch64 needs no mode switch -- unlike x86 it

@@ -276,7 +276,13 @@ static u64 ips_from_parange(unsigned phys_bits)
 	}
 }
 
-static void activate(void)
+/* Turns this processor's MMU on using the tables the boot processor built.
+ *
+ * Called by the boot processor once, from vm_init(), and by every secondary on
+ * itself. The tables are shared; what is per-processor is the registers that
+ * point at them, which is why this is a separate function rather than part of
+ * vm_init(). */
+void vm_activate_this_cpu(void)
 {
 	u64 tcr, sctlr;
 
@@ -415,7 +421,7 @@ void vm_init(void)
 	ttbr0_phys = virt_to_phys(ttbr0_root);
 	ttbr1_phys = virt_to_phys(ttbr1_root);
 
-	activate();
+	vm_activate_this_cpu();
 
 	direct_map_live = true;
 

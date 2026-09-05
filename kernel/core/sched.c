@@ -6,11 +6,19 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
+#include <recon/kernel/lock.h>
+#include <recon/kernel/smp.h>
 
 #define THREAD_STACK_PAGES 4	/* 16KB, which is generous for a kernel thread */
 
-static struct thread *current;
+/* The run queue, and the lock that makes it safe for more than one processor.
+ *
+ * Interrupt-safe, because the timer interrupt calls into the scheduler: a lock
+ * held by ordinary code and then wanted by that code's own timer interrupt
+ * deadlocks the processor holding it. */
 static struct thread *ring;	/* any member; the ring is circular */
+static struct spinlock ring_lock = SPINLOCK_INIT("sched");
+
 static u64 next_id;
 static u64 switches;
 
@@ -20,12 +28,16 @@ static u64 switches;
  * offer it. A test that counts both together passes on either. */
 static u64 preemptions;
 
-/* The thread the kernel was already running as when the scheduler started.
- * It is not created, it is *adopted* -- it has a stack and a context already,
- * and the first switch away from it is what fills in its stack pointer. Without
- * this there would be no thread to switch away from, and the first switch would
- * have nowhere to save the state it was replacing. */
-static struct thread boot_thread;
+/* The thread each processor was already running when it joined the scheduler.
+ * Not created but *adopted*: it has a stack and a context already, and the first
+ * switch away from it is what fills in its stack pointer. Without one there
+ * would be nothing to switch away from, and the first switch would have nowhere
+ * to save the state it was replacing.
+ *
+ * One per processor, because that is the whole shape of this change: a
+ * processor's notion of what it is running cannot be a global once there is
+ * more than one processor to have a notion. */
+static struct thread boot_threads[MAX_CPUS];
 
 static void ring_insert(struct thread *t)
 {
@@ -64,23 +76,44 @@ static void ring_remove(struct thread *t)
 
 struct thread *sched_current(void)
 {
-	return current;
+	return this_cpu()->current;
 }
 
 void sched_init(void)
 {
-	kmemset(&boot_thread, 0, sizeof(boot_thread));
-	kstrlcpy(boot_thread.name, "boot", sizeof(boot_thread.name));
-	boot_thread.id = 0;
-	boot_thread.state = THREAD_RUNNING;
-	boot_thread.slice_left = SCHED_SLICE_TICKS;
+	struct thread *boot = &boot_threads[arch_cpu_id()];
+
+	spin_init(&ring_lock, "sched");
+
+	kmemset(boot, 0, sizeof(*boot));
+	kstrlcpy(boot->name, "boot", sizeof(boot->name));
+	boot->id = 0;
+	boot->state = THREAD_RUNNING;
+	boot->slice_left = SCHED_SLICE_TICKS;
+	boot->cpu = (int)arch_cpu_id();
 
 	ring = 0;
-	ring_insert(&boot_thread);
-	current = &boot_thread;
+	ring_insert(boot);
+	this_cpu()->current = boot;
 	next_id = 1;
 	switches = 0;
 	preemptions = 0;
+}
+
+/* A secondary processor joining. It arrives already running on a stack of its
+ * own, so like the boot processor it adopts rather than creates -- and the
+ * thread it adopts is the idle thread made for it in advance, which is already
+ * in the ring. */
+void sched_adopt_idle(struct thread *idle)
+{
+	u64 flags = spin_lock_irq(&ring_lock);
+
+	idle->state = THREAD_RUNNING;
+	idle->cpu = (int)arch_cpu_id();
+	idle->slice_left = SCHED_SLICE_TICKS;
+	this_cpu()->current = idle;
+
+	spin_unlock_irq(&ring_lock, flags);
 }
 
 struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
@@ -108,60 +141,103 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
 	t->slice_left = SCHED_SLICE_TICKS;
 	kstrlcpy(t->name, name, sizeof(t->name));
 
+	t->cpu = -1;		/* not running anywhere */
+
 	t->stack_pointer = arch_thread_stack_init(
 		(u8 *)t->stack_base + THREAD_STACK_PAGES * PAGE_SIZE,
 		entry, arg);
 
-	ring_insert(t);
+	{
+		u64 flags = spin_lock_irq(&ring_lock);
+
+		ring_insert(t);
+		spin_unlock_irq(&ring_lock, flags);
+	}
+
 	return t;
 }
 
-/* The next thread that is willing to run. Walks the ring from the current
- * thread; if nothing else is ready, the current thread keeps going, and if the
- * current thread has finished and nothing else is ready, there is nothing left
- * to run at all. */
-static struct thread *pick_next(void)
+/* The next thread willing to run *here*. The ring lock must be held.
+ *
+ * THREAD_READY is the only state that can be taken. A thread marked RUNNING is
+ * running on some processor -- possibly this one, possibly another -- and
+ * scheduling it a second time would put one thread on two processors with one
+ * stack between them, which corrupts both within a few instructions and looks
+ * like nothing in particular afterwards.
+ *
+ * That check is the single line on which the whole of this checkpoint's
+ * safety rests.
+ */
+static struct thread *pick_next(struct thread *cur)
 {
-	struct thread *t = current->next;
+	struct thread *t = cur->next;
 
-	while (t != current) {
+	while (t != cur) {
 		if (t->state == THREAD_READY)
 			return t;
 		t = t->next;
 	}
 
-	return (current->state == THREAD_RUNNING) ? current : 0;
+	return (cur->state == THREAD_RUNNING) ? cur : 0;
 }
 
 void sched_switch(void)
 {
-	struct thread *prev = current;
-	struct thread *next = pick_next();
+	struct cpu_local *me = this_cpu();
+	struct thread *prev, *next;
+	u64 flags;
+
+	flags = spin_lock_irq(&ring_lock);
+
+	prev = me->current;
+	next = pick_next(prev);
 
 	if (!next) {
-		/* Everything has finished. The caller is a thread that is about
-		 * to stop existing, so there is nowhere to go. */
+		/* Nothing here can run, including the caller. On one processor
+		 * that means everything has finished; on several it can also
+		 * mean every other thread is running elsewhere, which is normal
+		 * and is not an error. */
+		spin_unlock_irq(&ring_lock, flags);
 		panic("sched: nothing left to run");
 	}
 
 	if (next == prev) {
 		prev->slice_left = SCHED_SLICE_TICKS;
+		spin_unlock_irq(&ring_lock, flags);
 		return;
 	}
 
-	if (prev->state == THREAD_RUNNING)
+	if (prev->state == THREAD_RUNNING) {
 		prev->state = THREAD_READY;
+		prev->cpu = -1;
+	}
 
 	next->state = THREAD_RUNNING;
+	next->cpu = (int)me->id;
 	next->slice_left = SCHED_SLICE_TICKS;
-	current = next;
+	me->current = next;
+	me->switches++;
 	switches++;
 
-	/* After this returns, the stack is the *other* thread's -- so `prev` is
-	 * whichever thread is now resuming, not the one that called. Anything
-	 * that has to happen for the outgoing thread must happen above this
-	 * line. */
+	/* The lock is released *before* the switch, not after.
+	 *
+	 * After the switch this code is running as a different thread, on a
+	 * different stack, and `flags` holds that thread's saved interrupt state
+	 * from whenever it last switched away -- not ours. Releasing afterwards
+	 * would unlock on behalf of somebody else and restore the wrong
+	 * interrupt state, and would do it correctly often enough to look fine.
+	 *
+	 * Releasing here is safe because both threads' states are already
+	 * consistent: prev is READY and owned by nobody, next is RUNNING and
+	 * owned by this processor. Another processor that looks at the ring now
+	 * sees the truth. It cannot take `next`, because `next` is already
+	 * marked RUNNING. */
+	spin_unlock(&ring_lock);
+
 	arch_context_switch(&prev->stack_pointer, next->stack_pointer);
+
+	/* Reached as the *incoming* thread, whenever it is next scheduled. */
+	arch_irq_restore(flags);
 }
 
 void sched_yield(void)
@@ -171,20 +247,25 @@ void sched_yield(void)
 
 bool sched_tick(void)
 {
-	if (!current)
+	struct cpu_local *me = this_cpu();
+	struct thread *cur = me->current;
+
+	me->ticks++;
+
+	if (!cur)
 		return false;
 
-	current->ran_ticks++;
+	cur->ran_ticks++;
 
-	if (current->slice_left > 0)
-		current->slice_left--;
+	if (cur->slice_left > 0)
+		cur->slice_left--;
 
 	/* True means "switch on the way out of this interrupt". The switch is
 	 * not done here because the caller is the architecture's interrupt path,
 	 * and it may have work to finish -- acknowledging the interrupt
 	 * controller, for one -- that must happen before the stack changes. */
-	if (current->slice_left == 0) {
-		preemptions++;
+	if (cur->slice_left == 0) {
+		__atomic_add_fetch(&preemptions, 1, __ATOMIC_RELAXED);
 		return true;
 	}
 
@@ -193,9 +274,10 @@ bool sched_tick(void)
 
 void thread_exit(void)
 {
-	struct thread *dead = current;
+	struct thread *dead = this_cpu()->current;
 
 	dead->state = THREAD_FINISHED;
+	dead->cpu = -1;
 
 	/* The stack cannot be freed here: this code is standing on it. It is
 	 * left for whoever notices the thread is finished, which is the reaper
@@ -218,6 +300,14 @@ void thread_exit(void)
  * Restarting the whole scan is O(n^2) in the worst case and that is fine: it
  * runs when a thread ends, not in a loop, and n is the number of threads.
  */
+static bool is_boot_thread(const struct thread *t)
+{
+	for (unsigned i = 0; i < MAX_CPUS; i++)
+		if (t == &boot_threads[i])
+			return true;
+	return false;
+}
+
 static void reap(void)
 {
 	bool removed;
@@ -233,7 +323,7 @@ static void reap(void)
 
 		do {
 			if (t->state == THREAD_FINISHED &&
-			    t != current && t != &boot_thread) {
+			    t != this_cpu()->current && !is_boot_thread(t)) {
 				ring_remove(t);
 				pmm_free_pages(virt_to_phys(t->stack_base),
 					       t->stack_pages);

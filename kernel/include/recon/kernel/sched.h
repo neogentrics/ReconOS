@@ -15,12 +15,19 @@
  * So the tick takes execution away. That is the whole point of having built
  * the timer first.
  *
- * --- What is deliberately still absent ---
+ * --- More than one processor ---
  *
- * Other cores. Secondary processors are still parked in boot.S, and waking them
- * needs a way to start a CPU (a mailbox on ARM, an interrupt sequence on x86)
- * plus locking on everything this file touches. That is real work and it is
- * recorded in docs/KERNEL.md, not skipped quietly.
+ * The run queue is shared and guarded by one lock, and a thread marked RUNNING
+ * is never scheduled again until it stops. That single check is what keeps one
+ * thread from landing on two processors with one stack between them -- which
+ * corrupts both within a few instructions and looks like nothing in particular
+ * afterwards.
+ *
+ * `current` is per-processor. It was one pointer meaning "the running thread";
+ * with four processors there are four running threads and the question has no
+ * single answer, so every reader now has to say *whose*.
+ *
+ * --- What is deliberately still absent ---
  *
  * Priorities. Round-robin, equal slices. A priority scheme invented before
  * there is a workload to shape it around is a priority scheme fitted to
@@ -58,6 +65,12 @@ struct thread {
 	enum thread_state state;
 
 	u64 id;
+
+	/* Which processor is running it, or -1 for none. Not decoration: it is
+	 * what makes a thread's presence on a processor visible to the others,
+	 * and it is checked before anything is scheduled. */
+	int cpu;
+
 	u64 slice_left;
 	u64 ran_ticks;			/* total, for the summary */
 
@@ -93,6 +106,10 @@ bool sched_tick(void);
 void sched_switch(void);
 
 struct thread *sched_current(void);
+
+/* A secondary processor joining the scheduler, adopting the idle thread that
+ * was made for it in advance. Called once, by that processor, on itself. */
+void sched_adopt_idle(struct thread *idle);
 
 void sched_print_summary(void);
 bool sched_self_test(void);
