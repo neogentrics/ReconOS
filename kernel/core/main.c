@@ -10,6 +10,7 @@
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pmm.h>
+#include <recon/kernel/heap.h>
 #include <recon/kernel/vm.h>
 
 #ifndef RECONOS_KERNEL_VERSION
@@ -41,6 +42,9 @@ void kmain(void)
 	vm_init();
 	vm_print_summary();
 
+	heap_init();
+	heap_print_summary();
+
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
 	 * wrong is the kind of fault that surfaces three checkpoints later as
@@ -50,6 +54,8 @@ void kmain(void)
 		pmm_self_test() ? "pass" : "FAIL");
 	kprintf("  virtual memory     : %s\n",
 		vm_self_test() ? "pass" : "FAIL");
+	kprintf("  kernel heap        : %s\n",
+		heap_self_test() ? "pass" : "FAIL");
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

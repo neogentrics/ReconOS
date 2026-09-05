@@ -14,10 +14,10 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.6`. The number says what works. What works: it boots four ways across two
+`0.0.7`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, and is started by a
-bootloader we wrote.
+can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
+the byte, and is started by a bootloader we wrote.
 
 ## What "finished" means
 
@@ -53,7 +53,7 @@ courtesy now rather than a dependency.
 | 3 | Reads what this processor can actually do | **Done** |
 | 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | **Done** |
 | 5 | Its own page tables, a direct map, and large pages where the CPU has them | **Done** |
-| 6 | A kernel heap | |
+| 6 | A kernel heap | **Done** |
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
 | 8 | A timer, a tick, and time | |
 | 9 | Threads, a scheduler, and every core in use | |
@@ -247,6 +247,47 @@ script change plus one jump, and doing it beside the work that first needs it
 means it can be tested by something that actually cares. Recorded here rather
 than quietly dropped, because a checkpoint that shrinks to fit what got done is
 not a checkpoint.
+
+### Checkpoint 6 — done
+
+**A kernel heap.** The page allocator hands out 4KB at a time, which is the
+right unit for page tables and the wrong one for a forty-byte structure.
+
+Small allocations come from *slabs*: one page, carved into objects of a single
+size, with a header at the front of the page and a free list threaded through
+the free objects themselves. Two things fall out of that shape:
+
+- **No per-object header.** A sixteen-byte allocation costs sixteen bytes. The
+  usual alternative — a size word before every object — costs fifty percent on
+  the smallest class, and this project's whole argument is about not spending
+  memory it does not have to.
+- **Freeing needs no search.** The slab a pointer belongs to is the page it sits
+  in, found by masking off the low twelve bits.
+
+Large allocations come straight from the page allocator and are page-aligned as
+a result — and *that* is what tells the two apart at `kfree()`, unambiguously
+and without reading anything that might not be a header: **a slab object can
+never be page-aligned, because the slab header occupies the start of the page.**
+
+**Empty slabs go back.** A slab whose last object is freed is returned to the
+page allocator rather than kept for next time. Without that, a burst of
+allocations that is then freed holds every page it touched forever — which is
+precisely the shape of "the machine gets slower the longer it runs" that this
+project exists not to have. The self-test checks for it: it counts slabs before
+and after, not just bytes.
+
+**The portability check earned its keep again, and was right this time.** It
+flagged `0x52534C41` in `core/heap.c` — a magic number, not a hardware address,
+so a false positive. But long hex literals in portable code are exactly what a
+hardware address looks like, and weakening the check to admit a magic number
+would also admit the next real address. The magic is spelled out from its
+characters instead, which reads better anyway. *When a guard fires wrongly, the
+question is whether the guard or the code is easier to make right.*
+
+**Not built, deliberately:** no `realloc`, because nothing wants one and a
+realloc written before its first caller gets the semantics wrong. No locking:
+one CPU runs kernel code until checkpoint 9, and a lock invented before the
+concurrency it guards is a lock in the wrong place.
 
 ## Using the machine you are on
 
