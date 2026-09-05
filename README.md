@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-9_suites-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-81-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-89-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -22,12 +22,19 @@ same time.**
 | What it is | The compositor, window management, the shell, the applications | Boot, memory, drivers, processes |
 | Where | `src/`, `include/`, `modules/` | `kernel/` |
 | Built against | wlroots and the Linux kernel | no libc, no wlroots, nothing |
-| State | A usable desktop. v0.2.17 released | Boots and knows its machine. v0.0.4 |
+| State | A usable desktop. v0.2.17 released | Runs its own memory, threads and clocks. v0.0.10 |
 
 **The kernel today** boots on x86_64 and aarch64 — under legacy BIOS, under
-UEFI, and via device tree — reports which firmware is underneath it, reads what
-the processor can actually do, and manages physical memory. It runs nothing of
-the desktop's yet.
+UEFI, and via device tree, **from a bootloader we wrote**; GRUB left the boot
+path at checkpoint 4. It reports which firmware is underneath it, reads what
+the processor can actually do, manages physical memory on page tables it built
+itself, allocates by the byte, reports a fault instead of resetting the
+machine, keeps a monotonic clock and a wall clock read off the hardware, and
+runs threads it can take execution away from.
+
+It runs nothing of the desktop's yet, and will not until checkpoint 10. That
+sentence stays in every time this paragraph is rewritten, because the one
+before it is impressive enough to be misread.
 
 **Phase 1 currently runs on Linux, and that is temporary.** wlroots and the
 Linux kernel underneath are scaffolding, not architecture. Every place the
