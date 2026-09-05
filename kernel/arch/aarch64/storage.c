@@ -15,6 +15,7 @@
 
 #include <recon/kernel/block.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/pci.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/console.h>
@@ -97,4 +98,35 @@ void arch_storage_print(void)
 
 	kprintf("  looked at    : %u memory-mapped virtio slots, %u occupied\n",
 		slots_seen, devices_found);
+}
+
+/* --- PCI, which this architecture has and does not use yet -----------------
+ *
+ * QEMU's virt machine has a PCI host bridge, and so does every ARM server. It
+ * is reached through a memory window whose address is in the device tree rather
+ * than through I/O ports, and using it means parsing the host bridge node --
+ * its register window, and the ranges it forwards.
+ *
+ * Not done, because the memory-mapped transport already reaches every device
+ * this machine offers, and a second path to the same disk would be a second
+ * untested path. It becomes worth doing when this kernel meets an ARM machine
+ * whose storage is only on PCI, which is most real ones.
+ */
+bool arch_pci_available(void)
+{
+	return false;
+}
+
+u32 arch_pci_config_read(u8 bus, u8 slot, u8 func, u8 offset)
+{
+	return 0xFFFFFFFFu;
+}
+
+void arch_pci_config_write(u8 bus, u8 slot, u8 func, u8 offset, u32 value)
+{
+}
+
+bool arch_pci_mmio_window(u64 *base, u64 *size)
+{
+	return false;
 }

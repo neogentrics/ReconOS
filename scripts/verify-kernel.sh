@@ -36,9 +36,20 @@ declare -a FAILED_PATHS=()
 # Runs QEMU, then reads the log rather than trusting the exit status. A kernel
 # that hangs before printing anything and a kernel that panics both "exit"; only
 # the self-test lines say which happened.
+# EXPECT, when set before a call, is a string the log must also contain.
+#
+# It exists because of a specific way this harness could lie. The block
+# self-test reports "pass" on a machine with no disk attached, which is correct
+# -- a diskless machine must still boot -- but it means a driver that silently
+# stopped finding disks would go on reporting eleven passes for ever. So a run
+# that was *given* a disk is required to say it found one, and the counts alone
+# are not enough.
 check() {
 	local name=$1; shift
 	local log="$WORK/$(echo "$name" | tr ' /' '__').log"
+	local want=${EXPECT:-}
+
+	EXPECT=
 
 	printf '%-46s' "$name"
 	timeout "$TIMEOUT" "$@" >"$log" 2>&1
@@ -75,8 +86,24 @@ check() {
 		return
 	fi
 
+	if [ -n "$want" ] && ! grep -q "$want" "$log"; then
+		echo "$ran passed, but never said '$want' -- $log"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+		return
+	fi
+
 	echo "$ran self-tests, all pass"
 	passes=$((passes + ran))
+}
+
+# The same, for a run that was given a disk. A separate function rather than a
+# variable assignment in front of the call: bash restores a prefix assignment
+# after a *function* returns, so the flag would survive into the next check and
+# fail the diskless run for not finding a disk it was never offered.
+checkd() {
+	EXPECT=virtio0
+	check "$@"
 }
 
 skip() {
@@ -112,6 +139,13 @@ ARM_DISK=(-global virtio-mmio.force-legacy=false
           -drive "file=$DISK,format=raw,if=none,id=d0"
           -device virtio-blk-device,drive=d0)
 
+# The same disk on the other architecture, over PCI. No flag needed: QEMU offers
+# a *transitional* device here -- one that can speak either protocol -- and the
+# driver decides by whether the 1.0 capability structures are published rather
+# than by the identifier, which for a transitional device looks legacy.
+X64_DISK=(-drive "file=$DISK,format=raw,if=none,id=d0"
+          -device virtio-blk-pci,drive=d0)
+
 # A GRUB rescue ISO. The same ISO boots on BIOS and on UEFI -- grub-mkrescue
 # writes both an El Torito boot catalogue and an EFI system partition -- which
 # is why two of the paths below differ only by whether -bios is passed.
@@ -132,21 +166,31 @@ make_iso() {
 echo
 echo "x86_64"
 
-check "  PVH, direct kernel load" \
-	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+# The PVH paths are the ones with no firmware at all, so they are also the only
+# ones where the kernel has to place the device's registers itself. Everything
+# else on this architecture arrives with the base address registers already
+# assigned by SeaBIOS or OVMF.
+checkd "  PVH, direct kernel load" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		"${X64_DISK[@]}"
 
-check "  PVH, -cpu max" \
-	qemu-system-x86_64 -m 512M -nographic -no-reboot -cpu max -kernel "$X64_ELF"
+checkd "  PVH, -cpu max" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -cpu max -kernel "$X64_ELF" \
+		"${X64_DISK[@]}"
+
+check "  PVH, no disk attached" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
 if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	if command -v grub-mkrescue >/dev/null && make_iso; then
-		check "  Multiboot2 via GRUB, BIOS" \
+		checkd "  Multiboot2 via GRUB, BIOS" \
 			qemu-system-x86_64 -m 512M -nographic -no-reboot \
-				-cdrom "$WORK/reconos.iso"
+				-cdrom "$WORK/reconos.iso" "${X64_DISK[@]}"
 		if [ -f "$OVMF_X64" ]; then
-			check "  Multiboot2 via GRUB, UEFI" \
+			checkd "  Multiboot2 via GRUB, UEFI" \
 				qemu-system-x86_64 -m 512M -nographic -no-reboot \
-					-bios "$OVMF_X64" -cdrom "$WORK/reconos.iso"
+					-bios "$OVMF_X64" -cdrom "$WORK/reconos.iso" \
+					"${X64_DISK[@]}"
 		else
 			skip "  Multiboot2 via GRUB, UEFI" "no OVMF"
 		fi
@@ -156,10 +200,11 @@ if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	fi
 
 	if [ -f "$OVMF_X64" ] && make -C boot ARCH=x86_64 esp >/dev/null 2>&1; then
-		check "  reconboot, UEFI" \
+		checkd "  reconboot, UEFI" \
 			qemu-system-x86_64 -m 512M -nographic -no-reboot \
 				-bios "$OVMF_X64" \
-				-drive format=raw,file="$ROOT/boot/build/x86_64/esp.img"
+				-drive format=raw,file="$ROOT/boot/build/x86_64/esp.img" \
+				"${X64_DISK[@]}"
 	else
 		skip "  reconboot, UEFI" "the loader did not build"
 	fi
@@ -168,11 +213,11 @@ fi
 echo
 echo "aarch64"
 
-check "  device tree, cortex-a72" \
+checkd "  device tree, cortex-a72" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 		-kernel "$ARM_IMG" "${ARM_DISK[@]}"
 
-check "  device tree, -cpu max" \
+checkd "  device tree, -cpu max" \
 	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic -kernel "$ARM_IMG" \
 		"${ARM_DISK[@]}"
 
@@ -184,17 +229,25 @@ check "  device tree, no disk attached" \
 		-kernel "$ARM_IMG"
 
 for n in 2 4 8; do
-	check "  device tree, $n processors" \
+	checkd "  device tree, $n processors" \
 		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
 			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
 done
 
 if [ "$ONLY" = all ] || [ "$ONLY" = aarch64 ]; then
 	if [ -f "$OVMF_ARM" ] && make -C boot ARCH=aarch64 esp >/dev/null 2>&1; then
+		# No expectation of a disk on this one path, and the reason is
+		# worth knowing: booting aarch64 through UEFI means the firmware
+		# describes the machine with ACPI rather than with a device tree,
+		# and this kernel finds memory-mapped virtio devices by reading
+		# the tree. With no tree there is nothing to read, and the devices
+		# that are reachable sit on PCI -- which needs the configuration
+		# window, which is in an ACPI table nothing parses yet.
 		check "  reconboot, UEFI" \
 			qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 				-bios "$OVMF_ARM" \
-				-drive format=raw,file="$ROOT/boot/build/aarch64/esp.img"
+				-drive format=raw,file="$ROOT/boot/build/aarch64/esp.img" \
+				"${ARM_DISK[@]}"
 	else
 		skip "  reconboot, UEFI" "the loader did not build"
 	fi

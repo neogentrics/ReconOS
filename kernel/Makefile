@@ -122,11 +122,21 @@ run: $(BOOT_IMAGE)
 # does, not what the prose is allowed to mention -- a portable file explaining
 # *why* it is portable will name the machines it is avoiding, and failing the
 # build for that teaches people to write worse comments.
+#
+# All-ones constants are stripped too, and that is a refinement rather than a
+# loophole. The long-hex-number rule is there to catch *addresses*, and no
+# address is 0xFFFFFFFF: that number is a mask, or a "not present" answer from a
+# bus, or every value there could be. Writing block devices produced three of
+# them in one afternoon -- sizing a base address register works by writing all
+# ones -- and each one was rewritten to appease a rule that was not aimed at it.
+# Rewriting correct code to satisfy a check makes the check the author rather
+# than the reader's friend, so the check learned the distinction instead.
 check-portable:
 	@bad=""; \
 	for f in core/*.c core/*.h; do \
 		[ -e "$$f" ] || continue; \
-		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' "$$f" \
+		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' \
+		           -e 's|0[xX][fF][fF][fF][fF][fF]*[uUlL]*||g' "$$f" \
 		      | grep -nE '__asm__|asm volatile|\bx86|\baarch64|\briscv|0x[0-9a-fA-F]{6,}' \
 		      | sed "s|^|$$f:|"); \
 		[ -n "$$hit" ] && bad="$$bad$$hit\n"; \
