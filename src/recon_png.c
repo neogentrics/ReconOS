@@ -77,6 +77,20 @@ static size_t put_chunk(unsigned char *out, size_t used, const char *type,
 
 unsigned char *recon_png_encode(const unsigned int *pixels, int width,
         int height, bool with_alpha, size_t *size_out) {
+    /*
+     * Zeroed before anything can fail, so that every path out of here that
+     * returns NULL has also said the length is nothing.
+     *
+     * No caller was bitten by the older arrangement -- each one starts its own
+     * length at zero and checks the pointer. That is exactly why it was worth
+     * closing: the next caller is the one that reuses the variable across two
+     * calls, and a stale length beside a NULL pointer is a buffer overrun
+     * waiting for somebody to skip the NULL check.
+     */
+    if (size_out != NULL) {
+        *size_out = 0;
+    }
+
     if (pixels == NULL || width <= 0 || height <= 0) {
         set_error("nothing to encode");
         return NULL;

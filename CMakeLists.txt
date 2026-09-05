@@ -333,6 +333,22 @@ target_include_directories(recon_video_tests PRIVATE
 
 target_link_libraries(recon_video_tests PRIVATE m)
 
+# The writer checked against a decoder somebody else wrote. That is the whole
+# point of this one: agreeing with itself would prove nothing about whether a
+# file it saves opens anywhere. It needs recon_fs because recon_png_write goes
+# through it, and zlib because the compression is zlib's.
+add_executable(recon_png_tests
+    tests/test_png.c
+    src/recon_png.c
+    src/recon_fs.c)
+
+target_include_directories(recon_png_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+    ${ZLIB_INCLUDE_DIRS})
+
+target_link_libraries(recon_png_tests PRIVATE ${ZLIB_LIBRARIES} m)
+
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.
 add_executable(recon_version_tests

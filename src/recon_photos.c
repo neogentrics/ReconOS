@@ -22,6 +22,7 @@
 #include "recon_icons.h"
 #include "recon_ocr_match.h"
 #include "recon_photos.h"
+#include "recon_png.h"
 #include "recon_server.h"
 #include "recon_shell.h"
 #include "recon_server.h"
@@ -51,6 +52,7 @@
 #define HIT_FIT (RECON_APPWIN_HIT_USER + 3)
 #define HIT_PICTURE (RECON_APPWIN_HIT_USER + 4)
 #define HIT_READ (RECON_APPWIN_HIT_USER + 5)
+#define HIT_CONVERT (RECON_APPWIN_HIT_USER + 6)
 
 /*
  * Above this, ask first.
@@ -300,6 +302,98 @@ bool recon_photos_open_path(struct recon_appwin *win, const char *path) {
     bool ok = load_current(ph);
     recon_appwin_refresh(win);
     return ok;
+}
+
+/* --- Saving a picture as a PNG --- */
+
+/*
+ * The same picture, in a format that has not thrown anything away.
+ *
+ * Photos decodes seven formats and this system writes one, so this is the join
+ * between them rather than anything new. It lands beside the original under a
+ * name nothing else has, because a converter that overwrites is a converter
+ * that loses the thing it converted.
+ *
+ * PNG out and nothing else, deliberately. The direction people want is almost
+ * always this one -- a photograph arrives compressed and is wanted lossless to
+ * work on -- and offering the other direction would mean a button that quietly
+ * costs a little of the picture every time it is pressed.
+ */
+static void save_as_png(struct recon_photos *ph) {
+    if (ph->pixels == NULL) {
+        set_message(ph, false, "Nothing open to convert.");
+        return;
+    }
+
+    /*
+     * RGBA bytes into the packed colours the writer takes. Alpha is kept: a
+     * picture with a transparent corner should still have one afterwards, and
+     * being able to hold that is half the reason somebody converts.
+     */
+    size_t count = (size_t)ph->width * (size_t)ph->height;
+    unsigned int *packed = malloc(count * sizeof(*packed));
+    if (packed == NULL) {
+        set_message(ph, true, "Not enough memory to convert that.");
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        const unsigned char *px = ph->pixels + i * 4;
+        packed[i] = ((unsigned int)px[3] << 24) | ((unsigned int)px[0] << 16) |
+            ((unsigned int)px[1] << 8) | (unsigned int)px[2];
+    }
+
+    char base[RECON_NAME_MAX];
+    recon_text_copy(base, sizeof(base), ph->names[ph->at]);
+    char *dot = strrchr(base, '.');
+    if (dot != NULL && dot != base) {
+        *dot = '\0';
+    }
+    if (base[0] == '\0') {
+        recon_text_copy(base, sizeof(base), "Picture");
+    }
+
+    char leaf[RECON_NAME_MAX];
+    if (!recon_fs_unique_name("/", ph->folder, base, ".png", leaf,
+            sizeof(leaf))) {
+        free(packed);
+        set_message(ph, true, "%s", recon_fs_last_error());
+        return;
+    }
+
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), ph->folder, leaf)) {
+        free(packed);
+        set_message(ph, true, "That name is too long to save as a picture.");
+        return;
+    }
+
+    /* The writer goes through recon_fs itself, so the picture lands inside the
+     * system and under the account rules like everything else here. */
+    bool wrote = recon_png_write(path, packed, ph->width, ph->height, true);
+    free(packed);
+
+    if (!wrote) {
+        set_message(ph, true, "%s", recon_png_last_error());
+        return;
+    }
+
+    /*
+     * The folder has one more picture in it than the list says. Rescanned, and
+     * then the position moved back onto the picture that is on screen -- the
+     * new file may sort before it, and stepping "next" should carry on from
+     * what is being looked at rather than from wherever the index landed.
+     */
+    char was[RECON_NAME_MAX];
+    recon_text_copy(was, sizeof(was), ph->names[ph->at]);
+    scan_folder(ph);
+    for (int i = 0; i < ph->count; i++) {
+        if (strcmp(ph->names[i], was) == 0) {
+            ph->at = i;
+            break;
+        }
+    }
+
+    set_message(ph, false, "Saved '%s' beside it.", leaf);
 }
 
 /* --- Drawing --- */
@@ -713,6 +807,25 @@ static void photos_draw(void *user, struct recon_panel *panel,
                    : "Still reading");
     bx += read_w + 12;
 
+    /*
+     * Offered for a PNG too. Somebody stepping through a folder should not have
+     * to work out which of these came out of a camera before they know whether
+     * the button applies, and a PNG saved as a PNG is a copy rather than a
+     * mistake.
+     */
+    const char *png_label = "Save as PNG";
+    int png_w = recon_text_width(ph->font, png_label) + 16;
+
+    recon_fill_rect(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, COLOR_BG);
+    recon_draw_button_edge(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, false,
+        COLOR_BAR);
+    recon_draw_text(panel, ph->font, bx + 8, baseline, png_w, png_label,
+        ph->pixels != NULL ? COLOR_TEXT : COLOR_DIM);
+    recon_hit_add(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, HIT_CONVERT);
+    recon_hit_tip(panel, ph->pixels == NULL ? "Nothing open to convert"
+        : "Write this picture out as a PNG, next to the original");
+    bx += png_w + 12;
+
     if (ph->message[0] != '\0') {
         recon_draw_text(panel, ph->font, bx, baseline, x + w - bx - PADDING,
             ph->message,
@@ -742,6 +855,9 @@ static bool photos_click(void *user, uint32_t hit_id, int cx, int cy,
         set_message(ph, false, ph->fit
             ? "Fitted to the window."
             : "At its own size. The window shows as much as it holds.");
+        return true;
+    case HIT_CONVERT:
+        save_as_png(ph);
         return true;
     case HIT_READ:
         if (ph->pixels == NULL) {
@@ -874,7 +990,7 @@ static const struct recon_appwin_impl PHOTOS_IMPL = {
     .icon = RECON_ICON_PHOTOS,
     .default_width = 640,
     .default_height = 480,
-    .min_width = 380,
+    .min_width = 500,
     .min_height = 200,
     .draw = photos_draw,
     .click = photos_click,

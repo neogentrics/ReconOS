@@ -28,7 +28,9 @@
  * is 255 everywhere would be a third more file for no more picture.
  *
  * Returns a buffer the caller frees, and puts its length in `size_out`. NULL
- * if there was no memory or the arguments make no sense.
+ * if there was no memory or the arguments make no sense -- and on that path
+ * `size_out` is set to zero rather than left alone, so a length that arrives
+ * beside a NULL pointer is never a length from some earlier call.
  */
 unsigned char *recon_png_encode(const unsigned int *pixels, int width,
     int height, bool with_alpha, size_t *size_out);
