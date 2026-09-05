@@ -42,6 +42,10 @@ paddr_t pmm_alloc_page(void);
 paddr_t pmm_alloc_pages(size_t count);
 
 void pmm_free_page(paddr_t page);
+
+/* Re-reaches the bitmap through the direct map. Called by vm_init() the moment
+ * the kernel is running on its own page tables, and never otherwise. */
+void pmm_remap(void);
 void pmm_free_pages(paddr_t page, size_t count);
 
 size_t pmm_total_pages(void);
