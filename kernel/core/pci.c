@@ -121,13 +121,29 @@ static u64 size_bar(struct pci_device *d, unsigned i, u32 original, bool is_64)
 	if (is_64)
 		pci_write32(d, (u8)(off + 4), original_hi);
 
-	if (!is_64)
-		hi = 0xFFFFFFFFu;
-
-	mask = ((u64)hi << 32) | lo;
-
 	/* The low bits are flags, not address. Four for memory, two for I/O. */
-	mask &= (lo & 1) ? ~0x3ULL : ~0xFULL;
+	{
+		u64 flag_mask = (original & 1) ? ~0x3ULL : ~0xFULL;
+
+		/* An unimplemented register reads back as zero, and this test
+		 * has to be made on the *low half alone* for a 32-bit register.
+		 *
+		 * The first version filled the high half with ones so that one
+		 * piece of 64-bit arithmetic could serve both widths, and the
+		 * consequence was that every unimplemented register reported a
+		 * size of exactly four gigabytes. It was visible the moment the
+		 * summary printed the sizes: a host bridge with six four-
+		 * gigabyte regions, which is not a thing. Nothing had gone
+		 * wrong yet only because a four-gigabyte region never fits the
+		 * window and so was never placed. */
+		if (((u64)lo & flag_mask & 0xFFFFFFFFULL) == 0 &&
+		    (!is_64 || hi == 0))
+			return 0;
+
+		mask = is_64 ? (((u64)hi << 32) | lo)
+			     : (0xFFFFFFFF00000000ULL | lo);
+		mask &= flag_mask;
+	}
 
 	if (mask == 0)
 		return 0;
@@ -340,7 +356,13 @@ void pci_print_summary(void)
 	for (unsigned i = 0; i < device_count; i++) {
 		const struct pci_device *d = &devices[i];
 
-		kprintf("    %u:%u.%u  %x:%x  %s\n", d->bus, d->slot, d->func,
-			d->vendor, d->device, class_name(d->class_code, d->subclass));
+		/* The class triple, not just a name for it: a driver matches on
+		 * all three, and "SATA controller" with the wrong programming
+		 * interface is a different driver's device. Printing what was
+		 * matched against saves guessing at why nothing attached. */
+		kprintf("    %u:%u.%u  %x:%x  %s [%x/%x/%x]\n", d->bus, d->slot,
+			d->func, d->vendor, d->device,
+			class_name(d->class_code, d->subclass),
+			d->class_code, d->subclass, d->prog_if);
 	}
 }

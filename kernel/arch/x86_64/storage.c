@@ -34,6 +34,9 @@ void arch_storage_probe(void)
 		if (nvme_attach(d))
 			continue;
 
+		if (ahci_attach(d))
+			continue;
+
 		if (!virtio_pci_probe(d, &v))
 			continue;
 

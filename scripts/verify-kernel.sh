@@ -194,6 +194,15 @@ check_for nvme0n1 "  PVH, NVMe" \
 		-drive "file=$DISK,format=raw,if=none,id=n0" \
 		-device nvme,serial=recon0,drive=n0
 
+# And SATA, which is what the machines between the IDE era and the NVMe one
+# have -- roughly everything built between 2005 and 2020, which is most of what
+# this will actually be installed on for some years yet.
+check_for sata0 "  PVH, AHCI" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		-device ahci,id=ahci0 \
+		-drive "file=$DISK,format=raw,if=none,id=s0" \
+		-device ide-hd,drive=s0,bus=ahci0.0
+
 if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	if command -v grub-mkrescue >/dev/null && make_iso; then
 		check_for virtio0 "  Multiboot2 via GRUB, BIOS" \
@@ -249,6 +258,13 @@ check_for nvme0n1 "  device tree, NVMe" \
 		-kernel "$ARM_IMG" \
 		-drive "file=$DISK,format=raw,if=none,id=n0" \
 		-device nvme,serial=recon0,drive=n0
+
+check_for sata0 "  device tree, AHCI" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+		-kernel "$ARM_IMG" \
+		-device ahci,id=ahci0 \
+		-drive "file=$DISK,format=raw,if=none,id=s0" \
+		-device ide-hd,drive=s0,bus=ahci0.0
 
 for n in 2 4 8; do
 	check_for virtio0 "  device tree, $n processors" \

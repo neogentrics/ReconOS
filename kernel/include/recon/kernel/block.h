@@ -139,6 +139,7 @@ void arch_storage_probe(void);
 struct pci_device;
 
 bool nvme_attach(const struct pci_device *d);
+bool ahci_attach(const struct pci_device *d);
 
 /* One line saying how the architecture went looking, printed above the devices
  * it found. Worth its own hook because "no devices" has two very different
