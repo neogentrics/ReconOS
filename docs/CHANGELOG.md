@@ -221,6 +221,38 @@ threshold taken from the band's height alone; its fix took one from the
 distribution alone. Both halves were needed -- **one pixel of difference is not
 evidence at any size**, and a quarter of the height is the floor under it.
 
+**Photos saves what it opens.** It could read seven picture formats and write
+none of them, so a JPEG stayed a JPEG. **Save as PNG** writes the picture out
+beside the original, under a name nothing else has -- a converter that
+overwrites is a converter that loses the thing it converted.
+
+PNG out and nothing else, deliberately. The direction people want is almost
+always this one: a photograph arrives compressed and is wanted lossless to work
+on. Offering the other direction would mean a button that costs a little of the
+picture every time somebody presses it.
+
+The whole feature was the join between two things that already existed -- the
+decoder Photos opens files with, and the encoder written for screenshots -- and
+the interesting part was what checking it found. **The encoder had never been
+tested.** It had been looked at, on screenshots, by a person deciding they
+looked right; a picture can have red and blue swapped or an alpha channel
+quietly flattened and still look right at a glance. The new suite encodes with
+the writer and decodes with stb_image, so what is being checked is agreement
+with a different implementation by a different author.
+
+That found a refused encode leaving the caller's length variable untouched. No
+live caller was bitten -- each starts its own at zero and checks the pointer --
+which is exactly why it was worth closing: the next caller is the one that
+reuses the variable, and a stale length beside a NULL pointer is an overrun
+waiting for a skipped check.
+
+Checked on a running system as well as in memory. A 3900-byte JPEG opened in
+Photos, the button pressed, a 7485-byte PNG beside it; both then decoded by
+ffmpeg, which wrote neither. 375 of 79800 samples differ and **every one of
+them by exactly one step** -- stb_image and libjpeg rounding the IDCT
+differently, within what the JPEG standard permits. The conversion moved
+nothing.
+
 **A Read Text button in Photos.** It reads the picture on screen, writes the
 text to a new file in Documents named after the picture, and opens it in
 Notepad. Verified end to end on a running system: 46 of 46 marks, confidence
@@ -397,6 +429,36 @@ so that being asked is unmistakable. See-through would work directly against
 what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
+
+**The clock goes in the corner, and gains the date.** The clock and the desktop
+pager were the wrong way round. That is a mistake rather than a preference: the
+corner is where a clock goes, and four numbered squares sitting in the place a
+clock goes are four squares somebody has to look at twice to identify.
+
+The clock showed the time and not the date, so the corner answered half of what
+people look there for. The full date is four times too wide for a taskbar, so
+this writes a short one from the same numbers, on a second line, in a smaller
+face. Two lines do not fit a 28-pixel button at the bar's own size, and a clock
+is glanced at rather than read -- competing with the window titles beside it
+would be wrong even if it fitted.
+
+**Twelve-hour time needed nothing built.** `clock/twenty-four-hour` already
+existed, `recon_clock_short` already honoured it, and the Control Panel's Date
+and Time page already toggled it; the new date line follows whatever the time
+line is doing. Clicking the clock still opens the Control Panel, though at the
+root rather than at Date and Time -- that needs the panel to accept which page
+to show, and is not done.
+
+**And the pager rounds.** It drew a plain bevel where every other button goes
+through `recon_draw_button_edge`, so it stayed square under every skin. Those
+four were the last square things on a desktop whose windows and task buttons
+have rounded since v0.2.10 -- and being in the corner is exactly where that
+gets noticed.
+
+Checked by clicking rather than by reading the diff: pager button 3 selects
+desktop 3, button 4 selects desktop 4, and the clock still opens the Control
+Panel from its new position. Moving a button and breaking its click is the
+whole risk in that change.
 
 **Four wallpapers made for this system rather than drawn by it.** The
 four that existed are two colours, a ramp and some stars, generated at first run

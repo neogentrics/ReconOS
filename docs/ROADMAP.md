@@ -141,30 +141,43 @@ Nothing changes until the kernel has address spaces per process. It has to be
 settled before checkpoint 15, because an installer is what fixes the meaning of
 the word.
 
+### Asked for, and done
+
+**Reading text out of a picture** — v0.3.1. The prediction on this page turned
+out to be right about the shape: because ReconOS draws its own text, it can draw
+the shapes it is trying to recognise, and clean rendered text became a matching
+problem rather than a research one. A screenshot of the whole desktop now reads
+back at 101 of 125 marks. Handwriting and photographs of signs are refused
+rather than guessed at, which was the other half of the plan.
+
+**A colour for the glass** — v0.3.1. Six tints, applied as a lens over the
+skin's own colours rather than as six more skins.
+
 ### Asked for, and not started
 
-**Reading text out of a picture.** A screenshot of a document, a photograph of
-a page, a diagram with a label too small to read -- the system should be able to
-turn any of them into text it can put in a file. It matters more here than it
-would elsewhere: ReconOS has no word processor and cannot run anybody else's
-yet, so a picture of text is currently text that cannot be got at.
+**Telling an open window from a minimized one on the taskbar.** Half of this
+request shipped: the desktop pager in the bottom-right corner was the last
+square thing on the desktop and now rounds like everything else. The half that
+is left is the half the request was actually about -- a task button should look
+different depending on whether its window is on screen or put away, and today
+it does not. Naming it separately because "rounded taskbar buttons" is done and
+this is not, and one heading covering both would read as finished.
 
-The honest shape is probably not a research project. ReconOS renders its own
-text and has a font rasterizer, so it can *draw* the shapes it is trying to
-recognise -- which makes clean, rendered text (screenshots, scans of ordinary
-documents) a matching problem rather than a machine-learning one. Photographs of
-signs and handwriting are a different thing entirely, and the tool should say so
-rather than return confident nonsense.
+**Clicking the clock should open Date and Time, not the Control Panel root.**
+It opens the right application at the wrong page. Blocked on the panel being
+able to accept which page to show, which nothing else needs yet.
 
-**A colour for the glass.** The frosted look is one tint today. Choosing the
-skin should let somebody choose what colour the glass is, which is a change to
-how a skin is chosen rather than eleven more skins in the list.
+**Making a picture bigger.** Photos can convert formats; it cannot resize. The
+honest version of this is a resampler, and one already exists -- `recon_video`
+scales every frame of every film, area-averaging down and interpolating up, and
+was checked against ffmpeg at five scales. Pointing Photos at it is small.
 
-**Rounded taskbar buttons**, including the Apps button and the ones in the
-bottom-right corner, with a visible difference between an application that is
-open and one that is minimized. The window frames round; the strip along the
-bottom does not, which makes it the one part of the desktop that did not get
-the change.
+What is *not* on offer is the thing people usually mean by upscaling: inventing
+detail that was never in the picture. That needs a trained model, it would be
+the first thing in ReconOS that could not explain its own output, and a button
+that promises a sharper photograph and delivers a confident invention is the
+same failure as an OCR engine returning plausible nonsense. If it is ever built
+it gets its own name and says what it is doing.
 
 ### Parallel tracks
 
