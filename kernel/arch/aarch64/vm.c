@@ -401,14 +401,20 @@ void vm_init(void)
 	if (!ttbr0_root || !ttbr1_root)
 		panic("vm: no memory for the root translation tables");
 
-	/* The kernel image, identity mapped in the low half. This is the
-	 * mapping the switch itself stands on: the instruction after the one
-	 * that changes TTBR is fetched through the new tables. */
+	/* The kernel image, at the address it is linked at. This is the mapping
+	 * the switch itself stands on: the instruction after the one that
+	 * changes TTBR is fetched through the new tables, and by the time this
+	 * runs the processor is already executing high -- boot.S moved it there
+	 * before any C ran.
+	 *
+	 * There is deliberately no identity mapping of it. Leaving one would
+	 * keep a copy of the kernel in the lower half of every address space,
+	 * which is exactly what moving the kernel was meant to stop. */
 	{
-		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_start);
-		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_end) - start;
+		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_phys_start);
+		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_phys_end) - start;
 
-		if (!vm_map((vaddr_t)start, start, len,
+		if (!vm_map((vaddr_t)(KERNEL_VMA + start), start, len,
 			    VM_READ | VM_WRITE | VM_EXEC | VM_GLOBAL))
 			panic("vm: could not map the kernel image");
 	}
@@ -432,8 +438,8 @@ void vm_init(void)
 		};
 
 		for (unsigned i = 0; i < RK_ARRAY_LEN(fixed_devices); i++)
-			if (!vm_map((vaddr_t)fixed_devices[i], fixed_devices[i],
-				    PAGE_SIZE * 16,
+			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i],
+				    fixed_devices[i], PAGE_SIZE * 16,
 				    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
 				panic("vm: could not map the machine's fixed hardware");
 	}
@@ -480,6 +486,13 @@ void vm_init(void)
 
 	vm_activate_this_cpu();
 
+	/* First, and before anything can want to print. The map that was live a
+	 * moment ago had the UART at its physical address; this one has it in
+	 * the direct map, and between these two statements a single kprintf
+	 * would fault on a device that no longer exists where the driver
+	 * believes it is. */
+	aarch64_device_offset = DIRECT_MAP_BASE;
+
 	direct_map_live = true;
 
 	/* Both roots were reached through the map we were handed. Re-point them
@@ -524,9 +537,20 @@ bool vm_self_test(void)
 		ok = false;
 	}
 
-	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_start) !=
-	    (paddr_t)(uintptr_t)__kernel_start) {
-		kputs("  vm: the kernel image is no longer identity mapped\n");
+	if (vm_lookup((vaddr_t)(KERNEL_VMA + (u64)(uintptr_t)__kernel_phys_start)) !=
+	    (paddr_t)(uintptr_t)__kernel_phys_start) {
+		kputs("  vm: the kernel image is not where it is linked\n");
+		ok = false;
+	}
+
+	/* And the other half of the same claim, which is the one checkpoint 10
+	 * actually bought: the address the kernel was *loaded* at means nothing
+	 * any more. Without this the move would be half done -- the kernel
+	 * reachable from the top and still sitting in the middle of every
+	 * program's address space -- and nothing would say so. */
+	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_phys_start) != 0) {
+		kputs("  vm: the kernel is still mapped where it was loaded, so "
+		      "the lower half is not free after all\n");
 		ok = false;
 	}
 

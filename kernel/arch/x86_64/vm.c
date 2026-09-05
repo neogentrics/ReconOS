@@ -305,17 +305,23 @@ void vm_init(void)
 	if (!kernel_pml4)
 		panic("vm: no memory for the top-level page table");
 
-	/* The kernel image, identity mapped, and this is the mapping the switch
-	 * itself depends on: CR3 takes effect on the next instruction fetch, so
-	 * the address the CPU is executing from has to mean the same thing in
-	 * both maps. Text and data together for now, writable and executable,
-	 * because splitting them needs the linker to say where the boundary is
-	 * and that is a separate change. */
+	/* The kernel image, at the address it is linked at -- and this is the
+	 * mapping the switch itself depends on. CR3 takes effect on the next
+	 * instruction fetch, and by the time this runs the processor is already
+	 * executing high, because boot.S moved it there before any C ran. So
+	 * the high mapping is the one that has to exist, and the identity
+	 * mapping is the one that must not: leaving it would keep a copy of the
+	 * kernel in the lower half of every address space, which is precisely
+	 * what moving the kernel was for.
+	 *
+	 * Text and data together, writable and executable, because splitting
+	 * them needs the linker to say where the boundary is and that is a
+	 * separate change. */
 	{
-		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_start);
-		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_end) - start;
+		paddr_t start = PAGE_ALIGN_DOWN((u64)(uintptr_t)__kernel_phys_start);
+		u64 len = PAGE_ALIGN_UP((u64)(uintptr_t)__kernel_phys_end) - start;
 
-		if (!vm_map((vaddr_t)start, start, len,
+		if (!vm_map((vaddr_t)(KERNEL_VMA + start), start, len,
 			    VM_READ | VM_WRITE | VM_EXEC | VM_GLOBAL))
 			panic("vm: could not map the kernel image");
 	}
@@ -422,9 +428,20 @@ bool vm_self_test(void)
 	/* The kernel's own code is still where it was, which is the thing that
 	 * would have gone wrong at the CR3 write rather than here -- but if it
 	 * had gone subtly wrong instead of fatally, this is what would catch it. */
-	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_start) !=
-	    (paddr_t)(uintptr_t)__kernel_start) {
-		kputs("  vm: the kernel image is no longer identity mapped\n");
+	if (vm_lookup((vaddr_t)(KERNEL_VMA + (u64)(uintptr_t)__kernel_phys_start)) !=
+	    (paddr_t)(uintptr_t)__kernel_phys_start) {
+		kputs("  vm: the kernel image is not where it is linked\n");
+		ok = false;
+	}
+
+	/* And the other half of the same claim, which is the one checkpoint 10
+	 * actually bought: the address the kernel was *loaded* at means nothing
+	 * any more. Without this the move would be half done -- the kernel
+	 * reachable from the top and still sitting in the middle of every
+	 * program's address space -- and nothing would say so. */
+	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_phys_start) != 0) {
+		kputs("  vm: the kernel is still mapped where it was loaded, so "
+		      "the lower half is not free after all\n");
 		ok = false;
 	}
 

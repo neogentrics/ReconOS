@@ -194,7 +194,12 @@ bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 	/* The context identifier is passed to the entry point in x0, and this
 	 * kernel uses it for the processor's own index -- so a secondary knows
 	 * which it is without reading memory it cannot yet trust. */
-	r = psci_call(PSCI_CPU_ON, id, (u64)(uintptr_t)secondary_entry, cpu,
+	/* A *physical* entry point. The processor arrives with the MMU off, so
+	 * the linked address of secondary_entry would mean nothing to it -- and
+	 * PSCI does not fail visibly when handed one, it starts a processor that
+	 * never appears. */
+	r = psci_call(PSCI_CPU_ON, id,
+		      (u64)(uintptr_t)secondary_entry - KERNEL_VMA, cpu,
 		      psci_use_hvc);
 
 	if (r == PSCI_SUCCESS || r == PSCI_ALREADY_ON)

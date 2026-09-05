@@ -178,8 +178,9 @@ void boot_finish_regions(void)
 	 * about without being told, and the one nothing may ever reuse.
 	 * Physical and virtual are still the same thing at this point; when the
 	 * kernel moves to the higher half this has to become a translation. */
-	boot_add_region((paddr_t)(uintptr_t)__kernel_start,
-			(u64)(__kernel_end - __kernel_start), MEM_KERNEL);
+	boot_add_region((paddr_t)(uintptr_t)__kernel_phys_start,
+			(u64)(__kernel_phys_end - __kernel_phys_start),
+			MEM_KERNEL);
 
 	carve_out_owned();
 	drop_empty_regions();
@@ -284,7 +285,8 @@ void boot_print_summary(void)
 	print_size(info.usable_bytes);
 	kprintf("\n  mapped : ");
 	print_size(info.total_bytes);
-	kprintf("\n  kernel : %p-%p  ", (void *)__kernel_start, (void *)__kernel_end);
-	print_size((u64)(__kernel_end - __kernel_start));
+	kprintf("\n  kernel : %p-%p  ", (void *)__kernel_phys_start,
+		(void *)__kernel_phys_end);
+	print_size((u64)(__kernel_phys_end - __kernel_phys_start));
 	kprintf("\n");
 }

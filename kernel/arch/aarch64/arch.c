@@ -16,15 +16,8 @@ u64 arch_dtb_pointer;
 #define PL011_FR    0x18 /* flags */
 #define PL011_FR_TXFF (1u << 5) /* transmit FIFO full */
 
-static inline void mmio_write32(u64 base, u64 off, u32 value)
-{
-	*(volatile u32 *)(base + off) = value;
-}
-
-static inline u32 mmio_read32(u64 base, u64 off)
-{
-	return *(volatile u32 *)(base + off);
-}
+/* Zero until vm_init replaces the map boot.S built. See aarch64.h. */
+u64 aarch64_device_offset;
 
 /* --- Contract ---------------------------------------------------------- */
 
@@ -66,9 +59,9 @@ void arch_early_init(void)
 
 void arch_console_putc(char c)
 {
-	while (mmio_read32(PL011_BASE, PL011_FR) & PL011_FR_TXFF)
+	while (mmio_r32(PL011_BASE, PL011_FR) & PL011_FR_TXFF)
 		;
-	mmio_write32(PL011_BASE, PL011_DR, (u32)(unsigned char)c);
+	mmio_w32(PL011_BASE, PL011_DR, (u32)(unsigned char)c);
 }
 
 

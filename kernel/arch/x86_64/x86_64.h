@@ -4,6 +4,12 @@
 
 #include <recon/kernel/types.h>
 
+/* Where the kernel image is linked, and where boot.S puts the processor before
+ * any C runs. The linker script holds the same number; they are two statements
+ * of one fact and must not drift. See linker.ld for why this address and not
+ * another -- -mcmodel=kernel does not offer a choice. */
+#define KERNEL_VMA 0xFFFFFFFF80000000ULL
+
 /* Set by boot.S before anything else runs. */
 extern u32 boot_protocol;	/* 1 = Multiboot2, 2 = PVH */
 extern u32 boot_info_phys;

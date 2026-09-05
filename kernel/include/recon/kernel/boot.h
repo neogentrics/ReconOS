@@ -123,7 +123,14 @@ void boot_print_summary(void);
 
 /* Where the kernel image itself sits. Provided by every linker script, and the
  * one region the kernel knows about without being told. */
-extern char __kernel_start[];
-extern char __kernel_end[];
+/* Where the image sits in *physical* memory. Not where it runs: since
+ * checkpoint 10 the kernel is linked high and loaded low, and these two are
+ * the loaded bounds -- which is what the memory map and the page allocator
+ * care about. Nothing that allocates has any interest in the virtual ones.
+ *
+ * Defined by the linker script as absolute symbols, so the address of the
+ * symbol is the value; there is nothing at it to read. */
+extern char __kernel_phys_start[];
+extern char __kernel_phys_end[];
 
 #endif /* RECON_KERNEL_BOOT_H */
