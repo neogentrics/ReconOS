@@ -249,6 +249,15 @@ void recon_appwin_ask(struct recon_appwin *win, const char *title,
 /* Whatever the application has to say about its own state. */
 void recon_appwin_describe(struct recon_appwin *win, char *out, size_t size);
 
+/*
+ * The tooltip under a point, if the window has one there.
+ *
+ * False for a window that is shut or minimized, so the shell can walk every
+ * window it has without checking each one first.
+ */
+bool recon_appwin_tip_at(struct recon_appwin *win, double lx, double ly,
+    char *out, size_t size);
+
 /* List the window's clickable regions, for diagnosis. */
 void recon_appwin_describe_hits(struct recon_appwin *win, char *out, size_t size);
 

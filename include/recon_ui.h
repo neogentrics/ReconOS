@@ -339,6 +339,33 @@ bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
  * from outside rather than by measuring a screenshot. Returns false once
  * `index` runs past the end.
  */
+/*
+ * A line of text for the region added last.
+ *
+ * Written straight after the `recon_hit_add` it belongs to, which is why it
+ * takes no id: a tooltip is part of registering a thing, not a second
+ * bookkeeping exercise beside it. Somewhere for a control to say what it does
+ * without spending screen on saying it all the time.
+ *
+ * Kept short. A tooltip is a label, not documentation -- the Help application
+ * is where a paragraph goes.
+ */
+bool recon_hit_tip(struct recon_panel *panel, const char *text);
+
+/*
+ * The tooltip under a point, in the panel's own coordinates. Empty when the
+ * region there has none, which is most of them.
+ */
+bool recon_hit_tip_at(struct recon_panel *panel, int x, int y,
+    char *out, size_t size);
+
+/*
+ * The same question in screen coordinates, for callers holding a panel whose
+ * position they would otherwise have to look up first.
+ */
+bool recon_panel_tip_at(struct recon_panel *panel, double lx, double ly,
+    char *out, size_t size);
+
 bool recon_hit_region(const struct recon_panel *panel, size_t index,
     int *x, int *y, int *w, int *h, uint32_t *id);
 

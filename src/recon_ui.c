@@ -418,6 +418,10 @@ int recon_text_width(struct recon_font *font, const char *text) {
 struct recon_hit_region {
     int x, y, w, h;
     uint32_t id;
+
+    /* What this thing is, for the tooltip. Empty for most regions: a control
+     * whose label already says it needs nothing said twice. */
+    char tip[80];
 };
 
 #define MAX_HIT_REGIONS 64
@@ -1189,6 +1193,65 @@ bool recon_hit_add(struct recon_panel *panel, int x, int y, int w, int h,
         .x = x, .y = y, .w = w, .h = h, .id = id,
     };
     return true;
+}
+
+bool recon_hit_tip(struct recon_panel *panel, const char *text) {
+    if (panel == NULL || panel->hit_count == 0 || text == NULL) {
+        return false;
+    }
+    struct recon_hit_region *region = &panel->hits[panel->hit_count - 1];
+    snprintf(region->tip, sizeof(region->tip), "%s", text);
+    return true;
+}
+
+bool recon_hit_tip_at(struct recon_panel *panel, int x, int y,
+        char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (panel == NULL) {
+        return false;
+    }
+
+    /* Last added wins, the same rule the click uses. A tooltip that named a
+     * region the click would not reach would be describing the wrong thing. */
+    for (size_t i = panel->hit_count; i > 0; i--) {
+        const struct recon_hit_region *r = &panel->hits[i - 1];
+        if (x < r->x || x >= r->x + r->w || y < r->y || y >= r->y + r->h) {
+            continue;
+        }
+        if (r->tip[0] == '\0') {
+            return false;
+        }
+        snprintf(out, size, "%s", r->tip);
+        return true;
+    }
+    return false;
+}
+
+bool recon_panel_tip_at(struct recon_panel *panel, double lx, double ly,
+        char *out, size_t size) {
+    if (out != NULL && size > 0) {
+        out[0] = '\0';
+    }
+    if (panel == NULL) {
+        return false;
+    }
+
+    int px = 0, py = 0;
+    recon_panel_position(panel, &px, &py);
+
+    int w = recon_panel_width(panel);
+    int h = recon_panel_height(panel);
+
+    int x = (int)lx - px;
+    int y = (int)ly - py;
+    if (x < 0 || y < 0 || x >= w || y >= h) {
+        return false;
+    }
+
+    return recon_hit_tip_at(panel, x, y, out, size);
 }
 
 bool recon_hit_region(const struct recon_panel *panel, size_t index,

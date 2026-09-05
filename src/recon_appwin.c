@@ -164,6 +164,22 @@ static void draw_buttons(struct recon_appwin *win) {
         recon_draw_bevel(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, false);
         recon_hit_add(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, buttons[i].id);
 
+        /* Three glyphs and no words. The middle one changes meaning with the
+         * window's state, so it says which meaning it has now. */
+        switch (buttons[i].id) {
+        case HIT_CLOSE:
+            recon_hit_tip(p, "Close");
+            break;
+        case HIT_MAXIMIZE:
+            recon_hit_tip(p, win->maximized ? "Restore" : "Maximize");
+            break;
+        case HIT_MINIMIZE:
+            recon_hit_tip(p, "Minimize");
+            break;
+        default:
+            break;
+        }
+
         switch (buttons[i].id) {
         case HIT_MINIMIZE:
             /* A bar along the bottom. */
@@ -1245,6 +1261,17 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
 
     /* Anywhere else inside the window still belongs to it. */
     return true;
+}
+
+bool recon_appwin_tip_at(struct recon_appwin *win, double lx, double ly,
+        char *out, size_t size) {
+    if (out != NULL && size > 0) {
+        out[0] = '\0';
+    }
+    if (win == NULL || !win->open || win->minimized) {
+        return false;
+    }
+    return recon_panel_tip_at(win->panel, lx, ly, out, size);
 }
 
 void recon_appwin_handle_motion(struct recon_appwin *win, double lx, double ly) {

@@ -630,15 +630,12 @@ struct control_panel {
     int fw_followed;
 
     /*
-     * Which tile the pointer is over on the front page, and where it is.
+     * Which tile the pointer is over on the front page, so it can be lit.
      *
-     * For the tooltip. The name under an icon had to be short enough to fit
-     * under an icon, which meant "Code the system lo..." -- a label cut off
-     * mid-word says less than no label at all. A tooltip has the width of the
-     * window to say it in, and only appears for the one being pointed at.
+     * What it is for is said by the tooltip, which the shell draws -- so this
+     * no longer needs to know where the pointer is, only which tile it is in.
      */
     int hover_tile;
-    int hover_x, hover_y;
 
     /*
      * What Disk Cleanup last measured, and what is ticked.
@@ -4053,42 +4050,22 @@ static void draw_home(struct control_panel *cp, struct recon_panel *p,
             chosen ? COLOR_SELECTED_TEXT : COLOR_TEXT);
 
         recon_hit_add(p, tx, ty, TILE_W, TILE_H, HIT_TILE_BASE + i);
+
+        /*
+         * What it is for, said when somebody stops on it.
+         *
+         * This used to be a line of text under every name, which had to fit
+         * under an icon and so was cut off mid-word -- "Code the system
+         * lo..." -- and was drawn fourteen times whether anybody wanted it or
+         * not. Then it was a tooltip this file drew itself, which could not
+         * hang past the edge of the window. Now it is the shell's, like every
+         * other tooltip.
+         */
+        if (PAGES[i].summary != NULL) {
+            recon_hit_tip(p, PAGES[i].summary);
+        }
     }
 
-    /*
-     * The tooltip last, over everything, because that is what a tooltip is.
-     *
-     * It replaces the line of description that used to sit under every name.
-     * That line had to fit under an icon and so was cut off -- "Code the
-     * system lo..." -- and it was drawn fourteen times whether anybody wanted
-     * it or not. This is drawn once, for the one being pointed at.
-     */
-    if (cp->hover_tile >= 0 && cp->hover_tile < PAGE_COUNT &&
-            PAGES[cp->hover_tile].summary != NULL) {
-        const char *text = PAGES[cp->hover_tile].summary;
-        int tip_w = recon_text_width(cp->font, text) + 16;
-        int tip_h = recon_font_line_height(cp->font) + 8;
-
-        int tip_x = cp->hover_x + 12;
-        int tip_y = cp->hover_y + 18;
-
-        /* Kept inside the window: a tip drawn past the edge is a tip nobody
-         * can read, and it is only there to be read. */
-        if (tip_x + tip_w > x + w) {
-            tip_x = x + w - tip_w;
-        }
-        if (tip_x < x) {
-            tip_x = x;
-        }
-        if (tip_y + tip_h > bottom) {
-            tip_y = cp->hover_y - tip_h - 6;
-        }
-
-        recon_fill_rect(p, tip_x, tip_y, tip_w, tip_h, COLOR_PANEL);
-        recon_stroke_rect(p, tip_x, tip_y, tip_w, tip_h, COLOR_SEPARATOR);
-        recon_draw_text(p, cp->font, tip_x + 8,
-            tip_y + (tip_h + ascent) / 2 - 2, tip_w - 16, text, COLOR_TEXT);
-    }
 }
 
 /* Whichever page this window is about. Shared by both kinds of window, so
@@ -5645,6 +5622,9 @@ static void do_action(struct control_panel *cp, enum action action) {
 
 static void panel_motion(void *user, uint32_t hit_id, int cx, int cy) {
     struct control_panel *cp = user;
+    (void)cx;
+    (void)cy;
+
     if (!cp->home) {
         return;
     }
@@ -5653,14 +5633,11 @@ static void panel_motion(void *user, uint32_t hit_id, int cx, int cy) {
     cp->hover_tile = (hit_id >= HIT_TILE_BASE &&
         hit_id < HIT_TILE_BASE + PAGE_COUNT)
         ? (int)(hit_id - HIT_TILE_BASE) : -1;
-    cp->hover_x = cx;
-    cp->hover_y = cy;
-
     /*
      * Redrawn only when the tile under the pointer changes, not on every
-     * pixel of movement. The tooltip does not follow the pointer around
-     * inside a tile, and repainting fourteen icons sixty times a second to
-     * move a box eight pixels is a desktop that feels heavy for no reason.
+     * pixel of movement. Repainting fourteen icons sixty times a second to
+     * light the same one it already lit is a desktop that feels heavy for no
+     * reason.
      */
     if (was != cp->hover_tile) {
         recon_appwin_refresh(cp->win);
@@ -6458,6 +6435,12 @@ struct recon_appwin *recon_control_panel_create(struct recon_server *server,
     /* The window the menus open is the front page: the icons, and no page.
      * Every other one is built by open_page_window when a tile is clicked. */
     cp->home = true;
+    /*
+     * Nothing chosen. calloc leaves this at zero, which is a real row -- the
+     * front page opened with Accounts looking picked before anybody had
+     * pointed at it, and one click highlights is the rule everywhere else.
+     */
+    cp->selected = -1;
 
     recon_edit_begin(&cp->unlock, "", false);
     cp->unlock.masked = true;

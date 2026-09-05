@@ -704,6 +704,19 @@ struct recon_shell {
      */
     struct recon_panel *blank;
     struct wl_event_source *blank_timer;
+
+    /*
+     * The tooltip: one panel for the whole desktop.
+     *
+     * Anything that registers a clickable region can attach a line of text to
+     * it, and this is what draws it. One panel rather than one per window,
+     * because only one can be showing and a tip has to be able to hang past
+     * the edge of the thing it describes.
+     */
+    struct recon_panel *tip;
+    struct wl_event_source *tip_timer;
+    char tip_text[80];
+    int tip_x, tip_y;
     bool blanked;
     int blank_after_seconds;   /* 0 means never. */
     bool lock_on_wake;
@@ -806,6 +819,147 @@ struct recon_shell {
     /* Which built-in window a window context menu was opened on. */
     int context_app;
 };
+
+/* --- Tooltips --- */
+
+#define TIP_DELAY_MS 550
+#define TIP_PADDING 7
+
+/*
+ * Long enough that crossing a row of buttons on the way somewhere else does
+ * not set off a string of them, short enough that stopping to ask feels
+ * answered. Windows settled on about half a second decades ago and it still
+ * reads right.
+ */
+
+static void tip_hide(struct recon_shell *shell) {
+    if (shell == NULL || shell->tip == NULL) {
+        return;
+    }
+    shell->tip_text[0] = '\0';
+    recon_panel_set_enabled(shell->tip, false);
+    if (shell->tip_timer != NULL) {
+        wl_event_source_timer_update(shell->tip_timer, 0);
+    }
+}
+
+static void tip_draw(struct recon_shell *shell) {
+    if (shell->tip == NULL || shell->tip_text[0] == '\0') {
+        return;
+    }
+
+    struct recon_font *font = shell->font;
+    if (font == NULL) {
+        return;
+    }
+
+    int line = recon_font_line_height(font);
+    int w = recon_text_width(font, shell->tip_text) + TIP_PADDING * 2;
+    int h = line + TIP_PADDING;
+
+    /*
+     * Below and right of the pointer, which is where the pointer is not.
+     * Nudged back inside the screen rather than clipped: a tip half off the
+     * edge is a tip nobody can read, and reading it is the only thing it is
+     * for.
+     */
+    int x = shell->tip_x + 14;
+    int y = shell->tip_y + 20;
+    if (x + w > shell->screen_width) {
+        x = shell->screen_width - w;
+    }
+    if (x < 0) {
+        x = 0;
+    }
+    if (y + h > shell->screen_height) {
+        y = shell->tip_y - h - 6;
+    }
+
+    recon_panel_resize(shell->tip, w, h);
+    recon_panel_set_position(shell->tip, x, y);
+
+    recon_fill(shell->tip, COLOR_MENU);
+    recon_stroke_rect(shell->tip, 0, 0, w, h, COLOR_MENU_SEPARATOR);
+    recon_draw_text(shell->tip, font, TIP_PADDING,
+        (h + recon_font_ascent(font)) / 2 - 1, w - TIP_PADDING * 2,
+        shell->tip_text, COLOR_MENU_TEXT);
+    recon_panel_commit(shell->tip);
+
+    recon_panel_set_enabled(shell->tip, true);
+    recon_panel_raise_to_top(shell->tip);
+}
+
+static int tip_expired(void *data) {
+    struct recon_shell *shell = data;
+    tip_draw(shell);
+    return 0;
+}
+
+/*
+ * What the pointer is over, asked of everything on screen in the order it is
+ * stacked -- so a tip does not come from a window that is behind another one.
+ */
+static bool tip_under(struct recon_shell *shell, double lx, double ly,
+        char *out, size_t size) {
+    if (shell->dialog_open &&
+            recon_panel_tip_at(shell->dialog, lx, ly, out, size)) {
+        return true;
+    }
+    if (shell->menu_open) {
+        if (recon_panel_tip_at(shell->programs, lx, ly, out, size)) {
+            return true;
+        }
+        if (recon_panel_tip_at(shell->menu, lx, ly, out, size)) {
+            return true;
+        }
+    }
+    if (shell->context_open &&
+            recon_panel_tip_at(shell->context, lx, ly, out, size)) {
+        return true;
+    }
+
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_tip_at(shell->apps[shell->app_order[i]], lx, ly,
+                out, size)) {
+            return true;
+        }
+    }
+
+    return recon_panel_tip_at(shell->taskbar, lx, ly, out, size);
+}
+
+/*
+ * Called on every pointer move. Cheap when nothing changes, which is almost
+ * always: the answer only differs when the pointer crosses out of one region
+ * and into another.
+ */
+static void tip_track(struct recon_shell *shell, double lx, double ly) {
+    if (shell == NULL || shell->tip == NULL || shell->tip_timer == NULL) {
+        return;
+    }
+
+    char found[sizeof(shell->tip_text)];
+    tip_under(shell, lx, ly, found, sizeof(found));
+
+    shell->tip_x = (int)lx;
+    shell->tip_y = (int)ly;
+
+    if (strcmp(found, shell->tip_text) == 0) {
+        return;
+    }
+
+    /*
+     * Hidden the moment the answer changes, including when it changes to
+     * another tip: a box that slides from control to control keeping its old
+     * text is worse than one that waits.
+     */
+    tip_hide(shell);
+    snprintf(shell->tip_text, sizeof(shell->tip_text), "%s", found);
+
+    if (shell->tip_text[0] != '\0') {
+        wl_event_source_timer_update(shell->tip_timer, TIP_DELAY_MS);
+    }
+}
 
 /* --- Asking the user something --- */
 
@@ -1695,6 +1849,13 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
 
         recon_hit_add(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON, BUTTON_HEIGHT,
             HIT_DESKTOP_BASE + i);
+
+        /* The pager is four numbered squares. What they are is not something
+         * a number says. */
+        char what[48];
+        snprintf(what, sizeof(what), "Desktop %d%s", i + 1,
+            occupied ? " -- has windows open" : "");
+        recon_hit_tip(bar, what);
     }
 }
 
@@ -1753,6 +1914,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         shell->menu_open ? COLOR_TEXT : COLOR_BUTTON_TEXT);
     recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
+    recon_hit_tip(bar, "Programs, places and settings");
 
     /* One button per window, client or built-in, sharing the remaining
      * width. Both kinds appear here, because from the user's side there is no
@@ -1820,6 +1982,12 @@ static void draw_taskbar(struct recon_shell *shell) {
 
         recon_hit_add(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
             HIT_TASK_BASE + shell->button_count);
+        /*
+         * The whole title. A task button shares the bar with every other
+         * window, so it gets narrower each time one opens, and the name is
+         * the first thing to go.
+         */
+        recon_hit_tip(bar, recon_appwin_title(win));
         shell->buttons[shell->button_count].toplevel = NULL;
         shell->buttons[shell->button_count].appwin = win;
         shell->button_count++;
@@ -1847,6 +2015,7 @@ static void draw_taskbar(struct recon_shell *shell) {
 
         recon_hit_add(bar, x, TASKBAR_PADDING, button_width, BUTTON_HEIGHT,
             HIT_TASK_BASE + shell->button_count);
+        recon_hit_tip(bar, recon_toplevel_title(toplevel));
         shell->buttons[shell->button_count].toplevel = toplevel;
         shell->buttons[shell->button_count].appwin = NULL;
         shell->button_count++;
@@ -2605,6 +2774,14 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
     shell->blank_timer = wl_event_loop_add_timer(
         wl_display_get_event_loop(server->wl_display), blank_expired, shell);
+
+    /* Small to start with; it is resized to whatever it has to say. */
+    shell->tip = recon_panel_create(&server->scene->tree, 120, 24);
+    if (shell->tip != NULL) {
+        recon_panel_set_enabled(shell->tip, false);
+    }
+    shell->tip_timer = wl_event_loop_add_timer(
+        wl_display_get_event_loop(server->wl_display), tip_expired, shell);
     recon_shell_blank_reload(shell);
 
     shell->programs = recon_panel_create(&server->scene->tree,
@@ -2905,6 +3082,10 @@ void recon_shell_destroy(struct recon_shell *shell) {
      * destroying it -- which is what makes a shell restart survivable for
      * whatever somebody was in the middle of typing.
      */
+    if (shell->tip_timer != NULL) {
+        wl_event_source_remove(shell->tip_timer);
+        shell->tip_timer = NULL;
+    }
     if (shell->blank_timer != NULL) {
         wl_event_source_remove(shell->blank_timer);
     }
@@ -4541,6 +4722,7 @@ void recon_shell_handle_motion(struct recon_shell *shell, double lx, double ly) 
         return;
     }
     update_hover(shell, lx, ly);
+    tip_track(shell, lx, ly);
     recon_desktop_handle_motion(shell->desktop, lx, ly);
     for (int i = 0; i < shell->app_count; i++) {
         recon_appwin_handle_motion(shell->apps[i], lx, ly);
