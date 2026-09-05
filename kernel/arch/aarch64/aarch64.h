@@ -7,6 +7,9 @@
 /* Saved by boot.S from x0, where the firmware left it. */
 extern u64 arch_dtb_pointer;
 
+/* Set by reconboot_entry from x0. Zero when the firmware started us directly. */
+extern u64 reconboot_handoff;
+
 /* Reads the memory and the command line out of a flattened device tree.
  * Returns false if the blob is not one. */
 bool fdt_parse(u64 dtb_phys);

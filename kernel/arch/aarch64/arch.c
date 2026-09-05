@@ -46,6 +46,14 @@ void arch_early_init(void)
 	 * means a mistake here is silent. Left alone deliberately until there is
 	 * a reason to own it. */
 
+	/* Our own loader, if that is what started us. It has already translated
+	 * the firmware memory map and found the framebuffer, so there is
+	 * nothing left here to read out of the device tree. */
+	if (reconboot_parse((paddr_t)reconboot_handoff)) {
+		boot_finish_regions();
+		return;
+	}
+
 	if (!fdt_parse(arch_dtb_pointer)) {
 		/* Without a device tree this architecture has no other way to
 		 * learn what memory exists -- there is no equivalent of E820 to

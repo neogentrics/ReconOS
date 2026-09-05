@@ -55,6 +55,24 @@ multiboot_header_end:
 	.long	pvh_entry
 	.align 4
 
+/* --- ReconBoot header ---------------------------------------------------
+ *
+ * Our own loader's way in. It cannot use the ELF entry point, because that
+ * belongs to the 32-bit trampoline below and UEFI has already put the machine
+ * in 64-bit mode -- arriving there would execute 32-bit code as 64-bit and
+ * fault immediately. So the image names a second entry, the loader finds this
+ * header by scanning for the magic, and one kernel binary stays bootable by
+ * every protocol it supports.
+ *
+ * Must match struct reconboot_kernel_header in boot/include/reconboot.h.
+ */
+	.section .reconboot, "a"
+	.align 8
+	.quad	0x00544f4f424e4352	/* "RCNBOOT\0" */
+	.long	1			/* version */
+	.long	24			/* sizeof(header) */
+	.quad	reconboot_entry
+
 /* --- 32-bit trampoline ------------------------------------------------- */
 
 	.section .text.boot, "ax"
@@ -168,6 +186,34 @@ halt:
 	hlt
 	jmp	halt
 
+/* --- ReconBoot entry ----------------------------------------------------
+ *
+ * Arrived at from our own UEFI loader, already in 64-bit long mode with an
+ * identity map the firmware built. There is nothing to set up that the loader
+ * has not already done -- which is most of the argument for writing the loader
+ * before the drivers.
+ *
+ * RDI holds the handoff structure, because the loader declares this call
+ * System V even though the loader itself is compiled for the Microsoft ABI.
+ *
+ * BSS is NOT cleared here. The loader zeroed every byte of each segment that
+ * has no bytes in the file, which is exactly BSS, and clearing it again would
+ * wipe the handoff pointer stored below.
+ */
+	.global reconboot_entry
+reconboot_entry:
+	cli
+	cld
+
+	movq	$__stack_top, %rsp
+	xorq	%rbp, %rbp
+
+	movq	%rdi, reconboot_handoff(%rip)
+	movl	$3, boot_protocol(%rip)
+
+	call	kmain
+	jmp	halt
+
 /* --- GDT ------------------------------------------------------------- */
 
 	.section .rodata
@@ -196,3 +242,11 @@ boot_info_phys:
 	.global boot_magic
 boot_magic:
 	.long	0
+
+	/* In .data rather than .bss on purpose: the ReconBoot path stores this
+	 * and never clears BSS, and the other two paths clear BSS after the
+	 * trampoline has already run. Either way, nothing zeroes it afterwards. */
+	.align 8
+	.global reconboot_handoff
+reconboot_handoff:
+	.quad	0

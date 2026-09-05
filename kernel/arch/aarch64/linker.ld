@@ -24,6 +24,9 @@ SECTIONS
 		*(.text .text.*)
 	}
 
+	. = ALIGN(8);
+	.reconboot : { KEEP(*(.reconboot)) }
+
 	. = ALIGN(4096);
 	.rodata : { *(.rodata .rodata.*) }
 

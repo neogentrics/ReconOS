@@ -89,27 +89,53 @@ static void merge_regions(void)
  * wrong is asymmetric: unused free memory is a waste, but reused owned memory
  * is corruption.
  */
+/* Which claim wins where two regions describe the same address.
+ *
+ * It is not enough to say "anything beats usable". Our own loader reports the
+ * kernel image inside the range it also reports as loader memory -- both true,
+ * and the kernel's claim is the more specific one. Without an ordering the map
+ * printed the same range twice under two names, and a later reader would have
+ * had to guess which was operative.
+ *
+ * Higher wins. The shape of the ordering is: things that must never be touched,
+ * then things owned until somebody finishes with them, then free.
+ */
+static unsigned kind_priority(enum mem_kind k)
+{
+	switch (k) {
+	case MEM_KERNEL:       return 6;	/* never reusable, and ours */
+	case MEM_BAD:          return 5;	/* never usable at all */
+	case MEM_ACPI_NVS:     return 4;
+	case MEM_ACPI_RECLAIM: return 3;
+	case MEM_RESERVED:     return 2;
+	case MEM_BOOTLOADER:   return 1;	/* ours, once we have finished reading it */
+	case MEM_USABLE:
+	default:               return 0;
+	}
+}
+
 static void carve_out_owned(void)
 {
 	struct mem_region blockers[BOOT_MAX_REGIONS];
 	unsigned n_blockers = 0;
 
-	/* Snapshotted first: the loop below appends regions when a usable range
-	 * is split in two, and iterating a list that grows underneath you is how
-	 * a boot hangs. */
+	/* Snapshotted first: the loop below appends regions when a range is
+	 * split in two, and iterating a list that grows underneath you is how a
+	 * boot hangs. */
 	for (unsigned i = 0; i < info.region_count; i++)
-		if (info.regions[i].kind != MEM_USABLE)
+		if (kind_priority(info.regions[i].kind) > 0)
 			blockers[n_blockers++] = info.regions[i];
 
 	for (unsigned b = 0; b < n_blockers; b++) {
 		u64 bs = blockers[b].base;
 		u64 be = bs + blockers[b].size;
+		unsigned bp = kind_priority(blockers[b].kind);
 
 		for (unsigned i = 0; i < info.region_count; i++) {
 			struct mem_region *u = &info.regions[i];
 			u64 us, ue;
 
-			if (u->kind != MEM_USABLE || u->size == 0)
+			if (u->size == 0 || kind_priority(u->kind) >= bp)
 				continue;
 
 			us = u->base;
@@ -126,8 +152,10 @@ static void carve_out_owned(void)
 			} else if (be >= ue) {
 				u->size = bs - us;		/* owned at the top */
 			} else {
+				enum mem_kind kind = u->kind;
+
 				u->size = bs - us;		/* owned in the middle */
-				boot_add_region(be, ue - be, MEM_USABLE);
+				boot_add_region(be, ue - be, kind);
 			}
 		}
 	}
@@ -228,6 +256,14 @@ void boot_print_summary(void)
 		kprintf("  ACPI RSDP    : %p\n", (void *)(uintptr_t)info.acpi_rsdp);
 	if (info.dtb)
 		kprintf("  device tree  : %p\n", (void *)(uintptr_t)info.dtb);
+
+	if (info.fb.width)
+		kprintf("  framebuffer  : %ux%u at %p, pitch %u, %s\n",
+			info.fb.width, info.fb.height,
+			(void *)(uintptr_t)info.fb.base, info.fb.pitch,
+			info.fb.format == FB_FORMAT_BGRA ? "BGRA" : "RGBA");
+	else
+		kputs("  framebuffer  : none\n");
 
 	kprintf("\nMemory map (%u regions)\n", info.region_count);
 

@@ -15,7 +15,7 @@
 #   make check-portable       fail if core/ has learned about a machine
 #   make clean
 
-VERSION := 0.0.4
+VERSION := 0.0.5
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -54,7 +54,7 @@ CFLAGS := -std=c11 -O2 -g \
           -ffreestanding -fno-stack-protector -fno-pic -fno-builtin \
           -fno-omit-frame-pointer \
           -Wall -Wextra -Werror -Wno-unused-parameter \
-          -Iinclude \
+          -Iinclude -I../boot/include \
           -DRECONOS_KERNEL_VERSION=\"$(VERSION)\" \
           $(ARCHFLAGS)
 

@@ -14,9 +14,9 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.4`. The number says what works. What works: it boots four ways across two
+`0.0.5`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, and can hand pages of it out.
+can do, knows what memory exists, hands pages of it out, and is started by a bootloader we wrote.
 
 ## What "finished" means
 
@@ -36,10 +36,11 @@ was built rather than assembled. Open-source components are used where there is
 genuinely no alternative, and are named in [THIRD_PARTY.md](../THIRD_PARTY.md)
 when they are.
 
-GRUB is in the *test* path and only there. It boots the kernel today so the
-Multiboot2 and firmware-detection code has something real to run against, and
-checkpoint 4 removes it. Nothing depends on GRUB existing; the Multiboot2
-header is forty bytes and comes out with it.
+GRUB is gone from the boot path as of checkpoint 4. `reconboot` starts the
+kernel on both architectures under real UEFI firmware. The Multiboot2 header
+stays in the image — it is forty bytes, it costs nothing, and it means a machine
+that already has GRUB can chain-load ReconOS without an install. It is a
+courtesy now rather than a dependency.
 
 ## Checkpoints
 
@@ -49,7 +50,7 @@ header is forty bytes and comes out with it.
 | 1 | Knows what firmware booted it and what memory exists | **Done** |
 | 2 | A physical page allocator | **Done** |
 | 3 | Reads what this processor can actually do | **Done** |
-| 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | |
+| 4 | Its own UEFI bootloader, both architectures — GRUB comes out of the tree | **Done** |
 | 5 | Its own page tables, the higher half, and large pages where the CPU has them | |
 | 6 | A kernel heap | |
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | |
@@ -123,6 +124,68 @@ Every field is there because something will branch on it. Large pages decide
 whether a gigabyte costs one page table entry or two hundred thousand. Hardware
 random decides whether the entropy pool has a real source. Physical address
 bits bound the page tables. Core count bounds the scheduler.
+
+### Checkpoint 4 — done
+
+**reconboot boots the kernel on both architectures under real UEFI firmware.**
+Not compiled — booted, against OVMF and AAVMF, off a FAT image laid out as a
+real EFI System Partition.
+
+No gnu-efi: `boot/include/efi.h` declares what the loader calls, written from
+the specification, for the same reason the kernel has no libc. Built by clang
+rather than gcc, because a UEFI application is a PE binary and clang targets
+both architectures' PE from one installation.
+
+The x86_64 run against OVMF reports:
+
+```
+framebuffer : 1280x800 at 0x0000000080000000, pitch 5120, BGRA
+```
+
+which is the thing UEFI gives back that is hardest to obtain any other way, and
+most of the argument for writing the loader before the drivers.
+
+**One kernel binary, three ways in.** The kernel is entered at
+`reconboot_entry`, not at its ELF entry point — that belongs to the 32-bit
+trampoline Multiboot2 and PVH arrive through, and UEFI has already put the
+machine in 64-bit mode. The image carries a header naming its 64-bit entry and
+the loader scans for it. That is what makes "BIOS, UEFI, or both" a build with
+one output rather than three.
+
+**Two bugs, both found by running it, both worth generalising.**
+
+`BOOT_MAX_REGIONS` was 64, with a comment reasoning that "real machines report
+well under thirty regions" — true of every machine tested at the time, and
+wrong the first time our own loader ran. OVMF reported 86, the kernel silently
+dropped 68, and it claimed 487MB usable where the truth was 505MB. It was caught
+by a warning added defensively that had never been expected to fire. *Firmware
+fragments its memory map as it allocates, so the region count reflects how much
+work the firmware did before handing over, not how much memory the machine has.*
+A number derived from observing three machines is a guess wearing evidence's
+clothes.
+
+The map also printed the same range twice under two names — loader memory and
+kernel image, both true, with nothing saying which was operative. The carve-out
+only subtracted non-usable from usable. It now has an explicit priority, so the
+more specific claim wins: kernel, then bad, then ACPI, then reserved, then
+bootloader, then usable.
+
+**A limitation stated rather than discovered.** On aarch64 with virtio-gpu the
+firmware offers a Blt-only Graphics Output Protocol: there is no linear
+framebuffer and the base address comes back as zero. The loader reports the
+layout as not understood and the kernel reports no framebuffer, rather than
+handing anything a pointer to address zero. A framebuffer is therefore available
+on x86_64 UEFI today; on ARM it needs firmware offering a linear mode, or our
+own display driver.
+
+### Why the bootloader was checkpoint 4 and not checkpoint 17
+
+It could reasonably have gone last. It went fourth because of what UEFI gives
+back: the memory map, a framebuffer at a known address, and file access on the
+boot volume, all before the kernel exists. Each of those is otherwise a driver
+the kernel has to write, and two of them cannot be obtained on ARM at all
+without firmware help. Writing it early also meant the handoff protocol was
+designed by us rather than inherited from GRUB.
 
 ## Using the machine you are on
 

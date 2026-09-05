@@ -21,6 +21,11 @@ SECTIONS
 		*(.text .text.*)
 	}
 
+	. = ALIGN(8);
+	/* Kept and placed early: the loader finds it by scanning the first part
+	 * of the image for its magic. */
+	.reconboot : { KEEP(*(.reconboot)) }
+
 	. = ALIGN(4096);
 	.rodata : {
 		*(.rodata .rodata.*)

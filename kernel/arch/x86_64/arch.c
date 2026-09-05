@@ -89,6 +89,13 @@ void arch_early_init(void)
 	case BOOT_PROTOCOL_PVH:
 		ok = pvh_parse(boot_info_phys);
 		break;
+	case BOOT_PROTOCOL_RECONBOOT:
+		/* Our own loader. No magic number to check beyond the one in the
+		 * structure itself, because the structure is the only thing that
+		 * was passed -- and unlike the other two, we wrote the code on
+		 * both sides of this handoff. */
+		ok = reconboot_parse((paddr_t)reconboot_handoff);
+		break;
 	default:
 		break;
 	}
