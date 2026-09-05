@@ -171,6 +171,8 @@ enum context_action {
     CTX_MAXIMIZE,
     CTX_CLOSE,
     CTX_PROPERTIES,
+    CTX_PIN,
+    CTX_UNPIN,
 };
 
 /* The context menu. */
@@ -362,6 +364,135 @@ static bool contains_fold(const char *haystack, const char *needle) {
  * typing letters is looking for a name, and most-used is not an order you can
  * look a name up in.
  */
+/*
+ * --- Pinned applications ---
+ *
+ * The left column used to be "the six you open most", counted per account.
+ * That is a good answer to a question nobody asked: a column that reorders
+ * itself under the pointer is a column nobody can build a habit on, and
+ * reaching for the second entry and finding a different program there is
+ * worse than a list that never moves.
+ *
+ * So it is what somebody chose to put there. Right-click an entry to unpin
+ * it; right-click one in All Programs to pin it. The names live in the
+ * account's own hive, because which programs somebody keeps to hand is a fact
+ * about them and not about the machine.
+ *
+ * Stored as one value with bars between the names rather than as numbered
+ * keys: the order matters, and a list whose order is the order of the keys is
+ * a list that has to be renumbered every time something moves.
+ */
+#define MENU_PINNED_KEY "menu/pinned"
+#define MENU_PINNED_MAX_TEXT 512
+
+/* What ships pinned. Whatever somebody would otherwise have to go and find on
+ * a system they have just met. */
+#define MENU_PINNED_DEFAULT "File Explorer|Notepad|Watchtower|Terminal"
+
+/* An installed application by name. The registry lists them by index; a pin
+ * names one, and the two have to be brought together somewhere. */
+static bool installed_app_named(const char *name,
+        struct recon_installed_app *out) {
+    int count = recon_installed_app_count();
+    for (int i = 0; i < count; i++) {
+        if (recon_installed_app_at(i, out) &&
+                strcasecmp(out->name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int pinned_names(char names[][RECON_NAME_MAX], int max) {
+    const char *text = recon_registry_get(RECON_REG_USER, MENU_PINNED_KEY,
+        MENU_PINNED_DEFAULT);
+
+    int count = 0;
+    const char *at = text;
+    while (*at != '\0' && count < max) {
+        const char *bar = strchr(at, '|');
+        size_t length = (bar != NULL) ? (size_t)(bar - at) : strlen(at);
+
+        if (length > 0 && length < RECON_NAME_MAX) {
+            memcpy(names[count], at, length);
+            names[count][length] = '\0';
+            count++;
+        }
+
+        if (bar == NULL) {
+            break;
+        }
+        at = bar + 1;
+    }
+    return count;
+}
+
+static bool menu_is_pinned(const char *name) {
+    char names[MENU_PINNED_MAX][RECON_NAME_MAX];
+    int count = pinned_names(names, MENU_PINNED_MAX);
+    for (int i = 0; i < count; i++) {
+        if (strcasecmp(names[i], name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void pinned_write(char names[][RECON_NAME_MAX], int count) {
+    char text[MENU_PINNED_MAX_TEXT];
+    size_t used = 0;
+
+    for (int i = 0; i < count; i++) {
+        int n = snprintf(text + used, sizeof(text) - used, "%s%s",
+            used > 0 ? "|" : "", names[i]);
+        if (n < 0 || (size_t)n >= sizeof(text) - used) {
+            break;
+        }
+        used += (size_t)n;
+    }
+    text[used] = '\0';
+
+    recon_registry_set(RECON_REG_USER, MENU_PINNED_KEY, text);
+}
+
+static void menu_pin(const char *name) {
+    if (name == NULL || *name == '\0' || menu_is_pinned(name)) {
+        return;
+    }
+
+    char names[MENU_PINNED_MAX][RECON_NAME_MAX];
+    int count = pinned_names(names, MENU_PINNED_MAX);
+    if (count >= MENU_PINNED_MAX) {
+        return;
+    }
+
+    /* At the end, because that is where somebody watching it appear expects
+     * to find it. Pushing it to the top would move everything they already
+     * knew the position of. */
+    snprintf(names[count], RECON_NAME_MAX, "%s", name);
+    pinned_write(names, count + 1);
+}
+
+static void menu_unpin(const char *name) {
+    char names[MENU_PINNED_MAX][RECON_NAME_MAX];
+    int count = pinned_names(names, MENU_PINNED_MAX);
+
+    int keep = 0;
+    for (int i = 0; i < count; i++) {
+        if (strcasecmp(names[i], name) == 0) {
+            continue;
+        }
+        if (keep != i) {
+            snprintf(names[keep], RECON_NAME_MAX, "%s", names[i]);
+        }
+        keep++;
+    }
+
+    if (keep != count) {
+        pinned_write(names, keep);
+    }
+}
+
 static int menu_apps(bool show_all, const char *filter,
         struct menu_entry *out, int max) {
     struct menu_entry found[MENU_APPS_MAX];
@@ -371,6 +502,32 @@ static int menu_apps(bool show_all, const char *filter,
     bool searching = (filter != NULL && filter[0] != '\0');
     if (searching) {
         show_all = true;
+    }
+
+    /*
+     * Closed, the column is the pinned list, in the order it was pinned in.
+     * Open or searching, it is everything, alphabetically -- the only order
+     * that helps somebody find a name they already know.
+     */
+    if (!show_all) {
+        char names[MENU_PINNED_MAX][RECON_NAME_MAX];
+        int pinned = pinned_names(names, MENU_PINNED_MAX);
+        int shown = 0;
+
+        for (int i = 0; i < pinned && shown < max; i++) {
+            /* Only if it is still installed. A pin outliving the program it
+             * points at would be an entry that opens nothing. */
+            struct recon_installed_app app;
+            if (!installed_app_named(names[i], &app) || !app.in_menu) {
+                continue;
+            }
+            snprintf(out[shown].label, sizeof(out[shown].label), "%s",
+                app.name);
+            snprintf(out[shown].icon, sizeof(out[shown].icon), "%s", app.icon);
+            out[shown].is_shutdown = false;
+            shown++;
+        }
+        return shown;
     }
 
     int installed = recon_installed_app_count();
@@ -572,6 +729,21 @@ struct recon_shell {
      * explorer, taskbar -- because a context menu is the same thing wherever
      * it appears, differing only in what it offers.
      */
+    /*
+     * --- All Programs ---
+     *
+     * A list beside the menu rather than one that replaces the left column.
+     *
+     * Replacing it meant the pinned column -- the one somebody arranged on
+     * purpose -- disappeared the moment they went looking for something not
+     * on it, and there was a Back row to press to get it again. A list that
+     * opens alongside leaves what they arranged where they left it.
+     */
+    struct recon_panel *programs;
+    bool programs_open;
+    int programs_hover;
+    int programs_scroll;
+
     struct recon_panel *context;
     bool context_open;
     struct {
@@ -2122,6 +2294,139 @@ static void draw_menu(struct recon_shell *shell) {
     recon_panel_commit(menu);
 }
 
+/* --- All Programs --- */
+
+#define PROGRAMS_ROWS_MAX 14
+
+static int programs_count(void) {
+    struct menu_entry entries[MENU_APPS_MAX];
+    return menu_apps(true, NULL, entries, MENU_APPS_MAX);
+}
+
+static void draw_programs(struct recon_shell *shell) {
+    struct recon_panel *p = shell->programs;
+    if (p == NULL) {
+        return;
+    }
+
+    int width = recon_panel_width(p);
+    int height = recon_panel_height(p);
+    int ascent = recon_font_ascent(shell->font);
+
+    recon_fill(p, COLOR_MENU);
+    recon_hit_clear(p);
+    recon_stroke_rect(p, 0, 0, width, height, THEME(MENU_BORDER));
+
+    struct menu_entry entries[MENU_APPS_MAX];
+    int total = menu_apps(true, NULL, entries, MENU_APPS_MAX);
+
+    int rows = (height - MENU_PADDING * 2) / MENU_ITEM_HEIGHT;
+    if (rows > total) {
+        rows = total;
+    }
+
+    if (shell->programs_scroll > total - rows) {
+        shell->programs_scroll = total - rows;
+    }
+    if (shell->programs_scroll < 0) {
+        shell->programs_scroll = 0;
+    }
+
+    for (int row = 0; row < rows; row++) {
+        int i = shell->programs_scroll + row;
+        if (i >= total) {
+            break;
+        }
+
+        int ry = MENU_PADDING + row * MENU_ITEM_HEIGHT;
+        bool hovered = (shell->programs_hover == i);
+
+        if (hovered) {
+            recon_fill_role(p, MENU_PADDING, ry,
+                width - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
+                RECON_THEME_MENU_HILITE);
+        }
+
+        int icon = MENU_ITEM_HEIGHT - 10;
+        recon_icon_draw(p, entries[i].icon, MENU_PADDING + TEXT_INSET,
+            ry + (MENU_ITEM_HEIGHT - icon) / 2, icon);
+
+        recon_draw_text(p, shell->font,
+            MENU_PADDING + TEXT_INSET + icon + 10,
+            ry + (MENU_ITEM_HEIGHT + ascent) / 2 - 2,
+            width - MENU_PADDING * 2 - TEXT_INSET - icon - 16,
+            entries[i].label,
+            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
+
+        recon_hit_add(p, MENU_PADDING, ry, width - MENU_PADDING * 2,
+            MENU_ITEM_HEIGHT, HIT_MENU_BASE + i);
+    }
+
+    if (total > rows) {
+        char more[48];
+        snprintf(more, sizeof(more), "%d of %d", rows, total);
+        recon_draw_text(p, shell->font, MENU_PADDING + TEXT_INSET,
+            height - MENU_PADDING - 4, width - MENU_PADDING * 2, more,
+            COLOR_MENU_TEXT_DISABLED);
+    }
+
+    recon_panel_commit(p);
+}
+
+static void programs_close(struct recon_shell *shell) {
+    if (shell == NULL || shell->programs == NULL) {
+        return;
+    }
+    recon_panel_set_enabled(shell->programs, false);
+    shell->programs_open = false;
+    shell->programs_hover = -1;
+    shell->programs_scroll = 0;
+}
+
+/*
+ * Beside the menu, aligned with its bottom.
+ *
+ * Down the left edge of the screen the menu already occupies, so the list
+ * grows upward from the taskbar the way the menu does -- a list that started
+ * at the top and ran down would end behind the bar.
+ */
+static void programs_show(struct recon_shell *shell) {
+    if (shell == NULL || shell->programs == NULL || shell->menu == NULL) {
+        return;
+    }
+
+    int total = programs_count();
+    int rows = total < PROGRAMS_ROWS_MAX ? total : PROGRAMS_ROWS_MAX;
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    int height = rows * MENU_ITEM_HEIGHT + MENU_PADDING * 2 +
+        (total > rows ? MENU_ITEM_HEIGHT / 2 : 0);
+    recon_panel_resize(shell->programs, MENU_LEFT_WIDTH, height);
+
+    int menu_x = 0;
+    int menu_y = 0;
+    recon_panel_position(shell->menu, &menu_x, &menu_y);
+    int menu_h = recon_panel_height(shell->menu);
+
+    int x = menu_x + MENU_WIDTH;
+    int y = menu_y + menu_h - height;
+
+    if (x + MENU_LEFT_WIDTH > shell->screen_width) {
+        x = shell->screen_width - MENU_LEFT_WIDTH;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+
+    recon_panel_set_position(shell->programs, x, y);
+    draw_programs(shell);
+    recon_panel_set_enabled(shell->programs, true);
+    recon_panel_raise_to_top(shell->programs);
+    shell->programs_open = true;
+}
+
 static void draw_security(struct recon_shell *shell) {
     struct recon_panel *p = shell->security;
     if (p == NULL) {
@@ -2266,6 +2571,13 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     shell->blank_timer = wl_event_loop_add_timer(
         wl_display_get_event_loop(server->wl_display), blank_expired, shell);
     recon_shell_blank_reload(shell);
+
+    shell->programs = recon_panel_create(&server->scene->tree,
+        MENU_LEFT_WIDTH, MENU_ITEM_HEIGHT * 4);
+    if (shell->programs != NULL) {
+        recon_panel_set_enabled(shell->programs, false);
+    }
+    shell->programs_hover = -1;
 
     shell->dim = recon_panel_create(&server->scene->tree,
         screen_width, screen_height);
@@ -3485,6 +3797,24 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
         break;
     }
 
+    case RECON_CONTEXT_MENU_APP: {
+        const char *name = shell->context_target;
+        switch (action) {
+        case CTX_OPEN:
+            recon_shell_open_named(shell, name);
+            break;
+        case CTX_PIN:
+            menu_pin(name);
+            break;
+        case CTX_UNPIN:
+            menu_unpin(name);
+            break;
+        default:
+            break;
+        }
+        break;
+    }
+
     case RECON_CONTEXT_WINDOW: {
         if (shell->context_app < 0 || shell->context_app >= shell->app_count) {
             return;
@@ -3641,12 +3971,83 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         return true;
     }
 
-    recon_shell_close_menu(shell);
     recon_shell_close_context(shell);
     shell->context_item_count = 0;
     shell->context_target[0] = 0;
 
     int px, py;
+
+    /*
+     * An entry in the Start menu, before the menu is closed.
+     *
+     * It used to be closed first, so a right-click on an application fell
+     * through to whatever was behind it -- which is the desktop, and the
+     * desktop's menu appeared instead. Nothing in the Start menu could be
+     * right-clicked at all.
+     */
+    /*
+     * The All Programs list, which sits on top of whatever is beside the
+     * menu. Tested before the menu because it is drawn above it.
+     */
+    if (shell->programs_open && shell->programs != NULL &&
+            point_in_panel(shell->programs, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->programs, px, py);
+        int index = (int)(hit - HIT_MENU_BASE);
+
+        struct menu_entry entry;
+        if (hit >= HIT_MENU_BASE &&
+                menu_entry_at(true, NULL, index, &entry)) {
+            recon_shell_close_menu(shell);
+
+            shell->context_kind = RECON_CONTEXT_MENU_APP;
+            snprintf(shell->context_target, sizeof(shell->context_target),
+                "%s", entry.label);
+
+            context_add(shell, "Open", CTX_OPEN, true, true);
+            if (menu_is_pinned(entry.label)) {
+                context_add(shell, "Unpin from the menu", CTX_UNPIN, true,
+                    false);
+            } else {
+                context_add(shell, "Pin to the menu", CTX_PIN, true, false);
+            }
+            context_show(shell, lx, ly);
+        }
+        return true;
+    }
+
+    if (shell->menu_open && shell->menu != NULL &&
+            point_in_panel(shell->menu, lx, ly, &px, &py)) {
+        uint32_t hit = recon_hit_test(shell->menu, px, py);
+        int index = (int)(hit - HIT_MENU_BASE);
+
+        struct menu_entry entry;
+        if (hit >= HIT_MENU_BASE && hit < HIT_PLACE_BASE &&
+                menu_entry_at(shell->menu_show_all, shell->menu_filter,
+                    index, &entry) && !entry.is_shutdown) {
+            recon_shell_close_menu(shell);
+
+            shell->context_kind = RECON_CONTEXT_MENU_APP;
+            snprintf(shell->context_target, sizeof(shell->context_target),
+                "%s", entry.label);
+
+            context_add(shell, "Open", CTX_OPEN, true, true);
+            if (menu_is_pinned(entry.label)) {
+                context_add(shell, "Unpin from the menu", CTX_UNPIN, true,
+                    false);
+            } else {
+                context_add(shell, "Pin to the menu", CTX_PIN, true, false);
+            }
+            context_show(shell, lx, ly);
+            return true;
+        }
+
+        /* Anywhere else in the menu: no menu of its own, and the Start menu
+         * stays open. Closing it because somebody right-clicked a gap in it
+         * is the fault above in a different place. */
+        return true;
+    }
+
+    recon_shell_close_menu(shell);
 
     /* A window button on the taskbar. */
     if (shell->taskbar != NULL && point_in_panel(shell->taskbar, lx, ly, &px, &py)) {
@@ -4029,6 +4430,21 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
         if (hit >= HIT_CONTEXT_BASE) {
             context = (int)(hit - HIT_CONTEXT_BASE);
         }
+    } else if (shell->programs_open && shell->programs != NULL &&
+            point_in_panel(shell->programs, lx, ly, &px, &py)) {
+        /*
+         * Hover only. This is update_hover -- acting on a row here opened
+         * whatever the pointer passed over, which is a menu that runs
+         * programs by being looked at.
+         */
+        uint32_t hit = recon_hit_test(shell->programs, px, py);
+        int over = (hit >= HIT_MENU_BASE) ? (int)(hit - HIT_MENU_BASE) : -1;
+        if (over != shell->programs_hover) {
+            shell->programs_hover = over;
+            draw_programs(shell);
+            recon_damage_all(shell->server);
+        }
+        return;
     } else if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
         uint32_t hit = recon_hit_test(shell->menu, px, py);
@@ -4133,6 +4549,8 @@ void recon_shell_close_menu(struct recon_shell *shell) {
         return;
     }
     shell->menu_open = false;
+    /* And the list beside it, which has nothing to sit beside now. */
+    programs_close(shell);
     /* What was typed goes with it. A menu reopened still holding somebody's
      * last search would be showing a list they did not ask for. */
     shell->menu_filter[0] = '\0';
@@ -4198,6 +4616,10 @@ bool recon_shell_contains_point(struct recon_shell *shell, double lx, double ly)
     int px, py;
     if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
+        return true;
+    }
+    if (shell->programs_open && shell->programs != NULL &&
+            point_in_panel(shell->programs, lx, ly, &px, &py)) {
         return true;
     }
     if (appwin_index_for_node(shell, topmost_node(shell, lx, ly)) >= 0) {
@@ -4322,14 +4744,37 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
          * would otherwise swallow this one -- the ranges below are compared
          * with >=, so the order of these branches is what separates them.
          */
+        /*
+         * A row in the All Programs list. Its ids are indices into the whole
+         * list of applications rather than one of the menu's four ranges, so
+         * it is resolved here rather than folded into them.
+         */
+        if (shell->programs_open && shell->programs != NULL) {
+            int qx, qy;
+            if (point_in_panel(shell->programs, lx, ly, &qx, &qy)) {
+                uint32_t row = recon_hit_test(shell->programs, qx, qy);
+                struct menu_entry chosen;
+                if (row >= HIT_MENU_BASE &&
+                        menu_entry_at(true, NULL,
+                            (int)(row - HIT_MENU_BASE), &chosen)) {
+                    recon_shell_close_menu(shell);
+                    recon_shell_open_named(shell, chosen.label);
+                }
+                return true;
+            }
+        }
+
         if (hit == HIT_ALL_PROGRAMS) {
             /* While something is being looked for, this row is the way back
-             * from it rather than a switch between two orders the search has
+             * from it rather than a switch between two lists the search has
              * already overridden. */
             if (shell->menu_filter[0] != '\0') {
                 shell->menu_filter[0] = '\0';
+                programs_close(shell);
+            } else if (shell->programs_open) {
+                programs_close(shell);
             } else {
-                shell->menu_show_all = !shell->menu_show_all;
+                programs_show(shell);
             }
             shell->menu_hover = -1;
             layout(shell);

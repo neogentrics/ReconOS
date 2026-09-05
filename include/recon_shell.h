@@ -391,6 +391,8 @@ enum recon_context_kind {
     /* A menu the application under the pointer asked for. Its entry ids mean
      * whatever that application decided they mean. */
     RECON_CONTEXT_APP,
+    /* An application in the Start menu, pinned or not. */
+    RECON_CONTEXT_MENU_APP,
 };
 
 /* Offer a right click to the shell. Returns true if it opened a menu. */
