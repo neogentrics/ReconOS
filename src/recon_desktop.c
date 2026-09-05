@@ -21,6 +21,7 @@
 #include "ReconOS.h"
 #include "recon_desktop.h"
 #include "recon_fs.h"
+#include "recon_props.h"
 #include "recon_registry.h"
 #include "recon_icons.h"
 #include "recon_shell.h"
@@ -464,10 +465,18 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         }
     }
 
+    /*
+     * A file gets the icon its kind deserves, asked of recon_props -- the same
+     * question the explorer asks, so a file looks the same on the desktop as
+     * it does in a window two inches away. It drew a plain sheet for
+     * everything until this line, which meant the desktop and the explorer
+     * disagreed about what a .mp3 was.
+     */
     const char *generic =
         item->kind == ITEM_FOLDER ? RECON_ICON_FOLDER :
         item->kind == ITEM_SHORTCUT ? RECON_ICON_APP :
-        item->kind == ITEM_TRASH ? RECON_ICON_TRASH : RECON_ICON_FILE;
+        item->kind == ITEM_TRASH ? RECON_ICON_TRASH :
+        recon_props_icon(item->name);
     if (recon_icon_draw(p, generic, cx, cy, ICON_IMAGE)) {
         return;
     }

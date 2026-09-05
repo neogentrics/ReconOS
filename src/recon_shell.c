@@ -29,6 +29,7 @@
 #include "recon_appwin.h"
 #include "recon_calendar.h"
 #include "recon_mailwin.h"
+#include "recon_player.h"
 #include "recon_web.h"
 #include "recon_clock.h"
 #include "recon_control_panel.h"
@@ -2986,6 +2987,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         /* The name here and WEB_APPLICATION in recon_web.c must match:
          * the network permission is by name. See the note there. */
         { "Web", RECON_ICON_WEB, recon_web_create, true, RECONOS_VERSION },
+        { "Media Player", RECON_ICON_PLAYER, recon_player_create, true,
+          RECONOS_VERSION },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing
@@ -3996,6 +3999,9 @@ bool recon_shell_open_file(struct recon_shell *shell, const char *path) {
     }
     if (strcmp(opener, "Web") == 0) {
         return recon_web_open_path(win, path);
+    }
+    if (strcmp(opener, "Media Player") == 0) {
+        return recon_player_open_path(win, path);
     }
     return false;
 }

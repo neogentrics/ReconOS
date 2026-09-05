@@ -9,6 +9,8 @@
 #include <strings.h>   /* strcasecmp */
 #include <time.h>
 
+#include "recon_codec.h"
+#include "recon_icons.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 
@@ -112,6 +114,26 @@ const char *recon_props_kind(const struct recon_dirent *entry,
         return "Font";
     }
 
+    /*
+     * Sound and video, including the formats nothing here can decode.
+     *
+     * A file is what it is regardless of what can open it, and "Video" beside
+     * a message saying it cannot be played is more use than "File" beside the
+     * same message. The Type column said "File" for a .mp4 whose icon already
+     * said video, which is two parts of one window disagreeing.
+     */
+    if (recon_codec_handles_extension(name) ||
+            strcasecmp(dot, ".flac") == 0 || strcasecmp(dot, ".ogg") == 0 ||
+            strcasecmp(dot, ".opus") == 0 || strcasecmp(dot, ".m4a") == 0 ||
+            strcasecmp(dot, ".aac") == 0) {
+        return "Sound";
+    }
+    if (strcasecmp(dot, ".mp4") == 0 || strcasecmp(dot, ".mkv") == 0 ||
+            strcasecmp(dot, ".webm") == 0 || strcasecmp(dot, ".avi") == 0 ||
+            strcasecmp(dot, ".mov") == 0 || strcasecmp(dot, ".m4v") == 0) {
+        return "Video";
+    }
+
     if (strcasecmp(dot, ".ico") == 0)   { return "Icon"; }
     if (strcasecmp(dot, ".theme") == 0) { return "Skin"; }
     if (strcasecmp(dot, ".reg") == 0)   { return "Settings"; }
@@ -178,6 +200,15 @@ const char *recon_props_opener(const char *name) {
         return "Web";
     }
 
+    /*
+     * Sound. Asked of the codec registry rather than listed here, so a decoder
+     * a module brings makes its files openable without this file knowing about
+     * it -- which is the whole point of the registry.
+     */
+    if (recon_codec_handles_extension(name)) {
+        return "Media Player";
+    }
+
     if (strcasecmp(dot, ".xml") == 0 ||
             strcasecmp(dot, ".json") == 0 ||
             strcasecmp(dot, ".csv") == 0 ||
@@ -192,6 +223,75 @@ const char *recon_props_opener(const char *name) {
      * damaged.
      */
     return NULL;
+}
+
+const char *recon_props_icon(const char *name) {
+    const char *dot = (name != NULL) ? strrchr(name, '.') : NULL;
+    if (dot == NULL || dot == name || dot[1] == '\0') {
+        return RECON_ICON_FILE;
+    }
+
+    /*
+     * Sound and video are asked of the codec registry where they can be, so a
+     * decoder a module brings makes its files look right without this list
+     * knowing about it. The video extensions are listed here because nothing
+     * decodes video yet -- the file still has a kind even when nothing can
+     * open it, and an icon that says "video" beside a message that says "this
+     * cannot be played" is more informative than a blank sheet.
+     */
+    if (recon_codec_handles_extension(name)) {
+        return RECON_ICON_FILE_SOUND;
+    }
+    if (strcasecmp(dot, ".mp4") == 0 || strcasecmp(dot, ".mkv") == 0 ||
+            strcasecmp(dot, ".webm") == 0 || strcasecmp(dot, ".avi") == 0 ||
+            strcasecmp(dot, ".mov") == 0 || strcasecmp(dot, ".m4v") == 0) {
+        return RECON_ICON_FILE_VIDEO;
+    }
+    /* Sound formats nothing here decodes yet. Same reasoning as video: the
+     * file is what it is regardless of what can open it. */
+    if (strcasecmp(dot, ".flac") == 0 || strcasecmp(dot, ".ogg") == 0 ||
+            strcasecmp(dot, ".opus") == 0 || strcasecmp(dot, ".m4a") == 0 ||
+            strcasecmp(dot, ".aac") == 0) {
+        return RECON_ICON_FILE_SOUND;
+    }
+
+    if (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+            strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".bmp") == 0 ||
+            strcasecmp(dot, ".gif") == 0 || strcasecmp(dot, ".tga") == 0 ||
+            strcasecmp(dot, ".ico") == 0) {
+        return RECON_ICON_FILE_IMAGE;
+    }
+
+    if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0 ||
+            strcasecmp(dot, ".xml") == 0) {
+        return RECON_ICON_FILE_WEB;
+    }
+
+    if (strcasecmp(dot, ".json") == 0 || strcasecmp(dot, ".csv") == 0 ||
+            strcasecmp(dot, ".reg") == 0 || strcasecmp(dot, ".ini") == 0 ||
+            strcasecmp(dot, ".conf") == 0 || strcasecmp(dot, ".theme") == 0) {
+        return RECON_ICON_FILE_DATA;
+    }
+
+    if (strcasecmp(dot, ".ttf") == 0 || strcasecmp(dot, ".otf") == 0 ||
+            strcasecmp(dot, ".ttc") == 0) {
+        return RECON_ICON_FILE_FONT;
+    }
+
+    if (strcasecmp(dot, ".rpk") == 0 || strcasecmp(dot, ".zip") == 0 ||
+            strcasecmp(dot, ".tar") == 0 || strcasecmp(dot, ".gz") == 0) {
+        return RECON_ICON_FILE_ARCHIVE;
+    }
+
+    /* Applications and modules already have icons of their own. */
+    if (strcasecmp(dot, ".rex") == 0) {
+        return RECON_ICON_APP;
+    }
+    if (strcasecmp(dot, ".rts") == 0) {
+        return RECON_ICON_MODULES;
+    }
+
+    return RECON_ICON_FILE;
 }
 
 bool recon_props_describe(const char *cwd, const char *path,

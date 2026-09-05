@@ -1663,7 +1663,8 @@ static void explorer_draw(void *user, struct recon_panel *p,
         /* A small icon per row, so folders and files are told apart before
          * the type column is read. */
         int name_x = lx + COL_NAME;
-        if (recon_icon_draw(p, is_dir ? RECON_ICON_FOLDER : RECON_ICON_FILE,
+        if (recon_icon_draw(p, is_dir ? RECON_ICON_FOLDER
+                    : recon_props_icon(entry->name),
                 lx + 4, ry + 2, ROW_HEIGHT - 4)) {
             name_x = lx + 4 + (ROW_HEIGHT - 4) + 6;
         }

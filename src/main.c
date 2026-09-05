@@ -75,6 +75,8 @@
 #include "recon_net.h"
 #include "recon_registry.h"
 #include "recon_access.h"
+#include "recon_audio.h"
+#include "recon_codec.h"
 #include "recon_theme.h"
 #include "recon_session.h"
 #include "recon_shell.h"
@@ -2541,6 +2543,10 @@ int main(int argc, char **argv) {
             recon_firewall_last_error());
     }
 
+    /* The decoders, before any window asks what it can play. Sound itself
+     * starts later, once there is an event loop to top the device up from. */
+    recon_codec_init_builtin();
+
     /* Skins come next: they read a setting to know which one is wanted, and
      * everything that draws needs colours before it draws anything. */
     recon_theme_write_defaults();
@@ -2586,6 +2592,7 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/calendar.png", RECON_ICON_CALENDAR);
     install_asset_icon("icons/mail.png", RECON_ICON_MAIL);
     install_asset_icon("icons/web.png", RECON_ICON_WEB);
+    install_asset_icon("icons/player.png", RECON_ICON_PLAYER);
 
     /*
      * The help and the change log, rewritten every start rather than only
@@ -2616,6 +2623,18 @@ int main(int argc, char **argv) {
     server.cursor_mode = RECON_CURSOR_PASSTHROUGH;
 
     server.wl_display = wl_display_create();
+
+    /*
+     * Sound, now that there is an event loop.
+     *
+     * It takes the loop because the topping-up runs from it: a device wants a
+     * fixed number of frames at fixed moments, and the loop is what ReconOS
+     * has instead of a thread to deliver them from. Started here rather than
+     * with the other subsystems above, because those run before the display
+     * exists and this one cannot.
+     */
+    recon_audio_init(wl_display_get_event_loop(server.wl_display));
+
     server.backend = wlr_backend_autocreate(server.wl_display, NULL);
     if (server.backend == NULL) {
         wlr_log(WLR_ERROR, "ReconOS: failed to create backend");

@@ -21,6 +21,21 @@
 /* Well-known names, so the same icon is asked for by the same word. */
 #define RECON_ICON_FOLDER "folder"
 #define RECON_ICON_FILE "file"
+
+/*
+ * One per kind of file, all drawn on the same sheet so they are a family.
+ *
+ * A single icon for every file says nothing, and saying what a thing is before
+ * its name is read is most of what an icon is for. recon_props_icon decides
+ * which name a given file gets.
+ */
+#define RECON_ICON_FILE_SOUND "file-sound"
+#define RECON_ICON_FILE_VIDEO "file-video"
+#define RECON_ICON_FILE_IMAGE "file-image"
+#define RECON_ICON_FILE_WEB "file-web"
+#define RECON_ICON_FILE_DATA "file-data"
+#define RECON_ICON_FILE_FONT "file-font"
+#define RECON_ICON_FILE_ARCHIVE "file-archive"
 #define RECON_ICON_APP "application"
 #define RECON_ICON_TERMINAL "terminal"
 #define RECON_ICON_NOTEPAD "notepad"
@@ -53,6 +68,7 @@
 #define RECON_ICON_CALENDAR "calendar"
 #define RECON_ICON_MAIL "mail"
 #define RECON_ICON_WEB "web"
+#define RECON_ICON_PLAYER "player"
 #define RECON_ICON_SHUTDOWN "shutdown"
 /* The Recon Towers mark. Copied in from the assets rather than drawn: it is
  * artwork, not a generated glyph. */

@@ -322,8 +322,132 @@ struct generated_icon {
     void (*draw)(color *px);
 };
 
+/* --- A file, and then what kind of file --- */
+
+/*
+ * The accent every one of these carries.
+ *
+ * The same red the drawn icon set uses, so a generated icon and a drawn one
+ * sit beside each other in a list without one of them looking imported.
+ */
+#define C_MARK RGB(0xC4, 0x1D, 0x21)
+#define C_MARK_DARK RGB(0x10, 0x28, 0x6B)
+
 static void draw_file(color *px) {
     draw_page(px, true);
+}
+
+/*
+ * A level meter: three bars, the tallest in red.
+ *
+ * Not a musical note. The same icon has to serve a spoken recording, and a
+ * note claims the file is music -- which is the sort of small lie an icon set
+ * tells for years before anybody notices it is wrong about half its files.
+ */
+static void draw_file_sound(color *px) {
+    draw_page(px, false);
+
+    static const int HEIGHT[] = { 6, 12, 8 };
+    for (int i = 0; i < 3; i++) {
+        int x = 11 + i * 4;
+        int h = HEIGHT[i];
+        fill_rect(px, x, 22 - h, 3, h, i == 1 ? C_MARK : C_MARK_DARK);
+    }
+}
+
+/*
+ * Film perforations and a play triangle.
+ *
+ * The perforations do the work at small sizes: a triangle alone is a play
+ * button, and a play button on a page could be sound just as easily. Sprocket
+ * holes down an edge have meant film for a hundred years.
+ */
+static void draw_file_video(color *px) {
+    draw_page(px, false);
+
+    for (int i = 0; i < 4; i++) {
+        fill_rect(px, 9, 10 + i * 4, 2, 2, C_MARK_DARK);
+    }
+
+    /* A triangle pointing right, a row at a time. */
+    for (int row = 0; row < 11; row++) {
+        int from_middle = row - 5;
+        if (from_middle < 0) {
+            from_middle = -from_middle;
+        }
+        int span = 8 - (from_middle * 8) / 5;
+        if (span > 0) {
+            fill_rect(px, 14, 11 + row, span, 1, C_MARK);
+        }
+    }
+}
+
+/* A horizon with a sun -- the same shape as the Photos icon, so a picture file
+ * and the thing that opens it look like they know about each other. */
+static void draw_file_image(color *px) {
+    draw_page(px, false);
+
+    fill_rect(px, 10, 12, 12, 10, RGB(0xD8, 0xE2, 0xF2));
+    stroke_rect(px, 10, 12, 12, 10, C_MARK_DARK);
+
+    /* The sun, as a small stepped disc. */
+    fill_rect(px, 12, 14, 3, 3, C_MARK);
+    fill_rect(px, 13, 13, 1, 5, C_MARK);
+
+    /* And a ridge along the bottom of the frame. */
+    for (int i = 0; i < 5; i++) {
+        fill_rect(px, 13 + i, 21 - i, 1, i + 1, C_MARK_DARK);
+        fill_rect(px, 21 - i, 21 - i, 1, i + 1, C_MARK_DARK);
+    }
+}
+
+/* Angle brackets, which is what markup looks like to anybody who has seen
+ * any. */
+static void draw_file_web(color *px) {
+    draw_page(px, false);
+
+    for (int i = 0; i < 4; i++) {
+        fill_rect(px, 12 - i, 16 - i, 2, 2, C_MARK_DARK);
+        fill_rect(px, 12 - i, 16 + i, 2, 2, C_MARK_DARK);
+        fill_rect(px, 19 + i, 16 - i, 2, 2, C_MARK);
+        fill_rect(px, 19 + i, 16 + i, 2, 2, C_MARK);
+    }
+}
+
+/* A brace, for the structured-text formats. */
+static void draw_file_data(color *px) {
+    draw_page(px, false);
+
+    fill_rect(px, 13, 12, 2, 2, C_MARK_DARK);
+    fill_rect(px, 12, 14, 2, 8, C_MARK_DARK);
+    fill_rect(px, 13, 22, 2, 2, C_MARK_DARK);
+    fill_rect(px, 10, 17, 2, 2, C_MARK_DARK);
+
+    fill_rect(px, 18, 12, 2, 2, C_MARK);
+    fill_rect(px, 19, 14, 2, 8, C_MARK);
+    fill_rect(px, 18, 22, 2, 2, C_MARK);
+    fill_rect(px, 21, 17, 2, 2, C_MARK);
+}
+
+/* A letter A. The only mark that says "font" at sixteen pixels. */
+static void draw_file_font(color *px) {
+    draw_page(px, false);
+
+    for (int row = 0; row < 12; row++) {
+        int spread = row / 2;
+        fill_rect(px, 15 - spread, 11 + row, 2, 1, C_MARK_DARK);
+        fill_rect(px, 16 + spread, 11 + row, 2, 1, C_MARK_DARK);
+    }
+    fill_rect(px, 13, 18, 7, 2, C_MARK);
+}
+
+/* A box with a band round it. */
+static void draw_file_archive(color *px) {
+    draw_page(px, false);
+
+    fill_rect(px, 10, 13, 12, 9, RGB(0xD8, 0xC0, 0x88));
+    stroke_rect(px, 10, 13, 12, 9, C_MARK_DARK);
+    fill_rect(px, 15, 13, 2, 9, C_MARK);
 }
 
 /* --- The recycle bin --- */
@@ -500,6 +624,22 @@ static void draw_avatar_key(color *px) {
 static const struct generated_icon ICONS[] = {
     { "folder", draw_folder },
     { "file", draw_file },
+
+    /*
+     * One per kind of file, all built on the same sheet.
+     *
+     * A single icon for every file says nothing, and saying what a thing is
+     * before its name is read is most of what an icon is for. Which extension
+     * gets which is recon_props_icon's business, not this file's -- this only
+     * knows how to draw them.
+     */
+    { "file-sound", draw_file_sound },
+    { "file-video", draw_file_video },
+    { "file-image", draw_file_image },
+    { "file-web", draw_file_web },
+    { "file-data", draw_file_data },
+    { "file-font", draw_file_font },
+    { "file-archive", draw_file_archive },
     { "application", draw_application },
     { "terminal", draw_terminal },
     { "notepad", draw_notepad },

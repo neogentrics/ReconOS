@@ -1,3 +1,62 @@
+ReconOS makes a sound. recon_audio is a new boundary of the same kind as
+the filesystem and the network: one file knows how sound reaches hardware and
+nothing above it does. It speaks ALSA rather than a sound server, deliberately
+— ALSA is the lowest thing on Linux that is still an interface, so the header's
+shape is close to the shape a real driver has, and replacing it when there is a
+ReconOS driver is replacing a file rather than rethinking an idea.
+
+It is pulled, not pushed: the device asks for samples rather than being
+handed them. A device runs at its own rate and wants a fixed number of frames
+at fixed moments, and an interface where the caller decides when to write makes
+the caller responsible for a clock it does not own.
+
+Without a sound library at build time, or a sound card at run time, every
+function is still there and says there is no audio. That is the same code a
+machine with no card takes, which is the path that otherwise gets tested least.
+
+Codecs are a registry, and the registry is the deliverable. A decoder says
+which extensions it handles and how to recognise its files, and everything
+above asks rather than knowing a list — so a module can bring a decoder and
+nothing in the player changes. Contents are checked before the name: a file's
+bytes are what it is, and its name is what somebody called it.
+
+ReconOS ships the ones it can honestly write. WAV is written here, because
+it is a header and then the samples: 8, 16, 24 and 32-bit, integer and float,
+mono and stereo. MP3 is minimp3, which is a format parser and therefore on
+the permitted side of THIRD_PARTY.md's line. Writing an MP3 decoder here was
+considered and rejected — the format is a hundred pages of psychoacoustics, and
+one that is ninety-five per cent correct does not sound nearly right, it sounds
+broken.
+
+Every decoder is checked against ffmpeg, sample for sample, on real music
+rather than a tone. All four WAV widths match exactly; MP3 is off by at
+most one across eight million frames, which is rounding. That comparison found
+a real fault: the float conversion scaled by 32767 instead of 32768 and
+truncated instead of rounding, so every sample came out fractionally quiet and
+biased towards silence.
+
+There is no video, and recon_codec.h says why at length rather than
+leaving a gap. Sound is a stream of numbers and a speaker. Video is that, plus
+a container interleaving it with the sound, plus a clock keeping the two
+together, plus a decoder whose output is thirty megabytes a second that has to
+be scaled and colour-converted before anything can look at it. The place it
+would go is defined; a function that returned nothing would be a promise.
+
+A Media Player with a playlist, transport, a draggable position bar and its
+own volume — applied to the samples rather than to the device's mixer, because
+turning the whole machine down when somebody wants one track quieter is
+reaching past your own edges. The position is asked of the device rather than
+counted, since what has been handed over is up to a buffer ahead of what
+somebody is hearing.
+
+Every kind of file has its own icon. They are all the same sheet with one
+mark — a level meter for sound, film perforations and a play triangle for
+video, a horizon for a picture, angle brackets for markup, a brace for
+structured text, a letter for a typeface, a banded box for an archive. One
+icon for every file says nothing, and saying what a thing is before its name is
+read is most of what an icon is for. The Type column and the desktop ask the
+same question the explorer does, so a file looks the same everywhere.
+
 A web viewer. Not a browser, and it is called a viewer everywhere: HTTP
 and HTTPS, HTML structure, links, back and forward — and no CSS, no
 JavaScript, no images, no forms. That boundary is stated rather than

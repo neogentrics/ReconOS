@@ -95,6 +95,9 @@ add_executable(ReconOS
     src/recon_terminal.c
     src/recon_ui.c
     src/recon_version.c
+    src/recon_audio.c
+    src/recon_codec.c
+    src/recon_player.c
     src/recon_html.c
     src/recon_web.c
     src/recon_http.c
@@ -139,9 +142,31 @@ pkg_check_modules(ZLIB REQUIRED zlib)
 #
 # Three libraries, and all three are needed: mbedtls is the protocol,
 # mbedx509 is the certificate parsing, mbedcrypto is the primitives.
+# ALSA, for making a sound. Optional: a machine with no audio library still
+# builds a desktop, and the path it then takes is the same one a machine with
+# no sound *card* takes -- which is worth having be the same code rather than
+# a second one nobody exercises.
+#
+# ALSA rather than a sound server on purpose. It is the lowest thing on Linux
+# that is still an interface, so recon_audio.c has the shape a real driver has
+# and is replaced later rather than rethought. THIRD_PARTY.md's line is
+# "libraries may parse formats and talk to hardware"; this is the second half.
+pkg_check_modules(ALSA alsa)
+if(ALSA_FOUND)
+    message(STATUS "ALSA found (${ALSA_VERSION}); ReconOS can play sound")
+else()
+    message(STATUS "ALSA not found; ReconOS will build without audio")
+endif()
+
 find_library(MBEDTLS_LIB mbedtls REQUIRED)
 find_library(MBEDX509_LIB mbedx509 REQUIRED)
 find_library(MBEDCRYPTO_LIB mbedcrypto REQUIRED)
+
+if(ALSA_FOUND)
+    target_compile_definitions(ReconOS PRIVATE RECON_HAVE_ALSA)
+    target_include_directories(ReconOS PRIVATE ${ALSA_INCLUDE_DIRS})
+    target_link_libraries(ReconOS PRIVATE ${ALSA_LIBRARIES})
+endif()
 
 target_link_libraries(ReconOS PRIVATE
     ${WLR_LIBRARIES}

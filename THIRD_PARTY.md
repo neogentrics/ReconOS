@@ -27,9 +27,44 @@ Included directly in the repository under `third_party/`.
   text layout, and drawing on top; stb_truetype only turns a character into a
   coverage bitmap.
 
+### minimp3
+
+- **Author:** lieff and contributors
+- **License:** CC0 1.0 (public domain)
+- **Source:** https://github.com/lieff/minimp3
+- **Used for:** decoding MP3 into samples. `minimp3.h` and `minimp3_ex.h`; the
+  `_ex` layer builds an index on open, which is what makes seeking land on the
+  right sample rather than on a guess from the average bitrate.
+
+  Squarely on the "may parse formats" side of the line above, and the same
+  category as stb_image: it turns a file into numbers and does nothing else.
+  ReconOS keeps it behind `src/recon_codec.c`, which is also where the WAV
+  decoder is -- and that one is written here, because WAV is a header and then
+  the samples.
+
+  Writing an MP3 decoder here was considered and rejected. The format is a
+  hundred pages of psychoacoustics, and a decoder that is ninety-five per cent
+  correct does not sound nearly right, it sounds broken.
+
 ## System libraries
 
 Linked at build time, not distributed with ReconOS.
+
+### ALSA
+
+- **License:** LGPL-2.1
+- **Source:** https://www.alsa-project.org/
+- **Used for:** playing sound. It is the lowest thing on Linux that is still an
+  interface -- a thin layer over the ioctls a driver exposes -- which is why it
+  was chosen over a sound server: the shape of `include/recon_audio.h` is close
+  to the shape a real driver has, so replacing it when ReconOS has one of its
+  own is replacing a file rather than rethinking an abstraction. A sound server
+  would have been easier to get working and would have put a daemon, a protocol
+  and a mixing policy inside the thing being replaced.
+
+  This is the "talk to hardware" half of the line above. Optional at build
+  time: without it ReconOS builds and says it cannot play anything, which is
+  the same path a machine with no sound card takes.
 
 ### mbedTLS
 

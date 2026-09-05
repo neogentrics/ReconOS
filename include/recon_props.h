@@ -68,4 +68,17 @@ const char *recon_props_kind(const struct recon_dirent *entry,
  */
 const char *recon_props_opener(const char *name);
 
+/*
+ * The icon a file should be drawn with, by its name.
+ *
+ * Never NULL: a name nothing recognises gets the plain sheet, which is what
+ * a file that is only a file should look like.
+ *
+ * Here rather than in the explorer because it is the third question of the
+ * same shape as the two above -- what kind of thing this is, what opens it,
+ * and what it looks like -- and the answers have to agree. Two files deciding
+ * separately what a .mp3 is would eventually disagree.
+ */
+const char *recon_props_icon(const char *name);
+
 #endif
