@@ -104,6 +104,20 @@ asked to.
 removes it. The bootloader is the first thing that runs and the project's claim
 is that it was built rather than assembled.
 
+### Decided along the way
+
+**What an application is.** Installed applications become Wayland clients;
+`recon_appwin_impl` stays as a privileged tier for code that ships with
+ReconOS. Decided because a table of function pointers cannot cross an address
+space, and settled with a measurement rather than an argument — a client
+submitting frames with the whole surface damaged every time runs at 18.96 ms
+mean and 19.69 ms worst, a spread of 1.8 ms. The full reasoning, including
+what the kernel owes it, is in [APPLICATIONS.md](APPLICATIONS.md).
+
+Nothing changes until the kernel has address spaces per process. It has to be
+settled before checkpoint 15, because an installer is what fixes the meaning of
+the word.
+
 ### Parallel tracks
 
 These develop alongside the main line and never block it:
@@ -111,6 +125,11 @@ These develop alongside the main line and never block it:
 - **Application compatibility** — improving Wine upstream rather than
   reimplementing it, once its internals are well enough understood to contribute
   meaningfully.
+- **Virtualization** — running another operating system in a window. Asked for
+  early and deliberately deferred: it is a kernel capability before it is a
+  system one, and it wants the same three things the client migration wants —
+  address spaces, mappable pages, and handles that cross a syscall. Once those
+  exist it is mostly hardware-assist plumbing rather than new architecture.
 - **A systems language** — an optional language for writing ReconOS
   applications. It earns its way in; the OS never depends on it.
 - **Cryptography research** — a self-contained module for studying cipher
