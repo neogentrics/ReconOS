@@ -61,7 +61,8 @@ courtesy now rather than a dependency.
 | 9 | Threads, a scheduler, and preemption | **Done** |
 | 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
-| 11 | Block devices — storage the kernel can read and write | |
+| 11 | Block devices — storage the kernel can read and write | **Done** |
+| 11b | USB mass storage — a USB stack, and a disk on the end of it | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | |
 | 13 | ReconFS — a filesystem of its own | |
 | 14 | Reads foreign filesystems well enough to install beside them | |
@@ -619,6 +620,39 @@ to shape it around is fitted to nothing) and blocking (waiting for a key or a
 disk needs the key or the disk to exist).
 
 
+### Not a checkpoint, but on the record: virtualization
+
+Asked for, and deliberately not scheduled yet. Recorded here rather than
+remembered, which is the whole reason this file exists.
+
+**It is a kernel thing.** Both architectures put it in the processor, and
+checkpoint 3 already reports whether this machine has it. On x86_64 it is VMX or
+SVM: the kernel enters root mode and a guest runs in non-root mode, exiting into
+the kernel on anything it may not do itself. On aarch64 it is EL2, and there is
+a catch worth knowing early — a kernel *entered* at EL2 can drop to EL1 and keep
+EL2 for itself; a kernel entered at EL1 cannot climb back. ReconOS runs at EL1
+and does not currently record which it was entered at. That is free at boot and
+unrecoverable afterwards, so it is the one piece worth doing before the rest.
+
+**Why it comes after the disk work rather than before.** A hypervisor needs
+nested page tables (an extension of checkpoint 5, and part of why the page table
+code is a thing rather than a fixed layout), memory the physical allocator is
+not also handing out, virtual devices — which needs a device model, which needs
+checkpoint 11's block layer — and somewhere to keep a disk image, which needs a
+filesystem. Every one of those is already on the line for its own reasons.
+Reaching for virtualization first would mean building all of them badly, in a
+hurry, for one caller.
+
+**It does not replace the compatibility layers, and they do not replace it.**
+A compatibility layer runs *one program* from another system by translating its
+system calls: cheap, fast, and exactly as complete as the translation. A
+hypervisor runs *the whole other system*: complete by construction, and costs a
+machine's worth of resources to do it. The personality pointer added at
+checkpoint 10 is the first half of the first answer. Both are wanted, for the
+same reason every desktop that has both wants both.
+
+Tracked as [issue #265](https://github.com/neogentrics/ReconOS/issues/265).
+
 ### Checkpoint 10 — user mode, the first system call, and the higher half
 
 **This is the checkpoint the desktop's accounts have been waiting for.**
@@ -907,6 +941,216 @@ back a memory map, a framebuffer at a known address, and file access on the
 boot volume before the kernel exists. A BIOS loader is 16-bit real-mode x86 and
 covers one architecture, so it is worth doing second rather than not at all.
 
+
+### Checkpoint 11 — block devices
+
+**The first code in this kernel whose failure mode is somebody else's data.**
+
+Everything before it could crash, hang or report nonsense, and rebooting undid
+it. From here on a bug writes to a disk, and the disk remembers.
+
+#### The layer is small, deliberately
+
+A block device answers exactly one question — give me these blocks, put these
+blocks there — and knows nothing about partitions, filesystems, files or names.
+Every one of those is a data format that lives above this line, the same line
+[THIRD_PARTY.md](../THIRD_PARTY.md) already draws for PNG and TLS. Conflating
+the four is how the storage work looks impossible; separated, this one is a
+registry and a range check.
+
+The range check is the part worth reading. The obvious form is
+
+```c
+if (lba + count > dev->block_count)   /* wrong */
+```
+
+and it is wrong, because a caller that passes a large count produces a sum that
+wraps *below* `block_count`, the check passes, and the driver writes wherever
+the truncated address landed. The self-test asks for `(u32)-1` blocks starting
+at the last block, which is precisely the request that separates a real range
+check from one that looks like one.
+
+**Flush is in the driver interface from the first driver**, not added later. A
+disk that reports a write complete while it is still in a volatile cache is
+doing the normal thing, and ReconFS is meant to survive power loss — so without
+flush, every ordering guarantee above this line would be a fiction.
+
+#### Four drivers, three of them written
+
+| Driver | Where it is found | Reached through |
+|---|---|---|
+| **virtio-blk** | any hypervisor | memory-mapped registers, and PCI |
+| **NVMe** | every machine since about 2016 | PCI |
+| **AHCI** | roughly 2005 to 2020, which is most machines people own | PCI |
+| USB mass storage | removable media | *checkpoint 11b — see below* |
+
+They are shaped alike and differ in exactly the ways that matter.
+
+**virtio** is a ring and two indices. Two barriers hold it together and both are
+named in the code, because both failures look like corrupted data rather than
+like a missing barrier: every descriptor must be visible before the index that
+points at it, and the used index must be read before the entry it refers to.
+
+A virtio request is *three* descriptors, and that is the protocol rather than a
+choice. The device reads the header and writes the status byte, and a descriptor
+carries one direction — so putting the status inside the data buffer, which is
+the obvious thing to do with a small struct, asks the device to write into
+memory it was told to read.
+
+**NVMe** is two rings and a doorbell, and three things about it are genuinely
+different. A controller must be *stopped* before it can be configured, and a
+running one ignores writes to its queue registers silently. There are two kinds
+of queue — an admin queue configured through registers, whose job is to create
+the others, and I/O queues created by sending commands through it. And
+completions are found by a **phase bit** rather than an index: the ring is never
+cleared, and every entry carries a bit that flips each lap. Forgetting to flip
+the expected phase on wrap gives a driver that works for exactly one lap of the
+ring.
+
+**AHCI** is neither: it is a table of thirty-two slots and a bitmask register.
+Setting bit N means "slot N is yours", and the controller clears it when done.
+Two things hang a first AHCI driver, and both are in the code with the reason.
+The engine must be stopped before its pointers move, and stopping it is two bits
+and two waits rather than one — clear ST and wait for CR, then clear FRE and
+wait for FR — because the controller keeps reading the command list until the
+first clears and keeps writing the received-FIS area until the second does. And
+a port with nothing attached still exists and still answers; whether a disk is
+there is in the SATA status register, and a driver that skips that check waits
+forever for a command it gave to nobody.
+
+#### PCI, which had to be built before any of it
+
+Nothing on an x86 machine lists what is present. The bus is enumerated — read
+every possible address, and the ones answering all-ones are not there — and the
+same walk finds NVMe, AHCI and virtio alike.
+
+**The half worth writing carefully is base address registers nobody assigned**,
+because three boot paths out of four hide the need for it. Under SeaBIOS and
+under OVMF the firmware has already placed every device's registers. On the PVH
+path there is no firmware at all: the registers read back as zero and the kernel
+sizes and places them itself.
+
+Sizing one is destructive — write all ones, read back what the device holds, and
+the lowest bit still set is the size. The first version restored only the low
+half of a 64-bit register. **The size came out right**; what went wrong was
+three functions later, when the base address read back as `0xFFFFFFFF_FE000000`,
+the direct map turned that into a non-canonical pointer, and the processor
+turned that into a general protection fault. Found by asking `objdump` where the
+fault was rather than reasoning about it. The block self-test already had the
+discipline this needed — put back what you borrowed — written down deliberately
+and then not applied to the one register in the kernel where borrowing destroys
+something.
+
+#### Two firmwares describe a machine two ways
+
+aarch64 booted from a device tree finds its devices by reading the tree. aarch64
+booted through UEFI has no tree at all — that firmware uses ACPI — so it found
+nothing, and the driver was not the problem.
+
+So the kernel reads ACPI tables now: a root pointer, a root table listing every
+other, each with a four-character signature. Two details earned their comments.
+A machine with both an RSDT and an XSDT must be read through the **XSDT**,
+because a table above four gigabytes cannot appear in the older list at all, so
+that list is quietly incomplete on exactly the machines where it matters. And
+the entries are read byte by byte, because an XSDT's are eight bytes long after
+a thirty-six byte header — which makes every entry after the first misaligned,
+and a 64-bit load from there **faults on aarch64 and works on x86**. That is
+precisely the class of difference the `arch.h` split exists to prevent.
+
+AML is deliberately absent. Interpreting the DSDT means writing an interpreter
+for a language, and when something needs one it will be its own piece of work
+rather than something that grew quietly out of a table walker.
+
+The same walk is what checkpoint 9b needs on x86_64: the processor list is in
+MADT, two tables along from MCFG.
+
+#### A comment that was wrong, and is now the opposite
+
+`arch_pci_mmio_window` on aarch64 returned false, with a reason: every machine
+reached that way was booted by something that assigns base address registers.
+True of UEFI. False of a hypervisor starting the kernel directly with a device
+tree — which is one of this kernel's own boot paths. An NVMe controller on that
+path came up with every register unassigned, and the kernel could not reach a
+disk that was plainly there.
+
+The window comes out of the host bridge's `ranges` property now, which is a
+better answer than the one x86_64 uses: it is what the machine says about
+itself, rather than what its architecture usually does.
+
+#### The self-test moves sixteen kilobytes, not one block
+
+A one-block request fits inside a single page, and a single page is the case
+every scatter scheme gets right. NVMe describes a transfer as a list of pages —
+one in the first pointer, two in the second, three or more in a separate list —
+so a test that never exceeds one page never reaches the code where a driver goes
+wrong.
+
+It works on the *last* blocks of the device, because a driver with an off-by-one
+in its range arithmetic fails there and nowhere else. It clears the buffer
+between the write and the read, so a driver that quietly hands back the caller's
+own buffer is caught rather than congratulated. And it puts back every byte it
+borrowed, because this is somebody's disk.
+
+Proving the write reached the *file* rather than a cache took disabling the
+restore once and looking at the image on the host. The pattern was there, byte
+for byte.
+
+#### Verification
+
+The harness gained an expectation: **a run that was given a disk must say it
+found one.** Without it, a driver that silently stopped finding disks would go
+on reporting a full set of passes for ever, because "no device to test against"
+is a legitimate pass on a diskless machine — and both architectures deliberately
+have a run with no disk at all, since a kernel that only works on a machine with
+storage cannot boot a diskless one.
+
+It caught something on its first run: aarch64 under UEFI found nothing, which is
+what led to the ACPI work above.
+
+**187 self-tests across 17 boot paths, no failures.** Every driver runs on
+both architectures.
+
+| Path | With | Self-tests |
+|---|---|---|
+| x86_64 PVH, direct and `-cpu max` | virtio over PCI | 11 each |
+| x86_64 PVH | NVMe | 11 |
+| x86_64 PVH | AHCI | 11 |
+| x86_64 PVH | no disk at all | 11 |
+| x86_64 GRUB on BIOS and on UEFI | virtio over PCI | 11 each |
+| x86_64 reconboot, UEFI | virtio over PCI | 11 |
+| aarch64 device tree, two CPU models | virtio, memory-mapped | 11 each |
+| aarch64 device tree | NVMe | 11 |
+| aarch64 device tree | AHCI | 11 |
+| aarch64 device tree | no disk at all | 11 |
+| aarch64 device tree, 2 / 4 / 8 processors | virtio, memory-mapped | 11 each |
+| aarch64 reconboot, UEFI | virtio over PCI, found through ACPI | 11 |
+
+### Checkpoint 11b — USB mass storage
+
+**Split out rather than dropped, and the reason is that it is not a driver.**
+
+The other three storage drivers each talk to one controller over a bus the
+kernel already reaches. A USB disk needs, before any of that:
+
+- **a host controller driver** — xHCI, which is its own ring-and-doorbell
+  protocol with a command ring, an event ring, and a transfer ring per endpoint
+- **enumeration** — a device that arrives at address zero, is assigned one, is
+  asked for its descriptors, and has a configuration selected
+- **the mass storage class** — SCSI commands wrapped in a transport of their
+  own, and a specification's worth of error recovery for a bus where a device
+  can be unplugged mid-transfer
+
+That is three layers, one of which is a bus, and it is comparable in size to
+everything else in checkpoint 11 put together. Listing it beside three
+controller drivers made it look like a fourth, which is how a checkpoint quietly
+becomes twice its stated size.
+
+It is also not on the critical path. Installing beside an existing system needs
+to *read the installation medium*, and on both architectures that medium is
+reached through firmware during boot and through a real disk afterwards. USB
+becomes necessary when somebody wants to plug a drive in while the system is
+running, which is a desktop feature rather than an install one.
+
 ## Storage, partitions and filesystems
 
 The goal that shapes all of this: **install beside whatever is already there.**
@@ -1039,10 +1283,42 @@ Four rules hold across all of it, each paid for by something:
 
 Processes are deliberately *not* stubbed. Applications are `dlopen`'d into the
 compositor's address space, so there is no boundary to write in advance — the
-boundary is an address space and there is not one. The module ABI is settled at
-checkpoint 5, where address spaces arrive, and `recon_appwin_impl` is its real
-surface: a struct of callbacks holding pointers into the compositor's own
+boundary is an address space and there is not one. `recon_appwin_impl` is the
+real surface: a struct of callbacks holding pointers into the compositor's own
 memory, which is the part that cannot survive a process boundary unchanged.
+
+**That sentence used to say the module ABI would be settled at checkpoint 5,
+"where address spaces arrive."** The numbering has moved twice since it was
+written and address spaces arrived at checkpoint 10, which has now landed — so
+the deadline is here rather than ahead, and the paragraph is corrected rather
+than quietly left pointing at a checkpoint that means something else now.
+
+What checkpoint 10 actually settled is smaller than the sentence promised. The
+processor now enforces a privilege boundary, and a process has a personality —
+its own idea of what a system call number means. What it does *not* yet have is
+its own address space: there is one set of page tables, and every thread shares
+it. A process in the sense `recon_appwin_impl` would have to cross needs that,
+plus shared memory between two of them, plus a way to pass a handle. None of
+those is hard after checkpoint 11's device model; none of them exists today.
+
+**The observation that matters for the decision, and it is the desktop
+session's to make.** A function pointer means nothing across an address space,
+so the interface cannot simply be recompiled — it has to invert. The shape that
+survives is the one where the application owns its buffer, draws into shared
+memory, and *submits* a frame, rather than the compositor calling into it. That
+is Wayland, which the compositor already implements for external clients. The
+out-of-process path therefore already exists in the tree; what does not is
+in-tree applications using it.
+
+So the likely answer is not a new ABI but a migration: `recon_appwin_impl`
+stays as a convenience for code that genuinely lives inside the compositor's
+process, and everything a person installs becomes a client. The kernel's part
+is shared memory and handles, and it is on the line for checkpoints 11 through
+13 anyway.
+
+The decision does not need making now. It needs making before checkpoint 15,
+because the installer is what fixes the meaning of "an application", and by then
+the answer has to be true.
 
 The kernel claims error-code area letter `N` in `recon_errors.def`.
 
