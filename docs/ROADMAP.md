@@ -1951,14 +1951,9 @@ The transport and the message are built and tested: headers, dot-stuffing, line
 endings, and refusing a subject with a newline in it -- which is how one message
 becomes two. The window and the settings are built too.
 
-**And STARTTLS on port 587.** ReconOS sends over TLS from the first byte and
-nothing else, so a provider offering only STARTTLS cannot be used at all. It
-needs `recon_net` to be able to upgrade a plain stream, which it deliberately
-cannot today -- and when it can, the upgrade has to be *required*: a server that
-does not offer it, or a middle that strips it from the offer, must end the
-session rather than carry on in the open. The easy half of that is connecting.
-The hard half is the one that would otherwise ship a system sending passwords in
-the clear.
+**STARTTLS on port 587 works** as of v0.3.1, with the upgrade required: a
+server that does not offer it, or a middle that strips the offer, ends the
+session rather than carrying on in the open.
 
 **The firewall cannot filter packets**, and will not until ReconOS has a
 network stack of its own. What it governs is what ReconOS itself opens and

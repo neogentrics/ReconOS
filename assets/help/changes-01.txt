@@ -417,6 +417,43 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+STARTTLS, with the upgrade required. Port 587 works now, so a provider that
+offers only STARTTLS is usable. It was deferred on purpose — the easy half is
+connecting and the hard half is the one that ships a system sending passwords in
+the clear.
+
+Three things something in the middle can do, and all three are refused.
+
+It can *delete* STARTTLS from the server's offer, and a client that carries on
+has sent everything in the open because one line was removed. So the upgrade is
+required: no offer means the session ends. A server that genuinely cannot
+encrypt and a middle that stripped the offer look identical from the client's
+side — and that is the point, because a client able to tell them apart is one
+that could be argued out of encrypting.
+
+It can answer *"ready to start TLS"* and put more commands in the same packet.
+Those bytes arrived before anything was proved, and a client that reads them
+takes an attacker's commands as though they came from inside the encrypted
+session. That is how STARTTLS has been broken in real mail clients. Everything
+buffered is discarded the moment the upgrade starts.
+
+And it can lie in the first EHLO. Nothing learned before the upgrade survives
+it — EHLO is sent again afterwards, so what the server can do is heard from the
+party whose certificate has been checked.
+
+Tested against a server built to attack it rather than one built to work,
+because the well-behaved path ends at a certificate a fake server cannot produce
+and everything worth checking happens before that. The no-offer server saw
+exactly EHLO reconos and nothing else; the injecting server saw EHLO reconos
+and STARTTLS and nothing else. No AUTH, no MAIL FROM, no letter, in either.
+
+BG-113 came out of the same fake server, and is not about SMTP. A server
+that accepts and then says nothing left the client waiting forever: the connect
+deadline was dropped the moment the socket connected, and *connected* and
+*usable* are the same moment for a plain stream and not for an encrypted one.
+Every outgoing TLS stream had it — reading mail, the web viewer, checking the
+time.
+
 Mail can send. Both halves of an account on one form, because reading and
 sending are separate protocols on separate servers and the same account to the
 person filling it in. The sending half is allowed to be empty — somebody who
