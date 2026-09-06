@@ -430,6 +430,67 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+**A put-away window's button recedes into itself.** The last thing asked for on
+the taskbar and not built. `minimized` reached the drawing code, was cast to
+void, and then reached exactly one thing six lines later -- the bevel direction.
+So a put-away window and a background window differed by one pixel of light and
+one of shadow, on a 28-pixel button, at the bottom of the screen.
+
+There are three states, and there are now two signals, so every pair differs by
+at least two things:
+
+| | fill | bevel | contents |
+|---|---|---|---|
+| focused | active | pressed | full |
+| open, behind | plain | raised | full |
+| minimized | plain | pressed | **washed** |
+
+The contents wash towards the button's **own fill**, which is the original idea
+corrected rather than a new one. It used to be the whole button filled with the
+bar's colour so a put-away window sank into the bar, and that inverted on the
+skin whose bar is deep blue and whose buttons are near-white. Receding into its
+own button is right on every skin because the *surface* defines the direction --
+and it is the only such rule a skin cannot defeat, because every other way of
+saying "less prominent" needs two colours to stay apart and a skin may put them
+anywhere.
+
+**Measured on the same button, open and then put away**, so nothing but the
+state differs. All eleven skins land between 0.574 and 0.588 against an
+arithmetic prediction of 0.569.
+
+**Three instruments were wrong before that number was right**, and the code was
+right every time. Mean colour per button compared against two *other* buttons
+as a noise floor — a button is mostly fill, and the floor was measuring
+different words and icons. The pointer was in the photograph, its tooltip and
+cursor sitting on the very button being measured, which made three skins report
+a put-away button with *more* ink than an open one. And the taskbar was assumed
+four pixels higher than it is, so the window straddled the bevel — which flips
+with the state, and swamped what it was meant to measure around.
+
+A fourth found nothing wrong with the code and something wrong with the
+measurement: one skin read 0.74 where ten read 0.577, the gradient looked like
+the culprit, the fix changed the number by nothing at all, and the fault was
+that a graded button's own spread was being counted as contents. A wash cannot
+remove that, because washing a colour towards itself does nothing.
+
+**The wash strength's ceiling was measured with this system's own reader.**
+Washed past about 140 of 255 the title stops being separable from the button at
+all — the engine finds zero marks where it found nine or twelve, on every skin.
+It is set to 110.
+
+**A menu on the clock.** Clicking it opened the Control Panel at its root: the
+right application at the wrong page, and four more clicks for somebody who only
+wanted to stop reading fourteen thirty. It now offers the two things people
+want from a clock in a corner — which way it writes the hour, and how to get at
+the rest.
+
+Both choices are shown and the one in force is **marked**, rather than one entry
+that toggles. "Show am and pm" says what will happen and not what is happening,
+so the state would have to be read off the clock itself — which is the thing
+somebody was looking at when they could not tell. It writes the setting the
+Control Panel writes; two places that can change one thing and two records of
+what it is set to is how a preference starts disagreeing with itself.
+
 **The clock goes in the corner, and gains the date.** The clock and the desktop
 pager were the wrong way round. That is a mistake rather than a preference: the
 corner is where a clock goes, and four numbered squares sitting in the place a

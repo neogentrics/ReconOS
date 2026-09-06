@@ -153,19 +153,17 @@ rather than guessed at, which was the other half of the plan.
 **A colour for the glass** — v0.3.1. Six tints, applied as a lens over the
 skin's own colours rather than as six more skins.
 
+**Telling an open window from a minimized one** — v0.3.1. Both halves now: the
+buttons round, and a put-away window's contents recede into its own button.
+Measured on all eleven skins, on the same button open and then put away.
+
 ### Asked for, and not started
 
-**Telling an open window from a minimized one on the taskbar.** Half of this
-request shipped: the desktop pager in the bottom-right corner was the last
-square thing on the desktop and now rounds like everything else. The half that
-is left is the half the request was actually about -- a task button should look
-different depending on whether its window is on screen or put away, and today
-it does not. Naming it separately because "rounded taskbar buttons" is done and
-this is not, and one heading covering both would read as finished.
-
 **Clicking the clock should open Date and Time, not the Control Panel root.**
-It opens the right application at the wrong page. Blocked on the panel being
-able to accept which page to show, which nothing else needs yet.
+The clock now has its own menu, and choosing what the hour looks like never
+leaves the taskbar -- but the entry that goes to the settings still opens the
+panel at its root. Blocked on the panel being able to accept which page to
+show, which nothing else needs yet.
 
 **Making a picture bigger.** Photos can convert formats; it cannot resize. The
 honest version of this is a resampler, and one already exists -- `recon_video`

@@ -68,7 +68,7 @@ written down as it was hit rather than guessed at in advance.
 | **Draws** | its own windows, menus, icons and text — nothing is a toolkit widget |
 | **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for encryption in both directions |
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
-| **Skins** | eleven, including one see-through, three for colour vision and one for reading |
+| **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Tests** | 15 suites, no display needed |
 
