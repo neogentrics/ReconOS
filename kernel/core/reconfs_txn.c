@@ -56,9 +56,28 @@
  *
  * Bounded on purpose. A transaction that needs more is *refused*, not grown:
  * an allocator that quietly takes more memory under load is how a filesystem
- * fails at the moment it is most needed. Sixteen leaves is 16,384 blocks of
- * allocation change in one commit, which is far past anything a single file
- * operation does. */
+ * fails at the moment it is most needed.
+ *
+ * How many blocks that actually is depends on the block size, because a leaf
+ * holds one owner per eight bytes of itself:
+ *
+ *     capacity = TXN_LEAVES * (block_size / 8)
+ *
+ *      4 KiB blocks ->   8,192 blocks =  32 MiB of allocation change
+ *     16 KiB blocks ->  32,768 blocks = 512 MiB
+ *     64 KiB blocks -> 131,072 blocks =   8 GiB
+ *
+ * This comment used to read "sixteen leaves is 16,384 blocks", flat, with no
+ * block size attached. That figure is right at 8 KiB and at no other size the
+ * format allows -- and it is wrong by a factor of two at 4 KiB, which is the
+ * size ordinary volumes use. Nothing tested it, because a number in a comment
+ * is not reachable from a test: the same shape as the 16 TiB ceiling of
+ * BG-117, also written down, also wrong. (BG-126)
+ *
+ * The bound is still far past any single file operation -- a file needing more
+ * than one indirect block is refused, which is 512 blocks at 4 KiB -- but it is
+ * reachable by a test that fills a volume, and reconfs_txn_capacity exists so
+ * such a caller can ask rather than discover. */
 #define TXN_LEAVES	16
 #define TXN_INDEX	64
 #define TXN_FREED	256
@@ -375,6 +394,11 @@ u64 reconfs_txn_new_dossier(struct reconfs_txn *txn)
 void reconfs_txn_set_root(struct reconfs_txn *txn, u64 inode)
 {
 	txn->new_root_inode = inode;
+}
+
+u64 reconfs_txn_capacity(const struct reconfs *fs)
+{
+	return (u64)TXN_LEAVES * (fs->block_size / sizeof(u64));
 }
 
 bool reconfs_txn_failed(const struct reconfs_txn *txn)

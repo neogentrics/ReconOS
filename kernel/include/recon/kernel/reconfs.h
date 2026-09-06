@@ -562,6 +562,15 @@ void reconfs_txn_free(struct reconfs_txn *txn, u64 blk);
 u64  reconfs_txn_new_dossier(struct reconfs_txn *txn);
 void reconfs_txn_set_root(struct reconfs_txn *txn, u64 inode);
 bool reconfs_txn_failed(const struct reconfs_txn *txn);
+
+/* How many block ownerships one transaction on this volume may change.
+ *
+ * A fixed number of owner-table leaves, so the answer scales with the block
+ * size rather than being one number -- and on a volume with more blocks than
+ * this, no single transaction can touch all of them. Exposed because a caller
+ * that needs to know should ask rather than find out from a failure that does
+ * not say which limit it hit. */
+u64 reconfs_txn_capacity(const struct reconfs *fs);
 enum reconfs_status reconfs_txn_commit(struct reconfs_txn *txn);
 void reconfs_txn_abort(struct reconfs_txn *txn);
 

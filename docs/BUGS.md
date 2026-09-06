@@ -348,6 +348,59 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-126 — A transaction's capacity was written down as one number, and it is three
+
+[#284](https://github.com/neogentrics/ReconOS/issues/284)
+
+- **Found:** by running the ReconFS battery against a 512 MB disk instead of the
+  16 MB one the verification rig uses.
+- **Cost:** nothing yet. It has never been reached by anything but a test.
+
+A transaction may touch a fixed number of owner-table leaves, and a leaf holds
+one owner per eight bytes of *itself*. So its capacity scales with the block
+size:
+
+    capacity = TXN_LEAVES * (block_size / 8)
+
+      4 KiB blocks ->   8,192 blocks =  32 MiB of allocation change
+     16 KiB blocks ->  32,768 blocks = 512 MiB
+     64 KiB blocks -> 131,072 blocks =   8 GiB
+
+The comment above the constant said "sixteen leaves is 16,384 blocks", flat,
+with no block size attached. That figure is right at 8 KiB and at no other size
+the format allows — and wrong by a factor of two at 4 KiB, which is the size
+every volume under two terabytes gets.
+
+**The same shape as BG-117.** A number written in a comment, stated as a fact,
+wrong, and unreachable from any test. That one was a 16 TiB ceiling and was
+found only because somebody asked whether the limit was real. This one was found
+only because a disk was made bigger than the rig's.
+
+**What it is not.** Not a file-size ceiling: `reconfs_write_named` already
+refuses a file needing more than one indirect block, which is 512 blocks at
+4 KiB — far inside the bound. Nothing in the filesystem can reach this today.
+
+**What went wrong in the test.** The freed-block-exclusion test fills the volume
+to force the allocator to wrap, which is the only way to reach the case it
+exists for. A volume with more blocks than one transaction can track cannot be
+filled by one transaction — so on a large enough disk the test reported a
+filesystem fault when what had actually happened is that it had outgrown its own
+method. Bracketed exactly:
+
+    32 MB disk,  8,192 blocks of 4 KiB : pass (8,157 taken)
+    64 MB disk, 16,384 blocks of 4 KiB : FAIL (8,141 taken, txn failed)
+
+Still a failure either way — a check that cannot reach its case is not a check,
+and passing quietly is how it would stop being one — but it now says which of
+the two happened, and `reconfs_txn_capacity` exists so a caller can ask rather
+than find out.
+
+**And the rig, for the third time this session.** BG-124 hid below nine
+processors because the rig stopped at eight. BG-125 hid because the only node
+with a child was one the rig never asked about. This hid because the disk was
+16 MB. Every one of them is the same sentence: *the fault is real from the first
+line; what was missing was a machine big enough to show it.*
+
 ### BG-125 — The device tree walk lost any node that had a child
 
 [#283](https://github.com/neogentrics/ReconOS/issues/283)

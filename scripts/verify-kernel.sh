@@ -453,9 +453,18 @@ for a in x86_64 aarch64; do
 	commits=$(echo "$fs_out" | grep -cE 'a commit that survives a remount : pass')
 	verdict=$(echo "$fs_out" | grep -oE '[0-9]+ of [0-9]+ block sizes behaved')
 
+	# The freed-block exclusion can only be checked on a volume small enough
+	# to fill in one transaction, so it reports whether it ran rather than
+	# failing on a large disk (BG-126). This image is 16 MB, which is small
+	# enough at every block size -- so demand all three here. Without this,
+	# growing the image would silently stop checking the one rule that keeps
+	# a transaction from overwriting live storage, and the run would still
+	# be green.
+	excl=$(echo "$fs_out" | grep -cE 'the freed-block exclusion was checked at 3 of 3')
+
 	if [ "$verdict" = "3 of 3 block sizes behaved" ] &&
-	   [ "$sizes" = "3" ] && [ "$commits" = "3" ]; then
-		echo "3 block sizes, 15 faults, 3 commits"
+	   [ "$sizes" = "3" ] && [ "$commits" = "3" ] && [ "$excl" = "1" ]; then
+		echo "3 block sizes, 15 faults, 3 commits, exclusion 3/3"
 		passes=$((passes + 1))
 	else
 		echo "FAILED"

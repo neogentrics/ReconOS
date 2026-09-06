@@ -248,6 +248,15 @@ static bool noticed(struct block_device *dev, enum breakage b)
 	return saw;
 }
 
+/* How many block sizes actually reached the freed-block exclusion check.
+ *
+ * It needs a full volume, so it can only run where the volume fits inside one
+ * transaction. That is true of the verification rig's 16 MB disk and false of
+ * every real one -- so without counting, running the battery on real hardware
+ * would quietly stop checking the one rule that keeps a transaction from
+ * overwriting live storage, and nothing would say so. (BG-119, BG-126) */
+static unsigned exclusion_checked;
+
 static bool run_at(struct block_device *dev, u32 bs);
 
 void reconfs_run(void)
@@ -291,12 +300,29 @@ void reconfs_run(void)
 
 		kprintf("\nreconfs: formatting %s and checking the checker\n", want);
 
+		exclusion_checked = 0;
+
 		for (k = 0; k < RK_ARRAY_LEN(sizes); k++)
 			if (run_at(dev, sizes[k]))
 				good++;
 
 		kprintf("  %u of %u block sizes behaved\n",
 			good, (unsigned)RK_ARRAY_LEN(sizes));
+
+		/* Said out loud either way. A check that silently stops running
+		 * is the failure mode this whole battery exists to avoid, and
+		 * "it did not apply here" is only acceptable when something
+		 * states it. */
+		if (exclusion_checked)
+			kprintf("  the freed-block exclusion was checked at "
+				"%u of %u block sizes\n",
+				exclusion_checked,
+				(unsigned)RK_ARRAY_LEN(sizes));
+		else
+			kprintf("  the freed-block exclusion was NOT CHECKED "
+				"on this volume at any block size -- it needs "
+				"one small enough to fill in a single "
+				"transaction\n");
 	}
 }
 
@@ -562,11 +588,50 @@ static bool run_at(struct block_device *dev, u32 bs)
 			}
 
 			if (!last || reconfs_txn_failed(t2)) {
-				kprintf("  a freed block is not reused : FAIL "
-					"(could not fill: %llu taken, txn %s)\n",
-					(unsigned long long)n,
-					reconfs_txn_failed(t2) ? "failed"
-							       : "ok");
+				/* Two different failures wore one message until
+				 * BG-126. Filling the volume is how this test
+				 * forces the allocator to wrap -- and a volume
+				 * with more blocks than one transaction can
+				 * track cannot be filled by one, so on a large
+				 * enough disk this reported a filesystem fault
+				 * when what had happened is that the test had
+				 * outgrown its own method.
+				 *
+				 * Told apart now, and still a failure either
+				 * way: a check that cannot reach its case is
+				 * not a check, and passing quietly is exactly
+				 * how it would stop being one. */
+				u64 cap = reconfs_txn_capacity(&fs);
+
+				if (fs.total_blocks > cap) {
+					/* Not a fault. This method needs the
+					 * volume full, and a volume larger than
+					 * one transaction can track cannot be
+					 * filled by one -- which is every real
+					 * disk. Reported as not-run and counted,
+					 * so that a run where it never ran at
+					 * any block size says so at the end
+					 * rather than simply not mentioning it. */
+					kprintf("  a freed block is not reused"
+						" : not checked (needs a volume "
+						"of at most %llu blocks at this "
+						"block size; this one has "
+						"%llu)\n",
+						(unsigned long long)cap,
+						(unsigned long long)fs.total_blocks);
+					reconfs_txn_abort(t2);
+					goto exclusion_done;
+				}
+
+				{
+					kprintf("  a freed block is not reused"
+						" : FAIL (could not fill: %llu "
+						"taken of %llu, txn %s)\n",
+						(unsigned long long)n,
+						(unsigned long long)fs.total_blocks,
+						reconfs_txn_failed(t2) ? "failed"
+								       : "ok");
+				}
 				reconfs_txn_abort(t2);
 				reconfs_unmount(&fs);
 				return false;
@@ -589,11 +654,14 @@ static bool run_at(struct block_device *dev, u32 bs)
 			}
 
 			reconfs_txn_abort(t2);
+			exclusion_checked++;
 			kprintf("  a freed block is not reused : pass (%llu blocks "
 				"taken, %llu released, none given back)\n",
 				(unsigned long long)n,
 				(unsigned long long)released);
 		}
+exclusion_done:
+		;
 
 		/* --- Names -------------------------------------------------
 		 *

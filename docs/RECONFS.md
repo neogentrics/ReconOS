@@ -61,6 +61,27 @@ no kernel at all to fix.
 
 ---
 
+
+## How much one transaction can change
+
+A transaction touches a fixed number of owner-table leaves, and a leaf holds one
+owner per eight bytes of itself. So the answer is not one number:
+
+| Block size | Blocks in one transaction | Allocation change |
+|---|---|---|
+| 4 KiB | 8,192 | 32 MiB |
+| 16 KiB | 32,768 | 512 MiB |
+| 64 KiB | 131,072 | 8 GiB |
+
+Bounded on purpose: a transaction needing more is refused rather than grown,
+because an allocator that quietly takes more memory under load fails at the
+moment it is most needed. `reconfs_txn_capacity` returns it, so a caller that
+needs to know asks rather than discovering it from a failure.
+
+Nothing in the filesystem reaches this today — a file needing more than one
+indirect block is refused first, which is 512 blocks at 4 KiB. It is reachable
+by a test that fills a volume, and that is how BG-126 was found.
+
 ## What the medium underneath actually promises
 
 Measured and read, not assumed. This is the foundation, and a design resting on
