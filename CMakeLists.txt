@@ -56,6 +56,7 @@ add_executable(ReconOS
     src/recon_capture.c
     src/recon_net.c
     src/recon_png.c
+    src/recon_image.c
     src/recon_fonts.c
     src/recon_wallpaper.c
     src/recon_appwin.c
@@ -348,6 +349,16 @@ target_include_directories(recon_png_tests PRIVATE
     ${ZLIB_INCLUDE_DIRS})
 
 target_link_libraries(recon_png_tests PRIVATE ${ZLIB_LIBRARIES} m)
+
+# Resampling, checked against properties rather than against a fixture: a
+# fixture for a scaler is a picture the scaler made, which proves only that it
+# agrees with itself.
+add_executable(recon_image_tests
+    tests/test_image.c
+    src/recon_image.c)
+
+target_include_directories(recon_image_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.

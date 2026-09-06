@@ -66,6 +66,7 @@
 #include "recon_help.h"
 #include "recon_icon_gen.h"
 #include "recon_icons.h"
+#include "recon_image.h"
 #include "recon_server.h"
 #include "recon_service.h"
 #include "recon_apps.h"
@@ -213,56 +214,25 @@ static const struct wlr_buffer_impl image_buffer_impl = {
 };
 
 /*
- * Shrink RGBA pixels by averaging each destination pixel over the source
- * pixels it covers. Downscaling only -- enlarging would need interpolation.
+ * Fit a decoded picture into a box, by way of the shared resampler.
  *
- * Doing this once at load means the compositor never rescales the image again:
- * the buffer ends up the size it will be drawn at, so compositing is a copy
- * rather than a resample. On a machine without a GPU that is the difference
- * between a cheap frame and an expensive one.
+ * There was a private area-averaging shrinker here, and it did the right thing
+ * for the one case it had -- sampling a wallpaper down turns one-pixel detail
+ * into dotted lines. It could only make things smaller, so when Photos wanted
+ * to resize a picture there was nothing to point it at, and the good resampler
+ * in recon_video is welded to YUV input so that was no use either. Two
+ * half-answers with a gap between them, which is what recon_image is for.
  */
-static unsigned char *downscale_rgba(const unsigned char *src, int src_w, int src_h,
-        int dst_w, int dst_h) {
+static unsigned char *downscale_rgba(const unsigned char *src, int src_w,
+        int src_h, int dst_w, int dst_h) {
     unsigned char *dst = malloc((size_t)dst_w * dst_h * 4);
     if (dst == NULL) {
         return NULL;
     }
-
-    for (int y = 0; y < dst_h; y++) {
-        int sy0 = (int)((int64_t)y * src_h / dst_h);
-        int sy1 = (int)((int64_t)(y + 1) * src_h / dst_h);
-        if (sy1 <= sy0) {
-            sy1 = sy0 + 1;
-        }
-
-        for (int x = 0; x < dst_w; x++) {
-            int sx0 = (int)((int64_t)x * src_w / dst_w);
-            int sx1 = (int)((int64_t)(x + 1) * src_w / dst_w);
-            if (sx1 <= sx0) {
-                sx1 = sx0 + 1;
-            }
-
-            uint32_t r = 0, g = 0, b = 0, a = 0, n = 0;
-            for (int sy = sy0; sy < sy1; sy++) {
-                const unsigned char *px = src + ((size_t)sy * src_w + sx0) * 4;
-                for (int sx = sx0; sx < sx1; sx++) {
-                    r += px[0];
-                    g += px[1];
-                    b += px[2];
-                    a += px[3];
-                    px += 4;
-                    n++;
-                }
-            }
-
-            unsigned char *out = dst + ((size_t)y * dst_w + x) * 4;
-            out[0] = (unsigned char)(r / n);
-            out[1] = (unsigned char)(g / n);
-            out[2] = (unsigned char)(b / n);
-            out[3] = (unsigned char)(a / n);
-        }
+    if (!recon_image_scale(src, src_w, src_h, dst, dst_w, dst_h)) {
+        free(dst);
+        return NULL;
     }
-
     return dst;
 }
 
