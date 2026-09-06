@@ -1628,6 +1628,19 @@ void recon_click_forget(void) {
 #define EDIT_BORDER THEME(FIELD_BORDER)
 #define EDIT_SELECTION THEME(FIELD_SELECTION)
 
+void recon_edit_focus(struct recon_edit *edit) {
+    if (edit == NULL) {
+        return;
+    }
+    edit->active = true;
+    edit->length = (int)strlen(edit->text);
+    /* Selected whole, so the first key replaces a default rather than being
+     * appended to it -- which is what recon_edit_begin was being used for, and
+     * is the half of it that was worth keeping. */
+    edit->caret = edit->length;
+    edit->anchor = edit->length > 0 ? 0 : -1;
+}
+
 void recon_edit_begin(struct recon_edit *edit, const char *initial,
         bool select_stem) {
     if (edit == NULL) {
@@ -1857,6 +1870,13 @@ enum recon_edit_result recon_edit_key(struct recon_edit *edit,
     switch (sym) {
     case XKB_KEY_Return:
     case XKB_KEY_KP_Enter:
+        /* A multi-line field takes the newline instead of finishing. There is
+         * no way to commit one from the keyboard, deliberately: a letter with
+         * a blank line in it should not be sent by the key that made it. */
+        if (edit->multiline) {
+            edit_insert_bytes(edit, "\n", 1);
+            return RECON_EDIT_CHANGED;
+        }
         return RECON_EDIT_COMMIT;
 
     case XKB_KEY_Escape:

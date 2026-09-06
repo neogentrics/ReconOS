@@ -709,8 +709,13 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
         return true;
     case HIT_ADDRESS:
         /* The whole address selected, so typing replaces it -- which is what
-         * somebody clicking an address bar almost always means. */
-        recon_edit_begin(&w->address, w->address.text, false);
+         * somebody clicking an address bar almost always means.
+         *
+         * recon_edit_focus rather than recon_edit_begin with the field's own
+         * text: that form aliases snprintf's source and destination, which is
+         * undefined and empties the field. Clicking the address bar cleared
+         * the address it was showing. BG-112. */
+        recon_edit_focus(&w->address);
         return true;
     default:
         return false;
@@ -749,9 +754,10 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
     case XKB_KEY_l:
     case XKB_KEY_L:
-        /* Ctrl+L to the address bar, which is where every browser puts it. */
+        /* Ctrl+L to the address bar, which is where every browser puts it.
+         * Same aliasing fault as the click above: BG-112. */
         if ((modifiers & RECON_MOD_CTRL) != 0) {
-            recon_edit_begin(&w->address, w->address.text, false);
+            recon_edit_focus(&w->address);
             return true;
         }
         return false;

@@ -390,6 +390,21 @@ struct recon_edit {
      * that somebody behind you cannot read it. The text itself is untouched --
      * masking is about what is shown, not what is stored. */
     bool masked;
+
+    /*
+     * Enter puts a newline in rather than finishing.
+     *
+     * For a field that holds a letter rather than a name. Everywhere else in
+     * this system Enter means "done", and it still does here for every other
+     * field -- so a form with a body in it has one control that behaves
+     * differently, which is why the flag is on the field rather than being a
+     * mode the whole form is in.
+     *
+     * recon_edit_draw still draws one line. A caller with a multi-line field
+     * has a box to lay out and is drawing it itself; what it needs from here
+     * is the editing, not the picture.
+     */
+    bool multiline;
 };
 
 /*
@@ -404,6 +419,17 @@ struct recon_edit {
 void recon_edit_begin(struct recon_edit *edit, const char *initial,
     bool select_stem);
 void recon_edit_end(struct recon_edit *edit);
+
+/*
+ * Put the caret in a field that already has text in it, with the text selected.
+ *
+ * What recon_edit_begin does, minus the copy -- and the copy is the point.
+ * `recon_edit_begin(edit, edit->text, false)` is how a form used to move focus
+ * between fields, and it hands snprintf a source and a destination that are the
+ * same buffer, which is undefined and on this library empties the field. A form
+ * with defaults in it lost them to being tabbed past. See BG-112.
+ */
+void recon_edit_focus(struct recon_edit *edit);
 
 enum recon_edit_result {
     RECON_EDIT_IGNORED,  /* Not a key the editor uses. */

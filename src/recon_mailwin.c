@@ -18,6 +18,7 @@
 #include "recon_crypt.h"
 #include "recon_icons.h"
 #include "recon_mail.h"
+#include "recon_smtp.h"
 #include "recon_mailwin.h"
 #include "recon_net.h"
 #include "recon_server.h"
@@ -33,6 +34,10 @@
 #define COLOR_SEPARATOR THEME(MENU_SEPARATOR)
 #define COLOR_BAR THEME(BAR)
 #define COLOR_WARNING THEME(WARNING)
+/* The body box is a place text is typed, so it takes the field roles rather
+ * than the surface ones -- a skin makes those different on purpose. */
+#define COLOR_FIELD THEME(FIELD)
+#define COLOR_FIELD_TEXT THEME(FIELD_TEXT)
 
 #define PADDING 8
 #define ROW_HEIGHT 38
@@ -50,18 +55,37 @@
  */
 #define FETCH_LIMIT 50
 
-/* Fields on the setup screen, in the order they are tabbed through. */
+/*
+ * Fields on the setup screen, in the order they are tabbed through.
+ *
+ * Both halves of an account on one form. Reading and sending are separate
+ * protocols on separate servers, and they are the same account to the person
+ * filling it in -- two forms would mean somebody who set up reading and then
+ * could not work out why sending did nothing.
+ */
 enum setup_field {
     FIELD_HOST,
     FIELD_USER,
     FIELD_PORT,
+    FIELD_SEND_HOST,
+    FIELD_SEND_PORT,
+    FIELD_FROM,
     FIELD_COUNT,
+};
+
+/* Fields on the compose screen. The body is last because it is the tall one. */
+enum compose_field {
+    COMPOSE_TO,
+    COMPOSE_SUBJECT,
+    COMPOSE_BODY,
+    COMPOSE_COUNT,
 };
 
 enum mail_screen {
     SCREEN_SETUP,
     SCREEN_PASSWORD,
     SCREEN_MAIL,
+    SCREEN_COMPOSE,
 };
 
 #define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 100)
@@ -71,6 +95,10 @@ enum mail_screen {
 #define HIT_FORGET (RECON_APPWIN_HIT_USER + 13)
 #define HIT_REFRESH (RECON_APPWIN_HIT_USER + 14)
 #define HIT_BACK (RECON_APPWIN_HIT_USER + 15)
+#define HIT_WRITE (RECON_APPWIN_HIT_USER + 16)
+#define HIT_SEND (RECON_APPWIN_HIT_USER + 17)
+#define HIT_DISCARD (RECON_APPWIN_HIT_USER + 18)
+#define HIT_COMPOSE_BASE (RECON_APPWIN_HIT_USER + 300)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 200)
 
 struct recon_mailwin {
@@ -99,6 +127,15 @@ struct recon_mailwin {
     /* True while reading one message rather than the list. */
     bool reading;
     int body_scroll;
+
+    /* The letter being written, and the account it would go through. */
+    struct recon_smtp_account sending;
+    struct recon_edit compose[COMPOSE_COUNT];
+    int compose_focused;
+    struct recon_smtp_session *sender;
+    /* True from pressing Send until the server answers, so the button can say
+     * so and cannot be pressed twice. */
+    bool sending_now;
 
     char message[256];
     bool message_is_error;
@@ -146,6 +183,159 @@ static const struct recon_mail_handlers HANDLERS = {
     .finished = on_finished,
 };
 
+/* --- Sending --- */
+
+static void on_send_progress(void *user, const char *what) {
+    struct recon_mailwin *m = user;
+    set_message(m, false, "%s", what);
+    recon_appwin_refresh(m->win);
+}
+
+static void on_sent(void *user) {
+    struct recon_mailwin *m = user;
+    m->sending_now = false;
+
+    /*
+     * Back to the list, and the letter is cleared.
+     *
+     * Staying on a screen showing a message that has already gone invites
+     * pressing Send again, and the second copy is indistinguishable from the
+     * first to everybody except the person who received both.
+     */
+    m->screen = SCREEN_MAIL;
+    for (int i = 0; i < COMPOSE_COUNT; i++) {
+        recon_edit_begin(&m->compose[i], "", false);
+        m->compose[i].active = false;
+    }
+    set_message(m, false, "Sent.");
+    recon_appwin_refresh(m->win);
+}
+
+static void on_send_failed(void *user, const char *why) {
+    struct recon_mailwin *m = user;
+    m->sending_now = false;
+
+    /*
+     * The letter is left exactly as it was. A failure that also loses what
+     * somebody wrote is two failures, and the second one is the one they will
+     * remember.
+     */
+    set_message(m, true, "%s", why);
+    recon_appwin_refresh(m->win);
+}
+
+static const struct recon_smtp_handlers SEND_HANDLERS = {
+    .progress = on_send_progress,
+    .sent = on_sent,
+    .failed = on_send_failed,
+};
+
+static void stop_sending(struct recon_mailwin *m) {
+    if (m->sender != NULL) {
+        recon_smtp_close(m->sender);
+        m->sender = NULL;
+    }
+    m->sending_now = false;
+}
+
+static void start_writing(struct recon_mailwin *m) {
+    if (!recon_smtp_account_get(&m->sending) || m->sending.host[0] == '\0') {
+        set_message(m, true, "There is no sending server set up. Change the "
+            "account and fill in the sending half.");
+        return;
+    }
+    if (m->sending.from[0] == '\0') {
+        set_message(m, true, "There is no address to send from. Change the "
+            "account and fill in 'Your address'.");
+        return;
+    }
+
+    for (int i = 0; i < COMPOSE_COUNT; i++) {
+        recon_edit_begin(&m->compose[i], "", false);
+        m->compose[i].active = false;
+    }
+    /* The body is the one field where Enter means a new line rather than
+     * "done". See recon_edit's multiline flag. */
+    m->compose[COMPOSE_BODY].multiline = true;
+
+    m->compose[COMPOSE_TO].active = true;
+    m->compose_focused = COMPOSE_TO;
+    m->screen = SCREEN_COMPOSE;
+    m->message[0] = '\0';
+    m->message_is_error = false;
+}
+
+static void send_now(struct recon_mailwin *m) {
+    if (m->sending_now) {
+        return;
+    }
+
+    /*
+     * Refused rather than truncated, for the reason the setup form gives about
+     * server names and with more at stake here.
+     *
+     * The edit field holds more than a letter does. Cutting an address to fit
+     * would send to a different address from the one on screen, and the screen
+     * would go on showing the one that was typed -- so there would be nothing
+     * to notice until somebody else received it.
+     */
+    const char *to = m->compose[COMPOSE_TO].text;
+    const char *subject = m->compose[COMPOSE_SUBJECT].text;
+
+    struct recon_smtp_letter letter;
+    memset(&letter, 0, sizeof(letter));
+
+    if (strlen(to) >= sizeof(letter.to)) {
+        set_message(m, true, "That address is too long -- %zu characters, and "
+            "there is room for %zu.", strlen(to), sizeof(letter.to) - 1);
+        return;
+    }
+    if (strlen(subject) >= sizeof(letter.subject)) {
+        set_message(m, true, "That subject is too long -- %zu characters, and "
+            "there is room for %zu.", strlen(subject),
+            sizeof(letter.subject) - 1);
+        return;
+    }
+
+    /* Both lengths are checked above, so neither can truncate. */
+    memcpy(letter.to, to, strlen(to) + 1);
+    memcpy(letter.subject, subject, strlen(subject) + 1);
+    letter.body = m->compose[COMPOSE_BODY].text;
+
+    /*
+     * Checked here as well as inside recon_smtp_send, so the reason appears
+     * beside the field somebody is still looking at rather than as the result
+     * of a connection that was never made.
+     */
+    char why[192];
+    if (!recon_smtp_letter_ok(&letter, why, sizeof(why))) {
+        set_message(m, true, "%s", why);
+        return;
+    }
+
+    if (m->password.text[0] == '\0') {
+        set_message(m, true, "The password is needed to send as well as to "
+            "read. Change the account and sign in again.");
+        return;
+    }
+
+    stop_sending(m);
+
+    /*
+     * The same password as reading, which is right for nearly every provider
+     * and is stated rather than assumed: a separate sending password is a
+     * seventh field that is usually a copy of one already filled in, and a
+     * field like that is filled in wrong.
+     */
+    m->sender = recon_smtp_send(&m->sending, m->password.text, &letter,
+        &SEND_HANDLERS, m);
+    if (m->sender == NULL) {
+        set_message(m, true, "%s", recon_smtp_last_error());
+        return;
+    }
+    m->sending_now = true;
+}
+
 static void disconnect(struct recon_mailwin *m) {
     if (m->session != NULL) {
         recon_mail_close(m->session);
@@ -182,9 +372,19 @@ static void load_form(struct recon_mailwin *m) {
     char port[16];
     snprintf(port, sizeof(port), "%d", m->account.port);
 
+    recon_smtp_account_get(&m->sending);
+    if (m->sending.port <= 0) {
+        m->sending.port = RECON_SMTP_TLS_PORT;
+    }
+    char send_port[16];
+    snprintf(send_port, sizeof(send_port), "%d", m->sending.port);
+
     recon_edit_begin(&m->fields[FIELD_HOST], m->account.host, false);
     recon_edit_begin(&m->fields[FIELD_USER], m->account.user, false);
     recon_edit_begin(&m->fields[FIELD_PORT], port, false);
+    recon_edit_begin(&m->fields[FIELD_SEND_HOST], m->sending.host, false);
+    recon_edit_begin(&m->fields[FIELD_SEND_PORT], send_port, false);
+    recon_edit_begin(&m->fields[FIELD_FROM], m->sending.from, false);
 
     /*
      * `active` set directly, and *not* recon_edit_end.
@@ -195,8 +395,9 @@ static void load_form(struct recon_mailwin *m) {
      * emptied the port and username the moment the form was built, and the
      * form looked exactly like a form nobody had filled in.
      */
-    m->fields[FIELD_USER].active = false;
-    m->fields[FIELD_PORT].active = false;
+    for (int i = 0; i < FIELD_COUNT; i++) {
+        m->fields[i].active = (i == FIELD_HOST);
+    }
     m->focused = FIELD_HOST;
 }
 
@@ -249,6 +450,42 @@ static void save_form(struct recon_mailwin *m) {
     if (!recon_mail_account_set(&m->account)) {
         set_message(m, true, "%s", recon_mail_last_error());
         return;
+    }
+
+    /*
+     * The sending half, and it is allowed to be empty.
+     *
+     * Somebody who only wants to read their mail should not be stopped at a
+     * form asking for a server they do not have. Leaving it blank means Write
+     * says why it cannot, which is a better place to find out than a form that
+     * will not let you past.
+     */
+    const char *send_host = m->fields[FIELD_SEND_HOST].text;
+    const char *from = m->fields[FIELD_FROM].text;
+
+    if (send_host[0] != '\0') {
+        if (strlen(send_host) >= sizeof(m->sending.host) ||
+                strlen(from) >= sizeof(m->sending.from)) {
+            set_message(m, true, "That sending server or address is too long "
+                "to save.");
+            return;
+        }
+
+        memcpy(m->sending.host, send_host, strlen(send_host) + 1);
+        memcpy(m->sending.from, from, strlen(from) + 1);
+        /* The same username as reading, because for nearly every provider it
+         * is -- and a seventh field that is usually a copy of the second is a
+         * field people fill in wrong. */
+        memcpy(m->sending.user, m->account.user, strlen(m->account.user) + 1);
+
+        m->sending.port = atoi(m->fields[FIELD_SEND_PORT].text);
+        if (m->sending.port <= 0 || m->sending.port > 65535) {
+            m->sending.port = RECON_SMTP_TLS_PORT;
+        }
+        recon_smtp_account_set(&m->sending);
+    } else {
+        recon_smtp_account_clear();
+        memset(&m->sending, 0, sizeof(m->sending));
     }
 
     m->screen = SCREEN_PASSWORD;
@@ -316,13 +553,34 @@ static void draw_setup(struct recon_mailwin *m, struct recon_panel *p,
 
     static const char *const LABELS[FIELD_COUNT] = {
         "Server", "Username", "Port",
+        "Sending server", "Sending port", "Your address",
     };
 
     for (int i = 0; i < FIELD_COUNT; i++) {
-        recon_draw_text(p, m->font, x, y + ascent, 90, LABELS[i], COLOR_TEXT);
+        /*
+         * A gap and a heading where the form changes subject. Six fields in
+         * one column is a form somebody fills in from top to bottom without
+         * noticing that halfway down it stopped being about the same server.
+         */
+        if (i == FIELD_SEND_HOST) {
+            y += 6;
+            recon_draw_text(p, m->font, x, y + ascent, w,
+                "Sending, which is a different server", COLOR_TEXT);
+            y += line + 2;
+            recon_draw_text(p, m->font, x, y + ascent, w,
+                "Leave blank to only read mail. Encrypted from the first "
+                "byte, so port 465 rather than 587.", COLOR_DIM);
+            y += line + 6;
+        }
 
-        int fx = x + 96;
-        int fw = (i == FIELD_PORT) ? 80 : w - 96 - PADDING;
+        /* Wide enough for "Sending server", which the 90 this used to be cut
+         * to "Sending ser...". A label that does not fit is a form asking a
+         * question it did not finish. */
+        recon_draw_text(p, m->font, x, y + ascent, 112, LABELS[i], COLOR_TEXT);
+
+        int fx = x + 118;
+        int fw = (i == FIELD_PORT || i == FIELD_SEND_PORT)
+            ? 80 : w - 118 - PADDING;
         recon_edit_draw(p, m->font, fx, y, fw, FIELD_HEIGHT, &m->fields[i]);
         recon_hit_add(p, fx, y, fw, FIELD_HEIGHT, HIT_FIELD_BASE + i);
         y += FIELD_HEIGHT + 6;
@@ -365,6 +623,21 @@ static void draw_password(struct recon_mailwin *m, struct recon_panel *p,
     y += FIELD_HEIGHT + PADDING;
 
     int bx = draw_button(m, p, x, y, "Connect", HIT_CONNECT, true);
+
+    /*
+     * Writing without connecting first.
+     *
+     * Sending and reading are different servers, and requiring a successful
+     * connection to one before a letter can be handed to the other is a
+     * coupling with nothing behind it -- a mail server being down should not
+     * stop somebody writing. The password is the only thing sending needs from
+     * this screen, and it is on it.
+     */
+    struct recon_smtp_account sending;
+    bool can_write = recon_smtp_account_get(&sending) &&
+        sending.host[0] != '\0' && m->password.text[0] != '\0';
+    bx = draw_button(m, p, bx, y, "Write a letter", HIT_WRITE, can_write);
+
     draw_button(m, p, bx, y, "Change the account", HIT_FORGET, true);
     y += BUTTON_HEIGHT + PADDING;
 
@@ -376,6 +649,115 @@ static void draw_password(struct recon_mailwin *m, struct recon_panel *p,
     recon_draw_text(p, m->font, x, y + ascent, w,
         "The password is not saved. It is used for this connection and "
         "forgotten when the window closes.", COLOR_DIM);
+}
+
+/* --- Writing one --- */
+
+/*
+ * How tall the body box is, in lines.
+ *
+ * Whatever is left after the two header fields and the buttons, which is the
+ * right answer for a box whose whole job is to hold as much as it can.
+ */
+static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(m->font);
+    int line = recon_font_line_height(m->font);
+    int bottom = y + h;
+
+    recon_draw_text(p, m->font, x, y + ascent, w, "Write a letter", COLOR_TEXT);
+    y += line + 2;
+
+    char from[512];
+    snprintf(from, sizeof(from), "From %s, through %s", m->sending.from,
+        m->sending.host);
+    recon_draw_text(p, m->font, x, y + ascent, w, from, COLOR_DIM);
+    y += line + PADDING;
+
+    static const char *const LABELS[2] = { "To", "Subject" };
+    for (int i = 0; i < 2; i++) {
+        recon_draw_text(p, m->font, x, y + ascent, 70, LABELS[i], COLOR_TEXT);
+        recon_edit_draw(p, m->font, x + 76, y, w - 76 - PADDING, FIELD_HEIGHT,
+            &m->compose[i]);
+        recon_hit_add(p, x + 76, y, w - 76 - PADDING, FIELD_HEIGHT,
+            HIT_COMPOSE_BASE + i);
+        y += FIELD_HEIGHT + 6;
+    }
+
+    /* The buttons are placed from the bottom, so the body gets the rest. */
+    int buttons_y = bottom - BUTTON_HEIGHT;
+    int box_h = buttons_y - PADDING - y;
+    if (box_h < line * 3) {
+        box_h = line * 3;
+    }
+
+    /*
+     * The body, drawn line by line rather than by recon_edit_draw -- which
+     * draws one line and scrolls it sideways, which is right for a filename
+     * and useless for a letter.
+     *
+     * No wrapping. A long line runs off the right edge and is still there;
+     * wrapping it would mean deciding where words break and then mapping the
+     * caret through that, which is a text engine rather than a text box. What
+     * is here is enough to type a letter with newlines in it, and it says so
+     * by simply not pretending otherwise.
+     */
+    recon_fill_rect(p, x, y, w - PADDING, box_h, COLOR_FIELD);
+    recon_draw_bevel(p, x, y, w - PADDING, box_h, true);
+    recon_hit_add(p, x, y, w - PADDING, box_h,
+        HIT_COMPOSE_BASE + COMPOSE_BODY);
+
+    const struct recon_edit *body = &m->compose[COMPOSE_BODY];
+    int ty = y + 3;
+    int caret_x = x + 4;
+    int caret_y = ty;
+    int at = 0;
+
+    while (ty + line <= y + box_h) {
+        int end = at;
+        while (body->text[end] != '\0' && body->text[end] != '\n') {
+            end++;
+        }
+
+        char one[RECON_EDIT_MAX];
+        int length = end - at;
+        if (length > (int)sizeof(one) - 1) {
+            length = (int)sizeof(one) - 1;
+        }
+        memcpy(one, body->text + at, (size_t)length);
+        one[length] = '\0';
+
+        recon_draw_text(p, m->font, x + 4, ty + ascent, w - PADDING - 8, one,
+            COLOR_FIELD_TEXT);
+
+        /* Where the caret is, found while walking the same lines rather than
+         * by a second pass that could disagree with this one. */
+        if (body->caret >= at && body->caret <= end) {
+            char upto[RECON_EDIT_MAX];
+            int n = body->caret - at;
+            if (n > (int)sizeof(upto) - 1) {
+                n = (int)sizeof(upto) - 1;
+            }
+            memcpy(upto, body->text + at, (size_t)n);
+            upto[n] = '\0';
+            caret_x = x + 4 + recon_text_width(m->font, upto);
+            caret_y = ty;
+        }
+
+        if (body->text[end] == '\0') {
+            break;
+        }
+        at = end + 1;
+        ty += line;
+    }
+
+    if (body->active) {
+        recon_fill_rect(p, caret_x, caret_y + 1, 1, line - 2, THEME(CARET));
+    }
+
+    int bx = draw_button(m, p, x, buttons_y,
+        m->sending_now ? "Sending..." : "Send", HIT_SEND, !m->sending_now);
+    draw_button(m, p, bx, buttons_y, "Discard", HIT_DISCARD, !m->sending_now);
 }
 
 static void draw_reading(struct recon_mailwin *m, struct recon_panel *p,
@@ -453,6 +835,7 @@ static void draw_list(struct recon_mailwin *m, struct recon_panel *p,
     int count = recon_mail_count(m->session);
 
     int bx = draw_button(m, p, x, y, "Refresh", HIT_REFRESH, true);
+    bx = draw_button(m, p, bx, y, "Write", HIT_WRITE, true);
     draw_button(m, p, bx, y, "Change the account", HIT_FORGET, true);
     y += BUTTON_HEIGHT + PADDING;
 
@@ -546,6 +929,9 @@ static void mailwin_draw(void *user, struct recon_panel *p,
             draw_list(m, p, inner_x, inner_y, inner_w, inner_h);
         }
         break;
+    case SCREEN_COMPOSE:
+        draw_compose(m, p, inner_x, inner_y, inner_w, inner_h);
+        break;
     }
     (void)line;
 }
@@ -565,6 +951,23 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
     }
 
     /* Descending, because the ladders below are unbounded. */
+    /*
+     * The compose fields first, because the row check below is an open-ended
+     * `>=` and these are numbered above it -- so clicking the To field was
+     * being read as clicking message row one hundred, and the text went to
+     * whichever field had the caret. Bounded here and unbounded there, so the
+     * order is what keeps them apart.
+     */
+    if (hit >= HIT_COMPOSE_BASE && hit < HIT_COMPOSE_BASE + COMPOSE_COUNT) {
+        int i = (int)(hit - HIT_COMPOSE_BASE);
+        for (int j = 0; j < COMPOSE_COUNT; j++) {
+            m->compose[j].active = (j == i);
+        }
+        m->compose_focused = i;
+        recon_appwin_refresh(m->win);
+        return true;
+    }
+
     if (hit >= HIT_ROW_BASE) {
         int i = (int)(hit - HIT_ROW_BASE);
         if (i < 0 || i >= recon_mail_count(m->session)) {
@@ -601,6 +1004,32 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
     }
 
     switch (hit) {
+    case HIT_WRITE:
+        start_writing(m);
+        recon_appwin_refresh(m->win);
+        return true;
+
+    case HIT_SEND:
+        send_now(m);
+        recon_appwin_refresh(m->win);
+        return true;
+
+    case HIT_DISCARD:
+        /*
+         * Straight back, with no "are you sure".
+         *
+         * Asking would be right if this were the only copy of something that
+         * took a while to write, and it is not the only copy of anything --
+         * nothing has been sent, nothing was on disk, and the letter existed
+         * only in this window. What it costs is retyping, which is the same
+         * thing a question costs when the answer is yes.
+         */
+        stop_sending(m);
+        m->screen = SCREEN_MAIL;
+        m->message[0] = '\0';
+        recon_appwin_refresh(m->win);
+        return true;
+
     case HIT_PROTOCOL:
         toggle_protocol(m);
         return true;
@@ -649,8 +1078,13 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         if (sym == XKB_KEY_Tab) {
             edit->active = false;
             m->focused = (m->focused + 1) % FIELD_COUNT;
-            recon_edit_begin(&m->fields[m->focused],
-                m->fields[m->focused].text, false);
+            /*
+             * recon_edit_focus, not recon_edit_begin with the field's own
+             * text. That form aliases snprintf's source and destination, which
+             * is undefined and here emptied the field -- so every default on
+             * this form was lost to being tabbed past. BG-112.
+             */
+            recon_edit_focus(&m->fields[m->focused]);
             return true;
         }
 
@@ -660,6 +1094,47 @@ static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             return true;
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_CANCEL:
+            return true;
+        case RECON_EDIT_IGNORED:
+            return false;
+        }
+        return false;
+    }
+
+    if (m->screen == SCREEN_COMPOSE) {
+        struct recon_edit *edit = &m->compose[m->compose_focused];
+
+        if (sym == XKB_KEY_Tab) {
+            edit->active = false;
+            m->compose_focused = (m->compose_focused + 1) % COMPOSE_COUNT;
+            /*
+             * `active` set directly rather than recon_edit_begin, which
+             * selects the text so the next key replaces it. Tabbing into a
+             * half-written letter and typing one character should not delete
+             * the letter -- that is right for a rename and wrong for a field
+             * somebody is coming back to.
+             */
+            m->compose[m->compose_focused].active = true;
+            recon_appwin_refresh(m->win);
+            return true;
+        }
+
+        switch (recon_edit_key(edit, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            /*
+             * Enter in To or Subject moves on rather than sending. Sending is
+             * a button, deliberately: a letter should not leave because
+             * somebody finished typing an address and pressed the key they
+             * press at the end of every line.
+             */
+            edit->active = false;
+            m->compose_focused = (m->compose_focused + 1) % COMPOSE_COUNT;
+            m->compose[m->compose_focused].active = true;
+            recon_appwin_refresh(m->win);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_CANCEL:
+            recon_appwin_refresh(m->win);
             return true;
         case RECON_EDIT_IGNORED:
             return false;
@@ -761,6 +1236,10 @@ static void mailwin_describe(void *user, char *out, size_t size) {
 static void mailwin_destroy(void *user) {
     struct recon_mailwin *m = user;
     disconnect(m);
+    /* A send in flight holds a pointer to this window and will call back into
+     * it. Closed first, so the callback cannot arrive after the memory is
+     * gone. */
+    stop_sending(m);
     /* The password was in this memory. Erased rather than memset, because a
      * memset nothing reads afterwards is one the compiler may delete. */
     recon_secure_erase(m, sizeof(*m));

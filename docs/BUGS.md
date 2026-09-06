@@ -1999,3 +1999,24 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Fixed in** v0.3.1 by adopting at sign-in, which is the first moment there is
   an account to give it to. Only where no zone has been chosen — including
   where somebody chose UTC on a machine that is not on it.
+
+### BG-112 — Moving focus between form fields emptied the field arrived at
+
+- **Found in** v0.3.1. **Found by** filling in the mail setup form and noticing
+  the port had gone. Tabbing past a field cleared it; the two ports on that form
+  arrive with sensible defaults and lost them to being tabbed over.
+- **What it was** `recon_edit_begin(&field, field.text, false)` — a field handed
+  its own buffer as the text to start from. That is `snprintf` with a source and
+  a destination that overlap, which is **undefined**, and on this library
+  produces an empty string.
+- Not a new fault. The mail form has moved focus that way since it was written,
+  and the Web viewer's address bar did the same thing on a click and on Ctrl+L,
+  so **clicking the address bar cleared the address it was showing**. It went
+  unnoticed for the same reason in both places: a field you are about to type
+  into looks the same whether it was cleared or selected, and both of these
+  fields are usually typed into straight away. The mail form only exposed it by
+  gaining two fields with defaults worth keeping.
+- **The intent was right** and is kept. Selecting the text on focus is what
+  makes the first keystroke replace a default rather than append to it.
+- **Fixed in** v0.3.1 by `recon_edit_focus`, which does what
+  `recon_edit_begin` did minus the copy — and the copy was the whole fault.
