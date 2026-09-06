@@ -286,6 +286,27 @@ void recon_appwin_geometry(struct recon_appwin *win, int *x, int *y, int *w, int
 void recon_appwin_set_origin(struct recon_appwin *win, int x, int y);
 
 /*
+ * Draw the window this far from where it actually is, for one animation.
+ *
+ * A display offset, not a move. The window's own position is untouched, so
+ * everything that reasons about where it *is* -- hit testing, snapping, the
+ * taskbar, the clamp that keeps a title bar reachable -- goes on being right
+ * while it is in flight. Set both to zero and there is nothing left of it.
+ *
+ * Deliberately not done by moving the window and relaxing the clamp. A window
+ * genuinely positioned off the right edge is a window somebody could be handed
+ * mid-animation by a crash, a screenshot, or a layout being saved.
+ */
+void recon_appwin_set_slide(struct recon_appwin *win, int dx, int dy);
+bool recon_appwin_sliding(struct recon_appwin *win);
+
+/*
+ * Put the window that fraction of the way back to where it belongs, out of
+ * 1024, measured from the offset it was given. Zero lands it exactly home.
+ */
+void recon_appwin_slide_to(struct recon_appwin *win, int left_of_1024);
+
+/*
  * What this window costs in memory, in KB.
  *
  * Its pixels, which is nearly all of it: a window holds one buffer of its own

@@ -759,6 +759,22 @@ struct recon_shell {
     struct wl_event_source *clock_timer;
 
     /*
+     * The one thing in ReconOS that moves on its own.
+     *
+     * Windows arriving from a desktop that has just been turned off slide in
+     * from the direction they came from, rather than appearing. There is a
+     * single timer for all of them because they always arrive together: the
+     * animation is one event, not one per window.
+     *
+     * Nothing else animates, and this is not the beginning of a general
+     * animation system. It exists because collapsing four desktops into one
+     * moves windows somebody did not ask to have moved, and a thing that
+     * happens without being explained looks like a fault.
+     */
+    struct wl_event_source *slide_timer;
+    int slide_step;
+
+    /*
      * The tooltip: one panel for the whole desktop.
      *
      * Anything that registers a clickable region can attach a line of text to
@@ -1990,6 +2006,102 @@ static int appwin_index_for_node(struct recon_shell *shell,
         }
     }
     return -1;
+}
+
+/* --- Windows arriving --- */
+
+/*
+ * How long the arrival takes, and in how many steps.
+ *
+ * A quarter of a second, which is about the shortest a movement can be and
+ * still be followed rather than merely noticed. Sixteen steps of sixteen
+ * milliseconds is the frame rate the rest of the system already redraws at, so
+ * this asks for nothing the compositor was not already able to do.
+ */
+#define SLIDE_STEPS 16
+#define SLIDE_MS 16
+
+/*
+ * Ease out: fast at first, settling at the end.
+ *
+ * Returns how much of the distance is LEFT at a given step, out of 1024.
+ * Cubic, which is the standard choice for something arriving -- linear motion
+ * stops dead and reads as a jump cut, and the eye notices the stop rather than
+ * the movement.
+ *
+ * Integer arithmetic throughout. There is no reason for a float here and every
+ * reason for the numbers to be exactly reproducible.
+ */
+static int slide_remaining(int step) {
+    if (step >= SLIDE_STEPS) {
+        return 0;
+    }
+    /* t counts down from 1024 to 0 as the step counts up. */
+    int t = 1024 - (step * 1024) / SLIDE_STEPS;
+    return (int)(((int64_t)t * t / 1024) * t / 1024);
+}
+
+static int on_slide_tick(void *data) {
+    struct recon_shell *shell = data;
+    if (shell == NULL) {
+        return 0;
+    }
+
+    shell->slide_step++;
+    int left = slide_remaining(shell->slide_step);
+
+    bool moving = false;
+    for (int i = 0; i < shell->app_count; i++) {
+        struct recon_appwin *win = shell->apps[i];
+        if (!recon_appwin_sliding(win)) {
+            continue;
+        }
+
+        recon_appwin_slide_to(win, left);
+        moving = true;
+    }
+
+    recon_damage_all(shell->server);
+
+    if (!moving || shell->slide_step >= SLIDE_STEPS) {
+        /* Landed exactly, whatever the arithmetic did on the way. */
+        for (int i = 0; i < shell->app_count; i++) {
+            recon_appwin_set_slide(shell->apps[i], 0, 0);
+        }
+        recon_damage_all(shell->server);
+        return 0;
+    }
+
+    wl_event_source_timer_update(shell->slide_timer, SLIDE_MS);
+    return 0;
+}
+
+/*
+ * Start every window that has been given an offset moving towards zero.
+ *
+ * The offsets are set by whoever is moving the windows; this only animates
+ * them away. That split keeps the reason for the movement out of here -- the
+ * only thing this knows is that some windows are drawn somewhere they do not
+ * belong and should stop being.
+ */
+static void begin_slide(struct recon_shell *shell) {
+    if (shell == NULL || shell->slide_timer == NULL) {
+        return;
+    }
+
+    bool any = false;
+    for (int i = 0; i < shell->app_count; i++) {
+        if (recon_appwin_sliding(shell->apps[i])) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) {
+        return;
+    }
+
+    shell->slide_step = 0;
+    wl_event_source_timer_update(shell->slide_timer, SLIDE_MS);
 }
 
 /* --- Drawing --- */
@@ -3276,6 +3388,8 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     }
     shell->tip_timer = wl_event_loop_add_timer(
         wl_display_get_event_loop(server->wl_display), tip_expired, shell);
+    shell->slide_timer = wl_event_loop_add_timer(
+        wl_display_get_event_loop(server->wl_display), on_slide_tick, shell);
     recon_shell_blank_reload(shell);
 
     shell->programs = recon_panel_create(&server->scene->tree,
@@ -4613,11 +4727,23 @@ static void set_desktop_count(struct recon_shell *shell, bool many) {
          * not asking to lose what they had open under it, and after this there
          * is nothing left to reach them with -- the buttons are gone and Alt+2
          * has stopped answering, both because the count says one.
+         *
+         * And they slide in from the side they came from, rather than
+         * appearing. Four windows arriving at once with no explanation reads
+         * as a fault; four windows arriving FROM SOMEWHERE reads as the four
+         * windows that were over there. The direction carries the meaning,
+         * which is why it is taken from the desktop number rather than being
+         * the same for all of them: desktop 3 is to the right of desktop 1 on
+         * the pager, so its windows come in from the right.
          */
         for (int i = 0; i < shell->app_count; i++) {
-            if (recon_appwin_desktop(shell->apps[i]) != 0) {
-                recon_appwin_set_desktop(shell->apps[i], 0);
+            int from = recon_appwin_desktop(shell->apps[i]);
+            if (from == 0) {
+                continue;
             }
+            recon_appwin_set_desktop(shell->apps[i], 0);
+            recon_appwin_set_slide(shell->apps[i],
+                from > 0 ? shell->screen_width : -shell->screen_width, 0);
         }
         struct recon_toplevel *toplevel;
         wl_list_for_each(toplevel, &shell->server->toplevels, link) {
@@ -4630,6 +4756,10 @@ static void set_desktop_count(struct recon_shell *shell, bool many) {
          * now that the count says one. */
         shell->current_desktop = 0;
         recon_shell_set_desktop(shell, 0);
+
+        /* After the switch, so the arrivals are already visible when they
+         * start moving. */
+        begin_slide(shell);
     }
 
     recon_shell_restyle(shell);

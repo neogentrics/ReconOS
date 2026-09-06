@@ -89,6 +89,23 @@ struct recon_appwin {
     bool focused;
 
     int x, y;
+
+    /*
+     * Drawn this far from x,y while an animation is running, and zero the rest
+     * of the time. See recon_appwin_set_slide.
+     *
+     * The starting offset is kept beside the current one so every step is
+     * measured from the beginning. Stepping down from where the window is now
+     * loses a little each time and leaves it a pixel or two short of home --
+     * which on a system that never animates would be a permanent
+     * misplacement caused by a temporary effect.
+     *
+     * Both live on the window rather than in a list beside it, because a
+     * window can close while the animation is running and a list indexed by
+     * position would then be handing out somebody else's numbers.
+     */
+    int slide_x, slide_y;
+    int slide_from_x, slide_from_y;
     int width, height;
 
     /* Where to return to when unmaximized. */
@@ -326,9 +343,21 @@ void recon_appwin_refresh(struct recon_appwin *win) {
 
 /* --- Geometry --- */
 
+/*
+ * Where the window is, plus wherever it is being animated from.
+ *
+ * The slide is a *display* offset and never touches win->x. That is the whole
+ * reason it exists as a separate pair of numbers rather than as a relaxed
+ * clamp: a window animating in from off the right edge is, as far as every
+ * other part of the system is concerned, already exactly where it belongs.
+ * Hit testing, snapping, the taskbar, saving a layout and the on-screen clamp
+ * all keep working on a position that never moved, and when the animation
+ * finishes the offset is zero and there is nothing left of it.
+ */
 static void apply_geometry(struct recon_appwin *win) {
     recon_panel_resize(win->panel, win->width, win->height);
-    recon_panel_set_position(win->panel, win->x, win->y);
+    recon_panel_set_position(win->panel, win->x + win->slide_x,
+        win->y + win->slide_y);
 }
 
 void recon_appwin_screen_changed(struct recon_appwin *win, int screen_w, int screen_h,
@@ -364,6 +393,38 @@ void recon_appwin_screen_changed(struct recon_appwin *win, int screen_w, int scr
     if (win->y < 0) {
         win->y = 0;
     }
+    apply_geometry(win);
+}
+
+void recon_appwin_set_slide(struct recon_appwin *win, int dx, int dy) {
+    if (win == NULL) {
+        return;
+    }
+    win->slide_x = dx;
+    win->slide_y = dy;
+    win->slide_from_x = dx;
+    win->slide_from_y = dy;
+    apply_geometry(win);
+}
+
+bool recon_appwin_sliding(struct recon_appwin *win) {
+    return win != NULL && (win->slide_x != 0 || win->slide_y != 0);
+}
+
+/*
+ * Put the window a given fraction of the way back, out of 1024.
+ *
+ * Measured from where it started rather than from where it is, so the
+ * rounding of one step never feeds into the next. 0 lands it exactly home,
+ * which is what makes the end of an animation the same pixel as no animation
+ * at all.
+ */
+void recon_appwin_slide_to(struct recon_appwin *win, int left_of_1024) {
+    if (win == NULL) {
+        return;
+    }
+    win->slide_x = (int)((int64_t)win->slide_from_x * left_of_1024 / 1024);
+    win->slide_y = (int)((int64_t)win->slide_from_y * left_of_1024 / 1024);
     apply_geometry(win);
 }
 
