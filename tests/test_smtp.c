@@ -245,6 +245,185 @@ static void test_blind_copies(void) {
         "one more than the limit is refused rather than quietly trimmed");
 }
 
+/* --- Attachments --- */
+
+static void attach(struct recon_smtp_letter *l, const char *name,
+        const char *content) {
+    int i = l->attachment_count++;
+    snprintf(l->attachment[i].name, sizeof(l->attachment[i].name), "%s", name);
+    l->attachment[i].bytes = (const unsigned char *)content;
+    l->attachment[i].size = strlen(content);
+}
+
+static void test_attachments(void) {
+    printf("Attachments\n");
+
+    struct recon_smtp_account account = an_account();
+    char out[65536];
+    char why[256];
+
+    /* --- Nothing attached is the message it always was --- */
+
+    struct recon_smtp_letter plain = a_letter("to@a.com", "Hi", "Text.\n");
+    check(recon_smtp_compose(&account, &plain, NULL, out, sizeof(out)) > 0,
+        "a letter with nothing attached composes");
+    check(strstr(out, "Content-Type: text/plain; charset=utf-8\r\n") != NULL,
+        "as one plain part, exactly as before");
+    check(strstr(out, "multipart") == NULL && strstr(out, "boundary") == NULL,
+        "with no boundary and no multipart wrapper anywhere in it");
+
+    /* --- One attached file --- */
+
+    struct recon_smtp_letter l = a_letter("to@a.com", "Hi", "See attached.\n");
+    attach(&l, "notes.txt", "hello");
+
+    check(recon_smtp_letter_ok(&l, why, sizeof(why)),
+        "a letter with a file is sendable");
+    size_t n = recon_smtp_compose(&account, &l, NULL, out, sizeof(out));
+    check(n > 0, "and composes");
+
+    check(strstr(out, "Content-Type: multipart/mixed; boundary=\"") != NULL,
+        "the top-level type says multipart and names the boundary");
+    check(strstr(out, "Content-Type: text/plain; charset=utf-8\r\n") != NULL,
+        "the text is still a plain part");
+    check(strstr(out, "See attached.\r\n") != NULL, "and it is still there");
+    check(strstr(out, "Content-Type: text/plain; name=\"notes.txt\"") != NULL,
+        "the file's type is worked out from its name");
+    check(strstr(out, "Content-Transfer-Encoding: base64\r\n") != NULL,
+        "it travels as base64");
+    check(strstr(out,
+        "Content-Disposition: attachment; filename=\"notes.txt\"") != NULL,
+        "and is offered as an attachment rather than shown inline");
+    check(strstr(out, "aGVsbG8=\r\n") != NULL,
+        "with the content encoded -- 'hello' is 'aGVsbG8='");
+
+    /* The closing boundary, which is what says the last part was the last. */
+    const char *b = strstr(out, "boundary=\"");
+    check(b != NULL, "the boundary is findable");
+    if (b != NULL) {
+        char mark[80];
+        snprintf(mark, sizeof(mark), "%s", b + strlen("boundary=\""));
+        char *quote = strchr(mark, '"');
+        if (quote != NULL) {
+            *quote = '\0';
+        }
+        char closing[96];
+        snprintf(closing, sizeof(closing), "--%s--\r\n", mark);
+        check(strstr(out, closing) != NULL,
+            "and the message ends with the closing boundary");
+    }
+
+    /* --- The type is honest when it does not know --- */
+
+    struct recon_smtp_letter odd = a_letter("to@a.com", "Hi", "x");
+    attach(&odd, "thing.qqq", "data");
+    recon_smtp_compose(&account, &odd, NULL, out, sizeof(out));
+    check(strstr(out, "application/octet-stream") != NULL,
+        "an unknown extension is octet-stream rather than a guess");
+
+    struct recon_smtp_letter shouty = a_letter("to@a.com", "Hi", "x");
+    attach(&shouty, "PHOTO.PNG", "data");
+    recon_smtp_compose(&account, &shouty, NULL, out, sizeof(out));
+    check(strstr(out, "image/png") != NULL,
+        "and the extension is matched whatever case it is written in");
+
+    /*
+     * --- The boundary is checked, not assumed ---
+     *
+     * The dangerous case: a body that already contains the boundary. Left
+     * alone, the message splits there and everything after it is read as
+     * another part -- which somebody who can put text in a body could do on
+     * purpose.
+     */
+    struct recon_smtp_letter attack = a_letter("to@a.com", "Hi",
+        "innocent text\r\n"
+        "--=_ReconOS_0_=\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "a part I added myself\r\n");
+    attach(&attack, "x.txt", "y");
+
+    n = recon_smtp_compose(&account, &attack, NULL, out, sizeof(out));
+    check(n > 0, "a body containing the first candidate boundary still sends");
+
+    const char *decl = strstr(out, "boundary=\"");
+    check(decl != NULL, "and declares a boundary");
+    if (decl != NULL) {
+        char used[80];
+        snprintf(used, sizeof(used), "%s", decl + strlen("boundary=\""));
+        char *quote = strchr(used, '"');
+        if (quote != NULL) {
+            *quote = '\0';
+        }
+        check(strcmp(used, "=_ReconOS_0_=") != 0,
+            "which is NOT the one the body already contained");
+        check(strstr(attack.body, used) == NULL,
+            "and does not appear in the body at all");
+    }
+
+    /* --- A filename is a header value, and can be attacked like one --- */
+
+    struct recon_smtp_letter injected = a_letter("to@a.com", "Hi", "x");
+    attach(&injected, "ok.txt\r\nBcc: someone@evil.com", "y");
+    check(!recon_smtp_letter_ok(&injected, why, sizeof(why)),
+        "a filename with a line break is refused");
+
+    struct recon_smtp_letter quoted = a_letter("to@a.com", "Hi", "x");
+    attach(&quoted, "a\".txt", "y");
+    check(!recon_smtp_letter_ok(&quoted, why, sizeof(why)),
+        "and so is one with a quote, which would end the header value early");
+
+    /* --- Sizes --- */
+
+    struct recon_smtp_letter empty_file = a_letter("to@a.com", "Hi", "x");
+    attach(&empty_file, "nothing.txt", "");
+    check(recon_smtp_letter_ok(&empty_file, why, sizeof(why)),
+        "an empty file is a real file");
+    check(recon_smtp_compose(&account, &empty_file, NULL, out, sizeof(out)) > 0,
+        "and composes, as a part with a name and no content");
+
+    struct recon_smtp_letter too_many = a_letter("to@a.com", "Hi", "x");
+    too_many.attachment_count = RECON_SMTP_ATTACHMENTS_MAX + 1;
+    check(!recon_smtp_letter_ok(&too_many, why, sizeof(why)),
+        "more files than the limit is refused");
+
+    struct recon_smtp_letter huge = a_letter("to@a.com", "Hi", "x");
+    huge.attachment_count = 1;
+    snprintf(huge.attachment[0].name, sizeof(huge.attachment[0].name), "big.bin");
+    huge.attachment[0].bytes = (const unsigned char *)"x";
+    huge.attachment[0].size = RECON_SMTP_ATTACHED_BYTES_MAX + 1;
+    check(!recon_smtp_letter_ok(&huge, why, sizeof(why)),
+        "and so is more than the total size, with the number said out loud");
+
+    /* --- Base64 lines are wrapped --- */
+
+    static char big[4096];
+    memset(big, 'A', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+
+    struct recon_smtp_letter wrapped = a_letter("to@a.com", "Hi", "x");
+    attach(&wrapped, "big.txt", big);
+    check(recon_smtp_compose(&account, &wrapped, NULL, out, sizeof(out)) > 0,
+        "a file large enough to need wrapping composes");
+
+    int longest = 0;
+    int run = 0;
+    for (const char *p = out; *p != '\0'; p++) {
+        if (*p == '\n') {
+            run = 0;
+        } else if (*p != '\r') {
+            run++;
+            if (run > longest) {
+                longest = run;
+            }
+        }
+    }
+    check(longest <= 998,
+        "and no line in the whole message reaches SMTP's limit of 998");
+    check(longest <= 100,
+        "in fact none is much over the conventional 76");
+}
+
 /* --- What it writes --- */
 
 static void test_headers(void) {
@@ -383,6 +562,7 @@ int main(void) {
     test_header_injection();
     test_addresses();
     test_blind_copies();
+    test_attachments();
     test_headers();
     test_line_endings();
     test_the_dot();

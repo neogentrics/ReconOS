@@ -10,6 +10,32 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Mail can attach files. Up to eight, twelve megabytes together, chosen with
+the same file picker Notepad uses. The message becomes multipart/mixed; without
+an attachment it is written exactly as it always was, one plain part with no
+boundary anywhere in it -- which is the point rather than an optimisation,
+because every mail reader in the world handles the simple shape better than the
+complicated one.
+
+The boundary is checked, not assumed. This is the one genuinely dangerous
+part of multipart and it is dangerous quietly: a boundary that also occurs
+inside the message splits it there instead, so the letter arrives cut in half
+-- or somebody who can put text in the body ends the message early and appends
+parts of their own. The usual answer is a long random string and the argument
+that a collision is unlikely, which is fine against accident and worthless
+against somebody who has read the source. So the string is built, searched for
+in everything it will separate, and rebuilt with a different number if it is
+found. Certain rather than probable, for the cost of one pass.
+
+A filename is a header value twice over, so it can carry the same attack a
+subject can and one more: it is written inside quotes, and a quote in it ends
+the value early. Line breaks, quotes and backslashes are refused.
+
+The files are read at Send, not when they are chosen. A file picked at nine and
+sent at eleven should be the file as it is at eleven -- and reading it then is
+the only way to notice it has been deleted since, which is a thing to say out
+loud rather than to send an empty part about.
+
 Mail takes Cc and Bcc. Three address fields, each a comma-separated list,
 and one rule that is the whole reason there are three of them rather than one:
 every address reaches the server, and only To and Cc reach the message.

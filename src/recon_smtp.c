@@ -115,8 +115,19 @@ enum smtp_state {
 struct recon_smtp_session {
     struct recon_smtp_account account;
     char password[256];
-    struct recon_smtp_letter letter;
     char *message;
+
+    /*
+     * No copy of the letter is kept.
+     *
+     * There was one, assigned and never read. It became a trap the moment
+     * attachments arrived: a letter borrows the bytes of its files from
+     * whoever asked for the send, and that caller frees them as soon as this
+     * function returns -- so a kept copy holds pointers that are already
+     * dangling, and the next person to add a line reading from it would find
+     * out the interesting way. What is needed past composing is the envelope
+     * and the composed message, and both are below.
+     */
 
     /*
      * Everybody the letter goes to, and how far through them this is.
@@ -589,7 +600,6 @@ struct recon_smtp_session *recon_smtp_send(
     }
 
     s->account = *account;
-    s->letter = *letter;
 
     /*
      * The envelope, built here and not touched again.
@@ -619,14 +629,31 @@ struct recon_smtp_session *recon_smtp_send(
      * while nothing is on the wire -- rather than halfway through DATA, which
      * leaves the server holding part of a message and no way to say so.
      */
-    s->message = malloc(BODY_MAX);
+    /*
+     * Sized from what is actually being sent, rather than a fixed buffer.
+     *
+     * It was a flat 256 KB, which was generous for a letter and nowhere near
+     * enough for one with a photograph attached. Base64 costs four bytes for
+     * every three, plus a line ending every 57 -- so the allowance is the
+     * files, half again, plus the text and room for headers. Over-allocating a
+     * little is the cheap mistake here; the expensive one is a message that
+     * composes to nothing and reports "too long to send" about a file the
+     * limits above already agreed to.
+     */
+    size_t attached = 0;
+    for (int i = 0; i < letter->attachment_count; i++) {
+        attached += letter->attachment[i].size;
+    }
+
+    size_t room = BODY_MAX + attached + attached / 2;
+    s->message = malloc(room);
     if (s->message == NULL) {
         set_error("out of memory");
         recon_secure_erase(s, sizeof(*s));
         free(s);
         return NULL;
     }
-    if (recon_smtp_compose(account, letter, NULL, s->message, BODY_MAX) == 0) {
+    if (recon_smtp_compose(account, letter, NULL, s->message, room) == 0) {
         set_error("that message is too long to send");
         free(s->message);
         recon_secure_erase(s, sizeof(*s));

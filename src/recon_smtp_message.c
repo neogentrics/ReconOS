@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "recon_crypt.h"
 #include "recon_smtp.h"
 
 /* --- Checking a letter before it becomes one --- */
@@ -202,6 +203,54 @@ bool recon_smtp_letter_ok(const struct recon_smtp_letter *letter,
             "The subject has a line break in it, which cannot be sent.");
         return false;
     }
+
+    if (letter->attachment_count < 0 ||
+            letter->attachment_count > RECON_SMTP_ATTACHMENTS_MAX) {
+        say_why(why, why_size, "That is more files than one letter can carry.");
+        return false;
+    }
+
+    size_t total = 0;
+    for (int i = 0; i < letter->attachment_count; i++) {
+        const struct recon_smtp_attachment *file = &letter->attachment[i];
+
+        if (file->name[0] == '\0') {
+            say_why(why, why_size, "An attached file has no name.");
+            return false;
+        }
+
+        /*
+         * A filename goes into two headers, so it can carry the same attack a
+         * subject can -- and one more: the name is written inside quotes, so a
+         * quote character in it ends the value early and whatever follows is
+         * read as further parameters.
+         */
+        if (has_a_line_break(file->name) || strchr(file->name, '"') != NULL ||
+                strchr(file->name, '\\') != NULL) {
+            char message[256];
+            snprintf(message, sizeof(message),
+                "'%s' cannot be used as a filename in a message.", file->name);
+            say_why(why, why_size, message);
+            return false;
+        }
+
+        if (file->size > 0 && file->bytes == NULL) {
+            say_why(why, why_size, "An attached file could not be read.");
+            return false;
+        }
+
+        total += file->size;
+    }
+
+    if (total > RECON_SMTP_ATTACHED_BYTES_MAX) {
+        char message[160];
+        snprintf(message, sizeof(message),
+            "Those files come to %zu MB together, and the limit is %d MB.",
+            total / (1024 * 1024),
+            RECON_SMTP_ATTACHED_BYTES_MAX / (1024 * 1024));
+        say_why(why, why_size, message);
+        return false;
+    }
     return true;
 }
 
@@ -254,6 +303,136 @@ static bool write_address_header(const char *field, const char *name,
     }
     *at += (size_t)written;
     return true;
+}
+
+/* --- Attachments --- */
+
+/*
+ * Bytes per base64 line. 57 in, 76 out, which is the conventional width and
+ * comfortably under SMTP's hard limit of 998 characters -- a limit a server is
+ * entitled to enforce by cutting the message where it likes.
+ */
+#define BASE64_LINE_BYTES 57
+
+/*
+ * What kind of file this is, by its name.
+ *
+ * Shallow on purpose. Naming a type wrongly means a reader offers the wrong
+ * program to open it, which is a nuisance; refusing to name one at all means
+ * `application/octet-stream`, which every reader handles by offering to save
+ * the file -- which is the right thing to do with something unrecognised.
+ *
+ * So this covers what somebody actually attaches and falls back honestly for
+ * everything else, rather than pretending to a table of a thousand types that
+ * would be wrong in more interesting ways.
+ */
+static const char *type_for(const char *name) {
+    static const struct { const char *ext; const char *type; } TYPES[] = {
+        { ".txt",  "text/plain"       }, { ".md",   "text/plain"       },
+        { ".csv",  "text/csv"         }, { ".html", "text/html"        },
+        { ".png",  "image/png"        }, { ".jpg",  "image/jpeg"       },
+        { ".jpeg", "image/jpeg"       }, { ".gif",  "image/gif"        },
+        { ".bmp",  "image/bmp"        }, { ".webp", "image/webp"       },
+        { ".pdf",  "application/pdf"  }, { ".zip",  "application/zip"  },
+        { ".wav",  "audio/wav"        }, { ".mp3",  "audio/mpeg"       },
+        { ".mp4",  "video/mp4"        }, { ".json", "application/json" },
+    };
+
+    const char *dot = strrchr(name, '.');
+    if (dot != NULL) {
+        for (size_t i = 0; i < sizeof(TYPES) / sizeof(TYPES[0]); i++) {
+            size_t n = strlen(TYPES[i].ext);
+            if (strlen(dot) == n) {
+                bool same = true;
+                for (size_t j = 0; j < n && same; j++) {
+                    char a = dot[j], b = TYPES[i].ext[j];
+                    if (a >= 'A' && a <= 'Z') {
+                        a = (char)(a - 'A' + 'a');
+                    }
+                    same = (a == b);
+                }
+                if (same) {
+                    return TYPES[i].type;
+                }
+            }
+        }
+    }
+    return "application/octet-stream";
+}
+
+/* Whether `text` contains `needle`, over bytes rather than a C string, so a
+ * file with a zero byte in the middle of it is still searched to the end. */
+static bool bytes_contain(const unsigned char *haystack, size_t size,
+        const char *needle) {
+    size_t n = strlen(needle);
+    if (n == 0 || size < n) {
+        return false;
+    }
+    for (size_t i = 0; i + n <= size; i++) {
+        if (memcmp(haystack + i, needle, n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * A boundary that appears nowhere in what it is about to separate.
+ *
+ * This is the one genuinely dangerous part of multipart, and it is dangerous
+ * quietly: a boundary that also occurs inside the message splits it at that
+ * point instead, so the letter arrives cut in half with the rest of it shown
+ * as a mangled attachment -- or, worse, an attacker who can put text in the
+ * body can end the message early and append parts of their own.
+ *
+ * The usual fix is a long random string and the argument that a collision is
+ * unlikely. That argument is fine against accident and worthless against
+ * somebody who has read this file. So the string is CHECKED instead: built,
+ * looked for in everything it will separate, and rebuilt with a different
+ * number if it is found. Certain rather than probable, for the cost of one
+ * pass over the content.
+ *
+ * The base64 of an attachment cannot contain it -- '_' and '=' in the middle
+ * are not in base64's output alphabet -- so only the person's own text and the
+ * filenames need searching.
+ */
+static bool choose_a_boundary(const struct recon_smtp_letter *letter,
+        char *out, size_t out_size) {
+    const char *body = letter->body != NULL ? letter->body : "";
+
+    for (int attempt = 0; attempt < 1000; attempt++) {
+        int written = snprintf(out, out_size, "=_ReconOS_%d_=", attempt);
+        if (written < 0 || (size_t)written >= out_size) {
+            return false;
+        }
+
+        if (strstr(body, out) != NULL) {
+            continue;
+        }
+
+        bool clashes = false;
+        for (int i = 0; i < letter->attachment_count && !clashes; i++) {
+            if (strstr(letter->attachment[i].name, out) != NULL) {
+                clashes = true;
+            }
+            /* And the bytes, even though base64 cannot produce this shape.
+             * The check costs one pass and outlives whatever encoding a later
+             * version of this file decides to use. */
+            if (!clashes && letter->attachment[i].bytes != NULL &&
+                    bytes_contain(letter->attachment[i].bytes,
+                        letter->attachment[i].size, out)) {
+                clashes = true;
+            }
+        }
+        if (!clashes) {
+            return true;
+        }
+    }
+
+    /* A thousand different boundaries all present in one message is not
+     * something that happens by accident, so this is somebody trying. Refused
+     * rather than sent with the thousand-and-first. */
+    return false;
 }
 
 size_t recon_smtp_compose(const struct recon_smtp_account *account,
@@ -320,8 +499,46 @@ size_t recon_smtp_compose(const struct recon_smtp_account *account,
      * occasionally turns a letter into markup.
      */
     PUT("MIME-Version: 1.0\r\n");
-    PUT("Content-Type: text/plain; charset=utf-8\r\n");
-    PUT("\r\n");
+
+    /*
+     * A letter with nothing attached is written exactly as it always was.
+     *
+     * Not an optimisation -- the point. A message that gained a boundary and a
+     * multipart wrapper the day attachments were added would be a change to
+     * every letter anybody sends in order to serve the few that carry a file,
+     * and every mail reader in the world handles the simple shape better than
+     * the complicated one.
+     */
+    int files = letter->attachment_count;
+    if (files < 0 || files > RECON_SMTP_ATTACHMENTS_MAX) {
+        out[0] = '\0';
+        return 0;
+    }
+
+    char boundary[64];
+    if (files == 0) {
+        PUT("Content-Type: text/plain; charset=utf-8\r\n");
+        PUT("\r\n");
+    } else {
+        if (!choose_a_boundary(letter, boundary, sizeof(boundary))) {
+            out[0] = '\0';
+            return 0;
+        }
+        PUT("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary);
+        PUT("\r\n");
+
+        /*
+         * A line for a reader that does not understand multipart at all. It
+         * sits before the first boundary, where such a reader shows it and
+         * everything else shows nothing.
+         */
+        PUT("This message has attachments, and needs a reader that can show"
+            " them.\r\n");
+        PUT("\r\n");
+        PUT("--%s\r\n", boundary);
+        PUT("Content-Type: text/plain; charset=utf-8\r\n");
+        PUT("\r\n");
+    }
 
     /*
      * The body, with two rules the protocol will not forgive.
@@ -366,6 +583,62 @@ size_t recon_smtp_compose(const struct recon_smtp_account *account,
      * lands on the end of somebody's sentence and is not a dot on its own. */
     if (!at_line_start) {
         PUT("\r\n");
+    }
+
+    /*
+     * The attachments.
+     *
+     * Nothing below needs dot-stuffing, which is worth stating rather than
+     * leaving to be noticed: a boundary line begins "--", a part header begins
+     * with a letter, and base64's alphabet has no dot in it at all. The only
+     * text in this message that can begin a line with a dot is the one the
+     * person typed, and that is handled above.
+     */
+    for (int i = 0; i < files; i++) {
+        const struct recon_smtp_attachment *file = &letter->attachment[i];
+
+        PUT("--%s\r\n", boundary);
+        PUT("Content-Type: %s; name=\"%s\"\r\n", type_for(file->name),
+            file->name);
+        PUT("Content-Transfer-Encoding: base64\r\n");
+        PUT("Content-Disposition: attachment; filename=\"%s\"\r\n", file->name);
+        PUT("\r\n");
+
+        /*
+         * Encoded three bytes at a time so nothing has to be allocated for it,
+         * and wrapped, because a base64 blob on one line is a line megabytes
+         * long -- and SMTP's own limit is 998 characters, which a server is
+         * entitled to enforce by cutting the message.
+         */
+        size_t done = 0;
+        while (done < file->size) {
+            size_t chunk = file->size - done;
+            if (chunk > BASE64_LINE_BYTES) {
+                chunk = BASE64_LINE_BYTES;
+            }
+
+            char line[BASE64_LINE_BYTES * 2 + 8];
+            size_t written = recon_to_base64(file->bytes + done, chunk, line,
+                sizeof(line));
+            if (written == 0) {
+                out[0] = '\0';
+                return 0;
+            }
+            PUT("%s\r\n", line);
+            done += chunk;
+        }
+
+        /* An empty file is a real file, and this is what says so: the part is
+         * there, with headers and a name, and no content between them. */
+        if (file->size == 0) {
+            PUT("\r\n");
+        }
+    }
+
+    if (files > 0) {
+        /* The trailing two dashes are what says the last part was the last
+         * part. Without them a reader keeps waiting for another. */
+        PUT("--%s--\r\n", boundary);
     }
 
     #undef PUT

@@ -16,6 +16,8 @@
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_crypt.h"
+#include "recon_filedlg.h"
+#include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_mail.h"
 #include "recon_smtp.h"
@@ -109,7 +111,11 @@ enum mail_screen {
 #define HIT_WRITE (RECON_APPWIN_HIT_USER + 16)
 #define HIT_SEND (RECON_APPWIN_HIT_USER + 17)
 #define HIT_DISCARD (RECON_APPWIN_HIT_USER + 18)
+#define HIT_ATTACH (RECON_APPWIN_HIT_USER + 20)
 #define HIT_COMPOSE_BASE (RECON_APPWIN_HIT_USER + 300)
+/* One per attached file, so the X beside each is its own thing. Above the
+ * compose fields and below the row ladder, which is checked last. */
+#define HIT_ATTACHED_BASE (RECON_APPWIN_HIT_USER + 320)
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 200)
 
 struct recon_mailwin {
@@ -143,6 +149,19 @@ struct recon_mailwin {
     struct recon_smtp_account sending;
     struct recon_edit compose[COMPOSE_COUNT];
     int compose_focused;
+
+    /*
+     * The files chosen to travel with it -- paths only, until Send.
+     *
+     * Deliberately not read here. A file picked at nine and sent at eleven
+     * should be the file as it is at eleven, and holding the bytes for two
+     * hours would send a version of it that no longer exists anywhere. It also
+     * means a window left open with a large file attached costs nothing.
+     */
+    char attached[RECON_SMTP_ATTACHMENTS_MAX][RECON_PATH_MAX];
+    int attached_count;
+    struct recon_filedlg dialog;
+
     struct recon_smtp_session *sender;
     /* True from pressing Send until the server answers, so the button can say
      * so and cannot be pressed twice. */
@@ -218,6 +237,9 @@ static void on_sent(void *user) {
         recon_edit_begin(&m->compose[i], "", false);
         m->compose[i].active = false;
     }
+    /* Including what was attached. A letter that cleared its text and kept its
+     * files would put them on the next one silently. */
+    m->attached_count = 0;
     set_message(m, false, "Sent.");
     recon_appwin_refresh(m->win);
 }
@@ -265,6 +287,7 @@ static void start_writing(struct recon_mailwin *m) {
         recon_edit_begin(&m->compose[i], "", false);
         m->compose[i].active = false;
     }
+    m->attached_count = 0;
     /* The body is the one field where Enter means a new line rather than
      * "done". See recon_edit's multiline flag. */
     m->compose[COMPOSE_BODY].multiline = true;
@@ -274,6 +297,18 @@ static void start_writing(struct recon_mailwin *m) {
     m->screen = SCREEN_COMPOSE;
     m->message[0] = '\0';
     m->message_is_error = false;
+}
+
+/*
+ * The last part of a path, which is the part a recipient should see.
+ *
+ * A message that named the folder a file came out of would be telling everyone
+ * who receives it something about how this machine is arranged, which is
+ * nobody's business and was never the point of attaching a file.
+ */
+static const char *name_of(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return (slash != NULL && slash[1] != '\0') ? slash + 1 : path;
 }
 
 static void send_now(struct recon_mailwin *m) {
@@ -331,6 +366,51 @@ static void send_now(struct recon_mailwin *m) {
     letter.body = m->compose[COMPOSE_BODY].text;
 
     /*
+     * The attached files, read now rather than when they were chosen.
+     *
+     * A file picked at nine and sent at eleven should be the file as it is at
+     * eleven. Reading it at the moment of sending is also the only way to
+     * notice that it has been deleted or renamed since -- which is a thing to
+     * say out loud, not a thing to send an empty part about.
+     *
+     * Freed on every path out of this function, including the ones that fail,
+     * which is why they go into a local array rather than into the letter
+     * alone: the letter borrows these bytes and does not own them.
+     */
+    char *held[RECON_SMTP_ATTACHMENTS_MAX];
+    memset(held, 0, sizeof(held));
+    bool read_them_all = true;
+
+    for (int i = 0; i < m->attached_count && read_them_all; i++) {
+        size_t size = 0;
+        held[i] = recon_fs_read("/", m->attached[i], &size);
+        if (held[i] == NULL) {
+            set_message(m, true, "'%s' could not be read: %s",
+                name_of(m->attached[i]), recon_fs_last_error());
+            read_them_all = false;
+            break;
+        }
+
+        letter.attachment[i].bytes = (const unsigned char *)held[i];
+        letter.attachment[i].size = size;
+        snprintf(letter.attachment[i].name,
+            sizeof(letter.attachment[i].name), "%s",
+            name_of(m->attached[i]));
+        letter.attachment_count = i + 1;
+    }
+
+    #define LET_GO() do { \
+        for (int k = 0; k < RECON_SMTP_ATTACHMENTS_MAX; k++) { \
+            free(held[k]); \
+        } \
+    } while (0)
+
+    if (!read_them_all) {
+        LET_GO();
+        return;
+    }
+
+    /*
      * Checked here as well as inside recon_smtp_send, so the reason appears
      * beside the field somebody is still looking at rather than as the result
      * of a connection that was never made.
@@ -338,12 +418,14 @@ static void send_now(struct recon_mailwin *m) {
     char why[192];
     if (!recon_smtp_letter_ok(&letter, why, sizeof(why))) {
         set_message(m, true, "%s", why);
+        LET_GO();
         return;
     }
 
     if (m->password.text[0] == '\0') {
         set_message(m, true, "The password is needed to send as well as to "
             "read. Change the account and sign in again.");
+        LET_GO();
         return;
     }
 
@@ -357,6 +439,17 @@ static void send_now(struct recon_mailwin *m) {
      */
     m->sender = recon_smtp_send(&m->sending, m->password.text, &letter,
         &SEND_HANDLERS, m);
+
+    /*
+     * Released here whether it worked or not. recon_smtp_send composes the
+     * whole message into a buffer of its own before it returns, so by this
+     * point nothing it holds points back at these bytes -- which is the fact
+     * that makes borrowing them safe, and is worth saying because it is the
+     * only reason this free is not a use-after-free.
+     */
+    LET_GO();
+    #undef LET_GO
+
     if (m->sender == NULL) {
         set_message(m, true, "%s", recon_smtp_last_error());
         return;
@@ -748,6 +841,35 @@ static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
         COLOR_DIM);
     y += line + 4;
 
+    /*
+     * What is attached, one per line, each with its own way of being taken off
+     * again.
+     *
+     * Named rather than counted. "3 files attached" is a thing somebody has to
+     * open something else to check, and the moment worth catching is the one
+     * where the wrong file is on the list.
+     */
+    for (int i = 0; i < m->attached_count; i++) {
+        char shown[RECON_PATH_MAX + 32];
+        snprintf(shown, sizeof(shown), "%s", name_of(m->attached[i]));
+
+        int remove_w = recon_text_width(m->font, "Remove") + 16;
+        int remove_x = x + w - PADDING - remove_w;
+
+        recon_draw_text(p, m->font, x + 4, y + ascent, remove_w > 0
+            ? remove_x - x - 12 : w, shown, COLOR_TEXT);
+
+        recon_fill_rect(p, remove_x, y - 1, remove_w, line + 2, COLOR_PANEL);
+        recon_draw_button_edge(p, remove_x, y - 1, remove_w, line + 2, false,
+            COLOR_BG);
+        recon_draw_text(p, m->font, remove_x + 8, y + ascent, remove_w - 8,
+            "Remove", COLOR_TEXT);
+        recon_hit_add(p, remove_x, y - 1, remove_w, line + 2,
+            HIT_ATTACHED_BASE + (uint32_t)i);
+
+        y += line + 4;
+    }
+
     /* The buttons are placed from the bottom, so the body gets the rest. */
     int buttons_y = bottom - BUTTON_HEIGHT;
     int box_h = buttons_y - PADDING - y;
@@ -821,7 +943,14 @@ static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
 
     int bx = draw_button(m, p, x, buttons_y,
         m->sending_now ? "Sending..." : "Send", HIT_SEND, !m->sending_now);
-    draw_button(m, p, bx, buttons_y, "Discard", HIT_DISCARD, !m->sending_now);
+    bx = draw_button(m, p, bx, buttons_y, "Discard", HIT_DISCARD,
+        !m->sending_now);
+
+    /* Greyed at the limit rather than removed, so the reason the button will
+     * not respond is the button itself saying so. */
+    draw_button(m, p, bx, buttons_y, "Attach a file", HIT_ATTACH,
+        !m->sending_now &&
+        m->attached_count < RECON_SMTP_ATTACHMENTS_MAX);
 }
 
 static void draw_reading(struct recon_mailwin *m, struct recon_panel *p,
@@ -997,12 +1126,59 @@ static void mailwin_draw(void *user, struct recon_panel *p,
         draw_compose(m, p, inner_x, inner_y, inner_w, inner_h);
         break;
     }
+
+    /*
+     * The file picker over everything, last, so its hit regions win.
+     *
+     * Drawn over the whole content area rather than beside the letter: while
+     * it is up it is the only thing that can be used, and covering what is
+     * behind it is what makes that obvious rather than something to find out
+     * by clicking.
+     */
+    if (recon_filedlg_is_open(&m->dialog)) {
+        recon_filedlg_draw(&m->dialog, p, m->font, x, y, w, h);
+    }
+
     (void)line;
 }
 
 /* --- Input --- */
 
 static void open_selected(struct recon_mailwin *m);
+
+/*
+ * Put the chosen file on the list.
+ *
+ * Not read, and not checked for size beyond the count -- both of those happen
+ * at Send, against the file as it is then. What IS checked here is that the
+ * same file is not attached twice: two parts with the same name is a message
+ * that looks corrupt to whoever opens it, and it is far more often a double
+ * click than an intention.
+ */
+static void attach_chosen(struct recon_mailwin *m) {
+    const char *path = recon_filedlg_path(&m->dialog);
+    if (path == NULL || *path == '\0') {
+        return;
+    }
+
+    if (m->attached_count >= RECON_SMTP_ATTACHMENTS_MAX) {
+        set_message(m, true, "One letter can carry %d files.",
+            RECON_SMTP_ATTACHMENTS_MAX);
+        return;
+    }
+
+    for (int i = 0; i < m->attached_count; i++) {
+        if (strcmp(m->attached[i], path) == 0) {
+            set_message(m, false, "'%s' is already attached.", name_of(path));
+            return;
+        }
+    }
+
+    snprintf(m->attached[m->attached_count],
+        sizeof(m->attached[m->attached_count]), "%s", path);
+    m->attached_count++;
+    set_message(m, false, "'%s' will go with the letter.", name_of(path));
+}
 
 static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
         bool pressed) {
@@ -1014,14 +1190,42 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
         return false;
     }
 
+    /* The file dialog takes every click while it is up, including the ones
+     * that miss it: the window behind is not usable until it is answered. */
+    if (recon_filedlg_is_open(&m->dialog)) {
+        if (recon_filedlg_click(&m->dialog, hit) == RECON_FILEDLG_ACCEPTED) {
+            attach_chosen(m);
+        }
+        recon_appwin_refresh(m->win);
+        return true;
+    }
+
     /* Descending, because the ladders below are unbounded. */
     /*
-     * The compose fields first, because the row check below is an open-ended
-     * `>=` and these are numbered above it -- so clicking the To field was
-     * being read as clicking message row one hundred, and the text went to
-     * whichever field had the caret. Bounded here and unbounded there, so the
-     * order is what keeps them apart.
+     * The Remove buttons, then the compose fields, then the rows. All three
+     * for one reason: HIT_ROW_BASE below is an open-ended `>=` and both of the
+     * others are numbered above it. Clicking the To field used to be read as
+     * clicking message row one hundred, and the text went to whichever field
+     * had the caret. Bounded here and unbounded there, so the order is what
+     * keeps them apart.
      */
+    if (hit >= HIT_ATTACHED_BASE &&
+            hit < HIT_ATTACHED_BASE + RECON_SMTP_ATTACHMENTS_MAX) {
+        int i = (int)(hit - HIT_ATTACHED_BASE);
+        if (i >= 0 && i < m->attached_count) {
+            set_message(m, false, "'%s' is no longer attached.",
+                name_of(m->attached[i]));
+            for (int j = i; j + 1 < m->attached_count; j++) {
+                memcpy(m->attached[j], m->attached[j + 1],
+                    sizeof(m->attached[j]));
+            }
+            m->attached_count--;
+            m->attached[m->attached_count][0] = '\0';
+        }
+        recon_appwin_refresh(m->win);
+        return true;
+    }
+
     if (hit >= HIT_COMPOSE_BASE && hit < HIT_COMPOSE_BASE + COMPOSE_COUNT) {
         int i = (int)(hit - HIT_COMPOSE_BASE);
         for (int j = 0; j < COMPOSE_COUNT; j++) {
@@ -1103,6 +1307,12 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
         recon_appwin_refresh(m->win);
         return true;
 
+    case HIT_ATTACH:
+        recon_filedlg_open(&m->dialog, RECON_FILEDLG_OPEN, "Attach a file",
+            NULL, NULL);
+        recon_appwin_refresh(m->win);
+        return true;
+
     case HIT_DISCARD:
         /*
          * Straight back, with no "are you sure".
@@ -1160,6 +1370,18 @@ static void open_selected(struct recon_mailwin *m) {
 
 static bool mailwin_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_mailwin *m = user;
+
+    /* The dialog first, and it takes everything -- including the keys it does
+     * not use. Typing into the letter behind a picker that is waiting for an
+     * answer is how somebody sends a filename to their aunt. */
+    if (recon_filedlg_is_open(&m->dialog)) {
+        if (recon_filedlg_key(&m->dialog, sym, modifiers) ==
+                RECON_FILEDLG_ACCEPTED) {
+            attach_chosen(m);
+        }
+        recon_appwin_refresh(m->win);
+        return true;
+    }
 
     if (m->screen == SCREEN_SETUP) {
         struct recon_edit *edit = &m->fields[m->focused];

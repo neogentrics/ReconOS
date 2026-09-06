@@ -408,7 +408,10 @@ target_include_directories(recon_image_tests PRIVATE
 # and those are the ones that turn one message into two when they are wrong.
 add_executable(recon_smtp_tests
     tests/test_smtp.c
-    src/recon_smtp_message.c)
+    src/recon_smtp_message.c
+    # For base64, which is how an attachment travels. Still no network here:
+    # recon_crypt is arithmetic on bytes and nothing else.
+    src/recon_crypt.c)
 
 target_include_directories(recon_smtp_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")

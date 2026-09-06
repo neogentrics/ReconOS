@@ -1937,13 +1937,12 @@ client somebody would use daily.
 
 **Mail sends** — as of v0.4.0. What is still missing is named below.
 
-**Sending has no attachments and no HTML.** To, Cc and Bcc are there as of
-v0.4.0, each a comma-separated list, with the rule that matters: every address
-reaches the server and only To and Cc reach the message. What is left is
-attaching a file, which needs MIME multipart -- a body that is several bodies,
-each with its own headers and a boundary marker between them, and a base64
-encoder for the parts that are not text. The encoder exists; the multipart
-writer does not.
+**Sending has no HTML.** To, Cc, Bcc and attachments are all there as of
+v0.4.0. What is left is a letter that is not plain text, which is a larger
+question than it sounds: an HTML message is two bodies, one of each kind, and
+something has to write the plain-text version of what somebody typed with a
+mouse. Nothing here has an editor that produces HTML, so this waits on that
+rather than on the message format.
 
 **Older, on sending:** SMTP is a separate
 protocol on a separate port with its own set of ways to lose somebody's

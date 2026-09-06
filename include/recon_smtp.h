@@ -54,10 +54,29 @@
  * write `Bcc`, which is deliberate: the guarantee is worth more as a thing the
  * function cannot do than as a thing it remembers not to.
  *
+ * --- Attachments ---
+ *
+ * A letter with nothing attached is written exactly as it always was: one
+ * part, no boundaries, no multipart header. That is not an optimisation, it is
+ * the point -- the common message stays the simple message, and nothing about
+ * it changed when this feature arrived.
+ *
+ * With something attached it becomes multipart/mixed: the text, then each
+ * file, with a boundary line between them. The boundary is the one genuinely
+ * dangerous part, because a boundary that also appears inside the content
+ * splits the message somewhere nobody intended. So it is CHECKED against
+ * everything it is about to separate rather than assumed unique -- see
+ * recon_smtp_compose.
+ *
+ * The bytes are passed in rather than read from a path here, so composing
+ * stays a pure function of its arguments and can be tested with no filesystem
+ * under it. Reading the file, and deciding it is not too large, belongs to
+ * whoever is asking for it to be sent.
+ *
  * --- What it does not do yet ---
  *
- * Plain text bodies, no attachments, no HTML. Enough to send a letter, and
- * everything absent is absent by name rather than by discovery.
+ * Plain text bodies and no HTML. Enough to send a letter with something
+ * attached, and everything absent is absent by name rather than by discovery.
  */
 
 #ifndef RECON_SMTP_H
@@ -115,6 +134,32 @@ bool recon_smtp_account_clear(void);
 #define RECON_SMTP_RECIPIENTS_MAX 32
 
 /*
+ * How many files one letter may carry, and how large they may be together.
+ *
+ * The size is of the file on disk; base64 makes it a third bigger again on the
+ * way out. Both are limits rather than no limit for the same reason: the whole
+ * message is built in memory before a byte of it is sent, so "how big can this
+ * get" has to have an answer, and a refusal that names the number is kinder
+ * than a failure at the point of allocation.
+ */
+#define RECON_SMTP_ATTACHMENTS_MAX 8
+#define RECON_SMTP_ATTACHED_BYTES_MAX (12 * 1024 * 1024)
+
+/*
+ * One file travelling with a letter.
+ *
+ * The bytes are borrowed, not owned: they must outlive the compose call. That
+ * is the arrangement that keeps composing testable without a filesystem, and
+ * it is why `name` is separate from any path -- what the recipient sees is the
+ * name, and the directory it came out of is nobody else's business.
+ */
+struct recon_smtp_attachment {
+    char name[128];
+    const unsigned char *bytes;
+    size_t size;
+};
+
+/*
  * A message, before it is a message.
  *
  * `to`, `cc` and `bcc` are addresses separated by commas, as typed. `body` is
@@ -131,6 +176,9 @@ struct recon_smtp_letter {
     char bcc[RECON_SMTP_LIST_MAX];
     char subject[256];
     const char *body;
+
+    struct recon_smtp_attachment attachment[RECON_SMTP_ATTACHMENTS_MAX];
+    int attachment_count;
 };
 
 /*
