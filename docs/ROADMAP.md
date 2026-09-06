@@ -1959,6 +1959,23 @@ session rather than carrying on in the open.
 network stack of its own. What it governs is what ReconOS itself opens and
 accepts, which is a real boundary and is not the same boundary.
 
+**There is no DHCP client and no static configuration, because there is nothing
+to configure yet.** Asked directly, and worth answering in full: the Network
+page shows an address, a gateway and nameservers, and every one of those is the
+*host's*, read from its interfaces, its routing table and its
+`/etc/resolv.conf`. ReconOS did not obtain them and cannot change them. DHCP is
+a protocol spoken over UDP by a machine that does not yet have an address, and
+static configuration means writing an address onto an interface — both of them
+are things a network stack does, and this one belongs to Linux.
+
+So the honest shape of it is that the *choice* between automatic and static
+does not exist here at all, rather than existing and defaulting to automatic.
+Both arrive together with the kernel's stack, and when they do the Network page
+becomes a page that sets something instead of a page that reports. The header
+says the same thing about the whole file, and it is worth repeating here
+because a page listing an IP address looks exactly like an operating system
+doing networking: *"It is ReconOS reporting what it was told."*
+
 **A client window's title bar carries a generic icon.** A Wayland client
 hands its compositor an `app_id`, not a picture; guessing an icon from a
 reverse-DNS string would be wrong more often than right, and looking one up
