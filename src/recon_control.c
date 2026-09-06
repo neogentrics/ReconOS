@@ -588,7 +588,30 @@ struct recon_control *recon_control_create(struct recon_server *server,
 
     memcpy(addr.sun_path, control->path, strlen(control->path));
 
-    if (bind(control->fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+    /*
+     * Created with only the owner able to touch it, rather than created and
+     * then restricted.
+     *
+     * bind() takes no mode, so the umask is the only way to say this at
+     * creation -- it is the socket equivalent of the create-with-mode rule
+     * that files now follow through recon_fs_write_private.
+     *
+     * The chmod below stays, and is not redundant. It is what makes the
+     * permissions certain rather than dependent on a umask this process did
+     * not set and cannot see; this pair means the file is never more open than
+     * intended, and ends up exactly as intended.
+     *
+     * What this replaces is an argument rather than a bug. The old comment
+     * reasoned that a socket which is bound but not yet listening refuses
+     * connections, so the gap between bind and chmod was safe -- true on
+     * Linux, and a guarantee borrowed from a kernel this system intends to
+     * replace. Better to not need it.
+     */
+    mode_t was = umask(0177);
+    int bound = bind(control->fd, (struct sockaddr *)&addr, sizeof(addr));
+    umask(was);
+
+    if (bound != 0) {
         wlr_log(WLR_ERROR, "ReconOS: cannot bind '%s': %s",
             control->path, strerror(errno));
         close(control->fd);
@@ -606,8 +629,11 @@ struct recon_control *recon_control_create(struct recon_server *server,
      * socket in /tmp that every other account on the box can drive.
      *
      * Set after bind, because the file does not exist until then, and before
-     * listen, so there is no window in which it is both connectable and
-     * open to everybody.
+     * listen. The umask above means it was never open in the first place; this
+     * makes it certain rather than dependent on a umask this process did not
+     * set -- a umask can only take permissions away, so one that was already
+     * strict leaves this with nothing to do and one that was loose has already
+     * been overridden.
      */
     if (chmod(control->path, S_IRUSR | S_IWUSR) != 0) {
         wlr_log(WLR_ERROR, "ReconOS: cannot restrict '%s': %s",

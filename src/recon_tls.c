@@ -16,7 +16,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -201,24 +200,28 @@ static bool generate(void) {
         fail(rc, "writing the key");
         goto done;
     }
-    if (!recon_fs_write("/", RECON_TLS_KEY_FILE, (const char *)pem,
-            strlen((const char *)pem))) {
-        snprintf(g_error, sizeof(g_error), "cannot write %s",
-            RECON_TLS_KEY_FILE);
-        goto done;
-    }
-
     /*
-     * The private key is readable only by the account that owns ReconOS.
-     * Writing it and then tightening it leaves a window, which is worth
-     * naming: the alternative is a filesystem layer that can create a file
-     * with a mode, and that does not exist yet.
+     * Created readable only by the account that owns ReconOS, rather than
+     * written and then tightened.
+     *
+     * This used to be recon_fs_write followed by a chmod, under a comment
+     * saying the alternative was "a filesystem layer that can create a file
+     * with a mode, and that does not exist yet". It exists now, and it is the
+     * shape docs/KERNEL.md already lists as a constraint on ReconFS -- decided
+     * early, because now is when it is free.
+     *
+     * The window it closes is small and real, and it is the kind that stops
+     * being small the day account roles are enforced by the kernel instead of
+     * by the Control Panel declining. Today everything runs as one host user,
+     * so there is nobody to lose the race to. That is a fact about the
+     * substrate, not about this code, and it changes on somebody else's
+     * schedule.
      */
-    char host[RECON_PATH_MAX];
-    char canonical[RECON_PATH_MAX];
-    if (recon_fs_resolve("/", RECON_TLS_KEY_FILE, host, sizeof(host),
-            canonical, sizeof(canonical))) {
-        chmod(host, 0600);
+    if (!recon_fs_write_private("/", RECON_TLS_KEY_FILE, (const char *)pem,
+            strlen((const char *)pem))) {
+        snprintf(g_error, sizeof(g_error), "cannot write %s: %s",
+            RECON_TLS_KEY_FILE, recon_fs_last_error());
+        goto done;
     }
 
     /* The buffer held a private key a moment ago. */

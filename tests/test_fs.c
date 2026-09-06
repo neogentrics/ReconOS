@@ -300,6 +300,75 @@ static void test_clipboard(void) {
 
 /* --- Harness --- */
 
+/* --- Files that are private from the moment they exist --- */
+
+/*
+ * The claim recon_fs_write_private makes is not "ends up private" -- a chmod
+ * after the write does that too. It is "was never anything else", and the
+ * difference is a window during which a key is readable by everything on the
+ * machine.
+ *
+ * A test cannot watch that window from inside one process. What it can do is
+ * check the two things that produce it: the mode is right, and it is right
+ * even when the file already existed with a looser one -- which is the case a
+ * write-then-chmod gets wrong in the other direction, by truncating a file and
+ * keeping whatever permissions it had.
+ */
+static void test_private_files(void) {
+    printf("Files that start out private\n");
+
+    const char *secret = "-----BEGIN PRIVATE KEY-----\nnot really\n";
+
+    check(recon_fs_write_private("/", "/System/key.pem", secret,
+        strlen(secret)), "a private file writes");
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    check(recon_fs_resolve("/", "/System/key.pem", host, sizeof(host),
+        canonical, sizeof(canonical)), "and can be found on the host");
+
+    struct stat info;
+    check(stat(host, &info) == 0, "and exists");
+    check((info.st_mode & 0777) == 0600,
+        "readable and writable by its owner, and by nobody else");
+
+    /* The contents survived all that. */
+    size_t size = 0;
+    char *back = recon_fs_read("/", "/System/key.pem", &size);
+    check(back != NULL && size == strlen(secret) &&
+        memcmp(back, secret, size) == 0, "and holds what was written");
+    free(back);
+
+    /*
+     * Written over a file that was already there and already loose.
+     *
+     * This is the case that separates the two approaches. Truncating an
+     * existing file keeps its permissions, so a key written by an older
+     * version at 0644 would stay at 0644 forever -- and the promise here is
+     * that it does not.
+     */
+    check(recon_fs_write("/", "/System/loose.pem", "old", 3),
+        "an ordinary file is written first");
+    check(recon_fs_resolve("/", "/System/loose.pem", host, sizeof(host),
+        canonical, sizeof(canonical)), "and found");
+    check(chmod(host, 0644) == 0, "and deliberately made world-readable");
+
+    check(recon_fs_write_private("/", "/System/loose.pem", secret,
+        strlen(secret)), "then written privately over the top");
+    check(stat(host, &info) == 0 && (info.st_mode & 0777) == 0600,
+        "and it is private now, not still world-readable");
+
+    /* An ordinary write is NOT private, which is the point of there being two
+     * functions rather than one that quietly tightened everything. */
+    check(recon_fs_write("/", "/System/plain.txt", "hello", 5),
+        "an ordinary file still writes");
+    check(recon_fs_resolve("/", "/System/plain.txt", host, sizeof(host),
+        canonical, sizeof(canonical)) && stat(host, &info) == 0,
+        "and is found");
+    check((info.st_mode & 0077) != 0 || (info.st_mode & 0777) == 0600,
+        "and is left to the umask rather than forced private");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-test-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -322,6 +391,7 @@ int main(void) {
     test_reading_across_accounts();
     test_escapes();
     test_clipboard();
+    test_private_files();
 
     recon_fs_finish();
 
