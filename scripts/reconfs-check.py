@@ -384,7 +384,7 @@ def check(path, want=None):
     # Both superblocks and the run reserved between them. Claimed explicitly,
     # rather than exempted in the comparison below -- an exemption for
     # archive-owned blocks applies to every stale copy of the root directory
-    # too, and hid a leak on every commit (BG-090).
+    # too, and hid a leak on every commit (BG-122).
     for b in range(min(reconfs_super_b_blocks(img), total)):
         by[b] = OWNER_ARCHIVE
 

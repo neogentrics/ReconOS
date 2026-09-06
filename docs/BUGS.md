@@ -21,6 +21,48 @@ keeps its number forever, because the number is how the fix is referred to
 afterwards — in a commit, in a change log, in a conversation six months from
 now about whether this has happened before.
 
+### The one exception, 6 September 2026
+
+That rule was broken once, deliberately, and this is the record of it.
+
+ReconOS is built by two sessions sharing one repository — a desktop half on
+`main` and a kernel half on a branch. The arrangement was that the kernel
+session reports a fault and the desktop session writes the entry, so that one
+register exists. That stopped happening, and both sides began writing into their
+own copy of this file, each taking the next number from the copy in front of it.
+
+They agree up to and including BG-081. **BG-082 through BG-093 then named twelve
+faults on `main` and twelve entirely different faults on the kernel branch**, and
+`main` ran on to BG-113. Two GitHub issues were titled `BG-085`, for unrelated
+bugs.
+
+The kernel branch's twelve were renumbered to **BG-114 through BG-125**, in the
+same order, and the next fault found took BG-126. `main` keeps its numbers,
+being the longer sequence and the one the arrangement says is authoritative.
+
+| Was | Is |
+|---|---|
+| BG-082 | BG-114 |
+| BG-083 | BG-115 |
+| BG-084 | BG-116 |
+| BG-085 | BG-117 |
+| BG-086 | BG-118 |
+| BG-087 | BG-119 |
+| BG-088 | BG-120 |
+| BG-089 | BG-121 |
+| BG-090 | BG-122 |
+| BG-091 | BG-123 |
+| BG-092 | BG-124 |
+| BG-093 | BG-125 |
+
+Their GitHub issues (#270–#283) were retitled and carry a line saying what they
+were. **Commit messages were not rewritten and cannot be** — commits on the
+kernel branch dated before 6 September 2026 that cite `BG-082` through `BG-093`
+mean the numbers in the right-hand column above.
+
+The rule that made this necessary is not "do not renumber". It is: *take the
+next number from the register, not from your copy of it.*
+
 BG-001 through BG-059 were assigned retroactively on 4 September 2026, from
 the commit history, and are in the right order relative to each other. From
 BG-060 on, a number is taken when the fault is found.
@@ -76,7 +118,7 @@ broken says nothing about the work.
 
 ## Fixed
 
-### BG-087 — A transaction could overwrite storage the live filesystem still used
+### BG-119 — A transaction could overwrite storage the live filesystem still used
 
 [#276](https://github.com/neogentrics/ReconOS/issues/276)
 
@@ -133,7 +175,7 @@ broken says nothing about the work.
   With a control that genuinely applies, the allocator hands back block 4095 —
   the exact block released moments earlier — and the test fails. That is the
   third instance tonight of a check that reported success while doing nothing,
-  after BG-082 and BG-083.
+  after BG-114 and BG-115.
 
   Testing it directly also turned up a smaller thing worth fixing: running out
   of space marked the whole transaction failed, which made "the volume is full"
@@ -141,7 +183,7 @@ broken says nothing about the work.
   leaves the transaction usable, which is what let the test fill a volume on
   purpose.
 
-### BG-088 — Only one of the two superblocks was ever written
+### BG-120 — Only one of the two superblocks was ever written
 
 [#277](https://github.com/neogentrics/ReconOS/issues/277)
 
@@ -184,7 +226,7 @@ broken says nothing about the work.
   into superblock A's fields while B was live, damaging a block nothing pointed
   at, and getting a correct report of a healthy volume.
 
-### BG-089 — Renaming over a file leaked every block it occupied
+### BG-121 — Renaming over a file leaked every block it occupied
 
 [#278](https://github.com/neogentrics/ReconOS/issues/278)
 
@@ -217,7 +259,7 @@ broken says nothing about the work.
   whole thing. An empty file is always complete, so a crash test on empty files
   can only assert that a *name* resolved.
 
-### BG-090 — Every directory rewrite leaked a block, and the checker was built not to notice
+### BG-122 — Every directory rewrite leaked a block, and the checker was built not to notice
 
 [#279](https://github.com/neogentrics/ReconOS/issues/279)
 
@@ -264,7 +306,7 @@ broken says nothing about the work.
   independence a second implementation by the same author buys, and worth
   recording as such.
 
-### BG-091 — A machine with more processors than the kernel holds reported the wrong number, under a comment saying it never would
+### BG-123 — A machine with more processors than the kernel holds reported the wrong number, under a comment saying it never would
 
 [#280](https://github.com/neogentrics/ReconOS/issues/280)
 
@@ -290,8 +332,8 @@ broken says nothing about the work.
   The comment above it says *"Reported, never silently truncated"*, and cites
   the memory map's region cap as the lesson that taught it. The lesson was
   learned, written down, and then implemented as code that could not do it —
-  which is the same shape as BG-088 (a correct sentence above an incorrect line)
-  and BG-090 (an exemption written for a category, applied as a membership
+  which is the same shape as BG-120 (a correct sentence above an incorrect line)
+  and BG-122 (an exemption written for a category, applied as a membership
   test). Three of these now.
 - **Fixed in** kernel 0.0.11. `arch_smp_discover` returns how many processors
   *exist*, which may exceed `max`; only `max` are written to the array. Both
@@ -306,7 +348,53 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
-### BG-092 — The kernel panicked at boot on any ARM machine with more than eight processors
+### BG-125 — The device tree walk lost any node that had a child
+
+[#283](https://github.com/neogentrics/ReconOS/issues/283)
+
+- **Found:** chasing BG-124's fix, which did not work and had two wrong
+  diagnoses before this one.
+- **Cost:** an entire debugging session, most of it spent suspecting the pointer
+  the walk was given rather than the walk.
+
+`fdt_each_compatible` collects a node's `compatible` and `reg` as the properties
+go by, and reports the node when it sees `FDT_END_NODE`. A node's children sit
+between its properties and its own end, and `FDT_BEGIN_NODE` clears both fields
+to start the child fresh. So a node with a child had its match erased by that
+child, and its `FDT_END_NODE` found nothing to report.
+
+Both walkers in the file had it. Neither had ever been asked about a node with
+children:
+
+    pci-host-ecam-generic   pcie@10000000         children: 0
+    virtio,mmio             virtio_mmio@a000000   children: 0
+    arm,gic-v3              intc@8000000          children: 1   <-- the ITS
+
+So PCI worked, storage worked, and the *first* question ever asked of this walk
+about a node with a child was "does this machine have a GICv3" — answered "no"
+by a machine holding one. The kernel fell back to GICv2, wrote to a CPU
+interface that does not exist on such a machine, and panicked at boot. That is
+BG-124's symptom exactly, which is why two rounds of fixing BG-124 changed
+nothing: the fix was correct and could not be reached.
+
+A node is fully described the moment a child begins, because properties always
+precede children. Both walkers now report there as well as at the end.
+
+**What actually found it.** Not reasoning — dumping the machine's own device
+tree with `-M virt,dumpdtb=` and reading it with a script that had nothing to do
+with the kernel. Two rounds of reading the C and reasoning about what it must be
+doing produced two confident wrong answers, and the second one was written into
+the source as a comment explaining a mechanism that does not exist. The blob
+took one command to obtain.
+
+**And the instrument that should have existed.** The kernel decided its
+interrupt controller generation in silence. Being wrong about it does not
+produce a message; it produces `external abort, on a write, 0xffff800008010004`,
+an address that means nothing unless you already know which generation the
+kernel picked. It prints the generation now — one line, and the difference
+between a five-minute diagnosis and a session-long one.
+
+### BG-124 — The kernel panicked at boot on any ARM machine with more than eight processors
 
 [#281](https://github.com/neogentrics/ReconOS/issues/281)
 
@@ -377,7 +465,7 @@ broken says nothing about the work.
   it is the same range that caught the original: booting one machine size proves
   something about one machine size.
 
-### BG-085 — ReconFS could not have held a drive you can buy today
+### BG-117 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)
 
@@ -414,7 +502,7 @@ broken says nothing about the work.
   it caught at exactly the sizes that matter — 2^32 blocks of 4096, the old
   ceiling, and 5,859,375,000 blocks, which is a 24TB drive.
 
-### BG-086 — A block-size rule that read like a rule and behaved like a constant
+### BG-118 — A block-size rule that read like a rule and behaved like a constant
 
 [#275](https://github.com/neogentrics/ReconOS/issues/275)
 
@@ -431,7 +519,7 @@ broken says nothing about the work.
   wrong side of its own starting point is indistinguishable from a working one
   unless somebody tabulates it.
 
-  Third in a row of this shape, after BG-082 and BG-083: **something that looks
+  Third in a row of this shape, after BG-114 and BG-115: **something that looks
   like it is working, is not.**
 - **Fixed in** kernel 0.0.11. Replaced with an explicit table — 4KiB under 2TiB,
   16KiB under 16TiB, 64KiB above — with the trade-off written down beside it,
@@ -439,7 +527,7 @@ broken says nothing about the work.
   formula can know what a volume will hold. An explicit size passed by the
   caller always wins, which is what the installer is for.
 
-### BG-082 — The crash harness never cut the power, and reported that it had
+### BG-114 — The crash harness never cut the power, and reported that it had
 
 [#270](https://github.com/neogentrics/ReconOS/issues/270)
 
@@ -469,11 +557,11 @@ broken says nothing about the work.
   an `EXIT`/`INT`/`TERM` trap kills it if the run is interrupted, so orphans
   cannot accumulate silently again.
 
-### BG-083 — The crash harness passed cleanly with its checker missing
+### BG-115 — The crash harness passed cleanly with its checker missing
 
 [#271](https://github.com/neogentrics/ReconOS/issues/271)
 
-- **Found in** kernel 0.0.11. **Found by** fixing BG-082 and watching the next
+- **Found in** kernel 0.0.11. **Found by** fixing BG-114 and watching the next
   run print `0 out of order, 0 torn` while every single round had printed
   `can't open file 'scripts/check-markers.py'`.
 - **Was** the status switch ended in `*) echo ...`, which printed the round and
@@ -491,7 +579,7 @@ broken says nothing about the work.
   fails with "this is not a result". Verified by hiding `check-markers.py` and
   confirming the harness exits 1.
 
-### BG-084 — The flush instrument counted zero on a driver that was flushing
+### BG-116 — The flush instrument counted zero on a driver that was flushing
 
 [#272](https://github.com/neogentrics/ReconOS/issues/272)
 

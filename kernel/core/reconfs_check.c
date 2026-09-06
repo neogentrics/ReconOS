@@ -395,7 +395,7 @@ enum reconfs_status reconfs_check(struct reconfs *fs,
 	 * whose owner happened to be the archive.
 	 *
 	 * Which included every stale copy of the root directory. Each commit
-	 * writes a new root inode, and nothing released the old one (BG-090):
+	 * writes a new root inode, and nothing released the old one (BG-122):
 	 * a leaked block on every create, rename, write and remove, owned by
 	 * the archive because the root has no parent, and therefore skipped by
 	 * the one check that would have named it.

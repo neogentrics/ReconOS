@@ -245,6 +245,40 @@ static bool compatible_contains(const char *list, u32 len, const char *want)
 	return false;
 }
 
+/* A node's properties always precede its children, so a node is finished being
+ * described the moment either a child begins or it ends. Reporting only at the
+ * end is wrong for any node that has children: the child's FDT_BEGIN_NODE
+ * clears the match that the parent had already earned, and the parent's
+ * FDT_END_NODE then finds nothing to report.
+ *
+ * That is not a corner case. QEMU's GICv3 node has an ITS child, so a kernel
+ * asking "is there an arm,gic-v3 here" was told no by the machine that had
+ * one -- and fell back to GICv2, whose CPU interface does not exist on such a
+ * machine, and panicked at boot. Every other node this walk is asked about is
+ * childless, which is why it went unseen. (BG-125)
+ */
+static void report_node(bool matched, const u8 *reg_value, u32 reg_len,
+			u32 addr_cells, u32 size_cells,
+			void (*fn)(u64 base, u64 size))
+{
+	const u8 *v, *v_end;
+
+	if (!matched || !reg_value)
+		return;
+
+	v     = reg_value;
+	v_end = reg_value + reg_len;
+
+	while (v < v_end) {
+		u64 base, size;
+
+		if (!read_cells(&v, addr_cells, &base) ||
+		    !read_cells(&v, size_cells, &size))
+			break;
+		fn(base, size);
+	}
+}
+
 void fdt_each_compatible(u64 dtb_phys, const char *compat,
 			 void (*fn)(u64 base, u64 size))
 {
@@ -278,6 +312,12 @@ void fdt_each_compatible(u64 dtb_phys, const char *compat,
 		case FDT_BEGIN_NODE: {
 			const char *name = (const char *)p;
 
+			/* The enclosing node is fully described now: its own
+			 * properties are behind us and this child is about to
+			 * overwrite them. */
+			report_node(matched, reg_value, reg_len,
+				    addr_cells, size_cells, fn);
+
 			depth++;
 			p += (kstrlen(name) + 1 + 3) & ~3u;
 
@@ -288,24 +328,12 @@ void fdt_each_compatible(u64 dtb_phys, const char *compat,
 		}
 
 		case FDT_END_NODE:
-			/* Report on the way *out* of the node, when both
-			 * properties have certainly been seen. */
-			if (matched && reg_value) {
-				const u8 *v = reg_value;
-				const u8 *v_end = reg_value + reg_len;
-
-				while (v < v_end) {
-					u64 base, size;
-
-					if (!read_cells(&v, addr_cells, &base) ||
-					    !read_cells(&v, size_cells, &size))
-						break;
-					fn(base, size);
-				}
-			}
+			report_node(matched, reg_value, reg_len,
+				    addr_cells, size_cells, fn);
 
 			matched   = false;
 			reg_value = 0;
+			reg_len   = 0;
 			depth--;
 			break;
 
@@ -385,6 +413,10 @@ void fdt_each_property(u64 dtb_phys, const char *compat, const char *prop_name,
 		case FDT_BEGIN_NODE: {
 			const char *name = (const char *)p;
 
+			/* Before the child erases it -- see report_node. */
+			if (matched && want_value)
+				fn(want_value, want_len);
+
 			p += (kstrlen(name) + 1 + 3) & ~3u;
 			matched = false;
 			want_value = 0;
@@ -397,6 +429,7 @@ void fdt_each_property(u64 dtb_phys, const char *compat, const char *prop_name,
 				fn(want_value, want_len);
 			matched = false;
 			want_value = 0;
+			want_len = 0;
 			break;
 
 		case FDT_NOP:

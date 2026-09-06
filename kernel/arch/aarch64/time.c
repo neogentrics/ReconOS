@@ -52,7 +52,7 @@
  * or more processors that address is not a CPU interface. The first write to it
  * took an external abort and the machine panicked before finishing boot. It was
  * never seen because the verification rig stopped at eight -- the largest
- * machine QEMU's `virt` board still gives a GICv2 for. (BG-092.)
+ * machine QEMU's `virt` board still gives a GICv2 for. (BG-124.)
  *
  * --- What changes, and what does not ---
  *
@@ -147,7 +147,10 @@ static void gic_note_v3(u64 base, u64 size)
 
 static unsigned gic_detect(void)
 {
-	u64 dtb = boot_info()->dtb;
+	/* What boot.S recorded, which is a pointer to a blob whether or not that
+	 * blob turned out to parse. `boot_info()->dtb` would do equally well;
+	 * this is one step closer to the firmware. */
+	u64 dtb = arch_dtb_pointer;
 
 	if (!dtb)
 		return 2;
@@ -156,6 +159,16 @@ static unsigned gic_detect(void)
 	fdt_each_compatible(dtb, "arm,gic-v3", gic_note_v3);
 
 	return gic_saw_v3 ? 3 : 2;
+}
+
+/* Printed at boot, because this decision is made once, silently, and being
+ * wrong about it does not produce a message saying so -- it produces an
+ * external abort at an address that means nothing without knowing which
+ * generation the kernel thought it had. It cost a full debugging session to
+ * learn that. The line is cheap. */
+static void gic_announce(unsigned gen)
+{
+	kprintf("  interrupt   : GICv%u\n", gen);
 }
 
 /* This processor's redistributor frame.
@@ -315,6 +328,7 @@ void aarch64_timer_cpu_init(void)
 static void gic_init(void)
 {
 	gic_version = gic_detect();
+	gic_announce(gic_version);
 
 	if (gic_version >= 3) {
 		/* Affinity routing on, and group 1 enabled. Without the routing

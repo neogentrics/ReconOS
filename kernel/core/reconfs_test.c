@@ -5,7 +5,7 @@
  * docs/RECONFS.md puts the reverse sweep second on the list of things to test,
  * and says to run the checker against a deliberately corrupted image *first*
  * and confirm that it fails. That order is not a preference. Three harness bugs
- * in one afternoon (BG-082, BG-083, BG-084) all presented as clean passes, and
+ * in one afternoon (BG-114, BG-115, BG-116) all presented as clean passes, and
  * two of them were in the same script:
  *
  *     a test that has never been seen to fail is not a test yet
@@ -471,7 +471,7 @@ static bool run_at(struct block_device *dev, u32 bs)
 		 * kept the block, owned by the archive and reachable from
 		 * nothing -- which is a leak, and which passed only because the
 		 * checker exempted archive-owned blocks from having to be
-		 * reachable. Removing that exemption (BG-090) made this test
+		 * reachable. Removing that exemption (BG-122) made this test
 		 * fail, correctly, on the first run. */
 		before = fs.super.epoch;
 		txn = reconfs_txn_begin(&fs);
@@ -990,7 +990,7 @@ contents_done:
 		 *
 		 * The check that matters is not that the name is gone. It is
 		 * that **the space came back** — which is exactly what renaming
-		 * over a file failed to do (BG-089), invisibly, because the test
+		 * over a file failed to do (BG-121), invisibly, because the test
 		 * that covered it used empty files.
 		 *
 		 * So this writes a file large enough to need blocks of its own,

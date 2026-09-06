@@ -248,7 +248,7 @@ disjoint.
 An exemption written for a category — "the superblocks and the owner table",
 which is a list of specific blocks — had been applied as a membership test,
 "owned by the archive", which is a property those blocks share with something
-else. It hid a leaked block on every commit (BG-090,
+else. It hid a leaked block on every commit (BG-122,
 [#279](https://github.com/neogentrics/ReconOS/issues/279)). That is the closest
 thing to a second opinion a single author can build, it costs bytes per object,
 and **it must be in the first version or never.**
@@ -285,7 +285,7 @@ superblock write would have rolled the volume back to freshly formatted.
 Nothing inside the kernel could see it. Mounting reads the second copy from the
 right place and finds a valid, older superblock, which is what a healthy volume
 looks like. Every self-test passed. It took a reader that did not share the
-constant. (BG-088, [#277](https://github.com/neogentrics/ReconOS/issues/277).)
+constant. (BG-120, [#277](https://github.com/neogentrics/ReconOS/issues/277).)
 
 The Python reader is also what judges a power cut, because the kernel cannot
 check an image it was killed in the middle of writing.
@@ -317,7 +317,7 @@ power cut, nobody does.
 
 Before that, the workload wrote empty files. **An empty file is always
 complete**, so the test could only assert that a name resolved — and it hid
-BG-089, in which renaming over a file leaked every block its contents occupied.
+BG-121, in which renaming over a file leaked every block its contents occupied.
 The self-test renamed one file over another and ran the whole checker, which is
 the right shape; both files were empty, so there was nothing to leak, and the
 checker correctly reported a volume with nothing wrong.
@@ -405,7 +405,7 @@ sensitivity would.
    depend on.
 
    **Done**, and it earned its place immediately: the first run of it found
-   BG-088, a bug that made the second superblock useless and that nothing inside
+   BG-120, a bug that made the second superblock useless and that nothing inside
    the kernel could have detected.
 2. **The reverse sweep, before the forward walk is trusted.** The sweep is the
    independent derivation, and a sweep that quietly uses the reader's path
@@ -689,7 +689,7 @@ it.
 Its test does not check that the name is gone — that is the easy half. It writes
 a file large enough to need blocks of its own, records the volume's block count,
 removes it, and requires the count to return to where it started. That is what
-found BG-090.
+found BG-122.
 
 Contents work: `reconfs_write_named` and `reconfs_read_named`, whole-file only —
 which is what the callers above actually do, since a registry or a theme file is

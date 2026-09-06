@@ -543,7 +543,7 @@ Decided here rather than at checkpoint 10, because deciding it later means
 deciding it about a system that has already leaked.
 
 The desktop found a password `memset` that survived only by accident of build
-flags (BG-090). Its fix protects the *previous owner's* copy — and that is a
+flags (BG-122). Its fix protects the *previous owner's* copy — and that is a
 different obligation from the kernel's. **A kernel that hands a freed page to
 another process without clearing it has leaked the secret however carefully the
 previous owner scrubbed it.**
@@ -612,7 +612,7 @@ Secondary processors are still parked in `boot.S` on both architectures. Waking
 them needs a way to start a CPU — a mailbox and PSCI on ARM, an interrupt
 sequence on x86 — and locking on everything the scheduler touches, because a run
 queue that two processors can edit at once is a run queue that will eventually
-contain a cycle. That is real work, it is where BG-088's lesson about ownership
+contain a cycle. That is real work, it is where BG-120's lesson about ownership
 checks will first bite this kernel, and it is listed rather than assumed.
 
 Also absent by choice: priorities (a scheme invented before there is a workload
@@ -1444,7 +1444,7 @@ an optional extra: GICv2 *stops* at eight, and every ARM machine with more has a
 v3 whose CPU interface is a set of system registers rather than memory.
 
 The kernel spoke only v2 until 0.0.11 and panicked at boot on anything larger
-(BG-092). The verification rig booted at 2, 4 and 8 processors, on the principle
+(BG-124). The verification rig booted at 2, 4 and 8 processors, on the principle
 that some faults only exist above a certain machine size — and stopped one
 processor below the first machine that would have shown this one. It boots
 sixteen now.

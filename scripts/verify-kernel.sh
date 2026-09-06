@@ -308,7 +308,7 @@ check_for sata0 "  device tree, AHCI" \
 #
 # This loop stopped at eight, and eight is exactly the largest machine the older
 # interrupt controller supports -- so the kernel panicked at boot on any ARM
-# machine with nine or more processors, and nothing here could see it (BG-092).
+# machine with nine or more processors, and nothing here could see it (BG-124).
 # A rig built on the principle that some bugs only exist above a certain machine
 # size had its own ceiling, one processor below the first machine that would
 # have shown this one.
@@ -414,8 +414,8 @@ done
 # the checker was shown four faults it was built to catch and caught all four.
 #
 # A checker that has only ever been run on good images has never been observed
-# to do anything. Three harness bugs on the day this was written (BG-082,
-# BG-083, BG-084) all presented as clean passes, and the filesystem's crash
+# to do anything. Three harness bugs on the day this was written (BG-114,
+# BG-115, BG-116) all presented as clean passes, and the filesystem's crash
 # suite is about to rest on exactly this checker being honest.
 
 echo
