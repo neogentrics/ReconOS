@@ -417,6 +417,37 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+Photos can make a picture a different size. Half and Double rather than a
+box to type a size into — a dialog taking two numbers has to explain what
+happens when they do not match the picture's shape, and the honest answer (the
+shape is kept and one of them is ignored) means the second box was never real.
+
+Nothing is written. What is on screen changes and the file does not, so a resize
+is something to look at before deciding to keep, and keeping it is Save as
+PNG, which already refuses to overwrite. That gave Photos unsaved state for
+the first time, so the title bar carries the same star Notepad uses —
+deliberately not a different sign.
+
+One resampler, where there were two halves and a gap. I said this would be
+small because recon_video already area-averages down and interpolates up.
+That was wrong: recon_video_render takes YUV planes and cannot be pointed at a
+photograph. What existed was a private RGBA shrinker in the wallpaper loader
+that could only make things smaller, a good two-way resampler welded to video,
+and nothing at all in the application where somebody would ask.
+
+recon_image is the shared one, and it picks its resampler per axis — a
+picture made narrower and taller at once wants an average across and an
+interpolation down, and one rule for both gets one of them wrong. Tested against
+properties rather than a fixture, because a fixture for a scaler is a picture
+the scaler made and proves only that it agrees with itself.
+
+The clock's menu opens the page, not the panel it lives on. Also two things
+the screenshot caught that the change itself caused: the header said "Central
+(UTC-6)" while the row highlighted underneath was Eastern, because the
+summer-time hour was being folded into the match and Central-plus-an-hour is
+Eastern's offset. And the note explaining why there are no buttons to set the
+clock ran off the end of the window as "Its own co...".
+
 The clock tells the right time. It was an hour slow: Central selected, the
 host reading 4:25 am, ReconOS reading 3:25 am. The page said plainly that
 nothing here follows daylight saving — true, and it did not stop the clock being

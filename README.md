@@ -6,7 +6,7 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-15_suites-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-16_suites-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-111-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -70,7 +70,7 @@ written down as it was hit rather than guessed at in advance.
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 15 suites, 917 checks, no display needed |
+| **Tests** | 16 suites, 939 checks, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -530,10 +530,11 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   than followed
 - **Photos** — one picture at a time, fitted to the window and never enlarged
   past its own size, on a dark mat. **Read Text** turns the writing in a picture
-  into a file in Documents, and **Save as PNG** writes any of the seven formats
-  it opens out losslessly, beside the original. Both refuse rather than guess: a
-  reading it is not confident about is offered as a guess and named as one, and
-  nothing is ever overwritten
+  into a file in Documents; **Save as PNG** writes any of the seven formats it
+  opens out losslessly, beside the original; **Half** and **Double** resample it
+  on screen without touching the file. Everything here refuses rather than
+  guesses: a reading it is not confident about is offered as a guess and named
+  as one, and nothing is ever overwritten
 - **Calendar** — a month at a time, with what is on each day kept as a text
   file anything can read
 - **Calculator** — five modes: Standard, Scientific, Programmer, Date and
