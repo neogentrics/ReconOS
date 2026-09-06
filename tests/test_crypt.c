@@ -208,6 +208,59 @@ static void test_helpers(void) {
         "two draws differ, so they are not a constant");
 }
 
+/* --- Base64 --- */
+
+/*
+ * The vectors from RFC 4648, which is the point of using them: they are not
+ * mine, so agreeing with them is evidence about the encoder rather than
+ * evidence that I wrote the test and the code the same way.
+ */
+static void test_base64(void) {
+    printf("Base64\n");
+
+    static const struct { const char *in, *want; } CASES[] = {
+        { "",       ""         },
+        { "f",      "Zg=="     },
+        { "fo",     "Zm8="     },
+        { "foo",    "Zm9v"     },
+        { "foob",   "Zm9vYg==" },
+        { "fooba",  "Zm9vYmE=" },
+        { "foobar", "Zm9vYmFy" },
+    };
+
+    char out[64];
+    bool all = true;
+    for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
+        size_t n = recon_to_base64((const uint8_t *)CASES[i].in,
+            strlen(CASES[i].in), out, sizeof(out));
+        if (strcmp(out, CASES[i].want) != 0 || n != strlen(CASES[i].want)) {
+            printf("        \"%s\" gave \"%s\", wanted \"%s\"\n",
+                CASES[i].in, out, CASES[i].want);
+            all = false;
+        }
+    }
+    check(all, "every vector in RFC 4648 comes out right");
+
+    /* Bytes that are not text, because a password need not be. */
+    static const uint8_t RAW[] = { 0x00, 0xFF, 0x10, 0x83, 0x7E };
+    check(recon_to_base64(RAW, sizeof(RAW), out, sizeof(out)) == 8 &&
+        strcmp(out, "AP8Qg34=") == 0, "and so do bytes that are not letters");
+
+    /*
+     * Refused rather than truncated. Half a base64 string decodes to
+     * something, and a password cut short fails to log in for a reason nobody
+     * can see from either end.
+     */
+    char tiny[4];
+    check(recon_to_base64((const uint8_t *)"foobar", 6, tiny, sizeof(tiny)) == 0,
+        "a buffer too small is refused");
+    check(tiny[0] == 0, "and left empty rather than half filled");
+
+    check(recon_to_base64(NULL, 4, out, sizeof(out)) == 0, "no input is refused");
+    check(recon_to_base64((const uint8_t *)"x", 1, NULL, 8) == 0,
+        "no output is refused");
+}
+
 int main(void) {
     printf("ReconOS hashing tests\n\n");
 
@@ -215,6 +268,7 @@ int main(void) {
     test_hmac();
     test_pbkdf2();
     test_helpers();
+    test_base64();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

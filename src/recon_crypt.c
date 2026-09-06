@@ -287,6 +287,58 @@ void recon_secure_erase(void *data, size_t size) {
     }
 }
 
+size_t recon_to_base64(const uint8_t *bytes, size_t size, char *out,
+        size_t out_size) {
+    static const char ALPHABET[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    if (out == NULL || out_size == 0) {
+        return 0;
+    }
+    out[0] = 0;
+    if (bytes == NULL && size > 0) {
+        return 0;
+    }
+
+    size_t needed = 4 * ((size + 2) / 3);
+    if (needed + 1 > out_size) {
+        /* Refused rather than truncated. Half a base64 string decodes to
+         * something, and that something is not what was encoded -- a password
+         * cut short is a password that fails to log in for a reason nobody can
+         * see. */
+        return 0;
+    }
+
+    size_t at = 0;
+    size_t i = 0;
+    while (i + 2 < size) {
+        uint32_t v = ((uint32_t)bytes[i] << 16) | ((uint32_t)bytes[i + 1] << 8)
+            | bytes[i + 2];
+        out[at++] = ALPHABET[(v >> 18) & 63];
+        out[at++] = ALPHABET[(v >> 12) & 63];
+        out[at++] = ALPHABET[(v >> 6) & 63];
+        out[at++] = ALPHABET[v & 63];
+        i += 3;
+    }
+
+    /* The tail, padded. The padding is not decoration: without it a decoder
+     * cannot tell one trailing byte from two. */
+    if (i < size) {
+        uint32_t v = (uint32_t)bytes[i] << 16;
+        bool two = (i + 1 < size);
+        if (two) {
+            v |= (uint32_t)bytes[i + 1] << 8;
+        }
+        out[at++] = ALPHABET[(v >> 18) & 63];
+        out[at++] = ALPHABET[(v >> 12) & 63];
+        out[at++] = two ? ALPHABET[(v >> 6) & 63] : '=';
+        out[at++] = '=';
+    }
+
+    out[at] = 0;
+    return at;
+}
+
 void recon_to_hex(const uint8_t *bytes, size_t size, char *out) {
     static const char DIGITS[] = "0123456789abcdef";
     for (size_t i = 0; i < size; i++) {

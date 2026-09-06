@@ -109,6 +109,8 @@ add_executable(ReconOS
     src/recon_web.c
     src/recon_http.c
     src/recon_mail.c
+    src/recon_smtp.c
+    src/recon_smtp_message.c
     src/recon_mailwin.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
@@ -358,6 +360,16 @@ add_executable(recon_image_tests
     src/recon_image.c)
 
 target_include_directories(recon_image_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Composing a message, without a network stack behind it. The conversation with
+# a server needs a server; the rules about what may appear in a header do not,
+# and those are the ones that turn one message into two when they are wrong.
+add_executable(recon_smtp_tests
+    tests/test_smtp.c
+    src/recon_smtp_message.c)
+
+target_include_directories(recon_smtp_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Comparing versions with strcmp is right for nine releases and wrong on the

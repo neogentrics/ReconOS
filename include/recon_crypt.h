@@ -97,6 +97,24 @@ bool recon_equal_constant_time(const void *a, const void *b, size_t size);
 void recon_secure_erase(void *data, size_t size);
 
 /* Hex, for writing a hash into a text file and reading it back. */
+/*
+ * Base64, which is beside hex here because it is the same kind of thing: a way
+ * of writing bytes down where only text may go.
+ *
+ * Not encryption and not obfuscation, and worth saying so where somebody will
+ * read it -- base64 is exactly as readable as what went into it, which is why
+ * a mail password sent this way is protected by the TLS around it and by
+ * nothing else. SMTP's AUTH wants it; nothing else here does yet.
+ *
+ * `out` needs 4 * ((size + 2) / 3) + 1 bytes, and the result is always padded.
+ * Returns how many characters were written, not counting the terminator, or 0
+ * where the buffer is too small -- which is a refusal rather than a truncation,
+ * because half a base64 string decodes to something and that something is
+ * wrong.
+ */
+size_t recon_to_base64(const uint8_t *bytes, size_t size, char *out,
+    size_t out_size);
+
 void recon_to_hex(const uint8_t *bytes, size_t size, char *out);
 bool recon_from_hex(const char *text, uint8_t *out, size_t size);
 
