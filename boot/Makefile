@@ -93,7 +93,7 @@ $(ESP_IMG): $(EFI) $(KERNEL_ELF)
 	mkfs.vfat -F 32 -n RECONOS $@ >/dev/null
 	mmd   -i $@ ::/EFI ::/EFI/BOOT ::/reconos
 	mcopy -i $@ $(EFI) ::/EFI/BOOT/$(EFI_NAME)
-	mcopy -i $@ $(KERNEL_ELF) ::/reconos/kernel.elf
+	mcopy -i $@ $(KERNEL_ELF) ::/reconos/kernel-$(ARCH).elf
 	@echo "  built $@"
 
 esp: $(ESP_IMG)

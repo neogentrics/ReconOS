@@ -348,6 +348,49 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-128 — One medium could not carry two architectures, because both loaders opened the same filename
+
+[#286](https://github.com/neogentrics/ReconOS/issues/286)
+
+- **Found:** 6 September 2026, building an actual bootable USB stick and trying
+  to boot it on both architectures.
+- **Cost:** nothing yet — no install medium had ever been built until today.
+
+UEFI's removable-media path is *already* per-architecture: `BOOTX64.EFI` and
+`BOOTAA64.EFI` sit side by side in `\EFI\BOOT`, and a machine runs the one it
+can without any boot entry registered in firmware. That is what makes a stick
+bootable on a machine that has never seen it, and it means **one stick can carry
+loaders for both architectures and boot on either**.
+
+The kernel could not follow. Both loaders opened `\reconos\kernel.elf` — one
+filename — so the medium could hold exactly one kernel, and the other
+architecture would read a binary built for a machine it is not.
+
+**What that actually looks like**, which is the part worth keeping:
+
+    reconboot -- the ReconOS bootloader
+      kernel       : 549024 bytes read
+    reconboot: the kernel wants to live at 0x100000 and the firmware will not
+               give it up.
+    reconboot: claiming the kernel's memory failed, status 0x800000000000000e
+
+Every word of that is true and it points at the wrong thing. `0x100000` is an
+x86_64 load address; the ARM loader had read the x86_64 kernel and dutifully
+tried to honour it. It reads as a firmware refusing an allocation, and it is a
+file with the wrong name. **A correct error message about the wrong subject is
+worse than a vague one**, because it is convincing.
+
+The name carries the architecture now — `kernel-x86_64.elf`,
+`kernel-aarch64.elf` — and the old path is still tried as a fallback, so media
+that predates the rule still boots. The ESP recipe writes the new name.
+
+**Why it went unfound for four checkpoints.** The loader has been booted against
+OVMF and AAVMF since checkpoint 4, on every run of the verification rig — but
+always from an ESP image built for *one* architecture, by a rule that put that
+architecture's kernel in it. The rig never built a medium holding both, because
+until somebody wanted a real bootable stick there was no reason to. The fault is
+real from the first line; what was missing was a medium that could show it.
+
 ### BG-127 — Whether a drive is flash is a question USB cannot answer, and the storage layer assumes it can
 
 [#285](https://github.com/neogentrics/ReconOS/issues/285)

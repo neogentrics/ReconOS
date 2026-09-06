@@ -11,7 +11,33 @@
 #include "efi.h"
 #include "reconboot.h"
 
-#define KERNEL_PATH u"\\reconos\\kernel.elf"
+/* Where the kernel is, and why the name carries the architecture.
+ *
+ * The removable-media path UEFI runs without a boot entry is per-architecture
+ * already -- BOOTX64.EFI and BOOTAA64.EFI sit side by side in \EFI\BOOT, and a
+ * machine runs the one it can. So a single USB stick can carry loaders for both
+ * architectures and boot on either, which is exactly what install media should
+ * do.
+ *
+ * The kernel could not. Both loaders opened \reconos\kernel.elf, one filename,
+ * so the medium could hold one kernel and the other architecture would read a
+ * binary built for a machine it is not. That is not a theoretical objection:
+ * the aarch64 loader on such a stick read the x86_64 kernel, was told it wanted
+ * to live at 0x100000, and failed there -- which reads as a firmware problem
+ * and is a packaging one. (BG-128)
+ *
+ * The name carries the architecture now. The old path is still tried as a
+ * fallback, because media that predates this holds it and there is no reason to
+ * refuse to boot from a stick that is merely older than the rule. */
+#if defined(__x86_64__)
+#define KERNEL_PATH     u"\\reconos\\kernel-x86_64.elf"
+#define KERNEL_PATH_STR "\\reconos\\kernel-x86_64.elf"
+#else
+#define KERNEL_PATH     u"\\reconos\\kernel-aarch64.elf"
+#define KERNEL_PATH_STR "\\reconos\\kernel-aarch64.elf"
+#endif
+
+#define KERNEL_PATH_OLD u"\\reconos\\kernel.elf"
 
 #if defined(__x86_64__)
 typedef void (*kernel_entry_fn)(struct reconboot *) __attribute__((sysv_abi));
@@ -184,7 +210,15 @@ static void *read_kernel(UINTN *size_out)
 
 	s = root->Open(root, &file, (CHAR16 *)KERNEL_PATH, EFI_FILE_MODE_READ, 0);
 	if (EFI_ERROR(s)) {
-		print("\nreconboot: could not open \\reconos\\kernel.elf\n");
+		/* Older media, from before the name carried the architecture.
+		 * Tried second rather than first so that a stick holding both
+		 * gets the right one. */
+		s = root->Open(root, &file, (CHAR16 *)KERNEL_PATH_OLD,
+			       EFI_FILE_MODE_READ, 0);
+	}
+	if (EFI_ERROR(s)) {
+		print("\nreconboot: could not open " KERNEL_PATH_STR
+		      " or \\reconos\\kernel.elf\n");
 		fail("opening the kernel", s);
 	}
 
