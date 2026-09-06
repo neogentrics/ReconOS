@@ -1437,6 +1437,79 @@ partition without losing what is in it; somewhere to write the bootloader that
 the machine's firmware will actually look at; and a first-run flow, which the
 desktop already has.
 
+## Foreign filesystems, and why FAT32 is not optional
+
+Checkpoint 14 exists for one reason: **the UEFI System Partition is FAT32 by
+specification, and that is where our own bootloader has to be written.** An
+installer that cannot put a file into a FAT32 volume cannot make a machine boot.
+NTFS, ext4, APFS and HFS+ are not required for that and are not being built --
+installing beside Windows means reading its *partition table*, not one of its
+files.
+
+### The rule is the opposite of ReconFS's
+
+ReconFS is ours: every volume that exists was written by this code, and when the
+checker disagrees with the tree, one of the two is our bug.
+
+FAT32 volumes were written by somebody else, and those somebodies disagree with
+each other about every ambiguous part of the specification. So:
+
+> **Believe nothing that can be derived, and derive everything that can be.**
+
+Three places that matters, all of which are how FAT readers usually go wrong:
+
+- **The type.** There is a string at offset 82 reading `"FAT32   "`, and
+  Microsoft's own specification says outright that it must not be used to
+  determine the type -- it is a comment, and formatters write what they like in
+  it. The type is the **count of data clusters**: at or under 4084 it is FAT12,
+  at or under 65524 it is FAT16, above that FAT32. Those boundaries are exact.
+  Off by one reads the wrong *width* of table entry from the right offset, which
+  produces a plausible wrong answer rather than an error.
+- **The length.** A boot sector says how many sectors the volume has and the
+  device knows how many it has. The device wins. Without that check a volume
+  claiming to be longer mounts perfectly and then fails one read at a time as
+  I/O errors -- so the machine reports a broken disk about a disk that is fine,
+  and the real fault is never named.
+- **The sector size.** `BPB_BytsPerSec` is 512 on almost everything and is not
+  512 on some 4Kn media, and it need not equal the block device's. Both are
+  read; a volume whose sectors are not a whole number of device blocks is
+  refused rather than approximated.
+
+### Long names are required, not a nicety
+
+Our own ESP holds `kernel-x86_64.elf`, whose 8.3 alias is `KERNEL~1.ELF`. An
+installer that could only see aliases could not tell one kernel from another on
+a volume it had written itself -- and the alias is not even stable, since it
+depends on what else is in the directory and in what order it was created.
+
+Long names are stored backwards, in fragments preceding the entry they belong
+to, tied to it only by **a checksum of the 8.3 name**. Checking that checksum is
+what stops orphaned fragments -- left by a system that did not understand long
+names -- being glued onto the next real file.
+
+### Both allocation tables are compared
+
+The second copy exists because the first can be wrong, and a reader that only
+looks at one throws that away. They are compared **per sector as it is read**,
+not in full at mount: comparing megabytes of table to open a volume is a cost
+paid every time for a fault almost no volume has, and this project has measured
+what an invisible-on-an-image check costs on real media. A disagreement is
+refused rather than resolved -- which copy is right is not knowable from here,
+and preferring the first is a guess wearing a uniform.
+
+### How it is known rather than believed
+
+`scripts/make-fat-fixture.sh` builds the volume with `mkfs.vfat` and `mcopy`,
+which share no code with this kernel. `scripts/fat32-damage.py` is a second
+reader, written from the specification rather than from the C, and it also
+breaks a volume in four specific ways. `scripts/fat32-reads-foreign.sh` requires
+each break to produce its **own** refusal -- signature, length, disagreeing
+tables, impossible chain -- because a reader that answered "I/O error" to
+everything would pass a test that only asked whether it complained.
+
+The length check exists *because* its damage test was written first and had
+nothing to catch.
+
 ## Interrupt controllers on ARM
 
 Both generations. GICv2 up to eight processors, GICv3 above that — which is not

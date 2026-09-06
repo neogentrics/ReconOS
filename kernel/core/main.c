@@ -14,6 +14,7 @@
 #include <recon/kernel/durability.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/partition.h>
+#include <recon/kernel/fat32.h>
 #include <recon/kernel/reconfs.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
@@ -149,6 +150,8 @@ void kmain(void)
 	 * disk is the most destructive thing this kernel could do by accident. */
 	reconfs_run();
 	reconfs_crash_run();
+	fat32_run();
+	fat32_write_run();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

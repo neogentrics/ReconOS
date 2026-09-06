@@ -348,6 +348,91 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-130 — Every rewrite renamed the file, including the one firmware looks for
+
+[#288](https://github.com/neogentrics/ReconOS/issues/288)
+
+- **Found:** 6 September 2026, writing the same files into a FAT32 volume twice
+  and reading the result back with `mtools`.
+- **Cost:** none yet. There is no installer to have run twice.
+
+Writing a file that already exists looks up the name, finds the entry, and then
+picks an 8.3 alias. The entry it is about to replace is still in the directory
+at that moment — so the file **collides with itself**, and gets a fresh alias
+every time it is written:
+
+    install 1:  BOOTX64  EFI
+    install 2:  BOOTX6~1 EFI   BOOTX64.EFI
+    install 1:  BIG      BIN
+    install 2:  BIG~1    BIN   big.bin
+
+**Why this one matters more than it looks.** `\EFI\BOOT\BOOTX64.EFI` is the
+*removable-media path*: the one filename UEFI firmware will run with no boot
+entry registered, and therefore the whole reason a USB stick boots a machine
+that has never seen it. Every reinstall or kernel update pushes that name one
+step further from what firmware is looking for. Firmware that reads long names
+still finds it; firmware that does not, does not.
+
+**It cannot be fixed by deleting the old entry first.** The old entry survives
+deliberately until the new data is on the medium — that ordering is what makes a
+crash mid-write leave one whole file rather than neither. So the collision test
+learns to ignore the entry being replaced instead, matched on the *name being
+written* rather than on a cluster number: an empty file's first cluster is zero,
+and every empty file would look like the same one.
+
+**And how nearly it was fixed against the wrong model.** The first attempt to
+confirm it ran three installs and reported `BOOTX64 EFI`, unchanged — which
+said the drift was not real. It was: that run had looked at the wrong output.
+Two installs with the trace visible showed the drift plainly. **A fix built on
+the first result would have been a fix for nothing, with a test that passed
+because the bug was not being reached.** That is the same shape as the GICv3
+work earlier the same day, where two correct fixes changed nothing because the
+thing making them unreachable was three files away.
+
+### BG-129 — An unsupported conversion made every later value in the line wrong
+
+[#287](https://github.com/neogentrics/ReconOS/issues/287)
+
+- **Found:** 6 September 2026, listing a real EFI System Partition with
+  `%-30s`, and getting a file of 2,148,777,108 bytes that was a pointer.
+- **Cost:** minutes, because the wrong number was absurd. It would have cost far
+  more if it had been plausible.
+
+`kprintf` handled an unrecognised conversion by printing the two characters and
+carrying on, under a comment saying *"print it visibly instead of silently
+dropping it"*. The intent is right and the consequence is the opposite of it:
+**the argument was never consumed**, so every conversion after it read the
+previous caller's argument — a pointer printed as a length, a length printed as
+an address.
+
+The output stays perfectly well formed and every value in it is wrong. That is
+the worst way for a printer to fail, because a printer is the instrument you
+reach for when something else is wrong.
+
+    EFI                            <dir>
+    NvVars                         2148777108 bytes     <- a pointer
+
+**Why the compiler did not catch it.** `kprintf` is annotated so GCC checks its
+format strings, and it does: `%q` is rejected at build time. The reachable fault
+is the *other* one — a conversion that is **valid printf and unimplemented
+here**. `%-30s` is ordinary C. So is `%o`. Both compile; neither existed in the
+switch.
+
+**The fix, and why it is a refusal.** There is no way to skip the argument,
+because its width is exactly what is not understood. So the printer says which
+conversion defeated it and stops the line:
+
+    %<unsupported conversion 'o'; the rest of this line is not printed>
+
+Missing output is a bug somebody fixes. Wrong output is a bug somebody believes.
+
+Field widths are implemented too — `%-30s` and `%8u` — because the reason
+anybody reached for one is that every table this kernel prints is columns, and
+the alternative was padding them by hand inside the format string.
+
+**Shown a fault before being believed.** `%o` injected on purpose, watched to
+produce the marker, and watched *not* to print the `%u` after it.
+
 ### BG-128 — One medium could not carry two architectures, because both loaders opened the same filename
 
 [#286](https://github.com/neogentrics/ReconOS/issues/286)

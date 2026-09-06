@@ -92,6 +92,31 @@ static void put_unsigned(u64 value, unsigned base, bool upper, unsigned pad)
 		kputc(buf[n]);
 }
 
+/* A string in a field of `width`, padded with spaces. Truncating would be the
+ * other choice and is the wrong one: a name cut down to fit a column is a
+ * different name, and this printer's whole job is to be believed. */
+static void put_padded(const char *s, unsigned width, bool left)
+{
+	size_t n = 0;
+	const char *q = s;
+
+	if (!s)
+		s = q = "(null)";
+
+	while (q[n])
+		n++;
+
+	if (!left)
+		while (n < width--)
+			kputc(' ');
+
+	raw_puts(s);
+
+	if (left)
+		while (n < width--)
+			kputc(' ');
+}
+
 static void put_signed(i64 value)
 {
 	u64 magnitude;
@@ -118,12 +143,30 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 	for (const char *p = fmt; *p; p++) {
 		unsigned longness = 0;
 
+		unsigned width = 0;
+		bool left = false;
+
 		if (*p != '%') {
 			kputc(*p);
 			continue;
 		}
 
 		p++;
+
+		/* An optional `-` and a decimal width, which is the whole of
+		 * the formatting this kernel needs: every table it prints is
+		 * columns of names and numbers, and the alternative is padding
+		 * them by hand with spaces in the format string, which is what
+		 * was being done and is why %-30s got reached for. */
+		if (*p == '-') {
+			left = true;
+			p++;
+		}
+		while (*p >= '0' && *p <= '9') {
+			width = width * 10 + (unsigned)(*p - '0');
+			p++;
+		}
+
 		while (*p == 'l') {
 			longness++;
 			p++;
@@ -131,7 +174,7 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 
 		switch (*p) {
 		case 's':
-			raw_puts(va_arg(ap, const char *));
+			put_padded(va_arg(ap, const char *), width, left);
 			break;
 		case 'c':
 			kputc((char)va_arg(ap, int));
@@ -169,11 +212,28 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 			kputc('%');
 			return;
 		default:
-			/* An unsupported conversion is a bug in the caller. Print it
-			 * visibly instead of silently dropping it. */
-			kputc('%');
+			/* An unsupported conversion cannot be recovered from, and
+			 * this used to try.
+			 *
+			 * It printed the two characters and carried on -- which
+			 * looks like the careful thing and is not, because the
+			 * argument was never consumed. Every conversion after it
+			 * then read the *previous* caller's argument: a pointer
+			 * printed as a number, a length printed as an address.
+			 * The output stays perfectly well formed and every value
+			 * in it is wrong, which is the worst way for a printer to
+			 * fail. It was found reading a real filesystem, where a
+			 * directory listing reported a file of 2148777108 bytes
+			 * that was a pointer.
+			 *
+			 * There is no way to skip the argument, because its width
+			 * is exactly what is not understood. So: say so, and stop.
+			 * Missing output is a bug someone fixes; wrong output is a
+			 * bug someone believes. (BG-129) */
+			raw_puts("%<unsupported conversion '");
 			kputc(*p);
-			break;
+			raw_puts("'; the rest of this line is not printed>\n");
+			return;
 		}
 	}
 }

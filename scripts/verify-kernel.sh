@@ -518,6 +518,59 @@ else
 	FAILED_PATHS+=("reconfs beside another partition")
 fi
 
+# --- Somebody else's filesystem --------------------------------------------
+#
+# FAT32 is the one foreign format that is required rather than optional: the
+# UEFI System Partition is FAT32 by specification and that is where our own
+# bootloader has to be written. A reader tested against a volume our own code
+# wrote would be tested against its own misunderstandings, so the fixture is
+# built by mkfs.vfat and filled by mcopy -- and then broken four ways, because a
+# reader that has never been seen to refuse anything is not a reader yet.
+
+echo
+echo "foreign filesystems"
+
+for a in x86_64 aarch64; do
+	printf '%-46s' "  reads FAT32, and refuses four broken ones ($a)"
+
+	fat_out=$(bash scripts/fat32-reads-foreign.sh "$a" 2>&1)
+	fat_rc=$?
+
+	if [ "$fat_rc" -eq 0 ]; then
+		echo "$(echo "$fat_out" | grep -oE '[0-9]+ of [0-9]+: read a foreign.*' | head -1)"
+		passes=$((passes + 1))
+	else
+		echo "FAILED"
+		echo "$fat_out" | sed 's/^/      /' | head -16
+		failures=$((failures + 1))
+		FAILED_PATHS+=("fat32 reads ($a)")
+	fi
+done
+
+# And the other direction, which is the one an installer depends on: we write
+# the bootloader and *firmware* reads it. A writer checked only by our own
+# reader would be checked against its own misunderstandings.
+
+for a in x86_64 aarch64; do
+	printf '%-46s' "  writes FAT32 that mtools can read ($a)"
+
+	fw_out=$(bash scripts/fat32-writes-foreign.sh "$a" 2>&1)
+	fw_rc=$?
+
+	if [ "$fw_rc" -eq 0 ]; then
+		echo "$(echo "$fw_out" | grep -oE '[0-9]+ of [0-9]+: wrote a volume.*' | head -1)"
+		passes=$((passes + 1))
+	elif [ "$fw_rc" -eq 2 ]; then
+		echo "skipped, mtools is not installed"
+		skipped=$((skipped + 1))
+	else
+		echo "FAILED"
+		echo "$fw_out" | sed 's/^/      /' | head -16
+		failures=$((failures + 1))
+		FAILED_PATHS+=("fat32 writes ($a)")
+	fi
+done
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."
