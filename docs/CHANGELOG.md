@@ -430,6 +430,34 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+**The Calculator's sixth mode.** Graphing was the one of six never built, and it
+needed an expression evaluator first — the Calculator is button-driven and had
+no way to read one.
+
+**Two things make a grapher honest rather than merely working**, and both are
+about refusing to draw a line that is not there. A column where the function has
+no value breaks the stroke, so 1/x is two branches rather than two branches
+joined by a vertical wall down the y axis. And a jump wider than the whole
+window between neighbouring columns is a break rather than a slope, because no
+honest curve crosses the window in one pixel of x — get that wrong and tan(x) is
+drawn as a row of walls.
+
+That is why the evaluator has **three results rather than two**. Dividing by
+zero and the root of a negative are not errors: the expression is fine and has
+no value at that x. A grapher told "error" gives up on the whole curve because
+of one point.
+
+**Pixels are square**, with the height following from the width and the shape of
+the box. Letting them differ draws a circle as an ellipse, which is a quieter
+lie of the same kind. The cost is that sin(x) looks flat at this scale — because
+it is, and a grapher that silently stretched it would be answering a question
+nobody asked.
+
+**My test was right and the code wrong**, for a change: `-2^2` came to 4. A power
+binds tighter than a minus on its left and looser than one on its right, and the
+paragraph at the top of the file said exactly that while the grammar underneath
+did the opposite.
+
 **STARTTLS, with the upgrade required.** Port 587 works now, so a provider that
 offers only STARTTLS is usable. It was deferred on purpose — the easy half is
 connecting and the hard half is the one that ships a system sending passwords in
