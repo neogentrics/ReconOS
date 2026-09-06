@@ -2077,3 +2077,53 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   click on Apps shut it and the right-click landed on the desktop, which
   answered with its own menu. The test was measuring the desktop and reporting
   on the Start menu. It now checks the menu is open rather than assuming it.
+
+### BG-116 — The Calculator opened smaller than its own minimum size
+
+- **Found in** v0.3.1. **Found by** the user: *"They're not big enough, or the
+  calculator window is not big enough, and the text isn't... [cen]tered
+  aligned. If you look at the buttons, the text is messed up. Also, the buttons
+  aren't exactly unique. They just kinda exist up there."*
+- **What it was** four separate faults in the same window, which is why one
+  round of fixing it did not look like a fix.
+- **The opening size was below the minimum size.** `recon_appwin_impl` carries
+  both `default_width` and `min_width`, set a line apart, and nothing made them
+  agree. The Calculator's default was 430 and its minimum 520, so it opened at
+  a width the resize code would refuse to let anybody choose: six mode tabs
+  wrapped onto a second row on a window nobody had touched, and the keypad was
+  as cramped as the wrapping left it. **A previous attempt raised `min_width`
+  and changed nothing on screen**, because the minimum is the floor for
+  dragging and has no say in where a window starts.
+- **Fixed in** v0.4.0 in `recon_appwin_create`, not in the Calculator: an
+  opening size smaller than the minimum is raised to it. It is a mistake any
+  application can make and none of them can see.
+- **The keypad stopped short of the right margin.** A key width of
+  `(width - gaps) / columns` throws the remainder away, and six columns of it
+  threw away up to five pixels — so the grid ended at a different place in
+  every mode and the rightmost column was visibly narrow. Each edge is now
+  divided out of the whole span, which spreads the remainder a pixel at a time
+  and lands the last key exactly on the margin.
+- **The labels sat high in their keys.** The baseline was
+  `(height + ascent) / 2 - 2`, which centres correctly only when the descent
+  happens to be four pixels. It is now centred by the line's own height.
+- **The keys were drawn with a bare bevel**, so they did not round with the
+  skin and read as one slab with lines scored in it rather than as forty
+  buttons. They use `recon_draw_button_edge` now, like the tabs beside them.
+
+### BG-117 — Every click was ignored while the login screen was up
+
+- **Found in** v0.4.0. **Found by** the look harness, which opened the
+  Calculator, clicked "7", and photographed a display still reading zero.
+- **What it is** the login screen takes the whole screen's pointer input, as it
+  should. What is wrong is not the behaviour but what the system reports about
+  it: `apps <name>` opens a window while the login screen is up, and `state`
+  then lists that window as *open* and *focused*. It is neither — nothing can
+  reach it.
+- **Not fixed.** The behaviour is right and only the reporting is misleading,
+  so this is recorded rather than changed for now: `state` should say the login
+  screen has the input, the way `session` already does.
+- **What it cost** three rounds of measuring a window that could not be clicked,
+  and one wrong conclusion — that the mode tabs did not work — that was a
+  property of the harness and not of the Calculator. `scripts/look.sh` now signs
+  in before it does anything else, and refuses to continue if it did not reach
+  the desktop.

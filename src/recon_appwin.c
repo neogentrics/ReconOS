@@ -488,6 +488,14 @@ void recon_appwin_set_maximized(struct recon_appwin *win, bool maximized) {
 
 /* --- Lifecycle --- */
 
+static int min_width_of(struct recon_appwin *win) {
+    return win->impl->min_width > 0 ? win->impl->min_width : MIN_WIDTH;
+}
+
+static int min_height_of(struct recon_appwin *win) {
+    return win->impl->min_height > 0 ? win->impl->min_height : MIN_HEIGHT;
+}
+
 struct recon_appwin *recon_appwin_create(struct recon_server *server,
         struct recon_font *font, const struct recon_appwin_impl *impl, void *user) {
     if (server == NULL || impl == NULL) {
@@ -508,6 +516,25 @@ struct recon_appwin *recon_appwin_create(struct recon_server *server,
 
     win->width = impl->default_width > 0 ? impl->default_width : 400;
     win->height = impl->default_height > 0 ? impl->default_height : 300;
+
+    /*
+     * Never smaller than the size it would refuse to be dragged to.
+     *
+     * The two numbers are set in different places in an application's impl and
+     * nothing made them agree, so the Calculator opened at 430 wide with a
+     * minimum of 520: it opened at a size the resize code would not let anybody
+     * choose, its six mode tabs wrapped onto a second row on a window nobody
+     * had touched, and it only looked right after being dragged. Clamped here
+     * rather than fixed in that one application, because it is a mistake any
+     * impl can make and none of them can see.
+     */
+    if (win->width < min_width_of(win)) {
+        win->width = min_width_of(win);
+    }
+    if (win->height < min_height_of(win)) {
+        win->height = min_height_of(win);
+    }
+
     win->restore_w = win->width;
     win->restore_h = win->height;
 
@@ -1055,14 +1082,6 @@ static const char *cursor_for_edges(uint32_t edges) {
     case EDGE_BOTTOM | EDGE_RIGHT: return "se-resize";
     default: return NULL;
     }
-}
-
-static int min_width_of(struct recon_appwin *win) {
-    return win->impl->min_width > 0 ? win->impl->min_width : MIN_WIDTH;
-}
-
-static int min_height_of(struct recon_appwin *win) {
-    return win->impl->min_height > 0 ? win->impl->min_height : MIN_HEIGHT;
 }
 
 /*

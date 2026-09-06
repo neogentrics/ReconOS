@@ -21,6 +21,10 @@
 #include "recon_ui.h"
 
 #define DISPLAY_HEIGHT 44
+/* Room either side of a tab's name, and between one tab and the next. */
+#define TAB_PADDING 12
+#define TAB_GAP 4
+
 #define PAD_PADDING 6
 #define KEY_GAP 4
 #define COLS 4
@@ -215,8 +219,6 @@ struct recon_calc {
     struct recon_edit formula;
     double span_x, span_y;
 
-    /* Remembered so the layout and the hit regions agree. */
-    int key_x[8], key_y[10], key_w, key_h;
 };
 
 /* --- Arithmetic --- */
@@ -632,29 +634,60 @@ static double convert(const struct calc_category *cat, int from, int to,
 }
 
 /* The tabs across the top. Returns the y to carry on drawing from. */
+/*
+ * The mode tabs, each as wide as its own name.
+ *
+ * They used to be equal slices of the width, which was fine for five and broke
+ * on the sixth: "Programmer" does not fit in a sixth of a narrow window, so it
+ * was drawn as "Progra..." while "Date" sat in a box twice the size it needed.
+ * A row of buttons where the long ones are cut off and the short ones are
+ * padded is a row that reads as neither.
+ *
+ * And they wrap rather than shrink. A window narrow enough that six do not fit
+ * gets two rows of six readable tabs instead of one row of six unreadable
+ * ones -- the same thing the Convert page already does with its categories,
+ * for the same reason.
+ */
 static int draw_tabs(struct recon_calc *calc, struct recon_panel *panel,
         int x, int y, int w) {
     int ascent = recon_font_ascent(calc->font);
-    int tab_w = w / CALC_MODE_COUNT;
+    int line = recon_font_line_height(calc->font);
+
+    int tx = x;
+    int ty = y;
 
     for (int i = 0; i < CALC_MODE_COUNT; i++) {
-        int tx = x + i * tab_w;
+        int tab_w = recon_text_width(calc->font, CALC_MODE_NAMES[i]) +
+            TAB_PADDING * 2;
+
+        if (tx + tab_w > x + w && tx > x) {
+            tx = x;
+            ty += TAB_HEIGHT + TAB_GAP;
+        }
+
         bool on = calc->mode == (enum calc_mode)i;
 
-        recon_fill_rect(panel, tx, y, tab_w - 1, TAB_HEIGHT,
+        recon_fill_rect(panel, tx, ty, tab_w, TAB_HEIGHT,
             on ? COLOR_KEY_ACCENT : COLOR_KEY);
-        recon_draw_bevel(panel, tx, y, tab_w - 1, TAB_HEIGHT, on);
+        /*
+         * The button edge rather than a bare bevel, so these round with the
+         * skin like every other button in the system -- and so they read as
+         * six separate things rather than one strip with lines in it.
+         */
+        recon_draw_button_edge(panel, tx, ty, tab_w, TAB_HEIGHT, on,
+            COLOR_BG);
 
-        int label_w = recon_text_width(calc->font, CALC_MODE_NAMES[i]);
-        recon_draw_text(panel, calc->font, tx + (tab_w - label_w) / 2,
-            y + (TAB_HEIGHT + ascent) / 2 - 2, tab_w - 4, CALC_MODE_NAMES[i],
-            on ? COLOR_ACCENT_TEXT : COLOR_KEY_TEXT);
+        recon_draw_text(panel, calc->font, tx + TAB_PADDING,
+            ty + (TAB_HEIGHT - line) / 2 + ascent, tab_w - TAB_PADDING,
+            CALC_MODE_NAMES[i], on ? COLOR_ACCENT_TEXT : COLOR_KEY_TEXT);
 
-        recon_hit_add(panel, tx, y, tab_w - 1, TAB_HEIGHT,
+        recon_hit_add(panel, tx, ty, tab_w, TAB_HEIGHT,
             HIT_TAB_BASE + (uint32_t)i);
+
+        tx += tab_w + TAB_GAP;
     }
 
-    return y + TAB_HEIGHT + PAD_PADDING;
+    return ty + TAB_HEIGHT + PAD_PADDING;
 }
 
 /* The readout. In programmer mode it carries the same number in every base,
@@ -1088,6 +1121,7 @@ static void calc_draw(void *user, struct recon_panel *panel,
         int x, int y, int w, int h) {
     struct recon_calc *calc = user;
     int ascent = recon_font_ascent(calc->font);
+    int line = recon_font_line_height(calc->font);
 
     recon_fill_rect(panel, x, y, w, h, COLOR_BG);
 
@@ -1116,14 +1150,30 @@ static void calc_draw(void *user, struct recon_panel *panel,
     }
 
     int pad_h = h - (cy - y) - PAD_PADDING;
-    calc->key_w = (dw - (layout->cols - 1) * KEY_GAP) / layout->cols;
-    calc->key_h = (pad_h - (layout->rows - 1) * KEY_GAP) / layout->rows;
-    if (calc->key_h < 1) {
-        calc->key_h = 1;
+    if (pad_h < layout->rows) {
+        pad_h = layout->rows;
     }
 
+    /*
+     * Each edge computed from the whole span rather than from a single key
+     * width multiplied out.
+     *
+     * A width of (dw - gaps) / cols throws away the remainder, and six columns
+     * of it threw away up to five pixels -- so the keypad stopped short of the
+     * right margin by a different amount in every mode, and the rightmost
+     * column was visibly narrower than the rest. Dividing the span at each
+     * boundary instead spreads that remainder one pixel at a time and lands
+     * the last key exactly on the edge.
+     */
+    int span_w = dw + KEY_GAP;
+    int span_h = pad_h + KEY_GAP;
+
     for (int row = 0; row < layout->rows; row++) {
-        int ky = cy + row * (calc->key_h + KEY_GAP);
+        int ky = cy + span_h * row / layout->rows;
+        int key_h = cy + span_h * (row + 1) / layout->rows - KEY_GAP - ky;
+        if (key_h < 1) {
+            key_h = 1;
+        }
 
         for (int col = 0; col < layout->cols; col++) {
             const struct calc_key *key =
@@ -1132,7 +1182,9 @@ static void calc_draw(void *user, struct recon_panel *panel,
                 continue;
             }
 
-            int kx = dx + col * (calc->key_w + KEY_GAP);
+            int kx = dx + span_w * col / layout->cols;
+            int key_w = dx + span_w * (col + 1) / layout->cols
+                - KEY_GAP - kx;
 
             recon_color fill = COLOR_KEY;
             recon_color text = COLOR_KEY_TEXT;
@@ -1149,18 +1201,48 @@ static void calc_draw(void *user, struct recon_panel *panel,
                 fill = COLOR_KEY_OP;
             }
 
-            recon_fill_rect(panel, kx, ky, calc->key_w, calc->key_h, fill);
-            recon_draw_bevel(panel, kx, ky, calc->key_w, calc->key_h, false);
+            recon_fill_rect(panel, kx, ky, key_w, key_h, fill);
+            /*
+             * The button edge, not a bare bevel.
+             *
+             * These are buttons, so they round with the skin like every other
+             * button in the system. Drawn with a flat bevel they were forty
+             * rectangles sharing an edge -- which is what "they just kind of
+             * exist" describes: nothing said where one key stopped and the
+             * next began except a four-pixel gap.
+             */
+            recon_draw_button_edge(panel, kx, ky, key_w, key_h, false,
+                COLOR_BG);
 
+            /*
+             * Centred, and clipped at the button's own right edge.
+             *
+             * The width passed used to be the key's full width measured from
+             * the centred start, which runs past the button by however far the
+             * label was indented -- so a label too wide for its key spilled
+             * over the one beside it instead of being cut at the edge.
+             */
             int label_w = recon_text_width(calc->font, key->label);
-            recon_draw_text(panel, calc->font,
-                kx + (calc->key_w - label_w) / 2,
-                ky + (calc->key_h + ascent) / 2 - 2,
-                calc->key_w - 4, key->label, text);
+            int label_x = kx + (key_w - label_w) / 2;
+            if (label_x < kx + 2) {
+                label_x = kx + 2;
+            }
+            /*
+             * The baseline centred by the line's own height.
+             *
+             * It was (key_h + ascent) / 2 - 2, which centres correctly only
+             * when the descent happens to be four pixels. Every other font
+             * size sat the label low in its key by half the difference, and
+             * "the text is messed up" is what that looks like when the keys
+             * beside each other are tall enough to notice.
+             */
+            recon_draw_text(panel, calc->font, label_x,
+                ky + (key_h - line) / 2 + ascent,
+                kx + key_w - 2 - label_x, key->label, text);
 
             /* Hit ids encode the position, so drawing and input cannot drift
              * out of step. */
-            recon_hit_add(panel, kx, ky, calc->key_w, calc->key_h,
+            recon_hit_add(panel, kx, ky, key_w, key_h,
                 RECON_APPWIN_HIT_USER +
                 (uint32_t)(row * layout->cols + col));
         }
@@ -1534,10 +1616,27 @@ static const struct recon_appwin_impl CALC_IMPL = {
      * Wide enough for five mode names and a six-column scientific keypad.
      * It was 260, which fitted the four-function keypad exactly and truncated
      * every tab label the moment there were tabs.
+     *
+     * Then it was 430, which was BELOW the 520 minimum below -- so the window
+     * opened at a size it would refuse to be resized to, six tabs wrapped onto
+     * a second row on a window nobody had touched yet, and the keys were as
+     * cramped as the wrapping made them. This is the pair to check together:
+     * a default under the minimum is a window that opens wrong and is only
+     * right once somebody drags it.
+     *
+     * The height leaves the tallest keypad -- programmer mode's nine rows --
+     * keys that are wider than they are tall rather than the other way round.
      */
-    .default_width = 430,
-    .default_height = 440,
-    .min_width = 380,
+    .default_width = 560,
+    .default_height = 520,
+    /*
+     * Wide enough for six mode tabs on one row.
+     *
+     * Three hundred and eighty fitted five. The sixth pushed "Programmer" off
+     * the end, and a window whose minimum size cannot show its own controls is
+     * a minimum that was measured against an older version of itself.
+     */
+    .min_width = 520,
     .min_height = 320,
     .draw = calc_draw,
     .click = calc_click,
