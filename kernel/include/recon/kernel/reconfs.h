@@ -623,6 +623,27 @@ enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
 				      struct reconfs_path *chain, char *leaf,
 				      size_t leaf_len);
 
+/* The same, from a root the caller names. Needed inside a transaction, where
+ * the tree has already moved and `fs->root_inode` is still the committed one. */
+enum reconfs_status reconfs_walk_path_from(struct reconfs *fs, u64 root,
+					   const char *path,
+					   struct reconfs_path *chain,
+					   char *leaf, size_t leaf_len);
+
+/* Moves a name from one path to another, in a single commit -- including
+ * between two different directories, where four directories are rewritten and
+ * two chains copied to the root.
+ *
+ * The object's back-reference is its parent's *dossier*, which is stable, so
+ * moving it rewrites the object and nothing below it. Had the back-reference
+ * been the parent's block, moving a directory would have rewritten every
+ * descendant.
+ *
+ * Returns the new root; the caller sets it on the transaction. */
+enum reconfs_status reconfs_move(struct reconfs_txn *txn, struct reconfs *fs,
+				 const char *from, const char *to,
+				 u64 *new_root);
+
 enum reconfs_status reconfs_rebuild_path(struct reconfs_txn *txn,
 					 struct reconfs *fs,
 					 const struct reconfs_path *chain,
@@ -674,19 +695,34 @@ enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
  *
  * The post-crash outcome set has exactly two members: the rename happened, or
  * it did not. Renaming over an existing name is permitted and releases what was
- * there. Renaming between two directories is refused -- the path-copy that would
- * make it one commit does not exist yet.
+ * there. For two different directories, use reconfs_move, which hands this case
+ * back here.
  *
  * Returns the directory's new block; the caller makes it reachable. */
 enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 				   u64 dir_block, const char *from,
 				   const char *to, u64 *out_dir);
 
-/* A listing is a snapshot of one epoch: entries come from the directory as it
- * was when the listing started, and changes made while iterating are not seen.
- * Stated rather than left to be discovered. */
+/* One entry by index, with **no guarantee at all** about concurrent
+ * modification -- stated plainly because the alternative is an unstated one.
+ *
+ * Between two calls the directory can change, and the block being held can be
+ * reused: copy-on-write frees the old copy on commit and a later transaction
+ * may allocate it. A caller iterating across such a change can see an entry
+ * twice, miss one, or read a block that is no longer a directory. */
 enum reconfs_status reconfs_readdir(struct reconfs *fs, u64 dir_block,
 				    unsigned index, char *name, size_t len,
 				    u64 *child, u32 *type);
+
+/* The whole directory in one call, which is the version that *does* have a
+ * guarantee: a listing with no part-way cannot observe a change part-way
+ * through.
+ *
+ * `names` receives NUL-terminated names back to back. A directory with more
+ * than the buffers hold is refused rather than truncated -- a caller handed the
+ * first half of a directory with a success status has no way to know. */
+enum reconfs_status reconfs_list(struct reconfs *fs, u64 dir_block,
+				 char *names, size_t names_len,
+				 u64 *blocks, unsigned max, unsigned *count);
 
 #endif /* RECON_KERNEL_RECONFS_H */

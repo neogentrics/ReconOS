@@ -36,6 +36,12 @@
 
 #define INODE_CSUM	RK_OFFSETOF(struct reconfs_inode, checksum)
 
+/* Defined with the rest of the contents handling, further down. Declared here
+ * because the operations above it -- add, remove, rename -- all release what
+ * they displace, and every one of them needs it. */
+static void release_contents(struct reconfs_txn *txn, struct reconfs *fs,
+			     const struct reconfs_inode *ino);
+
 static u8 fold(u8 c)
 {
 	return (c >= 'A' && c <= 'Z') ? (u8)(c - 'A' + 'a') : c;
@@ -362,6 +368,119 @@ out:
 	return st;
 }
 
+/* Puts a name into a directory, pointing at an inode that already exists.
+ *
+ * If the name is taken, what it named is released -- which is what makes both
+ * "rename over" and "move over" one operation rather than a delete followed by
+ * a create, with an instant in between where the name refers to nothing.
+ *
+ * Shared by create and by move so the two cannot drift apart about what an
+ * entry looks like.
+ */
+static enum reconfs_status add_entry(struct reconfs_txn *txn, struct reconfs *fs,
+				     u64 dir_block, const char *name,
+				     u64 inode, u8 type, u64 *out_dir)
+{
+	struct reconfs_inode *dir = NULL, *gone = NULL;
+	struct entries old_e, new_e;
+	struct reconfs_dirent *de;
+	enum reconfs_status st;
+	size_t name_len = kstrlen(name);
+	u64 replaced = 0;
+	u16 need;
+	u32 off;
+
+	kmemset(&old_e, 0, sizeof(old_e));
+	kmemset(&new_e, 0, sizeof(new_e));
+
+	if (!name_len || name_len > RECONFS_NAME_MAX)
+		return RECONFS_ERR_NAME;
+
+	dir = kzalloc(fs->block_size);
+	if (!dir)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, dir_block, dir, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (dir->type != RECONFS_TYPE_DIR) {
+		st = RECONFS_ERR_NOT_DIR;
+		goto out;
+	}
+
+	st = read_entries(fs, dir, &old_e);
+	if (st != RECONFS_OK)
+		goto out;
+
+	new_e.cap = entries_capacity(fs);
+	new_e.buf = kzalloc(new_e.cap);
+	if (!new_e.buf) {
+		st = RECONFS_ERR_NOMEM;
+		goto out;
+	}
+
+	off = 0;
+	while (off + RECONFS_DIRENT_MIN <= old_e.len) {
+		const struct reconfs_dirent *e =
+			(const struct reconfs_dirent *)(old_e.buf + off);
+
+		if (!e->rec_len)
+			break;
+
+		if (e->inode && name_eq(e->name, e->name_len, name)) {
+			replaced = e->inode;
+		} else if (e->inode) {
+			if (!entries_append(&new_e, e, e->rec_len)) {
+				st = RECONFS_ERR_DIR_FULL;
+				goto out;
+			}
+		}
+
+		off += e->rec_len;
+	}
+
+	need = entry_size((u8)name_len);
+	if (new_e.len + need > new_e.cap) {
+		st = RECONFS_ERR_DIR_FULL;
+		goto out;
+	}
+
+	de = (struct reconfs_dirent *)(new_e.buf + new_e.len);
+	kmemset(de, 0, need);
+	de->inode    = inode;
+	de->rec_len  = need;
+	de->name_len = (u8)name_len;
+	de->type     = type;
+	kmemcpy(de->name, name, name_len);
+	new_e.len += need;
+
+	st = write_dir(txn, fs, dir_block, dir, &new_e, out_dir);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (replaced && replaced != inode) {
+		gone = kzalloc(fs->block_size);
+		if (!gone) {
+			st = RECONFS_ERR_NOMEM;
+			goto out;
+		}
+
+		if (reconfs_read_block(fs, replaced, gone, INODE_CSUM)
+		    == RECONFS_OK)
+			release_contents(txn, fs, gone);
+
+		reconfs_txn_free(txn, replaced);
+	}
+
+out:
+	entries_free(&old_e);
+	entries_free(&new_e);
+	kfree(dir);
+	kfree(gone);
+	return st;
+}
+
 /* --- Creating ------------------------------------------------------------- */
 
 enum reconfs_status reconfs_create(struct reconfs_txn *txn, struct reconfs *fs,
@@ -480,10 +599,6 @@ out:
 	kfree(ino);
 	return st;
 }
-
-/* Defined with the rest of the contents handling below. */
-static void release_contents(struct reconfs_txn *txn, struct reconfs *fs,
-			     const struct reconfs_inode *ino);
 
 /* --- A file's contents ----------------------------------------------------
  *
@@ -869,12 +984,10 @@ out:
  * it until the commit lands, and a crash before that leaves the old contents
  * entirely intact.
  *
- * --- What is refused ---
+ * --- Renaming between two directories ---
  *
- * Renaming between two different directories. It needs the moved object's
- * parent rewritten and both directories rewritten and the path from each to the
- * root copied, and the path-copy helper that would do that does not exist yet.
- * Refused with a status of its own rather than half-performed.
+ * Not here. `reconfs_move` does it, and hands the same-directory case back to
+ * this function so the two cannot disagree about what a rename means.
  */
 enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 				   u64 dir_block, const char *from,
@@ -1145,9 +1258,10 @@ out:
  * slash are all accepted; "." and ".." are not, because they are the
  * directory's own business rather than names anyone may write.
  */
-enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
-				      struct reconfs_path *chain, char *leaf,
-				      size_t leaf_len)
+enum reconfs_status reconfs_walk_path_from(struct reconfs *fs, u64 root,
+					   const char *path,
+					   struct reconfs_path *chain,
+					   char *leaf, size_t leaf_len)
 {
 	const char *p = path;
 	enum reconfs_status st;
@@ -1156,7 +1270,7 @@ enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
 		return RECONFS_ERR_NAME;
 
 	chain->count = 0;
-	chain->dirs[chain->count++] = fs->root_inode;
+	chain->dirs[chain->count++] = root;
 	leaf[0] = '\0';
 
 	while (*p == '/')
@@ -1227,6 +1341,14 @@ enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
 	return RECONFS_ERR_NAME;
 }
 
+enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
+				      struct reconfs_path *chain, char *leaf,
+				      size_t leaf_len)
+{
+	return reconfs_walk_path_from(fs, fs->root_inode, path, chain, leaf,
+				      leaf_len);
+}
+
 /* Copies the chain back up, from the directory that changed to the root.
  *
  * `moved` is the new block of `chain->dirs[chain->count - 1]`. Every ancestor
@@ -1295,8 +1417,18 @@ enum reconfs_status reconfs_rebuild_path(struct reconfs_txn *txn,
  * on the next run. Refused rather than recursed, because a recursive delete is a
  * decision for the layer that knows whether the user meant it.
  */
-enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
-				   u64 dir_block, const char *name, u64 *out_dir)
+/* Takes a name out of a directory.
+ *
+ * `release` says whether what it named goes with it. Moving an object to
+ * another directory takes the name out and keeps the object -- and passing
+ * `false` here is the difference between a move and a deletion followed by a
+ * broken reference, so the parameter exists rather than a second copy of this
+ * function that somebody would forget to keep in step.
+ */
+static enum reconfs_status remove_entry(struct reconfs_txn *txn,
+					struct reconfs *fs, u64 dir_block,
+					const char *name, bool release,
+					u64 *out_dir, u64 *removed)
 {
 	struct reconfs_inode *dir = NULL, *gone = NULL;
 	struct entries old_e, new_e;
@@ -1408,8 +1540,13 @@ enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
 
 	/* After the new directory exists, so the object is unreachable from the
 	 * next superblock before it is unreachable from anything. */
-	release_contents(txn, fs, gone);
-	reconfs_txn_free(txn, target);
+	if (release) {
+		release_contents(txn, fs, gone);
+		reconfs_txn_free(txn, target);
+	}
+
+	if (removed)
+		*removed = target;
 
 out:
 	entries_free(&old_e);
@@ -1419,19 +1556,249 @@ out:
 	return st;
 }
 
+enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
+				   u64 dir_block, const char *name,
+				   u64 *out_dir)
+{
+	return remove_entry(txn, fs, dir_block, name, true, out_dir, NULL);
+}
+
+/* --- Moving between directories -------------------------------------------
+ *
+ * Renaming within one directory is one rewrite. Renaming across two is four,
+ * and the awkwardness is not the count -- it is that both directories sit on
+ * chains that have to be copied to the root, and the two chains share a prefix.
+ * Rebuilding them independently would produce two different roots.
+ *
+ * So it is done in sequence, against a tree that is consistent at every step:
+ *
+ *   1. walk to the source, take the name out, rebuild that chain      -> root A
+ *   2. walk to the destination *in the tree rooted at A*
+ *   3. rewrite the moved object with its new parent
+ *   4. put the name in, rebuild that chain                            -> root B
+ *
+ * Step 2 is why `reconfs_walk_path_from` takes a root: after step 1 the
+ * committed root is still the old one, and walking from it would find the
+ * destination's *previous* block and rebuild a chain that undoes step 1.
+ *
+ * All four rewrites are still one transaction, so the superblock write at the
+ * end makes the whole move real at once. There is no image in which the name
+ * exists in both places or in neither.
+ */
+enum reconfs_status reconfs_move(struct reconfs_txn *txn, struct reconfs *fs,
+				 const char *from, const char *to,
+				 u64 *new_root)
+{
+	struct reconfs_path chain;
+	char leaf_from[RECONFS_NAME_MAX + 1], leaf_to[RECONFS_NAME_MAX + 1];
+	struct reconfs_inode *ino = NULL;
+	enum reconfs_status st;
+	u64 moving = 0, moved = 0, dir_now = 0, root = 0, to_dossier = 0;
+	u32 type;
+
+	st = reconfs_walk_path(fs, from, &chain, leaf_from, sizeof(leaf_from));
+	if (st != RECONFS_OK)
+		return st;
+
+	st = reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf_from, &moving);
+	if (st != RECONFS_OK)
+		return st;
+
+	/* Within one directory this is the cheaper operation, and the two must
+	 * not disagree about what a rename means. Handed over rather than
+	 * reimplemented. */
+	{
+		struct reconfs_path dest;
+
+		st = reconfs_walk_path(fs, to, &dest, leaf_to, sizeof(leaf_to));
+		if (st != RECONFS_OK)
+			return st;
+
+		if (dest.dirs[dest.count - 1] == chain.dirs[chain.count - 1]) {
+			st = reconfs_rename(txn, fs,
+					    chain.dirs[chain.count - 1],
+					    leaf_from, leaf_to, &dir_now);
+			if (st != RECONFS_OK)
+				return st;
+			return reconfs_rebuild_path(txn, fs, &chain, dir_now,
+						    new_root);
+		}
+	}
+
+	ino = kzalloc(fs->block_size);
+	if (!ino)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, moving, ino, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	type = ino->type;
+
+	/* 1. Out of the source, keeping the object. */
+	st = remove_entry(txn, fs, chain.dirs[chain.count - 1], leaf_from,
+			  false, &dir_now, NULL);
+	if (st != RECONFS_OK)
+		goto out;
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir_now, &root);
+	if (st != RECONFS_OK)
+		goto out;
+
+	/* 2. The destination, in the tree that now exists. */
+	st = reconfs_walk_path_from(fs, root, to, &chain, leaf_to,
+				    sizeof(leaf_to));
+	if (st != RECONFS_OK)
+		goto out;
+
+	/* 3. The object's back-reference is its parent's dossier, which has
+	 *    changed. The dossier is stable, so this is the *only* thing that
+	 *    has to be rewritten -- had the back-reference been the parent's
+	 *    block, every descendant would need rewriting too. */
+	{
+		struct reconfs_inode *parent = kzalloc(fs->block_size);
+
+		if (!parent) {
+			st = RECONFS_ERR_NOMEM;
+			goto out;
+		}
+
+		st = reconfs_read_block(fs, chain.dirs[chain.count - 1], parent,
+					INODE_CSUM);
+		if (st == RECONFS_OK)
+			to_dossier = parent->dossier;
+		kfree(parent);
+
+		if (st != RECONFS_OK)
+			goto out;
+	}
+
+	ino->parent = to_dossier;
+	ino->ctime  = time_monotonic_ns();
+
+	moved = reconfs_txn_alloc(txn, to_dossier);
+	if (!moved) {
+		st = RECONFS_ERR_NOSPACE;
+		goto out;
+	}
+
+	st = reconfs_write_block(fs, moved, ino, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	reconfs_txn_free(txn, moving);
+
+	/* 4. Into the destination, replacing whatever was there. */
+	st = add_entry(txn, fs, chain.dirs[chain.count - 1], leaf_to, moved,
+		       (u8)type, &dir_now);
+	if (st != RECONFS_OK)
+		goto out;
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir_now, new_root);
+
+out:
+	kfree(ino);
+	return st;
+}
+
 /* --- Listing --------------------------------------------------------------
  *
- * Index-based, and the guarantee is stated rather than left to be discovered:
- * **a listing is a snapshot of one epoch.** Every entry returned for a given
- * index comes from the directory as it was when the listing started, because
- * copy-on-write means the old directory blocks stay intact and reachable until
- * the transaction that replaced them commits.
+ * The checkpoint's seventh constraint says a listing must come with a stated
+ * guarantee about concurrent modification, or a stated absence of one, because
+ * an unstated guarantee is the worst of the three.
  *
- * What a caller does *not* get is a listing that reflects changes made while it
- * is iterating. That is the honest guarantee, and stating it is the whole point:
- * the design records that an unstated guarantee is the worst of the three
- * options.
+ * --- reconfs_readdir has no guarantee, and this is the statement of that ---
+ *
+ * It takes a directory block and an index and returns one entry. Between two
+ * calls the directory can be changed, and the block the caller is holding can
+ * be *reused*: copy-on-write frees the old copy when the change commits, and a
+ * later transaction may allocate that block for something else entirely. A
+ * caller iterating across such a change can see an entry twice, miss one, or
+ * read a block that is no longer a directory at all.
+ *
+ * An earlier version of this comment claimed the opposite -- "a listing is a
+ * snapshot of one epoch" -- which is the exact failure the constraint was
+ * written against, made worse by being written down confidently. It is
+ * withdrawn.
+ *
+ * --- reconfs_list does have one ---
+ *
+ * It reads the whole directory in a single call, from a directory that cannot
+ * change while it is being read, because nothing else is running inside that
+ * call. A listing that has no part-way cannot observe a change part-way
+ * through.
+ *
+ * The cost is that the caller supplies a buffer big enough for the whole
+ * directory and is told so if it is not, rather than being handed a prefix. A
+ * caller given the first half of a directory with a success status has no way
+ * to know.
  */
+
+/* Every name in a directory, in one call.
+ *
+ * `names` receives NUL-terminated names back to back; `blocks` receives the
+ * matching inode blocks. `count` is set to how many there were. A directory
+ * with more entries than the buffers hold is refused, not truncated.
+ */
+enum reconfs_status reconfs_list(struct reconfs *fs, u64 dir_block,
+				 char *names, size_t names_len,
+				 u64 *blocks, unsigned max, unsigned *count)
+{
+	struct reconfs_inode *dir;
+	struct entries e;
+	enum reconfs_status st;
+	size_t used = 0;
+	u32 off = 0;
+	unsigned n = 0;
+
+	*count = 0;
+
+	dir = kzalloc(fs->block_size);
+	if (!dir)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, dir_block, dir, INODE_CSUM);
+	if (st != RECONFS_OK) {
+		kfree(dir);
+		return st;
+	}
+
+	if (dir->type != RECONFS_TYPE_DIR) {
+		kfree(dir);
+		return RECONFS_ERR_NOT_DIR;
+	}
+
+	st = read_entries(fs, dir, &e);
+	kfree(dir);
+	if (st != RECONFS_OK)
+		return st;
+
+	while (off + RECONFS_DIRENT_MIN <= e.len) {
+		const struct reconfs_dirent *de =
+			(const struct reconfs_dirent *)(e.buf + off);
+
+		if (!de->rec_len)
+			break;
+
+		if (de->inode) {
+			if (n == max || used + de->name_len + 1 > names_len) {
+				entries_free(&e);
+				return RECONFS_ERR_TOO_LARGE;
+			}
+
+			kmemcpy(names + used, de->name, de->name_len);
+			used += de->name_len;
+			names[used++] = '\0';
+			blocks[n++] = de->inode;
+		}
+
+		off += de->rec_len;
+	}
+
+	entries_free(&e);
+	*count = n;
+	return RECONFS_OK;
+}
 enum reconfs_status reconfs_readdir(struct reconfs *fs, u64 dir_block,
 				    unsigned index, char *name, size_t len,
 				    u64 *child, u32 *type)

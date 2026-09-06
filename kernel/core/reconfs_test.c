@@ -683,7 +683,11 @@ static bool run_at(struct block_device *dev, u32 bs)
 					ok = false;
 			}
 
-			/* And the listing returns the names as they were typed. */
+			/* And the listing returns the names as they were typed.
+			 *
+			 * Both ways: one entry at a time, which has no
+			 * guarantee about concurrent modification and says so,
+			 * and the whole directory in one call, which does. */
 			{
 				char got[RECONFS_NAME_MAX + 1];
 				u64 child;
@@ -696,6 +700,44 @@ static bool run_at(struct block_device *dev, u32 bs)
 					seen++;
 
 				if (seen != RK_ARRAY_LEN(names))
+					ok = false;
+			}
+
+			{
+				char all[256];
+				u64 blocks[8];
+				unsigned n = 0, i;
+
+				if (reconfs_list(&fs, fs.root_inode, all,
+						 sizeof(all), blocks, 8, &n)
+				    != RECONFS_OK ||
+				    n != RK_ARRAY_LEN(names))
+					ok = false;
+
+				/* The names come back exactly as they were
+				 * typed, in order, back to back. */
+				{
+					const char *p = all;
+
+					for (i = 0; i < n && ok; i++) {
+						const char *want = names[i];
+						size_t j = 0;
+
+						while (p[j] && p[j] == want[j])
+							j++;
+						if (p[j] || want[j])
+							ok = false;
+						p += j + 1;
+					}
+				}
+
+				/* A directory that does not fit is refused,
+				 * not truncated. A caller handed the first two
+				 * of three names, with a success status, has no
+				 * way to know. */
+				if (reconfs_list(&fs, fs.root_inode, all,
+						 sizeof(all), blocks, 2, &n)
+				    != RECONFS_ERR_TOO_LARGE)
 					ok = false;
 			}
 
@@ -1191,6 +1233,120 @@ contents_done:
 							     : "");
 				reconfs_unmount(&fs);
 				return false;
+			}
+
+			/* --- Across two directories ------------------------
+			 *
+			 * Four directories rewritten and two chains copied to
+			 * the root, in one commit. What must be true after it
+			 * is not only that the name moved: the file's contents
+			 * must be intact, and its back-reference must name its
+			 * new parent -- which the checker verifies, since a
+			 * moved object whose parent still points at where it
+			 * came from is exactly the disagreement it looks for.
+			 */
+			{
+				struct reconfs_txn *tm = reconfs_txn_begin(&fs);
+				struct reconfs_path where;
+				char leaf2[RECONFS_NAME_MAX + 1];
+				u64 root2 = 0;
+				u32 back_len = fs.block_size + 137;
+				u8 *check = kzalloc(back_len);
+				u32 n = 0, z;
+
+				if (!tm || !check) {
+					kfree(check);
+					if (tm)
+						reconfs_txn_abort(tm);
+					kputs("  a move across      : FAIL (setup)\n");
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				st = reconfs_move(tm, &fs, deep,
+						  "/System/Recycled/note.txt",
+						  &root2);
+				if (st != RECONFS_OK) {
+					kprintf("  a move across      : FAIL "
+						"(%s)\n", reconfs_strerror(st));
+					reconfs_txn_abort(tm);
+					kfree(check);
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				reconfs_txn_set_root(tm, root2);
+				if (reconfs_txn_commit(tm) != RECONFS_OK) {
+					kputs("  a move across      : FAIL (commit)\n");
+					kfree(check);
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				/* Gone from where it was. */
+				if (reconfs_walk_path(&fs, deep, &where, leaf2,
+						      sizeof(leaf2)) == RECONFS_OK &&
+				    reconfs_lookup(&fs,
+						   where.dirs[where.count - 1],
+						   leaf2, &found)
+				    != RECONFS_ERR_NOT_FOUND) {
+					kputs("  a move across      : FAIL (still "
+					      "at the old path)\n");
+					kfree(check);
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				/* There, and unchanged. */
+				st = reconfs_walk_path(&fs,
+						       "/System/Recycled/note.txt",
+						       &where, leaf2,
+						       sizeof(leaf2));
+				if (st == RECONFS_OK)
+					st = reconfs_read_named(&fs,
+							where.dirs[where.count - 1],
+							leaf2, check, back_len,
+							&n);
+
+				if (st != RECONFS_OK || n != len) {
+					kprintf("  a move across      : FAIL "
+						"(read %u of %u: %s)\n",
+						(unsigned)n, (unsigned)len,
+						reconfs_strerror(st));
+					kfree(check);
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				for (z = 0; z < len; z++) {
+					if (check[z] == (u8)(z * 13u + 7u))
+						continue;
+					kprintf("  a move across      : FAIL "
+						"(byte %u changed)\n",
+						(unsigned)z);
+					kfree(check);
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				kfree(check);
+
+				/* And the volume still agrees with itself --
+				 * which is where a stale back-reference would
+				 * show up. */
+				st = reconfs_check(&fs, &r);
+				if (st != RECONFS_OK || r.disagreements) {
+					kprintf("  a move across      : FAIL (%llu "
+						"disagreements: %s)\n",
+						(unsigned long long)r.disagreements,
+						r.first_disagreement
+							? r.first_disagreement : "");
+					reconfs_unmount(&fs);
+					return false;
+				}
+
+				kputs("  a move across      : pass (two chains "
+				      "copied, contents and parent intact)\n");
 			}
 
 			kprintf("  the desktop shape  : pass (%llu inodes, a file "

@@ -1207,8 +1207,16 @@ looks impossible:
    The shape `recon_fs` needs — System, Programs and User, each with a recycle
    bin — is built and checked, with a file three levels down.
 
-   What does not: renaming between two directories, and a stated guarantee for
-   reading a directory while somebody writes to it.
+   Moving between directories works too, which is four directory rewrites and
+   two chains copied to the root in one commit.
+
+   Every constraint the checkpoint was given is answered, including the
+   awkward seventh: a listing must come with a stated guarantee about concurrent
+   modification or a stated absence of one. `reconfs_readdir` has none and says
+   so; `reconfs_list` reads a whole directory in one call and therefore has one.
+
+   What is left is the layer above — how a volume gets found, mounted and
+   presented — which belongs with the installer rather than the format.
 
    The test `docs/RECONFS.md` lists first is done: the power is cut inside a
    rename and the surviving image is judged by the Python reader, which requires

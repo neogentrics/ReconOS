@@ -39,6 +39,11 @@ arrived from the desktop side afterwards.
    guarantee, or a stated absence of one. An unstated guarantee is the worst of
    the three options.
 
+   **Answered both ways.** `reconfs_readdir` has none and says so;
+   `reconfs_list` reads the whole directory in one call and therefore has one.
+   The first version of this had an unstated guarantee that was also false — see
+   the end of this document.
+
 ### One correction to the record
 
 Constraint 5 arrived described as preserving an existing pattern: that the
@@ -607,8 +612,52 @@ impossible to find afterwards.
 
 ### Not written yet
 
-Renaming between two directories, and reading a directory while somebody writes
-to it.
+Nothing named in the constraints. What is left is the layer above: how a volume
+gets found, mounted and presented, which is the installer's question rather than
+the format's.
+
+### Constraint 7, answered both ways
+
+*A listing must have a stated guarantee about concurrent modification, or a
+stated absence of one, because an unstated guarantee is the worst of the three.*
+
+`reconfs_readdir` takes an index and returns one entry, and it has **no
+guarantee at all** — which is now what it says. Between two calls the directory
+can change, and worse, the block the caller is holding can be *reused*:
+copy-on-write frees the old copy when the change commits, and a later
+transaction may allocate it for something else. A caller iterating across such a
+change can see an entry twice, miss one, or read a block that is no longer a
+directory.
+
+An earlier version of that comment claimed the opposite — "a listing is a
+snapshot of one epoch" — which is precisely the failure the constraint was
+written against, made worse by being stated confidently. It is withdrawn, and
+recorded here rather than quietly corrected.
+
+`reconfs_list` reads the whole directory in one call, and that one *does* have a
+guarantee for the simplest possible reason: **a listing with no part-way cannot
+observe a change part-way through.** The cost is that the caller supplies a
+buffer for the whole directory and is told when it is not big enough, rather
+than handed a prefix — a caller given the first two of three names with a
+success status has no way to know.
+
+**Moving between directories works.** It is four directory rewrites and two
+chains copied to the root, done in sequence against a tree that is consistent at
+every step: take the name out of the source and rebuild that chain, then walk to
+the destination *in the tree that now exists*, rewrite the moved object with its
+new parent, put the name in and rebuild that chain. All four rewrites are one
+transaction, so the superblock write at the end makes the whole move real at
+once — there is no image in which the name exists in both places or in neither.
+
+Walking the destination from the *new* root rather than the committed one is the
+part that is easy to get wrong: after the first rebuild the committed root is
+still the old one, and walking from it would find the destination's previous
+block and produce a chain that undoes the work.
+
+And this is where the dossier decision pays: the moved object's back-reference
+is its parent's dossier, which is stable, so a move rewrites the object and
+nothing below it. Had the back-reference been the parent's *block*, moving a
+directory would have rewritten every descendant.
 
 **Nested directories work.** Copy-on-write makes them the awkward case: changing
 anything in `/System/Recycled` writes a new inode for that directory, which
