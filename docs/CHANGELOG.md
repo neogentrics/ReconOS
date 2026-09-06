@@ -430,6 +430,31 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+**Four desktops, or one, per account.** Somebody who does not use four desktops
+should not have four buttons taking up the corner of their taskbar. Right-click
+the bar and choose.
+
+Off is genuinely *one desktop*, not four with the buttons hidden, and that
+distinction is the whole design. Hiding the pager while leaving Alt+2 working
+would let somebody arrive on a desktop with nothing on screen saying where they
+are and no button to come back with — a worse place to be than a taskbar with
+four squares on it. Everything that can reach another desktop was already
+guarded by one count, so making that count answer the setting turns the buttons,
+Alt+1..4 and Alt+Shift+1..4 off together, with no second rule to fall out of
+step with the first.
+
+**And everything comes to the desktop you are standing on.** You do not move:
+once there is one desktop it is the one you were already on, so nothing jumps
+and nothing has to be gone looking for. The setting and the windows move in one
+function rather than the registry being written at the call site — after the
+switch there is nothing left to reach a stranded window with.
+
+A screenshot caught the bug the numbers could not. Every reading said "1 of 1"
+and every one was correct, while the corner still held a single square marked
+**1** — the drawing loop is bounded by the count, so answering the setting drew
+one button instead of none. A button saying which of your one desktops you are
+on is the exact clutter the setting exists to remove.
+
 **A put-away window's button recedes into itself.** The last thing asked for on
 the taskbar and not built. `minimized` reached the drawing code, was cast to
 void, and then reached exactly one thing six lines later -- the bevel direction.

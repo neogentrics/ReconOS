@@ -6,8 +6,8 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-14_suites-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-105-da3633?style=flat-square)](docs/BUGS.md)
+[![tests](https://img.shields.io/badge/tests-15_suites-238636?style=flat-square)](#tests)
+[![bugs](https://img.shields.io/badge/bugs_recorded-106-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -70,7 +70,7 @@ written down as it was hit rather than guessed at in advance.
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 15 suites, no display needed |
+| **Tests** | 15 suites, 908 checks, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -137,55 +137,65 @@ about it. Every entry is also a
 
 ## What it looks like
 
-Every one of these is a real screen capture of a running ReconOS, taken by
-ReconOS's own `capture` command with the system driven over its control
-socket. Nothing here is a mock-up, and nothing is arranged by hand -- the
-script that takes them is the same harness the tests use, so a picture that
-stops being true stops being taken.
+Every one is a real screen capture of a running ReconOS, taken by ReconOS's own
+`capture` command with the system driven over its control socket. Nothing here
+is a mock-up and nothing is arranged by hand -- the script that takes them is
+the same harness the tests use, so a picture that stops being true stops being
+taken. Each was captured on its own freshly booted desktop, so nothing from the
+shot before it is left in the frame.
 
-![The desktop, with the Start menu open](docs/images/desktop.png)
+**Click any of them for the full-size image.**
 
-The desktop and the Start menu: pinned programs on the left, the places that
-belong to the account on the right, All Programs with a fly-out beside it, and
-a search box in the footer. The bar along the bottom carries one button per
-window and four desktops at the right end.
-
-![The Control Panel](docs/images/control-panel.png)
-
-The Control Panel is fourteen icons. Clicking one opens it in a window of its
-own, named for the item and stepped clear of whatever opened it, so two
-settings can be worked on side by side. Hovering one says what it is for.
-
-![Appearance](docs/images/appearance.png)
-
-Ten skins ship, including three for colour vision and one for reading. A skin
-sets forty-eight semantic roles, the shape of a window frame, and a wallpaper.
-Any of them can be copied and changed; none of them can be deleted, because a
-preset that can be deleted is gone with nowhere to get it back from.
-
-![Two windows at once](docs/images/explorer.png)
-
-ReconOS draws its own windows: the frames, the title bars, the buttons, the
-menus. The File Explorer is looking at the root of the ReconOS filesystem,
-which is a real directory tree on disk.
-
-![The firewall](docs/images/firewall.png)
-
-A rule list rather than a page about one -- consulted in order, first match
-decides, and the ports most people would want are already written down and
-switched off. The rules are a text file, and the same list is reachable from
-the terminal.
-
-![Network](docs/images/network.png)
-
-Network in four sections. This is Adapters: every interface the host has, and
-for the one picked, its address, netmask, state and kind.
-
-![System Information](docs/images/system-information.png)
-
-What the machine is, what ReconOS is, and what is underneath -- three groups,
-kept apart on purpose, because the third is what explains how the first is
-readable at all.
+<table>
+<tr>
+<td width="50%"><a href="docs/images/desktop.png"><img src="docs/images/thumbs/desktop.png" alt="Two windows on the desktop, Glass skin"></a></td>
+<td width="50%"><a href="docs/images/menu.png"><img src="docs/images/thumbs/menu.png" alt="The Apps menu, open over a window"></a></td>
+</tr>
+<tr>
+<td><b>The desktop.</b> Two windows over a wallpaper made for this system, in the see-through Glass skin -- the Calculator's title bar has the Notepad behind it.</td>
+<td><b>The Apps menu.</b> Pinned programs on the left, the account's own places on the right, All Programs with a fly-out beside it, a search box in the footer. The Notepad's text reads straight through the panel.</td>
+</tr>
+<tr>
+<td><a href="docs/images/control-panel.png"><img src="docs/images/thumbs/control-panel.png" alt="The Control Panel"></a></td>
+<td><a href="docs/images/appearance.png"><img src="docs/images/thumbs/appearance.png" alt="Appearance"></a></td>
+</tr>
+<tr>
+<td><b>The Control Panel</b> is sixteen icons. Each opens in a window of its own, named for the item and stepped clear of whatever opened it, so two settings can be worked on side by side.</td>
+<td><b>Appearance.</b> Eleven skins, including three for colour vision and one for reading. A skin sets forty-eight semantic roles, the shape of a window frame, and a wallpaper. Any can be copied and changed; none can be deleted.</td>
+</tr>
+<tr>
+<td><a href="docs/images/photos.png"><img src="docs/images/thumbs/photos.png" alt="Photos, with Read Text and Save as PNG"></a></td>
+<td><a href="docs/images/taskbar.png"><img src="docs/images/thumbs/taskbar.png" alt="The taskbar's three window states"></a></td>
+</tr>
+<tr>
+<td><b>Photos</b>, and the two newest things it can do. <b>Read Text</b> pulls the writing out of a picture into a text file. <b>Save as PNG</b> converts any of the seven formats it opens into a lossless one, beside the original.</td>
+<td><b>Three states on one bar.</b> Focused, open behind, and put away -- the put-away one has its contents washed back towards its own button. Every pair differs by at least two things, on all eleven skins.</td>
+</tr>
+<tr>
+<td><a href="docs/images/clock.png"><img src="docs/images/thumbs/clock.png" alt="The clock's menu"></a></td>
+<td><a href="docs/images/explorer.png"><img src="docs/images/thumbs/explorer.png" alt="File Explorer and Notepad"></a></td>
+</tr>
+<tr>
+<td><b>The clock's own menu.</b> Twenty-four hour or twelve, with the one in force marked rather than a single entry that toggles -- a label saying what <i>will</i> happen cannot tell you what <i>is</i> happening.</td>
+<td><b>ReconOS draws its own windows</b>: the frames, the title bars, the buttons, the menus. The File Explorer is looking at the root of the ReconOS filesystem, which is a real directory tree on disk.</td>
+</tr>
+<tr>
+<td><a href="docs/images/network.png"><img src="docs/images/thumbs/network.png" alt="Network"></a></td>
+<td><a href="docs/images/firewall.png"><img src="docs/images/thumbs/firewall.png" alt="The firewall"></a></td>
+</tr>
+<tr>
+<td><b>Network</b> in four sections, and honest about what it is: ReconOS has no network stack of its own yet, and the page says so where somebody would read it.</td>
+<td><b>The firewall</b> is a rule list rather than a page about one -- consulted in order, first match decides, and the ports most people would want are already written down and switched off.</td>
+</tr>
+<tr>
+<td><a href="docs/images/system-information.png"><img src="docs/images/thumbs/system-information.png" alt="System Information"></a></td>
+<td><a href="docs/images/midnight.png"><img src="docs/images/thumbs/midnight.png" alt="The Midnight skin"></a></td>
+</tr>
+<tr>
+<td><b>System Information.</b> What the machine is, what ReconOS is, and what is underneath -- three groups kept apart on purpose, because the third explains how the first is readable at all.</td>
+<td><b>The Midnight skin</b>, with the terminal. The same forty-eight roles, answered darkly.</td>
+</tr>
+</table>
 
 ## What works right now
 
