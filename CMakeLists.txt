@@ -57,6 +57,7 @@ add_executable(ReconOS
     src/recon_net.c
     src/recon_png.c
     src/recon_image.c
+    src/recon_expr.c
     src/recon_fonts.c
     src/recon_wallpaper.c
     src/recon_appwin.c
@@ -371,6 +372,19 @@ add_executable(recon_smtp_tests
 
 target_include_directories(recon_smtp_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# The expression evaluator, which touches no screen and can be asked questions
+# with known answers. Most of them are arithmetic anybody can check by hand --
+# a test whose expected values came from running the code proves only that the
+# code agrees with itself.
+add_executable(recon_expr_tests
+    tests/test_expr.c
+    src/recon_expr.c)
+
+target_include_directories(recon_expr_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_expr_tests PRIVATE m)
 
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.
