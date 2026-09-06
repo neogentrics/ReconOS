@@ -648,6 +648,140 @@ static bool run_at(struct block_device *dev, u32 bs)
 				(unsigned long long)r.inodes);
 		}
 
+		/* --- Contents ----------------------------------------------
+		 *
+		 * Written and read back at the sizes where the layout changes
+		 * shape, because those are the only sizes where it can be wrong:
+		 *
+		 *   0                 nothing at all
+		 *   1                 inline, one byte
+		 *   inline_max        inline, exactly full
+		 *   inline_max + 1    the first size that needs a block
+		 *   2 blocks + 7      several blocks and a partial tail
+		 *   13 blocks         one more than the direct pointers: indirect
+		 *
+		 * The last only at the smallest block size; at 64KiB it would be
+		 * most of a megabyte, and what it exercises is the indirect
+		 * pointer, which does not care how big a block is.
+		 *
+		 * The bytes are a position-dependent pattern, so a read that
+		 * returns the right *length* of the wrong data fails. Reading back
+		 * only the length is the mistake this shape is chosen to prevent:
+		 * a file of zeroes has the right length too. */
+		{
+			u32 inline_max = reconfs_inline_max(fs.block_size);
+			u32 sizes[6];
+			unsigned count = 5, k;
+			u8 *src, *back;
+			u32 biggest;
+
+			sizes[0] = 0;
+			sizes[1] = 1;
+			sizes[2] = inline_max;
+			sizes[3] = inline_max + 1;
+			sizes[4] = fs.block_size * 2 + 7;
+			if (fs.block_size == 4096)
+				sizes[count++] = fs.block_size * 13;
+
+			biggest = sizes[count - 1];
+			if (sizes[4] > biggest)
+				biggest = sizes[4];
+
+			src  = kzalloc(biggest ? biggest : 1);
+			back = kzalloc(biggest ? biggest : 1);
+			if (!src || !back) {
+				kputs("  contents           : FAIL (memory)\n");
+				kfree(src);
+				kfree(back);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			for (u32 q = 0; q < biggest; q++)
+				src[q] = (u8)(q * 31u + (q >> 8) * 7u + 1u);
+
+			for (k = 0; k < count; k++) {
+				struct reconfs_txn *tw = reconfs_txn_begin(&fs);
+				u64 dir = 0;
+				u32 got = 0;
+				u32 q;
+
+				if (!tw) {
+					kputs("  contents           : FAIL (txn)\n");
+					goto contents_failed;
+				}
+
+				st = reconfs_write_named(tw, &fs, fs.root_inode,
+							 "ReadMe.txt", src,
+							 sizes[k], &dir);
+				if (st != RECONFS_OK) {
+					kprintf("  contents           : FAIL "
+						"(write %u bytes: %s)\n",
+						(unsigned)sizes[k],
+						reconfs_strerror(st));
+					reconfs_txn_abort(tw);
+					goto contents_failed;
+				}
+
+				reconfs_txn_set_root(tw, dir);
+				if (reconfs_txn_commit(tw) != RECONFS_OK) {
+					kprintf("  contents           : FAIL "
+						"(commit %u bytes)\n",
+						(unsigned)sizes[k]);
+					goto contents_failed;
+				}
+
+				kmemset(back, 0, biggest ? biggest : 1);
+				st = reconfs_read_named(&fs, fs.root_inode,
+							"ReadMe.txt", back,
+							biggest ? biggest : 1, &got);
+				if (st != RECONFS_OK || got != sizes[k]) {
+					kprintf("  contents           : FAIL "
+						"(read %u bytes, got %u: %s)\n",
+						(unsigned)sizes[k], (unsigned)got,
+						reconfs_strerror(st));
+					goto contents_failed;
+				}
+
+				for (q = 0; q < sizes[k]; q++) {
+					if (back[q] == src[q])
+						continue;
+					kprintf("  contents           : FAIL (%u bytes: "
+						"byte %u is %u, should be %u)\n",
+						(unsigned)sizes[k], (unsigned)q,
+						(unsigned)back[q], (unsigned)src[q]);
+					goto contents_failed;
+				}
+
+				st = reconfs_check(&fs, &r);
+				if (st != RECONFS_OK || r.disagreements) {
+					kprintf("  contents           : FAIL (%u bytes "
+						"left %llu disagreements: %s)\n",
+						(unsigned)sizes[k],
+						(unsigned long long)r.disagreements,
+						r.first_disagreement
+							? r.first_disagreement : "");
+					goto contents_failed;
+				}
+			}
+
+			kprintf("  contents           : pass (%u sizes up to %u "
+				"bytes, read back byte for byte)\n",
+				count, (unsigned)sizes[count - 1]);
+			kfree(src);
+			kfree(back);
+			goto contents_done;
+
+contents_failed:
+			kfree(src);
+			kfree(back);
+			reconfs_unmount(&fs);
+			return false;
+
+contents_done:
+			;
+		}
+
 		/* --- Rename, which is what the registry is waiting on ------
 		 *
 		 * The pattern the desktop needs: write a temporary file, then

@@ -451,6 +451,369 @@ out:
 	return st;
 }
 
+/* Defined with the rest of the contents handling below. */
+static void release_contents(struct reconfs_txn *txn, struct reconfs *fs,
+			     const struct reconfs_inode *ino);
+
+/* --- A file's contents ----------------------------------------------------
+ *
+ * Whole-file writes only. `reconfs_write_named` replaces everything a file
+ * holds; there is no way to change part of one.
+ *
+ * That is not a simplification to be tidied up later -- it is what the caller
+ * above actually does. A registry, a theme file, a package receipt: each is
+ * built in memory and written out entire. An offset-based write would be an
+ * interface invented before its first caller, which this project has a rule
+ * about, and under copy-on-write it is barely cheaper anyway: changing one byte
+ * still rewrites the block holding it and the path from it to the root.
+ *
+ * --- Where the bytes live ---
+ *
+ *   up to RECONFS_INLINE_MAX   inside the inode, costing no extra block
+ *   up to 12 blocks            the direct pointers
+ *   up to per_index more       one indirect block
+ *
+ * At a 4KiB block that is about two megabytes; at 64KiB, about half a gigabyte.
+ * Beyond it the file is *refused*, not truncated -- the deeper indirection is in
+ * the format and is not written, and a write that silently kept part of what it
+ * was given would be the one outcome this project's rules forbid outright.
+ */
+static enum reconfs_status write_contents(struct reconfs_txn *txn,
+					  struct reconfs *fs,
+					  const struct reconfs_inode *old,
+					  const u8 *data, u32 len,
+					  u64 *out_block)
+{
+	struct reconfs_inode *ino;
+	enum reconfs_status st = RECONFS_OK;
+	u64 blk;
+	u8 *page = NULL;
+	u64 *index = NULL;
+	u32 off = 0;
+	unsigned used = 0, in_index = 0;
+
+	blk = reconfs_txn_alloc(txn, old->parent);
+	if (!blk)
+		return RECONFS_ERR_NOSPACE;
+
+	ino = kzalloc(fs->block_size);
+	if (!ino)
+		return RECONFS_ERR_NOMEM;
+
+	kmemcpy(ino, old, sizeof(*ino));
+	kmemset(ino->direct, 0, sizeof(ino->direct));
+	ino->indirect = 0;
+	ino->inline_len = 0;
+	ino->size = len;
+	ino->mtime = time_monotonic_ns();
+	ino->ctime = ino->mtime;
+
+	if (len <= reconfs_inline_max(fs->block_size)) {
+		if (len)
+			kmemcpy(ino->data, data, len);
+		ino->inline_len = len;
+		goto write;
+	}
+
+	page = kzalloc(fs->block_size);
+	if (!page) {
+		st = RECONFS_ERR_NOMEM;
+		goto out;
+	}
+
+	while (off < len) {
+		u32 take = len - off;
+		u64 where;
+
+		if (take > fs->block_size)
+			take = fs->block_size;
+
+		/* Zeroed first, so the tail of the last block carries nothing
+		 * from whatever previously occupied that block. A block handed
+		 * out by the allocator holds somebody's old contents, and
+		 * writing only `take` bytes into it would publish the rest. */
+		kmemset(page, 0, fs->block_size);
+		kmemcpy(page, data + off, take);
+
+		where = reconfs_txn_alloc(txn, ino->dossier);
+		if (!where) {
+			st = RECONFS_ERR_NOSPACE;
+			goto out;
+		}
+
+		st = reconfs_write_block(fs, where, page, RECONFS_NO_CSUM);
+		if (st != RECONFS_OK)
+			goto out;
+
+		if (used < RECONFS_DIRECT) {
+			ino->direct[used++] = where;
+		} else {
+			if (!index) {
+				index = kzalloc(fs->block_size);
+				if (!index) {
+					st = RECONFS_ERR_NOMEM;
+					goto out;
+				}
+			}
+			if (in_index == fs->per_index) {
+				st = RECONFS_ERR_TOO_LARGE;
+				goto out;
+			}
+			index[in_index++] = where;
+		}
+
+		off += take;
+	}
+
+	if (index) {
+		ino->indirect = reconfs_txn_alloc(txn, ino->dossier);
+		if (!ino->indirect) {
+			st = RECONFS_ERR_NOSPACE;
+			goto out;
+		}
+
+		/* After the blocks it names, never before: an index naming a
+		 * block that does not exist yet is a structure a crash could
+		 * make permanent. */
+		st = reconfs_write_block(fs, ino->indirect, index,
+					 RECONFS_NO_CSUM);
+		if (st != RECONFS_OK)
+			goto out;
+	}
+
+write:
+	st = reconfs_write_block(fs, blk, ino, INODE_CSUM);
+	if (st == RECONFS_OK)
+		*out_block = blk;
+
+out:
+	kfree(index);
+	kfree(page);
+	kfree(ino);
+	return st;
+}
+
+/* Releases every block a file's contents occupied, so the next transaction can
+ * use them. Not this one -- see reconfs_txn_alloc. */
+static void release_contents(struct reconfs_txn *txn, struct reconfs *fs,
+			     const struct reconfs_inode *ino)
+{
+	unsigned i;
+
+	if (ino->inline_len)
+		return;
+
+	for (i = 0; i < RECONFS_DIRECT; i++)
+		if (ino->direct[i])
+			reconfs_txn_free(txn, ino->direct[i]);
+
+	if (ino->indirect) {
+		u64 *slots = kzalloc(fs->block_size);
+
+		if (slots) {
+			if (reconfs_read_block(fs, ino->indirect, slots,
+					       RECONFS_NO_CSUM) == RECONFS_OK) {
+				u32 j;
+
+				for (j = 0; j < fs->per_index; j++)
+					if (slots[j])
+						reconfs_txn_free(txn, slots[j]);
+			}
+			kfree(slots);
+		}
+
+		reconfs_txn_free(txn, ino->indirect);
+	}
+}
+
+enum reconfs_status reconfs_write_named(struct reconfs_txn *txn,
+					struct reconfs *fs, u64 dir_block,
+					const char *name, const void *data,
+					u32 len, u64 *out_dir)
+{
+	struct reconfs_inode *dir = NULL, *old = NULL;
+	struct entries e;
+	enum reconfs_status st;
+	u64 child = 0, fresh = 0;
+	u32 off;
+
+	kmemset(&e, 0, sizeof(e));
+
+	st = reconfs_lookup(fs, dir_block, name, &child);
+	if (st != RECONFS_OK)
+		return st;
+
+	dir = kzalloc(fs->block_size);
+	old = kzalloc(fs->block_size);
+	if (!dir || !old) {
+		st = RECONFS_ERR_NOMEM;
+		goto out;
+	}
+
+	st = reconfs_read_block(fs, dir_block, dir, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	st = reconfs_read_block(fs, child, old, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (old->type != RECONFS_TYPE_FILE) {
+		st = RECONFS_ERR_NOT_FILE;
+		goto out;
+	}
+
+	st = write_contents(txn, fs, old, data, len, &fresh);
+	if (st != RECONFS_OK)
+		goto out;
+
+	/* The old copy's blocks, and the old inode itself. Released after the
+	 * new one is written, and reachable from the live superblock until the
+	 * commit lands. */
+	release_contents(txn, fs, old);
+	reconfs_txn_free(txn, child);
+
+	/* The directory's entry has to name the new inode, because the inode
+	 * moved -- which is what copy-on-write means and why a write to a file
+	 * rewrites the directory above it. */
+	st = read_entries(fs, dir, &e);
+	if (st != RECONFS_OK)
+		goto out;
+
+	off = 0;
+	while (off + RECONFS_DIRENT_MIN <= e.len) {
+		struct reconfs_dirent *de =
+			(struct reconfs_dirent *)(e.buf + off);
+
+		if (!de->rec_len)
+			break;
+		if (de->inode == child) {
+			de->inode = fresh;
+			break;
+		}
+		off += de->rec_len;
+	}
+
+	st = write_dir(txn, fs, dir, &e, out_dir);
+
+out:
+	entries_free(&e);
+	kfree(dir);
+	kfree(old);
+	return st;
+}
+
+enum reconfs_status reconfs_read_named(struct reconfs *fs, u64 dir_block,
+				       const char *name, void *out, u32 max,
+				       u32 *got)
+{
+	struct reconfs_inode *ino;
+	enum reconfs_status st;
+	u64 child = 0;
+	u8 *dst = out;
+	u32 want, off = 0;
+
+	*got = 0;
+
+	st = reconfs_lookup(fs, dir_block, name, &child);
+	if (st != RECONFS_OK)
+		return st;
+
+	ino = kzalloc(fs->block_size);
+	if (!ino)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, child, ino, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (ino->type != RECONFS_TYPE_FILE) {
+		st = RECONFS_ERR_NOT_FILE;
+		goto out;
+	}
+
+	/* Refused rather than truncated. A caller handed the first half of a
+	 * file, with a success status, has no way to know. */
+	if (ino->size > max) {
+		st = RECONFS_ERR_TOO_LARGE;
+		goto out;
+	}
+
+	want = (u32)ino->size;
+
+	if (ino->inline_len) {
+		kmemcpy(dst, ino->data, want);
+		*got = want;
+		goto out;
+	}
+
+	{
+		u8 *page = kzalloc(fs->block_size);
+		u64 *slots = NULL;
+		unsigned n = 0;
+
+		if (!page) {
+			st = RECONFS_ERR_NOMEM;
+			goto out;
+		}
+
+		while (off < want) {
+			u64 where = 0;
+			u32 take = want - off;
+
+			if (take > fs->block_size)
+				take = fs->block_size;
+
+			if (n < RECONFS_DIRECT) {
+				where = ino->direct[n];
+			} else {
+				if (!slots) {
+					slots = kzalloc(fs->block_size);
+					if (!slots) {
+						st = RECONFS_ERR_NOMEM;
+						break;
+					}
+					st = reconfs_read_block(fs,
+								ino->indirect,
+								slots,
+								RECONFS_NO_CSUM);
+					if (st != RECONFS_OK)
+						break;
+				}
+				if (n - RECONFS_DIRECT >= fs->per_index) {
+					st = RECONFS_ERR_CORRUPT;
+					break;
+				}
+				where = slots[n - RECONFS_DIRECT];
+			}
+
+			if (!where) {
+				st = RECONFS_ERR_CORRUPT;
+				break;
+			}
+
+			st = reconfs_read_block(fs, where, page,
+						RECONFS_NO_CSUM);
+			if (st != RECONFS_OK)
+				break;
+
+			kmemcpy(dst + off, page, take);
+			off += take;
+			n++;
+		}
+
+		kfree(slots);
+		kfree(page);
+
+		if (st == RECONFS_OK)
+			*got = want;
+	}
+
+out:
+	kfree(ino);
+	return st;
+}
+
 /* --- Renaming -------------------------------------------------------------
  *
  * The operation this whole design was asked for, and the reason it is
@@ -494,6 +857,7 @@ enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 	u16 need;
 	u64 moving = 0, replaced = 0;
 	u32 off;
+	u8 moving_type = RECONFS_TYPE_FILE;
 	bool have_old = false;
 
 	kmemset(&old_e, 0, sizeof(old_e));
@@ -545,6 +909,13 @@ enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 		if (de->inode) {
 			if (name_eq(de->name, de->name_len, from)) {
 				moving = de->inode;
+				/* Carried from the entry being moved rather
+				 * than recomputed: the inode is not being
+				 * rewritten, so anything derived here could
+				 * only disagree with it -- and a directory
+				 * listed as a file is a listing that lies about
+				 * what it is showing. */
+				moving_type = de->type;
 				have_old = true;
 			} else if (name_eq(de->name, de->name_len, to)) {
 				replaced = de->inode;
@@ -608,44 +979,42 @@ enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 		de->inode    = moving;
 		de->rec_len  = need;
 		de->name_len = (u8)to_len;
-		/* The type is carried over from the entry that is moving, not
-		 * re-derived: the inode is not being rewritten, so anything
-		 * this recomputed could only disagree with it. */
-		de->type     = RECONFS_TYPE_FILE;
+		de->type     = moving_type;
 		kmemcpy(de->name, to, to_len);
 		new_e.len += need;
-	}
-
-	/* Carry the moving entry's real type across. Read from the old stream
-	 * rather than assumed, because a directory renamed as a file would be a
-	 * listing that lies about what it is showing. */
-	off = 0;
-	while (off + RECONFS_DIRENT_MIN <= old_e.len) {
-		const struct reconfs_dirent *de =
-			(const struct reconfs_dirent *)(old_e.buf + off);
-
-		if (!de->rec_len)
-			break;
-		if (de->inode == moving) {
-			struct reconfs_dirent *added =
-				(struct reconfs_dirent *)(new_e.buf +
-							  new_e.len - need);
-
-			added->type = de->type;
-			break;
-		}
-		off += de->rec_len;
 	}
 
 	st = write_dir(txn, fs, dir, &new_e, out_dir);
 	if (st != RECONFS_OK)
 		goto out;
 
-	/* The object the new name used to refer to. Released only now, after
-	 * the new directory is built -- and released rather than written over,
-	 * so the live superblock still reaches it until the commit. */
-	if (replaced)
+	/* The object the new name used to refer to.
+	 *
+	 * Its contents as well as its inode. Freeing the inode alone leaks
+	 * every block the replaced file occupied -- which is invisible while
+	 * the files being renamed over are empty, and was: the self-test
+	 * renamed over a file with nothing in it, and found nothing wrong.
+	 * The crash workload writing a real payload is what made the leaked
+	 * blocks exist, and the checker named them immediately.
+	 *
+	 * Released only now, after the new directory is built, and released
+	 * rather than written over -- so the live superblock still reaches the
+	 * old contents until the commit lands. */
+	if (replaced) {
+		struct reconfs_inode *gone = kzalloc(fs->block_size);
+
+		if (!gone) {
+			st = RECONFS_ERR_NOMEM;
+			goto out;
+		}
+
+		if (reconfs_read_block(fs, replaced, gone, INODE_CSUM)
+		    == RECONFS_OK)
+			release_contents(txn, fs, gone);
+
+		kfree(gone);
 		reconfs_txn_free(txn, replaced);
+	}
 
 out:
 	entries_free(&old_e);

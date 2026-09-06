@@ -184,6 +184,39 @@ broken says nothing about the work.
   into superblock A's fields while B was live, damaging a block nothing pointed
   at, and getting a correct report of a healthy volume.
 
+### BG-089 — Renaming over a file leaked every block it occupied
+
+[#278](https://github.com/neogentrics/ReconOS/issues/278)
+
+- **Found in** kernel 0.0.11. **Found by** the Python reader, the moment the
+  crash workload started writing real contents — thirty-six blocks reported as
+  allocated to an object nothing could reach, after twelve replacements.
+- **Was** `reconfs_rename` releases the object the new name used to refer to, so
+  its blocks go back to the unclaimed state. It released the inode and nothing
+  else. Every block of the replaced file's *contents* stayed marked as owned,
+  reachable from nothing, forever.
+
+  On a volume being written the way the desktop's registry writer writes — a
+  temporary file renamed over the real one, every time settings change — the
+  free space falls by the size of the file on every save, and never comes back.
+
+  **It had a test, and the test could not see it.** The self-test renames one
+  file over another and then runs the whole checker, which is exactly the right
+  shape — but both files were empty, so there were no content blocks to leak,
+  and the checker correctly reported a volume with nothing wrong.
+
+  The shape worth keeping: **a test whose subject has no instance of the thing
+  that can go wrong**. Renaming empty files exercises every line of the rename
+  and none of the consequences.
+- **Fixed in** kernel 0.0.11. The replaced object's contents are released with
+  its inode, after the new directory is built and before the commit — so the
+  live superblock still reaches the old contents until the change is real.
+
+  What made it findable was giving the crash workload a payload: 9,001 bytes,
+  self-describing, with a round number at three places and a checksum over the
+  whole thing. An empty file is always complete, so a crash test on empty files
+  can only assert that a *name* resolved.
+
 ### BG-085 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)

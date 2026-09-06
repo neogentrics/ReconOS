@@ -38,6 +38,8 @@
 #include <recon/kernel/block.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/crc32.h>
+#include <recon/kernel/heap.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/kstring.h>
 
@@ -98,8 +100,57 @@ static struct block_device *find_by_name(const char *name)
 	return 0;
 }
 
-/* One transaction: make `TEMP`. */
-static enum reconfs_status make_temp(struct reconfs *fs)
+/* --- What the file actually contains -------------------------------------
+ *
+ * An empty file is always complete, so a crash test on empty files asserts
+ * nothing about contents at all -- it can only say the *name* resolved. The
+ * payload below is what makes "old-complete or new-complete" mean something.
+ *
+ * It is self-describing, in the same shape as the durability markers:
+ *
+ *     magic, round, length, checksum, then the bytes, then round again
+ *
+ * The round number appears at both ends. A file assembled from the head of one
+ * version and the tail of another has two different numbers in it, which is
+ * visible without knowing which version was expected -- and that is the point,
+ * because after a power cut nobody knows which version to expect.
+ *
+ * The checksum covers everything before it and everything after, so a file that
+ * is short, long, or altered anywhere fails it.
+ */
+#define PAYLOAD_MAGIC	0x52464350u	/* "RFCP" */
+
+/* Deliberately not a round number of blocks: a payload that ended exactly on a
+ * block boundary would never exercise the partial tail, which is where a
+ * length is most likely to be got wrong. */
+#define PAYLOAD_BYTES	9001
+
+static u32 fill_payload(u8 *buf, u32 round)
+{
+	u32 crc, i;
+
+	kmemset(buf, 0, PAYLOAD_BYTES);
+
+	for (i = 20; i < PAYLOAD_BYTES - 4; i++)
+		buf[i] = (u8)(round * 31u + i * 7u + 1u);
+
+	kmemcpy(buf + 0,  &(u32){ PAYLOAD_MAGIC },  4);
+	kmemcpy(buf + 4,  &round,                   4);
+	kmemcpy(buf + 8,  &(u32){ PAYLOAD_BYTES },  4);
+	kmemcpy(buf + 16, &round,                   4);
+	kmemcpy(buf + PAYLOAD_BYTES - 4, &round,    4);
+
+	/* Over everything except the four bytes holding it. */
+	crc = crc32_update(CRC32_INIT, buf, 12);
+	crc = crc32_update(crc, buf + 16, PAYLOAD_BYTES - 16);
+	crc = crc32_final(crc);
+	kmemcpy(buf + 12, &crc, 4);
+
+	return crc;
+}
+
+/* One transaction: make `TEMP`, with its contents. */
+static enum reconfs_status make_temp(struct reconfs *fs, u8 *payload, u32 round)
 {
 	struct reconfs_txn *txn = reconfs_txn_begin(fs);
 	u64 made = 0, dir = 0;
@@ -110,6 +161,15 @@ static enum reconfs_status make_temp(struct reconfs *fs)
 
 	st = reconfs_create(txn, fs, fs->root_inode, TEMP,
 			    RECONFS_TYPE_FILE, 0600, &made, &dir);
+	if (st != RECONFS_OK) {
+		reconfs_txn_abort(txn);
+		return st;
+	}
+
+	fill_payload(payload, round);
+
+	st = reconfs_write_named(txn, fs, dir, TEMP, payload, PAYLOAD_BYTES,
+				 &dir);
 	if (st != RECONFS_OK) {
 		reconfs_txn_abort(txn);
 		return st;
@@ -147,6 +207,7 @@ void reconfs_crash_run(void)
 	enum reconfs_status st;
 	u64 rounds = 0;
 	u64 limit = 0;
+	u8 *payload;
 
 	if (!want)
 		return;
@@ -194,6 +255,27 @@ void reconfs_crash_run(void)
 			return;
 		}
 
+		{
+			u8 *first = kzalloc(PAYLOAD_BYTES);
+
+			if (!first) {
+				reconfs_txn_abort(txn);
+				reconfs_unmount(&fs);
+				return;
+			}
+
+			fill_payload(first, 0);
+			if (reconfs_write_named(txn, &fs, dir, TARGET, first,
+						PAYLOAD_BYTES,
+						&dir) != RECONFS_OK) {
+				kfree(first);
+				reconfs_txn_abort(txn);
+				reconfs_unmount(&fs);
+				return;
+			}
+			kfree(first);
+		}
+
 		reconfs_txn_set_root(txn, dir);
 		if (reconfs_txn_commit(txn) != RECONFS_OK) {
 			kputs("reconfs-crash: could not commit the first target\n");
@@ -228,6 +310,13 @@ void reconfs_crash_run(void)
 		}
 	}
 
+	payload = kzalloc(PAYLOAD_BYTES);
+	if (!payload) {
+		kputs("reconfs-crash: no memory for the payload\n");
+		reconfs_unmount(&fs);
+		return;
+	}
+
 	for (;;) {
 		if (limit && rounds >= limit) {
 			kprintf("reconfs-crash: stopping at %llu replacements, "
@@ -238,7 +327,7 @@ void reconfs_crash_run(void)
 			break;
 		}
 
-		st = make_temp(&fs);
+		st = make_temp(&fs, payload, (u32)rounds + 1);
 		if (st == RECONFS_ERR_RETRY)
 			continue;
 		if (st != RECONFS_OK) {
@@ -262,5 +351,6 @@ void reconfs_crash_run(void)
 				(unsigned long long)rounds);
 	}
 
+	kfree(payload);
 	reconfs_unmount(&fs);
 }

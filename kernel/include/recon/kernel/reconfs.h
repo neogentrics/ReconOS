@@ -474,6 +474,7 @@ enum reconfs_status {
 	RECONFS_ERR_NOT_DIR,
 	RECONFS_ERR_EXISTS,
 	RECONFS_ERR_DIR_FULL,	/* refused rather than truncated */
+	RECONFS_ERR_NOT_FILE,
 };
 
 /* Passed to the block routines for a block kind that carries no checksum of
@@ -608,6 +609,24 @@ enum reconfs_status reconfs_lookup(struct reconfs *fs, u64 dir_block,
 enum reconfs_status reconfs_create(struct reconfs_txn *txn, struct reconfs *fs,
 				   u64 dir_block, const char *name, u32 type,
 				   u32 mode, u64 *out_inode, u64 *out_dir);
+
+/* Replaces everything a file holds. Whole-file only: the callers above build
+ * their contents in memory and write them out entire, and under copy-on-write a
+ * partial write is barely cheaper anyway.
+ *
+ * The file's inode moves, so the directory is rewritten too and its new block
+ * comes back in `out_dir`. A file too large for one indirect block is refused,
+ * not truncated. */
+enum reconfs_status reconfs_write_named(struct reconfs_txn *txn,
+					struct reconfs *fs, u64 dir_block,
+					const char *name, const void *data,
+					u32 len, u64 *out_dir);
+
+/* Reads a whole file. A file larger than `max` is refused rather than partly
+ * returned -- a caller handed half a file with a success status cannot tell. */
+enum reconfs_status reconfs_read_named(struct reconfs *fs, u64 dir_block,
+				       const char *name, void *out, u32 max,
+				       u32 *got);
 
 /* Renames `from` to `to` within one directory, in a single commit.
  *

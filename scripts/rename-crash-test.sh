@@ -100,7 +100,7 @@ if ! python3 scripts/reconfs-check.py "$PROVE" settings >/dev/null 2>&1; then
 	exit 1
 fi
 
-for how in checksum unallocated; do
+for how in checksum unallocated torn; do
 	cp "$PROVE" "$PROVE.broken"
 	python3 scripts/reconfs-check.py --damage "$how" "$PROVE.broken" >/dev/null
 
@@ -205,8 +205,10 @@ echo "$ROUNDS cuts inside a rename on $ARCH: $bad inconsistent."
 if [ "$bad" -eq 0 ]; then
 	echo
 	echo "Every image mounted, resolved 'settings' to exactly one readable"
-	echo "object, and had its tree and its owner table agree block for block"
-	echo "-- judged by a reader that shares no code with the kernel."
+	echo "object whose contents were one whole version -- the round number"
+	echo "agreeing in three places and the checksum over the whole payload --"
+	echo "and had its tree and its owner table agree block for block, judged"
+	echo "by a reader that shares no code with the kernel."
 	exit 0
 fi
 

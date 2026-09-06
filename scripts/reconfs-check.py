@@ -207,6 +207,36 @@ class Image:
         i["_raw"] = buf
         return i
 
+    def contents(self, ino):
+        """A file's bytes, assembled from wherever they live."""
+        want = ino["size"]
+
+        if ino["inline_len"]:
+            return ino["_raw"][INODE_SIZE:INODE_SIZE + want]
+
+        out = bytearray()
+        n = 0
+        slots = None
+        while len(out) < want:
+            if n < 12:
+                where = ino["direct"][n]
+            else:
+                if slots is None:
+                    if not ino["indirect"]:
+                        raise Bad("a file needs an indirect block and has none")
+                    slots = struct.unpack(f"<{self.per_index()}Q",
+                                          self.block(ino["indirect"]))
+                if n - 12 >= len(slots):
+                    raise Bad("a file is longer than its pointers reach")
+                where = slots[n - 12]
+            if not where:
+                raise Bad("a file has a hole in it")
+            take = min(self.bs, want - len(out))
+            out += self.block(where)[:take]
+            n += 1
+
+        return bytes(out)
+
     def dir_entries(self, ino):
         """Every (name, child, type) in a directory, in stored order."""
         streams = []
@@ -235,6 +265,39 @@ class Image:
                     out.append((name, child, etype))
                 off += rec_len
         return out
+
+
+PAYLOAD_MAGIC = 0x52464350          # "RFCP"
+
+
+def check_payload(data):
+    """Is this one complete version of the crash workload's file?
+
+    The round number is at both ends, so a file assembled from the head of one
+    version and the tail of another shows two different numbers -- visible
+    without knowing which version was supposed to be there, which matters
+    because after a power cut nobody does.
+    """
+    if len(data) < 24:
+        return f"only {len(data)} bytes"
+
+    magic, round_a, length, stored = struct.unpack_from("<IIII", data, 0)
+    round_b = struct.unpack_from("<I", data, 16)[0]
+    round_c = struct.unpack_from("<I", data, len(data) - 4)[0]
+
+    if magic != PAYLOAD_MAGIC:
+        return f"magic is {magic:#x}"
+    if length != len(data):
+        return f"says {length} bytes, is {len(data)}"
+    if not (round_a == round_b == round_c):
+        return (f"torn: the round is {round_a} at the front, {round_b} after "
+                f"the header, {round_c} at the end")
+
+    crc = crc32_reflected(data[:12] + data[16:])
+    if crc != stored:
+        return f"checksum {crc:08x}, stored {stored:08x}"
+
+    return None
 
 
 def check(path, want=None):
@@ -313,6 +376,7 @@ def check(path, want=None):
     names = [n for n, _c, _t in img.dir_entries(root)]
 
     found = None
+    payload_round = None
     if want is not None:
         matches = [c for n, c, _t in img.dir_entries(root)
                    if n.lower() == want.lower()]
@@ -323,7 +387,20 @@ def check(path, want=None):
         else:
             found = matches[0]
             try:
-                img.inode(found)
+                ino = img.inode(found)
+                data = img.contents(ino)
+
+                # Only if it looks like the crash workload's payload. Other
+                # callers write other things, and this reader is not only for
+                # that one workload.
+                if len(data) >= 4 and struct.unpack_from("<I", data, 0)[0] == \
+                        PAYLOAD_MAGIC:
+                    why = check_payload(data)
+                    if why:
+                        problems.append(f"'{want}' is not one whole version: "
+                                        f"{why}")
+                    else:
+                        payload_round = struct.unpack_from("<I", data, 4)[0]
             except Bad as e:
                 problems.append(f"'{want}' points at something unreadable: {e}")
 
@@ -333,6 +410,7 @@ def check(path, want=None):
         "inodes": inodes,
         "names": names,
         "target": found,
+        "round": payload_round,
         "problems": problems,
     }
 
@@ -359,6 +437,33 @@ def damage(path, how):
         leaf = img.leaf_block(sb["root_inode"] // img.per_leaf())
         struct.pack_into("<Q", data, leaf * bs +
                          (sb["root_inode"] % img.per_leaf()) * 8, 0)
+    elif how == "torn":
+        # The thing the whole crash test exists to rule out: a file made of the
+        # head of one version and the tail of another.
+        #
+        # Built by hand rather than hoped for, because QEMU will not produce one
+        # -- it does not tear a block, so this failure mode is *designed*
+        # against and can only be *tested* by constructing it.
+        root = img.inode(sb["root_inode"])
+        target = None
+        for name, child, _t in img.dir_entries(root):
+            if name.lower() == "settings":
+                target = child
+        if target is None:
+            raise Bad("no 'settings' to tear")
+
+        ino = img.inode(target)
+        if ino["inline_len"]:
+            at = sb["root_inode"] * bs + INODE_SIZE + ino["size"] - 4
+        else:
+            # The last block holding the tail, and the round number in it.
+            n = (ino["size"] - 1) // bs
+            where = ino["direct"][n] if n < 12 else struct.unpack_from(
+                f"<{img.per_index()}Q", img.block(ino["indirect"]))[n - 12]
+            at = where * bs + ((ino["size"] - 1) % bs) - 3
+
+        was = struct.unpack_from("<I", data, at)[0]
+        struct.pack_into("<I", data, at, was + 1)
     else:
         raise Bad(f"unknown damage: {how}")
 
@@ -375,7 +480,7 @@ def main():
 
     if len(sys.argv) < 2:
         print("usage: reconfs-check.py <image> [name-that-must-exist]")
-        print("       reconfs-check.py --damage checksum|unallocated <image>")
+        print("       reconfs-check.py --damage checksum|unallocated|torn <image>")
         return 2
 
     want = sys.argv[2] if len(sys.argv) > 2 else None
@@ -396,8 +501,9 @@ def main():
             print(f"  {p}")
         return 1
 
+    extra = f" round={r['round']}" if r["round"] is not None else ""
     print(f"ok epoch={r['epoch']} block={r['block_size']} "
-          f"inodes={r['inodes']} names={','.join(r['names']) or '-'}")
+          f"inodes={r['inodes']} names={','.join(r['names']) or '-'}{extra}")
     return 0
 
 

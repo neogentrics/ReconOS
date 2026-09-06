@@ -276,8 +276,30 @@ Three things must be true of every surviving image:
 A leftover `settings.tmp` is allowed, and is not a fault: the workload creates
 it in one commit and consumes it in the next.
 
+**The file has real contents, and that is not a detail.** Each version is 9,001
+bytes — deliberately not a whole number of blocks, so the partial tail is always
+exercised — carrying a magic number, the round it belongs to at *three*
+separate places, and a checksum over everything else. A file assembled from the
+head of one version and the tail of another shows two different round numbers,
+which is visible without knowing which version was supposed to be there. After a
+power cut, nobody does.
+
+Before that, the workload wrote empty files. **An empty file is always
+complete**, so the test could only assert that a name resolved — and it hid
+BG-089, in which renaming over a file leaked every block its contents occupied.
+The self-test renamed one file over another and ran the whole checker, which is
+the right shape; both files were empty, so there was nothing to leak, and the
+checker correctly reported a volume with nothing wrong.
+
 **And the harness proves its own checker before it believes a single round**,
-by breaking an image two ways and requiring both to be caught. The first version
+by breaking an image three ways and requiring all three to be caught: a byte
+flipped inside the live root inode, a reachable block marked unclaimed, and a
+*torn* payload — the head of one version with the tail of another.
+
+That third one has to be built by hand, because QEMU does not tear a block. It
+is the failure this whole design is arranged against and the one thing here that
+cannot be produced naturally, so it is constructed and the checker is required
+to notice. The first version
 of that control was itself useless — it reached into superblock A's fields
 while B was the live one, damaged a block nothing pointed at, and got back a
 correct report of a healthy volume. A negative control that misses its target
@@ -559,9 +581,21 @@ impossible to find afterwards.
 
 ### Not written yet
 
-Reading a file's contents back, writing to a file, deleting one, nested
-directories, and renaming between two directories. The format describes them
-all.
+Deleting a file, nested directories, and renaming between two directories. The
+format describes them all.
+
+Contents work: `reconfs_write_named` and `reconfs_read_named`, whole-file only —
+which is what the callers above actually do, since a registry or a theme file is
+built in memory and written out entire, and under copy-on-write a partial write
+is barely cheaper anyway. Bytes live inside the inode while they fit, then in
+the twelve direct pointers, then in one indirect block: about two megabytes at a
+4KiB block and half a gigabyte at 64KiB. Beyond that a write is refused, not
+truncated.
+
+Tested at every size where the layout changes shape — nothing, one byte, exactly
+the inline maximum, one past it, several blocks with a partial tail, and one
+block past the direct pointers — read back byte for byte against a
+position-dependent pattern, because a file of zeroes has the right length too.
 
 Names and rename exist: `reconfs_create`, `reconfs_lookup`, `reconfs_readdir`
 and `reconfs_rename`, with lookup case-insensitive and storage case-preserving.
