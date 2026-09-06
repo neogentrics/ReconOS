@@ -1918,8 +1918,53 @@ static void server_new_input(struct wl_listener *listener, void *data) {
  * the File Explorer like anything else. The asset directory is only where the
  * ones that ship come *from*.
  */
+/*
+ * How light each cell of a picture is, weighted the way an eye weights it.
+ *
+ * Green carries most of the apparent brightness and blue almost none, so a
+ * plain average calls pure blue and pure green equally bright and they are
+ * nothing alike. Same weights recon_color_luminance uses, for the same reason.
+ */
+static void measure_luma(const unsigned char *rgba, int w, int h,
+        unsigned char (*out)[RECON_LUMA_COLS]) {
+    for (int row = 0; row < RECON_LUMA_ROWS; row++) {
+        int y0 = row * h / RECON_LUMA_ROWS;
+        int y1 = (row + 1) * h / RECON_LUMA_ROWS;
+        if (y1 <= y0) {
+            y1 = y0 + 1;
+        }
+        for (int col = 0; col < RECON_LUMA_COLS; col++) {
+            int x0 = col * w / RECON_LUMA_COLS;
+            int x1 = (col + 1) * w / RECON_LUMA_COLS;
+            if (x1 <= x0) {
+                x1 = x0 + 1;
+            }
+
+            /*
+             * Stepped rather than exhaustive. A cell of a 1920-wide wallpaper
+             * is over a hundred pixels square, and what is wanted from it is
+             * "light or dark" -- a figure that does not move between sampling
+             * every pixel and sampling every fourth.
+             */
+            unsigned long total = 0;
+            unsigned long count = 0;
+            for (int y = y0; y < y1 && y < h; y += 4) {
+                const unsigned char *line = rgba + (size_t)y * w * 4;
+                for (int x = x0; x < x1 && x < w; x += 4) {
+                    const unsigned char *px = line + (size_t)x * 4;
+                    total += ((unsigned long)px[0] * 54 +
+                              (unsigned long)px[1] * 183 +
+                              (unsigned long)px[2] * 19) >> 8;
+                    count++;
+                }
+            }
+            out[row][col] = count > 0 ? (unsigned char)(total / count) : 128;
+        }
+    }
+}
+
 static struct wlr_buffer *load_reconos_image(const char *reconos_path,
-        int fit_w, int fit_h) {
+        int fit_w, int fit_h, unsigned char (*luma_out)[RECON_LUMA_COLS]) {
     size_t size = 0;
     char *bytes = recon_fs_read("/", reconos_path, &size);
     if (bytes == NULL) {
@@ -1946,6 +1991,10 @@ static struct wlr_buffer *load_reconos_image(const char *reconos_path,
             height = fit_h;
             from_stb = false;
         }
+    }
+
+    if (luma_out != NULL) {
+        measure_luma(data, width, height, luma_out);
     }
 
     struct wlr_buffer *buffer = image_buffer_create(data, width, height,
@@ -1991,6 +2040,25 @@ void recon_background_reload(struct recon_server *server) {
     }
 
     setup_background(server, width, height);
+
+    /*
+     * And redraw what sits on the wallpaper, because some of it is now the
+     * wrong colour.
+     *
+     * A desktop label picks its ink and whether to ring it from how light the
+     * wallpaper is underneath -- so changing the picture without redrawing them
+     * leaves labels chosen against the picture before it. That is not a
+     * cosmetic lag: swap a dark wallpaper for a pale one and every label keeps
+     * the white ink that was right a moment ago and is now invisible.
+     *
+     * Found while testing the labels themselves. The harness set a skin and
+     * then a wallpaper, and every measurement came back describing the skin's
+     * own picture rather than the one on screen.
+     */
+    if (server->shell != NULL) {
+        recon_shell_refresh(server->shell);
+    }
+
     recon_damage_all(server);
 }
 
@@ -2009,7 +2077,9 @@ static void setup_background(struct recon_server *server, int width, int height)
     if (chosen != NULL && *chosen != '\0') {
         char path[RECON_PATH_MAX];
         snprintf(path, sizeof(path), "%s/%s", RECON_DIR_WALLPAPERS, chosen);
-        wallpaper = load_reconos_image(path, width, height);
+        wallpaper = load_reconos_image(path, width, height,
+            server->background_luma);
+        server->background_luma_known = (wallpaper != NULL);
     }
     if (wallpaper == NULL) {
         wallpaper = load_image("wallpaper.jpg", width, height);
@@ -2037,6 +2107,27 @@ static void setup_background(struct recon_server *server, int width, int height)
 
     wlr_scene_node_set_position(node, 0, 0);
     wlr_scene_node_lower_to_bottom(node);
+}
+
+int recon_background_luminance_at(struct recon_server *server, int x, int y) {
+    /*
+     * Mid-grey when there is nothing to ask, which is a usable answer rather
+     * than a special case a caller has to handle. It is also the honest one:
+     * with no wallpaper loaded, neither light nor dark is known to be true.
+     */
+    if (server == NULL || !server->background_luma_known ||
+            server->screen_width <= 0 || server->screen_height <= 0) {
+        return 128;
+    }
+
+    int col = x * RECON_LUMA_COLS / server->screen_width;
+    int row = y * RECON_LUMA_ROWS / server->screen_height;
+    if (col < 0) { col = 0; }
+    if (row < 0) { row = 0; }
+    if (col >= RECON_LUMA_COLS) { col = RECON_LUMA_COLS - 1; }
+    if (row >= RECON_LUMA_ROWS) { row = RECON_LUMA_ROWS - 1; }
+
+    return server->background_luma[row][col];
 }
 
 /* --- SURFACES --- */

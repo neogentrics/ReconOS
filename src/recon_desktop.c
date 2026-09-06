@@ -437,6 +437,76 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
 
 /* --- Drawing --- */
 
+/*
+ * A desktop label, ringed only where a ring earns its place.
+ *
+ * Three things were wrong and they had to be fixed together.
+ *
+ * The shadow was drawn once, a pixel down and to the right, under a comment
+ * saying it kept the label readable over any wallpaper. One offset protects one
+ * of the eight directions a glyph has an edge in; the other seven sat on
+ * whatever the picture happened to be. So the ring goes all the way round.
+ *
+ * The halo roles carry alpha -- C0 in most skins, C8 in the rest -- and
+ * recon_draw_text writes the colour straight into the buffer at full coverage,
+ * alpha byte included. Wayland's ARGB8888 is premultiplied, so an unscaled
+ * colour with alpha under it comes out both see-through and too bright: the
+ * fault recon_panel_fade's own header warns about, met here for the same
+ * reason. So the ring is premultiplied.
+ *
+ * And a ring is not free. Drawn under the label, it blends with the label's own
+ * antialiased edges, so adding one where it is not needed costs the glyph
+ * weight and returns nothing. A ringed dark label on a pale wallpaper came out
+ * thinner and greyer than the unringed one -- while measuring 17:1, because the
+ * dark ink against the pale ground was never the problem. The number was
+ * answering a different question than the eye was.
+ *
+ * So the ring is drawn when it is against the wallpaper and skipped when it is
+ * not. That is what a ring is *for*: separating ink from a ground the ink might
+ * disappear into. A white ring on a pale wallpaper separates nothing -- and in
+ * that case the ink is the dark half of the pair, which needs no help. The two
+ * go together, because every skin pairs a light colour with a dark one: if the
+ * ring has vanished into the wallpaper then the ink is the one that has not.
+ */
+static void draw_label(struct recon_desktop *desktop, struct recon_panel *p,
+        int lx, int ly, const char *label) {
+    static const int RING[][2] = {
+        { -1, -1 }, { 0, -1 }, { 1, -1 },
+        { -1,  0 },            { 1,  0 },
+        { -1,  1 }, { 0,  1 }, { 1,  1 },
+    };
+
+    /*
+     * Far enough apart to be doing something. Below this the ring is close
+     * enough to the wallpaper that it adds no separation, and every pixel of it
+     * lands on the glyph's antialiased edge instead.
+     */
+    const int RING_EARNS_IT = 60;
+
+    recon_color ink = COLOR_LABEL;
+    recon_color ring = recon_color_fade(COLOR_LABEL_SHADOW,
+        (uint8_t)((COLOR_LABEL_SHADOW >> 24) & 0xFF));
+
+    /* Asked at the middle of the label rather than at its corner: the corner of
+     * a label in the corner of the screen is off the edge of the grid. */
+    int behind = recon_background_luminance_at(desktop->server,
+        lx + ICON_WIDTH / 4, ly);
+
+    int apart = recon_color_luminance(ring) - behind;
+    if (apart < 0) {
+        apart = -apart;
+    }
+
+    if (apart >= RING_EARNS_IT) {
+        for (size_t i = 0; i < sizeof(RING) / sizeof(RING[0]); i++) {
+            recon_draw_text(p, desktop->font, lx + RING[i][0], ly + RING[i][1],
+                ICON_WIDTH - 4, label, ring);
+        }
+    }
+
+    recon_draw_text(p, desktop->font, lx, ly, ICON_WIDTH - 4, label, ink);
+}
+
 static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         const struct desktop_item *item) {
     int cx = item->x + (ICON_WIDTH - ICON_IMAGE) / 2;
@@ -546,7 +616,7 @@ void recon_desktop_refresh(struct recon_desktop *desktop) {
 
         draw_icon(desktop, p, item);
 
-        /* The label, with a shadow so it stays readable over any wallpaper. */
+        /* The label, ringed so it stays readable over any wallpaper. */
         int label_w = recon_text_width(desktop->font, item->label);
         int lx = item->x + (ICON_WIDTH - label_w) / 2;
         if (lx < item->x + 2) {
@@ -561,10 +631,7 @@ void recon_desktop_refresh(struct recon_desktop *desktop) {
                 item->y + 6 + ICON_IMAGE + LABEL_GAP - 2,
                 ICON_WIDTH - 4, ascent + 8, &desktop->rename_edit);
         } else {
-            recon_draw_text(p, desktop->font, lx + 1, ly + 1, ICON_WIDTH - 4,
-                item->label, COLOR_LABEL_SHADOW);
-            recon_draw_text(p, desktop->font, lx, ly, ICON_WIDTH - 4,
-                item->label, COLOR_LABEL);
+            draw_label(desktop, p, lx, ly, item->label);
         }
 
         recon_hit_add(p, item->x, item->y, ICON_WIDTH, ICON_HEIGHT,

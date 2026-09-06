@@ -9,6 +9,17 @@
 #ifndef RECON_SERVER_H
 #define RECON_SERVER_H
 
+/*
+ * How finely the wallpaper's lightness is remembered.
+ *
+ * Sixteen by nine, which is one cell per eighty-odd pixels across a common
+ * screen -- coarse enough to cost nothing and fine enough to tell the top of a
+ * sky from the bottom of it, which is the case that matters: a wallpaper that
+ * is pale above and dark below has no single answer.
+ */
+#define RECON_LUMA_COLS 16
+#define RECON_LUMA_ROWS 9
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -59,6 +70,21 @@ struct recon_server {
      * the wallpaper image loaded. */
     struct wlr_scene_buffer *background_buffer;
     struct wlr_scene_rect *background_rect;
+
+    /*
+     * How light the wallpaper is, in a coarse grid across the screen.
+     *
+     * Kept because anything drawn straight onto the desktop has to be legible
+     * against a picture somebody else chose, and a fixed colour cannot be
+     * chosen against an unknown one. A grid rather than one number: a wallpaper
+     * is very often light at the top and dark at the bottom, so an average of
+     * the whole thing is a number that is wrong in both halves.
+     *
+     * Filled where the pixels already are -- at the moment the wallpaper is
+     * decoded -- so nothing has to read a buffer back off the scene graph.
+     */
+    unsigned char background_luma[RECON_LUMA_ROWS][RECON_LUMA_COLS];
+    bool background_luma_known;
     /* The size the background was built for, so it can be rebuilt when the
      * wallpaper changes without waiting for a screen to say how big it is. */
     int screen_width;
@@ -222,6 +248,16 @@ void recon_damage_all(struct recon_server *server);
 /* Put the chosen wallpaper on, replacing whatever is there. Called when the
  * choice changes, so it takes effect without a restart. */
 void recon_background_reload(struct recon_server *server);
+
+/*
+ * How light the wallpaper is under a point, 0 to 255.
+ *
+ * For anything drawn straight onto the desktop, which has to stay readable over
+ * a picture the system did not choose. Returns 128 -- neither light nor dark --
+ * when there is no wallpaper to ask about, so a caller gets a usable answer
+ * rather than a special case.
+ */
+int recon_background_luminance_at(struct recon_server *server, int x, int y);
 
 /* --- Synthetic input --- */
 

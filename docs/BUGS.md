@@ -1898,3 +1898,57 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   fixed this, because the search it re-runs was giving the wrong answer.
 - **Fixed in** v0.3.1. The panels in front are now checked in the order they are
   drawn, each stopping the search if the point is inside it.
+
+### BG-107 — Desktop labels were unreadable on half the wallpapers
+
+- **Found in** v0.3.1. **Found by** the user, in a screenshot: the Recycle Bin's
+  label on a pale wallpaper, barely legible.
+- **What it actually was** three faults stacked, and fixing any one alone made
+  it worse rather than better.
+- The label was drawn with a shadow **one pixel down and to the right**, under a
+  comment saying the shadow kept it readable over any wallpaper. One offset
+  protects one of the eight directions a glyph has an edge in. The other seven
+  sat directly on the picture.
+- The shadow roles carry alpha — `C0` in most skins, `C8` in the rest — and
+  `recon_draw_text` writes the colour straight into the buffer at full coverage,
+  **alpha byte included**. Wayland's ARGB8888 is premultiplied, so an unscaled
+  colour with alpha under it renders both see-through and too bright. That is
+  the fault `recon_panel_fade`'s own header warns about, met here for the same
+  reason: chrome over a wallpaper.
+- And a ring is not free. Drawn under the label it blends with the label's own
+  antialiased edges, so adding one where it is not needed **costs the glyph
+  weight and returns nothing**. A ringed dark label on a pale wallpaper came out
+  thinner and greyer than the unringed one — while measuring 17:1, because the
+  dark ink against the pale ground was never the problem.
+- **The measurement agreed with the code and disagreed with the eye**, and the
+  eye was right. The contrast ratio answered "is there a dark pixel near a light
+  one", which was true throughout; what had changed was the weight of the
+  strokes. Settled by magnifying the labels rather than by the number.
+- **Fixed in** v0.3.1. The ring goes all the way round, premultiplied, and is
+  drawn only when it is far enough from the wallpaper to be separating anything.
+  A white ring on a pale wallpaper separates nothing — and in that case the ink
+  is the dark half of the pair, which needs no help. The two go together,
+  because every skin pairs a light colour with a dark one: if the ring has
+  vanished into the wallpaper then the ink is the one that has not.
+- The wallpaper's lightness is measured into a 16x9 grid where the picture is
+  decoded, rather than one number for the whole screen. A wallpaper is very
+  often pale at the top and dark at the bottom, and an average of that is a
+  figure that is wrong in both halves.
+
+### BG-108 — Changing the wallpaper left the desktop labels chosen against the old one
+
+- **Found in** v0.3.1. **Found by** the harness for [BG-107](#bg-107--desktop-labels-were-unreadable-on-half-the-wallpapers),
+  which set a skin and then a wallpaper — and every measurement came back
+  describing the skin's own picture rather than the one on screen.
+- **What it was** `recon_background_reload` replaced the wallpaper and damaged
+  the screen, but never redrew the desktop. That was harmless while a label's
+  colours came only from the skin. It stopped being harmless the moment they
+  came from the wallpaper.
+- Not a cosmetic lag: swap a dark wallpaper for a pale one and every label keeps
+  the white ink that was right a moment earlier and is now invisible, until
+  something unrelated happens to redraw the desktop.
+- **The shape worth keeping** is that this bug was *created* by BG-107's fix and
+  found by BG-107's harness within the hour. A value that used to depend on one
+  thing and now depends on two needs every path that changes the second thing to
+  know that. Nothing warns you; the old paths keep compiling.
+- **Fixed in** v0.3.1.
