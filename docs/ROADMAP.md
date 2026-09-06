@@ -1936,15 +1936,20 @@ from the account password at sign-in and held in memory. That is a subsystem
 rather than a field, and it is the thing standing between this and a mail
 client somebody would use daily.
 
-**Nothing sends mail yet, but the protocol is written.** SMTP is a separate
+**Mail sends** — as of v0.3.1. What is still missing is named below.
+
+**Sending is one recipient, plain text, no attachments.** No Cc, no Bcc, no
+HTML, nothing to attach. Enough to send a letter, and everything absent is
+absent by name.
+
+**Older, on sending:** SMTP is a separate
 protocol on a separate port with its own set of ways to lose somebody's
 message. Reading came first because reading is the half that cannot destroy
 anything.
 
 The transport and the message are built and tested: headers, dot-stuffing, line
 endings, and refusing a subject with a newline in it -- which is how one message
-becomes two. What is missing is **a window to write a letter in** and a settings
-page for a sending account.
+becomes two. The window and the settings are built too.
 
 **And STARTTLS on port 587.** ReconOS sends over TLS from the first byte and
 nothing else, so a provider offering only STARTTLS cannot be used at all. It

@@ -430,7 +430,38 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
-**Mail can send, as far as the protocol goes.** It could receive on two
+**Mail can send.** Both halves of an account on one form, because reading and
+sending are separate protocols on separate servers and the same account to the
+person filling it in. The sending half is allowed to be empty — somebody who
+only wants to read should not be stopped at a field asking for a server they do
+not have.
+
+**Write is reachable without connecting first.** Sending and reading are
+different servers, and requiring a successful connection to one before a letter
+can be handed to the other is a coupling with nothing behind it: a mail server
+being down should not stop somebody writing.
+
+The body is the first multi-line field in the system, so `recon_edit` gained a
+flag — Enter puts a newline in rather than finishing, on that field only. There
+is no way to send from the keyboard, deliberately: a letter should not leave
+because somebody finished a line. And no wrapping, stated rather than faked — a
+long line runs off the edge and is still there; wrapping means deciding where
+words break and mapping the caret through it, which is a text engine rather than
+a text box.
+
+**A failure leaves the letter exactly as it was.** A failure that also loses what
+somebody wrote is two failures, and the second is the one they remember.
+
+**BG-112, found by filling the form in and noticing the port had gone.**
+`recon_edit_begin(&field, field.text, …)` hands `snprintf` a source and a
+destination that overlap — undefined, and here an empty string. Not new: the
+mail form has moved focus that way since it was written, and the Web viewer's
+address bar did it on a click, so **clicking the address bar cleared the address
+it was showing**. Unnoticed in both places because a field about to be typed
+into looks the same cleared as selected. The form only exposed it by gaining two
+fields with defaults worth keeping.
+
+**SMTP, the protocol underneath it.** It could receive on two
 protocols and not send at all. This is the transport and the message; the window
 to write one in is next.
 
