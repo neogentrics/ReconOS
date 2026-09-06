@@ -47,6 +47,20 @@ typedef uint32_t recon_color;
 recon_color recon_color_fade(recon_color color, uint8_t alpha);
 
 /*
+ * A colour part of the way between two others.
+ *
+ * `amount` out of 255: 0 is `from`, 255 is `to`. Alpha is taken from `from`,
+ * because this is for mixing two opaque colours to get a third and not for
+ * compositing -- a caller wanting transparency wants recon_color_fade.
+ *
+ * Useful for deriving a shade from roles a skin already answers rather than
+ * asking it for another one. A gridline that is the readout's own text at a
+ * quarter strength is behind the curve on every palette; a fixed grey is
+ * behind it on most of them.
+ */
+recon_color recon_color_mix(recon_color from, recon_color to, uint8_t amount);
+
+/*
  * How light a colour is, 0 to 255.
  *
  * Weighted the way an eye weights it rather than as a plain average: green

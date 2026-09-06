@@ -79,6 +79,21 @@ recon_color recon_color_tint(recon_color base, recon_color tint, int strength) {
         ((recon_color)g << 8) | (recon_color)b;
 }
 
+recon_color recon_color_mix(recon_color from, recon_color to,
+        uint8_t amount) {
+    if (amount == 0) {
+        return from;
+    }
+
+    uint32_t out = from & 0xFF000000u;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        int a = (int)((from >> shift) & 0xFF);
+        int b = (int)((to >> shift) & 0xFF);
+        out |= (uint32_t)(a + ((b - a) * (int)amount) / 255) << shift;
+    }
+    return out;
+}
+
 recon_color recon_color_fade(recon_color color, uint8_t alpha) {
     if (alpha == 255) {
         return color;

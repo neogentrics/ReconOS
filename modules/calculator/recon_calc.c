@@ -13,6 +13,7 @@
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_calc.h"
+#include "recon_expr.h"
 #include "recon_calc_modes.h"
 #include "recon_clock.h"
 #include "recon_module.h"
@@ -35,6 +36,20 @@
 #define COLOR_KEY_ACCENT THEME(ACCENT)
 #define COLOR_KEY_TEXT THEME(SURFACE_TEXT)
 #define COLOR_ACCENT_TEXT THEME(ACCENT_TEXT)
+
+/*
+ * The graph's own colours, taken from the readout roles.
+ *
+ * A graph is a dark panel with lines on it, which is what a readout is -- so it
+ * takes the same roles rather than a fifth set for a skin to have to answer.
+ * The grid is the readout's own text at a fraction of its strength, so it stays
+ * behind the curve on every palette instead of being a grey that happens to
+ * work on most of them.
+ */
+#define COLOR_AXIS THEME(READOUT_TEXT)
+#define COLOR_GRID recon_color_mix(THEME(READOUT), THEME(READOUT_TEXT), 60)
+#define COLOR_CURVE THEME(READOUT_ACCENT)
+#define COLOR_WARNING THEME(WARNING)
 
 enum key_kind {
     KEY_NONE,        /* a hole in the grid */
@@ -146,9 +161,10 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
     [CALC_STANDARD]   = { 5, 4, STANDARD_KEYS },
     [CALC_SCIENTIFIC] = { 6, 6, SCIENTIFIC_KEYS },
     [CALC_PROGRAMMER] = { 9, 4, PROGRAMMER_KEYS },
-    /* Date and Convert are not keypads. */
+    /* Date, Convert and Graph are not keypads. */
     [CALC_DATE]       = { 0, 0, NULL },
     [CALC_CONVERT]    = { 0, 0, NULL },
+    [CALC_GRAPH]      = { 0, 0, NULL },
 };
 
 struct recon_calc {
@@ -187,6 +203,17 @@ struct recon_calc {
     int category;
     int unit_from, unit_to;
     int convert_scroll;
+
+    /*
+     * Graph mode: the expression, and how much of the plane is on screen.
+     *
+     * The window is kept as a half-width and a half-height about the origin,
+     * so zooming is one multiply and the centre never drifts. Storing the four
+     * edges instead means zoom has to work out a centre first, and rounding
+     * moves it a little every time somebody presses the button.
+     */
+    struct recon_edit formula;
+    double span_x, span_y;
 
     /* Remembered so the layout and the hit regions agree. */
     int key_x[8], key_y[10], key_w, key_h;
@@ -567,6 +594,10 @@ static void equals(struct recon_calc *calc) {
 #define HIT_FROM_BASE (RECON_APPWIN_HIT_USER + 700)
 #define HIT_TO_BASE (RECON_APPWIN_HIT_USER + 800)
 #define HIT_DATE_FIELD (RECON_APPWIN_HIT_USER + 900)
+#define HIT_GRAPH_FIELD (RECON_APPWIN_HIT_USER + 901)
+#define HIT_GRAPH_IN (RECON_APPWIN_HIT_USER + 902)
+#define HIT_GRAPH_OUT (RECON_APPWIN_HIT_USER + 903)
+#define HIT_GRAPH_HOME (RECON_APPWIN_HIT_USER + 904)
 
 /* One of `n` values converted from `from` to `to` within a category. */
 static double convert(const struct calc_category *cat, int from, int to,
@@ -863,6 +894,196 @@ static void draw_convert_mode(struct recon_calc *calc,
     }
 }
 
+/* --- Graph --- */
+
+/*
+ * How many pixels a curve may jump before it is treated as two curves.
+ *
+ * A steep function moves a long way between one column and the next, and so
+ * does a function that has an asymptote between them -- and the difference
+ * cannot be seen from two points. What can be said is that no honest curve
+ * crosses the whole window in one pixel of x, so a jump larger than the window
+ * is a break rather than a slope. Getting this wrong in the other direction
+ * draws tan(x) as a row of vertical walls.
+ */
+#define GRAPH_BREAK_FACTOR 2
+
+/* How much of the plane is on screen at the start, either side of zero. */
+#define GRAPH_SPAN 10.0
+
+static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
+        int x, int y, int w, int bottom) {
+    int ascent = recon_font_ascent(calc->font);
+    int line = recon_font_line_height(calc->font);
+
+    /* The expression, above the picture of it. */
+    /* Wide enough for "y =", which twenty pixels cut to "y...". */
+    int label_w = recon_text_width(calc->font, "y =") + 6;
+    recon_draw_text(panel, calc->font, x, y + ascent, label_w, "y =",
+        COLOR_KEY_TEXT);
+    recon_edit_draw(panel, calc->font, x + label_w, y - 2, w - label_w,
+        line + 6, &calc->formula);
+    recon_hit_add(panel, x + label_w, y - 2, w - label_w, line + 6,
+        HIT_GRAPH_FIELD);
+    y += line + 10;
+
+    /* Zoom, and a way back to where it started. */
+    int bx = x;
+    static const struct { const char *label; uint32_t hit; } BUTTONS[] = {
+        { "Zoom in", HIT_GRAPH_IN },
+        { "Zoom out", HIT_GRAPH_OUT },
+        { "Reset", HIT_GRAPH_HOME },
+    };
+    for (size_t i = 0; i < sizeof(BUTTONS) / sizeof(BUTTONS[0]); i++) {
+        int bw = recon_text_width(calc->font, BUTTONS[i].label) + 16;
+        recon_fill_rect(panel, bx, y, bw, line + 6, COLOR_KEY);
+        recon_draw_bevel(panel, bx, y, bw, line + 6, false);
+        recon_draw_text(panel, calc->font, bx + 8, y + ascent + 3, bw,
+            BUTTONS[i].label, COLOR_KEY_TEXT);
+        recon_hit_add(panel, bx, y, bw, line + 6, BUTTONS[i].hit);
+        bx += bw + 6;
+    }
+
+    char range[64];
+    snprintf(range, sizeof(range), "x %+.2f to %+.2f", -calc->span_x,
+        calc->span_x);
+    recon_draw_text(panel, calc->font, bx + 6, y + ascent + 3, w - (bx - x),
+        range, COLOR_KEY_TEXT);
+    y += line + 12;
+
+    int h = bottom - y;
+    if (h < 40 || w < 40) {
+        return;
+    }
+
+    /* The plane it is drawn on. */
+    recon_fill_rect(panel, x, y, w, h, COLOR_DISPLAY);
+    recon_draw_bevel(panel, x, y, w, h, true);
+
+    int mid_x = x + w / 2;
+    int mid_y = y + h / 2;
+
+    /*
+     * Gridlines at whole numbers, and only while they are far enough apart to
+     * be lines rather than a fill. Zoomed out far enough, a line per unit is a
+     * solid rectangle that says nothing.
+     */
+    /*
+     * Square pixels: one unit across is one unit down.
+     *
+     * The height on screen follows from the width and the shape of the box
+     * rather than being a second number somebody sets. Letting the two differ
+     * means a circle is drawn as an ellipse and a slope of one is not at
+     * forty-five degrees -- which is a quieter lie than drawing a wall at an
+     * asymptote and the same kind: a picture that is not of the function.
+     *
+     * The cost is that sin(x) looks flat at this scale, because it is: an
+     * amplitude of one inside a window ten units tall. Zooming fixes it, and
+     * a grapher that silently stretched it would be answering a question
+     * nobody asked.
+     */
+    double per_unit_x = (w / 2.0) / calc->span_x;
+    double per_unit_y = per_unit_x;
+    calc->span_y = (h / 2.0) / per_unit_y;
+
+    if (per_unit_x >= 8.0) {
+        for (int i = 1; i * per_unit_x < w / 2.0; i++) {
+            int dx = (int)(i * per_unit_x);
+            recon_fill_rect(panel, mid_x + dx, y + 1, 1, h - 2, COLOR_GRID);
+            recon_fill_rect(panel, mid_x - dx, y + 1, 1, h - 2, COLOR_GRID);
+        }
+    }
+    if (per_unit_y >= 8.0) {
+        for (int i = 1; i * per_unit_y < h / 2.0; i++) {
+            int dy = (int)(i * per_unit_y);
+            recon_fill_rect(panel, x + 1, mid_y + dy, w - 2, 1, COLOR_GRID);
+            recon_fill_rect(panel, x + 1, mid_y - dy, w - 2, 1, COLOR_GRID);
+        }
+    }
+
+    /* The axes, brighter than the grid, because they are where zero is. */
+    recon_fill_rect(panel, x + 1, mid_y, w - 2, 1, COLOR_AXIS);
+    recon_fill_rect(panel, mid_x, y + 1, 1, h - 2, COLOR_AXIS);
+
+    if (calc->formula.text[0] == '\0') {
+        recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2, w - 16,
+            "Type an expression in x. For example: sin(x), x^2-2, 1/x",
+            COLOR_KEY_TEXT);
+        return;
+    }
+
+    char why[128];
+    if (!recon_expr_valid(calc->formula.text, why, sizeof(why))) {
+        recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2, w - 16, why,
+            COLOR_WARNING);
+        return;
+    }
+
+    /*
+     * One column of pixels at a time, joined to the last where joining them is
+     * honest.
+     *
+     * `had_last` is what makes an asymptote look like an asymptote: a column
+     * where the function has no value breaks the line, so the next point
+     * starts a new stroke rather than being joined across the gap. Without it
+     * 1/x is drawn with a vertical line down the y axis, which is not part of
+     * the function and is the commonest way a grapher lies.
+     */
+    bool had_last = false;
+    int last_y = 0;
+
+    for (int col = 0; col < w - 2; col++) {
+        double vx = ((col - (w - 2) / 2.0) / (w / 2.0)) * calc->span_x;
+
+        double vy = 0.0;
+        if (recon_expr_eval(calc->formula.text, vx, &vy, NULL, 0)
+                != RECON_EXPR_OK) {
+            had_last = false;
+            continue;
+        }
+
+        double py = mid_y - vy * per_unit_y;
+
+        /* Off the top or bottom by a long way. Clamped rather than skipped, so
+         * a curve leaving the window is drawn up to the edge instead of
+         * stopping short of it. */
+        if (py < y - h) {
+            py = y - h;
+        }
+        if (py > y + h * 2) {
+            py = y + h * 2;
+        }
+        int cy = (int)py;
+
+        if (had_last) {
+            int from = last_y < cy ? last_y : cy;
+            int to = last_y < cy ? cy : last_y;
+
+            /*
+             * A jump wider than the window is a break, not a slope. See the
+             * note on GRAPH_BREAK_FACTOR: this is what stops tan(x) being
+             * drawn as a row of walls.
+             */
+            if (to - from > h * GRAPH_BREAK_FACTOR) {
+                had_last = false;
+            } else {
+                for (int py2 = from; py2 <= to; py2++) {
+                    if (py2 >= y + 1 && py2 < y + h - 1) {
+                        recon_fill_rect(panel, x + 1 + col, py2, 1, 1,
+                            COLOR_CURVE);
+                    }
+                }
+            }
+        }
+
+        if (cy >= y + 1 && cy < y + h - 1) {
+            recon_fill_rect(panel, x + 1 + col, cy, 1, 1, COLOR_CURVE);
+        }
+        last_y = cy;
+        had_last = true;
+    }
+}
+
 static void calc_draw(void *user, struct recon_panel *panel,
         int x, int y, int w, int h) {
     struct recon_calc *calc = user;
@@ -882,6 +1103,10 @@ static void calc_draw(void *user, struct recon_panel *panel,
     }
     if (calc->mode == CALC_CONVERT) {
         draw_convert_mode(calc, panel, dx, cy, dw, y + h - PAD_PADDING);
+        return;
+    }
+    if (calc->mode == CALC_GRAPH) {
+        draw_graph_mode(calc, panel, dx, cy, dw, y + h - PAD_PADDING);
         return;
     }
 
@@ -1127,6 +1352,33 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         return false;
     }
 
+    /*
+     * The graph's controls first. HIT_DATE_FIELD below is matched with an
+     * open-ended >= and these are numbered above it, so anything checked after
+     * it would be read as a date field.
+     */
+    switch (hit_id) {
+    case HIT_GRAPH_FIELD:
+        recon_edit_focus(&calc->formula);
+        return true;
+    case HIT_GRAPH_IN:
+        /* Halved rather than stepped by a fixed amount, so zooming in and out
+         * the same number of times comes back to where it started. */
+        calc->span_x /= 2.0;
+        calc->span_y /= 2.0;
+        return true;
+    case HIT_GRAPH_OUT:
+        calc->span_x *= 2.0;
+        calc->span_y *= 2.0;
+        return true;
+    case HIT_GRAPH_HOME:
+        calc->span_x = GRAPH_SPAN;
+        calc->span_y = GRAPH_SPAN;
+        return true;
+    default:
+        break;
+    }
+
     if (hit_id >= HIT_DATE_FIELD) {
         calc->date_field = (int)(hit_id - HIT_DATE_FIELD);
         return true;
@@ -1178,6 +1430,28 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
  */
 static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_calc *calc = user;
+
+    /*
+     * Graph mode types an expression rather than arithmetic, so every key goes
+     * to the field. That includes the digits and the operators, which
+     * everywhere else in this application are buttons -- and here they are
+     * characters in "x^2-2".
+     */
+    if (calc->mode == CALC_GRAPH) {
+        if (sym == XKB_KEY_Left || sym == XKB_KEY_Right) {
+            /* Left and right move the caret, which is what they do in a field.
+             * The graph is panned by nothing yet; zooming is on the buttons. */
+        }
+        switch (recon_edit_key(&calc->formula, sym, modifiers)) {
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_COMMIT:
+        case RECON_EDIT_CANCEL:
+            return true;
+        case RECON_EDIT_IGNORED:
+            return false;
+        }
+        return false;
+    }
 
     /* Date mode steps a day at a time rather than typing arithmetic. */
     if (calc->mode == CALC_DATE) {
@@ -1279,6 +1553,16 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
     }
     calc->font = font;
     calc->base = 10;
+
+    /*
+     * Ten units either way to begin with, which puts sin(x) through more than
+     * three periods and x^2 through its interesting part without anybody
+     * having to zoom before they see anything.
+     */
+    calc->span_x = GRAPH_SPAN;
+    calc->span_y = GRAPH_SPAN;
+    recon_edit_begin(&calc->formula, "sin(x)", false);
+    calc->formula.active = false;
     calc->unit_to = 1;
 
     /* Both dates start at today, so the difference starts at zero and moves

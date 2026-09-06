@@ -29,11 +29,12 @@ enum calc_mode {
     CALC_PROGRAMMER,
     CALC_DATE,
     CALC_CONVERT,
+    CALC_GRAPH,
     CALC_MODE_COUNT,
 };
 
 static const char *const CALC_MODE_NAMES[CALC_MODE_COUNT] = {
-    "Standard", "Scientific", "Programmer", "Date", "Convert",
+    "Standard", "Scientific", "Programmer", "Date", "Convert", "Graph",
 };
 
 /* --- Units --- */
