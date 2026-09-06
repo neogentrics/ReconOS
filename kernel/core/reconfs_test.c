@@ -396,11 +396,17 @@ static bool run_at(struct block_device *dev, u32 bs)
 			"%llu)\n", (unsigned long long)fs.super.epoch,
 			(unsigned long long)fs.live_super);
 
-		/* Now one that takes a block. Owned by the archive, because
-		 * nothing above can reach it yet -- there is no way to create a
-		 * file until the directory code exists, and a block owned by an
-		 * inode that does not name it is exactly the corruption the
-		 * checker is built to find. */
+		/* Now one that touches the allocator, to exercise the part with
+		 * the chicken-and-egg problem: taking a block to hold the new
+		 * owner table changes the owner table.
+		 *
+		 * Taken and given back inside the same transaction, so the
+		 * volume it commits has nothing new in it. An earlier version
+		 * kept the block, owned by the archive and reachable from
+		 * nothing -- which is a leak, and which passed only because the
+		 * checker exempted archive-owned blocks from having to be
+		 * reachable. Removing that exemption (BG-090) made this test
+		 * fail, correctly, on the first run. */
 		before = fs.super.epoch;
 		txn = reconfs_txn_begin(&fs);
 		if (!txn) {
@@ -416,6 +422,8 @@ static bool run_at(struct block_device *dev, u32 bs)
 			reconfs_unmount(&fs);
 			return false;
 		}
+
+		reconfs_txn_free(txn, taken);
 
 		if (reconfs_txn_commit(txn) != RECONFS_OK) {
 			kputs("  a commit that allocates : FAIL (commit)\n");
@@ -439,8 +447,9 @@ static bool run_at(struct block_device *dev, u32 bs)
 			return false;
 		}
 
-		kprintf("  a commit that takes a block : pass (block %llu, "
-			"epoch %llu)\n", (unsigned long long)taken,
+		kprintf("  a commit that takes a block : pass (block %llu "
+			"taken and given back, epoch %llu)\n",
+			(unsigned long long)taken,
 			(unsigned long long)fs.super.epoch);
 
 		/* A block released by a transaction must not be handed back out
@@ -867,6 +876,118 @@ contents_done:
 			kprintf("  rename over a name : pass (%llu inodes, the "
 				"replaced one released)\n",
 				(unsigned long long)r.inodes);
+		}
+
+		/* --- Removing a name ---------------------------------------
+		 *
+		 * The check that matters is not that the name is gone. It is
+		 * that **the space came back** — which is exactly what renaming
+		 * over a file failed to do (BG-089), invisibly, because the test
+		 * that covered it used empty files.
+		 *
+		 * So this writes a file large enough to need blocks of its own,
+		 * records how many blocks the volume was using, removes it, and
+		 * requires the count to return to where it started. */
+		{
+			struct reconfs_txn *tr;
+			u64 before_blocks, after_blocks, dir = 0, found = 0;
+			u32 payload = fs.block_size * 3 + 11;
+			u8 *body = kzalloc(payload);
+
+			if (!body) {
+				kputs("  removing           : FAIL (memory)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			for (u32 q = 0; q < payload; q++)
+				body[q] = (u8)(q ^ 0x5A);
+
+			before_blocks = fs.super.blocks_used;
+
+			/* Make it, fill it. */
+			tr = reconfs_txn_begin(&fs);
+			if (!tr ||
+			    reconfs_create(tr, &fs, fs.root_inode, "Doomed.bin",
+					   RECONFS_TYPE_FILE, 0600, &found,
+					   &dir) != RECONFS_OK ||
+			    reconfs_write_named(tr, &fs, dir, "Doomed.bin", body,
+						payload, &dir) != RECONFS_OK) {
+				kputs("  removing           : FAIL (setup)\n");
+				if (tr)
+					reconfs_txn_abort(tr);
+				kfree(body);
+				reconfs_unmount(&fs);
+				return false;
+			}
+			reconfs_txn_set_root(tr, dir);
+			if (reconfs_txn_commit(tr) != RECONFS_OK) {
+				kputs("  removing           : FAIL (commit)\n");
+				kfree(body);
+				reconfs_unmount(&fs);
+				return false;
+			}
+			kfree(body);
+
+			if (fs.super.blocks_used <= before_blocks) {
+				kputs("  removing           : FAIL (the file cost "
+				      "no blocks, so this proves nothing)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* And take it away again. */
+			tr = reconfs_txn_begin(&fs);
+			if (!tr ||
+			    reconfs_remove(tr, &fs, fs.root_inode, "doomed.BIN",
+					   &dir) != RECONFS_OK) {
+				kputs("  removing           : FAIL (remove)\n");
+				if (tr)
+					reconfs_txn_abort(tr);
+				reconfs_unmount(&fs);
+				return false;
+			}
+			reconfs_txn_set_root(tr, dir);
+			if (reconfs_txn_commit(tr) != RECONFS_OK) {
+				kputs("  removing           : FAIL (commit)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			after_blocks = fs.super.blocks_used;
+
+			if (reconfs_lookup(&fs, fs.root_inode, "Doomed.bin",
+					   &found) != RECONFS_ERR_NOT_FOUND) {
+				kputs("  removing           : FAIL (the name is "
+				      "still there)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			if (after_blocks != before_blocks) {
+				kprintf("  removing           : FAIL (%llu blocks "
+					"before, %llu after — the space did not "
+					"come back)\n",
+					(unsigned long long)before_blocks,
+					(unsigned long long)after_blocks);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			st = reconfs_check(&fs, &r);
+			if (st != RECONFS_OK || r.disagreements) {
+				kprintf("  removing           : FAIL (%llu "
+					"disagreements: %s)\n",
+					(unsigned long long)r.disagreements,
+					r.first_disagreement ? r.first_disagreement
+							     : "");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			kprintf("  removing           : pass (%u bytes freed, "
+				"back to %llu blocks)\n", (unsigned)payload,
+				(unsigned long long)after_blocks);
 		}
 
 		/* And it must survive being read back from scratch. A commit

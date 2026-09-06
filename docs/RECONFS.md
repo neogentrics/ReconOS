@@ -222,9 +222,29 @@ it has to be **built into the format because it cannot be added afterwards**:
 > sweeping *up* from every allocated object are two independent derivations of
 > the same set.
 
-The forward walk follows pointers. The reverse sweep visits every block marked
-allocated, reads whose it is, and walks up to the root. If the two disagree, one
-of them is wrong, and neither was computed by the other. That is the closest
+The forward walk follows pointers. The reverse sweep reads the owner table and
+nothing else. If the two disagree, one of them is wrong, and neither was
+computed by the other.
+
+**Every allocated block must be reachable from something — with no exceptions,
+including the filesystem's own.** The comparison used to exempt blocks owned by
+the archive, reasoning that the superblocks and the owner table are owned by
+nothing above them and so cannot be reached by a walk from the root. That is
+true of those blocks and false of everything else the archive owns — which
+includes every stale copy of the *root directory*, because the root has no
+parent and archive-ownership is what "no parent" looks like.
+
+So the forward walk claims them explicitly instead: both superblocks, the
+reserved run between them, and the owner table's own index blocks and leaves,
+walked from the table root. Following the table's *structure* is the forward
+walk's business; the sweep still reads only its *contents*, so the two stay
+disjoint.
+
+An exemption written for a category — "the superblocks and the owner table",
+which is a list of specific blocks — had been applied as a membership test,
+"owned by the archive", which is a property those blocks share with something
+else. It hid a leaked block on every commit (BG-090,
+[#279](https://github.com/neogentrics/ReconOS/issues/279)). That is the closest
 thing to a second opinion a single author can build, it costs bytes per object,
 and **it must be in the first version or never.**
 
@@ -244,6 +264,12 @@ misunderstanding about what the format means could sit in both. What it does
 remove is every shared *mechanism*: no shared constants, no shared struct
 definitions, no shared arithmetic, no shared assumptions about what a field is
 called or where it sits.
+
+**And the limit is not theoretical.** Both checkers had the archive-exemption
+hole described above — written separately, in different languages, and wrong in
+the same place, because the mistake was in the *reasoning* rather than in any
+mechanism. That is a fair measure of what a second implementation by one author
+buys and what it does not.
 
 **That was enough to find a bug the kernel could not have found.** The commit
 was writing its superblock to block 1 — a constant meaning "the second
@@ -581,8 +607,21 @@ impossible to find afterwards.
 
 ### Not written yet
 
-Deleting a file, nested directories, and renaming between two directories. The
-format describes them all.
+Nested directories and renaming between two directories. The format describes
+both.
+
+Removing a name works: `reconfs_remove`, one commit, releasing the object's
+contents and its inode. Released and not erased — the blocks keep whatever they
+held until something else is written into them, which is worth saying plainly
+because "delete" is a word people reasonably expect to mean the other thing. A
+directory that still has entries is refused rather than recursed, since a
+recursive delete is a decision for the layer that knows whether the user meant
+it.
+
+Its test does not check that the name is gone — that is the easy half. It writes
+a file large enough to need blocks of its own, records the volume's block count,
+removes it, and requires the count to return to where it started. That is what
+found BG-090.
 
 Contents work: `reconfs_write_named` and `reconfs_read_named`, whole-file only —
 which is what the callers above actually do, since a registry or a theme file is

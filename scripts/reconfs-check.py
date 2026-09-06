@@ -270,6 +270,12 @@ class Image:
 PAYLOAD_MAGIC = 0x52464350          # "RFCP"
 
 
+def reconfs_super_b_blocks(img):
+    """The first block a file may use: one past the second superblock."""
+    return BLOCK_MAX // img.bs + 1
+
+
+
 def check_payload(data):
     """Is this one complete version of the crash workload's file?
 
@@ -354,15 +360,41 @@ def check(path, want=None):
         else:
             problems.append(f"inode at {blk} has type {ino['type']}")
 
+    def claim_table(node, depth):
+        """The owner table's own blocks -- its index blocks and its leaves.
+
+        Following the table's *structure* is the forward walk's business; the
+        sweep below still reads only the table's contents, so the two stay
+        disjoint.
+        """
+        if node >= total:
+            problems.append(f"the owner table leaves the volume at {node}")
+            return
+        if by[node]:
+            problems.append(f"owner table block {node} is reachable twice")
+            return
+        by[node] = OWNER_ARCHIVE
+        if depth == 0:
+            return
+        slots = struct.unpack(f"<{img.per_index()}Q", img.block(node))
+        for child in slots:
+            if child:
+                claim_table(child, depth - 1)
+
+    # Both superblocks and the run reserved between them. Claimed explicitly,
+    # rather than exempted in the comparison below -- an exemption for
+    # archive-owned blocks applies to every stale copy of the root directory
+    # too, and hid a leak on every commit (BG-090).
+    for b in range(min(reconfs_super_b_blocks(img), total)):
+        by[b] = OWNER_ARCHIVE
+
+    claim_table(sb["table_root"], sb["table_depth"])
+
     walk(sb["root_inode"], 0, OWNER_ARCHIVE)
 
     actual = img.owners()
     for b in range(total):
         a, e = actual[b], by[b]
-        if a == OWNER_ARCHIVE:
-            if e and e != OWNER_ARCHIVE:
-                problems.append(f"block {b}: archive metadata also claimed")
-            continue
         if a == e:
             continue
         if a == OWNER_VOID:

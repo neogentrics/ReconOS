@@ -230,7 +230,7 @@ enum reconfs_status reconfs_lookup(struct reconfs *fs, u64 dir_block,
  * from the transaction, so none of them is reachable from the live superblock.
  */
 static enum reconfs_status write_dir(struct reconfs_txn *txn,
-				     struct reconfs *fs,
+				     struct reconfs *fs, u64 old_block,
 				     const struct reconfs_inode *old,
 				     const struct entries *e,
 				     u64 *out_block)
@@ -323,8 +323,38 @@ static enum reconfs_status write_dir(struct reconfs_txn *txn,
 
 write:
 	st = reconfs_write_block(fs, blk, ino, INODE_CSUM);
-	if (st == RECONFS_OK)
-		*out_block = blk;
+	if (st != RECONFS_OK)
+		goto out;
+
+	*out_block = blk;
+
+	/* The copy this one replaces, and the blocks its entries were in.
+	 *
+	 * Every operation that changes a directory writes a new inode for it,
+	 * because that is what copy-on-write means. Nothing released the old
+	 * one, so *every* create, rename, write and remove leaked a block --
+	 * one per directory rewrite, forever, on a filesystem whose whole
+	 * pattern of use is rewriting directories.
+	 *
+	 * It was invisible to the checker, which asks whether the owner table
+	 * and the tree agree about what is allocated: a leaked block is
+	 * allocated and unreachable, which is exactly what it reports. What it
+	 * took was a test that asked a different question -- write a file,
+	 * remove it, and require the free-block count to return to where it
+	 * started.
+	 *
+	 * Released after the new copy is written, so the live superblock still
+	 * reaches the old one until the commit lands. */
+	if (old_block) {
+		unsigned k;
+
+		if (!old->inline_len)
+			for (k = 0; k < RECONFS_DIRECT; k++)
+				if (old->direct[k])
+					reconfs_txn_free(txn, old->direct[k]);
+
+		reconfs_txn_free(txn, old_block);
+	}
 
 out:
 	kfree(page);
@@ -439,7 +469,7 @@ enum reconfs_status reconfs_create(struct reconfs_txn *txn, struct reconfs *fs,
 	kmemcpy(de->name, name, name_len);
 	e.len += need;
 
-	st = write_dir(txn, fs, dir, &e, out_dir);
+	st = write_dir(txn, fs, dir_block, dir, &e, out_dir);
 	entries_free(&e);
 
 	if (st == RECONFS_OK)
@@ -694,7 +724,7 @@ enum reconfs_status reconfs_write_named(struct reconfs_txn *txn,
 		off += de->rec_len;
 	}
 
-	st = write_dir(txn, fs, dir, &e, out_dir);
+	st = write_dir(txn, fs, dir_block, dir, &e, out_dir);
 
 out:
 	entries_free(&e);
@@ -984,7 +1014,7 @@ enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
 		new_e.len += need;
 	}
 
-	st = write_dir(txn, fs, dir, &new_e, out_dir);
+	st = write_dir(txn, fs, dir_block, dir, &new_e, out_dir);
 	if (st != RECONFS_OK)
 		goto out;
 
@@ -1020,6 +1050,160 @@ out:
 	entries_free(&old_e);
 	entries_free(&new_e);
 	kfree(dir);
+	return st;
+}
+
+/* --- Removing a name ------------------------------------------------------
+ *
+ * One commit, like everything else: the directory is rebuilt without the entry,
+ * and the object it named is released -- its contents and its inode -- in the
+ * same transaction.
+ *
+ * "Released" and not "erased". The blocks go back to the unclaimed state in the
+ * *new* owner table, so the live superblock still reaches the old contents until
+ * the commit lands, and a crash before that leaves the file entirely intact.
+ * That is the two-outcome rule again: the name is there, or it is not.
+ *
+ * --- What this does not do ---
+ *
+ * The bytes are not overwritten. A block released here keeps whatever it held
+ * until something else is written into it, so deleting a file does not destroy
+ * what was in it -- and anything that needs it destroyed has to say so.
+ *
+ * That is worth stating plainly rather than leaving to be discovered, because
+ * "delete" is a word people reasonably expect to mean the other thing. The
+ * desktop already has a recycle bin, which is a different promise again; when
+ * something needs an erase that is really an erase, it will need a discard that
+ * the device honours and a rule about what to do on the devices that do not.
+ *
+ * --- A directory is refused unless it is empty ---
+ *
+ * Removing a directory that still has entries would strand everything under it:
+ * reachable from nothing, still marked allocated, and the checker would say so
+ * on the next run. Refused rather than recursed, because a recursive delete is a
+ * decision for the layer that knows whether the user meant it.
+ */
+enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
+				   u64 dir_block, const char *name, u64 *out_dir)
+{
+	struct reconfs_inode *dir = NULL, *gone = NULL;
+	struct entries old_e, new_e;
+	enum reconfs_status st;
+	u64 target = 0;
+	u32 off;
+	bool found = false;
+
+	kmemset(&old_e, 0, sizeof(old_e));
+	kmemset(&new_e, 0, sizeof(new_e));
+
+	if (!name || !*name)
+		return RECONFS_ERR_NAME;
+
+	dir = kzalloc(fs->block_size);
+	gone = kzalloc(fs->block_size);
+	if (!dir || !gone) {
+		st = RECONFS_ERR_NOMEM;
+		goto out;
+	}
+
+	st = reconfs_read_block(fs, dir_block, dir, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (dir->type != RECONFS_TYPE_DIR) {
+		st = RECONFS_ERR_NOT_DIR;
+		goto out;
+	}
+
+	st = read_entries(fs, dir, &old_e);
+	if (st != RECONFS_OK)
+		goto out;
+
+	new_e.cap = entries_capacity(fs);
+	new_e.buf = kzalloc(new_e.cap);
+	if (!new_e.buf) {
+		st = RECONFS_ERR_NOMEM;
+		goto out;
+	}
+
+	off = 0;
+	while (off + RECONFS_DIRENT_MIN <= old_e.len) {
+		const struct reconfs_dirent *de =
+			(const struct reconfs_dirent *)(old_e.buf + off);
+
+		if (!de->rec_len)
+			break;
+
+		if (de->inode && name_eq(de->name, de->name_len, name)) {
+			target = de->inode;
+			found = true;
+		} else if (de->inode) {
+			if (!entries_append(&new_e, de, de->rec_len)) {
+				st = RECONFS_ERR_DIR_FULL;
+				goto out;
+			}
+		}
+
+		off += de->rec_len;
+	}
+
+	if (!found) {
+		st = RECONFS_ERR_NOT_FOUND;
+		goto out;
+	}
+
+	st = reconfs_read_block(fs, target, gone, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	if (gone->type == RECONFS_TYPE_DIR) {
+		struct entries inside;
+
+		st = read_entries(fs, gone, &inside);
+		if (st != RECONFS_OK)
+			goto out;
+
+		{
+			bool empty = true;
+			u32 k = 0;
+
+			while (k + RECONFS_DIRENT_MIN <= inside.len) {
+				const struct reconfs_dirent *de =
+					(const struct reconfs_dirent *)
+					(inside.buf + k);
+
+				if (!de->rec_len)
+					break;
+				if (de->inode) {
+					empty = false;
+					break;
+				}
+				k += de->rec_len;
+			}
+
+			entries_free(&inside);
+
+			if (!empty) {
+				st = RECONFS_ERR_NOT_EMPTY;
+				goto out;
+			}
+		}
+	}
+
+	st = write_dir(txn, fs, dir_block, dir, &new_e, out_dir);
+	if (st != RECONFS_OK)
+		goto out;
+
+	/* After the new directory exists, so the object is unreachable from the
+	 * next superblock before it is unreachable from anything. */
+	release_contents(txn, fs, gone);
+	reconfs_txn_free(txn, target);
+
+out:
+	entries_free(&old_e);
+	entries_free(&new_e);
+	kfree(dir);
+	kfree(gone);
 	return st;
 }
 

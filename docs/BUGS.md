@@ -217,6 +217,53 @@ broken says nothing about the work.
   whole thing. An empty file is always complete, so a crash test on empty files
   can only assert that a *name* resolved.
 
+### BG-090 — Every directory rewrite leaked a block, and the checker was built not to notice
+
+[#279](https://github.com/neogentrics/ReconOS/issues/279)
+
+- **Found in** kernel 0.0.11. **Found by** a test written for something else:
+  the new remove operation records how many blocks the volume is using, deletes
+  a file, and requires the count to return to where it started. It came back
+  three higher — one for each commit that had rewritten the directory.
+- **Was** two faults, and the second is the one that matters.
+
+  1. **`write_dir` never released the directory it replaced.** Every operation
+     that changes a directory writes a new inode for it, because that is what
+     copy-on-write means. The old copy stayed marked as owned, forever. One
+     leaked block per create, per rename, per write, per remove — on a
+     filesystem whose entire pattern of use is rewriting directories.
+
+  2. **The checker was built to skip exactly those blocks.** Its comparison
+     exempted every block owned by `RECONFS_OWNER_ARCHIVE` from having to be
+     reachable, reasoning that the superblocks and the owner table are owned by
+     nothing above them and so cannot be reached by a walk from the root.
+
+     True of those blocks. Not true of everything owned by the archive — which
+     includes every stale copy of the *root directory*, because the root has no
+     parent and archive-ownership is what "no parent" looks like in the table.
+     So the one check that would have named the leak was the one place it was
+     invisible.
+
+  The shape worth keeping: **an exemption written for a category, applied to a
+  membership test.** "The superblocks and the owner table" is a list of specific
+  blocks; "owned by the archive" is a property those blocks happen to share with
+  something else entirely.
+- **Fixed in** kernel 0.0.11. `write_dir` releases the inode it replaces, and
+  the blocks its entries were in. The checker now *claims* the archive's blocks
+  explicitly — both superblocks, the reserved run between them, and the owner
+  table's own index blocks and leaves, walked from the table root — and the
+  exemption is gone entirely. **Every allocated block on the volume must now be
+  reachable from something.**
+
+  Removing the exemption made an existing test fail immediately and correctly:
+  it had been allocating a block owned by the archive and reachable from
+  nothing, which is a leak, and which had passed for the same reason.
+
+  The same hole existed in `scripts/reconfs-check.py`, written independently and
+  independently wrong in the same place — which is a fair measure of how much
+  independence a second implementation by the same author buys, and worth
+  recording as such.
+
 ### BG-085 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)

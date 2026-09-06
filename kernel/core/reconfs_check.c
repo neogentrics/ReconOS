@@ -260,6 +260,53 @@ static enum reconfs_status walk_inode(struct walk *w, u64 blk,
 	return st;
 }
 
+/* Claims the blocks the owner table itself occupies: its index blocks and its
+ * leaves, from the root down.
+ *
+ * This is the forward walk's business, not the sweep's -- it reads the table's
+ * *structure*, following pointers, which is what the forward walk does. The
+ * sweep still reads only the table's contents. The two stay disjoint.
+ */
+static enum reconfs_status claim_table(struct walk *w, u64 node, u32 depth)
+{
+	u64 *slots;
+	enum reconfs_status st;
+	u32 i;
+
+	if (node >= w->fs->total_blocks) {
+		disagree(w->r, "the owner table leaves the volume", node);
+		return RECONFS_ERR_CORRUPT;
+	}
+
+	if (w->by[node]) {
+		disagree(w->r, "an owner table block is reachable twice", node);
+		return RECONFS_ERR_CORRUPT;
+	}
+	w->by[node] = RECONFS_OWNER_ARCHIVE;
+	w->r->blocks_seen_forward++;
+
+	if (depth == 0)
+		return RECONFS_OK;
+
+	slots = kzalloc(w->fs->block_size);
+	if (!slots)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(w->fs, node, slots, RECONFS_NO_CSUM);
+	if (st == RECONFS_OK) {
+		for (i = 0; i < w->fs->per_index; i++) {
+			if (!slots[i])
+				continue;
+			st = claim_table(w, slots[i], depth - 1);
+			if (st != RECONFS_OK)
+				break;
+		}
+	}
+
+	kfree(slots);
+	return st;
+}
+
 /* --- The reverse sweep, and the comparison --------------------------------
  *
  * Reads the owner table, a whole leaf at a time, and compares each entry with
@@ -298,19 +345,6 @@ static enum reconfs_status sweep_and_compare(struct reconfs *fs,
 
 		if (actual != RECONFS_OWNER_VOID)
 			r->blocks_seen_reverse++;
-
-		if (actual == RECONFS_OWNER_ARCHIVE) {
-			/* The superblocks, the owner table, and the run
-			 * reserved between the two superblocks. Owned by
-			 * nothing above them, so the forward walk cannot reach
-			 * them -- except the root inode, which it does reach
-			 * and which is also archive-owned because the root has
-			 * no parent. */
-			if (expected && expected != RECONFS_OWNER_ARCHIVE)
-				disagree(r, "the archive's own metadata is also "
-					    "claimed by an object", b);
-			continue;
-		}
 
 		if (actual == expected)
 			continue;
@@ -351,6 +385,42 @@ enum reconfs_status reconfs_check(struct reconfs *fs,
 	w.by = kzalloc((size_t)(fs->total_blocks * sizeof(u64)));
 	if (!w.by)
 		return RECONFS_ERR_NOMEM;
+
+	/* --- The archive's own blocks, accounted for like everything else ---
+	 *
+	 * The comparison used to *exempt* every block owned by the archive from
+	 * needing to be reachable, on the grounds that the superblocks and the
+	 * owner table are owned by nothing above them. That is true of those
+	 * blocks and of nothing else -- and the exemption applied to any block
+	 * whose owner happened to be the archive.
+	 *
+	 * Which included every stale copy of the root directory. Each commit
+	 * writes a new root inode, and nothing released the old one (BG-090):
+	 * a leaked block on every create, rename, write and remove, owned by
+	 * the archive because the root has no parent, and therefore skipped by
+	 * the one check that would have named it.
+	 *
+	 * So the archive's blocks are claimed here, explicitly, and the
+	 * exemption is gone. Every allocated block on the volume must be
+	 * reachable from something.
+	 */
+	{
+		u64 b, first = reconfs_super_b(fs->block_size) + 1;
+
+		/* Both superblocks and the run reserved between them. */
+		for (b = 0; b < first; b++) {
+			if (b >= fs->total_blocks)
+				break;
+			w.by[b] = RECONFS_OWNER_ARCHIVE;
+			out->blocks_seen_forward++;
+		}
+
+		st = claim_table(&w, fs->table_root, fs->table_depth);
+		if (st != RECONFS_OK) {
+			kfree(w.by);
+			return st;
+		}
+	}
 
 	/* The root's own block is archive-owned: it has no parent, and that is
 	 * what "no parent" looks like in the table. */

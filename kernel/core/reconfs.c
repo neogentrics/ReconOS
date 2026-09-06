@@ -724,6 +724,7 @@ const char *reconfs_strerror(enum reconfs_status st)
 	case RECONFS_ERR_EXISTS:       return "that name is already taken";
 	case RECONFS_ERR_DIR_FULL:     return "the directory is full";
 	case RECONFS_ERR_NOT_FILE:     return "that is not a file";
+	case RECONFS_ERR_NOT_EMPTY:    return "the directory still has things in it";
 	}
 	return "unknown";
 }

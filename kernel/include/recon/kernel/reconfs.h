@@ -475,6 +475,7 @@ enum reconfs_status {
 	RECONFS_ERR_EXISTS,
 	RECONFS_ERR_DIR_FULL,	/* refused rather than truncated */
 	RECONFS_ERR_NOT_FILE,
+	RECONFS_ERR_NOT_EMPTY,
 };
 
 /* Passed to the block routines for a block kind that carries no checksum of
@@ -627,6 +628,19 @@ enum reconfs_status reconfs_write_named(struct reconfs_txn *txn,
 enum reconfs_status reconfs_read_named(struct reconfs *fs, u64 dir_block,
 				       const char *name, void *out, u32 max,
 				       u32 *got);
+
+/* Removes a name, and releases what it named, in a single commit.
+ *
+ * The blocks are released, not erased: they keep whatever they held until
+ * something else is written into them. Anything needing an erase that is really
+ * an erase has to say so.
+ *
+ * A directory that still has entries is refused rather than recursed -- a
+ * recursive delete is a decision for the layer that knows whether the user
+ * meant it. */
+enum reconfs_status reconfs_remove(struct reconfs_txn *txn, struct reconfs *fs,
+				   u64 dir_block, const char *name,
+				   u64 *out_dir);
 
 /* Renames `from` to `to` within one directory, in a single commit.
  *
