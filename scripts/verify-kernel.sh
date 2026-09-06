@@ -457,6 +457,25 @@ for a in x86_64 aarch64; do
 	fi
 done
 
+# The one docs/RECONFS.md lists first: cut the power inside a rename, and let
+# something that shares no code with the kernel say what survived.
+#
+# Fewer cuts than the standalone script does, because each one boots a machine
+# and each check reads a whole image -- enough to catch a regression, few enough
+# not to double the length of this.
+
+printf '%-46s' "  a rename survives the power going out"
+
+if rn_out=$(bash scripts/rename-crash-test.sh 6 x86_64 2>&1); then
+	echo "$(echo "$rn_out" | grep -oE '[0-9]+ cuts inside a rename.*')"
+	passes=$((passes + 1))
+else
+	echo "FAILED"
+	echo "$rn_out" | sed 's/^/      /' | head -20
+	failures=$((failures + 1))
+	FAILED_PATHS+=("reconfs: rename under a power cut")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

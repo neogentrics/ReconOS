@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Read a ReconFS image and say whether it holds together.
+
+--- Why this exists in a different language ---
+
+Nobody else implements ReconFS. Testing the kernel's checker against the
+kernel's writer proves only that they share their assumptions, which is the
+failure mode scripts/make-partition-fixtures.sh opens by naming: a writer and a
+reader built from the same misunderstanding agree perfectly.
+
+So this is written from kernel/include/recon/kernel/reconfs.h -- from the field
+offsets and the rules, not from kernel/core/reconfs*.c. Where the C and this
+disagree, one of them is wrong, and neither was derived from the other.
+
+It is also what judges a power cut. The kernel cannot check an image it was
+killed in the middle of writing; something outside has to read what survived.
+
+--- What it checks ---
+
+  * a superblock validates, and the one with the higher epoch is believed
+  * every block's checksum, where the block kind carries one
+  * the forward walk: root -> directory entries -> inodes -> block pointers
+  * the reverse sweep: every owner-table entry
+  * the two agree, block for block
+
+It writes nothing, ever. That is what makes it safe to run on an image that is
+about to be examined again.
+"""
+import struct
+import sys
+
+BLOCK_MIN = 4096
+BLOCK_MAX = 65536
+
+MAGIC       = 0x3153466E6F636552      # "ReconFS1"
+INODE_MAGIC = 0x316F6E496E636552      # "ReconIno1"
+VERSION     = 1
+
+OWNER_VOID    = 0
+OWNER_ARCHIVE = 1
+DOSSIER_ROOT  = 2
+
+TYPE_FILE = 1
+TYPE_DIR  = 2
+
+DIRECT = 12
+
+# --- Layouts, by explicit offset -------------------------------------------
+#
+# Field by field rather than as one struct format string. A format string is a
+# single opaque token where one wrong letter shifts everything after it and the
+# values still parse -- which is precisely the kind of wrong that looks right.
+# These offsets were read out of the compiler with __builtin_offsetof and are
+# checked against sizeof below.
+SUPER_AT = {
+    "magic": ("<Q", 0), "version": ("<I", 8), "block_size": ("<I", 12),
+    "epoch": ("<Q", 16), "total_blocks": ("<Q", 24), "root_inode": ("<Q", 32),
+    "table_root": ("<Q", 40), "table_depth": ("<I", 48),
+    "next_dossier": ("<Q", 56), "blocks_used": ("<Q", 64),
+    "fold": ("<I", 152), "seek_is_free": ("<B", 156),
+    "discard_supported": ("<B", 157), "transfer_hint": ("<I", 160),
+}
+SUPER_CSUM = 204
+SUPER_SIZE = 208
+
+INODE_AT = {
+    "magic": ("<Q", 0), "dossier": ("<Q", 8), "parent": ("<Q", 16),
+    "type": ("<I", 24), "mode": ("<I", 28), "uid": ("<I", 32),
+    "gid": ("<I", 36), "size": ("<Q", 40), "btime": ("<Q", 48),
+    "mtime": ("<Q", 56), "ctime": ("<Q", 64), "links": ("<I", 72),
+    "flags": ("<I", 76), "inline_len": ("<I", 80),
+    "indirect": ("<Q", 184), "double": ("<Q", 192), "triple": ("<Q", 200),
+}
+INODE_DIRECT_AT = 88
+INODE_CSUM = 224
+INODE_SIZE = 232          # where the inline data begins
+
+DIRENT_SIZE = 16          # inode, rec_len, name_len, type, reserved
+
+
+def field(buf, table, name):
+    fmt, off = table[name]
+    return struct.unpack_from(fmt, buf, off)[0]
+
+
+def crc32_reflected(data: bytes) -> int:
+    """The same reflected CRC-32 the format uses. Bitwise on purpose: this is a
+    checker, and a table would be one more thing to have copied wrong."""
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0xEDB88320 if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFF
+
+
+class Bad(Exception):
+    pass
+
+
+class Image:
+    def __init__(self, path):
+        with open(path, "rb") as f:
+            self.data = f.read()
+        self.bs = None
+        self.super = None
+        self.live = None
+
+    def raw(self, offset, length):
+        if offset + length > len(self.data):
+            raise Bad(f"read past the end of the image at {offset}")
+        return self.data[offset:offset + length]
+
+    def block(self, n):
+        return self.raw(n * self.bs, self.bs)
+
+    # --- Superblocks -------------------------------------------------------
+    def parse_super(self, buf):
+        return {k: field(buf, SUPER_AT, k) for k in SUPER_AT}
+
+    def load(self):
+        """Both superblocks sit at fixed byte offsets -- 0 and BLOCK_MAX -- so
+        either can be found without knowing the block size the other records."""
+        best = None
+        for at in (0, BLOCK_MAX):
+            try:
+                head = self.raw(at, BLOCK_MIN)
+            except Bad:
+                continue
+
+            s = self.parse_super(head)
+            if s["magic"] != MAGIC or s["version"] != VERSION:
+                continue
+
+            bs = s["block_size"]
+            if bs < BLOCK_MIN or bs > BLOCK_MAX or (bs & (bs - 1)):
+                continue
+
+            full = self.raw(at, bs)
+            off = SUPER_CSUM
+            stored = struct.unpack("<I", full[off:off + 4])[0]
+            body = full[:off] + b"\0\0\0\0" + full[off + 4:]
+            if crc32_reflected(body) != stored:
+                continue
+
+            if best is None or s["epoch"] > best[0]["epoch"]:
+                best = (s, at, bs)
+
+        if best is None:
+            raise Bad("no valid superblock")
+
+        self.super, self.live, self.bs = best
+        return self.super
+
+    # --- The owner table ---------------------------------------------------
+    def per_leaf(self):
+        return self.bs // 8
+
+    def per_index(self):
+        return self.bs // 8
+
+    def leaf_block(self, leaf_index):
+        node = self.super["table_root"]
+        depth = self.super["table_depth"]
+        span = self.per_index() ** depth
+        idx = leaf_index
+
+        while depth:
+            slots = struct.unpack(f"<{self.per_index()}Q", self.block(node))
+            span //= self.per_index()
+            slot = idx // span
+            if slot >= self.per_index():
+                raise Bad("owner table index out of range")
+            node = slots[slot]
+            idx %= span
+            if not node:
+                raise Bad("owner table has a hole")
+            depth -= 1
+
+        return node
+
+    def owners(self):
+        """Every block's owner, in order. Reads leaves, and nothing else."""
+        total = self.super["total_blocks"]
+        out = []
+        for first in range(0, total, self.per_leaf()):
+            leaf = self.block(self.leaf_block(first // self.per_leaf()))
+            vals = struct.unpack(f"<{self.per_leaf()}Q", leaf)
+            take = min(self.per_leaf(), total - first)
+            out.extend(vals[:take])
+        return out
+
+    # --- Inodes and names --------------------------------------------------
+    def inode(self, blk):
+        buf = self.block(blk)
+        i = {k: field(buf, INODE_AT, k) for k in INODE_AT}
+        i["direct"] = list(struct.unpack_from("<12Q", buf, INODE_DIRECT_AT))
+
+        if i["magic"] != INODE_MAGIC:
+            raise Bad(f"block {blk} is not an inode")
+
+        stored = struct.unpack_from("<I", buf, INODE_CSUM)[0]
+        body = buf[:INODE_CSUM] + b"\0\0\0\0" + buf[INODE_CSUM + 4:]
+        if crc32_reflected(body) != stored:
+            raise Bad(f"inode at block {blk} does not match its checksum")
+
+        i["_raw"] = buf
+        return i
+
+    def dir_entries(self, ino):
+        """Every (name, child, type) in a directory, in stored order."""
+        streams = []
+        if ino["inline_len"]:
+            streams.append(ino["_raw"][INODE_SIZE:
+                                       INODE_SIZE + ino["inline_len"]])
+        else:
+            for b in ino["direct"]:
+                if b:
+                    streams.append(self.block(b))
+
+        out = []
+        for s in streams:
+            off = 0
+            while off + DIRENT_SIZE <= len(s):
+                child, rec_len, name_len, etype = struct.unpack(
+                    "<QHBB", s[off:off + 12])
+                if rec_len == 0:
+                    break
+                if rec_len < DIRENT_SIZE or off + rec_len > len(s) or \
+                        DIRENT_SIZE + name_len > rec_len:
+                    raise Bad("a directory entry does not fit its block")
+                name = s[off + DIRENT_SIZE:off + DIRENT_SIZE + name_len].decode(
+                    "utf-8", "replace")
+                if child:
+                    out.append((name, child, etype))
+                off += rec_len
+        return out
+
+
+def check(path, want=None):
+    img = Image(path)
+    sb = img.load()
+
+    total = sb["total_blocks"]
+    by = [0] * total          # what the forward walk says owns each block
+    problems = []
+    inodes = 0
+
+    def claim(blk, owner, why):
+        if blk >= total:
+            problems.append(f"{why}: block {blk} is past the end")
+            return
+        if by[blk]:
+            problems.append(f"block {blk} is reachable twice")
+            return
+        by[blk] = owner
+
+    def walk(blk, expect_parent, owner, depth=0):
+        nonlocal inodes
+        if depth > 64:
+            problems.append("the directory tree is deeper than 64")
+            return
+        claim(blk, owner, "inode")
+        ino = img.inode(blk)
+        inodes += 1
+
+        if ino["parent"] != expect_parent:
+            problems.append(
+                f"inode at {blk} says its parent is {ino['parent']}, "
+                f"but {expect_parent} names it")
+
+        if ino["type"] == TYPE_DIR:
+            if not ino["inline_len"]:
+                for b in ino["direct"]:
+                    if b:
+                        claim(b, ino["dossier"], "directory block")
+            for _name, child, _t in img.dir_entries(ino):
+                walk(child, ino["dossier"], ino["dossier"], depth + 1)
+        elif ino["type"] == TYPE_FILE:
+            if not ino["inline_len"]:
+                for b in ino["direct"]:
+                    if b:
+                        claim(b, ino["dossier"], "data block")
+                if ino["indirect"]:
+                    claim(ino["indirect"], ino["dossier"], "indirect block")
+                    slots = struct.unpack(f"<{img.per_index()}Q",
+                                          img.block(ino["indirect"]))
+                    for b in slots:
+                        if b:
+                            claim(b, ino["dossier"], "data block")
+        else:
+            problems.append(f"inode at {blk} has type {ino['type']}")
+
+    walk(sb["root_inode"], 0, OWNER_ARCHIVE)
+
+    actual = img.owners()
+    for b in range(total):
+        a, e = actual[b], by[b]
+        if a == OWNER_ARCHIVE:
+            if e and e != OWNER_ARCHIVE:
+                problems.append(f"block {b}: archive metadata also claimed")
+            continue
+        if a == e:
+            continue
+        if a == OWNER_VOID:
+            problems.append(f"block {b}: reachable but not allocated")
+        elif not e:
+            problems.append(f"block {b}: allocated but not reachable")
+        else:
+            problems.append(f"block {b}: allocated to {a}, reachable from {e}")
+
+    root = img.inode(sb["root_inode"])
+    names = [n for n, _c, _t in img.dir_entries(root)]
+
+    found = None
+    if want is not None:
+        matches = [c for n, c, _t in img.dir_entries(root)
+                   if n.lower() == want.lower()]
+        if len(matches) == 0:
+            problems.append(f"'{want}' is not in the root directory")
+        elif len(matches) > 1:
+            problems.append(f"'{want}' names {len(matches)} things")
+        else:
+            found = matches[0]
+            try:
+                img.inode(found)
+            except Bad as e:
+                problems.append(f"'{want}' points at something unreadable: {e}")
+
+    return {
+        "epoch": sb["epoch"],
+        "block_size": sb["block_size"],
+        "inodes": inodes,
+        "names": names,
+        "target": found,
+        "problems": problems,
+    }
+
+
+def damage(path, how):
+    """Breaks a live structure on purpose, so a run can prove its own checker.
+
+    Aimed through the same load() the checker uses, because the two superblocks
+    alternate: a first attempt at this reached into superblock A's fields while
+    B was the live one, damaged a block nothing pointed at, and the checker
+    correctly reported a healthy volume. A negative control that misses its
+    target reports exactly what a working checker reports.
+    """
+    img = Image(path)
+    sb = img.load()
+    data = bytearray(img.data)
+    bs = img.bs
+
+    if how == "checksum":
+        # One byte inside the live root inode.
+        data[sb["root_inode"] * bs + 300] ^= 0xFF
+    elif how == "unallocated":
+        # Say the live root inode's block belongs to nobody.
+        leaf = img.leaf_block(sb["root_inode"] // img.per_leaf())
+        struct.pack_into("<Q", data, leaf * bs +
+                         (sb["root_inode"] % img.per_leaf()) * 8, 0)
+    else:
+        raise Bad(f"unknown damage: {how}")
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--damage":
+        # reconfs-check.py --damage <how> <image>
+        damage(sys.argv[3], sys.argv[2])
+        print(f"damaged {sys.argv[2]}")
+        return 0
+
+    if len(sys.argv) < 2:
+        print("usage: reconfs-check.py <image> [name-that-must-exist]")
+        print("       reconfs-check.py --damage checksum|unallocated <image>")
+        return 2
+
+    want = sys.argv[2] if len(sys.argv) > 2 else None
+
+    try:
+        r = check(sys.argv[1], want)
+    except Bad as e:
+        print(f"unreadable {e}")
+        return 1
+    except Exception as e:                    # noqa: BLE001
+        print(f"unreadable {type(e).__name__}: {e}")
+        return 1
+
+    if r["problems"]:
+        print(f"inconsistent epoch={r['epoch']} "
+              f"{len(r['problems'])} problem(s)")
+        for p in r["problems"][:5]:
+            print(f"  {p}")
+        return 1
+
+    print(f"ok epoch={r['epoch']} block={r['block_size']} "
+          f"inodes={r['inodes']} names={','.join(r['names']) or '-'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

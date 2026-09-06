@@ -55,7 +55,7 @@ AREA = {
     # The kernel's own faults share this register, so a track record of
     # the system is a track record of all of it.
     81: 'kernel', 82: 'build', 83: 'build', 84: 'build',
-    85: 'storage', 86: 'storage', 87: 'storage',
+    85: 'storage', 86: 'storage', 87: 'storage', 88: 'storage',
 }
 
 

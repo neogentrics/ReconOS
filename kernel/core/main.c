@@ -148,6 +148,7 @@ void kmain(void)
 	 * partition table -- a self-test that writes a filesystem over somebody's
 	 * disk is the most destructive thing this kernel could do by accident. */
 	reconfs_run();
+	reconfs_crash_run();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

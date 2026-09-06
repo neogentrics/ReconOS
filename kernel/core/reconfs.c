@@ -132,6 +132,11 @@ enum reconfs_status reconfs_write_block(struct reconfs *fs, u64 blk, void *buf,
 	return RECONFS_OK;
 }
 
+u32 reconfs_inline_max(u32 block_size)
+{
+	return RECONFS_INLINE_MAX_FOR(block_size);
+}
+
 /* Where superblock B lives, in blocks, for a given block size. Both copies sit
  * at fixed byte offsets; this converts the second one. */
 u64 reconfs_super_b(u32 block_size)
@@ -626,7 +631,7 @@ enum reconfs_status reconfs_format(struct block_device *dev, const char *label,
 
 	/* --- The root directory -------------------------------------------- */
 	root->magic      = RECONFS_INODE_MAGIC;
-	root->dossier    = 1;
+	root->dossier    = RECONFS_DOSSIER_ROOT;
 	root->parent     = 0;			/* the only object with none */
 	root->type       = RECONFS_TYPE_DIR;
 	root->mode       = 0755;
@@ -658,7 +663,7 @@ enum reconfs_status reconfs_format(struct block_device *dev, const char *label,
 	sb->root_inode   = root_blk;
 	sb->table_root   = fs.table_root;
 	sb->table_depth  = fs.table_depth;
-	sb->next_dossier = 2;
+	sb->next_dossier = RECONFS_DOSSIER_FIRST;
 	sb->blocks_used  = first_table + table_blocks;
 	sb->fold         = RECONFS_FOLD_ASCII;
 
@@ -713,6 +718,11 @@ const char *reconfs_strerror(enum reconfs_status st)
 	case RECONFS_ERR_NOSPACE:      return "no free blocks";
 	case RECONFS_ERR_BLOCK_SIZE:   return "the block size does not suit this device";
 	case RECONFS_ERR_RETRY:        return "the transaction must be built again";
+	case RECONFS_ERR_NAME:         return "that is not a usable name";
+	case RECONFS_ERR_NOT_FOUND:    return "no such name in that directory";
+	case RECONFS_ERR_NOT_DIR:      return "that is not a directory";
+	case RECONFS_ERR_EXISTS:       return "that name is already taken";
+	case RECONFS_ERR_DIR_FULL:     return "the directory is full";
 	}
 	return "unknown";
 }

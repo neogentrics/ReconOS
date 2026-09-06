@@ -718,8 +718,28 @@ enum reconfs_status reconfs_txn_commit(struct reconfs_txn *txn)
 	sb->next_dossier = txn->next_dossier;
 	sb->blocks_used    = txn->blocks_used;
 
-	target = (fs->live_super == RECONFS_SUPER_A) ? RECONFS_SUPER_B
-						    : RECONFS_SUPER_A;
+	/* Whichever of the two is not live.
+	 *
+	 * This read `RECONFS_SUPER_B`, a constant that meant "block 1" from when
+	 * both superblocks were adjacent blocks. They are at fixed *byte*
+	 * offsets now -- zero and 65536 -- so the second one's block number
+	 * depends on the block size, and at 4KiB it is block 16, not block 1.
+	 *
+	 * The constant kept compiling and kept meaning the block it always
+	 * meant. Every commit wrote its superblock into the reserved run between
+	 * the two copies, where nothing ever reads it, and the real second
+	 * superblock stayed at the epoch the format left it. So the property the
+	 * pair exists for -- that a crash during a superblock write leaves the
+	 * other one intact and current -- was not true: the other one held the
+	 * empty volume.
+	 *
+	 * Nothing in the kernel could see it. Mounting reads the second copy at
+	 * the right place and finds a valid, older superblock, which is exactly
+	 * what a healthy volume looks like. It took a second implementation of
+	 * the format, in another language, printing both copies. */
+	target = (fs->live_super == RECONFS_SUPER_A)
+	       ? reconfs_super_b(fs->block_size)
+	       : RECONFS_SUPER_A;
 
 	st = reconfs_write_block(fs, target, sb, SUPER_CSUM);
 	if (st != RECONFS_OK)

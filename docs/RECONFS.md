@@ -231,6 +231,58 @@ and **it must be in the first version or never.**
 The whole-image checker must not call any function the reader uses to resolve a
 path. If checking requires the reader, the checker is not a second opinion.
 
+### The second implementation, and what it is actually worth
+
+This document opens by saying no second opinion is available. There is one now,
+and it is worth being precise about how much: `scripts/reconfs-check.py` reads
+a ReconFS image and reports whether it holds together, written **from the
+format header** rather than from `kernel/core/reconfs*.c`, in a different
+language, structured differently.
+
+It is not an independent *author*. The same person wrote both, and a
+misunderstanding about what the format means could sit in both. What it does
+remove is every shared *mechanism*: no shared constants, no shared struct
+definitions, no shared arithmetic, no shared assumptions about what a field is
+called or where it sits.
+
+**That was enough to find a bug the kernel could not have found.** The commit
+was writing its superblock to block 1 — a constant meaning "the second
+superblock" from before the two copies moved to fixed byte offsets. The real
+second copy still held the epoch the format left it, so a crash during a
+superblock write would have rolled the volume back to freshly formatted.
+
+Nothing inside the kernel could see it. Mounting reads the second copy from the
+right place and finds a valid, older superblock, which is what a healthy volume
+looks like. Every self-test passed. It took a reader that did not share the
+constant. (BG-088, [#277](https://github.com/neogentrics/ReconOS/issues/277).)
+
+The Python reader is also what judges a power cut, because the kernel cannot
+check an image it was killed in the middle of writing.
+
+### The two-outcome rule, tested
+
+`scripts/rename-crash-test.sh` runs the workload the registry needs — create a
+temporary name, then rename it over the real one, as **two separate commits**,
+because that is what the caller does and a crash landing between them is the
+interval the guarantee is about. It cuts the power at swept moments and reads
+what survived.
+
+Three things must be true of every surviving image:
+
+- it mounts — a superblock validates
+- `settings` resolves to exactly one object, and that object reads
+- the tree and the owner table agree, block for block
+
+A leftover `settings.tmp` is allowed, and is not a fault: the workload creates
+it in one commit and consumes it in the next.
+
+**And the harness proves its own checker before it believes a single round**,
+by breaking an image two ways and requiring both to be caught. The first version
+of that control was itself useless — it reached into superblock A's fields
+while B was the live one, damaged a block nothing pointed at, and got back a
+correct report of a healthy volume. A negative control that misses its target
+reports exactly what a working checker reports.
+
 ### How crash consistency is tested
 
 `scripts/crash-test.sh` already exists and already cuts the power at swept
@@ -298,6 +350,10 @@ sensitivity would.
    assert the target is old-complete or new-complete. Anything else — absent,
    mixed, or both names present — breaks the pattern the registry is about to
    depend on.
+
+   **Done**, and it earned its place immediately: the first run of it found
+   BG-088, a bug that made the second superblock useless and that nothing inside
+   the kernel could have detected.
 2. **The reverse sweep, before the forward walk is trusted.** The sweep is the
    independent derivation, and a sweep that quietly uses the reader's path
    resolution is not independent. Test the checker against a deliberately
@@ -503,10 +559,21 @@ impossible to find afterwards.
 
 ### Not written yet
 
-Directory entries being *created*, reading a file back, and rename. The format
-describes all of them; nothing writes them. The next thing is directory entries,
-because until a name can be added there is nothing for a rename to be atomic
-about — and rename is the constraint the registry is waiting on.
+Reading a file's contents back, writing to a file, deleting one, nested
+directories, and renaming between two directories. The format describes them
+all.
+
+Names and rename exist: `reconfs_create`, `reconfs_lookup`, `reconfs_readdir`
+and `reconfs_rename`, with lookup case-insensitive and storage case-preserving.
+A directory holds its entries inline while they fit and in its direct blocks
+after that, which is about fifteen hundred names at a 4KiB block; more needs the
+indirect block, which the format has and the code refuses rather than
+truncating.
+
+Renaming between two directories is refused with a status of its own. It needs
+the moved object's parent rewritten, both directories rewritten, and the path
+from each to the root copied — and that path-copy helper is the next piece of
+work, because it is also what nested directories need.
 
 ---
 

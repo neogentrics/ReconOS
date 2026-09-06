@@ -35,15 +35,49 @@
  * --- Why an owner table rather than a bitmap ---
  *
  * The design needs a back-reference on every allocated object, so that walking
- * *down* from the root and sweeping *up* from every allocated block are two
+ * *down* from the root and sweeping *up* from every allocated object are two
  * independent derivations of the same set. It also needs to know which blocks
  * are free.
  *
- * Those are the same table. A block is free exactly when its owner is
- * RECONFS_OWNER_FREE, and otherwise the owner *is* the back-reference. One
- * structure, four bytes per block, and the reverse sweep gets what it needs
+ * Those are the same table. A block is unclaimed exactly when its owner is
+ * RECONFS_OWNER_VOID, and otherwise the owner *is* the back-reference. One
+ * structure, eight bytes per block, and the reverse sweep gets what it needs
  * without a header inside data blocks -- which would have made file data no
  * longer block-aligned, for the benefit of a checker.
+ *
+ * --- The owner is a dossier number, not a block number ---
+ *
+ * It was a block number, which is the obvious choice and is wrong here, for a
+ * reason that only appears once directories have entries in them.
+ *
+ * Copy-on-write moves an object's block every time the object changes. If a
+ * child recorded its parent's *block*, then changing a directory -- adding one
+ * file to it -- would move that directory's inode, and every child would then
+ * hold a stale back-reference. Fixing them means rewriting every child, which
+ * moves every child, which invalidates the back-references of *their* children.
+ *
+ * Creating one file in a directory of a thousand would rewrite a thousand and
+ * one inodes, and a deep tree would rewrite far more than that. Not slow:
+ * unusable.
+ *
+ * A dossier number is allocated once and never reused, so it survives the
+ * object moving. Nothing has to be rewritten when a directory changes except
+ * the directory itself and the path from it to the root.
+ *
+ * --- What that costs the checker, and what it keeps ---
+ *
+ * The reverse sweep can no longer *climb*: a dossier does not say where its
+ * inode lives, and finding out would need an index the forward walk builds --
+ * which is precisely the dependency that would make the two derivations one.
+ *
+ * So the sweep does not climb. It builds a map of *which dossier claims which
+ * blocks*, reading nothing but the owner table, and the forward walk builds the
+ * same map from directory entries and block pointers, reading nothing but
+ * pointers. Disjoint fields, and the two maps must be identical.
+ *
+ * That is the same evidence as before. The climb was the smaller half: four of
+ * the five faults the checker is tested against were caught by the comparison,
+ * not by the climb.
  *
  * --- Why an inode is a whole block, and its number is its address ---
  *
@@ -121,9 +155,15 @@
  * commit writes whichever is *not* live, so a crash during the superblock write
  * itself leaves the other one intact and the format never has a moment with no
  * valid superblock on it. */
+/* Superblock A is at byte zero, which is block zero at every block size. The
+ * second copy is at byte RECONFS_BLOCK_MAX, whose *block number* depends on the
+ * block size -- so it has no constant, only reconfs_super_b().
+ *
+ * There was a `RECONFS_SUPER_B 1` here, from when the two were adjacent blocks.
+ * It went on compiling and went on meaning block 1 after the layout changed
+ * under it, and every commit wrote its superblock into dead space. A constant
+ * whose meaning has moved is worse than no constant, so there is no constant. */
 #define RECONFS_SUPER_A		0
-#define RECONFS_SUPER_B		1
-#define RECONFS_FIRST_DATA	2
 
 /* Owner table sentinels.
  *
@@ -133,6 +173,14 @@
  * is owned by nothing above it and must still not read as free. */
 #define RECONFS_OWNER_VOID	0ULL
 #define RECONFS_OWNER_ARCHIVE	1ULL
+
+/* The root directory's dossier. Fixed, because the root has to be identifiable
+ * before anything has been read, and because dossier 0 and 1 are taken by the
+ * sentinels above -- an object numbered 1 would be indistinguishable from a
+ * block the archive owns. Everything else is numbered from
+ * RECONFS_DOSSIER_FIRST upward and never reused. */
+#define RECONFS_DOSSIER_ROOT	2ULL
+#define RECONFS_DOSSIER_FIRST	3ULL
 
 /* --- Why an owner is 64 bits, and what that cost buys --------------------
  *
@@ -298,8 +346,12 @@ struct reconfs_inode {
 	u64 dossier;		/* stable across rewrites; never reused */
 
 	/* The back-reference, and half of what makes the checker independent:
-	 * the block number of the directory whose entry names this inode. Zero
-	 * for the root, which is the only object with no parent.
+	 * the *dossier* of the directory whose entry names this inode. Zero for
+	 * the root, which is the only object with no parent.
+	 *
+	 * A dossier rather than a block, for the reason given at the top of this
+	 * file: a block number would go stale every time the parent changed, and
+	 * fixing it would rewrite the whole subtree.
 	 *
 	 * A forward walk never reads this field. That is the point -- if the
 	 * checker's two derivations shared a field, they would agree by
@@ -363,7 +415,10 @@ struct reconfs_inode {
 	u8 data[];
 } RK_PACKED;
 
-#define RECONFS_INLINE_MAX	(RECONFS_BLOCK - sizeof(struct reconfs_inode))
+/* How much of a small file, or how many directory entries, live inside the
+ * inode itself. It grows with the block size, so a larger block makes the
+ * inline case cover *more* files rather than fewer. */
+#define RECONFS_INLINE_MAX_FOR(bs) ((bs) - (unsigned)sizeof(struct reconfs_inode))
 
 /*
  * A directory entry, in a directory's data blocks.
@@ -414,6 +469,11 @@ enum reconfs_status {
 	RECONFS_ERR_NOSPACE,
 	RECONFS_ERR_BLOCK_SIZE,
 	RECONFS_ERR_RETRY,	/* nothing is wrong; try the whole thing again */
+	RECONFS_ERR_NAME,	/* the name is empty, too long, or contains a slash */
+	RECONFS_ERR_NOT_FOUND,
+	RECONFS_ERR_NOT_DIR,
+	RECONFS_ERR_EXISTS,
+	RECONFS_ERR_DIR_FULL,	/* refused rather than truncated */
 };
 
 /* Passed to the block routines for a block kind that carries no checksum of
@@ -522,8 +582,50 @@ enum reconfs_status reconfs_check(struct reconfs *fs,
  * there is no flag to override that. */
 void reconfs_run(void);
 
+/* Replaces one file by rename, over and over, until the machine is killed.
+ * Runs only when `reconfs-crash=<device>` names one; scripts/crash-test.sh
+ * cuts the power into it and scripts/reconfs-check.py judges what survived. */
+void reconfs_crash_run(void);
+
 /* The layout arithmetic, at sizes no disk in this build environment can reach.
  * Writes nothing and touches no device, so it runs on every boot. */
 bool reconfs_layout_self_test(void);
+
+/* --- Names ----------------------------------------------------------------
+ *
+ * Lookup is case-insensitive and storage is case-preserving, which is what a
+ * person means by a name. The fold is ASCII only; see reconfs_dir.c.
+ */
+u32 reconfs_inline_max(u32 block_size);
+
+enum reconfs_status reconfs_lookup(struct reconfs *fs, u64 dir_block,
+				   const char *name, u64 *out_block);
+
+/* Creates an object in `dir_block` and returns both the new object's block and
+ * the *new* block of the directory, which moved because it changed. The caller
+ * is responsible for making the new directory reachable -- for the root, with
+ * reconfs_txn_set_root. */
+enum reconfs_status reconfs_create(struct reconfs_txn *txn, struct reconfs *fs,
+				   u64 dir_block, const char *name, u32 type,
+				   u32 mode, u64 *out_inode, u64 *out_dir);
+
+/* Renames `from` to `to` within one directory, in a single commit.
+ *
+ * The post-crash outcome set has exactly two members: the rename happened, or
+ * it did not. Renaming over an existing name is permitted and releases what was
+ * there. Renaming between two directories is refused -- the path-copy that would
+ * make it one commit does not exist yet.
+ *
+ * Returns the directory's new block; the caller makes it reachable. */
+enum reconfs_status reconfs_rename(struct reconfs_txn *txn, struct reconfs *fs,
+				   u64 dir_block, const char *from,
+				   const char *to, u64 *out_dir);
+
+/* A listing is a snapshot of one epoch: entries come from the directory as it
+ * was when the listing started, and changes made while iterating are not seen.
+ * Stated rather than left to be discovered. */
+enum reconfs_status reconfs_readdir(struct reconfs *fs, u64 dir_block,
+				    unsigned index, char *name, size_t len,
+				    u64 *child, u32 *type);
 
 #endif /* RECON_KERNEL_RECONFS_H */

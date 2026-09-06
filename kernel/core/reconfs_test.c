@@ -96,7 +96,7 @@ enum breakage {
 	BREAK_LOST_OWNER,	/* reachable from the root, marked free */
 	BREAK_BAD_PARENT,	/* an inode disowned by its own directory */
 	BREAK_SUPER_CHECKSUM,	/* a superblock that no longer adds up */
-	BREAK_STRANDED_CHAIN,	/* an owner chain that never reaches the root */
+	BREAK_WRONG_OWNER,	/* allocated to one object, reachable from another */
 	BREAK_COUNT
 };
 
@@ -120,7 +120,7 @@ static const char *breakage_name(enum breakage b)
 	case BREAK_LOST_OWNER:     return "a reachable block marked free";
 	case BREAK_BAD_PARENT:     return "an inode whose parent is wrong";
 	case BREAK_SUPER_CHECKSUM: return "a superblock that does not add up";
-	case BREAK_STRANDED_CHAIN: return "an owner chain going nowhere";
+	case BREAK_WRONG_OWNER:    return "a block owned by the wrong object";
 	default:                   return "?";
 	}
 }
@@ -136,7 +136,7 @@ static bool apply_breakage(struct reconfs *fs, enum breakage b)
 		 * reaches it. */
 		u64 victim = fs->total_blocks - 1;
 
-		return reconfs_set_owner(fs, victim, fs->root_inode)
+		return reconfs_set_owner(fs, victim, RECONFS_DOSSIER_ROOT)
 		       == RECONFS_OK;
 	}
 	case BREAK_LOST_OWNER:
@@ -154,7 +154,7 @@ static bool apply_breakage(struct reconfs *fs, enum breakage b)
 
 		if (reconfs_read_block(fs, fs->root_inode, ino, INODE_CSUM)
 		    == RECONFS_OK) {
-			ino->parent = fs->root_inode;	/* its own parent */
+			ino->parent = RECONFS_DOSSIER_ROOT;	/* its own parent */
 			ok = reconfs_write_block(fs, fs->root_inode, ino,
 						 INODE_CSUM) == RECONFS_OK;
 		}
@@ -181,36 +181,17 @@ static bool apply_breakage(struct reconfs *fs, enum breakage b)
 		kfree(sb);
 		return ok;
 	}
-	case BREAK_STRANDED_CHAIN: {
-		/* An inode that is not the root and claims no parent, with a
-		 * block owned by it. The sweep climbs from the block, reaches
-		 * that inode, asks for its parent and is handed zero.
+	case BREAK_WRONG_OWNER: {
+		/* The root's own inode block, recorded in the table as
+		 * belonging to some other object.
 		 *
-		 * The first version of the sweep treated arriving at zero as
-		 * having climbed all the way home, which accepted exactly this.
-		 * The fault is here so the fix is watched working rather than
-		 * reasoned about. */
-		struct reconfs_inode *ino = kzalloc(fs->block_size);
-		u64 stray = fs->total_blocks - 2;
-		u64 owned = fs->total_blocks - 3;
-		bool ok = false;
-
-		if (!ino)
-			return false;
-
-		ino->magic     = RECONFS_INODE_MAGIC;
-		ino->dossier = 9999;
-		ino->parent    = 0;		/* only the root may say this */
-		ino->type      = RECONFS_TYPE_FILE;
-		ino->mode      = 0644;
-		ino->links     = 1;
-
-		if (reconfs_write_block(fs, stray, ino, INODE_CSUM) == RECONFS_OK &&
-		    reconfs_set_owner(fs, stray, RECONFS_OWNER_ARCHIVE) == RECONFS_OK)
-			ok = reconfs_set_owner(fs, owned, stray) == RECONFS_OK;
-
-		kfree(ino);
-		return ok;
+		 * This is the one comparison branch nothing else reaches: the
+		 * forward walk finds the block and knows who owns it, the table
+		 * says somebody else, and neither answer is "unclaimed". A
+		 * checker that only tested the reachable/unreachable pair would
+		 * pass an image where every block is accounted for and half of
+		 * them are accounted to the wrong file. */
+		return reconfs_set_owner(fs, fs->root_inode, 9999) == RECONFS_OK;
 	}
 	default:
 		return false;
@@ -539,22 +520,262 @@ static bool run_at(struct block_device *dev, u32 bs)
 				(unsigned long long)released);
 		}
 
+		/* --- Names -------------------------------------------------
+		 *
+		 * Three files in the root, then look them up, list them, and
+		 * check the volume still holds together. The last part is the
+		 * one that matters: a create that returns OK and leaves the
+		 * owner table disagreeing with the tree is a create that has
+		 * corrupted the volume while reporting success. */
+		{
+			struct reconfs_txn *t3 = reconfs_txn_begin(&fs);
+			static const char *names[] = {
+				"Registry.dat", "Theme.ini", "ReadMe.txt"
+			};
+			u64 made[3] = { 0, 0, 0 };
+			u64 dir = fs.root_inode;
+			unsigned k;
+			bool ok = true;
+
+			if (!t3) {
+				kputs("  names              : FAIL (no txn)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			for (k = 0; k < RK_ARRAY_LEN(names); k++) {
+				u64 new_dir = 0;
+
+				st = reconfs_create(t3, &fs, dir, names[k],
+						    RECONFS_TYPE_FILE, 0600,
+						    &made[k], &new_dir);
+				if (st != RECONFS_OK) {
+					kprintf("  names              : FAIL "
+						"(create %s: %s)\n", names[k],
+						reconfs_strerror(st));
+					reconfs_txn_abort(t3);
+					reconfs_unmount(&fs);
+					return false;
+				}
+				dir = new_dir;
+			}
+
+			/* A name already taken must be refused, not duplicated. */
+			{
+				u64 a = 0, b = 0;
+
+				if (reconfs_create(t3, &fs, dir, "theme.INI",
+						   RECONFS_TYPE_FILE, 0600,
+						   &a, &b) != RECONFS_ERR_EXISTS) {
+					kputs("  names              : FAIL (a name "
+					      "differing only in case was allowed "
+					      "twice)\n");
+					reconfs_txn_abort(t3);
+					reconfs_unmount(&fs);
+					return false;
+				}
+			}
+
+			reconfs_txn_set_root(t3, dir);
+
+			if (reconfs_txn_commit(t3) != RECONFS_OK) {
+				kputs("  names              : FAIL (commit)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* Found by the name that was typed, and by one that differs
+			 * only in case -- stored as given, compared without. */
+			for (k = 0; k < RK_ARRAY_LEN(names); k++) {
+				u64 found = 0;
+
+				if (reconfs_lookup(&fs, fs.root_inode, names[k],
+						   &found) != RECONFS_OK ||
+				    found != made[k])
+					ok = false;
+			}
+
+			{
+				u64 found = 0;
+
+				if (reconfs_lookup(&fs, fs.root_inode, "THEME.ini",
+						   &found) != RECONFS_OK ||
+				    found != made[1])
+					ok = false;
+
+				if (reconfs_lookup(&fs, fs.root_inode, "absent",
+						   &found) != RECONFS_ERR_NOT_FOUND)
+					ok = false;
+			}
+
+			/* And the listing returns the names as they were typed. */
+			{
+				char got[RECONFS_NAME_MAX + 1];
+				u64 child;
+				u32 type;
+				unsigned seen = 0;
+
+				while (reconfs_readdir(&fs, fs.root_inode, seen, got,
+						       sizeof(got), &child,
+						       &type) == RECONFS_OK)
+					seen++;
+
+				if (seen != RK_ARRAY_LEN(names))
+					ok = false;
+			}
+
+			st = reconfs_check(&fs, &r);
+			if (st != RECONFS_OK || r.disagreements) {
+				kprintf("  names              : FAIL (%llu "
+					"disagreements: %s)\n",
+					(unsigned long long)r.disagreements,
+					r.first_disagreement ? r.first_disagreement
+							     : "");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			if (!ok) {
+				kputs("  names              : FAIL (lookup or "
+				      "listing)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			kprintf("  three names        : pass (%llu blocks now "
+				"reachable, %llu inodes)\n",
+				(unsigned long long)r.blocks_seen_forward,
+				(unsigned long long)r.inodes);
+		}
+
+		/* --- Rename, which is what the registry is waiting on ------
+		 *
+		 * The pattern the desktop needs: write a temporary file, then
+		 * rename it over the real one. What must be true afterwards is
+		 * that the real name refers to the new object and the old object
+		 * is gone -- and that the volume still holds together, because a
+		 * rename that returns OK and leaves the owner table disagreeing
+		 * with the tree has corrupted the volume while reporting success.
+		 */
+		{
+			struct reconfs_txn *t4 = reconfs_txn_begin(&fs);
+			u64 fresh = 0, dir = fs.root_inode, found = 0;
+			u64 doomed = 0;
+
+			if (!t4 ||
+			    reconfs_lookup(&fs, dir, "Registry.dat",
+					   &doomed) != RECONFS_OK) {
+				kputs("  rename             : FAIL (setup)\n");
+				if (t4)
+					reconfs_txn_abort(t4);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			st = reconfs_create(t4, &fs, dir, "Registry.tmp",
+					    RECONFS_TYPE_FILE, 0600, &fresh, &dir);
+			if (st != RECONFS_OK) {
+				kprintf("  rename             : FAIL (create: %s)\n",
+					reconfs_strerror(st));
+				reconfs_txn_abort(t4);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			st = reconfs_rename(t4, &fs, dir, "Registry.tmp",
+					    "Registry.dat", &dir);
+			if (st != RECONFS_OK) {
+				kprintf("  rename             : FAIL (rename: %s)\n",
+					reconfs_strerror(st));
+				reconfs_txn_abort(t4);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			reconfs_txn_set_root(t4, dir);
+
+			if (reconfs_txn_commit(t4) != RECONFS_OK) {
+				kputs("  rename             : FAIL (commit)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* The real name now refers to what was the temporary file. */
+			if (reconfs_lookup(&fs, fs.root_inode, "Registry.dat",
+					   &found) != RECONFS_OK ||
+			    found != fresh || found == doomed) {
+				kputs("  rename             : FAIL (the name does not "
+				      "refer to the new object)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* And the temporary name is gone -- one name, not two. */
+			if (reconfs_lookup(&fs, fs.root_inode, "Registry.tmp",
+					   &found) != RECONFS_ERR_NOT_FOUND) {
+				kputs("  rename             : FAIL (both names "
+				      "exist)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			st = reconfs_check(&fs, &r);
+			if (st != RECONFS_OK || r.disagreements) {
+				kprintf("  rename             : FAIL (%llu "
+					"disagreements: %s)\n",
+					(unsigned long long)r.disagreements,
+					r.first_disagreement ? r.first_disagreement
+							     : "");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			kprintf("  rename over a name : pass (%llu inodes, the "
+				"replaced one released)\n",
+				(unsigned long long)r.inodes);
+		}
+
 		/* And it must survive being read back from scratch. A commit
 		 * that is only correct in the memory of the process that made
 		 * it is not a commit. */
-		reconfs_unmount(&fs);
+		/* Whatever the epoch is now, after everything above, is what a
+		 * remount must find. Comparing against a number captured
+		 * further up was how this read before, and it started failing
+		 * the moment a test was inserted between the two -- an
+		 * assertion about the state of the test rather than about the
+		 * filesystem. */
+		{
+			u64 committed = fs.super.epoch;
+			u64 named = 0;
 
-		if (reconfs_mount(dev, &fs) != RECONFS_OK) {
-			kputs("  a commit that survives : FAIL (remount)\n");
-			return false;
-		}
-
-		if (fs.super.epoch != before + 1) {
-			kprintf("  a commit that survives : FAIL (epoch %llu "
-				"after remount)\n",
-				(unsigned long long)fs.super.epoch);
 			reconfs_unmount(&fs);
-			return false;
+
+			if (reconfs_mount(dev, &fs) != RECONFS_OK) {
+				kputs("  a commit that survives : FAIL "
+				      "(remount)\n");
+				return false;
+			}
+
+			if (fs.super.epoch != committed) {
+				kprintf("  a commit that survives : FAIL "
+					"(epoch %llu committed, %llu after "
+					"remount)\n",
+					(unsigned long long)committed,
+					(unsigned long long)fs.super.epoch);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* And the names survive with it. A commit that
+			 * preserved the epoch and lost the directory would
+			 * pass an epoch check and be useless. */
+			if (reconfs_lookup(&fs, fs.root_inode, "Registry.dat",
+					   &named) != RECONFS_OK) {
+				kputs("  a commit that survives : FAIL (the "
+				      "renamed file is not there)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
 		}
 
 		st = reconfs_check(&fs, &r);

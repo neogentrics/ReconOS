@@ -34,3 +34,6 @@ dist/
 kernel/build/disk.img
 kernel/build/fixtures/
 kernel/build/crash/
+kernel/build/rename-crash/
+kernel/build/flush/
+__pycache__/

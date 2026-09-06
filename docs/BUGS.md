@@ -141,6 +141,49 @@ broken says nothing about the work.
   leaves the transaction usable, which is what let the test fill a volume on
   purpose.
 
+### BG-088 — Only one of the two superblocks was ever written
+
+[#277](https://github.com/neogentrics/ReconOS/issues/277)
+
+- **Found in** kernel 0.0.11. **Found by** a second implementation of the format
+  — `scripts/reconfs-check.py`, written in Python from the header rather than
+  from the kernel's reader — reporting an epoch one behind what the kernel said
+  it had committed.
+- **Was** ReconFS keeps two superblocks and writes whichever is not live, so a
+  crash during that write leaves the other intact and current. That is the only
+  reason there are two.
+
+  The commit chose its target with `RECONFS_SUPER_B`, a constant meaning *block
+  1* from when the two copies were adjacent blocks. They had since moved to
+  fixed *byte* offsets — zero and 65536 — so the second copy's block number
+  depends on the block size, and at 4KiB it is block 16.
+
+  The constant kept compiling and kept meaning block 1. Every commit wrote its
+  superblock into the reserved run between the two copies, where nothing ever
+  reads it, and **the real second superblock stayed at the epoch the format
+  left it — an empty volume.** A crash during a superblock write would have
+  rolled the filesystem back to freshly formatted.
+
+  **Nothing inside the kernel could have found this.** Mounting reads the second
+  copy from the right place and finds a valid, older superblock, which is
+  exactly what a healthy volume looks like; the checker walks the live tree,
+  which was correct; every self-test passed. It took reading the image with
+  something that did not share the constant.
+
+  The shape worth keeping: **a constant survived a change in what it named.**
+  `RECONFS_SUPER_A` was still right, because block zero is byte zero at every
+  block size, and its neighbour being right made the pair look right.
+- **Fixed in** kernel 0.0.11. The commit asks `reconfs_super_b(block_size)`, and
+  the constant is deleted rather than corrected — a constant whose meaning has
+  moved is worse than no constant.
+
+  Tested by `scripts/rename-crash-test.sh`, which cuts the power inside a rename
+  and judges the surviving image with the Python reader. It proves that reader
+  on every run first, by breaking an image two ways and requiring both to be
+  caught — and the first version of *that* control was itself useless, reaching
+  into superblock A's fields while B was live, damaging a block nothing pointed
+  at, and getting a correct report of a healthy volume.
+
 ### BG-085 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)
