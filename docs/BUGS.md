@@ -1952,3 +1952,50 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   thing and now depends on two needs every path that changes the second thing to
   know that. Nothing warns you; the old paths keep compiling.
 - **Fixed in** v0.3.1.
+
+### BG-109 — The clock was an hour slow for half the year, in half the world
+
+- **Found in** v0.3.1. **Found by** the user, looking at it: Central selected,
+  the host reading 4:25 am, ReconOS reading 3:25 am.
+- **What it was** the zone list carried standard offsets and nothing applied
+  summer time, which the page said plainly — *"Nothing here follows daylight
+  saving"*. Stating a limitation does not stop it being wrong; it was an hour
+  out for most of the year for most of the people in the list.
+- The original reasoning holds and is not reversed here: a rule engine for the
+  world's daylight-saving legislation is a database with politics in it,
+  revised by parliaments with no interest in this clock, and getting it wrong
+  twice a year is worse than not having it.
+- **Fixed in** v0.3.1 by making summer time a **switch** rather than a rule, and
+  starting it from what the host thinks. `tm_isdst` says whether summer time is
+  in force and the offset says by how much, so the two come apart into a
+  standard zone and a switch without any rules being carried.
+- Written with standard time arithmetic rather than `tm_gmtoff`, which is a BSD
+  extension C11 does not have — a system that intends to run on its own kernel
+  should not lean on what glibc adds to a standard structure.
+
+### BG-110 — The time zone list had a scrollbar and no way to move it
+
+- **Found in** v0.3.1. **Found by** the user, trying to scroll it.
+- **What it was** `panel_scroll` had a branch for Appearance, Display, Network,
+  Firewall, Programs and the Registry, and none for Date and Time. Twenty-six
+  zones, about nine rows of room, and seventeen zones that could not be reached
+  — with a scrollbar beside them saying they were there.
+- **The note directly above the fault describes the fault.** It explains that
+  every list in Appearance takes the wheel now, because one of them "said
+  'scroll for the rest' under a list that could not be scrolled -- a page
+  telling somebody to do something it would not let them do." The same
+  sentence was true one page over, and the fix had not been generalised.
+- **Fixed in** v0.3.1.
+
+### BG-111 — A first account started on UTC on a machine that was not
+
+- **Found in** v0.3.1, while fixing [BG-109](#bg-109--the-clock-was-an-hour-slow-for-half-the-year-in-half-the-world).
+- **What it was** the zone defaulted to UTC, which is right nowhere and reads
+  as a fault everywhere. Adopting the host's zone was written into
+  `recon_clock_init` — and the page still came up on UTC+00:00 on a machine six
+  hours from it, with the code meant to prevent that already running.
+- The zone is a **per-account** setting, and the clock starts before anybody has
+  signed in. The hive being written was not the hive that would be read.
+- **Fixed in** v0.3.1 by adopting at sign-in, which is the first moment there is
+  an account to give it to. Only where no zone has been chosen — including
+  where somebody chose UTC on a machine that is not on it.

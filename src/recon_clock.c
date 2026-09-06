@@ -109,8 +109,87 @@ static int64_t now_utc(void) {
     return (int64_t)time(NULL);
 }
 
+/*
+ * The offset actually applied: the zone's standard one, plus an hour if this
+ * account says it is on summer time.
+ *
+ * Every reader of the clock goes through here, so the switch reaches the
+ * taskbar, the Calendar, a file's timestamp and the mail client together. An
+ * hour applied in some of those and not others is worse than an hour applied
+ * in none.
+ */
 static int zone_minutes(void) {
-    return recon_registry_get_int(RECON_REG_USER, RECON_CLOCK_ZONE_KEY, 0);
+    int minutes = recon_registry_get_int(RECON_REG_USER,
+        RECON_CLOCK_ZONE_KEY, 0);
+    if (recon_registry_get_bool(RECON_REG_USER, RECON_CLOCK_DST_KEY, false)) {
+        minutes += 60;
+    }
+    return minutes;
+}
+
+bool recon_clock_daylight_saving(void) {
+    return recon_registry_get_bool(RECON_REG_USER, RECON_CLOCK_DST_KEY, false);
+}
+
+void recon_clock_set_daylight_saving(bool on) {
+    recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_DST_KEY, on);
+}
+
+/*
+ * What the host machine currently thinks, offset and summer time together.
+ *
+ * The one place ReconOS asks the host about zones rather than about the time,
+ * and it asks once -- to start from, on a machine that has never been set up.
+ * `tm_gmtoff` already has summer time folded into it, and `tm_isdst` says
+ * whether it did, so the two come apart cleanly into a standard offset and a
+ * switch.
+ *
+ * Returns false where the host cannot say. Nothing is guessed from a failure;
+ * the account simply starts at UTC and somebody sets it, which is the same
+ * place it started before this existed.
+ */
+bool recon_clock_host_zone(int *standard_minutes, bool *summer_time) {
+    time_t now = time(NULL);
+    struct tm local, utc;
+    if (localtime_r(&now, &local) == NULL || gmtime_r(&now, &utc) == NULL) {
+        return false;
+    }
+
+    /*
+     * The difference between the two broken-down times, rather than
+     * `tm_gmtoff`.
+     *
+     * tm_gmtoff is the obvious way and is a BSD extension that C11 does not
+     * have -- and this project compiles as C11 on purpose, because a system
+     * that intends to run on its own kernel one day should not be quietly
+     * leaning on whatever glibc happens to add to a standard structure.
+     * Subtracting two struct tms uses only fields C defines.
+     *
+     * The day term handles the case where local and UTC are on different
+     * dates, which is true for roughly half the world at any moment. Clamped
+     * to a day either way because that is the largest real offset and anything
+     * beyond it is a broken host rather than a distant one.
+     */
+    int day_shift = (local.tm_yday - utc.tm_yday);
+    if (local.tm_year != utc.tm_year) {
+        day_shift = (local.tm_year > utc.tm_year) ? 1 : -1;
+    }
+    if (day_shift > 1) { day_shift = 1; }
+    if (day_shift < -1) { day_shift = -1; }
+
+    int offset = day_shift * 24 * 60
+        + (local.tm_hour - utc.tm_hour) * 60
+        + (local.tm_min - utc.tm_min);
+
+    bool dst = local.tm_isdst > 0;
+
+    if (standard_minutes != NULL) {
+        *standard_minutes = dst ? offset - 60 : offset;
+    }
+    if (summer_time != NULL) {
+        *summer_time = dst;
+    }
+    return true;
 }
 
 /*
@@ -158,6 +237,52 @@ static void break_up(int64_t seconds, struct recon_clock_time *out) {
     out->year = (int)(y + (m <= 2 ? 1 : 0));
     out->month = (int)m;
     out->day = (int)d;
+}
+
+/*
+ * Start a never-configured account from what the host thinks, once.
+ *
+ * The zone used to default to UTC, which is right nowhere and looks like a
+ * fault everywhere. The host is sitting on the answer -- it knows its own
+ * offset and whether summer time is in force -- and asking it once, at the
+ * moment there is nothing to overwrite, costs nothing and is right for most
+ * people on their first boot.
+ *
+ * Only when the key is absent. A zone somebody has set is theirs, including
+ * when they set it to UTC on a machine that is not on UTC, and a setting that
+ * quietly re-follows the host is a setting nobody can rely on.
+ */
+static void adopt_the_host_zone(void) {
+    if (recon_registry_has(RECON_REG_USER, RECON_CLOCK_ZONE_KEY)) {
+        return;
+    }
+
+    int standard = 0;
+    bool summer = false;
+    if (!recon_clock_host_zone(&standard, &summer)) {
+        return;
+    }
+
+    recon_registry_set_int(RECON_REG_USER, RECON_CLOCK_ZONE_KEY, standard);
+    recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_DST_KEY, summer);
+
+    /*
+     * And the name, when the list carries that offset, so the page shows a row
+     * highlighted rather than a zone with no name. A host on an offset this
+     * list does not have keeps the offset and simply has no row -- which is
+     * honest: the clock is right and the list does not contain that place.
+     */
+    for (int i = 0; i < ZONE_COUNT; i++) {
+        if (ZONES[i].minutes == standard) {
+            recon_registry_set(RECON_REG_USER, RECON_CLOCK_ZONE_NAME_KEY,
+                ZONES[i].name);
+            break;
+        }
+    }
+}
+
+void recon_clock_adopt_host_zone(void) {
+    adopt_the_host_zone();
 }
 
 void recon_clock_init(void) {

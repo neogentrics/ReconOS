@@ -301,6 +301,85 @@ static void test_a_check_needs_the_network(void) {
         "and nothing has been checked");
 }
 
+/* --- Summer time --- */
+
+static void test_daylight_saving(void) {
+    printf("Summer time\n");
+
+    recon_registry_set_int(RECON_REG_USER, RECON_CLOCK_ZONE_KEY, -360);
+    recon_clock_set_daylight_saving(false);
+
+    struct recon_clock_time standard;
+    recon_clock_now(&standard);
+
+    recon_clock_set_daylight_saving(true);
+    struct recon_clock_time summer;
+    recon_clock_now(&summer);
+
+    /* Compared as minutes since midnight so the check holds across the hour
+     * that rolls the date over -- which it would otherwise fail on for one
+     * hour of every day. */
+    int a = standard.hour * 60 + standard.minute;
+    int b = summer.hour * 60 + summer.minute;
+    int forward = (b - a + 1440) % 1440;
+
+    check(forward == 60, "summer time puts the clock exactly an hour forward");
+    check(recon_clock_daylight_saving(), "and the setting reads back on");
+
+    recon_clock_set_daylight_saving(false);
+    check(!recon_clock_daylight_saving(), "and off again");
+
+    /*
+     * It reaches the short form too, which is what the taskbar draws. An hour
+     * applied to the clock and not to the thing that shows the clock is worse
+     * than an hour applied to neither.
+     */
+    char before[32], after[32];
+    recon_clock_short(before, sizeof(before));
+    recon_clock_set_daylight_saving(true);
+    recon_clock_short(after, sizeof(after));
+    check(strcmp(before, after) != 0,
+        "and the corner of the screen shows the difference");
+    recon_clock_set_daylight_saving(false);
+}
+
+/*
+ * What the host says, taken apart into an offset and a switch.
+ *
+ * Written the standard way rather than with tm_gmtoff, so the arithmetic is
+ * ours and worth checking: it subtracts two broken-down times and has to carry
+ * across a date boundary, which is true for about half the world at any moment.
+ */
+static void test_the_host_zone(void) {
+    printf("What the host machine thinks\n");
+
+    int standard = 9999;
+    bool summer = true;
+    bool answered = recon_clock_host_zone(&standard, &summer);
+
+    check(answered, "the host can say what its zone is");
+    if (!answered) {
+        return;
+    }
+
+    check(standard > -13 * 60 && standard < 15 * 60,
+        "and the offset is one a place on Earth could have");
+    check(standard % 15 == 0,
+        "and lands on a quarter hour, as every real zone does");
+
+    /*
+     * Checked against the C library rather than against a number written here.
+     * A fixture would pin this to whatever zone the machine that wrote it was
+     * in, and then fail for everybody else.
+     */
+    time_t now = time(NULL);
+    struct tm local;
+    check(localtime_r(&now, &local) != NULL,
+        "and localtime agrees there is one");
+    check(summer == (local.tm_isdst > 0),
+        "and summer time matches what the library says");
+}
+
 int main(void) {
     char root[] = "/tmp/reconos-clock-XXXXXX";
     if (mkdtemp(root) == NULL) {
@@ -325,6 +404,8 @@ int main(void) {
     test_midnight_and_noon();
     test_the_zone_list();
     test_a_check_needs_the_network();
+    test_daylight_saving();
+    test_the_host_zone();
 
     recon_registry_finish();
     recon_fs_finish();

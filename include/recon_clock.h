@@ -44,8 +44,52 @@
 #define RECON_CLOCK_ZONE_KEY "clock/zone-minutes"
 #define RECON_CLOCK_ZONE_NAME_KEY "clock/zone-name"
 /* Whether to show a 24-hour clock. Off means the 12-hour one with am/pm. */
+/*
+ * Whether the clock is currently an hour ahead of its zone's standard offset.
+ *
+ * A switch rather than a rule, and the difference is the whole design. Working
+ * out whether a given place is on summer time on a given date needs the world's
+ * daylight-saving legislation, per country, per year, revised by parliaments
+ * with no interest in this clock. That is a database with politics in it.
+ *
+ * What ReconOS knows instead is what the machine it is hosted on thinks, and
+ * that is where this starts from. After that it is the account's to set, and a
+ * clock somebody set is a clock that is right for the reason that matters --
+ * they looked at it and said so.
+ *
+ * The alternative was leaving the zone list as bare standard offsets, which is
+ * defensible and was wrong for about half the year for most of the people who
+ * would use it: pick Central in September and the clock is an hour slow.
+ */
+#define RECON_CLOCK_DST_KEY "clock/daylight-saving"
+
 #define RECON_CLOCK_24H_KEY "clock/twenty-four-hour"
 /* Where to ask the time, and whether to ask at all. */
+/*
+ * Give a never-configured account the host's zone, once.
+ *
+ * Called when an account signs in rather than when the clock starts, because
+ * the zone is a per-account setting and at startup there is no account -- the
+ * hive it would be written into is not the one that will be read. Does nothing
+ * where a zone has already been chosen, including where it was chosen to be
+ * UTC on a machine that is not.
+ */
+void recon_clock_adopt_host_zone(void);
+
+/* Whether this account is currently on summer time, and setting it. */
+bool recon_clock_daylight_saving(void);
+void recon_clock_set_daylight_saving(bool on);
+
+/*
+ * What the host machine thinks its zone is: the standard offset in minutes,
+ * and whether summer time is in force right now. False when it cannot say.
+ *
+ * For starting a fresh account from something better than UTC. Not consulted
+ * afterwards -- ReconOS's zone is its own, and a setting that silently follows
+ * the host is a setting nobody can rely on.
+ */
+bool recon_clock_host_zone(int *standard_minutes, bool *summer_time);
+
 #define RECON_CLOCK_NTP_KEY "clock/time-server"
 #define RECON_CLOCK_NTP_ON_KEY "clock/ask-the-network"
 

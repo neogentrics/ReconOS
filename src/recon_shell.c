@@ -3811,6 +3811,17 @@ static void adopt_signed_in_user(struct recon_shell *shell, bool arriving) {
      */
     recon_registry_reload_user();
 
+    /*
+     * And a first-time account gets the host's zone rather than UTC.
+     *
+     * Here because this is the first moment there is an account to give it to.
+     * The clock's own startup runs before anyone has signed in, so a zone
+     * written there lands in a hive nothing will read -- which is exactly what
+     * happened: the page came up on UTC+00:00 on a machine six hours away from
+     * it, with the code meant to prevent that already running.
+     */
+    recon_clock_adopt_host_zone();
+
     recon_theme_init();
     recon_access_apply(shell->font);
 

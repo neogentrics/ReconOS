@@ -149,6 +149,8 @@ enum action {
     ACTION_SET_RESOLUTION,
     ACTION_CHECK_TIME,
     ACTION_TOGGLE_24H,
+    ACTION_TOGGLE_DST,
+    ACTION_TOGGLE_ASK_NETWORK,
     ACTION_ADD_FONT,
     ACTION_REMOVE_FONT,
     ACTION_USE_FONT,
@@ -2458,6 +2460,27 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
     int bx = draw_button(cp, p, x, y, recon_registry_get_bool(RECON_REG_USER,
             RECON_CLOCK_24H_KEY, true) ? "Show am and pm" : "Show a 24-hour clock",
         HIT_ACTION_BASE + ACTION_TOGGLE_24H, true);
+
+    /*
+     * Summer time as a switch, because ReconOS does not know the rules.
+     *
+     * Working out whether a place is on summer time on a given date needs the
+     * world's daylight-saving legislation, per country, per year, revised by
+     * parliaments with no interest in this clock. What is here instead is what
+     * the host thought when the account was made, and after that it is the
+     * account's to set. A clock somebody set is right for the reason that
+     * matters -- they looked at it and said so.
+     */
+    draw_button(cp, p, bx, y, recon_clock_daylight_saving()
+        ? "Summer time is on" : "Summer time is off",
+        HIT_ACTION_BASE + ACTION_TOGGLE_DST, true);
+    y += BUTTON_HEIGHT + 6;
+
+    bool asking = recon_registry_get_bool(RECON_REG_USER,
+        RECON_CLOCK_NTP_ON_KEY, false);
+    bx = draw_button(cp, p, x, y, asking
+        ? "Stop asking the network" : "Allow asking the network",
+        HIT_ACTION_BASE + ACTION_TOGGLE_ASK_NETWORK, true);
     draw_button(cp, p, bx, y, "Check Against a Time Server",
         HIT_ACTION_BASE + ACTION_CHECK_TIME, recon_clock_can_check());
     y += BUTTON_HEIGHT + 6;
@@ -2478,8 +2501,8 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
         y += line + 2;
     } else if (!recon_clock_can_check()) {
         recon_draw_text(p, cp->font, x, y + ascent, w,
-            "Checking is off. Turn on 'clock/ask-the-network' in the "
-            "Registry to allow it.", COLOR_DIM);
+            "Checking is off, so this machine will not reach the network "
+            "for the time unless it is allowed to.", COLOR_DIM);
         y += line + 2;
     }
     y += PADDING;
@@ -2542,8 +2565,9 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
 
     if (y + line <= bottom) {
         recon_draw_text(p, cp->font, x, y + ascent, w,
-            "Nothing here follows daylight saving. The offset is what is "
-            "kept and what is applied.", COLOR_DIM);
+            "Summer time is a switch, not a rule -- ReconOS does not carry "
+            "the world's daylight-saving legislation. It starts from what "
+            "the host thought, and after that it is yours.", COLOR_DIM);
         y += line;
     }
     if (y + line <= bottom) {
@@ -5804,6 +5828,31 @@ static void do_action(struct control_panel *cp, enum action action) {
         set_status(cp, false, "Back to the system's own font.");
         break;
 
+    case ACTION_TOGGLE_DST: {
+        bool was = recon_clock_daylight_saving();
+        recon_clock_set_daylight_saving(!was);
+        /* Everything that shows a time, not just the corner: the taskbar, the
+         * Calendar and this page all read the same clock, and an hour applied
+         * to some of them is worse than an hour applied to none. */
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, was
+            ? "Summer time off. The clock is back on its zone's own offset."
+            : "Summer time on. The clock is an hour ahead of its zone.");
+        break;
+    }
+
+    case ACTION_TOGGLE_ASK_NETWORK: {
+        bool was = recon_registry_get_bool(RECON_REG_USER,
+            RECON_CLOCK_NTP_ON_KEY, false);
+        recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_NTP_ON_KEY, !was);
+        set_status(cp, false, was
+            ? "This machine will not ask the network for the time."
+            : "This machine may now ask the network for the time. It will "
+              "report what the server said and will not set the clock from "
+              "it.");
+        break;
+    }
+
     case ACTION_TOGGLE_24H: {
         bool was = recon_registry_get_bool(RECON_REG_USER,
             RECON_CLOCK_24H_KEY, true);
@@ -7283,6 +7332,23 @@ static void panel_scroll(void *user, double delta) {
         cp->font_scroll += step;
         if (cp->font_scroll < 0) {
             cp->font_scroll = 0;
+        }
+        return;
+    }
+
+    /*
+     * The zone list, which had a scrollbar and no way to move it.
+     *
+     * Twenty-six zones and about nine rows of room, so seventeen of them could
+     * not be reached at all -- and the scrollbar beside them said they were
+     * there. Exactly the fault the note above says was fixed for Appearance:
+     * a page telling somebody to do something it would not let them do.
+     * Reported by somebody looking at the page and trying to scroll it.
+     */
+    if (cp->page == PAGE_CLOCK) {
+        cp->zone_scroll += step;
+        if (cp->zone_scroll < 0) {
+            cp->zone_scroll = 0;
         }
         return;
     }
