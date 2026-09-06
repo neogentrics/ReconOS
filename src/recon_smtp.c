@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strncasecmp */
 
 #include "ReconOS.h"
 #include "recon_crypt.h"
@@ -24,6 +25,7 @@
 #define KEY_PORT "mail/send-port"
 #define KEY_USER "mail/send-user"
 #define KEY_FROM "mail/send-from"
+#define KEY_SECURITY "mail/send-starttls"
 
 static char g_error[256];
 
@@ -60,6 +62,8 @@ bool recon_smtp_account_get(struct recon_smtp_account *out) {
         recon_registry_get(RECON_REG_USER, KEY_FROM, ""));
     out->port = recon_registry_get_int(RECON_REG_USER, KEY_PORT,
         RECON_SMTP_TLS_PORT);
+    out->security = recon_registry_get_bool(RECON_REG_USER, KEY_SECURITY,
+        false) ? RECON_SMTP_STARTTLS : RECON_SMTP_TLS;
     return true;
 }
 
@@ -74,6 +78,8 @@ bool recon_smtp_account_set(const struct recon_smtp_account *account) {
     recon_registry_set(RECON_REG_USER, KEY_FROM, account->from);
     recon_registry_set_int(RECON_REG_USER, KEY_PORT,
         account->port > 0 ? account->port : RECON_SMTP_TLS_PORT);
+    recon_registry_set_bool(RECON_REG_USER, KEY_SECURITY,
+        account->security == RECON_SMTP_STARTTLS);
     return true;
 }
 
@@ -82,6 +88,7 @@ bool recon_smtp_account_clear(void) {
     recon_registry_remove(RECON_REG_USER, KEY_PORT);
     recon_registry_remove(RECON_REG_USER, KEY_USER);
     recon_registry_remove(RECON_REG_USER, KEY_FROM);
+    recon_registry_remove(RECON_REG_USER, KEY_SECURITY);
     return true;
 }
 
@@ -90,6 +97,10 @@ bool recon_smtp_account_clear(void) {
 enum smtp_state {
     SMTP_GREETING,
     SMTP_EHLO,
+    /* Sent STARTTLS, waiting for the server to agree before upgrading. */
+    SMTP_STARTTLS,
+    /* Upgraded, and saying hello again over the encrypted connection. */
+    SMTP_EHLO_AGAIN,
     SMTP_AUTH,
     SMTP_AUTH_USER,
     SMTP_AUTH_PASSWORD,
@@ -113,9 +124,28 @@ struct recon_smtp_session {
 
     enum smtp_state state;
 
+    /*
+     * Whether the server said it can do STARTTLS, heard from the EHLO list.
+     *
+     * Cleared before each EHLO, so what is remembered is what the most recent
+     * one said. That matters after an upgrade: the first list was heard in the
+     * clear from whoever happened to be speaking, and nothing it claimed is
+     * allowed to count once the connection is encrypted.
+     */
+    bool offers_starttls;
+
     char line[LINE_MAX];
     size_t line_used;
     bool line_overflowed;
+
+    /*
+     * Stop parsing what is left of this read.
+     *
+     * Set the moment an upgrade begins, so bytes that arrived in the same
+     * packet as the server's "ready to start TLS" are dropped instead of being
+     * read as though they had come from inside the encrypted session.
+     */
+    bool discard_rest;
 
     /* Set while a handler runs, so a handler that closes the session does not
      * free the thing it is standing on. The same guard recon_net uses. */
@@ -207,6 +237,18 @@ static void on_line(struct recon_smtp_session *s, char *line) {
     if (!reply_code(line, &code, &last)) {
         return;             /* not a reply; nothing here reads anything else */
     }
+
+    /*
+     * EHLO's answer is a list of what the server can do, one line each, and
+     * STARTTLS is one of the things it can say. Read from the continuation
+     * lines as they arrive rather than by asking afterwards, because by the
+     * time the last line arrives the earlier ones are gone.
+     */
+    if ((s->state == SMTP_EHLO || s->state == SMTP_EHLO_AGAIN) &&
+            code == 250 && strncasecmp(line + 4, "STARTTLS", 8) == 0) {
+        s->offers_starttls = true;
+    }
+
     if (!last) {
         return;             /* a continuation, and the last line is the answer */
     }
@@ -227,12 +269,69 @@ static void on_line(struct recon_smtp_session *s, char *line) {
             give_up(s, "The server would not accept a greeting.");
             return;
         }
+
         /*
-         * Straight to AUTH LOGIN without reading what the server said it
-         * supports. That is a real shortcut and it fails cleanly: a server
-         * that does not offer it answers 500 or 504 and the message below
-         * says so, rather than anything being sent unauthenticated.
+         * On a connection that started plain, this is the only place an
+         * upgrade can happen, and it is required.
+         *
+         * A server that does not offer STARTTLS ends the session. So does one
+         * whose offer was removed by something in the middle -- which looks
+         * exactly the same from here, and that is the point: a client that can
+         * tell the difference is a client that could be talked out of
+         * encrypting, and this one cannot be.
          */
+        if (s->account.security == RECON_SMTP_STARTTLS) {
+            if (!s->offers_starttls) {
+                give_up(s, "That server did not offer to encrypt the "
+                    "connection, so nothing was sent. Either it cannot, or "
+                    "something between here and it removed the offer.");
+                return;
+            }
+            say(s, "Encrypting");
+            s->state = SMTP_STARTTLS;
+            send_line(s, "STARTTLS");
+            return;
+        }
+
+        say(s, "Signing in");
+        s->state = SMTP_AUTH;
+        send_line(s, "AUTH LOGIN");
+        return;
+
+    case SMTP_STARTTLS:
+        if (code != 220) {
+            give_up(s, "That server would not start encrypting, so nothing "
+                "was sent.");
+            return;
+        }
+
+        /*
+         * Everything read so far is thrown away, and this is the line that
+         * matters most in the file.
+         *
+         * A server -- or something pretending to be one -- can answer "ready
+         * to start TLS" and put more commands in the same packet. Those bytes
+         * arrived in the clear, before anything was proved, and treating them
+         * as though they came from inside the encrypted session is how
+         * STARTTLS has been broken in real mail clients. So the line buffer
+         * goes, and feed() stops reading the rest of what it is holding.
+         */
+        s->line_used = 0;
+        s->line_overflowed = false;
+        s->discard_rest = true;
+
+        if (!recon_net_stream_start_tls(s->stream, s->account.host)) {
+            give_up(s, recon_net_last_error());
+            return;
+        }
+        return;
+
+    case SMTP_EHLO_AGAIN:
+        if (code != 250) {
+            give_up(s, "The server would not accept a greeting over the "
+                "encrypted connection.");
+            return;
+        }
         say(s, "Signing in");
         s->state = SMTP_AUTH;
         send_line(s, "AUTH LOGIN");
@@ -330,6 +429,14 @@ static void on_line(struct recon_smtp_session *s, char *line) {
 static void feed(struct recon_smtp_session *s, const char *bytes,
         size_t length) {
     for (size_t i = 0; i < length; i++) {
+        /*
+         * Set by the STARTTLS branch. Everything after the "ready" line in
+         * this same read arrived in the clear and is dropped rather than
+         * parsed -- see the note there.
+         */
+        if (s->discard_rest) {
+            return;
+        }
         char c = bytes[i];
         if (c == '\r') {
             continue;
@@ -365,6 +472,25 @@ static void stream_opened(void *user, struct recon_net_stream *stream) {
     say(s, "Connected");
 }
 
+static void stream_secured(void *user, struct recon_net_stream *stream) {
+    struct recon_smtp_session *s = user;
+    (void)stream;
+
+    /*
+     * Hello again, over the encrypted connection.
+     *
+     * Required by the standard and worth having anyway: everything the server
+     * said the first time was said in the clear by whoever was speaking, so
+     * none of it is allowed to count. The list is heard again from the party
+     * whose certificate has now been checked.
+     */
+    s->discard_rest = false;
+    s->offers_starttls = false;
+    s->state = SMTP_EHLO_AGAIN;
+    say(s, "Saying hello again, encrypted");
+    send_line(s, "EHLO reconos");
+}
+
 static void stream_received(void *user, struct recon_net_stream *stream,
         const char *bytes, size_t length) {
     struct recon_smtp_session *s = user;
@@ -392,6 +518,7 @@ static void stream_closed(void *user, struct recon_net_stream *stream,
 
 static const struct recon_net_stream_handlers STREAM_HANDLERS = {
     .opened = stream_opened,
+    .secured = stream_secured,
     .received = stream_received,
     .closed = stream_closed,
 };
@@ -459,14 +586,22 @@ struct recon_smtp_session *recon_smtp_send(
     say(s, "Connecting");
 
     /*
-     * Encrypted, with no plain alternative anywhere in this file. See the
-     * header: the cost of that is a provider on STARTTLS only, and the cost of
-     * the alternative is a password sent in the open because a setting was the
-     * wrong way round.
+     * Encrypted either way, and the difference is only when.
+     *
+     * A plain stream here is not a plain session: the state machine sends EHLO
+     * and STARTTLS and nothing else until the upgrade has finished, and ends
+     * the session if it does not. There is no path through this file that
+     * sends a password or a letter over an unencrypted connection.
      */
-    s->stream = recon_net_stream_open_tls(SMTP_APPLICATION, account->host,
-        account->port > 0 ? account->port : RECON_SMTP_TLS_PORT,
-        &STREAM_HANDLERS, s);
+    int port = account->port > 0 ? account->port
+        : (account->security == RECON_SMTP_STARTTLS
+            ? RECON_SMTP_STARTTLS_PORT : RECON_SMTP_TLS_PORT);
+
+    s->stream = account->security == RECON_SMTP_STARTTLS
+        ? recon_net_stream_open(SMTP_APPLICATION, account->host, port,
+            &STREAM_HANDLERS, s)
+        : recon_net_stream_open_tls(SMTP_APPLICATION, account->host, port,
+            &STREAM_HANDLERS, s);
     if (s->stream == NULL) {
         set_error("%s", recon_net_last_error());
         free(s->message);

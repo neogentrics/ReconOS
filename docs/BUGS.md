@@ -2020,3 +2020,22 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   makes the first keystroke replace a default rather than append to it.
 - **Fixed in** v0.3.1 by `recon_edit_focus`, which does what
   `recon_edit_begin` did minus the copy — and the copy was the whole fault.
+
+### BG-113 — A TLS handshake that stalled was never timed out
+
+- **Found in** v0.3.1, while building STARTTLS. **Found by** a fake SMTP server
+  that speaks the plain half of STARTTLS and cannot speak TLS — so it accepts,
+  answers, agrees to upgrade, and then falls silent. The client waited forever
+  with "Sending…" on screen and the button disabled.
+- **What it was** the connect deadline was dropped the moment the socket
+  connected, which left the handshake unguarded. `connected` and *usable* are
+  the same moment for a plain stream and are not for an encrypted one, and the
+  timeout was written for the first meaning.
+- **Not specific to SMTP.** Every outgoing TLS stream had this: reading mail,
+  the web viewer, checking the time. A server that accepts and says nothing is
+  also what a failing middlebox looks like, so it is not an exotic case.
+- **Fixed in** v0.3.1. The deadline now survives until the connection is usable
+  rather than until the socket is open — dropped immediately for a plain
+  stream, and at the end of the handshake for an encrypted one. An upgrade
+  starts a fresh one, because the original was correctly dropped when the plain
+  connection came up.

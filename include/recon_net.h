@@ -265,6 +265,17 @@ struct recon_net_stream;
  */
 struct recon_net_stream_handlers {
     void (*opened)(void *user, struct recon_net_stream *stream);
+
+    /*
+     * An upgrade finished and the connection is now encrypted.
+     *
+     * Only for a stream that started plain and was upgraded with
+     * recon_net_stream_start_tls. A stream opened encrypted never calls this --
+     * for one of those, `opened` already means "encrypted and verified", and
+     * having two callbacks that both mean it would invite a caller to handle
+     * one and not the other.
+     */
+    void (*secured)(void *user, struct recon_net_stream *stream);
     void (*received)(void *user, struct recon_net_stream *stream,
         const char *bytes, size_t length);
     void (*closed)(void *user, struct recon_net_stream *stream,
@@ -306,6 +317,43 @@ struct recon_net_stream *recon_net_stream_open(const char *application,
 struct recon_net_stream *recon_net_stream_open_tls(const char *application,
     const char *host, int port,
     const struct recon_net_stream_handlers *handlers, void *user);
+
+/*
+ * Turn a plain, connected stream into an encrypted one.
+ *
+ * For protocols that begin in the clear and ask to be upgraded -- SMTP's
+ * STARTTLS, and the same pattern in IMAP and elsewhere. The far end's
+ * certificate is checked against `hostname` exactly as it is for a stream that
+ * was encrypted from the first byte; there is no weaker mode.
+ *
+ * --- What the caller still has to get right ---
+ *
+ * This function cannot make an upgrade safe on its own, and it is worth being
+ * plain about which half it does not own.
+ *
+ * It refuses an upgrade that is obviously unsafe: a stream that is not
+ * connected, one that is already encrypted, and one with bytes still queued to
+ * send -- because those bytes were written for a plaintext conversation and
+ * would arrive inside the encrypted one.
+ *
+ * What it cannot see is the *received* side. A server, or something pretending
+ * to be one, can answer "ready to start TLS" and put more commands in the same
+ * packet. Anything the caller has already read is plaintext that arrived before
+ * anything was proved, and treating it as though it came from inside the
+ * encrypted session is how STARTTLS has been broken in real mail clients more
+ * than once. The caller must throw away whatever it has buffered at the moment
+ * it asks for this, and must not carry any conclusion drawn before the upgrade
+ * across it.
+ *
+ * And the upgrade must be required rather than attempted. A protocol that
+ * carries on unencrypted when the server does not offer it is a protocol that
+ * anything in the middle can downgrade by deleting one line.
+ *
+ * False, with recon_net_last_error saying why, when the upgrade cannot start.
+ * The stream is left plain and usable; nothing is half-upgraded.
+ */
+bool recon_net_stream_start_tls(struct recon_net_stream *stream,
+    const char *hostname);
 
 /*
  * Queue bytes to send.

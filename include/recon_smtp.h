@@ -8,24 +8,36 @@
  *
  * --- What this refuses to do ---
  *
- * It will not send a message over a connection that is not encrypted, and the
- * only way it knows to get one is TLS from the first byte -- port 465. There is
- * no plaintext path anywhere in this file and no setting that produces one.
+ * It will not send a message over a connection that is not encrypted. Both
+ * usual ways of getting one are here: TLS from the first byte on port 465, and
+ * STARTTLS on 587. There is no third way and no setting that produces one.
  *
- * That costs something real, and the cost is named rather than hidden: a
- * provider that offers only STARTTLS on 587 is a provider this cannot send
- * through. STARTTLS is not missing because it is unimportant. It is missing
- * because it means starting a plaintext conversation and asking to be upgraded,
- * and recon_net has no way to upgrade a stream -- deliberately, and its header
- * says so: "A plain stream is still a plain stream. Nothing upgrades itself
- * quietly."
+ * --- STARTTLS, and why it is the dangerous one ---
  *
- * Adding that is the work this needs next, and it has to be built so the
- * upgrade is *required*: a server that does not offer STARTTLS, or a middle
- * that strips it from the offer, must end the session rather than continue in
- * the open. Half of that -- the connecting half -- is easy, and it is the half
- * that would ship a system sending passwords in the clear if the other half
- * were got wrong. So it waits for a session with somebody watching it.
+ * It begins in the clear and asks to be upgraded, which puts three things in
+ * the hands of whatever is in the middle. All three are refused here.
+ *
+ * A middle can delete STARTTLS from the server's list of what it supports, and
+ * a client that then carries on has sent everything in the open because one
+ * line was removed. So the upgrade is REQUIRED: no STARTTLS in the offer means
+ * the session ends and nothing is sent. There is no setting to relax that,
+ * which is the same rule the rest of this system follows about safety checks.
+ *
+ * A middle can answer "ready to start TLS" and put more commands in the same
+ * packet. Everything read before the handshake is plaintext that arrived before
+ * anything was proved, and a client that keeps it treats an attacker's
+ * commands as though they came from inside the encrypted session. That is how
+ * STARTTLS has been broken in real mail clients more than once, so everything
+ * buffered is thrown away at the moment the upgrade starts.
+ *
+ * And nothing learned before the upgrade is carried across it. EHLO is sent
+ * again afterwards -- which the standard requires anyway -- so the list of what
+ * the server supports, including whether it takes a password at all, is one
+ * heard over the encrypted connection rather than one heard from whoever was
+ * speaking first.
+ *
+ * Nothing is written before the connection is encrypted except EHLO and
+ * STARTTLS themselves. Not the username, not the password, not the letter.
  *
  * --- What it does not do yet ---
  *
@@ -40,9 +52,25 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* The usual encrypted port. Editable in the account, because somebody's server
- * is on another one -- but always TLS, whatever the number. */
+/*
+ * How the connection becomes encrypted.
+ *
+ * Both end up in the same place and one of them is riskier to reach, which is
+ * why it is a choice rather than something guessed from the port: guessing
+ * would mean a typed port number silently deciding how carefully the
+ * connection is made.
+ */
+enum recon_smtp_security {
+    /* TLS from the first byte. Nothing is ever spoken in the clear. */
+    RECON_SMTP_TLS,
+    /* Plain, then an upgrade that is required to succeed. */
+    RECON_SMTP_STARTTLS,
+};
+
+/* The usual ports. Editable in the account, because somebody's server is on
+ * another one -- but always encrypted, whatever the number. */
 #define RECON_SMTP_TLS_PORT 465
+#define RECON_SMTP_STARTTLS_PORT 587
 
 struct recon_smtp_account {
     char host[192];
@@ -50,6 +78,7 @@ struct recon_smtp_account {
     /* The address messages are sent as, which is not always the username. */
     char from[192];
     int port;
+    enum recon_smtp_security security;
 };
 
 /* Read and write the sending account. False when there is none. */

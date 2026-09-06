@@ -95,6 +95,7 @@ enum mail_screen {
 #define HIT_FORGET (RECON_APPWIN_HIT_USER + 13)
 #define HIT_REFRESH (RECON_APPWIN_HIT_USER + 14)
 #define HIT_BACK (RECON_APPWIN_HIT_USER + 15)
+#define HIT_SECURITY (RECON_APPWIN_HIT_USER + 19)
 #define HIT_WRITE (RECON_APPWIN_HIT_USER + 16)
 #define HIT_SEND (RECON_APPWIN_HIT_USER + 17)
 #define HIT_DISCARD (RECON_APPWIN_HIT_USER + 18)
@@ -480,7 +481,8 @@ static void save_form(struct recon_mailwin *m) {
 
         m->sending.port = atoi(m->fields[FIELD_SEND_PORT].text);
         if (m->sending.port <= 0 || m->sending.port > 65535) {
-            m->sending.port = RECON_SMTP_TLS_PORT;
+            m->sending.port = m->sending.security == RECON_SMTP_STARTTLS
+                ? RECON_SMTP_STARTTLS_PORT : RECON_SMTP_TLS_PORT;
         }
         recon_smtp_account_set(&m->sending);
     } else {
@@ -585,6 +587,25 @@ static void draw_setup(struct recon_mailwin *m, struct recon_panel *p,
         recon_hit_add(p, fx, y, fw, FIELD_HEIGHT, HIT_FIELD_BASE + i);
         y += FIELD_HEIGHT + 6;
     }
+
+    /*
+     * How the sending connection gets encrypted, as one control saying what it
+     * is rather than a port number deciding it. Guessing from the port would
+     * mean a typed number silently choosing how carefully the connection is
+     * made, and the two are not equally safe to get wrong.
+     */
+    recon_draw_text(p, m->font, x, y + ascent, 112, "Encryption", COLOR_TEXT);
+    draw_button(m, p, x + 118, y - 2,
+        m->sending.security == RECON_SMTP_STARTTLS
+            ? "STARTTLS -- plain, then upgraded (587)"
+            : "TLS from the first byte (465)",
+        HIT_SECURITY, true);
+    y += BUTTON_HEIGHT + 4;
+
+    recon_draw_text(p, m->font, x, y + ascent, w,
+        "STARTTLS is required to succeed: a server that does not offer it "
+        "ends the session.", COLOR_DIM);
+    y += line + PADDING;
 
     /* The protocol, as one control that says what it is rather than two
      * radio buttons where only one can be right. */
@@ -1004,6 +1025,31 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
     }
 
     switch (hit) {
+    case HIT_SECURITY: {
+        /* The port moves with it, unless it has been changed to something
+         * that is neither default -- the same rule the reading protocol
+         * toggle follows. */
+        bool was_starttls = m->sending.security == RECON_SMTP_STARTTLS;
+        int old_default = was_starttls
+            ? RECON_SMTP_STARTTLS_PORT : RECON_SMTP_TLS_PORT;
+        int typed = atoi(m->fields[FIELD_SEND_PORT].text);
+
+        m->sending.security = was_starttls
+            ? RECON_SMTP_TLS : RECON_SMTP_STARTTLS;
+        int new_default = was_starttls
+            ? RECON_SMTP_TLS_PORT : RECON_SMTP_STARTTLS_PORT;
+
+        if (typed == old_default || typed == 0) {
+            char port[16];
+            snprintf(port, sizeof(port), "%d", new_default);
+            recon_edit_begin(&m->fields[FIELD_SEND_PORT], port, false);
+            m->fields[FIELD_SEND_PORT].active =
+                (m->focused == FIELD_SEND_PORT);
+        }
+        recon_appwin_refresh(m->win);
+        return true;
+    }
+
     case HIT_WRITE:
         start_writing(m);
         recon_appwin_refresh(m->win);

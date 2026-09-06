@@ -734,6 +734,10 @@ struct recon_net_stream {
     struct recon_tls_conn *tls;
     bool secure;
     char hostname[256];
+    /* True when this stream began in the clear and was upgraded, so the
+     * handshake finishing calls `secured` rather than `opened` -- `opened`
+     * having already been called when the plain connection came up. */
+    bool upgrading;
 
     char application[64];
     char peer[192];
@@ -844,6 +848,78 @@ bool recon_net_stream_stats(struct recon_net_stream *stream, size_t *sent,
     return true;
 }
 
+/* Defined below, beside the other timeouts; needed here for the deadline
+ * an upgrade starts. */
+static int stream_expired(void *data);
+
+bool recon_net_stream_start_tls(struct recon_net_stream *stream,
+        const char *hostname) {
+    if (stream == NULL || !stream->used) {
+        set_error("there is no stream to upgrade");
+        return false;
+    }
+    if (hostname == NULL || *hostname == 0) {
+        set_error("an upgrade needs a name to check the certificate against");
+        return false;
+    }
+    if (!stream->connected) {
+        set_error("that connection is not up yet");
+        return false;
+    }
+    if (stream->tls != NULL) {
+        set_error("that connection is already encrypted");
+        return false;
+    }
+
+    /*
+     * Nothing queued, because whatever is in that buffer was written for a
+     * plaintext conversation. Sending it after the handshake would put it
+     * inside the encrypted session, where the far end would read it as
+     * something the caller said afterwards.
+     */
+    if (stream->outgoing_used > 0) {
+        set_error("there are bytes still to send in the clear");
+        return false;
+    }
+
+    snprintf(stream->hostname, sizeof(stream->hostname), "%s", hostname);
+    stream->tls = recon_tls_client_begin(stream->fd, stream->hostname);
+    if (stream->tls == NULL) {
+        set_error("%s", recon_tls_last_error());
+        stream->hostname[0] = 0;
+        return false;
+    }
+
+    stream->upgrading = true;
+    stream->secure = false;
+
+    /*
+     * A fresh deadline for the handshake. The one that guarded connecting was
+     * dropped when the plain connection came up -- correctly, because a plain
+     * connection is usable the moment it exists -- and an upgrade starts a new
+     * thing that can hang.
+     */
+    if (stream->deadline == NULL) {
+        stream->deadline = wl_event_loop_add_timer(g_loop, stream_expired,
+            stream);
+    }
+    if (stream->deadline != NULL) {
+        wl_event_source_timer_update(stream->deadline, STREAM_CONNECT_MS);
+    }
+
+    /*
+     * The handshake runs on the next turn of the loop, in the same code that
+     * runs it for a stream encrypted from the start. Asked for readable and
+     * writable both, because the first step will want one of them and this
+     * does not know which.
+     */
+    if (stream->source != NULL) {
+        wl_event_source_fd_update(stream->source,
+            WL_EVENT_READABLE | WL_EVENT_WRITABLE);
+    }
+    return true;
+}
+
 bool recon_net_stream_send(struct recon_net_stream *stream, const char *bytes,
         size_t length) {
     if (stream == NULL || !stream->used || bytes == NULL) {
@@ -944,8 +1020,23 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         }
 
         stream->connected = true;
-        if (stream->deadline != NULL) {
-            /* Connected, so the connect timeout has nothing left to guard. */
+
+        /*
+         * The deadline stays until the connection is USABLE, not until the
+         * socket is open.
+         *
+         * It used to be dropped here, which left the handshake unguarded: a
+         * server that accepts a connection and then says nothing leaves the
+         * client waiting forever, with whatever asked for it stuck showing
+         * "connecting". Found with a fake SMTP server that speaks the plain
+         * part of STARTTLS and cannot speak TLS -- so it accepts, answers,
+         * agrees to upgrade, and then falls silent, which is also what a
+         * failing middlebox looks like.
+         *
+         * For a plain stream the connection is usable now, so the timeout goes
+         * now. For an encrypted one it has to survive the handshake.
+         */
+        if (stream->deadline != NULL && stream->hostname[0] == '\0') {
             wl_event_source_remove(stream->deadline);
             stream->deadline = NULL;
         }
@@ -1000,7 +1091,29 @@ static int stream_event(int fd, uint32_t mask, void *data) {
         }
 
         stream->secure = true;
+
+        /* Handshake done, so the deadline has nothing left to guard. */
+        if (stream->deadline != NULL) {
+            wl_event_source_remove(stream->deadline);
+            stream->deadline = NULL;
+        }
+
         wl_event_source_fd_update(stream->source, WL_EVENT_READABLE);
+
+        if (stream->upgrading) {
+            stream->upgrading = false;
+            if (stream->handlers.secured != NULL) {
+                stream->in_handler = true;
+                stream->handlers.secured(stream->user, stream);
+                stream->in_handler = false;
+                if (stream->close_wanted) {
+                    stream->close_wanted = false;
+                    stream_end(stream, RECON_NET_OK, false);
+                    return 0;
+                }
+            }
+            return 0;
+        }
 
         if (stream->handlers.opened != NULL) {
             stream->in_handler = true;
