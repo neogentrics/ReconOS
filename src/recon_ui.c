@@ -2018,10 +2018,17 @@ void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
 
     int baseline = y + (h + recon_font_ascent(font)) / 2 - 1;
 
-    /* The selection, behind the text, so it is visible that typing will
-     * replace rather than append. */
+    /*
+     * The selection, behind the text, so it is visible that typing will
+     * replace rather than append.
+     *
+     * Only in the field being typed into, for the same reason as the caret
+     * below: a highlight on a field that is not focused says the next key will
+     * replace that text, and it will not. The Mail setup screen showed both
+     * port numbers highlighted at once while the cursor was in Server.
+     */
     int from, to;
-    if (edit_selection(edit, &from, &to)) {
+    if (edit->active && edit_selection(edit, &from, &to)) {
         char head[RECON_EDIT_MAX];
         memcpy(head, edit->text, (size_t)from);
         head[from] = '\0';
@@ -2050,5 +2057,21 @@ void recon_edit_draw(struct recon_panel *panel, struct recon_font *font,
     recon_draw_text(panel, font, x + pad - offset, baseline,
         inner_w + offset, edit->text, EDIT_TEXT);
 
-    recon_fill_rect(panel, x + pad + caret_x - offset, y + 3, 1, h - 6, EDIT_CARET);
+    /*
+     * The caret, only where the typing goes.
+     *
+     * It was drawn unconditionally, so every field on a form carried one at
+     * once: the Mail setup screen showed a caret in Server, Username, Port,
+     * Sending server, Sending port and Your address simultaneously, and none
+     * of them meant anything. A caret is the answer to "where does the next
+     * key land?", and six answers is no answer.
+     *
+     * Safe to gate on `active` because both ways of starting to edit --
+     * recon_edit_begin and recon_edit_focus -- set it, so the windows with one
+     * field each keep their caret without having been changed.
+     */
+    if (edit->active) {
+        recon_fill_rect(panel, x + pad + caret_x - offset, y + 3, 1, h - 6,
+            EDIT_CARET);
+    }
 }

@@ -1674,9 +1674,33 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
         } \
     } while (0)
 
+    /*
+     * Who has the input, before anything about what is on screen.
+     *
+     * While setup or the login screen is up it takes every pointer event, and
+     * nothing below it reaches a window. `apps <name>` will still open one,
+     * and every line below will then describe that window as open and focused
+     * -- which it is, in the shell's own bookkeeping, and which is worse than
+     * useless to somebody who has just clicked it three times and watched
+     * nothing happen.
+     *
+     * That cost an afternoon of measuring a Calculator whose buttons were
+     * fine, so it is not enough that `session` knew all along: the fact has to
+     * be stated by the command somebody actually runs. BG-117.
+     */
+    bool locked = shell->session != NULL &&
+        recon_session_active(shell->session);
+    if (locked) {
+        EMIT("input: the login screen has it"
+            " -- no click reaches any window below\n");
+    } else {
+        EMIT("input: the desktop\n");
+    }
+
     EMIT("focus: ");
     if (shell->focused_app >= 0 && shell->focused_app < shell->app_count) {
-        EMIT("%s\n", recon_appwin_title(shell->apps[shell->focused_app]));
+        EMIT("%s%s\n", recon_appwin_title(shell->apps[shell->focused_app]),
+            locked ? " (not reachable -- see input, above)" : "");
     } else {
         EMIT("(none)\n");
     }

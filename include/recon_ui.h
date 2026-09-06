@@ -398,6 +398,16 @@ struct recon_edit {
      * it instead of being appended to it.
      */
     int anchor;
+
+    /*
+     * Whether this field is the one being typed into.
+     *
+     * `recon_edit_begin` and `recon_edit_focus` set it, so a window with a
+     * single field -- a rename box, a dialog -- gets it without asking. A
+     * window with several sets it directly, and is responsible for clearing it
+     * on the others: exactly one field at a time, or the caret is a lie about
+     * where the next keystroke goes.
+     */
     bool active;
 
     /* Draw dots instead of the characters. For a password, where the point is
