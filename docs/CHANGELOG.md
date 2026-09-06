@@ -430,6 +430,31 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+**ReconOS has its own Wayland protocol.** The applications that ship with it
+read the palette directly because they are in this process; one that arrives
+later is a client in its own process and cannot. The decision recorded in
+`docs/APPLICATIONS.md` is that installed applications become clients, so this is
+on the path to that rather than beside it.
+
+Without being told, a client can guess and be the one window that does not
+match, ship its own theme and be the one window that does not change when the
+desktop does, or read the registry behind the compositor's back — which works
+until the format changes and is not a boundary at all.
+
+**What it does not do is say how to draw.** No frame, no button shape, no font.
+A client that wants to look like it belongs uses the colours; one that wants to
+look like itself ignores them, and the test client keeps its fallback colours to
+prove that ignoring them is allowed.
+
+**The first version of the test client passed and proved nothing.** It recorded
+the palette and stopped, so the client was told the skin had changed and went on
+showing white content inside a dark frame. Everything about the protocol worked;
+the claim was that a client *following* it ends up the right colour, and that
+was false. A test that stopped at "the bytes arrived" would have called it a
+pass. Measured properly: the pixels inside the client's window are `#FFFFFF` on
+Recon and `#1E2024` on Midnight — exactly the two surface colours the compositor
+said it had sent.
+
 **The Calculator's sixth mode.** Graphing was the one of six never built, and it
 needed an expression evaluator first — the Calculator is button-driven and had
 no way to read one.
