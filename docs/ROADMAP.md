@@ -157,25 +157,24 @@ skin's own colours rather than as six more skins.
 buttons round, and a put-away window's contents recede into its own button.
 Measured on all eleven skins, on the same button open and then put away.
 
-### Asked for, and not started
+**Clicking the clock opens Date and Time** -- v0.4.0, at the page rather than at
+the Control Panel's root. It needed the panel to be able to accept which page to
+show, which nothing else had wanted yet. Falls back to the front page if the item
+is ever renamed, so a menu entry cannot quietly become one that does nothing.
 
-**Clicking the clock should open Date and Time, not the Control Panel root.**
-The clock now has its own menu, and choosing what the hour looks like never
-leaves the taskbar -- but the entry that goes to the settings still opens the
-panel at its root. Blocked on the panel being able to accept which page to
-show, which nothing else needs yet.
-
-**Making a picture bigger.** Photos can convert formats; it cannot resize. The
-honest version of this is a resampler, and one already exists -- `recon_video`
-scales every frame of every film, area-averaging down and interpolating up, and
-was checked against ffmpeg at five scales. Pointing Photos at it is small.
-
+**Making a picture bigger** -- v0.4.0. Photos resizes by half and by double,
+through one resampler shared with the wallpaper loader and the video scaler.
 What is *not* on offer is the thing people usually mean by upscaling: inventing
 detail that was never in the picture. That needs a trained model, it would be
 the first thing in ReconOS that could not explain its own output, and a button
-that promises a sharper photograph and delivers a confident invention is the
+promising a sharper photograph while delivering a confident invention is the
 same failure as an OCR engine returning plausible nonsense. If it is ever built
 it gets its own name and says what it is doing.
+
+### Asked for, and not started
+
+*Nothing outstanding. Everything asked for so far is built; what is left is
+listed under "What ReconOS does and does not do yet".*
 
 ### Parallel tracks
 
@@ -1938,9 +1937,13 @@ client somebody would use daily.
 
 **Mail sends** — as of v0.4.0. What is still missing is named below.
 
-**Sending is one recipient, plain text, no attachments.** No Cc, no Bcc, no
-HTML, nothing to attach. Enough to send a letter, and everything absent is
-absent by name.
+**Sending has no attachments and no HTML.** To, Cc and Bcc are there as of
+v0.4.0, each a comma-separated list, with the rule that matters: every address
+reaches the server and only To and Cc reach the message. What is left is
+attaching a file, which needs MIME multipart -- a body that is several bodies,
+each with its own headers and a boundary marker between them, and a base64
+encoder for the parts that are not text. The encoder exists; the multipart
+writer does not.
 
 **Older, on sending:** SMTP is a separate
 protocol on a separate port with its own set of ways to lose somebody's

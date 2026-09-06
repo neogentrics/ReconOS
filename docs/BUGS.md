@@ -2127,3 +2127,27 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   property of the harness and not of the Calculator. `scripts/look.sh` now signs
   in before it does anything else, and refuses to continue if it did not reach
   the desktop.
+
+### BG-118 — Every text field on a form drew a caret at once
+
+- **Found in** v0.4.0. **Found by** a screenshot taken for something else: the
+  Mail setup screen, photographed to check the new Cc and Bcc rows, showed a
+  caret in Server, Username, Port, Sending server, Sending port and Your
+  address simultaneously — and both port numbers highlighted as selected.
+- **What it was** `recon_edit_draw` drew the caret and the selection
+  unconditionally, without asking whether the field was the one being typed
+  into. `struct recon_edit` has carried an `active` flag the whole time and the
+  drawing never read it.
+- **A caret is the answer to "where does the next key land?"**, and six answers
+  is no answer. The selection is worse: a highlight says the next keystroke
+  will *replace* that text, and on five of those six fields it would not.
+- **Fixed in** v0.4.0. Both are drawn only when `active` is set. Safe without
+  touching any of the twelve windows that draw fields, because both ways of
+  starting to edit — `recon_edit_begin` and `recon_edit_focus` — already set
+  it, so the seven windows with a single field each keep their caret without
+  having been changed.
+- **Why it survived this long**: every window that has *one* field looked
+  correct, and those are most of them. It only reads as wrong on a form, and
+  the two forms in the system are the Mail setup screen and the compose window
+   — both of which were being looked at for whether the fields were in the
+  right order rather than for what was drawn inside them.

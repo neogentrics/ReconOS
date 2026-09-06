@@ -10,6 +10,37 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Mail takes Cc and Bcc. Three address fields, each a comma-separated list,
+and one rule that is the whole reason there are three of them rather than one:
+every address reaches the server, and only To and Cc reach the message.
+
+Getting that backwards is the failure that has embarrassed real mail software
+repeatedly. The letter still sends, still arrives, and quietly hands every
+recipient the list of people who were meant to be hidden -- and nothing about
+it is visible from the sender's side. So the guarantee is built as something
+recon_smtp_compose *cannot* do rather than something it remembers not to:
+there is one function that writes an address header, it is handed the name to
+write, and Bcc never calls it.
+
+A letter addressed only in Cc, or only in Bcc, is a real letter and is sent --
+with no To header at all, because there is honestly nobody to put in it. A bad
+address anywhere in any of the three lists stops the whole send and the message
+says which one: a letter that reached four of five people and reported success
+is worse than one that failed, because nobody goes looking for the fifth.
+
+state says who has the input. The login screen takes every pointer event
+while it is up, which is correct -- but apps <name> would still open a window
+and state would still call it open and focused. It is neither, and that cost
+an afternoon of measuring a Calculator whose buttons were fine. session knew
+all along, which was not enough: it has to be said by the command somebody
+actually runs. BG-117.
+
+One caret, in the field being typed into. Every text field drew one at
+once, and every field with a default value drew it selected -- so the Mail
+setup screen showed six carets and two highlights, none of which meant
+anything. struct recon_edit has carried the flag that answers this the whole
+time and the drawing never read it. BG-118.
+
 The Calculator opens at a size it can be used at. Six mode tabs on one
 row, each sized to its own label; a keypad whose columns divide the width
 exactly rather than throwing the remainder away; labels centred by the line's
