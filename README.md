@@ -3,11 +3,11 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.3.1_in_progress-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.2.17-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.2.17)
+[![version](https://img.shields.io/badge/version-0.4.0-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.0-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.0)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-18_suites-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-115-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-117-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -84,7 +84,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
-| **0.3.1** *in progress* | ReconOS makes a sound, shows a picture, and can be seen through: `recon_audio`, a codec registry, WAV written from the specification, our own MP4 demuxer, and video playing with the sound device as the clock. Colour conversion and scaling are ours; H.264 is borrowed, in a module. A Media Player, a web viewer, an icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement. Glass in six colours, four wallpapers made for it, and a clock in the corner with the date under it. Text read out of a picture — including a screenshot of its own desktop — by drawing the shapes it is looking for |
+| **0.4.0** | ReconOS makes a sound, shows a picture, and can be seen through: `recon_audio`, a codec registry, WAV written from the specification, our own MP4 demuxer, and video playing with the sound device as the clock. Colour conversion and scaling are ours; H.264 is borrowed, in a module. A Media Player, a web viewer, an icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement. Glass in six colours, four wallpapers made for it, and a clock in the corner with the date under it. Text read out of a picture — including a screenshot of its own desktop — by drawing the shapes it is looking for. A theme protocol, so a client that is not part of this program can look like the desktop it is on. Mail that sends. An expression grammar with its own tests, and a grapher on top of it. A filesystem call that creates a file already private rather than tightening it afterwards |
 | **0.3.0** | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
 | **0.2.17** | The Control Panel becomes icons, one window per item. Appearance, Network and Programs split into sections. Storage becomes three spaces with a bin each, plus Disk Cleanup. Tooltips. Fonts and wallpapers installable from a right-click. Presets that cannot be deleted |
 | **0.2.16** | Error codes with a screen and a log. A firewall. Remote access, two ways. A startup screen that checks rather than counts |

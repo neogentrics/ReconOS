@@ -9,7 +9,43 @@ way for the two to disagree.
 
 ---
 
-## v0.3.1 — in progress
+## v0.4.0
+
+**Why this is 0.4.0 and not 0.3.1.** It was numbered 0.3.1 for seventy commits
+and seventy-six entries in this file, and a patch release is not that. The
+number is supposed to say what changed: sound, video, a codec registry, a
+theme protocol for clients that are not part of this program, mail that can
+send, an expression grammar with its own tests, and a filesystem call that
+creates a private file rather than tightening one afterwards. None of those is
+a fix to 0.3.0 — each is a thing 0.3.0 could not do at all.
+
+Noticed by the user, not by the project, which is the part worth writing down:
+nothing here counts commits, so "in progress" stayed true for as long as
+somebody kept typing under it.
+
+**The Calculator opens at a size it can be used at.** Six mode tabs on one
+row, each sized to its own label; a keypad whose columns divide the width
+exactly rather than throwing the remainder away; labels centred by the line's
+own height instead of by a constant that only worked at one font size; and
+keys drawn with the button edge, so they round with the skin and read as forty
+buttons rather than one slab with lines scored in it.
+
+The window opened at 430 wide with a minimum of 520 — a size the resize code
+would refuse to let anybody choose. That is fixed in `recon_appwin_create`
+rather than in the Calculator: an opening size below the minimum is raised to
+it, for every application, because it is a mistake any of them can make and
+none of them can see. See BG-116.
+
+**`scripts/look.sh` photographs the desktop from a script.** Every "does it
+look right?" question in this project has been settled by a picture, and
+getting to one takes four steps that are not obvious — two of which cost an
+afternoon each. The login screen takes the whole screen's pointer input, so a
+window opened while it is up reports itself as focused and cannot be clicked;
+and `capture` resolves its path inside the ReconOS filesystem rather than the
+host's, so an absolute host path reports success and writes nowhere useful.
+The harness signs in first, to a copy of the filesystem with the password
+removed, and refuses to continue if it did not reach the desktop.
+
 
 **ReconOS makes a sound.** `recon_audio` is a new boundary of the same kind as
 the filesystem and the network: one file knows how sound reaches hardware and

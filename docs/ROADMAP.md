@@ -143,17 +143,17 @@ the word.
 
 ### Asked for, and done
 
-**Reading text out of a picture** — v0.3.1. The prediction on this page turned
+**Reading text out of a picture** — v0.4.0. The prediction on this page turned
 out to be right about the shape: because ReconOS draws its own text, it can draw
 the shapes it is trying to recognise, and clean rendered text became a matching
 problem rather than a research one. A screenshot of the whole desktop now reads
 back at 101 of 125 marks. Handwriting and photographs of signs are refused
 rather than guessed at, which was the other half of the plan.
 
-**A colour for the glass** — v0.3.1. Six tints, applied as a lens over the
+**A colour for the glass** — v0.4.0. Six tints, applied as a lens over the
 skin's own colours rather than as six more skins.
 
-**Telling an open window from a minimized one** — v0.3.1. Both halves now: the
+**Telling an open window from a minimized one** — v0.4.0. Both halves now: the
 buttons round, and a put-away window's contents recede into its own button.
 Measured on all eleven skins, on the same button open and then put away.
 
@@ -1936,7 +1936,7 @@ from the account password at sign-in and held in memory. That is a subsystem
 rather than a field, and it is the thing standing between this and a mail
 client somebody would use daily.
 
-**Mail sends** — as of v0.3.1. What is still missing is named below.
+**Mail sends** — as of v0.4.0. What is still missing is named below.
 
 **Sending is one recipient, plain text, no attachments.** No Cc, no Bcc, no
 HTML, nothing to attach. Enough to send a letter, and everything absent is
@@ -1951,7 +1951,7 @@ The transport and the message are built and tested: headers, dot-stuffing, line
 endings, and refusing a subject with a newline in it -- which is how one message
 becomes two. The window and the settings are built too.
 
-**STARTTLS on port 587 works** as of v0.3.1, with the upgrade required: a
+**STARTTLS on port 587 works** as of v0.4.0, with the upgrade required: a
 server that does not offer it, or a middle that strips the offer, ends the
 session rather than carrying on in the open.
 
