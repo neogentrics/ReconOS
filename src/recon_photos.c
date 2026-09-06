@@ -22,6 +22,7 @@
 #include "recon_icons.h"
 #include "recon_ocr_match.h"
 #include "recon_photos.h"
+#include "recon_image.h"
 #include "recon_png.h"
 #include "recon_server.h"
 #include "recon_shell.h"
@@ -53,6 +54,20 @@
 #define HIT_PICTURE (RECON_APPWIN_HIT_USER + 4)
 #define HIT_READ (RECON_APPWIN_HIT_USER + 5)
 #define HIT_CONVERT (RECON_APPWIN_HIT_USER + 6)
+#define HIT_SMALLER (RECON_APPWIN_HIT_USER + 7)
+#define HIT_BIGGER (RECON_APPWIN_HIT_USER + 8)
+
+/*
+ * How small and how large a picture is allowed to be made.
+ *
+ * The floor is so that halving repeatedly cannot produce a picture with no
+ * pixels in it, which is not a picture. The ceiling is memory: a resample
+ * holds the old picture and the new one at once, so doubling a large
+ * photograph twice is asking for the better part of a gigabyte -- and the
+ * refusal is at the point of asking rather than at the point of running out.
+ */
+#define RESIZE_MIN 16
+#define RESIZE_MAX 12000
 
 /*
  * Above this, ask first.
@@ -94,6 +109,16 @@ struct recon_photos {
     /* The one on screen. NULL when nothing has loaded. */
     unsigned char *pixels;
     int width, height;
+
+    /*
+     * Whether what is on screen is still what is in the file.
+     *
+     * Photos had no unsaved state at all until it could resize, and a window
+     * whose contents no longer match the file it names has to say so
+     * somewhere. Cleared by loading anything, because loading is what makes
+     * them agree again.
+     */
+    bool resized;
 
     /*
      * False shows the picture at its own size, which for anything from a
@@ -178,8 +203,38 @@ static void forget_picture(struct recon_photos *ph) {
  * emptying the window: a folder with one damaged file in it should still be
  * something you can page through.
  */
+/*
+ * The window's name, and a mark when what is on screen is not what is in the
+ * file.
+ *
+ * The same star Notepad uses, for the same reason and deliberately not a
+ * different sign: two applications with unsaved work should not need to be
+ * learned separately. Photos had nothing to put here until it could resize --
+ * every other thing it does either changes nothing or writes a new file.
+ */
+static void retitle(struct recon_photos *ph) {
+    if (ph == NULL || ph->win == NULL) {
+        return;
+    }
+
+    char title[RECON_NAME_MAX + 32];
+    const char *name = (ph->at >= 0 && ph->at < ph->count)
+        ? ph->names[ph->at] : NULL;
+
+    if (name == NULL) {
+        snprintf(title, sizeof(title), "Photos");
+    } else {
+        snprintf(title, sizeof(title), "%s%s - Photos", name,
+            ph->resized ? " *" : "");
+    }
+    recon_appwin_set_title(ph->win, title);
+}
+
 static bool load_current(struct recon_photos *ph) {
     forget_picture(ph);
+
+    /* Whatever was on screen is gone, so any resize of it is gone with it. */
+    ph->resized = false;
 
     if (ph->at < 0 || ph->at >= ph->count) {
         return false;
@@ -213,6 +268,7 @@ static bool load_current(struct recon_photos *ph) {
 
     set_message(ph, false, "%s   %d by %d   %d of %d", ph->names[ph->at],
         ph->width, ph->height, ph->at + 1, ph->count);
+    retitle(ph);
     return true;
 }
 
@@ -394,6 +450,73 @@ static void save_as_png(struct recon_photos *ph) {
     }
 
     set_message(ph, false, "Saved '%s' beside it.", leaf);
+}
+
+/* --- Making it a different size --- */
+
+/*
+ * Resample the open picture to a new size, in memory.
+ *
+ * Nothing is written. What is on screen changes and the file on disk does not,
+ * so a resize is something somebody looks at before deciding to keep -- and
+ * keeping it is Save as PNG, which already exists and already refuses to
+ * overwrite. That split is deliberate: a resize that wrote straight to the
+ * file would be the one operation in this application that destroys what it
+ * was given.
+ *
+ * Which is also why the title bar says the picture has been changed. Photos
+ * has never had unsaved state before, and a window whose contents no longer
+ * match its file has to say so somewhere.
+ */
+static void resize_to(struct recon_photos *ph, int want_w, int want_h) {
+    if (ph->pixels == NULL) {
+        set_message(ph, false, "Nothing open to resize.");
+        return;
+    }
+
+    if (want_w < RESIZE_MIN || want_h < RESIZE_MIN) {
+        set_message(ph, true, "That is as small as this goes.");
+        return;
+    }
+    if (want_w > RESIZE_MAX || want_h > RESIZE_MAX) {
+        set_message(ph, true, "That is as large as this goes.");
+        return;
+    }
+
+    unsigned char *bigger = malloc((size_t)want_w * want_h * 4);
+    if (bigger == NULL) {
+        set_message(ph, true, "Not enough memory for a picture that size.");
+        return;
+    }
+
+    if (!recon_image_scale(ph->pixels, ph->width, ph->height, bigger,
+            want_w, want_h)) {
+        free(bigger);
+        set_message(ph, true, "That size could not be worked out.");
+        return;
+    }
+
+    /*
+     * The old pixels are freed only after the new ones exist. A resize that
+     * fails halfway should leave the picture that was on screen still on
+     * screen, rather than an application showing nothing and a file it can no
+     * longer be bothered to reload.
+     */
+    free(ph->pixels);
+    ph->pixels = bigger;
+    ph->width = want_w;
+    ph->height = want_h;
+    ph->resized = true;
+
+    /*
+     * Short, because two more buttons left the message strip narrow enough to
+     * clip "Save as PNG keeps it." to "Sa...". How to keep it is on the Save
+     * button's own tooltip and in the star in the title bar; a sentence that
+     * runs out halfway is worse than the two words that fit.
+     */
+    set_message(ph, false, "Now %d by %d, unsaved", want_w, want_h);
+    retitle(ph);
+    recon_appwin_refresh(ph->win);
 }
 
 /* --- Drawing --- */
@@ -826,6 +949,47 @@ static void photos_draw(void *user, struct recon_panel *panel,
         : "Write this picture out as a PNG, next to the original");
     bx += png_w + 12;
 
+    /*
+     * Halving and doubling rather than a box to type a size into.
+     *
+     * A dialog taking two numbers has to explain what happens when they do not
+     * match the picture's shape, and the honest answer -- the shape is kept and
+     * one of them is ignored -- means the second box was never real. These two
+     * cannot be given a shape that is wrong, and repeated presses reach any
+     * size somebody actually wants within a factor of two.
+     */
+    const char *half_label = "Half";
+    int half_w = recon_text_width(ph->font, half_label) + 16;
+    bool can_shrink = ph->pixels != NULL &&
+        ph->width / 2 >= RESIZE_MIN && ph->height / 2 >= RESIZE_MIN;
+
+    recon_fill_rect(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, COLOR_BG);
+    recon_draw_button_edge(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, false,
+        COLOR_BAR);
+    recon_draw_text(panel, ph->font, bx + 8, baseline, half_w, half_label,
+        can_shrink ? COLOR_TEXT : COLOR_DIM);
+    recon_hit_add(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, HIT_SMALLER);
+    recon_hit_tip(panel, can_shrink
+        ? "Make the picture half this size, on screen only"
+        : "Already as small as this goes");
+    bx += half_w + 6;
+
+    const char *double_label = "Double";
+    int double_w = recon_text_width(ph->font, double_label) + 16;
+    bool can_grow = ph->pixels != NULL &&
+        ph->width * 2 <= RESIZE_MAX && ph->height * 2 <= RESIZE_MAX;
+
+    recon_fill_rect(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, COLOR_BG);
+    recon_draw_button_edge(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, false,
+        COLOR_BAR);
+    recon_draw_text(panel, ph->font, bx + 8, baseline, double_w, double_label,
+        can_grow ? COLOR_TEXT : COLOR_DIM);
+    recon_hit_add(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, HIT_BIGGER);
+    recon_hit_tip(panel, can_grow
+        ? "Make the picture twice this size, on screen only"
+        : "Already as large as this goes");
+    bx += double_w + 12;
+
     if (ph->message[0] != '\0') {
         recon_draw_text(panel, ph->font, bx, baseline, x + w - bx - PADDING,
             ph->message,
@@ -858,6 +1022,14 @@ static bool photos_click(void *user, uint32_t hit_id, int cx, int cy,
         return true;
     case HIT_CONVERT:
         save_as_png(ph);
+        return true;
+
+    case HIT_SMALLER:
+        resize_to(ph, ph->width / 2, ph->height / 2);
+        return true;
+
+    case HIT_BIGGER:
+        resize_to(ph, ph->width * 2, ph->height * 2);
         return true;
     case HIT_READ:
         if (ph->pixels == NULL) {
@@ -990,7 +1162,7 @@ static const struct recon_appwin_impl PHOTOS_IMPL = {
     .icon = RECON_ICON_PHOTOS,
     .default_width = 640,
     .default_height = 480,
-    .min_width = 500,
+    .min_width = 760,
     .min_height = 200,
     .draw = photos_draw,
     .click = photos_click,
@@ -1033,6 +1205,17 @@ struct recon_appwin *recon_photos_create(struct recon_server *server,
     }
 
     ph->shell = server->shell;
+
+    /*
+     * Named after the window exists, not while it is being loaded.
+     *
+     * load_current retitles, and at that point in creation there is no window
+     * to retitle -- so the first picture opened came up in a window called
+     * "Photos" and only got its name on the second. The title is set again
+     * here rather than moving the load, because the load is also what the
+     * arrow keys and the file dialog call and those do have a window.
+     */
+    retitle(ph);
     ph->read_timer = wl_event_loop_add_timer(
         wl_display_get_event_loop(server->wl_display), on_read_tick, ph);
 
