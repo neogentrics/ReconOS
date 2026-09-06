@@ -399,10 +399,23 @@ bool recon_clock_zone_at(int index, struct recon_clock_zone *out) {
     return true;
 }
 
+/*
+ * Which row of the list is the chosen one.
+ *
+ * Matched against the zone's STANDARD offset, not the one currently being
+ * applied. zone_minutes now folds in the summer-time hour, and matching on
+ * that put the highlight on the neighbour: Central with summer time on is
+ * UTC-5, and the list has a zone called Eastern at UTC-5. The page then said
+ * "Central (UTC-6)" at the top and highlighted Eastern underneath.
+ *
+ * The zone and the hour are two different facts and only one of them names a
+ * place, which is the same reason they are stored separately.
+ */
 int recon_clock_zone_current(void) {
-    int minutes = zone_minutes();
+    int standard = recon_registry_get_int(RECON_REG_USER,
+        RECON_CLOCK_ZONE_KEY, 0);
     for (int i = 0; i < ZONE_COUNT; i++) {
-        if (ZONES[i].minutes == minutes) {
+        if (ZONES[i].minutes == standard) {
             return i;
         }
     }

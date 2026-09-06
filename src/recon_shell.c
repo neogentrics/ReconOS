@@ -4806,11 +4806,18 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
         }
         case CTX_DATE_AND_TIME:
             /*
-             * Still the root rather than the Date and Time page. The Control
-             * Panel cannot yet be told which item to open, and saying so here
-             * is better than a name that promises a page it does not reach.
+             * The page, not the front of the panel it lives on.
+             *
+             * It used to open the Control Panel at its root -- the right
+             * application at the wrong place, and four more clicks for
+             * somebody who was already pointing at the thing they wanted to
+             * change. Falls back to the front page if the item is ever
+             * renamed, so a menu entry cannot become one that does nothing.
              */
-            recon_shell_open_named(shell, "Control Panel");
+            if (!recon_control_panel_open_named(shell->server, shell->font,
+                    "Date and Time")) {
+                recon_shell_open_named(shell, "Control Panel");
+            }
             break;
         default:
             break;

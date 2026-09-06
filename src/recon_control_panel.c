@@ -879,6 +879,11 @@ static void set_status(struct control_panel *cp, bool warning, const char *fmt, 
     __attribute__((format(printf, 3, 4)));
 
 static void set_status(struct control_panel *cp, bool warning, const char *fmt, ...) {
+    /* NULL-safe for the same reason clear_status is: a page opened straight
+     * from the taskbar has no front page to report on. */
+    if (cp == NULL) {
+        return;
+    }
     va_list args;
     va_start(args, fmt);
     vsnprintf(cp->status, sizeof(cp->status), fmt, args);
@@ -893,7 +898,17 @@ static void set_status(struct control_panel *cp, bool warning, const char *fmt, 
  * carries a printf format attribute, and an empty format is a warning at
  * every call site -- six of them, which is enough noise to hide a real one.
  */
+/*
+ * NULL-safe, because a page can now be opened with no front page behind it.
+ *
+ * A page opened from the taskbar clock has nowhere to put a status line, and
+ * the alternative -- opening the front page first so there is somewhere -- puts
+ * a window on screen that nobody asked for every time this succeeds.
+ */
 static void clear_status(struct control_panel *cp) {
+    if (cp == NULL) {
+        return;
+    }
     cp->status[0] = '\0';
     cp->status_is_warning = false;
 }
@@ -2455,6 +2470,34 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
     char summary[160];
     snprintf(summary, sizeof(summary), "%s   %s", now, zone);
     recon_draw_text(p, cp->font, x, y + ascent, w, summary, COLOR_DIM);
+    y += line + 2;
+
+    /*
+     * Said here rather than at the foot of the page.
+     *
+     * It was at the bottom, under the zone list, and somebody looking for the
+     * buttons that set the clock read the top of the page, did not find them,
+     * and concluded the feature was missing rather than declined. An absence
+     * explained three hundred pixels away from where it is noticed is an
+     * absence nobody has explained.
+     */
+    /*
+     * Two short lines rather than one long one, because recon_draw_text clips
+     * and does not wrap. The first version of this ran off the end of the
+     * window as "Its own co..." -- an explanation cut off before it explains
+     * anything, which is worse than the absence it was written to explain.
+     *
+     * A shared wrapper is what this actually wants. There is one in the Help
+     * viewer and it is tied to that viewer's own page structure, so using it
+     * here means lifting it out first -- worth doing, and not worth doing at
+     * the same time as this.
+     */
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Nothing here sets the clock: ReconOS reads the host machine's and "
+        "will not move it.", COLOR_DIM);
+    y += line;
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "Its own comes with its own kernel.", COLOR_DIM);
     y += line + PADDING;
 
     int bx = draw_button(cp, p, x, y, recon_registry_get_bool(RECON_REG_USER,
@@ -2565,15 +2608,13 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
 
     if (y + line <= bottom) {
         recon_draw_text(p, cp->font, x, y + ascent, w,
-            "Summer time is a switch, not a rule -- ReconOS does not carry "
-            "the world's daylight-saving legislation. It starts from what "
-            "the host thought, and after that it is yours.", COLOR_DIM);
+            "Summer time is a switch, not a rule: ReconOS does not carry "
+            "the world's daylight-saving legislation.", COLOR_DIM);
         y += line;
-    }
-    if (y + line <= bottom) {
         recon_draw_text(p, cp->font, x, y + ascent, w,
-            "ReconOS reads the host's clock and does not set it. Its own "
-            "comes with its own kernel.", COLOR_DIM);
+            "It starts from what the host thought, and after that it is "
+            "yours.", COLOR_DIM);
+        y += line;
     }
 }
 
@@ -7436,7 +7477,20 @@ static const struct recon_appwin_impl CONTROL_PANEL_IMPL = {
  * been told about is drawn and reachable by nothing -- no taskbar button, no
  * clicks, no Alt+Tab. It looks like a window and behaves like a picture.
  */
-static void open_page_window(struct control_panel *cp, enum page page) {
+/*
+ * Open a page window, with or without a front page behind it.
+ *
+ * `cp` is where a failure gets reported and is allowed to be NULL: a page
+ * opened from the taskbar clock has no front page to put a message on, and the
+ * alternative -- opening the front page first so there is somewhere to say
+ * "out of memory" -- would mean the common path pays for the rare one.
+ *
+ * The cascade also needs a window to step down from, and falls back to the
+ * top-left corner when there is none.
+ */
+static void open_page_from(struct control_panel *cp,
+        struct recon_server *server, struct recon_font *font,
+        enum page page) {
     if (page < 0 || page >= PAGE_COUNT) {
         return;
     }
@@ -7446,13 +7500,15 @@ static void open_page_window(struct control_panel *cp, enum page page) {
     if (g_pages[page] == NULL) {
         struct control_panel *sub = calloc(1, sizeof(*sub));
         if (sub == NULL) {
-            set_status(cp, true, "Out of memory opening %s.",
-                PAGES[page].label);
+            if (cp != NULL) {
+                set_status(cp, true, "Out of memory opening %s.",
+                    PAGES[page].label);
+            }
             return;
         }
 
-        sub->server = cp->server;
-        sub->font = cp->font;
+        sub->server = server;
+        sub->font = font;
         sub->home = false;
         sub->page = page;
         nothing_chosen(sub);
@@ -7460,11 +7516,13 @@ static void open_page_window(struct control_panel *cp, enum page page) {
         recon_edit_begin(&sub->unlock, "", false);
         sub->unlock.masked = true;
 
-        sub->win = recon_appwin_create(cp->server, cp->font,
+        sub->win = recon_appwin_create(server, font,
             &CONTROL_PANEL_IMPL, sub);
         if (sub->win == NULL) {
             free(sub);
-            set_status(cp, true, "Could not open %s.", PAGES[page].label);
+            if (cp != NULL) {
+                set_status(cp, true, "Could not open %s.", PAGES[page].label);
+            }
             return;
         }
 
@@ -7487,8 +7545,10 @@ static void open_page_window(struct control_panel *cp, enum page page) {
      * like some minutes ago. */
     sub->storage_measured = false;
 
-    if (!recon_shell_adopt_window(cp->server->shell, sub->win)) {
-        set_status(cp, true, "No room for another window.");
+    if (!recon_shell_adopt_window(server->shell, sub->win)) {
+        if (cp != NULL) {
+            set_status(cp, true, "No room for another window.");
+        }
         return;
     }
 
@@ -7500,7 +7560,7 @@ static void open_page_window(struct control_panel *cp, enum page page) {
      * one. Only raising it handed somebody a window on top that their
      * keyboard was not talking to.
      */
-    recon_shell_focus_window(cp->server->shell, sub->win);
+    recon_shell_focus_window(server->shell, sub->win);
 
     /*
      * Placed after it is shown, not before.
@@ -7516,8 +7576,13 @@ static void open_page_window(struct control_panel *cp, enum page page) {
      * put, and moving it back every time would undo that.
      */
     if (built) {
-        int px, py, pw, ph;
-        recon_appwin_geometry(cp->win, &px, &py, &pw, &ph);
+        /* Stepped down from the front page when there is one. Opened straight
+         * from the taskbar there is nothing to step down from, so it starts
+         * where a first window starts. */
+        int px = 40, py = 40, pw = 0, ph = 0;
+        if (cp != NULL && cp->win != NULL) {
+            recon_appwin_geometry(cp->win, &px, &py, &pw, &ph);
+        }
         (void)pw;
         (void)ph;
 
@@ -7609,6 +7674,33 @@ static void open_skin_editor(struct control_panel *cp, const char *skin) {
     recon_appwin_set_origin(ed->win, px + pw / 3, py + 40);
 
     recon_shell_focus_window(cp->server->shell, ed->win);
+}
+
+static void open_page_window(struct control_panel *cp, enum page page) {
+    if (cp == NULL) {
+        return;
+    }
+    open_page_from(cp, cp->server, cp->font, page);
+}
+
+bool recon_control_panel_open_named(struct recon_server *server,
+        struct recon_font *font, const char *item) {
+    if (server == NULL || item == NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < PAGE_COUNT; i++) {
+        if (strcasecmp(PAGES[i].label, item) == 0) {
+            /*
+             * No front page behind it. Opening one first so there is somewhere
+             * to report a failure would put a window on screen that nobody
+             * asked for every time this succeeds, which is nearly always.
+             */
+            open_page_from(NULL, server, font, (enum page)i);
+            return true;
+        }
+    }
+    return false;
 }
 
 struct recon_appwin *recon_control_panel_create(struct recon_server *server,
