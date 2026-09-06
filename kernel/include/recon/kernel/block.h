@@ -64,6 +64,9 @@ enum block_status {
 	BLOCK_ERR_IO,		/* the hardware tried and failed */
 	BLOCK_ERR_TIMEOUT,	/* the hardware did not answer */
 	BLOCK_ERR_BUSY,		/* no room in the queue right now */
+	BLOCK_ERR_UNSUPPORTED,	/* the device does not offer this operation --
+				 * not a failure, and a caller must not treat it
+				 * as one */
 };
 
 const char *block_status_name(enum block_status s);
@@ -100,6 +103,14 @@ struct block_ops {
 	enum block_status (*write)(struct block_device *dev, u64 lba,
 				   u32 count, const void *buf);
 	enum block_status (*flush)(struct block_device *dev);
+
+	/* Optional. A null pointer means the device does not offer it, which is
+	 * reported as BLOCK_ERR_UNSUPPORTED rather than as success -- a caller
+	 * told a discard succeeded when nothing was issued would draw exactly
+	 * the wrong conclusion about the drive's state, which is the mistake
+	 * virtio-blk's flush used to make. */
+	enum block_status (*discard)(struct block_device *dev, u64 lba,
+				     u32 count);
 };
 
 struct block_device {
@@ -137,6 +148,37 @@ struct block_device {
 	 * anything building a crash-recoverable structure on top can ask, and
 	 * refuse to promise what this device cannot deliver. */
 	bool flush_is_durable;
+
+	/* --- What kind of medium this is, so callers can stop guessing -------
+	 *
+	 * A filesystem's allocator has one decision that depends entirely on the
+	 * medium: whether it may put a file's blocks wherever there is room, or
+	 * must work to keep them together.
+	 *
+	 * On solid state a seek costs nothing and scattering is free. On a
+	 * spinning disk a seek costs milliseconds -- five orders of magnitude
+	 * more than the transfer -- and a file scattered across the platter reads
+	 * at a fraction of the drive's sequential speed. Copy-on-write scatters
+	 * by nature, so for ReconFS this is not a tuning detail: it is the
+	 * difference between a filesystem that is pleasant on a hard disk and one
+	 * that is unusable on it.
+	 *
+	 * `seek_is_free` defaults to false, which is the safe direction. Treating
+	 * an SSD as a disk costs a little allocator effort and nothing else;
+	 * treating a disk as an SSD fragments it and cannot be undone without
+	 * rewriting the volume. */
+	bool seek_is_free;
+
+	/* The device wants to be told when a block stops being in use, so it can
+	 * stop preserving its contents. On an SSD this is what keeps write
+	 * amplification down as the drive fills; a drive never told about freed
+	 * space eventually behaves as though it is full even when it is not. */
+	bool discard_supported;
+
+	/* Bytes the device would rather move in one request. Advisory, and zero
+	 * means it did not say -- which is different from "it said zero", and is
+	 * why this is not a defaulted value. */
+	u32 transfer_hint;
 
 	/* Held for the length of one request. See block.c: not a spinlock,
 	 * because every driver polls with sched_yield() and a spinlock held
@@ -202,6 +244,16 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf);
 enum block_status block_flush(struct block_device *dev);
+
+/* Tells the device that a range of blocks no longer holds anything anyone
+ * wants. Advisory in both directions: a device may ignore it, and a caller
+ * must never rely on the blocks reading back as anything in particular
+ * afterwards -- some devices return zeroes, some return the old contents, and
+ * the specification permits both.
+ *
+ * Returns BLOCK_ERR_UNSUPPORTED on a device that does not offer it, which is
+ * not a failure and callers should not treat it as one. */
+enum block_status block_discard(struct block_device *dev, u64 lba, u32 count);
 
 /* Whether a flush on this device reaches the medium, or merely succeeds.
  *

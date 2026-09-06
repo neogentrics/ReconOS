@@ -1188,10 +1188,30 @@ looks impossible:
    need anyway. Reading a Mac's *files* needs APFS, which is a separate and much
    larger job — and, importantly, is not required in order to install beside
    macOS without damaging it.
-3. **A filesystem of our own** (checkpoint 13). ReconFS. Not designed yet, and
-   deliberately not designed yet: it should be designed when there is a block
-   layer to build it on and real use to shape it, not before. What is already
-   known about it is recorded below.
+3. **A filesystem of our own** (checkpoint 13). ReconFS. **Designed, and the
+   format is written**, in [docs/RECONFS.md](RECONFS.md) and
+   `kernel/include/recon/kernel/reconfs.h`. Copy-on-write with a single commit,
+   chosen over journalling because it makes recovery a pure function of the
+   image bytes — which is what gives a crash suite exactly two outcomes to
+   assert instead of a spectrum to reason about.
+
+   Every allocated block carries a back-reference to its owner, so walking down
+   from the root and sweeping up from the owner table are two derivations of the
+   same set that read disjoint fields. That is the only independence available
+   to one author writing both the reader and the writer, and it had to be in the
+   first version or never.
+
+   What exists: the format, mount, allocation, the commit path, the checker,
+   and a self-test that breaks a volume five ways and requires the checker to
+   catch all five — at every block size the format allows. What does not:
+   directory entries being created, reading a file back, and rename.
+
+   **There is no disk-size ceiling.** The allocation table's owner was a 32-bit
+   block number, capping a volume at 16TiB, which is smaller than drives on sale
+   today; it is 64 bits now. What stops first is somebody else's limit — ATA's
+   LBA48 at 128PiB, MBR at 2TiB — and the layout arithmetic is checked on every
+   boot at volumes up to an exabyte, against a derivation written separately
+   from the code so the two can disagree. See [docs/STORAGE.md](STORAGE.md).
 4. **Reading foreign filesystems** (checkpoint 14). NTFS, ext4, APFS, HFS+,
    FAT32. Much bigger than it sounds, and **mostly not needed for the goal.**
    Installing beside Windows requires reading the *partition table*; it does

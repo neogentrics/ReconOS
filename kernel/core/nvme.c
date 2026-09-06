@@ -119,6 +119,7 @@ struct nvme {
 	u64    *prp_list;
 
 	u32 namespace_id;
+	bool dsm_supported;	/* Dataset Management, whose Deallocate is TRIM */
 	u32 block_size;
 	u64 block_count;
 	u16 next_cid;
@@ -362,6 +363,57 @@ static bool build_prp(struct nvme *n, paddr_t buf, u32 len, u64 *prp1, u64 *prp2
 	return true;
 }
 
+/* Dataset Management: opcode 0x09, and its Deallocate function is what the rest
+ * of the world calls TRIM.
+ *
+ * One range per command here. The specification allows 256, and batching them
+ * would be worth doing when there is a caller that frees many scattered ranges
+ * at once -- there is not yet, and a batching path with no caller gets its
+ * shape wrong. What matters now is that the command is real: a filesystem that
+ * frees a block and believes the drive was told must be right about that.
+ */
+#define NVME_IO_DSM		0x09
+#define NVME_DSM_DEALLOCATE	(1u << 2)
+
+struct nvme_dsm_range {
+	u32 attributes;
+	u32 length;		/* in logical blocks */
+	u64 slba;
+} RK_PACKED;
+
+static enum block_status nvme_discard(struct block_device *dev, u64 lba,
+				      u32 count)
+{
+	struct nvme *n = dev->driver;
+	struct nvme_dsm_range *r;
+	struct nvme_command cmd;
+	u16 status;
+
+	if (!n->dsm_supported)
+		return BLOCK_ERR_UNSUPPORTED;
+
+	/* The scratch page, which is already a page the device can reach. A
+	 * range descriptor on the stack would hand the controller a pointer
+	 * into a kernel stack. */
+	r = n->scratch;
+	kmemset(r, 0, sizeof(*r));
+	r->attributes = 0;
+	r->length     = count;
+	r->slba       = lba;
+
+	kmemset(&cmd, 0, sizeof(cmd));
+	cmd.cdw0  = NVME_IO_DSM;
+	cmd.nsid  = n->namespace_id;
+	cmd.cdw10 = 0;			/* one range, zero-based */
+	cmd.cdw11 = NVME_DSM_DEALLOCATE;
+	cmd.prp1  = n->scratch_phys;
+
+	if (!submit(n, &n->io, &cmd, 0, &status))
+		return BLOCK_ERR_TIMEOUT;
+
+	return status ? BLOCK_ERR_IO : BLOCK_OK;
+}
+
 static enum block_status transfer(struct nvme *n, u8 opcode, u64 lba, u32 count,
 				  paddr_t buf)
 {
@@ -436,9 +488,10 @@ static enum block_status nvme_flush(struct block_device *dev)
 }
 
 static const struct block_ops nvme_ops = {
-	.read  = nvme_read,
-	.write = nvme_write,
-	.flush = nvme_flush,
+	.read    = nvme_read,
+	.write   = nvme_write,
+	.flush   = nvme_flush,
+	.discard = nvme_discard,
 };
 
 /* Reads one identify page into the scratch buffer. */
@@ -648,6 +701,22 @@ bool nvme_attach(const struct pci_device *d)
 		goto fail;
 	}
 
+	/* ONCS -- Optional NVM Command Support -- is a 16-bit field at byte 520
+	 * of the Identify Controller page, and bit 2 says Dataset Management is
+	 * present. Read here, while that page is still in the scratch buffer:
+	 * read_namespace below overwrites it with a different identify page, and
+	 * reading it afterwards would be reading the namespace page's bytes 520
+	 * and 521, which mean something else entirely.
+	 *
+	 * Byte by byte, because the page is a device structure and this kernel
+	 * does not assume alignment inside one. */
+	{
+		const u8 *id = n->scratch;
+		u16 oncs = (u16)id[520] | ((u16)id[521] << 8);
+
+		n->dsm_supported = (oncs & (1u << 2)) != 0;
+	}
+
 	if (!create_io_queues(n))
 		goto fail;
 
@@ -671,6 +740,17 @@ bool nvme_attach(const struct pci_device *d)
 	 * write cache and harmless on one without, and this driver issues it
 	 * and waits for the completion. */
 	n->bdev->flush_is_durable = true;
+
+	/* NVMe is flash on a PCIe link. There is no seek, and no NVMe device
+	 * has a platter -- so unlike SATA, which carries both kinds and has to
+	 * be asked, this one is known from the bus. */
+	n->bdev->seek_is_free = true;
+
+	/* Identify Controller, ONCS at byte 520, bit 2: Dataset Management is
+	 * supported. Asked rather than assumed, because Deallocate is optional
+	 * and a controller that does not have it completes the command with an
+	 * error rather than ignoring it. */
+	n->bdev->discard_supported = n->dsm_supported;
 
 	n->bdev->max_blocks_per_request =
 		(u32)(((PAGE_SIZE / sizeof(u64)) + 1) * PAGE_SIZE / n->block_size);

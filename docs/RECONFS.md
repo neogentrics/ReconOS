@@ -90,14 +90,66 @@ disks the day the block layer gets a wait queue.
 
 **One block is the largest unit that may be treated as atomic**, and even that
 is convention rather than something this kernel verifies. `scripts/crash-test.sh`
-cut the power at swept moments twenty-eight times across both architectures and
-saw no torn block and no write out of order — but QEMU is not a disk. That
-result means the kernel and the drivers order correctly. It is not a promise
-about a cheap SSD that lies about its cache.
+cuts the power at swept moments and finds no torn block and no write out of
+order — but read the next section before leaning on that, because the first
+version of this document leaned on a number that was not measured.
 
 So: **any structure spanning more than one block must be self-validating on
 read.** Either a checksum over the whole run, or a commit record whose presence
 is the only thing that gives the run meaning.
+
+### The measurement that was not a measurement
+
+The paragraph above originally read that the power had been cut twenty-eight
+times across both architectures with no write out of order and no block torn.
+That number should not have been in this document, and the two reasons it should
+not have been are worth more than the number was.
+
+**The cut never happened.** The harness launched QEMU as
+`timeout -s KILL 30 qemu-system-... &` and took `$!` as the victim's pid. `$!` is
+the pid of `timeout`. The kill went to the wrapper, SIGKILL cannot be caught so
+`timeout` never forwarded it, and QEMU was orphaned and carried on running —
+after which the harness read the disk image out from under a live guest and
+found, unsurprisingly, an unbroken prefix. Its "wait until the process is
+genuinely gone" loop polled the wrapper's pid and returned immediately.
+
+What exposed it was not the result. The result looked exactly like a pass. It
+was twelve orphaned emulators still running minutes after the harness had exited
+reporting success.
+
+**And the cut, once fixed, does not measure flushing.** Killing QEMU does not
+lose the writes QEMU has already made: those bytes are in the *host's* page
+cache, and the host writes them out whether or not the guest ever asked for a
+flush. The harness now takes a `nocache` argument that tells QEMU to discard
+guest flushes entirely, and with flushes discarded it returns the same clean
+result. A test that passes identically whether or not flushes are honoured is
+not testing flushes.
+
+> **So the cut measures ordering, and only ordering: that writes arrive in the
+> order they were issued, and that a block is not observed half-written. The
+> flush is measured separately, or it is not measured.**
+
+**Where the flush is measured.** `scripts/flush-reaches-device.sh` runs the same
+workload with QEMU tracing the *device model* — `pci_nvme_flush_ns` for NVMe,
+ATA opcode `0xea` for AHCI — and counts the durability commands that arrive at
+the emulated controller. That is the far side of the boundary the kernel is
+responsible for: a flush that was never issued cannot appear there, and one that
+was issued cannot fail to. Four thousand and ninety-six markers produce four
+thousand and ninety-seven flush commands: on NVMe on both architectures, and on
+AHCI, which only the x86 machine has. virtio-blk is not covered — this QEMU
+build publishes no trace point for its flush — which is worth saying plainly,
+because virtio-blk is the driver that told this exact lie in the first place.
+
+It was checked the only way a checker is worth anything: `nvme_flush` was
+altered to return success having issued nothing — the exact lie virtio-blk used
+to tell — and the instrument reported *0 flush commands for 4096 markers* while
+passing the untouched AHCI driver in the same run.
+
+**What is still not measured** is whether the host, or a real disk, honours a
+flush once it has one. That is below this boundary, and nothing runnable on this
+machine reaches it. The claim this design is entitled to make is therefore:
+*the kernel issues a real durability command for every ordering point, and its
+writes arrive in order.* Not that the medium keeps its side of the bargain.
 
 **A partial write is unknowable.** `block_write` returns a status and no
 transferred count, so on failure the target range is partially and
@@ -194,10 +246,24 @@ the two-outcome rule made concrete:
 
 ### What that plan cannot cover
 
-It cannot cover a device that lies about its flush, because QEMU does not lie.
+It cannot cover a device that lies about its flush — not because QEMU does not
+lie, which was the original claim here and is wrong, but because QEMU lies on
+request and the cut cannot tell. `crash-test.sh ... nocache` is that lie, and it
+passes. What catches a lying *driver* is `flush-reaches-device.sh`; nothing here
+catches a lying *device*.
+
 It cannot cover a torn block, because QEMU does not tear one — so the format's
 resilience to tearing is *designed* rather than *tested*, and that gap is real
 and is written down here rather than discovered later.
+
+Both gaps have the same closer, and it is worth naming so it is not reinvented:
+a write-recording layer between the guest and the image — Linux's
+`dm-log-writes` is the one built for this — records every write and every flush
+and can replay the device to any point, which is what makes "what would a crash
+here have left" answerable rather than sampled. It needs privileges this build
+environment does not have. Filed as
+[issue #273](https://github.com/neogentrics/ReconOS/issues/273) rather than
+pretended away.
 
 ---
 
@@ -236,11 +302,211 @@ sensitivity would.
    independent derivation, and a sweep that quietly uses the reader's path
    resolution is not independent. Test the checker against a deliberately
    corrupted image first, and confirm it *fails*.
+
+   **Done** — five faults, five caught, and one of them was written
+   specifically because the sweep had a hole: it treated an owner chain
+   arriving at zero as having climbed home, when only the root may have no
+   parent. The hole was found by reading the loop, and the fault was added so
+   the fix could be *watched* working rather than argued for.
 3. **A structure that spans two blocks, and a crash between them.** Since a
    partial multi-block write is unknowable, every such structure must be
    detectable as incomplete from the medium alone. The test writes one, cuts
    between the blocks, and asserts recovery sees an incomplete structure rather
    than a plausible one.
+
+### The rule these three harness bugs bought
+
+Every one of them — the pid that was not the workload, the checker that never
+ran, the trace pattern that matched nothing — presented as a clean pass. None
+presented as an error. Two of them were in the *same script*, and the second was
+found only because the first was being fixed.
+
+> **A test that has never been seen to fail is not a test yet.** Every checker
+> here is run once against a deliberately broken subject and required to
+> report the breakage before its passing result is allowed to mean anything.
+
+That is why the reverse sweep is second on the list above, and why it says to
+corrupt an image and confirm the checker *fails* before trusting it on a good
+one. It is not a nicety. It is the only thing that separates these three bugs
+from a filesystem whose crash suite is green for the same reason.
+
+---
+
+## What exists
+
+The format is `kernel/include/recon/kernel/reconfs.h`, and it is the part that
+freezes. Two things were caught there before it did, both of which would have
+been permanent:
+
+**The owner table could not have been a contiguous run.** Under copy-on-write,
+changing one entry in a contiguous table means copying the whole table, and on
+a 16TiB volume the table is 16GiB. One commit per file write, each rewriting
+16GiB, is not slow — it is a layout that cannot be used at all. It is a radix
+tree instead, and its depth is *stored* in the superblock rather than derived
+from the volume size, so a reader never has to agree with a writer about a
+calculation.
+
+**A file would have been capped at two megabytes.** `direct` plus a single
+`indirect` is enough for everything the desktop writes today, and "no file may
+exceed two megabytes" is not a limitation anyone would accept discovering after
+their data was in it. Three levels are in the inode now. The deeper two are not
+written yet, and a file that would need one is *refused* rather than silently
+truncated — refusing rather than truncating being this project's standing rule.
+
+### The decisions that ended up as bytes
+
+**Every block carries a checksum over itself.** A device block may be 512 bytes,
+so a 4096-byte filesystem block is up to eight of them, which makes *every*
+filesystem block a multi-block structure by this document's own definition. One
+mechanism rather than two: a block whose checksum does not match did not happen.
+That covers tearing, a partial write whose transferred count `block_write` does
+not report, and a device returning stale bytes.
+
+**The owner table is the free-space map and the back-reference at once.** A
+block is free exactly when its owner is zero, and otherwise the owner *is* the
+back-reference the reverse sweep needs. One structure, four bytes per block, and
+no second free-space structure that can disagree with the first — and no header
+inside data blocks, which would have cost file data its block alignment for the
+benefit of a checker.
+
+**An inode is a whole block, and its number is that block's number.** Wasteful,
+and deliberate: allocating an inode is allocating a block, so create-with-mode
+is not a special case — the mode is in the same block as everything else about
+the file, and that block becomes reachable in the single write that commits it.
+There is no image, crashed or otherwise, in which a file is reachable with a
+mode written afterwards. Small files live inside their inode and get most of the
+waste back.
+
+The consequence, which is stated because every filesystem trains people to
+assume the opposite: **copy-on-write moves an inode on every write, so its block
+number is not a stable name.** Anything needing a name that survives a write
+uses `object_id`, allocated once from a counter and never reused.
+
+### The checker, and the only result worth reporting about it
+
+`reconfs_check` runs the two derivations and compares them. They read disjoint
+fields — the forward walk never reads `parent` or the owner table; the reverse
+sweep never follows a directory entry or resolves a name — so their agreement is
+evidence rather than construction.
+
+It is not run only on good images. `reconfs=<device>` formats a volume, checks
+it, and then breaks it on purpose four ways:
+
+| what is broken | what the checker said |
+|---|---|
+| a block allocated to nobody | allocated but not reachable from the root |
+| a reachable block marked free | reachable from the root but not allocated |
+| an inode whose parent is wrong | an inode's parent is not the directory that names it |
+| a superblock that does not add up | refused it and believed the other one |
+| an owner chain going nowhere | an owner chain ends at an inode with no parent |
+
+**Five of five, on both architectures.** That number is the point, not the fresh
+volume passing. A checker that has only ever been run on good images has never
+been observed to do anything at all.
+
+### That it formats is why it is gated
+
+`reconfs=<device>` is required, it names the device explicitly, and it refuses
+a device carrying a partition table. A self-test that formats the first disk it
+finds is the most destructive thing this kernel could contain, and this kernel
+is meant to install beside somebody's existing operating system without harming
+it. There is no flag to override the refusal.
+
+### The ceiling that should never have been there
+
+The owner in the allocation table was a 32-bit block number, which capped a
+volume at 2^32 blocks — **16 TiB** at a 4 KiB block. It was written down as a
+documented limit, and being written down is not the same as being acceptable:
+20 TB and 24 TB drives are on sale now, and a filesystem that refuses the disk
+somebody just bought does not have a limitation, it has a defect.
+
+It was found by being asked about, not by being hit. Every test ran on a volume
+a hundred thousand times smaller than the limit, and every one passed — which is
+the same failure shape as everything else in this document: the result looked
+exactly like success.
+
+**The owner is 64 bits now**, and there is no ceiling left worth stating. What
+stops first is elsewhere and is somebody else's: ATA's LBA48 caps SATA at
+128 PiB, and MBR caps a partition table at 2 TiB. NVMe carries a full 64-bit
+LBA and stops nowhere.
+
+The cost is the owner table doubling from 0.1% of the volume to 0.2%, which is
+what the reverse sweep costs. The block size below takes most of it back.
+
+### Block size is chosen when the volume is made
+
+The owner table is eight bytes per block whatever the block is, so its share of
+the volume is exactly `8 / block_size` — 0.195% at 4 KiB, 0.012% at 64 KiB.
+Larger blocks also mean longer transfers and fewer of them, which both media
+prefer.
+
+The cost is the tail of every file: a 1 KB file costs 4 KB at the smallest block
+and 64 KB at the largest, on every small file on the volume. So the default
+scales gently — 4 KiB under 2 TiB, 16 KiB under 16 TiB, 64 KiB above — and an
+explicit size always wins, because the installer is where somebody who knows
+what the volume will hold gets to say so.
+
+The size lives in the superblock and nothing in the code may assume the default.
+Which forces one thing worth stating: **both superblocks sit at fixed byte
+offsets** — zero and 65536 — because if the second one's position depended on
+the block size, finding it would require reading the first, and a volume whose
+first superblock is damaged would be unrecoverable exactly when the second copy
+exists to save it.
+
+`docs/STORAGE.md` has the whole of this, along with what the drivers now report
+about the medium underneath.
+
+### The commit path exists
+
+`reconfs_txn_begin` / `reconfs_txn_alloc` / `reconfs_txn_commit`. Every write in
+it is one of exactly two kinds, and a reviewer can check that claim line by
+line:
+
+1. a write to a block the live superblock's owner table calls unclaimed, which
+   by construction no live superblock can reach;
+2. the superblock write itself, which is preceded by a flush and followed by
+   one.
+
+There is no third kind. If a change ever adds one, the ordering rule is broken
+and the filesystem stops being crash-safe — that is the one thing to look for
+when reading `reconfs_txn.c`.
+
+Abandoning a transaction needs no undo. Nothing it wrote was ever reachable, so
+abandoning is forgetting.
+
+The chicken-and-egg — the owner table records what is allocated, and copying a
+table leaf on write requires allocating a block, which changes a table leaf — is
+resolved by doing all allocation in memory, against images of the touched
+leaves, and writing nothing until every block the transaction will need has been
+decided. Leaves are written before the index blocks that name them, because an
+index naming a block that does not exist yet is a structure a crash could make
+permanent.
+
+**Tested by:** an empty commit (the epoch moves, the superblock alternates, the
+volume still checks clean), a commit that takes a block (the owner table is
+copied on write), and a remount afterwards — because a commit that is only
+correct in the memory of the process that made it is not a commit. All three, at
+all three block sizes.
+
+**And one case where a commit refuses.** The allocation table's index blocks are
+planned around where the leaves are at that moment. Planning them allocates
+blocks, and if one of those allocations happens to dirty a leaf nothing had
+touched, that leaf now needs to move — to a place the already-planned index does
+not point at. The new copy would be unreachable and the old copy, already
+released, would still be named.
+
+That is silent corruption wearing a successful commit's clothes, so the commit
+returns `RECONFS_ERR_RETRY` instead. Nothing it wrote was ever reachable, so
+retrying is free. It needs the index's own allocation to cross a leaf boundary,
+which is rare — and rare is exactly the property that would have made it
+impossible to find afterwards.
+
+### Not written yet
+
+Directory entries being *created*, reading a file back, and rename. The format
+describes all of them; nothing writes them. The next thing is directory entries,
+because until a name can be added there is nothing for a rename to be atomic
+about — and rename is the constraint the registry is waiting on.
 
 ---
 

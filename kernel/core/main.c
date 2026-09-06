@@ -14,6 +14,7 @@
 #include <recon/kernel/durability.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/partition.h>
+#include <recon/kernel/reconfs.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -130,6 +131,8 @@ void kmain(void)
 		crc32_self_test() ? "pass" : "FAIL");
 	kprintf("  partitions         : %s\n",
 		partition_self_test() ? "pass" : "FAIL");
+	kprintf("  filesystem layout  : %s\n",
+		reconfs_layout_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 	user_print_summary();
@@ -139,6 +142,12 @@ void kmain(void)
 	 * a flush on this kernel actually orders writes, which is the property
 	 * every crash-consistency scheme a filesystem could use rests on. */
 	durability_run();
+
+	/* Same gating, and for a stronger reason: this one formats. It runs only
+	 * when `reconfs=<device>` names a device, and refuses one that carries a
+	 * partition table -- a self-test that writes a filesystem over somebody's
+	 * disk is the most destructive thing this kernel could do by accident. */
+	reconfs_run();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

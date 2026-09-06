@@ -362,6 +362,18 @@ fi
 echo
 echo "durability"
 
+# Two checks, because they answer different questions and only one of them was
+# ever being asked.
+#
+# The cut measures *ordering*: what a reader finds on the medium after the
+# machine stops. It cannot measure flushing at all -- killing QEMU does not lose
+# the writes QEMU already made, those bytes are in the host's page cache and the
+# host writes them out regardless. Run crash-test.sh with `nocache`, which tells
+# QEMU to discard guest flushes entirely, and it returns the same clean result.
+#
+# So the flush is checked where it can be seen: at the emulated controller,
+# which is the far side of the boundary the kernel is responsible for.
+
 printf '%-46s' "  a flush orders writes, blocks do not tear"
 
 if crash_out=$(bash scripts/crash-test.sh 6 x86_64 2>&1); then
@@ -371,8 +383,79 @@ else
 	echo "FAILED"
 	echo "$crash_out" | sed 's/^/      /'
 	failures=$((failures + 1))
-	FAILED_PATHS+=("durability")
+	FAILED_PATHS+=("durability: ordering")
 fi
+
+for a in x86_64 aarch64; do
+	printf '%-46s' "  every flush reaches the device ($a)"
+
+	if flush_out=$(bash scripts/flush-reaches-device.sh "$a" 2>&1); then
+		echo "$(echo "$flush_out" | grep -c 'flush commands at the controller') driver(s)"
+		passes=$((passes + 1))
+	else
+		echo "FAILED"
+		echo "$flush_out" | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("durability: flush reaches device ($a)")
+	fi
+done
+
+# --- ReconFS ----------------------------------------------------------------
+#
+# The interesting number here is not that a fresh volume checks out. It is that
+# the checker was shown four faults it was built to catch and caught all four.
+#
+# A checker that has only ever been run on good images has never been observed
+# to do anything. Three harness bugs on the day this was written (BG-082,
+# BG-083, BG-084) all presented as clean passes, and the filesystem's crash
+# suite is about to rest on exactly this checker being honest.
+
+echo
+echo "reconfs"
+
+for a in x86_64 aarch64; do
+	printf '%-46s' "  the checker catches what it is shown ($a)"
+
+	img=$(mktemp)
+	dd if=/dev/zero of="$img" bs=1M count=16 status=none
+
+	if [ "$a" = aarch64 ]; then
+		fs_out=$(timeout -s KILL 150 qemu-system-aarch64 -M virt \
+			-cpu cortex-a72 -m 512M -nographic \
+			-kernel kernel/build/aarch64/reconos-kernel.img \
+			-append "reconfs=nvme0n1" \
+			-drive "file=$img,format=raw,if=none,id=d0" \
+			-device nvme,serial=recon0,drive=d0 2>&1) || true
+	else
+		fs_out=$(timeout -s KILL 150 qemu-system-x86_64 -m 512M \
+			-nographic -no-reboot \
+			-kernel kernel/build/x86_64/reconos-kernel.elf \
+			-append "reconfs=nvme0n1" \
+			-drive "file=$img,format=raw,if=none,id=d0" \
+			-device nvme,serial=recon0,drive=d0 2>&1) || true
+	fi
+
+	rm -f "$img"
+
+	# The whole battery, at every block size, and the commit path with it.
+	# Checking only the last line would pass a run where two of the three
+	# block sizes failed, which is the shape of pass this work has already
+	# produced three of.
+	sizes=$(echo "$fs_out" | grep -cE 'the checker caught 5 of 5')
+	commits=$(echo "$fs_out" | grep -cE 'a commit that survives a remount : pass')
+	verdict=$(echo "$fs_out" | grep -oE '[0-9]+ of [0-9]+ block sizes behaved')
+
+	if [ "$verdict" = "3 of 3 block sizes behaved" ] &&
+	   [ "$sizes" = "3" ] && [ "$commits" = "3" ]; then
+		echo "3 block sizes, 15 faults, 3 commits"
+		passes=$((passes + 1))
+	else
+		echo "FAILED"
+		echo "$fs_out" | sed -n '/reconfs:/,$p' | head -20 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("reconfs ($a)")
+	fi
+done
 
 echo
 if [ "$failures" -eq 0 ]; then

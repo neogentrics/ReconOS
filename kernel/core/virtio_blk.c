@@ -326,6 +326,16 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 	 * not split yet and a limit it ignores would be a lie. */
 	b->bdev->max_blocks_per_request = 0;
 
+	/* What is underneath a virtio disk is whatever the host put there, and
+	 * the device does not say. Left as "assume it seeks", which is the safe
+	 * direction: treating an SSD as a disk costs a little allocator effort,
+	 * while treating a disk as an SSD fragments it permanently.
+	 *
+	 * VIRTIO_BLK_F_DISCARD exists and is not negotiated here, so discard is
+	 * reported as absent rather than as present-but-unimplemented. */
+	b->bdev->seek_is_free      = false;
+	b->bdev->discard_supported = false;
+
 	b->in_use = true;
 	device_count++;
 	return true;

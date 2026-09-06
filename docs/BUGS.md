@@ -76,6 +76,208 @@ broken says nothing about the work.
 
 ## Fixed
 
+### BG-087 — A transaction could overwrite storage the live filesystem still used
+
+[#276](https://github.com/neogentrics/ReconOS/issues/276)
+
+- **Found in** kernel 0.0.11. **Found by** reading the allocator back while
+  writing the discard path, not by any test — there was no test that could have
+  produced it, which is recorded below.
+- **Was** ReconFS's whole safety argument is that every write in a transaction
+  goes to a block the *live* superblock's owner table calls unclaimed, so no
+  write can damage the filesystem that currently exists.
+
+  `reconfs_txn_free` broke it. Releasing a block marked it unclaimed in the
+  transaction's in-memory owner table immediately — which is right, because the
+  *next* transaction must be able to use it. But the live superblock still
+  reaches that block, and keeps reaching it until the new superblock is durable.
+
+  So a transaction that freed a block and then allocated it back would write into
+  storage the current filesystem still points at. A crash before the commit would
+  leave the old superblock — still the truth at that moment — naming a block that
+  had already been overwritten. Silent corruption, in the exact place the design
+  exists to prevent it.
+
+  It was reachable, not theoretical: the allocator scans forward from a hint and
+  wraps at the end of the volume, and after wrapping it walks straight back over
+  everything the transaction had just released. Every commit frees the old copy
+  of each owner-table leaf it touches, so there is always something on that list.
+
+  The shape worth keeping: **the invariant was stated correctly in a comment
+  directly above the function that violated it.** The comment said "a block the
+  live table calls free", and the code asked the *transaction's* table, which is
+  not the same table. A correct sentence and an incorrect line, adjacent, and the
+  sentence made the line look right.
+- **Fixed in** kernel 0.0.11. A transaction keeps the list of blocks it released
+  and the allocator refuses them; a freed block becomes available to the next
+  transaction, never to this one. Overflowing that list fails the transaction
+  rather than dropping the exclusion — an allocator that cannot prove a block is
+  safe to hand out must not hand it out.
+
+  Testing it took three attempts, and the two failures are worth more than the
+  fix:
+
+  1. **The obvious test could not reach the bug.** Allocate, free, allocate
+     again, and check the two differ — which passes whether or not the exclusion
+     exists, because the allocator scans *forward* from a hint and has already
+     moved past the released block. Run with the bug deliberately reintroduced,
+     it passed three times out of three. The allocator only revisits a released
+     block after wrapping at the end of the volume, so the test now fills the
+     volume first, which makes the wrap unavoidable.
+  2. **The negative control silently did not apply.** Removing the call to the
+     exclusion left the function it called unused, `-Werror=unused-function`
+     failed the build, the build error was being discarded, and the *previous*
+     binary ran and passed. The control was rewritten to keep the function and
+     neuter its body instead, and to check that the build actually succeeded.
+
+  With a control that genuinely applies, the allocator hands back block 4095 —
+  the exact block released moments earlier — and the test fails. That is the
+  third instance tonight of a check that reported success while doing nothing,
+  after BG-082 and BG-083.
+
+  Testing it directly also turned up a smaller thing worth fixing: running out
+  of space marked the whole transaction failed, which made "the volume is full"
+  indistinguishable from "the allocator broke". Exhaustion now returns zero and
+  leaves the transaction usable, which is what let the test fill a volume on
+  purpose.
+
+### BG-085 — ReconFS could not have held a drive you can buy today
+
+[#274](https://github.com/neogentrics/ReconOS/issues/274)
+
+- **Found in** kernel 0.0.11. **Found by** the author asking whether the system
+  would support drives larger than 16TB, having seen other systems stop at 4 or
+  8. It would not have.
+- **Was** the owner recorded in ReconFS's allocation table was a 32-bit block
+  number, which caps a volume at 2^32 blocks — **16TiB** at the smallest block
+  size. It was written down in the format header as a documented limit, with a
+  note that a larger volume must be refused at format time rather than silently
+  wrapped.
+
+  Documenting a limit is not the same as the limit being acceptable. 20TB and
+  24TB drives are on sale now, and a filesystem that refuses the disk somebody
+  just bought does not have a limitation, it has a defect.
+
+  The shape worth keeping is how it survived: **every test ran on a volume a
+  hundred thousand times smaller than the limit, so every test passed.** A
+  capacity ceiling is invisible to a test suite that cannot reach it, and the
+  ceiling was found by being asked about rather than by being hit.
+
+  Nothing else in the stack had a ceiling. NVMe carries a full 64-bit LBA, AHCI
+  stops at ATA's own LBA48 (128PiB), and GPT at 8ZiB. The only limit in the
+  system was the one written here.
+- **Fixed in** kernel 0.0.11. The owner is 64 bits, which costs the allocation
+  table 0.2% of the volume instead of 0.1% — the price of the reverse sweep
+  being an independent derivation — and the block size is now chosen at format
+  time, which takes most of that back on a large volume (0.012% at 64KiB).
+
+  And the arithmetic is now tested where a disk cannot reach:
+  `reconfs_layout_self_test` runs the layout maths at volumes from 1GiB to 1EiB
+  on every boot, comparing what the format computes against a derivation written
+  separately from the definition. Verified by reintroducing a depth bug, which
+  it caught at exactly the sizes that matter — 2^32 blocks of 4096, the old
+  ceiling, and 5,859,375,000 blocks, which is a 24TB drive.
+
+### BG-086 — A block-size rule that read like a rule and behaved like a constant
+
+[#275](https://github.com/neogentrics/ReconOS/issues/275)
+
+- **Found in** kernel 0.0.11. **Found by** running the function over a table of
+  volume sizes from 64MB to 24TB and noticing every answer was identical.
+- **Was** `choose_block_size` grew the block size while the allocation table
+  exceeded a fiftieth of a percent of the volume. The table is eight bytes per
+  block, so its share is exactly `8 / block_size` — 0.195% at the minimum block
+  size, which is *already under* the threshold. The loop condition was satisfied
+  on its first test at every volume size, and the function returned 4096 always.
+
+  It compiled, it ran, it returned a plausible number, and nothing about its
+  output said it was not doing anything. A heuristic whose threshold sits on the
+  wrong side of its own starting point is indistinguishable from a working one
+  unless somebody tabulates it.
+
+  Third in a row of this shape, after BG-082 and BG-083: **something that looks
+  like it is working, is not.**
+- **Fixed in** kernel 0.0.11. Replaced with an explicit table — 4KiB under 2TiB,
+  16KiB under 16TiB, 64KiB above — with the trade-off written down beside it,
+  because a bigger block wastes proportionally more on every small file and no
+  formula can know what a volume will hold. An explicit size passed by the
+  caller always wins, which is what the installer is for.
+
+### BG-082 — The crash harness never cut the power, and reported that it had
+
+[#270](https://github.com/neogentrics/ReconOS/issues/270)
+
+- **Found in** kernel 0.0.11. **Found by** twelve orphaned QEMU processes still
+  running minutes after the harness had exited reporting success. Not by the
+  result, which looked exactly like a pass.
+- **Was** the harness launched the emulator as
+  `timeout -s KILL 30 qemu-system-... &` and took `$!` as the pid to kill. `$!`
+  is the pid of `timeout`, not of QEMU. SIGKILL cannot be caught, so `timeout`
+  died without forwarding anything and QEMU was orphaned and carried on
+  running. The harness then read the disk image out from under a live guest and
+  found an unbroken prefix of markers, which is what a healthy result looks
+  like. Its "wait until the process is genuinely gone" loop polled the dead
+  wrapper's pid and returned immediately.
+
+  So twenty-eight reported power cuts, across two architectures, cut nothing.
+  The durability measurement that `docs/RECONFS.md` was written on top of
+  measured nothing at all.
+
+  The shape is worth keeping, and it is not "a pid bug". It is that **a test
+  whose subject is missing looks identical to a test whose subject is
+  healthy** — silence is the pass condition for both. This is the second time
+  this exact script has had a pid that was not the process it meant; the first
+  is recorded in its own comments, and having been burned once did not prevent
+  the second.
+- **Fixed in** kernel 0.0.11. QEMU is launched directly, so `$!` is the emulator;
+  an `EXIT`/`INT`/`TERM` trap kills it if the run is interrupted, so orphans
+  cannot accumulate silently again.
+
+### BG-083 — The crash harness passed cleanly with its checker missing
+
+[#271](https://github.com/neogentrics/ReconOS/issues/271)
+
+- **Found in** kernel 0.0.11. **Found by** fixing BG-082 and watching the next
+  run print `0 out of order, 0 torn` while every single round had printed
+  `can't open file 'scripts/check-markers.py'`.
+- **Was** the status switch ended in `*) echo ...`, which printed the round and
+  incremented nothing. A round whose check did not run therefore contributed
+  zero gaps and zero tears — indistinguishable, in the totals and in the exit
+  code, from a round that was checked and was clean. Fourteen consecutive
+  failures to check produced a green run and exit 0.
+
+  (The checker was missing because the kernel work was being built inside
+  another session's working tree, as untracked files, and something there
+  removed them. That is fixed separately by building from a dedicated checkout
+  of the `kernel` branch — but the harness must not depend on it.)
+- **Fixed in** kernel 0.0.11. Rounds that produce a recognised status are
+  counted, and a run where that count is not equal to the number of rounds
+  fails with "this is not a result". Verified by hiding `check-markers.py` and
+  confirming the harness exits 1.
+
+### BG-084 — The flush instrument counted zero on a driver that was flushing
+
+[#272](https://github.com/neogentrics/ReconOS/issues/272)
+
+- **Found in** kernel 0.0.11. **Found by** the new instrument reporting `0` for
+  AHCI in the same run where NVMe reported 4097 — a disagreement between two
+  drivers that had no reason to differ.
+- **Was** two faults in the new `scripts/flush-reaches-device.sh`, both of which
+  made it *lenient*:
+  1. It matched QEMU's ATA trace as `cmd=0xea`. QEMU writes `cmd 0xea`. The
+     driver was issuing 4097 FLUSH CACHE EXT commands and the instrument saw
+     none of them.
+  2. `flushes=$(grep -c ... || echo 0)` produced `"0\n0"` when grep matched
+     nothing, because `grep -c` already prints `0` before exiting non-zero. The
+     `[ -lt ]` comparison then failed with "integer expression expected", and
+     the failure fell through to the success message — a shell error counted as
+     a pass, again.
+- **Fixed in** kernel 0.0.11. The opcode is matched as written on the wire, and
+  both counts must parse as numbers or the driver is failed. Verified the only
+  way that means anything: `nvme_flush` was altered to return success having
+  issued nothing, and the instrument reported *0 flush commands for 4096
+  markers* while passing the untouched AHCI driver in the same run.
+
 ### BG-081 — The page allocator counted a gigabyte of nothing as used
 
 [#234](https://github.com/neogentrics/ReconOS/issues/234)

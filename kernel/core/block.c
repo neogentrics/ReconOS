@@ -41,6 +41,7 @@ const char *block_status_name(enum block_status s)
 	case BLOCK_ERR_IO:          return "the hardware reported a failure";
 	case BLOCK_ERR_TIMEOUT:     return "the hardware did not answer";
 	case BLOCK_ERR_BUSY:        return "the queue is full, or the disk is not claimed";
+	case BLOCK_ERR_UNSUPPORTED: return "the device does not offer that operation";
 	default:                    return "unrecognised status";
 	}
 }
@@ -364,6 +365,62 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 
 	device_release(dev);
 	return BLOCK_OK;
+}
+
+/* Tells the device a range of blocks holds nothing anyone wants.
+ *
+ * --- Why this is here at all ---
+ *
+ * A solid-state drive cannot overwrite a block in place: it erases a much
+ * larger region and rewrites it. To do that it has to preserve everything else
+ * in that region -- including blocks whose contents no one will ever read
+ * again, because nothing ever told it so. A drive that is never told about
+ * freed space gradually behaves as though it is full even when the filesystem
+ * says it is half empty, and its write speed falls with it.
+ *
+ * Copy-on-write makes this sharper than it is for most filesystems: every write
+ * frees the block it replaced, so a ReconFS volume generates freed space
+ * continuously rather than only when files are deleted.
+ *
+ * --- Why an unsupported discard is not success ---
+ *
+ * A device with no discard operation returns BLOCK_ERR_UNSUPPORTED, not
+ * BLOCK_OK. Returning success would tell a caller the drive now knows about the
+ * freed space when it does not -- which is the same shape as the virtio-blk
+ * flush bug this kernel already had once, and the reason `flush_is_durable`
+ * exists. Once is a mistake; twice is a pattern nobody looked for.
+ *
+ * It is still not an error for the *caller*: discard is advisory, and a
+ * filesystem that refuses to free a block because the drive would not listen
+ * has misunderstood which of them is in charge.
+ */
+enum block_status block_discard(struct block_device *dev, u64 lba, u32 count)
+{
+	if (!dev || !dev->present)
+		return BLOCK_ERR_NO_DEVICE;
+
+	if (dev->read_only)
+		return BLOCK_ERR_READ_ONLY;
+
+	if (!count)
+		return BLOCK_OK;
+
+	/* The same range check as a write, and for the same reason: a discard
+	 * that runs off the end of a slice would be telling the device to
+	 * forget somebody else's data. */
+	if (lba >= dev->block_count)
+		return BLOCK_ERR_RANGE;
+	if ((u64)count > dev->block_count - lba)
+		return BLOCK_ERR_RANGE;
+
+	{
+		struct block_device *root = to_root(dev, &lba);
+
+		if (!root->ops->discard)
+			return BLOCK_ERR_UNSUPPORTED;
+
+		return root->ops->discard(root, lba, count);
+	}
 }
 
 enum block_status block_flush(struct block_device *dev)

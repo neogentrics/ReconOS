@@ -9,4 +9,9 @@
 
 #define RK_ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
+/* The builtin rather than the cast-a-null-pointer trick, which is
+ * undefined behaviour that happens to work and stops working under
+ * enough optimisation. */
+#define RK_OFFSETOF(t, m) __builtin_offsetof(t, m)
+
 #endif /* RECON_KERNEL_COMPILER_H */
