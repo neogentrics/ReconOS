@@ -463,9 +463,24 @@ bool recon_hit_tip_at(struct recon_panel *panel, int x, int y,
 /*
  * The same question in screen coordinates, for callers holding a panel whose
  * position they would otherwise have to look up first.
+ *
+ * False means two different things -- outside the panel, or inside it with no
+ * tip there -- so a caller searching front to back needs recon_panel_contains
+ * to tell them apart. See BG-106.
  */
 bool recon_panel_tip_at(struct recon_panel *panel, double lx, double ly,
     char *out, size_t size);
+
+/*
+ * Is this point inside the panel at all?
+ *
+ * Exists so that a panel in front can stop a search it has no answer for. A
+ * blank patch of the thing on top is not a hole to read what is underneath
+ * through -- the same rule the window loop follows, which the panels in front
+ * of it could not, because a false from recon_panel_tip_at does not say which
+ * kind of false it is. BG-106.
+ */
+bool recon_panel_contains(const struct recon_panel *panel, double lx, double ly);
 
 bool recon_hit_region(const struct recon_panel *panel, size_t index,
     int *x, int *y, int *w, int *h, uint32_t *id);

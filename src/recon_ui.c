@@ -1486,6 +1486,21 @@ bool recon_panel_tip_at(struct recon_panel *panel, double lx, double ly,
     return recon_hit_tip_at(panel, x, y, out, size);
 }
 
+bool recon_panel_contains(const struct recon_panel *panel, double lx,
+        double ly) {
+    if (panel == NULL) {
+        return false;
+    }
+
+    int px = 0, py = 0;
+    recon_panel_position(panel, &px, &py);
+
+    int x = (int)lx - px;
+    int y = (int)ly - py;
+    return x >= 0 && y >= 0 && x < recon_panel_width(panel) &&
+        y < recon_panel_height(panel);
+}
+
 bool recon_hit_region(const struct recon_panel *panel, size_t index,
         int *x, int *y, int *w, int *h, uint32_t *id) {
     if (panel == NULL || index >= panel->hit_count) {

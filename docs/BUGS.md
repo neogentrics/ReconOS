@@ -1872,3 +1872,29 @@ The desktop's own rig has the same gaps, named here so they are a list rather
 than an omission: everything runs on one screen size, one renderer, one
 account, and one build configuration. Each of those is a condition that has not
 been manufactured yet, and BG-090 is what the last of them already cost.
+
+### BG-106 — A panel in front could not stop a tooltip search it had no answer for
+
+- **Found in** v0.3.1. **Found by** opening the taskbar clock's new menu: the menu
+  appeared under a pointer that had not moved, and the clock's own tooltip
+  carried on showing across it.
+- **What it actually was** not the stale-tip fault it looked like. `tip_under`
+  asks each panel in front for a tip and *falls through* when it has none, so a
+  menu with no tooltip under the pointer handed the question down to the taskbar
+  underneath it — which answered.
+- The rule was already written down eight lines below, over the window loop:
+  *"Stopping matters more than finding: a blank patch of the window in front is
+  not a hole to read the one behind through."* The panels above that loop were
+  not following the rule stated for the loop.
+- The reason they could not is that `recon_panel_tip_at` returns false for two
+  different facts — "the point is not in this panel" and "it is, and there is
+  nothing here" — and the caller cannot tell them apart. `recon_appwin_tip_at`
+  already distinguishes them with an `owned` out-parameter; panels had no
+  equivalent until `recon_panel_contains`.
+- **The shape it shares with [BG-089](#bg-089--a-tooltip-kept-showing-over-the-window-that-opened-on-top-of-it)**
+  is the second half only. BG-089 was a stale answer nothing rechecked, and its
+  fix — `tip_recheck` — is called when a window opens and was not called when a
+  menu does. That gap is closed too. But `tip_recheck` alone would not have
+  fixed this, because the search it re-runs was giving the wrong answer.
+- **Fixed in** v0.3.1. The panels in front are now checked in the order they are
+  drawn, each stopping the search if the point is inside it.

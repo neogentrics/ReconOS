@@ -415,6 +415,8 @@ enum recon_context_kind {
     RECON_CONTEXT_APP,
     /* An application in the Start menu, pinned or not. */
     RECON_CONTEXT_MENU_APP,
+    /* The taskbar clock's own menu, from clicking it. */
+    RECON_CONTEXT_CLOCK,
 };
 
 /* Offer a right click to the shell. Returns true if it opened a menu. */

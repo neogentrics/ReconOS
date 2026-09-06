@@ -200,6 +200,11 @@ enum context_action {
     CTX_PROPERTIES,
     CTX_PIN,
     CTX_UNPIN,
+    /* The clock's own menu. Two of them are one choice with two faces rather
+     * than two switches, which is why they are marked rather than ticked. */
+    CTX_TIME_24,
+    CTX_TIME_12,
+    CTX_DATE_AND_TIME,
 };
 
 /* The context menu. */
@@ -211,6 +216,11 @@ enum context_action {
  * agree about it, and a drawn menu whose entries are not where the hit test
  * says they are looks exactly like a menu whose entries do nothing. */
 #define CONTEXT_SEPARATOR_HEIGHT 5
+
+/* Room for the mark beside a label, and the mark itself. Square rather than a
+ * tick: see the note on the marked flag. */
+#define MENU_MARK_GUTTER 14
+#define MENU_MARK_SIZE 6
 
 /* --- Apps menu contents --- */
 
@@ -803,6 +813,14 @@ struct recon_shell {
         uint32_t id;
         bool enabled;
         bool separator_after;
+        /*
+         * Shown as the one currently in force.
+         *
+         * Deliberately not a tick box. A tick says "this is switched on" and
+         * invites both being on; these are one setting seen from two sides,
+         * and exactly one of them is always true. The mark says which.
+         */
+        bool marked;
     } context_items[CONTEXT_ITEMS_MAX];
     int context_item_count;
     enum recon_context_kind context_kind;
@@ -940,21 +958,27 @@ static int tip_expired(void *data) {
  */
 static bool tip_under(struct recon_shell *shell, double lx, double ly,
         char *out, size_t size) {
-    if (shell->dialog_open &&
-            recon_panel_tip_at(shell->dialog, lx, ly, out, size)) {
-        return true;
+    /*
+     * The panels in front, in the order they are drawn -- and each one stops
+     * the search if the point is inside it, whether or not it has a tip
+     * there. That is the same rule the window loop below follows, and these
+     * did not follow it until BG-106: a menu with no tooltip under the
+     * pointer handed the question down to the taskbar underneath, which
+     * answered, and the clock's tip was drawn across the open menu.
+     */
+    if (shell->dialog_open && recon_panel_contains(shell->dialog, lx, ly)) {
+        return recon_panel_tip_at(shell->dialog, lx, ly, out, size);
+    }
+    if (shell->context_open && recon_panel_contains(shell->context, lx, ly)) {
+        return recon_panel_tip_at(shell->context, lx, ly, out, size);
     }
     if (shell->menu_open) {
-        if (recon_panel_tip_at(shell->programs, lx, ly, out, size)) {
-            return true;
+        if (recon_panel_contains(shell->programs, lx, ly)) {
+            return recon_panel_tip_at(shell->programs, lx, ly, out, size);
         }
-        if (recon_panel_tip_at(shell->menu, lx, ly, out, size)) {
-            return true;
+        if (recon_panel_contains(shell->menu, lx, ly)) {
+            return recon_panel_tip_at(shell->menu, lx, ly, out, size);
         }
-    }
-    if (shell->context_open &&
-            recon_panel_tip_at(shell->context, lx, ly, out, size)) {
-        return true;
     }
 
     /*
@@ -1751,6 +1775,21 @@ static void draw_context(struct recon_shell *shell) {
     recon_fill(p, COLOR_MENU);
     recon_hit_clear(p);
 
+    /*
+     * The labels move right only if something in this menu is marked, so a
+     * menu with no marks keeps the inset it has always had. A hanging indent
+     * across every menu in the system to serve one of them would be the tail
+     * wagging the dog.
+     */
+    bool any_marked = false;
+    for (int i = 0; i < shell->context_item_count; i++) {
+        if (shell->context_items[i].marked) {
+            any_marked = true;
+            break;
+        }
+    }
+    int label_x = any_marked ? 14 + MENU_MARK_GUTTER : 14;
+
     for (int i = 0; i < shell->context_item_count; i++) {
         int y = context_entry_y(shell, i);
 
@@ -1763,10 +1802,27 @@ static void draw_context(struct recon_shell *shell) {
                 CONTEXT_ITEM_HEIGHT, RECON_THEME_MENU_HILITE);
         }
 
-        recon_draw_text(p, shell->font, 14, y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
-            width - 24, shell->context_items[i].label,
-            !shell->context_items[i].enabled ? COLOR_MENU_TEXT_DISABLED :
-            hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT);
+        recon_color ink = !shell->context_items[i].enabled
+            ? COLOR_MENU_TEXT_DISABLED
+            : hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT;
+
+        /*
+         * Drawn rather than a glyph, for the reason the Disk Cleanup list
+         * gives: a mark has to read at this size, and what the font has at
+         * this size is not reliable across skins.
+         *
+         * It takes the label's own colour, so it stays legible on the
+         * highlight for exactly the same reason the label does.
+         */
+        if (shell->context_items[i].marked) {
+            int size = MENU_MARK_SIZE;
+            recon_fill_rect(p, 14 + (MENU_MARK_GUTTER - size) / 2 - 2,
+                y + (CONTEXT_ITEM_HEIGHT - size) / 2, size, size, ink);
+        }
+
+        recon_draw_text(p, shell->font, label_x,
+            y + (CONTEXT_ITEM_HEIGHT + ascent) / 2 - 2,
+            width - label_x - 10, shell->context_items[i].label, ink);
 
         /* Disabled entries are shown rather than hidden, so the menu keeps the
          * same shape and what is unavailable is visible. */
@@ -1803,6 +1859,20 @@ static void context_add_id(struct recon_shell *shell, const char *label,
     shell->context_items[i].id = id;
     shell->context_items[i].enabled = enabled;
     shell->context_items[i].separator_after = separator;
+    shell->context_items[i].marked = false;
+}
+
+/*
+ * Mark the entry just added as the one in force.
+ *
+ * A separate call rather than a sixth argument on both adders, because one
+ * menu out of nine uses it and five booleans in a row is a call nobody can
+ * read at the site.
+ */
+static void context_mark_last(struct recon_shell *shell) {
+    if (shell->context_item_count > 0) {
+        shell->context_items[shell->context_item_count - 1].marked = true;
+    }
 }
 
 static void context_add(struct recon_shell *shell, const char *label,
@@ -1816,6 +1886,7 @@ static void context_add(struct recon_shell *shell, const char *label,
     shell->context_items[i].id = (uint32_t)action;
     shell->context_items[i].enabled = enabled;
     shell->context_items[i].separator_after = separator;
+    shell->context_items[i].marked = false;
 }
 
 /* Show the menu at a point, kept on screen if it would run off an edge. */
@@ -1850,6 +1921,11 @@ static void context_show(struct recon_shell *shell, double lx, double ly) {
     recon_panel_raise_to_top(shell->context);
     shell->context_hover = -1;
     shell->context_open = true;
+
+    /* Something appeared under a pointer that did not move, which is BG-089's
+     * situation exactly. A menu opened by a keyboard shortcut or by a click on
+     * a control the pointer is still resting on both land here. */
+    tip_recheck(shell);
     recon_damage_all(shell->server);
 }
 
@@ -4310,6 +4386,60 @@ static void ask_desktop(struct recon_shell *shell, int question, const char *nam
 }
 
 /* Carry out what a context menu entry asked for. */
+/*
+ * The clock's menu, from clicking the clock.
+ *
+ * It used to open the Control Panel at its root: the right application at the
+ * wrong page, and four more clicks for somebody who only wanted to stop
+ * reading fourteen thirty. The two things people actually want from a clock in
+ * a corner are which way it writes the hour and how to get at the rest, so the
+ * menu is those and nothing else.
+ *
+ * The setting is the one the Control Panel writes, not a second one. Two
+ * places that can change the same thing and two records of what it is set to
+ * is how a preference starts disagreeing with itself.
+ */
+static void show_clock_menu(struct recon_shell *shell) {
+    bool twenty_four = recon_registry_get_bool(RECON_REG_USER,
+        RECON_CLOCK_24H_KEY, true);
+
+    shell->context_kind = RECON_CONTEXT_CLOCK;
+    shell->context_item_count = 0;
+
+    /*
+     * Both offered, and the one in force marked, rather than one entry that
+     * toggles. "Show am and pm" tells somebody what will happen and not what
+     * is happening, so the state has to be read off the clock itself -- which
+     * is the thing they were looking at when they could not tell.
+     *
+     * Both stay enabled. Choosing the one already in force does nothing and
+     * says nothing, which is the correct amount of event for choosing what is
+     * already true; greying it out would make the menu change shape depending
+     * on the setting, and a menu that moves under the pointer is worse than a
+     * click that does nothing.
+     */
+    context_add(shell, "24-hour clock", CTX_TIME_24, true, false);
+    if (twenty_four) {
+        context_mark_last(shell);
+    }
+    context_add(shell, "12-hour clock, am and pm", CTX_TIME_12, true, true);
+    if (!twenty_four) {
+        context_mark_last(shell);
+    }
+
+    context_add(shell, "Date and Time...", CTX_DATE_AND_TIME, true, false);
+
+    /*
+     * Anchored to the bottom-right corner rather than to the pointer. The
+     * clock is in a fixed place and a menu about it that appears wherever the
+     * click landed slides around under a person who clicked the same button
+     * twice. context_show pushes it left off the edge and flips it above the
+     * taskbar from here.
+     */
+    context_show(shell, shell->screen_width,
+        shell->screen_height - TASKBAR_HEIGHT);
+}
+
 static void context_activate(struct recon_shell *shell, uint32_t id) {
     /*
      * An application's entries are its own; the shell drew the menu but has no
@@ -4324,6 +4454,38 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
     }
 
     enum context_action action = (enum context_action)id;
+
+    if (shell->context_kind == RECON_CONTEXT_CLOCK) {
+        switch (action) {
+        case CTX_TIME_24:
+        case CTX_TIME_12: {
+            bool want = (action == CTX_TIME_24);
+            if (recon_registry_get_bool(RECON_REG_USER, RECON_CLOCK_24H_KEY,
+                    true) != want) {
+                recon_registry_set_bool(RECON_REG_USER, RECON_CLOCK_24H_KEY,
+                    want);
+                /* Everything that draws a time redraws, not just the corner:
+                 * the Control Panel's own page shows this setting too, and
+                 * two views of one setting disagreeing is the fault this
+                 * shares a registry key to avoid. */
+                recon_shell_restyle(shell);
+            }
+            break;
+        }
+        case CTX_DATE_AND_TIME:
+            /*
+             * Still the root rather than the Date and Time page. The Control
+             * Panel cannot yet be told which item to open, and saying so here
+             * is better than a name that promises a page it does not reach.
+             */
+            recon_shell_open_named(shell, "Control Panel");
+            break;
+        default:
+            break;
+        }
+        recon_shell_refresh(shell);
+        return;
+    }
 
     switch (shell->context_kind) {
     case RECON_CONTEXT_TASKBAR_WINDOW: {
@@ -5547,13 +5709,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
         if (hit == HIT_APPS_BUTTON) {
             toggle_menu(shell);
         } else if (hit == HIT_CLOCK) {
-            /*
-             * Opens the page that can change it. A popup panel showing the
-             * date would be the familiar answer and is a second thing to
-             * build and keep; the Control Panel already draws lists and
-             * already knows how to be one window per item.
-             */
-            recon_shell_open_named(shell, "Control Panel");
+            show_clock_menu(shell);
         } else if (hit >= HIT_DESKTOP_BASE &&
                 hit < HIT_DESKTOP_BASE + (uint32_t)DESKTOP_COUNT) {
             recon_shell_set_desktop(shell, (int)(hit - HIT_DESKTOP_BASE));
