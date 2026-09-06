@@ -39,11 +39,25 @@
  * Nothing is written before the connection is encrypted except EHLO and
  * STARTTLS themselves. Not the username, not the password, not the letter.
  *
+ * --- Bcc, and the one rule that matters about it ---
+ *
+ * A blind copy is two different things at once, and confusing them is how mail
+ * clients leak the list of who was written to.
+ *
+ * In the ENVELOPE -- the RCPT TO lines the server is given -- a Bcc address is
+ * an ordinary recipient, exactly like To and Cc. That is how the message
+ * reaches them at all.
+ *
+ * In the MESSAGE -- the headers everybody who receives it can read -- a Bcc
+ * address does not appear. Not abbreviated, not in a second copy, not at all.
+ * `recon_smtp_compose` writes `To` and `Cc` and has no code path that can
+ * write `Bcc`, which is deliberate: the guarantee is worth more as a thing the
+ * function cannot do than as a thing it remembers not to.
+ *
  * --- What it does not do yet ---
  *
- * One recipient list, plain text bodies, no attachments, no HTML, no
- * addressing beyond To and a subject. Enough to send a letter, and everything
- * absent is absent by name rather than by discovery.
+ * Plain text bodies, no attachments, no HTML. Enough to send a letter, and
+ * everything absent is absent by name rather than by discovery.
  */
 
 #ifndef RECON_SMTP_H
@@ -86,17 +100,62 @@ bool recon_smtp_account_get(struct recon_smtp_account *out);
 bool recon_smtp_account_set(const struct recon_smtp_account *account);
 bool recon_smtp_account_clear(void);
 
+/* One address, and the room a field of them gets. */
+#define RECON_SMTP_ADDRESS_MAX 192
+#define RECON_SMTP_LIST_MAX 1024
+
+/*
+ * How many people one letter may go to.
+ *
+ * A limit rather than no limit, because every one of these is a round trip to
+ * the server before the message is sent, and a field pasted full of a thousand
+ * addresses is a mailing list -- which is a different thing, run by different
+ * software, for reasons this is not going to solve by accident.
+ */
+#define RECON_SMTP_RECIPIENTS_MAX 32
+
 /*
  * A message, before it is a message.
  *
- * `to` is one address. `body` is plain text with whatever line endings; this
- * writes the ones the protocol wants.
+ * `to`, `cc` and `bcc` are addresses separated by commas, as typed. `body` is
+ * plain text with whatever line endings; this writes the ones the protocol
+ * wants.
+ *
+ * All three fields reach the server as recipients. Only the first two reach
+ * the message -- see the note at the top of this file, which is the reason
+ * they are three fields and not one.
  */
 struct recon_smtp_letter {
-    char to[192];
+    char to[RECON_SMTP_LIST_MAX];
+    char cc[RECON_SMTP_LIST_MAX];
+    char bcc[RECON_SMTP_LIST_MAX];
     char subject[256];
     const char *body;
 };
+
+/*
+ * Everybody one letter goes to, in envelope order: To, then Cc, then Bcc.
+ *
+ * Flattened out of the three fields because the envelope does not distinguish
+ * them -- a server is told a list of recipients and nothing about why each one
+ * is on it. Keeping the distinction anywhere past this point would be keeping
+ * it somewhere it could be got wrong.
+ */
+struct recon_smtp_recipients {
+    char address[RECON_SMTP_RECIPIENTS_MAX][RECON_SMTP_ADDRESS_MAX];
+    int count;
+};
+
+/*
+ * Split a letter's three address fields into the envelope's one list.
+ *
+ * False when an address will not do, with `why` filled in. Exposed for the
+ * same reason `recon_smtp_compose` is: the splitting rules -- what a separator
+ * is, what surrounding space means, what an empty entry between two commas is
+ * -- are worth testing without a server.
+ */
+bool recon_smtp_recipients_of(const struct recon_smtp_letter *letter,
+    struct recon_smtp_recipients *out, char *why, size_t why_size);
 
 /*
  * Whether a letter can be sent as written.

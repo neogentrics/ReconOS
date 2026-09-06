@@ -118,6 +118,17 @@ struct recon_smtp_session {
     struct recon_smtp_letter letter;
     char *message;
 
+    /*
+     * Everybody the letter goes to, and how far through them this is.
+     *
+     * Worked out once, before anything connects, rather than re-split at each
+     * RCPT: the list a server is given has to be the list that was checked,
+     * and parsing the same text twice is two chances to get a different
+     * answer.
+     */
+    struct recon_smtp_recipients recipients;
+    int recipient_at;
+
     struct recon_net_stream *stream;
     struct recon_smtp_handlers handlers;
     void *user;
@@ -376,14 +387,39 @@ static void on_line(struct recon_smtp_session *s, char *line) {
             return;
         }
         s->state = SMTP_RCPT;
-        send_line(s, "RCPT TO:<%s>", s->letter.to);
+        s->recipient_at = 0;
+        send_line(s, "RCPT TO:<%s>", s->recipients.address[0]);
         return;
 
     case SMTP_RCPT:
         if (code != 250 && code != 251) {
-            give_up(s, "The server would not accept that recipient.");
+            /*
+             * Named, because with several recipients "the server would not
+             * accept that recipient" leaves somebody guessing which of six
+             * addresses has the typo in it.
+             *
+             * And the whole send stops rather than skipping past. A letter
+             * that reached four of five people and reported success is worse
+             * than one that failed: nobody goes looking for the fifth.
+             */
+            char why[RECON_SMTP_ADDRESS_MAX + 64];
+            snprintf(why, sizeof(why),
+                "The server would not accept '%s' as a recipient.",
+                s->recipients.address[s->recipient_at]);
+            give_up(s, why);
             return;
         }
+
+        s->recipient_at++;
+        if (s->recipient_at < s->recipients.count) {
+            /* One round trip each, which is what the protocol is: the envelope
+             * is built a recipient at a time and each is accepted or refused
+             * on its own. */
+            send_line(s, "RCPT TO:<%s>",
+                s->recipients.address[s->recipient_at]);
+            return;
+        }
+
         s->state = SMTP_DATA;
         send_line(s, "DATA");
         return;
@@ -554,6 +590,21 @@ struct recon_smtp_session *recon_smtp_send(
 
     s->account = *account;
     s->letter = *letter;
+
+    /*
+     * The envelope, built here and not touched again.
+     *
+     * letter_ok above already split the same fields to decide whether they
+     * were sendable, so this cannot fail -- but it is checked rather than
+     * assumed, because "the earlier call already proved it" is exactly the
+     * reasoning that stops being true when somebody adds a caller.
+     */
+    if (!recon_smtp_recipients_of(letter, &s->recipients, why, sizeof(why))) {
+        set_error("%s", why);
+        free(s);
+        return NULL;
+    }
+
     snprintf(s->password, sizeof(s->password), "%s", password);
     s->user = user;
     s->state = SMTP_GREETING;

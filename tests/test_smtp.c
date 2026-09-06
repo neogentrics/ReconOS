@@ -118,9 +118,21 @@ static void test_addresses(void) {
     l = a_letter("a@b@c.com", "Hi", "x");
     check(!recon_smtp_letter_ok(&l, why, sizeof(why)), "two at signs");
 
+    /* This used to be refused, and the check used to read "two addresses,
+     * because this sends to one". It sends to several now. */
     l = a_letter("one@a.com, two@b.com", "Hi", "x");
+    check(recon_smtp_letter_ok(&l, why, sizeof(why)),
+        "a comma-separated list, now that there can be more than one");
+
+    l = a_letter("one@a.com,,two@b.com,", "Hi", "x");
+    check(recon_smtp_letter_ok(&l, why, sizeof(why)),
+        "and stray commas, which are a typing artefact and not a statement");
+
+    l = a_letter("one@a.com, nobody", "Hi", "x");
     check(!recon_smtp_letter_ok(&l, why, sizeof(why)),
-        "two addresses, because this sends to one");
+        "but one bad address in a list still stops the whole letter");
+    check(strstr(why, "nobody") != NULL,
+        "and the reason names which one, out of however many");
 
     l = a_letter("Joshua <j@example.com>", "Hi", "x");
     check(!recon_smtp_letter_ok(&l, why, sizeof(why)),
@@ -135,6 +147,102 @@ static void test_addresses(void) {
     l = a_letter("odd+tag@sub.domain.example.museum", "Hi", "x");
     check(recon_smtp_letter_ok(&l, why, sizeof(why)),
         "including an unusual but perfectly real one");
+}
+
+/* --- Who it goes to, and who is told --- */
+
+/*
+ * The one thing about Bcc that has to be right.
+ *
+ * Every address goes in the envelope; only To and Cc go in the message. Get
+ * that backwards and the letter still sends, still arrives, and quietly hands
+ * every recipient the list of people who were meant to be hidden -- which is
+ * the failure that has embarrassed real mail software repeatedly and is not
+ * visible from the sender's side at all.
+ */
+static void test_blind_copies(void) {
+    printf("Cc and Bcc\n");
+
+    char why[192];
+    struct recon_smtp_letter l;
+    struct recon_smtp_recipients everyone;
+
+    /* --- The envelope has all three --- */
+
+    l = a_letter("to@a.com", "Hi", "x");
+    snprintf(l.cc, sizeof(l.cc), "%s", "cc1@b.com, cc2@b.com");
+    snprintf(l.bcc, sizeof(l.bcc), "%s", "secret@c.com");
+
+    check(recon_smtp_recipients_of(&l, &everyone, why, sizeof(why)),
+        "a letter with all three fields splits");
+    check(everyone.count == 4, "and everybody named is in the envelope");
+    check(strcmp(everyone.address[0], "to@a.com") == 0, "To first");
+    check(strcmp(everyone.address[1], "cc1@b.com") == 0, "then Cc");
+    check(strcmp(everyone.address[2], "cc2@b.com") == 0, "in order");
+    check(strcmp(everyone.address[3], "secret@c.com") == 0, "then Bcc");
+
+    /* --- The message has two of them --- */
+
+    struct recon_smtp_account account = an_account();
+    char out[8192];
+    size_t n = recon_smtp_compose(&account, &l, NULL, out, sizeof(out));
+
+    check(n > 0, "and it composes");
+    check(strstr(out, "To: to@a.com\r\n") != NULL, "To is written");
+    check(strstr(out, "Cc: cc1@b.com, cc2@b.com\r\n") != NULL,
+        "Cc is written, with the list joined the same way every time");
+    check(strstr(out, "secret@c.com") == NULL,
+        "AND THE BCC ADDRESS APPEARS NOWHERE IN THE MESSAGE");
+    check(strstr(out, "Bcc") == NULL && strstr(out, "bcc") == NULL,
+        "not even the header name, which would say one was used");
+
+    /* --- Each field can carry the letter on its own --- */
+
+    struct recon_smtp_letter cc_only;
+    memset(&cc_only, 0, sizeof(cc_only));
+    snprintf(cc_only.cc, sizeof(cc_only.cc), "%s", "only@b.com");
+    cc_only.body = "x";
+    check(recon_smtp_letter_ok(&cc_only, why, sizeof(why)),
+        "a letter with only a Cc is a real letter");
+
+    struct recon_smtp_letter bcc_only;
+    memset(&bcc_only, 0, sizeof(bcc_only));
+    snprintf(bcc_only.bcc, sizeof(bcc_only.bcc), "%s", "only@c.com");
+    bcc_only.body = "x";
+    check(recon_smtp_letter_ok(&bcc_only, why, sizeof(why)),
+        "and so is one with only a Bcc");
+
+    n = recon_smtp_compose(&account, &bcc_only, NULL, out, sizeof(out));
+    check(n > 0, "which composes");
+    check(strstr(out, "To:") == NULL,
+        "with no To header, because there is honestly nobody to put in it");
+    check(strstr(out, "only@c.com") == NULL,
+        "and still nothing naming the recipient");
+
+    /* --- Nobody at all is still refused --- */
+
+    struct recon_smtp_letter nobody;
+    memset(&nobody, 0, sizeof(nobody));
+    nobody.body = "x";
+    check(!recon_smtp_letter_ok(&nobody, why, sizeof(why)),
+        "three empty fields is nobody, and that is still an error");
+
+    /* --- The limit is a limit --- */
+
+    struct recon_smtp_letter crowd;
+    memset(&crowd, 0, sizeof(crowd));
+    crowd.body = "x";
+    size_t at = 0;
+    for (int i = 0; i < RECON_SMTP_RECIPIENTS_MAX + 1; i++) {
+        int w = snprintf(crowd.to + at, sizeof(crowd.to) - at, "%sp%d@e.com",
+            i > 0 ? "," : "", i);
+        if (w <= 0) {
+            break;
+        }
+        at += (size_t)w;
+    }
+    check(!recon_smtp_letter_ok(&crowd, why, sizeof(why)),
+        "one more than the limit is refused rather than quietly trimmed");
 }
 
 /* --- What it writes --- */
@@ -274,6 +382,7 @@ int main(void) {
 
     test_header_injection();
     test_addresses();
+    test_blind_copies();
     test_headers();
     test_line_endings();
     test_the_dot();

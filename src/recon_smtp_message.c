@@ -70,31 +70,191 @@ static bool looks_like_an_address(const char *text) {
     return true;
 }
 
-bool recon_smtp_letter_ok(const struct recon_smtp_letter *letter,
-        char *why, size_t why_size) {
-    const char *problem = NULL;
+/* --- One field of addresses into many addresses --- */
 
-    if (letter == NULL) {
-        problem = "There is no message.";
-    } else if (letter->to[0] == '\0') {
-        problem = "There is nobody to send it to.";
-    } else if (!looks_like_an_address(letter->to)) {
-        problem = "That does not look like one address. One at a time, and "
-            "no spaces or commas.";
-    } else if (has_a_line_break(letter->subject)) {
-        problem = "The subject has a line break in it, which cannot be sent.";
+static void say_why(char *why, size_t why_size, const char *what) {
+    if (why != NULL && why_size > 0) {
+        snprintf(why, why_size, "%s", what);
     }
+}
 
-    if (problem == NULL) {
+/*
+ * Add every address in one comma-separated field to the list.
+ *
+ * Surrounding space is trimmed, because somebody typing a list puts a space
+ * after each comma and a field that rejected that would be a field nobody can
+ * use. An empty entry -- a trailing comma, or two in a row -- is skipped
+ * rather than refused, for the same reason: it is a typing artefact and not a
+ * statement about who the letter is for.
+ *
+ * What is *not* forgiven is an address that does not look like one. That is
+ * the difference between tidying up input and guessing at intent.
+ */
+static bool add_field(const char *field, struct recon_smtp_recipients *out,
+        char *why, size_t why_size) {
+    if (field == NULL || *field == '\0') {
         return true;
     }
-    if (why != NULL && why_size > 0) {
-        snprintf(why, why_size, "%s", problem);
+    if (has_a_line_break(field)) {
+        say_why(why, why_size,
+            "An address has a line break in it, which cannot be sent.");
+        return false;
     }
-    return false;
+
+    const char *p = field;
+    while (*p != '\0') {
+        const char *comma = strchr(p, ',');
+        const char *end = comma != NULL ? comma : p + strlen(p);
+
+        const char *start = p;
+        while (start < end && (*start == ' ' || *start == '\t')) {
+            start++;
+        }
+        const char *stop = end;
+        while (stop > start && (stop[-1] == ' ' || stop[-1] == '\t')) {
+            stop--;
+        }
+
+        size_t length = (size_t)(stop - start);
+        if (length > 0) {
+            if (out->count >= RECON_SMTP_RECIPIENTS_MAX) {
+                say_why(why, why_size,
+                    "That is more people than one letter can be addressed to.");
+                return false;
+            }
+            if (length >= RECON_SMTP_ADDRESS_MAX) {
+                say_why(why, why_size, "One of those addresses is too long.");
+                return false;
+            }
+
+            char one[RECON_SMTP_ADDRESS_MAX];
+            memcpy(one, start, length);
+            one[length] = '\0';
+
+            if (!looks_like_an_address(one)) {
+                char message[RECON_SMTP_ADDRESS_MAX + 64];
+                snprintf(message, sizeof(message),
+                    "'%s' does not look like an address.", one);
+                say_why(why, why_size, message);
+                return false;
+            }
+
+            memcpy(out->address[out->count], one, length + 1);
+            out->count++;
+        }
+
+        if (comma == NULL) {
+            break;
+        }
+        p = comma + 1;
+    }
+    return true;
+}
+
+bool recon_smtp_recipients_of(const struct recon_smtp_letter *letter,
+        struct recon_smtp_recipients *out, char *why, size_t why_size) {
+    if (letter == NULL || out == NULL) {
+        say_why(why, why_size, "There is no message.");
+        return false;
+    }
+
+    out->count = 0;
+
+    /*
+     * To, then Cc, then Bcc. The order is the one a person would read them in
+     * and the server does not care -- but a stable order means a failing send
+     * fails at the same address every time, which is the difference between a
+     * bug that can be reproduced and one that cannot.
+     */
+    if (!add_field(letter->to, out, why, why_size) ||
+            !add_field(letter->cc, out, why, why_size) ||
+            !add_field(letter->bcc, out, why, why_size)) {
+        return false;
+    }
+
+    if (out->count == 0) {
+        say_why(why, why_size, "There is nobody to send it to.");
+        return false;
+    }
+    return true;
+}
+
+bool recon_smtp_letter_ok(const struct recon_smtp_letter *letter,
+        char *why, size_t why_size) {
+    if (letter == NULL) {
+        say_why(why, why_size, "There is no message.");
+        return false;
+    }
+
+    /*
+     * A letter with somebody only in Cc or only in Bcc is a real letter and is
+     * sent. What is refused is a letter with nobody anywhere, which
+     * recipients_of already answers -- so this asks that rather than checking
+     * the To field on its own and calling an empty To an error.
+     */
+    struct recon_smtp_recipients everyone;
+    if (!recon_smtp_recipients_of(letter, &everyone, why, why_size)) {
+        return false;
+    }
+
+    if (has_a_line_break(letter->subject)) {
+        say_why(why, why_size,
+            "The subject has a line break in it, which cannot be sent.");
+        return false;
+    }
+    return true;
 }
 
 /* --- Writing the message out --- */
+
+/*
+ * One address header, or nothing when the field is empty.
+ *
+ * The addresses are re-joined from what was parsed rather than copied through
+ * as typed, so what goes out is the list this program understood. If those two
+ * ever disagree, the one that reaches the server should be the one that was
+ * checked.
+ *
+ * Nothing here knows which header it is writing beyond the name it is handed,
+ * which is why there is exactly one of these and Bcc simply never calls it.
+ */
+static bool write_address_header(const char *field, const char *name,
+        char *out, size_t out_size, size_t *at) {
+    if (field == NULL || *field == '\0') {
+        return true;
+    }
+
+    struct recon_smtp_letter one_field;
+    memset(&one_field, 0, sizeof(one_field));
+    snprintf(one_field.to, sizeof(one_field.to), "%s", field);
+
+    struct recon_smtp_recipients people;
+    if (!recon_smtp_recipients_of(&one_field, &people, NULL, 0)) {
+        return false;
+    }
+
+    int written = snprintf(out + *at, out_size - *at, "%s: ", name);
+    if (written < 0 || (size_t)written >= out_size - *at) {
+        return false;
+    }
+    *at += (size_t)written;
+
+    for (int i = 0; i < people.count; i++) {
+        written = snprintf(out + *at, out_size - *at, "%s%s",
+            i > 0 ? ", " : "", people.address[i]);
+        if (written < 0 || (size_t)written >= out_size - *at) {
+            return false;
+        }
+        *at += (size_t)written;
+    }
+
+    written = snprintf(out + *at, out_size - *at, "\r\n");
+    if (written < 0 || (size_t)written >= out_size - *at) {
+        return false;
+    }
+    *at += (size_t)written;
+    return true;
+}
 
 size_t recon_smtp_compose(const struct recon_smtp_account *account,
         const struct recon_smtp_letter *letter, const char *now,
@@ -126,7 +286,27 @@ size_t recon_smtp_compose(const struct recon_smtp_account *account,
     } while (0)
 
     PUT("From: %s\r\n", account->from);
-    PUT("To: %s\r\n", letter->to);
+
+    /*
+     * To and Cc, tidied to what was actually parsed rather than echoed as
+     * typed -- so a trailing comma or a double space does not travel.
+     *
+     * And Bcc is not here. There is no branch below that writes it, no flag
+     * that turns it on, and nothing further down this function that touches
+     * `letter->bcc` at all: the addresses in it reach the server as RCPT TO
+     * lines in recon_smtp.c and reach the message nowhere. That is the whole
+     * meaning of a blind copy, and it is a guarantee worth having as a thing
+     * this function *cannot* do rather than as a thing it remembers not to.
+     */
+    if (!write_address_header(letter->to, "To", out, out_size, &at)) {
+        out[0] = '\0';
+        return 0;
+    }
+    if (!write_address_header(letter->cc, "Cc", out, out_size, &at)) {
+        out[0] = '\0';
+        return 0;
+    }
+
     if (letter->subject[0] != '\0') {
         PUT("Subject: %s\r\n", letter->subject);
     }

@@ -73,9 +73,19 @@ enum setup_field {
     FIELD_COUNT,
 };
 
-/* Fields on the compose screen. The body is last because it is the tall one. */
+/*
+ * Fields on the compose screen. The body is last because it is the tall one.
+ *
+ * Cc and Bcc are separate fields rather than one list with a marker, because
+ * they are separate things: everyone here receives the letter, and only the
+ * first two are named in it. A single field with a convention for "hide this
+ * one" would put that distinction in somebody's typing, and typing is where it
+ * would eventually be got wrong.
+ */
 enum compose_field {
     COMPOSE_TO,
+    COMPOSE_CC,
+    COMPOSE_BCC,
     COMPOSE_SUBJECT,
     COMPOSE_BODY,
     COMPOSE_COUNT,
@@ -280,17 +290,36 @@ static void send_now(struct recon_mailwin *m) {
      * would go on showing the one that was typed -- so there would be nothing
      * to notice until somebody else received it.
      */
-    const char *to = m->compose[COMPOSE_TO].text;
     const char *subject = m->compose[COMPOSE_SUBJECT].text;
 
     struct recon_smtp_letter letter;
     memset(&letter, 0, sizeof(letter));
 
-    if (strlen(to) >= sizeof(letter.to)) {
-        set_message(m, true, "That address is too long -- %zu characters, and "
-            "there is room for %zu.", strlen(to), sizeof(letter.to) - 1);
-        return;
+    /* The three address fields and where each one goes. Named in a table so
+     * adding a fourth is one line and cannot forget the length check. */
+    const struct {
+        int field;
+        char *into;
+        size_t room;
+        const char *label;
+    } LISTS[3] = {
+        { COMPOSE_TO,  letter.to,  sizeof(letter.to),  "To" },
+        { COMPOSE_CC,  letter.cc,  sizeof(letter.cc),  "Cc" },
+        { COMPOSE_BCC, letter.bcc, sizeof(letter.bcc), "Bcc" },
+    };
+
+    for (int i = 0; i < 3; i++) {
+        const char *text = m->compose[LISTS[i].field].text;
+        size_t length = strlen(text);
+        if (length >= LISTS[i].room) {
+            set_message(m, true, "The %s list is too long -- %zu characters, "
+                "and there is room for %zu.", LISTS[i].label, length,
+                LISTS[i].room - 1);
+            return;
+        }
+        memcpy(LISTS[i].into, text, length + 1);
     }
+
     if (strlen(subject) >= sizeof(letter.subject)) {
         set_message(m, true, "That subject is too long -- %zu characters, and "
             "there is room for %zu.", strlen(subject),
@@ -298,8 +327,6 @@ static void send_now(struct recon_mailwin *m) {
         return;
     }
 
-    /* Both lengths are checked above, so neither can truncate. */
-    memcpy(letter.to, to, strlen(to) + 1);
     memcpy(letter.subject, subject, strlen(subject) + 1);
     letter.body = m->compose[COMPOSE_BODY].text;
 
@@ -695,8 +722,14 @@ static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
     recon_draw_text(p, m->font, x, y + ascent, w, from, COLOR_DIM);
     y += line + PADDING;
 
-    static const char *const LABELS[2] = { "To", "Subject" };
-    for (int i = 0; i < 2; i++) {
+    /*
+     * Every field above the body, in the order they are typed. Four rows now
+     * rather than two, which is four rows the body does not get -- but a Bcc
+     * that has to be found somewhere is a Bcc nobody uses, and this window
+     * exists to be usable rather than to be tall.
+     */
+    static const char *const LABELS[4] = { "To", "Cc", "Bcc", "Subject" };
+    for (int i = 0; i < 4; i++) {
         recon_draw_text(p, m->font, x, y + ascent, 70, LABELS[i], COLOR_TEXT);
         recon_edit_draw(p, m->font, x + 76, y, w - 76 - PADDING, FIELD_HEIGHT,
             &m->compose[i]);
@@ -704,6 +737,16 @@ static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
             HIT_COMPOSE_BASE + i);
         y += FIELD_HEIGHT + 6;
     }
+
+    /*
+     * Said once, beside the field, rather than assumed known. The difference
+     * between Cc and Bcc is the whole reason both exist and it is not visible
+     * from the labels.
+     */
+    recon_draw_text(p, m->font, x, y + ascent, w,
+        "Everyone above receives it. Only To and Cc are named in the letter.",
+        COLOR_DIM);
+    y += line + 4;
 
     /* The buttons are placed from the bottom, so the body gets the rest. */
     int buttons_y = bottom - BUTTON_HEIGHT;
