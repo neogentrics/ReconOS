@@ -61,6 +61,13 @@ extern u64 reconboot_handoff;
  * priority mask register. Two minutes, no guessing. */
 #define GICD_BASE  0x08000000UL		/* interrupt controller, distributor */
 #define GICC_BASE  0x08010000UL		/* interrupt controller, CPU interface */
+#define GICR_BASE  0x080A0000UL		/* GICv3 redistributors, one pair each */
+
+/* How many redistributor pairs the fixed device map covers. The walk that
+ * looks for a processor's own frame is bounded by this, so it can never
+ * read past what is mapped -- which would fault inside the code that makes
+ * reporting a fault possible. */
+#define GICR_FRAMES_MAPPED 64
 #define PL031_BASE 0x09010000UL		/* real-time clock */
 
 /* In time.c: the interrupt path, and what the console reports about the clock. */

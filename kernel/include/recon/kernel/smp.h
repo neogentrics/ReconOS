@@ -68,14 +68,24 @@ bool smp_self_test(void);
 
 /* --- What the architecture provides -------------------------------------- */
 
-/* Discovers the processors and returns how many there are, filling `ids` with
- * whatever identifier the architecture needs to start each one -- an MPIDR
- * value on aarch64, a local APIC identifier on x86_64. Index 0 is this
- * processor. */
+/* Discovers the processors, filling `ids` with whatever identifier the
+ * architecture needs to start each one -- an MPIDR value on aarch64, a local
+ * APIC identifier on x86_64. Index 0 is this processor.
+ *
+ * **Returns how many exist, which may be more than `max`.** Only `max` of them
+ * are written to `ids`; the return value is the true count, so the caller can
+ * say how many it had to drop.
+ *
+ * That distinction is the whole point of the signature. It used to return the
+ * number it had *stored*, which made `found > MAX_CPUS` unreachable in
+ * smp_init -- a machine with sixteen processors reported eight and said
+ * nothing, underneath a comment promising it would never silently truncate. */
 unsigned arch_smp_discover(u64 *ids, unsigned max);
 
 /* Starts one processor, which begins at the architecture's secondary entry
- * point with the given stack. Returns false if the firmware refused. */
+ * point with the given stack. Returns false if it could not be started -- which
+ * on aarch64 means firmware refused, and on x86_64 means this kernel has not
+ * written the startup sequence yet. */
 bool arch_smp_start(u64 id, unsigned cpu, void *stack_top);
 
 /* Brings this processor onto the kernel's page tables, its interrupt

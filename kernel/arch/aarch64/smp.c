@@ -128,15 +128,21 @@ unsigned arch_smp_discover(u64 *ids, unsigned max)
 	 * find is a processor that does not answer. */
 	ids[0] = arch_cpu_id_real();
 
-	for (u64 candidate = 0; candidate < max && count < max; candidate++) {
+	/* Probes past `max`, so a machine with more processors than this kernel
+	 * can hold is *reported* rather than quietly halved. Twice the array is
+	 * enough to notice; probing without a bound would ask forever. */
+	for (u64 candidate = 0; candidate < (u64)max * 2; candidate++) {
 		if (candidate == ids[0])
 			continue;
 
 		/* Ask whether it is affine to us -- CPU_ON with a null entry
 		 * point would start it somewhere useless, so the probe is
 		 * AFFINITY_INFO (0xC4000004), which only reports. */
-		if (psci_call(0xC4000004u, candidate, 0, 0, psci_use_hvc) >= 0)
-			ids[count++] = candidate;
+		if (psci_call(0xC4000004u, candidate, 0, 0, psci_use_hvc) >= 0) {
+			if (count < max)
+				ids[count] = candidate;
+			count++;
+		}
 	}
 
 	return count;

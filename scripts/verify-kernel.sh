@@ -304,7 +304,15 @@ check_for sata0 "  device tree, AHCI" \
 		-drive "file=$DISK,format=raw,if=none,id=s0" \
 		-device ide-hd,drive=s0,bus=ahci0.0
 
-for n in 2 4 8; do
+# Sixteen is past where QEMU's virt board stops giving a GICv2.
+#
+# This loop stopped at eight, and eight is exactly the largest machine the older
+# interrupt controller supports -- so the kernel panicked at boot on any ARM
+# machine with nine or more processors, and nothing here could see it (BG-092).
+# A rig built on the principle that some bugs only exist above a certain machine
+# size had its own ceiling, one processor below the first machine that would
+# have shown this one.
+for n in 2 4 8 16; do
 	check_for virtio0 "  device tree, $n processors" \
 		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
 			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
@@ -474,6 +482,31 @@ else
 	echo "$rn_out" | sed 's/^/      /' | head -20
 	failures=$((failures + 1))
 	FAILED_PATHS+=("reconfs: rename under a power cut")
+fi
+
+# The promise the whole of phase 2 rests on: ReconOS installs beside an
+# operating system that is already there without destroying it. Every safety
+# rule in the storage stack exists to keep it, and none of them is worth
+# anything as an intention.
+
+printf '%-46s' "  a filesystem beside somebody else's"
+
+# The status is captured rather than read from `$?` inside an elif, where what
+# it refers to depends on how the shell got there.
+beside_out=$(bash scripts/beside-others-test.sh x86_64 2>&1)
+beside_rc=$?
+
+if [ "$beside_rc" -eq 0 ]; then
+	echo "neighbour and both tables unchanged"
+	passes=$((passes + 1))
+elif [ "$beside_rc" -eq 2 ]; then
+	echo "skipped, sgdisk is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$beside_out" | sed 's/^/      /' | head -14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("reconfs beside another partition")
 fi
 
 echo

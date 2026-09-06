@@ -88,7 +88,10 @@ void smp_init(void)
 
 		if (!arch_smp_start(cpu_ids[i], i,
 				    (u8 *)phys_to_virt(stack) + 4 * PAGE_SIZE)) {
-			kprintf("  smp: the firmware refused to start processor %u\n", i);
+			/* Not "the firmware refused": on x86_64 there is no firmware
+			 * in this path at all, and a message that names the wrong
+			 * culprit sends whoever reads it to the wrong place. */
+			kprintf("  smp: could not start processor %u\n", i);
 			pmm_free_pages(stack, 4);
 			continue;
 		}

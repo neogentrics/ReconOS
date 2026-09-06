@@ -17,6 +17,7 @@
 
 #include <recon/kernel/arch.h>
 #include <recon/kernel/time.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/sched.h>
 
@@ -41,12 +42,195 @@
 #define GICC_IAR  0x000C	/* read: which interrupt, and acknowledge it */
 #define GICC_EOIR 0x0010	/* write: finished with it */
 
+/* --- Two generations of the same controller ------------------------------
+ *
+ * Everything above is GICv2, and GICv2 stops at eight processors. Above that a
+ * machine has a GICv3, whose distributor looks similar and whose CPU interface
+ * is somewhere else entirely: not memory at all, but system registers.
+ *
+ * This kernel spoke only v2, at a hardcoded address, and on a machine with nine
+ * or more processors that address is not a CPU interface. The first write to it
+ * took an external abort and the machine panicked before finishing boot. It was
+ * never seen because the verification rig stopped at eight -- the largest
+ * machine QEMU's `virt` board still gives a GICv2 for. (BG-092.)
+ *
+ * --- What changes, and what does not ---
+ *
+ *   the distributor    same registers, plus a bit that must be set for the
+ *                      newer routing model
+ *   the CPU interface  system registers instead of MMIO
+ *   private interrupts the timer's interrupt is per-processor, and on v3 those
+ *                      live in a REDISTRIBUTOR frame of their own rather than
+ *                      in the distributor
+ *
+ * The last is the one that catches people: a v3 timer configured in the
+ * distributor is configured perfectly and never fires, because the distributor
+ * does not own interrupt 30 any more.
+ */
+#define GICD_PIDR2	  0xFFE8	/* [7:4] is the architecture revision */
+
+#define GICD_CTLR_ARE_NS  (1u << 4)	/* affinity routing, which v3 requires */
+#define GICD_CTLR_GRP1NS  (1u << 1)
+
+/* A redistributor is two 64KiB frames: the control frame, then the one holding
+ * the per-processor interrupts. One pair per processor, laid out end to end. */
+#define GICR_STRIDE	  0x20000
+#define GICR_CTLR	  0x0000
+#define GICR_TYPER	  0x0008	/* [63:32] affinity, [4] last frame */
+#define GICR_WAKER	  0x0014
+#define GICR_SGI_BASE	  0x10000
+#define GICR_IGROUPR0	  (GICR_SGI_BASE + 0x0080)
+#define GICR_ISENABLER0	  (GICR_SGI_BASE + 0x0100)
+#define GICR_IPRIORITYR	  (GICR_SGI_BASE + 0x0400)
+
+#define GICR_WAKER_SLEEP  (1u << 1)	/* this processor is asleep */
+#define GICR_WAKER_ASLEEP (1u << 2)	/* the redistributor agrees */
+
+/* Which one this is. Read once, because the answer cannot change while the
+ * machine is running and every processor needs it. */
+static unsigned gic_version;
+
+/* The CPU interface, on v3, is reached through system registers rather than
+ * through memory. Named by their encodings because the assembler in use does
+ * not know the newer mnemonics on every target. */
+#define ICC_SRE_EL1	"S3_0_C12_C12_5"
+#define ICC_PMR_EL1	"S3_0_C4_C6_0"
+#define ICC_IGRPEN1_EL1	"S3_0_C12_C12_7"
+#define ICC_IAR1_EL1	"S3_0_C12_C12_0"
+#define ICC_EOIR1_EL1	"S3_0_C12_C12_1"
+
+#define sysreg_write(name, v) \
+	__asm__ volatile("msr " name ", %0" :: "r" ((u64)(v)) : "memory")
+
+#define sysreg_read(name) ({ \
+	u64 _v; \
+	__asm__ volatile("mrs %0, " name : "=r" (_v) :: "memory"); \
+	_v; })
+
+/* --- How the generation is discovered, and how it is not -----------------
+ *
+ * The obvious way is to read the distributor's peripheral identification
+ * register and look at the revision field. That was the first attempt here, and
+ * it does not work, for a reason that only appears on the machine it breaks:
+ *
+ *   GICv3 puts that register at offset 0xFFE8.
+ *   GICv2 puts it at 0xFE8.
+ *
+ * So a kernel that reads 0xFFE8 to find out which one it has is reading an
+ * offset that does not exist on half the machines it is asking about. On QEMU's
+ * virt board with eight processors or fewer, that read took an external abort
+ * and the kernel panicked -- while machines with *nine or more* worked
+ * perfectly. Fixing the larger machines had broken every smaller one, and the
+ * verification rig would have caught it in the same run.
+ *
+ * The device tree already says. `arm,gic-v3` on the interrupt controller node
+ * is the machine describing itself, it cannot fault, and it is the same source
+ * the memory map and the PCI window already come from.
+ *
+ * A machine with no device tree -- the UEFI path, which describes itself with
+ * ACPI -- falls back to v2, which is what every such machine here has. Written
+ * down because it is an assumption rather than a discovery, and the day it is
+ * wrong the symptom will be this exact fault at this exact address.
+ *
+ * The ACPI MADT says too, in its GICD structure, and the kernel already walks
+ * ACPI tables. Filed as issue #282 rather than left here, because a note about
+ * a wrong assumption is least useful in the file that holds it.
+ */
+static bool gic_saw_v3;
+
+static void gic_note_v3(u64 base, u64 size)
+{
+	(void)base;
+	(void)size;
+	gic_saw_v3 = true;
+}
+
+static unsigned gic_detect(void)
+{
+	u64 dtb = boot_info()->dtb;
+
+	if (!dtb)
+		return 2;
+
+	gic_saw_v3 = false;
+	fdt_each_compatible(dtb, "arm,gic-v3", gic_note_v3);
+
+	return gic_saw_v3 ? 3 : 2;
+}
+
+/* This processor's redistributor frame.
+ *
+ * Found by affinity rather than by index: nothing guarantees that the frames
+ * are in the same order as the processors, and using the wrong frame would
+ * enable the timer on somebody else's processor -- which looks like a machine
+ * where one processor never gets a tick and another gets two.
+ */
+static u64 gicr_for_this_cpu(void)
+{
+	u64 mpidr;
+	u32 want;
+	u64 frame = GICR_BASE;
+	unsigned guard;
+
+	__asm__ volatile("mrs %0, mpidr_el1" : "=r" (mpidr));
+
+	/* Aff3..Aff0 packed the way GICR_TYPER packs them. */
+	want = (u32)((mpidr & 0xFFFFFF) | ((mpidr >> 32) & 0xFF) << 24);
+
+	/* Bounded by what is mapped, not by an arbitrary number. A frame whose
+	 * "last" bit never arrives would otherwise walk off the end of the
+	 * mapping and fault while looking for the thing that reports faults. */
+	for (guard = 0; guard < GICR_FRAMES_MAPPED; guard++) {
+		u32 lo = mmio_r32(frame, GICR_TYPER);
+		u32 hi = mmio_r32(frame, GICR_TYPER + 4);
+
+		if (hi == want)
+			return frame;
+
+		if (lo & (1u << 4))
+			break;			/* that was the last one */
+
+		frame += GICR_STRIDE;
+	}
+
+	/* No frame claims this processor. Returning the first is wrong; saying
+	 * so and returning zero lets the caller decline to arm a timer that
+	 * would belong to somebody else. */
+	return 0;
+}
+
+/* Brings this processor's redistributor out of sleep, which it powers up in.
+ * A redistributor left asleep forwards nothing, and the timer that depends on
+ * it is configured perfectly and silent. */
+static bool gicr_wake(u64 frame)
+{
+	u32 w = mmio_r32(frame, GICR_WAKER);
+	unsigned guard;
+
+	mmio_w32(frame, GICR_WAKER, w & ~GICR_WAKER_SLEEP);
+
+	for (guard = 0; guard < 100000; guard++)
+		if (!(mmio_r32(frame, GICR_WAKER) & GICR_WAKER_ASLEEP))
+			return true;
+
+	return false;
+}
+
 /* The EL1 physical timer's interrupt. Private to each CPU -- a "private
  * peripheral interrupt" -- and 30 by architectural convention rather than by
  * discovery, which is one of the few ARM numbers that genuinely is fixed. */
 #define TIMER_IRQ 30
 
 static void arm_timer(void);
+
+/* Finished with an interrupt, on whichever generation this is. */
+static void gic_eoi(u32 iar)
+{
+	if (gic_version >= 3)
+		sysreg_write(ICC_EOIR1_EL1, iar);
+	else
+		mmio_w32(GICC_BASE, GICC_EOIR, iar);
+}
 
 /* The parts of the interrupt controller that are per-processor.
  *
@@ -56,6 +240,53 @@ static void arm_timer(void);
  * skips this is online, healthy, and permanently uninterruptible. */
 void aarch64_gic_cpu_init(void)
 {
+	if (!gic_version)
+		gic_version = gic_detect();
+
+	if (gic_version >= 3) {
+		u64 frame = gicr_for_this_cpu();
+
+		if (!frame) {
+			kputs("  gic: no redistributor claims this processor; "
+			      "its timer is left disarmed\n");
+			return;
+		}
+
+		if (!gicr_wake(frame)) {
+			kputs("  gic: this processor's redistributor would not "
+			      "wake; its timer is left disarmed\n");
+			return;
+		}
+
+		/* The timer's interrupt lives here on v3, not in the
+		 * distributor. Group 1 non-secure, which is the group the
+		 * interface below enables. */
+		{
+			u32 g = mmio_r32(frame, GICR_IGROUPR0);
+			u64 off = GICR_IPRIORITYR + (TIMER_IRQ & ~3u);
+			u32 v = mmio_r32(frame, off);
+			unsigned shift = (TIMER_IRQ & 3) * 8;
+
+			mmio_w32(frame, GICR_IGROUPR0, g | (1u << TIMER_IRQ));
+
+			v &= ~(0xFFu << shift);
+			v |= (0xA0u << shift);
+			mmio_w32(frame, off, v);
+
+			mmio_w32(frame, GICR_ISENABLER0, 1u << TIMER_IRQ);
+		}
+
+		/* And the CPU interface, which is registers. SRE first: until
+		 * it is set the others do not exist. */
+		sysreg_write(ICC_SRE_EL1, sysreg_read(ICC_SRE_EL1) | 1u);
+		__asm__ volatile("isb");
+
+		sysreg_write(ICC_PMR_EL1, 0xF0);
+		sysreg_write(ICC_IGRPEN1_EL1, 1);
+		__asm__ volatile("isb");
+		return;
+	}
+
 	mmio_w32(GICC_BASE, GICC_PMR, 0xF0);
 	mmio_w32(GICC_BASE, GICC_CTLR, 1);
 
@@ -83,6 +314,23 @@ void aarch64_timer_cpu_init(void)
 
 static void gic_init(void)
 {
+	gic_version = gic_detect();
+
+	if (gic_version >= 3) {
+		/* Affinity routing on, and group 1 enabled. Without the routing
+		 * bit a v3 distributor behaves as though it were a v2 and the
+		 * redistributors below are never consulted. */
+		u32 c = mmio_r32(GICD_BASE, GICD_CTLR);
+
+		mmio_w32(GICD_BASE, GICD_CTLR,
+			 c | GICD_CTLR_ARE_NS | GICD_CTLR_GRP1NS);
+
+		/* Everything else about the timer is per-processor on v3, and
+		 * aarch64_gic_cpu_init does it -- including for this one. */
+		aarch64_gic_cpu_init();
+		return;
+	}
+
 	/* Priority mask: only interrupts of higher priority than this reach the
 	 * CPU. 0xF0 is the lowest useful threshold -- it lets everything
 	 * through. A mask of zero, which is the reset value, lets nothing
@@ -140,11 +388,19 @@ static void arm_timer(void)
 /* Called from the IRQ path in trap.c. */
 void aarch64_irq(void)
 {
-	u32 iar = mmio_r32(GICC_BASE, GICC_IAR);
-	u32 id = iar & 0x3FF;
+	/* Where the interrupt number comes from depends on the generation. On
+	 * v3 it is a system register, and the number is wider -- 24 bits rather
+	 * than 10 -- though nothing this kernel handles needs the extra bits.
+	 */
+	u32 iar = (gic_version >= 3) ? (u32)sysreg_read(ICC_IAR1_EL1)
+				     : mmio_r32(GICC_BASE, GICC_IAR);
+	u32 id = iar & 0xFFFFFF;
 
 	/* 1023 means "spurious": the interrupt went away before it was
 	 * acknowledged. Not an error, and must not be acknowledged. */
+	/* 1023 means "spurious" on both generations: the interrupt went away
+	 * before it was acknowledged. Not an error, and must not be
+	 * acknowledged. */
 	if (id == 1023)
 		return;
 
@@ -160,14 +416,14 @@ void aarch64_irq(void)
 		 * acknowledgement would never happen and the controller would
 		 * send nothing further. The machine would freeze on the first
 		 * preemption with every part of it looking correct. */
-		mmio_w32(GICC_BASE, GICC_EOIR, iar);
+		gic_eoi(iar);
 
 		if (preempt)
 			sched_switch();
 		return;
 	}
 
-	mmio_w32(GICC_BASE, GICC_EOIR, iar);
+	gic_eoi(iar);
 }
 
 u64 arch_monotonic_ns(void)

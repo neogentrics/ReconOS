@@ -1437,6 +1437,22 @@ partition without losing what is in it; somewhere to write the bootloader that
 the machine's firmware will actually look at; and a first-run flow, which the
 desktop already has.
 
+## Interrupt controllers on ARM
+
+Both generations. GICv2 up to eight processors, GICv3 above that — which is not
+an optional extra: GICv2 *stops* at eight, and every ARM machine with more has a
+v3 whose CPU interface is a set of system registers rather than memory.
+
+The kernel spoke only v2 until 0.0.11 and panicked at boot on anything larger
+(BG-092). The verification rig booted at 2, 4 and 8 processors, on the principle
+that some faults only exist above a certain machine size — and stopped one
+processor below the first machine that would have shown this one. It boots
+sixteen now.
+
+The generation comes from the device tree rather than from a register, because
+the register that would answer is at a different offset in each generation:
+asking at one of them faults on the other.
+
 ## Architecture support
 
 | Architecture | Status | Notes |

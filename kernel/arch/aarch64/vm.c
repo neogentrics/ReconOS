@@ -430,16 +430,34 @@ void vm_init(void)
 	 * reaching for it -- which is the right way round, since a map that
 	 * covers what nothing uses is a map that hides what nothing checked. */
 	{
-		static const paddr_t fixed_devices[] = {
-			PL011_BASE,	/* console */
-			GICD_BASE,	/* interrupt controller, distributor */
-			GICC_BASE,	/* interrupt controller, CPU interface */
-			PL031_BASE,	/* real-time clock */
+		/* Each one carries its own size, because they are not all the
+		 * same size. Sixteen pages was enough for every register block
+		 * here until the GICv3 redistributors, which are a *pair* of
+		 * 64KiB frames per processor laid end to end -- and a machine
+		 * with sixteen processors puts the sixteenth frame two
+		 * megabytes past the start. Mapping them all at one fixed size
+		 * left the far frames unmapped, and the read that walked to
+		 * them took a translation fault. */
+		static const struct {
+			paddr_t base;
+			unsigned pages;
+		} fixed_devices[] = {
+			{ PL011_BASE, 16 },	/* console */
+			{ GICD_BASE,  16 },	/* interrupt controller */
+			{ GICC_BASE,  16 },	/* its v2 CPU interface */
+			{ PL031_BASE, 16 },	/* real-time clock */
+
+			/* Sixty-four redistributor pairs: more processors than
+			 * this kernel can hold, deliberately, so that a machine
+			 * larger than MAX_CPUS can still be *walked* and
+			 * reported rather than faulting while being counted. */
+			{ GICR_BASE, 64 * 0x20000 / PAGE_SIZE },
 		};
 
 		for (unsigned i = 0; i < RK_ARRAY_LEN(fixed_devices); i++)
-			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i],
-				    fixed_devices[i], PAGE_SIZE * 16,
+			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i].base,
+				    fixed_devices[i].base,
+				    PAGE_SIZE * fixed_devices[i].pages,
 				    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
 				panic("vm: could not map the machine's fixed hardware");
 	}

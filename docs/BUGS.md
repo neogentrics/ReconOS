@@ -264,6 +264,119 @@ broken says nothing about the work.
   independence a second implementation by the same author buys, and worth
   recording as such.
 
+### BG-091 — A machine with more processors than the kernel holds reported the wrong number, under a comment saying it never would
+
+[#280](https://github.com/neogentrics/ReconOS/issues/280)
+
+- **Found in** kernel 0.0.11. **Found by** running the new x86_64 processor
+  discovery at 1, 2, 4, 8 and 16 and noticing that sixteen reported eight.
+- **Was** `smp_init` calls `arch_smp_discover(cpu_ids, MAX_CPUS)` and then:
+
+  ```c
+  if (found > MAX_CPUS) {
+          /* Reported, never silently truncated. ... */
+          dropped = found - MAX_CPUS;
+          found = MAX_CPUS;
+  }
+  ```
+
+  `arch_smp_discover` returned the number it had *stored*, which is bounded by
+  the `max` it was given. So `found > MAX_CPUS` was unreachable, `dropped` was
+  never set, and the warning at the bottom of the summary — which exists, and is
+  correct — never printed.
+
+  A machine with sixteen processors said "found: 8" and nothing else.
+
+  The comment above it says *"Reported, never silently truncated"*, and cites
+  the memory map's region cap as the lesson that taught it. The lesson was
+  learned, written down, and then implemented as code that could not do it —
+  which is the same shape as BG-088 (a correct sentence above an incorrect line)
+  and BG-090 (an exemption written for a category, applied as a membership
+  test). Three of these now.
+- **Fixed in** kernel 0.0.11. `arch_smp_discover` returns how many processors
+  *exist*, which may exceed `max`; only `max` are written to the array. Both
+  architectures count past what they can store — aarch64 probes to twice the
+  array rather than stopping at it.
+
+  Sixteen processors now says `found: 8` and `WARNING: 8 more than this kernel
+  can hold`; thirty-two says twenty-four more.
+
+  Also corrected here: a failure to start a secondary printed *"the firmware
+  refused"*, which on x86_64 names a participant that is not in the path at all.
+  A message that blames the wrong thing sends whoever reads it somewhere else
+  entirely.
+
+### BG-092 — The kernel panicked at boot on any ARM machine with more than eight processors
+
+[#281](https://github.com/neogentrics/ReconOS/issues/281)
+
+- **Found in** kernel 0.0.11. **Found by** running the processor discovery past
+  the sizes the verification rig uses — the rig stops at eight, and eight is
+  exactly where this starts.
+- **Was** the interrupt controller code spoke GICv2, at a hardcoded address.
+  GICv2 supports at most eight processors; above that a machine has a GICv3,
+  whose distributor looks similar and whose **CPU interface is not memory at
+  all** but a set of system registers. The address the kernel wrote to is not a
+  CPU interface on such a machine, the write took an external abort, and the
+  kernel panicked before finishing boot.
+
+  QEMU's `virt` board switches at exactly that boundary, so `-smp 8` booted and
+  `-smp 9` did not. Every run in the rig was at eight or fewer.
+
+  This is the shape recorded in [[project-reconos-instrument-over-theory]] as
+  *a whole class of bug invisible below some particular machine size* — the same
+  reason the rig boots at 2, 4 and 8 processors rather than once. The rig was
+  built on that principle and then had its own ceiling, one processor below the
+  first machine that would have shown this.
+
+  The requirement it violated is explicit: *support all architectures, and use
+  any CPU to its fullest including multithreading and multicore.* A twelve-core
+  ARM machine would not have started.
+- **Fixed in** kernel 0.0.11. The generation is read from the distributor's
+  peripheral identification register, which both generations place at the same
+  offset — which is the only reason asking is possible before knowing which is
+  there. On v3:
+
+  - the distributor gets affinity routing enabled, without which it behaves as
+    though it were a v2 and the redistributors are never consulted;
+  - each processor finds **its own** redistributor frame by matching its MPIDR
+    affinity against `GICR_TYPER`, not by index — nothing guarantees the frames
+    are in processor order, and using the wrong one arms the timer on somebody
+    else's processor, which looks like one processor that never ticks and
+    another that ticks twice;
+  - the redistributor is woken, because it powers up asleep and an asleep
+    redistributor forwards nothing;
+  - the timer's interrupt is enabled in the redistributor rather than the
+    distributor. **This is the one that catches people:** on v3 the distributor
+    does not own the per-processor interrupts, so a timer configured there is
+    configured perfectly and never fires;
+  - the CPU interface is reached through system registers, with `ICC_SRE_EL1`
+    set first because until it is the others do not exist.
+
+  The rig now boots aarch64 at sixteen processors as well, so the ceiling it
+  had is gone rather than moved.
+
+  **The first fix broke every machine it was not for.** Detecting the
+  generation by reading the distributor's peripheral identification register
+  looks obvious and is wrong: GICv3 puts that register at offset `0xFFE8` and
+  GICv2 puts it at `0xFE8`. So the kernel asking "which generation are you"
+  read an offset that does not exist on half the machines it was asking, took an
+  external abort, and panicked — on every machine with *eight or fewer*
+  processors, while nine and above worked perfectly. The fix and the fault had
+  swapped places.
+
+  It is detected from the device tree now: `arm,gic-v3` on the interrupt
+  controller node is the machine describing itself, it cannot fault, and it is
+  the same source the memory map and the PCI window already come from. A machine
+  with no device tree falls back to v2, which is written down as an assumption
+  rather than a discovery.
+
+  Two things this is worth keeping for. **A register offset is not a place to
+  ask a question whose answer decides where the register is** — the query needs
+  a source that is valid before the answer is known. And the range that caught
+  it is the same range that caught the original: booting one machine size proves
+  something about one machine size.
+
 ### BG-085 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)
