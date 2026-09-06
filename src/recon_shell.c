@@ -5082,8 +5082,14 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         struct menu_entry entry;
         if (hit >= HIT_MENU_BASE &&
                 menu_entry_at(true, NULL, index, &entry)) {
-            recon_shell_close_menu(shell);
-
+            /*
+             * The menu stays open.
+             *
+             * It used to close, which left a context menu offering "Open" and
+             * "Unpin from the menu" floating on an empty desktop with nothing
+             * on screen saying which program it was about. A menu about a
+             * thing has to be shown beside the thing.
+             */
             shell->context_kind = RECON_CONTEXT_MENU_APP;
             snprintf(shell->context_target, sizeof(shell->context_target),
                 "%s", entry.label);
@@ -5109,8 +5115,8 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         if (hit >= HIT_MENU_BASE && hit < HIT_PLACE_BASE &&
                 menu_entry_at(shell->menu_show_all, shell->menu_filter,
                     index, &entry) && !entry.is_shutdown) {
-            recon_shell_close_menu(shell);
-
+            /* Left open, for the reason above: the menu is what says which
+             * program this is about. */
             shell->context_kind = RECON_CONTEXT_MENU_APP;
             snprintf(shell->context_target, sizeof(shell->context_target),
                 "%s", entry.label);
@@ -5833,6 +5839,36 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
      * them: a maximized window covers the same pixels, and checking windows
      * first let it swallow clicks meant for the menu.
      */
+    /*
+     * The All Programs list, before the menu it hangs off.
+     *
+     * It is a SEPARATE PANEL sitting beside the menu, and this check used to be
+     * nested inside the branch that tests whether the click landed in the menu
+     * -- so it never ran. A click on a program row was not in the menu, was not
+     * in any window, and fell through to "clicked outside, close the menu".
+     * Every entry in All Programs closed the menu and launched nothing, which
+     * is what it looked like from outside: a list where nothing works.
+     *
+     * The same shape as the compose window's fields and the graph's controls:
+     * a more specific case checked after a broader one that swallows it. Here
+     * the broader one was a panel rather than a range of ids.
+     */
+    if (shell->programs_open && shell->programs != NULL &&
+            point_in_panel(shell->programs, lx, ly, &px, &py)) {
+        if (!pressed) {
+            return true;
+        }
+        uint32_t row = recon_hit_test(shell->programs, px, py);
+        struct menu_entry chosen;
+        if (row >= HIT_MENU_BASE &&
+                menu_entry_at(true, NULL, (int)(row - HIT_MENU_BASE),
+                    &chosen)) {
+            recon_shell_close_menu(shell);
+            recon_shell_open_named(shell, chosen.label);
+        }
+        return true;
+    }
+
     /* The menu sits above the bar, so it gets first refusal. */
     if (shell->menu_open && shell->menu != NULL &&
             point_in_panel(shell->menu, lx, ly, &px, &py)) {
@@ -5846,26 +5882,6 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
          * would otherwise swallow this one -- the ranges below are compared
          * with >=, so the order of these branches is what separates them.
          */
-        /*
-         * A row in the All Programs list. Its ids are indices into the whole
-         * list of applications rather than one of the menu's four ranges, so
-         * it is resolved here rather than folded into them.
-         */
-        if (shell->programs_open && shell->programs != NULL) {
-            int qx, qy;
-            if (point_in_panel(shell->programs, lx, ly, &qx, &qy)) {
-                uint32_t row = recon_hit_test(shell->programs, qx, qy);
-                struct menu_entry chosen;
-                if (row >= HIT_MENU_BASE &&
-                        menu_entry_at(true, NULL,
-                            (int)(row - HIT_MENU_BASE), &chosen)) {
-                    recon_shell_close_menu(shell);
-                    recon_shell_open_named(shell, chosen.label);
-                }
-                return true;
-            }
-        }
-
         if (hit == HIT_ALL_PROGRAMS) {
             /* While something is being looked for, this row is the way back
              * from it rather than a switch between two lists the search has

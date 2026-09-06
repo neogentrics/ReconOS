@@ -193,6 +193,35 @@ bool recon_fs_usage(const char *cwd, const char *path,
 char *recon_fs_read(const char *cwd, const char *path, size_t *size_out);
 
 bool recon_fs_write(const char *cwd, const char *path, const char *data, size_t size);
+
+/*
+ * Write a file that only its owner may read, and never let it be otherwise.
+ *
+ * The difference from recon_fs_write is one word and it is the whole point: the
+ * permissions are set *at creation*, so there is no instant at which the file
+ * exists and is readable by anything else.
+ *
+ * Every secret ReconOS writes used to be written and then tightened with
+ * chmod, and the comment beside the worst of them -- the TLS private key --
+ * said plainly that the alternative was "a filesystem layer that can create a
+ * file with a mode, and that does not exist yet". This is that layer. The
+ * window was small and it was real, and it is exactly the kind that stops
+ * being small the moment account roles are enforced by the kernel rather than
+ * by the Control Panel declining: today everything runs as one host user, so
+ * there is nobody to lose the race to. That changes on the kernel's side, and
+ * every one of these windows would arm at once, quietly.
+ *
+ * An existing file is REPLACED rather than truncated. Truncating keeps whatever
+ * permissions it already had, so a key written by an older version at 0644
+ * would stay at 0644 forever -- and the one thing this function promises is
+ * that it did not.
+ *
+ * This is also the shape the kernel's own filesystem calls take. It is written
+ * down in docs/KERNEL.md as a constraint on ReconFS, decided early because now
+ * is when it is free.
+ */
+bool recon_fs_write_private(const char *cwd, const char *path,
+    const char *data, size_t size);
 bool recon_fs_append(const char *cwd, const char *path, const char *data, size_t size);
 
 bool recon_fs_mkdir(const char *cwd, const char *path);

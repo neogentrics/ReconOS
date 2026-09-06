@@ -2039,3 +2039,41 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   stream, and at the end of the handshake for an encrypted one. An upgrade
   starts a fresh one, because the original was correctly dropped when the plain
   connection came up.
+
+### BG-114 — Nothing in All Programs would open
+
+- **Found in** v0.3.1. **Found by** the user: clicking any entry in All Programs
+  closed the Start menu and launched nothing.
+- **What it was** the All Programs list is a **separate panel** sitting beside
+  the menu, and the code that handled a click on one of its rows was nested
+  inside the branch that tests whether the click landed *in the menu*. So it
+  never ran. A click on a program row was not in the menu, was not in any
+  window, and fell through to "clicked outside, close the menu".
+- **The third time this shape has appeared** in as many days: the compose
+  window's fields were numbered above the message rows, which are matched with
+  an open-ended `>=`; the graph's controls were numbered above the date fields
+  the same way. Here the broader case was a *panel* rather than a range of ids,
+  which is why remembering the first two did not prevent it.
+- The pattern to watch for is not "check ids in the right order". It is **a
+  specific case tested inside or after a general one that already claims the
+  event.**
+- **Fixed in** v0.3.1. The list is offered the click before the menu it hangs
+  off, which is also the order they are drawn in.
+
+### BG-115 — Right-clicking in the Start menu closed the menu
+
+- **Found in** v0.3.1. **Found by** the user: *"you can't even see what you're
+  right clicking to do."*
+- **What it was** the right-click handler closed the menu before showing the
+  context menu — deliberately, and wrong. What was left was a small menu
+  offering "Open" and "Unpin from the menu" floating on an empty desktop, with
+  nothing on screen saying which program it was about.
+- **A menu about a thing has to be shown beside the thing.** The context menu is
+  raised above the Start menu, so there was never a reason to close it.
+- **Fixed in** v0.3.1. Both right-click paths — the pinned list and All
+  Programs — leave the menu where it is.
+- **The harness reported this as still broken after it was fixed**, because
+  Escape clears the search box without closing the menu, so the test's blind
+  click on Apps shut it and the right-click landed on the desktop, which
+  answered with its own menu. The test was measuring the desktop and reporting
+  on the Start menu. It now checks the menu is open rather than assuming it.

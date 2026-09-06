@@ -6,6 +6,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -755,6 +756,78 @@ static bool write_file(const char *cwd, const char *path, const char *data,
 
 bool recon_fs_write(const char *cwd, const char *path, const char *data, size_t size) {
     return write_file(cwd, path, data, size, "wb");
+}
+
+bool recon_fs_write_private(const char *cwd, const char *path,
+        const char *data, size_t size) {
+    if (!permitted(cwd, path)) {
+        return false;
+    }
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        return false;
+    }
+
+    /*
+     * Removed first, so what follows is a creation rather than a truncation.
+     *
+     * O_TRUNC on a file that already exists keeps the permissions it already
+     * had, which would leave a key written by an older version readable
+     * forever -- and the promise this function makes is that it is not.
+     *
+     * A missing file is not a failure here; that is the ordinary case.
+     */
+    if (unlink(host) != 0 && errno != ENOENT) {
+        set_error("cannot replace '%s': %s", canonical, strerror(errno));
+        return false;
+    }
+
+    /*
+     * O_EXCL, so this creates the file or fails.
+     *
+     * Without it, something could put a symbolic link where the key is about
+     * to go in the moment between the unlink above and the open below, and the
+     * key would be written wherever that link pointed -- with this function
+     * reporting success. The window is tiny and the consequence is a private
+     * key in somebody else's file, which is the trade this refuses to make.
+     */
+    int fd = open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        set_error("cannot write '%s': %s", canonical, strerror(errno));
+        return false;
+    }
+
+    bool ok = true;
+    size_t at = 0;
+    while (at < size) {
+        ssize_t n = write(fd, data + at, size - at);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            set_error("cannot write '%s': %s", canonical, strerror(errno));
+            ok = false;
+            break;
+        }
+        at += (size_t)n;
+    }
+
+    if (close(fd) != 0 && ok) {
+        /* Reported, because a close that fails is a write that did not land --
+         * and for the one kind of file this function is for, believing it did
+         * is worse than knowing it did not. */
+        set_error("cannot finish writing '%s': %s", canonical, strerror(errno));
+        ok = false;
+    }
+
+    if (!ok) {
+        /* A half-written secret is worse than none: it looks like a file. */
+        unlink(host);
+    }
+    return ok;
 }
 
 bool recon_fs_append(const char *cwd, const char *path, const char *data, size_t size) {
