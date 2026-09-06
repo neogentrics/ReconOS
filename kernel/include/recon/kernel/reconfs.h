@@ -476,6 +476,7 @@ enum reconfs_status {
 	RECONFS_ERR_DIR_FULL,	/* refused rather than truncated */
 	RECONFS_ERR_NOT_FILE,
 	RECONFS_ERR_NOT_EMPTY,
+	RECONFS_ERR_TOO_DEEP,
 };
 
 /* Passed to the block routines for a block kind that carries no checksum of
@@ -599,6 +600,33 @@ bool reconfs_layout_self_test(void);
  * person means by a name. The fold is ASCII only; see reconfs_dir.c.
  */
 u32 reconfs_inline_max(u32 block_size);
+
+/* --- Paths ----------------------------------------------------------------
+ *
+ * Copy-on-write means a change anywhere writes a new inode for the directory it
+ * is in, which changes that directory's block, which means its parent must be
+ * rewritten too -- all the way to the root, which the superblock then names.
+ *
+ * `reconfs_walk_path` finds the chain down; `reconfs_rebuild_path` copies it
+ * back up once the deepest directory has moved. Between them the caller uses
+ * the single-directory operations unchanged, so there is one implementation of
+ * "create a name" rather than one per depth.
+ */
+#define RECONFS_PATH_MAX	32
+
+struct reconfs_path {
+	u64 dirs[RECONFS_PATH_MAX];	/* root first, the leaf's parent last */
+	unsigned count;
+};
+
+enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
+				      struct reconfs_path *chain, char *leaf,
+				      size_t leaf_len);
+
+enum reconfs_status reconfs_rebuild_path(struct reconfs_txn *txn,
+					 struct reconfs *fs,
+					 const struct reconfs_path *chain,
+					 u64 moved, u64 *new_root);
 
 enum reconfs_status reconfs_lookup(struct reconfs *fs, u64 dir_block,
 				   const char *name, u64 *out_block);

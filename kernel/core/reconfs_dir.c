@@ -1053,6 +1053,218 @@ out:
 	return st;
 }
 
+/* --- Paths ----------------------------------------------------------------
+ *
+ * Everything above works on one directory, identified by the block its inode
+ * lives in. That is enough for a flat volume and not enough for the shape
+ * ReconFS has to hold: System, Programs and User, each with a recycle bin.
+ *
+ * The obstacle is copy-on-write itself. Changing anything in `/System/Recycled`
+ * writes a new inode for that directory, which changes its block -- so
+ * `/System` must be rewritten to name the new block, which changes *its* block,
+ * so the root must be rewritten too. The chain has to be copied from the change
+ * up to the root, and the superblock names the new root.
+ *
+ * That is not overhead to be avoided. It is the mechanism: the whole path is
+ * built out of blocks nothing reachable can see, and one superblock write makes
+ * every one of them real at the same instant. A crash anywhere in the middle
+ * leaves the entire old tree, including the directory being changed.
+ *
+ * --- Two halves, on purpose ---
+ *
+ * `reconfs_walk_path` finds the chain of directories from the root down, and
+ * `reconfs_rebuild_path` copies it back up once the deepest one has moved.
+ * Between them the caller does whatever it came to do, using the existing
+ * single-directory operations unchanged.
+ *
+ * Splitting it that way means there is exactly one implementation of "create a
+ * name", not one per depth -- and the path machinery can be read on its own,
+ * without a create or a rename tangled through it.
+ */
+
+/* Replaces one child's block number in a directory, writing a new directory. */
+static enum reconfs_status replace_child(struct reconfs_txn *txn,
+					 struct reconfs *fs, u64 dir_block,
+					 u64 old_child, u64 new_child,
+					 u64 *out_dir)
+{
+	struct reconfs_inode *dir;
+	struct entries e;
+	enum reconfs_status st;
+	u32 off = 0;
+	bool found = false;
+
+	kmemset(&e, 0, sizeof(e));
+
+	dir = kzalloc(fs->block_size);
+	if (!dir)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, dir_block, dir, INODE_CSUM);
+	if (st != RECONFS_OK)
+		goto out;
+
+	st = read_entries(fs, dir, &e);
+	if (st != RECONFS_OK)
+		goto out;
+
+	while (off + RECONFS_DIRENT_MIN <= e.len) {
+		struct reconfs_dirent *de =
+			(struct reconfs_dirent *)(e.buf + off);
+
+		if (!de->rec_len)
+			break;
+		if (de->inode == old_child) {
+			de->inode = new_child;
+			found = true;
+			break;
+		}
+		off += de->rec_len;
+	}
+
+	if (!found) {
+		/* The chain said this directory contains that one. It does not.
+		 * Reported rather than papered over: a path that cannot be
+		 * rebuilt is a tree that has already gone wrong. */
+		st = RECONFS_ERR_CORRUPT;
+		goto out;
+	}
+
+	st = write_dir(txn, fs, dir_block, dir, &e, out_dir);
+
+out:
+	entries_free(&e);
+	kfree(dir);
+	return st;
+}
+
+/* Splits a path into the chain of directories leading to its last component.
+ *
+ * "/System/Recycled/note.txt" gives dirs = { root, System, Recycled } and a
+ * leaf of "note.txt". A trailing slash, a repeated slash and a missing leading
+ * slash are all accepted; "." and ".." are not, because they are the
+ * directory's own business rather than names anyone may write.
+ */
+enum reconfs_status reconfs_walk_path(struct reconfs *fs, const char *path,
+				      struct reconfs_path *chain, char *leaf,
+				      size_t leaf_len)
+{
+	const char *p = path;
+	enum reconfs_status st;
+
+	if (!path || !chain || !leaf || !leaf_len)
+		return RECONFS_ERR_NAME;
+
+	chain->count = 0;
+	chain->dirs[chain->count++] = fs->root_inode;
+	leaf[0] = '\0';
+
+	while (*p == '/')
+		p++;
+
+	while (*p) {
+		char name[RECONFS_NAME_MAX + 1];
+		size_t n = 0;
+		u64 next = 0;
+
+		while (p[n] && p[n] != '/') {
+			if (n >= RECONFS_NAME_MAX)
+				return RECONFS_ERR_NAME;
+			name[n] = p[n];
+			n++;
+		}
+		name[n] = '\0';
+
+		if (!n)
+			return RECONFS_ERR_NAME;
+
+		if (name_eq(".", 1, name) || name_eq("..", 2, name))
+			return RECONFS_ERR_NAME;
+
+		p += n;
+		while (*p == '/')
+			p++;
+
+		if (!*p) {
+			/* The last component. It is the leaf, whether or not it
+			 * exists and whether or not it is a directory -- the
+			 * caller is the one who knows which it wants. */
+			if (n + 1 > leaf_len)
+				return RECONFS_ERR_NAME;
+			kmemcpy(leaf, name, n + 1);
+			return RECONFS_OK;
+		}
+
+		/* An interior component, which must be a directory that is
+		 * already there. */
+		st = reconfs_lookup(fs, chain->dirs[chain->count - 1], name,
+				    &next);
+		if (st != RECONFS_OK)
+			return st;
+
+		if (chain->count == RECONFS_PATH_MAX)
+			return RECONFS_ERR_TOO_DEEP;
+
+		{
+			struct reconfs_inode *probe = kzalloc(fs->block_size);
+
+			if (!probe)
+				return RECONFS_ERR_NOMEM;
+
+			st = reconfs_read_block(fs, next, probe, INODE_CSUM);
+			if (st == RECONFS_OK && probe->type != RECONFS_TYPE_DIR)
+				st = RECONFS_ERR_NOT_DIR;
+			kfree(probe);
+
+			if (st != RECONFS_OK)
+				return st;
+		}
+
+		chain->dirs[chain->count++] = next;
+	}
+
+	/* The path named no leaf at all -- "/" or "///". */
+	return RECONFS_ERR_NAME;
+}
+
+/* Copies the chain back up, from the directory that changed to the root.
+ *
+ * `moved` is the new block of `chain->dirs[chain->count - 1]`. Every ancestor
+ * is rewritten to name its child's new block, deepest first, so that each new
+ * directory is written before the one that will point at it -- an entry naming
+ * a block that does not exist yet is a structure a crash could make permanent.
+ */
+enum reconfs_status reconfs_rebuild_path(struct reconfs_txn *txn,
+					 struct reconfs *fs,
+					 const struct reconfs_path *chain,
+					 u64 moved, u64 *new_root)
+{
+	u64 child_was, child_now;
+	unsigned i;
+
+	if (!chain->count)
+		return RECONFS_ERR_CORRUPT;
+
+	child_was = chain->dirs[chain->count - 1];
+	child_now = moved;
+
+	for (i = chain->count - 1; i > 0; i--) {
+		u64 parent_now = 0;
+		enum reconfs_status st;
+
+		st = replace_child(txn, fs, chain->dirs[i - 1], child_was,
+				   child_now, &parent_now);
+		if (st != RECONFS_OK)
+			return st;
+
+		child_was = chain->dirs[i - 1];
+		child_now = parent_now;
+	}
+
+	*new_root = child_now;
+	return RECONFS_OK;
+}
+
 /* --- Removing a name ------------------------------------------------------
  *
  * One commit, like everything else: the directory is rebuilt without the entry,

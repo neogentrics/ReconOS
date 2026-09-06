@@ -1201,10 +1201,20 @@ looks impossible:
    to one author writing both the reader and the writer, and it had to be in the
    first version or never.
 
-   What exists: the format, mount, allocation, the commit path, the checker,
-   and a self-test that breaks a volume five ways and requires the checker to
-   catch all five — at every block size the format allows. What does not:
-   directory entries being created, reading a file back, and rename.
+   What exists: the format, mount, allocation, the commit path, names, file
+   contents, rename, delete, nested directories, the checker, and a second
+   implementation of the format in Python that judges what survives a power cut.
+   The shape `recon_fs` needs — System, Programs and User, each with a recycle
+   bin — is built and checked, with a file three levels down.
+
+   What does not: renaming between two directories, and a stated guarantee for
+   reading a directory while somebody writes to it.
+
+   The test `docs/RECONFS.md` lists first is done: the power is cut inside a
+   rename and the surviving image is judged by the Python reader, which requires
+   the target to resolve to exactly one object whose contents are one whole
+   version — a round number agreeing in three places and a checksum over the
+   payload.
 
    **There is no disk-size ceiling.** The allocation table's owner was a 32-bit
    block number, capping a volume at 16TiB, which is smaller than drives on sale

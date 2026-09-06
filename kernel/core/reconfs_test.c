@@ -300,6 +300,72 @@ void reconfs_run(void)
 	}
 }
 
+/* Create anything, anywhere: walk down, do the one-directory operation, copy the
+ * chain back up, commit. This is the whole of what the path machinery is for,
+ * and it is four lines because the operations underneath did not have to learn
+ * about depth. */
+static enum reconfs_status make_at(struct reconfs *fs, const char *path,
+				   u32 type, u32 mode)
+{
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	u64 made = 0, moved = 0, root = 0;
+	enum reconfs_status st;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_create(txn, fs, chain.dirs[chain.count - 1], leaf, type,
+			    mode, &made, &moved);
+	if (st == RECONFS_OK)
+		st = reconfs_rebuild_path(txn, fs, &chain, moved, &root);
+
+	if (st != RECONFS_OK) {
+		reconfs_txn_abort(txn);
+		return st;
+	}
+
+	reconfs_txn_set_root(txn, root);
+	return reconfs_txn_commit(txn);
+}
+
+static enum reconfs_status put_at(struct reconfs *fs, const char *path,
+				  const void *data, u32 len)
+{
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	u64 moved = 0, root = 0;
+	enum reconfs_status st;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_write_named(txn, fs, chain.dirs[chain.count - 1], leaf,
+				 data, len, &moved);
+	if (st == RECONFS_OK)
+		st = reconfs_rebuild_path(txn, fs, &chain, moved, &root);
+
+	if (st != RECONFS_OK) {
+		reconfs_txn_abort(txn);
+		return st;
+	}
+
+	reconfs_txn_set_root(txn, root);
+	return reconfs_txn_commit(txn);
+}
+
 static bool run_at(struct block_device *dev, u32 bs)
 {
 	struct reconfs fs;
@@ -988,6 +1054,149 @@ contents_done:
 			kprintf("  removing           : pass (%u bytes freed, "
 				"back to %llu blocks)\n", (unsigned)payload,
 				(unsigned long long)after_blocks);
+		}
+
+		/* --- The shape recon_fs actually needs ----------------------
+		 *
+		 * Three volumes' worth of directories, each with a recycle bin,
+		 * and a file three levels down. This is the constraint the
+		 * checkpoint was given — "it must hold recon_fs's shape" — and
+		 * until the path machinery existed nothing below the root could
+		 * be changed at all.
+		 *
+		 * What is being tested is not that mkdir works. It is that a
+		 * change three levels down rewrites the chain to the root and
+		 * leaves the volume agreeing with itself — which is the part
+		 * copy-on-write makes non-obvious. */
+		{
+			static const char *dirs[] = {
+				"/System", "/Programs", "/User",
+				"/System/Recycled", "/Programs/Recycled",
+				"/User/Recycled",
+			};
+			static const char *deep = "/User/Recycled/note.txt";
+			u32 len = fs.block_size + 137;
+			u8 *body, *back;
+			u32 got = 0, q;
+			unsigned k;
+			u64 parent = 0, found = 0;
+
+			for (k = 0; k < RK_ARRAY_LEN(dirs); k++) {
+				st = make_at(&fs, dirs[k], RECONFS_TYPE_DIR, 0755);
+				if (st != RECONFS_OK) {
+					kprintf("  the desktop shape  : FAIL "
+						"(%s: %s)\n", dirs[k],
+						reconfs_strerror(st));
+					reconfs_unmount(&fs);
+					return false;
+				}
+			}
+
+			body = kzalloc(len);
+			back = kzalloc(len);
+			if (!body || !back) {
+				kfree(body); kfree(back);
+				kputs("  the desktop shape  : FAIL (memory)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+			for (q = 0; q < len; q++)
+				body[q] = (u8)(q * 13u + 7u);
+
+			st = make_at(&fs, deep, RECONFS_TYPE_FILE, 0600);
+			if (st == RECONFS_OK)
+				st = put_at(&fs, deep, body, len);
+
+			if (st != RECONFS_OK) {
+				kprintf("  the desktop shape  : FAIL (%s: %s)\n",
+					deep, reconfs_strerror(st));
+				kfree(body); kfree(back);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			/* Read it back through the path, and compare the bytes —
+			 * a file of the right length in the wrong place would
+			 * otherwise look like success. */
+			{
+				struct reconfs_path chain;
+				char leaf[RECONFS_NAME_MAX + 1];
+
+				st = reconfs_walk_path(&fs, deep, &chain, leaf,
+						       sizeof(leaf));
+				if (st == RECONFS_OK) {
+					parent = chain.dirs[chain.count - 1];
+					st = reconfs_read_named(&fs, parent, leaf,
+								back, len, &got);
+				}
+			}
+
+			if (st != RECONFS_OK || got != len) {
+				kprintf("  the desktop shape  : FAIL (read %u of %u: "
+					"%s)\n", (unsigned)got, (unsigned)len,
+					reconfs_strerror(st));
+				kfree(body); kfree(back);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			for (q = 0; q < len; q++) {
+				if (back[q] == body[q])
+					continue;
+				kprintf("  the desktop shape  : FAIL (byte %u)\n",
+					(unsigned)q);
+				kfree(body); kfree(back);
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			kfree(body);
+			kfree(back);
+
+			/* A path through a file, and a path that is not there, are
+			 * both refused rather than resolved to something nearby. */
+			{
+				struct reconfs_path chain;
+				char leaf[RECONFS_NAME_MAX + 1];
+
+				if (reconfs_walk_path(&fs, "/User/Recycled/note.txt/x",
+						      &chain, leaf,
+						      sizeof(leaf))
+				    != RECONFS_ERR_NOT_DIR ||
+				    reconfs_walk_path(&fs, "/Nowhere/at/all",
+						      &chain, leaf,
+						      sizeof(leaf))
+				    != RECONFS_ERR_NOT_FOUND) {
+					kputs("  the desktop shape  : FAIL (a bad "
+					      "path resolved)\n");
+					reconfs_unmount(&fs);
+					return false;
+				}
+			}
+
+			if (reconfs_lookup(&fs, fs.root_inode, "system",
+					   &found) != RECONFS_OK) {
+				kputs("  the desktop shape  : FAIL (the root lost a "
+				      "name on the way back up)\n");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			st = reconfs_check(&fs, &r);
+			if (st != RECONFS_OK || r.disagreements) {
+				kprintf("  the desktop shape  : FAIL (%llu "
+					"disagreements: %s)\n",
+					(unsigned long long)r.disagreements,
+					r.first_disagreement ? r.first_disagreement
+							     : "");
+				reconfs_unmount(&fs);
+				return false;
+			}
+
+			kprintf("  the desktop shape  : pass (%llu inodes, a file "
+				"three deep, %llu blocks both ways)\n",
+				(unsigned long long)r.inodes,
+				(unsigned long long)r.blocks_seen_forward);
 		}
 
 		/* And it must survive being read back from scratch. A commit

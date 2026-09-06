@@ -607,8 +607,27 @@ impossible to find afterwards.
 
 ### Not written yet
 
-Nested directories and renaming between two directories. The format describes
-both.
+Renaming between two directories, and reading a directory while somebody writes
+to it.
+
+**Nested directories work.** Copy-on-write makes them the awkward case: changing
+anything in `/System/Recycled` writes a new inode for that directory, which
+changes its block, so `/System` must be rewritten to name the new block, which
+changes *its* block, so the root must be rewritten too. The chain is copied from
+the change up to the root, and one superblock write makes every new block real
+at the same instant — a crash anywhere in the middle leaves the entire old tree,
+including the directory being changed.
+
+That is split in two on purpose. `reconfs_walk_path` finds the chain down;
+`reconfs_rebuild_path` copies it back up once the deepest directory has moved;
+in between, the caller uses the single-directory operations unchanged. So there
+is one implementation of "create a name" rather than one per depth, and the path
+machinery can be read on its own.
+
+The shape the checkpoint was given — System, Programs and User, each with a
+recycle bin — is built and checked: three volumes' worth of directories, a file
+three levels down written and read back byte for byte, and a path through a file
+(`/User/Recycled/note.txt/x`) refused rather than resolved to something nearby.
 
 Removing a name works: `reconfs_remove`, one commit, releasing the object's
 contents and its inode. Released and not erased — the blocks keep whatever they
