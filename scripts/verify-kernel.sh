@@ -346,6 +346,34 @@ else
 	skip "  partition tables" "sgdisk or sfdisk is missing"
 fi
 
+# --- Durability -------------------------------------------------------------
+#
+# That a flushed write is on the medium before the next one is issued is the
+# property every crash-consistency scheme rests on, and it is the kind of thing
+# that regresses silently: somebody makes a driver faster by returning from
+# flush when the command was accepted rather than when it completed, every
+# self-test still passes, and the only symptom arrives months later as a
+# filesystem that does not survive a power cut.
+#
+# So it is measured on every run, not once. Six cuts rather than the twenty the
+# standalone script does -- enough to catch a flush that stopped waiting, few
+# enough not to double the length of this.
+
+echo
+echo "durability"
+
+printf '%-46s' "  a flush orders writes, blocks do not tear"
+
+if crash_out=$(bash scripts/crash-test.sh 6 x86_64 2>&1); then
+	echo "$(echo "$crash_out" | grep -oE '[0-9]+ cuts.*')"
+	passes=$((passes + 1))
+else
+	echo "FAILED"
+	echo "$crash_out" | sed 's/^/      /'
+	failures=$((failures + 1))
+	FAILED_PATHS+=("durability")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

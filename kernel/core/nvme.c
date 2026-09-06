@@ -667,6 +667,11 @@ bool nvme_attach(const struct pci_device *d)
 	 * one. Stated as a limit so the block layer splits rather than the
 	 * driver failing a large request that a caller had every right to
 	 * make. */
+	/* NVMe's Flush command is mandatory for a controller with a volatile
+	 * write cache and harmless on one without, and this driver issues it
+	 * and waits for the completion. */
+	n->bdev->flush_is_durable = true;
+
 	n->bdev->max_blocks_per_request =
 		(u32)(((PAGE_SIZE / sizeof(u64)) + 1) * PAGE_SIZE / n->block_size);
 

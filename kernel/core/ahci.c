@@ -572,6 +572,9 @@ bool ahci_attach(const struct pci_device *d)
 	/* One scatter entry per page, and a fixed number of them. Stated so the
 	 * block layer splits rather than the driver failing a request a caller
 	 * had every right to make. */
+	/* FLUSH CACHE EXT is issued and waited for. */
+	a->bdev->flush_is_durable = true;
+
 	a->bdev->max_blocks_per_request =
 		(u32)(AHCI_PRD_MAX * PAGE_SIZE / a->block_size);
 

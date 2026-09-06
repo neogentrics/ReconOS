@@ -118,6 +118,31 @@ struct block_device {
 	bool removable;
 	bool read_only;
 
+	/* Whether block_flush on this device actually reaches the medium.
+	 *
+	 * It is not always true, and the case where it is false used to be
+	 * invisible: virtio-blk returns success from flush without issuing
+	 * anything when the device did not offer the flush feature, and no
+	 * caller could tell that apart from a flush that happened.
+	 *
+	 * The comment that used to sit there said a device without the feature
+	 * "has nothing volatile to flush, so success is the true answer". That
+	 * is an assumption about the device, not something the kernel checked --
+	 * the specification says only that the driver must not send a flush, not
+	 * that the device has no cache. A durability promise resting on an
+	 * assumption is not a durability promise.
+	 *
+	 * So the fact is recorded instead of assumed. flush still returns
+	 * success, because there is nothing better to do; what changes is that
+	 * anything building a crash-recoverable structure on top can ask, and
+	 * refuse to promise what this device cannot deliver. */
+	bool flush_is_durable;
+
+	/* Held for the length of one request. See block.c: not a spinlock,
+	 * because every driver polls with sched_yield() and a spinlock held
+	 * across a yield is a deadlock. */
+	volatile int busy;
+
 	/* --- Slices ------------------------------------------------------
 	 *
 	 * A partition is a block device with a parent and an offset, in the
@@ -177,6 +202,13 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf);
 enum block_status block_flush(struct block_device *dev);
+
+/* Whether a flush on this device reaches the medium, or merely succeeds.
+ *
+ * A filesystem that promises to survive power loss must ask, and must refuse
+ * to make that promise where the answer is no. Asking is cheap; finding out
+ * afterwards is somebody's data. */
+bool block_flush_is_durable(const struct block_device *dev);
 
 /* --- Rewriting a disk, which is the dangerous direction ---------------------
  *

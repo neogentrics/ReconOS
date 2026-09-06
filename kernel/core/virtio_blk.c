@@ -198,8 +198,10 @@ static enum block_status blk_flush(struct block_device *dev)
 {
 	struct virtio_blk *b = dev->driver;
 
-	/* A device without the flush feature has nothing volatile to flush, so
-	 * success is the true answer rather than a convenient one. */
+	/* A device that did not offer the flush feature must not be sent a
+	 * flush command. Success is returned because there is nothing else to
+	 * return -- and dev->flush_is_durable is false, which is how a caller
+	 * finds out that this success means less than it looks. */
 	if (!(b->dev.features & (1ULL << VIRTIO_BLK_F_FLUSH)))
 		return BLOCK_OK;
 
@@ -307,6 +309,16 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 	}
 
 	b->bdev->read_only = (b->dev.features & (1ULL << VIRTIO_BLK_F_RO)) != 0;
+
+	/* Whether a flush here means anything.
+	 *
+	 * A device that did not offer VIRTIO_BLK_F_FLUSH must not be sent one,
+	 * so blk_flush returns success having issued nothing. That used to be
+	 * silent, with a comment asserting such a device "has nothing volatile
+	 * to flush" -- which the specification does not say and the kernel never
+	 * checked. Recorded now, so a filesystem can ask instead of assume. */
+	b->bdev->flush_is_durable =
+		(b->dev.features & (1ULL << VIRTIO_BLK_F_FLUSH)) != 0;
 
 	/* One request at a time, and a request is three descriptors, so the
 	 * useful limit is what one chain can carry rather than what the ring

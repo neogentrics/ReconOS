@@ -19,6 +19,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/partition.h>
+#include <recon/kernel/sched.h>
 
 static struct block_device devices[BLOCK_MAX_DEVICES];
 static unsigned device_count;
@@ -194,6 +195,42 @@ static enum block_status check_range(const struct block_device *dev, u64 lba, u3
 	return BLOCK_OK;
 }
 
+/* --- One request at a time, per device --------------------------------------
+ *
+ * There was no locking anywhere in the storage path, and the reason it worked
+ * is that exactly one thread ever called it. Nothing enforced that and nothing
+ * said it.
+ *
+ * Every driver holds one command slot and one scratch buffer for the request it
+ * is running, and every driver polls for completion with sched_yield(). The
+ * scheduler is preemptive and runs on every processor. So the day a second
+ * thread calls block_read -- which is the day a filesystem exists -- two
+ * requests share one command slot, and the failure is silent: two reads return
+ * each other's data.
+ *
+ * That is the same shape as several bugs already in this project's register:
+ * correct until a second caller arrives, and armed by a change somewhere else.
+ * A filesystem is that second caller, so this is fixed before it is written
+ * rather than after.
+ *
+ * It is NOT a spinlock. A spinlock cannot be held across sched_yield(), and the
+ * driver being protected yields on every poll -- so a spinlock here deadlocks
+ * on one processor and wastes a core on several. What this needs is a lock a
+ * waiter can sleep on, and the kernel has no sleeping primitive yet, so a
+ * waiter yields. When there is a wait queue this loop is what changes; the
+ * shape of the lock is not.
+ */
+static void device_acquire(struct block_device *dev)
+{
+	while (__atomic_test_and_set(&dev->busy, __ATOMIC_ACQUIRE))
+		sched_yield();
+}
+
+static void device_release(struct block_device *dev)
+{
+	__atomic_clear(&dev->busy, __ATOMIC_RELEASE);
+}
+
 /* Translates a request on a slice into one on the disk underneath it.
  *
  * Walked to the root rather than assuming one level, so that a volume nested
@@ -236,6 +273,8 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 	if (!dev)
 		return BLOCK_ERR_NO_DEVICE;
 
+	device_acquire(dev);
+
 	/* Split, if the device has an opinion about how much it can take at
 	 * once. Done here rather than in each driver: the arithmetic is the
 	 * same everywhere and getting it wrong means a short read that reports
@@ -248,8 +287,10 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 			chunk = dev->max_blocks_per_request;
 
 		s = dev->ops->read(dev, lba, chunk, buf);
-		if (s != BLOCK_OK)
+		if (s != BLOCK_OK) {
+			device_release(dev);
 			return s;
+		}
 
 		reads++;
 		blocks_read += chunk;
@@ -259,6 +300,7 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 		buf    = (u8 *)buf + (size_t)chunk * dev->block_size;
 	}
 
+	device_release(dev);
 	return BLOCK_OK;
 }
 
@@ -297,6 +339,8 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 	if (!dev)
 		return BLOCK_ERR_NO_DEVICE;
 
+	device_acquire(dev);
+
 	while (count) {
 		u32 chunk = count;
 
@@ -305,8 +349,10 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			chunk = dev->max_blocks_per_request;
 
 		s = dev->ops->write(dev, lba, chunk, buf);
-		if (s != BLOCK_OK)
+		if (s != BLOCK_OK) {
+			device_release(dev);
 			return s;
+		}
 
 		writes++;
 		blocks_written += chunk;
@@ -316,6 +362,7 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 		buf    = (const u8 *)buf + (size_t)chunk * dev->block_size;
 	}
 
+	device_release(dev);
 	return BLOCK_OK;
 }
 
@@ -324,15 +371,53 @@ enum block_status block_flush(struct block_device *dev)
 	if (!dev || !dev->present)
 		return BLOCK_ERR_NO_DEVICE;
 
-	/* A device with no flush operation is one whose writes are already
-	 * durable when they complete. Reporting success is correct; reporting
-	 * "unsupported" would push every caller into deciding whether that
-	 * meant danger. */
+	/* A device with no flush operation. Success is reported, because there
+	 * is nothing better to return and an error would make every caller
+	 * invent a policy. What the caller can do instead is ask
+	 * block_flush_is_durable() and decline to promise what this device
+	 * cannot deliver. */
 	if (!dev->ops->flush)
 		return BLOCK_OK;
 
-	flushes++;
-	return dev->ops->flush(dev);
+	/* A flush is device-wide: there is no range-scoped or file-scoped flush
+	 * on this block layer and there cannot be one, so flushing through a
+	 * partition commits everything pending on the whole controller. Anything
+	 * above must state its durability guarantee in those terms rather than
+	 * promising that one file is safe and another is not. */
+	{
+		u64 ignored = 0;
+		struct block_device *root = to_root(dev, &ignored);
+		enum block_status s;
+
+		if (!root)
+			return BLOCK_ERR_NO_DEVICE;
+
+		device_acquire(root);
+		flushes++;
+		s = root->ops->flush(root);
+		device_release(root);
+		return s;
+	}
+}
+
+bool block_flush_is_durable(const struct block_device *dev)
+{
+	if (!dev || !dev->present)
+		return false;
+
+	/* Answered by the disk underneath, because that is where the cache is
+	 * and where the flush goes. A slice inherits the answer rather than
+	 * having one of its own. */
+	while (dev->parent) {
+		const struct block_device *p =
+			block_device_by_id(dev->parent, dev->parent_generation);
+
+		if (!p)
+			return false;
+		dev = p;
+	}
+
+	return dev->flush_is_durable;
 }
 
 /* --- Claiming a whole disk -------------------------------------------------
@@ -521,10 +606,12 @@ void block_print_summary(void)
 			kputc(' ');
 		kputs(" : ");
 		print_size(d->block_count * (u64)d->block_size);
-		kprintf(", %lu blocks of %u bytes%s%s\n",
+		kprintf(", %lu blocks of %u bytes%s%s%s\n",
 			d->block_count, d->block_size,
 			d->read_only ? ", read-only" : "",
-			d->removable ? ", removable" : "");
+			d->removable ? ", removable" : "",
+			(!d->parent && !d->flush_is_durable)
+				? ", FLUSH DOES NOT REACH THE MEDIUM" : "");
 	}
 }
 
