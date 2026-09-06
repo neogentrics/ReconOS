@@ -430,6 +430,36 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+**Mail can send, as far as the protocol goes.** It could receive on two
+protocols and not send at all. This is the transport and the message; the window
+to write one in is next.
+
+Encrypted from the first byte, with no plaintext path in the file and no setting
+that produces one — and **the cost of that is named**: a provider offering only
+STARTTLS on 587 is a provider this cannot send through. STARTTLS is absent
+because it means starting in the clear and asking to be upgraded, and `recon_net`
+has no way to upgrade a stream, deliberately. Building it has to make the
+upgrade *required*, because the easy half is connecting and the hard half is the
+one that would ship a system sending passwords in the open.
+
+**The rules live in their own file so they can be tested without a network
+stack**, and they are where the mistakes are. A newline in a subject is how one
+message becomes two — whoever wrote it gets to add headers, and what arrives is
+not what was on screen. Refused at composing as well as at checking, because
+those are separate entry points and a caller could reach the second without the
+first. The *sender's* address is checked too: it comes from the settings rather
+than the message, so it is the one nobody thinks about.
+
+A line that is exactly a dot ends a message, so one inside a letter is doubled.
+A body with no final newline gets one, or the dot that follows lands on the end
+of a sentence. And a message too long for the buffer is refused whole — a
+truncated one is still valid SMTP, so it would be accepted, delivered, and
+arrive missing the end with nobody told.
+
+base64 went in beside hex in `recon_crypt`, checked against RFC 4648's vectors —
+not mine, so agreeing with them is evidence about the encoder rather than
+evidence I wrote the test and the code the same way.
+
 **Photos can make a picture a different size.** Half and Double rather than a
 box to type a size into — a dialog taking two numbers has to explain what
 happens when they do not match the picture's shape, and the honest answer (the

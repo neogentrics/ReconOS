@@ -1936,9 +1936,24 @@ from the account password at sign-in and held in memory. That is a subsystem
 rather than a field, and it is the thing standing between this and a mail
 client somebody would use daily.
 
-**Nothing sends mail.** SMTP is a separate protocol on a separate port with
-its own set of ways to lose somebody's message. Reading came first because
-reading is the half that cannot destroy anything.
+**Nothing sends mail yet, but the protocol is written.** SMTP is a separate
+protocol on a separate port with its own set of ways to lose somebody's
+message. Reading came first because reading is the half that cannot destroy
+anything.
+
+The transport and the message are built and tested: headers, dot-stuffing, line
+endings, and refusing a subject with a newline in it -- which is how one message
+becomes two. What is missing is **a window to write a letter in** and a settings
+page for a sending account.
+
+**And STARTTLS on port 587.** ReconOS sends over TLS from the first byte and
+nothing else, so a provider offering only STARTTLS cannot be used at all. It
+needs `recon_net` to be able to upgrade a plain stream, which it deliberately
+cannot today -- and when it can, the upgrade has to be *required*: a server that
+does not offer it, or a middle that strips it from the offer, must end the
+session rather than carry on in the open. The easy half of that is connecting.
+The hard half is the one that would otherwise ship a system sending passwords in
+the clear.
 
 **The firewall cannot filter packets**, and will not until ReconOS has a
 network stack of its own. What it governs is what ReconOS itself opens and
