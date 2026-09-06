@@ -48,6 +48,32 @@ is a 24 TB drive.
 
 ---
 
+
+## What the kernel can and cannot know about a drive
+
+Whether to tell a drive that blocks have stopped being needed depends on whether
+it is flash. Today that is answered from the transport:
+
+| Transport | How | Reliable |
+|---|---|---|
+| NVMe | everything on it is flash | yes, by construction |
+| ATA | IDENTIFY word 217, nominal rotation rate | yes |
+| **USB mass storage** | **nothing to read** | **no — see BG-127** |
+
+USB mass storage is SCSI in a wrapper: no IDENTIFY word 217, no NVMe identity.
+Linux, given a USB flash drive with no moving parts, reports
+`/sys/block/*/queue/rotational : 1`, because when nothing says otherwise the
+block layer assumes rotating. Measured on real hardware, not inferred.
+
+So the answer has three states and not two — rotating, solid state, and
+**unknown** — and the discard path must decline to guess rather than default
+either way. Defaulting to "rotating" wears out every external SSD attached to
+ReconOS; defaulting to "flash" sends TRIM to devices that will reject it.
+
+For USB specifically there is a real answer to read: the SCSI Block Device
+Characteristics VPD page carries a medium rotation rate, where 1 means
+non-rotating. Checkpoint 11b should ask that rather than infer from the bus.
+
 ## Making the drive's own nature visible
 
 Three facts now travel with every block device, because a filesystem cannot make

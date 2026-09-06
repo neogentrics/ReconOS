@@ -348,6 +348,56 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-127 — Whether a drive is flash is a question USB cannot answer, and the storage layer assumes it can
+
+[#285](https://github.com/neogentrics/ReconOS/issues/285)
+
+- **Found:** 6 September 2026, on a physical USB stick, the first real disk this
+  kernel has ever been shown.
+- **Status:** **Open.** It cannot bite until checkpoint 11b exists, because
+  there is no USB driver for it to be wrong in yet. Recorded now because the
+  assumption is already written into the storage layer, and the moment a USB
+  disk appears it becomes wrong silently.
+
+The storage layer decides whether a drive is solid state in order to decide
+whether to tell it about blocks that stop being needed — Dataset Management on
+NVMe, TRIM on ATA. It answers that question two ways, and both are properties of
+a *transport*:
+
+- NVMe: everything on it is flash, so the answer is yes by construction.
+- ATA: IDENTIFY word 217, the nominal media rotation rate.
+
+**USB mass storage has neither.** It is SCSI in a wrapper; there is no IDENTIFY
+word 217 to read and no NVMe identity page. Linux, asked about the stick this
+was found on, says:
+
+    /sys/block/sde/queue/rotational : 1
+
+on a device with no moving parts, because when nothing tells the block layer
+otherwise it assumes rotating. A USB SSD — an ordinary external drive — would
+therefore be classified by ReconOS as a hard disk and would never be told that a
+block had been freed. Not a crash and not corruption: it wears the drive out
+faster and slows it down over months, invisibly, with every individual line of
+code correct.
+
+**What makes it worth a number rather than a note.** The two answers were not
+written as "these are the transports we can ask". They were written as *the*
+answer to "is this flash", and a question with two answers that each happen to
+work for one transport looks finished until a third transport arrives. That is
+the same shape as BG-119's comment arguing "this case does not arise here" about
+a case that then arose.
+
+The honest form is three states — rotating, solid state, **unknown** — and a
+discard path that declines to guess. SCSI has a real answer available for the
+third case (the Block Limits and Block Device Characteristics VPD pages, where
+a medium rotation rate of 1 means non-rotating), and that is where 11b should
+read it from rather than inferring from the bus.
+
+**And what actually found it:** not reading the code. Plugging in a drive and
+asking the operating system that already had it what it thought the drive was.
+No emulator would ever have said this, because QEMU is always truthful about
+what it is pretending to be.
+
 ### BG-126 — A transaction's capacity was written down as one number, and it is three
 
 [#284](https://github.com/neogentrics/ReconOS/issues/284)

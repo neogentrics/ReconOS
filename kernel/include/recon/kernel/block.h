@@ -166,7 +166,23 @@ struct block_device {
 	 * `seek_is_free` defaults to false, which is the safe direction. Treating
 	 * an SSD as a disk costs a little allocator effort and nothing else;
 	 * treating a disk as an SSD fragments it and cannot be undone without
-	 * rewriting the volume. */
+	 * rewriting the volume.
+	 *
+	 * **This is two states standing in for three, and the third is real.**
+	 * Every driver that sets it today can actually answer -- NVMe because
+	 * everything on it is flash, ATA because IDENTIFY word 217 says. USB
+	 * mass storage is SCSI in a wrapper and has neither, so it cannot answer
+	 * at all, and the default then reports *rotating* for an external SSD
+	 * rather than reporting that it does not know. That costs nothing here,
+	 * where the field only steers the allocator -- but the same not-knowing
+	 * governs discard, and a drive never told about freed space wears out
+	 * faster and slows down over months with every line of code correct.
+	 *
+	 * Measured, not supposed: Linux reports `rotational: 1` for a USB flash
+	 * drive, for exactly this reason. Checkpoint 11b must read the SCSI Block
+	 * Device Characteristics VPD page, where a medium rotation rate of 1
+	 * means non-rotating, rather than inferring anything from the bus.
+	 * (BG-127) */
 	bool seek_is_free;
 
 	/* The device wants to be told when a block stops being in use, so it can
