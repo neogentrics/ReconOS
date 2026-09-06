@@ -46,6 +46,43 @@ add_custom_command(
     COMMENT "Generating xdg-shell protocol code"
     VERBATIM)
 
+# ReconOS's own protocol: the one thing the compositor tells a client that no
+# standard protocol covers -- what this desktop looks like. Generated the same
+# way as xdg-shell, from XML in protocol/.
+set(RECON_THEME_XML "${CMAKE_CURRENT_SOURCE_DIR}/protocol/recon-theme.xml")
+
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.h"
+    COMMAND "${WAYLAND_SCANNER_EXEC}" server-header
+            "${RECON_THEME_XML}" "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.h"
+    DEPENDS "${RECON_THEME_XML}"
+    COMMENT "Generating recon-theme server header"
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.c"
+    COMMAND "${WAYLAND_SCANNER_EXEC}" private-code
+            "${RECON_THEME_XML}" "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.c"
+    DEPENDS "${RECON_THEME_XML}"
+    COMMENT "Generating recon-theme protocol code"
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.h"
+    COMMAND "${WAYLAND_SCANNER_EXEC}" client-header
+            "${RECON_THEME_XML}" "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.h"
+    DEPENDS "${RECON_THEME_XML}"
+    COMMENT "Generating recon-theme client header"
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.c"
+    COMMAND "${WAYLAND_SCANNER_EXEC}" private-code
+            "${RECON_THEME_XML}" "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.c"
+    DEPENDS "${RECON_THEME_XML}"
+    COMMENT "Generating recon-theme client code"
+    VERBATIM)
+
 # --- Executable ---
 
 add_executable(ReconOS
@@ -58,6 +95,7 @@ add_executable(ReconOS
     src/recon_png.c
     src/recon_image.c
     src/recon_expr.c
+    src/recon_themewl.c
     src/recon_fonts.c
     src/recon_wallpaper.c
     src/recon_appwin.c
@@ -114,7 +152,9 @@ add_executable(ReconOS
     src/recon_smtp_message.c
     src/recon_mailwin.c
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.c"
-    "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h")
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-protocol.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-protocol.h")
 
 # The version, from the project declaration above, so the running system and
 # the packaged tarball cannot disagree about what they are. It was written out
@@ -524,7 +564,9 @@ add_executable(decor_client
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.c"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-shell-client-protocol.h"
     "${CMAKE_CURRENT_BINARY_DIR}/xdg-decoration-client-protocol.c"
-    "${CMAKE_CURRENT_BINARY_DIR}/xdg-decoration-client-protocol.h")
+    "${CMAKE_CURRENT_BINARY_DIR}/xdg-decoration-client-protocol.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.c"
+    "${CMAKE_CURRENT_BINARY_DIR}/recon-theme-client-protocol.h")
 
 target_include_directories(decor_client PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"

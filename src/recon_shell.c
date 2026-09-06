@@ -51,6 +51,7 @@
 #include "recon_session.h"
 #include "recon_users.h"
 #include "recon_theme.h"
+#include "recon_themewl.h"
 #include "recon_ui.h"
 
 /* --- Look --- */
@@ -3801,6 +3802,15 @@ void recon_shell_restyle(struct recon_shell *shell) {
     if (shell == NULL) {
         return;
     }
+
+    /*
+     * Clients first, because they redraw on their own schedule.
+     *
+     * A client told after the desktop has repainted spends a frame or two
+     * looking like the old skin next to windows wearing the new one. Told
+     * first, it is at worst a frame ahead, which nobody sees.
+     */
+    recon_themewl_changed();
 
     /*
      * The wallpaper too, since a skin names one. Restyling is the moment the

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="recon_theme_v1">
+
+  <copyright>
+    Public domain, like the rest of ReconOS. See LICENSE.txt.
+  </copyright>
+
+  <description summary="tells a client what the desktop looks like">
+    ReconOS draws its own windows, menus and text, and the applications that
+    ship with it read the palette directly. An application that arrives later
+    is a Wayland client in its own process and cannot: it has no way to know
+    what colour a button is on this desktop, or that somebody has just changed
+    it.
+
+    Without this, a client has three options and all of them are bad. It can
+    guess, and be the one window that does not match. It can ship its own
+    theme, and be the one window that does not change when the desktop does.
+    Or it can read the registry behind the compositor's back, which works until
+    the format changes and is not a boundary at all.
+
+    So the compositor says. A client binds this, is told the whole palette at
+    once, and is told again whenever it changes.
+
+    ---
+
+    On the shape of it: the palette is sent as a run of colours in a fixed
+    order rather than as a colour per event with a name attached. That order is
+    ReconOS's own role enum and the protocol is versioned against it, which
+    means adding a role is a new version rather than a silent change in the
+    length of an array. Names would survive that better and would cost a string
+    per role per change, forty-eight times, every time somebody drags a slider
+    in the skin editor.
+
+    What this does NOT do is tell a client how to draw. There is no window
+    frame here, no button shape, no font. A client that wants to look like it
+    belongs uses these colours in its own drawing; a client that wants to look
+    like itself ignores them. Neither is wrong, and a protocol that tried to
+    enforce the first would be a toolkit pretending to be a protocol.
+  </description>
+
+  <interface name="recon_theme_manager_v1" version="1">
+    <description summary="hands out the palette">
+      A global. Binding it gets one theme object, which begins by sending
+      everything and then sends again on every change.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop listening">
+        Existing theme objects are unaffected; this is only the factory.
+      </description>
+    </request>
+
+    <request name="get_theme">
+      <description summary="ask to be told the palette">
+        The new object sends `palette`, `metrics` and `done` immediately, so a
+        client can draw its first frame without waiting for anything to change.
+      </description>
+      <arg name="id" type="new_id" interface="recon_theme_v1"/>
+    </request>
+  </interface>
+
+  <interface name="recon_theme_v1" version="1">
+    <description summary="the palette, and changes to it">
+      Every change arrives as palette, then metrics, then done. A client should
+      redraw on `done` rather than on each of the others -- the two arrive
+      together and redrawing twice for one change is a visible flicker on a
+      slow client.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop being told"/>
+    </request>
+
+    <event name="palette">
+      <description summary="every colour the desktop uses">
+        An array of 32-bit ARGB values, in ReconOS's role order. A client that
+        does not know the order can still use the first few, which are the
+        window frame and its title -- but the honest way to read this is
+        against the header that names them.
+
+        The count is whatever this version of the protocol carries. A client
+        should check it rather than assuming, because a compositor may be older
+        than the client is.
+      </description>
+      <arg name="colours" type="array" summary="ARGB, one per role, in order"/>
+    </event>
+
+    <event name="metrics">
+      <description summary="the numbers that are not colours">
+        Title bar height, border thickness, corner radius and the rest, in the
+        same fixed order and with the same versioning rule as the palette.
+
+        Sent as a second array rather than folded into the first because they
+        are not colours and a client reading past the end of one into the other
+        would get a number that looks plausible.
+      </description>
+      <arg name="values" type="array" summary="int32, one per metric, in order"/>
+    </event>
+
+    <event name="name">
+      <description summary="what this skin is called">
+        For a client that wants to say so, or to keep something cached per
+        skin. Not for deciding how to draw: a skin named "Midnight" may be
+        edited to be pale, and a client that switched on the name rather than
+        on the colours would then be wrong in a way nothing corrects.
+      </description>
+      <arg name="name" type="string"/>
+    </event>
+
+    <event name="done">
+      <description summary="that is the whole of this change">
+        Everything sent since the last `done` belongs together. Redraw here.
+      </description>
+    </event>
+  </interface>
+
+</protocol>

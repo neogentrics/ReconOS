@@ -79,6 +79,7 @@
 #include "recon_audio.h"
 #include "recon_codec.h"
 #include "recon_theme.h"
+#include "recon_themewl.h"
 #include "recon_session.h"
 #include "recon_shell.h"
 #include "recon_users.h"
@@ -2764,6 +2765,17 @@ int main(int argc, char **argv) {
     }
 
     server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
+
+    /*
+     * And ReconOS's own protocol, beside the standard one.
+     *
+     * A client needs xdg-shell to have a window at all and this to know what
+     * the window should look like. Not fatal if it fails: the desktop works and
+     * clients look like themselves rather than like the desktop.
+     */
+    if (!recon_themewl_init(server.wl_display)) {
+        wlr_log(WLR_ERROR, "ReconOS: could not offer the theme to clients");
+    }
     server.new_xdg_surface.notify = server_new_xdg_surface;
     wl_signal_add(&server.xdg_shell->events.new_surface, &server.new_xdg_surface);
 
