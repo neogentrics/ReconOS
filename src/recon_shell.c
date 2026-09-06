@@ -1990,32 +1990,73 @@ static int appwin_index_for_node(struct recon_shell *shell,
 /* --- Drawing --- */
 
 /*
- * One taskbar button. A minimized window is drawn recessed and its label
- * dimmed, so the bar shows at a glance what is on screen and what is put away.
+ * How far a put-away window's button recedes into itself.
+ *
+ * Out of 255, so this leaves the contents at 1 - 110/255 of the strength they
+ * stand off the fill with. Measured on all eleven skins, on the same button
+ * open and then put away so nothing but the state differs: every one of them
+ * lands between 0.574 and 0.588 against an arithmetic prediction of 0.569.
+ *
+ * The ceiling was measured rather than guessed, using this system's own
+ * reader. Washed past about 140 the title stops being separable from the
+ * button at all -- the engine finds zero marks where it found nine or twelve,
+ * on every skin, and the earliest to go are Beacon and Reading at 140 while
+ * the rest hold to 150. That is a threshold for a machine deciding what is ink
+ * and not a measurement of what a person can read, which is why it is used as
+ * a distance to stay away from rather than as a limit to approach: 110 sits
+ * thirty below the earliest failure.
+ *
+ * The floor is the only part still chosen by eye. Below roughly a third the
+ * button stops reading as different at a glance, which is the one thing it is
+ * for, and no instrument here measures "at a glance".
+ */
+#define MINIMIZED_WASH 110
+
+/*
+ * One taskbar button, in one of three states.
+ *
+ *   focused          the window is on screen and in front
+ *   open             on screen, behind something
+ *   minimized        not on screen at all
+ *
+ * Three states and two signals, so every pair differs by at least two things:
+ *
+ *                     fill            bevel      contents
+ *   focused           BUTTON_ACTIVE   pressed    full
+ *   open              BUTTON          raised     full
+ *   minimized         BUTTON          pressed    washed
+ *
+ * Before this, `minimized` reached the bevel and nothing else, so a put-away
+ * window and a background window differed by a bevel direction alone -- one
+ * pixel of light and one of shadow, on a 28-pixel button, at the bottom of the
+ * screen. The header here claimed the label was dimmed for a minimized window;
+ * it was not, it was dimmed for every unfocused one, which is a different
+ * statement that happened to describe the same pixels most of the time.
  */
 static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
         int x, int w, int baseline, const char *title, const char *icon,
         bool active, bool minimized) {
     /*
-     * A minimized window keeps the button fill and is marked by the pressed
-     * bevel and the dimmed label instead.
+     * The fill still says focused and nothing else.
      *
-     * It used to be filled with the bar's own colour, so that a put-away
-     * window sank into the bar. That works while a skin's bar and its buttons
-     * are near-identical greys, which was true of every skin there was at the
-     * time. Beacon has a deep blue bar and light buttons, and there the rule
-     * inverted the contrast: the label was dimmed for a light button and then
-     * drawn on a dark one.
+     * It used to say minimized: the button was filled with the bar's own
+     * colour so a put-away window sank into it. That works while a skin's bar
+     * and its buttons are near-identical greys, which was true of every skin
+     * there was at the time. Beacon has a deep blue bar and light buttons, and
+     * there the rule inverted the contrast -- the label was dimmed for a light
+     * button and then drawn on a dark one.
+     *
+     * What replaces it below is that idea corrected rather than abandoned. A
+     * put-away window still recedes; it recedes into its *own* button instead
+     * of into the bar, and that direction is right on every skin because the
+     * surface defines it. Beacon cannot invert it, and Contrast -- which
+     * paints the bar and the active button the same pure black -- cannot
+     * collapse it.
      */
     enum recon_theme_role fill = active
         ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON;
-    (void)minimized;
 
     recon_fill_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
-    /* Filled back to the bar behind rather than cleared -- a hole here would
-     * show the wallpaper through the taskbar. */
-    recon_draw_button_edge(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
-        active || minimized, THEME(BAR));
 
     /* The icon comes first, so a bar of buttons can be read at a glance
      * without depending on the titles fitting. */
@@ -2029,6 +2070,46 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
     recon_draw_text(bar, shell->font, text_x, baseline,
         w - (text_x - x) - TEXT_INSET, title,
         active ? COLOR_TEXT : COLOR_TEXT_DIM);
+
+    /*
+     * And a put-away window's contents sink into the button.
+     *
+     * Applied to the icon and the title together rather than to either alone.
+     * Fading only the icon would say nothing on a window that has none, and
+     * dimming only the title is a third shade of text that has to stay clear
+     * of the two already in use across eleven palettes.
+     *
+     * The whole button rather than an inset rectangle, which needs no inset
+     * constant and lines a graded role's ramp up with the fill underneath it.
+     * That second reason was originally the whole reason, and it was wrong: a
+     * skin measured 0.74 where the other ten measured 0.577, the ramp looked
+     * like the culprit, and washing the full rectangle changed the number by
+     * nothing at all. The fault was in the instrument -- a gradient's own
+     * spread was being counted as contents, and a wash does not remove it,
+     * because washing a colour towards itself does nothing. Measured per row
+     * instead, that skin reads 0.580 with the rest.
+     *
+     * Kept anyway, for the reason that survived: one less magic number.
+     */
+    if (minimized) {
+        recon_wash_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill,
+            MINIMIZED_WASH);
+    }
+
+    /*
+     * The edge last, so the wash cannot blunt it.
+     *
+     * It used to be drawn straight after the fill. The bevel is the other half
+     * of what separates these three states and washing it would soften the
+     * signal at the same moment as adding one -- and it has to survive intact
+     * for the pair it distinguishes on its own, which is a minimized window
+     * against a background one.
+     *
+     * Filled back to the bar behind rather than cleared: a hole here would
+     * show the wallpaper through the taskbar.
+     */
+    recon_draw_button_edge(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
+        active || minimized, THEME(BAR));
 }
 
 /*

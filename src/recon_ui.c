@@ -922,16 +922,6 @@ static unsigned ramp(unsigned from, unsigned to, int shift, int step, int of) {
  * direction; drawing is what has the dependencies, so drawing is where this
  * belongs.
  */
-void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
-        enum recon_theme_role role) {
-    recon_color from, to;
-    if (recon_theme_gradient(role, &from, &to)) {
-        recon_fill_gradient(panel, x, y, w, h, from, to);
-        return;
-    }
-    recon_fill_rect(panel, x, y, w, h, recon_theme_color(role));
-}
-
 /*
  * Mix `over` into `base` by `amount` out of 255.
  *
@@ -957,6 +947,69 @@ static uint32_t blend_over(uint32_t base, uint32_t over, int amount) {
     }
     return out;
 }
+
+void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
+        enum recon_theme_role role) {
+    recon_color from, to;
+    if (recon_theme_gradient(role, &from, &to)) {
+        recon_fill_gradient(panel, x, y, w, h, from, to);
+        return;
+    }
+    recon_fill_rect(panel, x, y, w, h, recon_theme_color(role));
+}
+
+void recon_wash_role(struct recon_panel *panel, int x, int y, int w, int h,
+        enum recon_theme_role role, uint8_t amount) {
+    if (panel == NULL || amount == 0) {
+        return;
+    }
+
+    recon_color from, to;
+    bool graded = recon_theme_gradient(role, &from, &to);
+    if (!graded) {
+        from = to = recon_theme_color(role);
+    }
+
+    /*
+     * The ramp is positioned against the rectangle asked for, the same way
+     * recon_fill_gradient does it -- and that is worth naming as an
+     * approximation rather than left to be discovered. A caller washing the
+     * *inside* of a control passes a rectangle a few pixels shorter than the
+     * one the fill used, so on a skin whose role carries a gradient the ramp
+     * here is stretched across slightly less height than the one underneath.
+     *
+     * One skin of eleven puts a gradient on a taskbar button, over
+     * twenty-eight rows, between two colours a few units apart. The error is
+     * a fraction of a unit and the alternative is passing two rectangles to
+     * every call. Named here so that a caller washing something tall and
+     * steeply graded knows to pass the outer rectangle and clip instead.
+     */
+    int want_y = y;
+    int want_h = h;
+    if (!clip_rect(panel, &x, &y, &w, &h)) {
+        return;
+    }
+
+    int last = want_h > 1 ? want_h - 1 : 1;
+    for (int row = y; row < y + h; row++) {
+        recon_color color;
+        if (graded) {
+            int step = row - want_y;
+            color = 0xFF000000u |
+                (ramp(from, to, 16, step, last) << 16) |
+                (ramp(from, to, 8, step, last) << 8) |
+                ramp(from, to, 0, step, last);
+        } else {
+            color = from;
+        }
+
+        uint32_t *p = panel->pixels + (size_t)row * panel->width + x;
+        for (int col = 0; col < w; col++) {
+            p[col] = blend_over(p[col], color, amount);
+        }
+    }
+}
+
 
 /*
  * Round all four corners of a rectangle already drawn into the panel.

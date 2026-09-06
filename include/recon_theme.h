@@ -330,6 +330,41 @@ bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
  * skin is a change to the skin and not a change to the code that draws --
  * which is the same bargain the roles themselves make.
  */
+/*
+ * Mix a region back towards the way a role looks, without repainting it.
+ *
+ * The inverse of recon_panel_fade, and needed for the opposite reason. Fading
+ * moves a region towards transparent, which is right for chrome sitting over a
+ * wallpaper and wrong anywhere the thing behind is not going to be redrawn --
+ * on the taskbar it would show the desktop through the middle of the bar.
+ *
+ * This moves a region towards the colour it is sitting on instead, which is
+ * what "receded" actually means: less different from its surroundings. That
+ * makes it the one way to say "this is not prominent" that cannot be defeated
+ * by a skin. Every other way -- a dimmer ink, a paler fill, an accent mark --
+ * needs two colours to stay far enough apart, and a skin may put them
+ * anywhere. Contrast paints the bar, the accent and the active button all
+ * pure black; Midnight makes the active button lighter rather than darker.
+ * Moving towards the surface underneath is correct on both, because the
+ * direction is defined by the surface rather than by a second colour.
+ *
+ * `amount` is out of 255: 0 changes nothing and 255 erases the region back to
+ * the plain role. Alpha is taken from what is already there, so an opaque
+ * panel stays opaque.
+ *
+ * Pass the same rectangle the fill used. Where a role carries a gradient the
+ * ramp is positioned against the rectangle given here, exactly as the fill
+ * positions its own -- so washing a sub-rectangle stretches the ramp across
+ * the wrong height and lands on colours the fill never used. To wash part of a
+ * control, pass the whole control and clip.
+ *
+ * How wrong that goes has not been measured. It was blamed for a real
+ * discrepancy once and turned out to be innocent, so it is stated here as a
+ * property of the arithmetic rather than as a fault anybody has seen.
+ */
+void recon_wash_role(struct recon_panel *panel, int x, int y, int w, int h,
+    enum recon_theme_role role, uint8_t amount);
+
 void recon_fill_role(struct recon_panel *panel, int x, int y, int w, int h,
     enum recon_theme_role role);
 
