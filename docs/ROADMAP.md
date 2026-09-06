@@ -2000,10 +2000,12 @@ be declared. And there is no signing, no dependency between packages, and no
 upgrade -- installing over an existing package is refused rather than
 replacing it.
 
-**Only text files open.** `recon_props_opener` maps a name to an application
-and knows about text; a picture has nowhere to go because nothing views one,
-and the mapping is a list in one function rather than anything a program can
-register itself with.
+**A file type cannot be chosen, only inherited.** As of v0.4.0 an application
+declares what it opens when it registers, so a module can bring one that reads
+a format and have the files actually go to it, and turning an application off
+hands its types back. What is still missing is somebody *choosing*: two
+applications claiming the same extension is first-come, and there is no
+"open with" and no way to change an association without uninstalling something.
 
 **Nothing can listen.** Streams connect outwards, plain or encrypted with the
 far end verified; there is still no way for an application to accept a

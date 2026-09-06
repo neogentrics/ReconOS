@@ -11,6 +11,7 @@
 
 #include "recon_codec.h"
 #include "recon_icons.h"
+#include "recon_modules.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 
@@ -155,72 +156,42 @@ const char *recon_props_opener(const char *name) {
     }
 
     /*
-     * Text and things that are text underneath. A skin and a settings file
-     * are both editable by hand on purpose -- that is most of why they are
-     * text -- so opening one should put it in front of somebody rather than
-     * refusing because the extension is unfamiliar.
-     */
-    if (strcasecmp(dot, ".txt") == 0 ||
-            strcasecmp(dot, ".theme") == 0 ||
-            strcasecmp(dot, ".reg") == 0 ||
-            strcasecmp(dot, ".md") == 0 ||
-            strcasecmp(dot, ".log") == 0) {
-        return "Notepad";
-    }
-
-    /*
-     * Pictures, which have somewhere to go now. The list is what stb_image
-     * decodes, because a name that opens an empty window is worse than a
-     * name nothing offers to open.
-     */
-    if (strcasecmp(dot, ".png") == 0 ||
-            strcasecmp(dot, ".jpg") == 0 ||
-            strcasecmp(dot, ".jpeg") == 0 ||
-            strcasecmp(dot, ".bmp") == 0 ||
-            strcasecmp(dot, ".gif") == 0 ||
-            strcasecmp(dot, ".tga") == 0) {
-        return "Photos";
-    }
-
-    /*
-     * Marked-up documents, which now have somewhere to go.
+     * What an application says it opens.
      *
-     * The web viewer could read HTML off the network from the day it existed
-     * and a file on this machine had nowhere to open -- which nobody would
-     * have found by using it, because the two halves are reached from
-     * different places.
+     * This used to be a list of extensions here, which meant the answer to
+     * "what opens a .png?" lived a long way from the application that opens
+     * one -- and a module bringing an application that reads a format had no
+     * way to say so at all: the file sat on the desktop, correctly named and
+     * correctly drawn, and double-clicking it did nothing.
      *
-     * XML is not here. The viewer reads HTML's tag vocabulary; handing it an
-     * XML document would show the text with every tag silently dropped, which
-     * looks like a viewer that works rather than one that does not understand
-     * the file. Notepad shows XML as what it is, which is the honest answer
-     * until something reads it properly.
+     * The list now lives on each registration, so a replacement applet
+     * inherits the association or overrides it by the same rule that decides
+     * everything else about a replacement, and turning an application off
+     * hands its file types back -- because an "off" that leaves the
+     * associations behind is not off.
      */
-    if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) {
-        return "Web";
+    const char *registered = recon_installed_app_for_file(name);
+    if (registered != NULL) {
+        return registered;
     }
 
     /*
-     * Sound. Asked of the codec registry rather than listed here, so a decoder
-     * a module brings makes its files openable without this file knowing about
-     * it -- which is the whole point of the registry.
+     * Sound and video, asked of the codec registry rather than listed
+     * anywhere.
+     *
+     * The one association that cannot be a string on a registration: what the
+     * player opens is whatever can be decoded, and that changes when a module
+     * brings a decoder. Written down once, it would be a list that is wrong
+     * from the moment somebody installs anything.
      */
     if (recon_codec_handles_extension(name)) {
         return "Media Player";
     }
 
-    if (strcasecmp(dot, ".xml") == 0 ||
-            strcasecmp(dot, ".json") == 0 ||
-            strcasecmp(dot, ".csv") == 0 ||
-            strcasecmp(dot, ".ini") == 0 ||
-            strcasecmp(dot, ".conf") == 0) {
-        return "Notepad";
-    }
-
     /*
-     * A module is not a document. It returns NULL rather than being handed to
-     * Notepad, which would show a screen of binary and look like the file was
-     * damaged.
+     * A module is not a document, and neither is a font or a package. They
+     * return NULL rather than being handed to Notepad, which would show a
+     * screen of binary and look like the file was damaged.
      */
     return NULL;
 }

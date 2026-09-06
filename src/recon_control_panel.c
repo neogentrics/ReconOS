@@ -3792,7 +3792,10 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
          * one that is running?" -- is asked while looking at the list, and an
          * answer one click away is an answer nobody checks.
          */
-        char detail[256];
+        /* Sized so every part fits at full length rather than to a round
+         * number: the compiler can prove it, which is the only version of "it
+         * fits" worth having. */
+        char detail[512];
         char version[48] = "";
         if (apps[i].version[0] != '\0') {
             snprintf(version, sizeof(version), "   %s", apps[i].version);
@@ -3804,9 +3807,22 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
                 apps[i].builtin_version);
         }
 
-        snprintf(detail, sizeof(detail), "%s%s%s%s",
+        /*
+         * And what it opens.
+         *
+         * On the row for the same reason the version is: "this program will
+         * now open your pictures" is a consequence of installing something,
+         * not a detail, and a file type quietly changing hands is the sort of
+         * thing people notice long after they could have said no to it.
+         */
+        char opens[sizeof(apps[i].opens) + 16] = "";
+        if (apps[i].opens[0] != '\0') {
+            snprintf(opens, sizeof(opens), "   opens %s", apps[i].opens);
+        }
+
+        snprintf(detail, sizeof(detail), "%s%s%s%s%s",
             app_is_system(&apps[i]) ? "built into ReconOS" : apps[i].module,
-            version, over, apps[i].disabled ? "   turned off" : "");
+            version, over, opens, apps[i].disabled ? "   turned off" : "");
 
         draw_row(cp, p, x, y + row * ROW_HEIGHT, w - bar, row, apps[i].name,
             detail, i == cp->selected);

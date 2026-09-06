@@ -10,6 +10,34 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+An application says what it opens, and a module can say it too. The answer
+to "what opens a .png?" was a list of extensions inside one function in the
+system -- a long way from the application that opens one, and with no way for a
+module to answer it at all. A module could bring an application that reads a
+format, and the file would sit on the desktop correctly named and correctly
+drawn, and double-clicking it would do nothing.
+
+Registering an application and registering what it opens are now the same act.
+A module's claim beats the system's own default, because somebody who installs
+a picture editor and finds pictures still opening in the viewer has installed
+something that does not work. Turning an application off in the Control Panel
+hands its file types straight back -- an "off" that leaves the associations
+behind is not off -- and every application's row now says what it opens, because
+"this program will now open your pictures" is a consequence of installing
+something rather than a detail.
+
+The one association that stays dynamic is the player's: what it opens is
+whatever can be decoded, and that changes when a module brings a decoder.
+Written down once it would be a list that is wrong from the moment somebody
+installs anything.
+
+Every built-in lost its version number to that change, for about an hour.
+The field went into the middle of a public struct and the twelve built-in
+registrations were positional, so each version string slid one place and
+version became NULL. It compiled without a warning; the only sign anywhere
+was a dash in one column of apps. The version is the number the whole
+applet-update decision rests on. The table uses named fields now. BG-119.
+
 Mail can attach files. Up to eight, twelve megabytes together, chosen with
 the same file picker Notepad uses. The message becomes multipart/mixed; without
 an attachment it is written exactly as it always was, one plain part with no

@@ -156,6 +156,17 @@ struct recon_installed_app {
      * is a real thing to want, which this is the answer to.
      */
     bool disabled;
+
+    /*
+     * Which kinds of file it opens, as the module declared them: extensions
+     * with the dots, separated by spaces. Empty for one that opens none.
+     *
+     * Shown where applications are managed, because "this program will now
+     * open your pictures" is a consequence of installing something and not a
+     * detail -- and because a file type quietly changing hands is the sort of
+     * thing people notice long after they could have said no to it.
+     */
+    char opens[128];
 };
 
 /*
@@ -172,6 +183,19 @@ const char *recon_installed_app_resolve(const char *target);
 /* The icon name for a registered application, stable for as long as it stays
  * registered. NULL if it has none. */
 const char *recon_installed_app_icon(const char *name);
+
+/*
+ * Which application a module registered for this file's name, or NULL.
+ *
+ * Asked before the system's own list of what opens what, so an installed
+ * application that says it reads a format actually gets handed one. A
+ * disabled application claims nothing -- turning something off has to mean
+ * its files stop going to it, or "off" is only off in the menus.
+ *
+ * The name is matched on the extension, case-insensitively. Pass the file's
+ * name, not its path.
+ */
+const char *recon_installed_app_for_file(const char *filename);
 
 /*
  * Whether an application is turned off, and turning one off or back on.

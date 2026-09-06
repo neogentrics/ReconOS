@@ -3464,41 +3464,83 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * ships, its built-in Notepad is newer again and takes it back. An applet
      * update applies until the release that catches up with it.
      */
+    /*
+     * Written with field names rather than in order.
+     *
+     * They were positional, and adding `opens` to the middle of the struct
+     * silently shifted every version string into it: each built-in claimed to
+     * open a file type called "0.4.0" and had no version of its own, which is
+     * the number the whole applet-update decision is made on. It compiled
+     * without a warning and the only visible sign was a dash in one column of
+     * `apps`. Named fields cannot do that, and this struct is public -- it
+     * will gain another field.
+     */
     static const struct recon_app_registration BUILTIN_APPS[] = {
-        { "File Explorer", RECON_ICON_EXPLORER, recon_explorer_create, true,
-          RECONOS_VERSION },
-        { "Terminal", RECON_ICON_TERMINAL, recon_terminal_create, true,
-          RECONOS_VERSION },
-        { "Notepad", RECON_ICON_NOTEPAD, recon_notepad_create, true,
-          RECONOS_VERSION },
-        { "Watchtower", RECON_ICON_TASKMGR, recon_taskmgr_create, true,
-          RECONOS_VERSION },
-        { "Photos", RECON_ICON_PHOTOS, recon_photos_create, true,
-          RECONOS_VERSION },
-        { "Calendar", RECON_ICON_CALENDAR, recon_calendar_create, true,
-          RECONOS_VERSION },
-        { "Mail", RECON_ICON_MAIL, recon_mailwin_create, true,
-          RECONOS_VERSION },
+        { .name = "File Explorer", .icon = RECON_ICON_EXPLORER,
+          .create = recon_explorer_create, .in_menu = true,
+          .version = RECONOS_VERSION },
+        { .name = "Terminal", .icon = RECON_ICON_TERMINAL,
+          .create = recon_terminal_create, .in_menu = true,
+          .version = RECONOS_VERSION },
+        /*
+         * Notepad, Photos and Web say what they open here rather than being
+         * named in a table somewhere else.
+         *
+         * The list used to live in recon_props.c alone, which meant the
+         * question "what opens a .png?" was answered a long way from the
+         * application that opens it -- and a module bringing an application
+         * had no way to answer it at all. Saying it at registration means a
+         * replacement applet inherits the association, or overrides it, by the
+         * same rule that decides everything else about a replacement.
+         */
+        { .name = "Notepad", .icon = RECON_ICON_NOTEPAD,
+          .create = recon_notepad_create, .in_menu = true,
+          .version = RECONOS_VERSION,
+          .opens = ".txt .md .log .theme .reg .xml .json .csv .ini .conf" },
+        { .name = "Watchtower", .icon = RECON_ICON_TASKMGR,
+          .create = recon_taskmgr_create, .in_menu = true,
+          .version = RECONOS_VERSION },
+        { .name = "Photos", .icon = RECON_ICON_PHOTOS,
+          .create = recon_photos_create, .in_menu = true,
+          .version = RECONOS_VERSION,
+          .opens = ".png .jpg .jpeg .bmp .gif .tga" },
+        { .name = "Calendar", .icon = RECON_ICON_CALENDAR,
+          .create = recon_calendar_create, .in_menu = true,
+          .version = RECONOS_VERSION },
+        { .name = "Mail", .icon = RECON_ICON_MAIL,
+          .create = recon_mailwin_create, .in_menu = true,
+          .version = RECONOS_VERSION },
         /* The name here and WEB_APPLICATION in recon_web.c must match:
          * the network permission is by name. See the note there. */
-        { "Web", RECON_ICON_WEB, recon_web_create, true, RECONOS_VERSION },
-        { "Media Player", RECON_ICON_PLAYER, recon_player_create, true,
-          RECONOS_VERSION },
+        { .name = "Web", .icon = RECON_ICON_WEB, .create = recon_web_create,
+          .in_menu = true, .version = RECONOS_VERSION,
+          .opens = ".html .htm" },
+        /*
+         * The player says nothing here, on purpose. What it opens is whatever
+         * the codec registry can decode, which changes when a module brings a
+         * decoder -- so the answer is asked for at the moment rather than
+         * written down once. See recon_props_opener.
+         */
+        { .name = "Media Player", .icon = RECON_ICON_PLAYER,
+          .create = recon_player_create, .in_menu = true,
+          .version = RECONOS_VERSION },
         /*
          * Not in the applications column: it is reached from the right of the
          * Start menu, where the things that configure the machine live. Listing
          * it in both would put the same name in two places, and anything
          * looking one up by name would find whichever came first.
          */
-        { "Control Panel", RECON_ICON_CONTROL_PANEL, recon_control_panel_create,
-          false, RECONOS_VERSION },
+        { .name = "Control Panel", .icon = RECON_ICON_CONTROL_PANEL,
+          .create = recon_control_panel_create, .in_menu = false,
+          .version = RECONOS_VERSION },
 
         /*
          * Help is beside the Control Panel rather than in the applications
          * column, for the same reason: it is a thing about the system rather
          * than a thing you work in.
          */
-        { "Help", RECON_ICON_HELP, recon_help_create, false, RECONOS_VERSION },
+        { .name = "Help", .icon = RECON_ICON_HELP, .create = recon_help_create,
+          .in_menu = false, .version = RECONOS_VERSION },
 
         /*
          * The notice shown after an update. Registered so the shell can build
@@ -3507,8 +3549,9 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
          * it -- it comes to them, once, and the log it is quoting from is
          * reached deliberately through Help.
          */
-        { "What's New", RECON_ICON_HELP, recon_help_notice_create, false,
-          RECONOS_VERSION },
+        { .name = "What's New", .icon = RECON_ICON_HELP,
+          .create = recon_help_notice_create, .in_menu = false,
+          .version = RECONOS_VERSION },
     };
 
     for (size_t i = 0; i < sizeof(BUILTIN_APPS) / sizeof(BUILTIN_APPS[0]); i++) {

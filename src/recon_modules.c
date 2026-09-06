@@ -55,6 +55,7 @@ struct app_slot {
     char builtin_icon[64];
     char builtin_version[RECON_VERSION_MAX];
     bool builtin_in_menu;
+    char builtin_opens[128];
 };
 
 static struct recon_server *g_server;
@@ -148,6 +149,8 @@ static void displace_builtin(struct app_slot *slot,
         slot->has_builtin = true;
         slot->builtin_create = slot->create;
         slot->builtin_in_menu = slot->info.in_menu;
+        snprintf(slot->builtin_opens, sizeof(slot->builtin_opens), "%s",
+            slot->info.opens);
         snprintf(slot->builtin_icon, sizeof(slot->builtin_icon), "%s",
             slot->info.icon);
         snprintf(slot->builtin_version, sizeof(slot->builtin_version), "%s",
@@ -156,6 +159,8 @@ static void displace_builtin(struct app_slot *slot,
 
     slot->create = app->create;
     slot->info.in_menu = app->in_menu;
+    snprintf(slot->info.opens, sizeof(slot->info.opens), "%s",
+        app->opens != NULL ? app->opens : "");
     snprintf(slot->info.icon, sizeof(slot->info.icon), "%s",
         app->icon != NULL ? app->icon : "");
     snprintf(slot->info.module, sizeof(slot->info.module), "%s", module);
@@ -256,6 +261,8 @@ static bool register_app(const struct recon_app_registration *app,
             snprintf(existing->info.version, sizeof(existing->info.version),
                 "%s", version);
             existing->info.in_menu = app->in_menu;
+            snprintf(existing->info.opens, sizeof(existing->info.opens), "%s",
+                app->opens != NULL ? app->opens : "");
             return true;
         }
 
@@ -276,6 +283,9 @@ static bool register_app(const struct recon_app_registration *app,
             existing->has_builtin = true;
             existing->builtin_create = app->create;
             existing->builtin_in_menu = app->in_menu;
+            snprintf(existing->builtin_opens,
+                sizeof(existing->builtin_opens), "%s",
+                app->opens != NULL ? app->opens : "");
             snprintf(existing->builtin_icon, sizeof(existing->builtin_icon),
                 "%s", app->icon != NULL ? app->icon : "");
             snprintf(existing->builtin_version,
@@ -292,6 +302,8 @@ static bool register_app(const struct recon_app_registration *app,
                     existing->info.version, existing->info.module);
                 existing->create = app->create;
                 existing->info.in_menu = app->in_menu;
+                snprintf(existing->info.opens, sizeof(existing->info.opens),
+                    "%s", app->opens != NULL ? app->opens : "");
                 snprintf(existing->info.icon, sizeof(existing->info.icon),
                     "%s", app->icon != NULL ? app->icon : "");
                 existing->info.module[0] = '\0';
@@ -337,6 +349,8 @@ static bool register_app(const struct recon_app_registration *app,
             module != NULL ? module : "");
         snprintf(slot->info.version, sizeof(slot->info.version), "%s", version);
         slot->info.in_menu = app->in_menu;
+        snprintf(slot->info.opens, sizeof(slot->info.opens), "%s",
+            app->opens != NULL ? app->opens : "");
         return true;
     }
 
@@ -406,6 +420,8 @@ bool recon_unregister_app(const char *name) {
 
         slot->create = slot->builtin_create;
         slot->info.in_menu = slot->builtin_in_menu;
+        snprintf(slot->info.opens, sizeof(slot->info.opens), "%s",
+            slot->builtin_opens);
         snprintf(slot->info.icon, sizeof(slot->info.icon), "%s",
             slot->builtin_icon);
         snprintf(slot->info.version, sizeof(slot->info.version), "%s",
@@ -552,6 +568,60 @@ const char *recon_installed_app_icon(const char *name) {
         return NULL;
     }
     return slot->info.icon;
+}
+
+/*
+ * Whether a space-separated list of extensions claims this filename.
+ *
+ * The same shape as the codec registry's claims(), and deliberately not shared
+ * with it: that one answers "can this be decoded", this one answers "who opens
+ * it", and a file can have a decoder and no application or an application and
+ * no decoder. One function serving both would have to be told which question
+ * it was being asked, which is two functions wearing a coat.
+ */
+static bool claims_extension(const char *list, const char *filename) {
+    if (list == NULL || *list == '\0' || filename == NULL) {
+        return false;
+    }
+
+    const char *dot = strrchr(filename, '.');
+    if (dot == NULL || dot == filename || dot[1] == '\0') {
+        return false;
+    }
+    size_t want = strlen(dot);
+
+    const char *p = list;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        const char *start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            p++;
+        }
+
+        size_t length = (size_t)(p - start);
+        if (length == want && strncasecmp(start, dot, want) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *recon_installed_app_for_file(const char *filename) {
+    if (filename == NULL || *filename == '\0') {
+        return NULL;
+    }
+
+    for (int i = 0; i < APPS_MAX; i++) {
+        if (!g_apps[i].used || g_apps[i].info.disabled) {
+            continue;
+        }
+        if (claims_extension(g_apps[i].info.opens, filename)) {
+            return g_apps[i].info.name;
+        }
+    }
+    return NULL;
 }
 
 const char *recon_installed_app_resolve(const char *target) {

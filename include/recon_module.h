@@ -133,6 +133,26 @@ struct recon_app_registration {
     bool in_menu;
 
     /*
+     * Which kinds of file this opens, as extensions with the dots:
+     * ".xcf .psd", or NULL for an application that opens no files.
+     *
+     * Before this, the answer to "what opens a .foo?" was a list inside one
+     * function in the system, so a module could bring an application that
+     * reads a format and there was no way to say so -- the file sat on the
+     * desktop, correctly named and correctly drawn, and double-clicking it
+     * did nothing. Registering the application and registering what it opens
+     * are the same act, and this is where it is said.
+     *
+     * A claim here BEATS the system's own list. That is deliberate: somebody
+     * who installs a picture editor and finds that pictures still open in the
+     * viewer has installed something that does not work, and the built-in list
+     * is a default rather than a decision. Two modules claiming the same
+     * extension is first-come, and recon_app_opens_what says which won so it
+     * can be shown rather than guessed at.
+     */
+    const char *opens;
+
+    /*
      * Which release of *this applet* it is: "1.4.0", "0.3.1".
      *
      * This is how an applet is updated without updating ReconOS. Register an

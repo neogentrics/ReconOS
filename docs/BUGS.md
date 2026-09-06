@@ -2151,3 +2151,25 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   the two forms in the system are the Mail setup screen and the compose window
    — both of which were being looked at for whether the fields were in the
   right order rather than for what was drawn inside them.
+
+### BG-119 — Every built-in application lost its version number
+
+- **Found in** v0.4.0. **Found by** running `apps` on the control socket
+  immediately after adding a field, for no reason except to see whether
+  anything had moved. Every built-in showed `-` in the version column.
+- **What it was** `struct recon_app_registration` gained an `opens` field, and
+  it was added in the middle. The twelve built-in applications were registered
+  with **positional** initialisers, so every `RECONOS_VERSION` slid one place
+  into `opens` and `version` became NULL. Each built-in then claimed to open a
+  file type called `"0.4.0"` and had no version of its own.
+- **The version is not decoration.** It is the number the whole applet-update
+  decision is made on: an installed applet takes a name by being newer, and
+  gives it back when the system catches up. With every built-in at NULL, any
+  applet claiming any version would have displaced any built-in — and no
+  built-in could ever have taken its name back.
+- **It compiled without a warning**, because both fields are `const char *`.
+  The only visible sign anywhere in the system was a dash in one column of one
+  command.
+- **Fixed in** v0.4.0. The built-in table uses designated initialisers, so a
+  field added anywhere in the struct cannot silently shift another. The struct
+  is public and will gain another field; this is what stops it happening twice.
