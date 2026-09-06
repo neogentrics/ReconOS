@@ -205,6 +205,10 @@ enum context_action {
     CTX_TIME_24,
     CTX_TIME_12,
     CTX_DATE_AND_TIME,
+    /* How many desktops this account has. One choice with two faces, like the
+     * clock's, so both are shown and the one in force is marked. */
+    CTX_DESKTOPS_FOUR,
+    CTX_DESKTOPS_ONE,
 };
 
 /* The context menu. */
@@ -1681,7 +1685,8 @@ void recon_shell_describe(struct recon_shell *shell, char *out, size_t size) {
             wx, wy, ww, wh, cx, cy);
     }
 
-    EMIT("desktop: %d of %d\n", shell->current_desktop + 1, DESKTOP_COUNT);
+    EMIT("desktop: %d of %d\n", shell->current_desktop + 1,
+        recon_shell_desktop_count());
     EMIT("apps menu: %s\n", shell->menu_open ? "open" : "closed");
 
     if (shell->menu_open) {
@@ -2201,7 +2206,24 @@ static void draw_clock(struct recon_shell *shell, struct recon_panel *bar,
 
 static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
         int x, int baseline) {
-    for (int i = 0; i < DESKTOP_COUNT; i++) {
+    /*
+     * Nothing at all when this account has one desktop, rather than one button
+     * marked 1.
+     *
+     * The loop below is bounded by the count, so making the count answer the
+     * setting drew a single square in the corner instead of clearing it -- a
+     * button that says which of your one desktops you are on, which is the
+     * exact clutter the setting exists to remove. Found by looking at the two
+     * taskbars side by side; the numbers all said 1 of 1 and were all correct.
+     */
+    int shown = recon_shell_desktop_count();
+    if (shown < 2) {
+        return;
+    }
+    if (shown > DESKTOP_COUNT) {
+        shown = DESKTOP_COUNT;      /* the label below is sized for one digit */
+    }
+    for (int i = 0; i < shown; i++) {
         int bx = x + i * (DESKTOP_BUTTON + 2);
         bool current = (i == shell->current_desktop);
 
@@ -2220,7 +2242,11 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
         recon_draw_button_edge(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
             BUTTON_HEIGHT, current, THEME(BAR));
 
-        char label[4];
+        /* Room for any int, not for the four this actually writes. The loop
+         * bound became a function call and the compiler stopped being able to
+         * prove the number is one digit -- and arguing with it costs more than
+         * eight bytes of stack. */
+        char label[12];
         snprintf(label, sizeof(label), "%d", i + 1);
         int text_w = recon_text_width(shell->font, label);
         recon_draw_text(bar, shell->font, bx + (DESKTOP_BUTTON - text_w) / 2,
@@ -2313,8 +2339,16 @@ static void draw_taskbar(struct recon_shell *shell) {
     int x = TASKBAR_PADDING * 2 + APPS_BUTTON_WIDTH;
     int available = width - x - TASKBAR_PADDING;
 
-    /* Room at the right end for the pager, so windows never draw over it. */
-    int pager_w = DESKTOP_COUNT * (DESKTOP_BUTTON + 2) + TASKBAR_PADDING;
+    /*
+     * Room at the right end for the pager, so windows never draw over it --
+     * and none reserved when this account has one desktop, which is the point
+     * of turning them off. A row of buttons that stops being drawn but goes on
+     * holding its width would leave a gap nobody can explain.
+     */
+    int pager_w = 0;
+    if (recon_shell_desktop_count() > 1) {
+        pager_w = DESKTOP_COUNT * (DESKTOP_BUTTON + 2) + TASKBAR_PADDING;
+    }
     available -= pager_w;
 
     /* And the clock, which sits between the windows and the pager. */
@@ -4207,7 +4241,8 @@ void recon_shell_cycle_windows(struct recon_shell *shell) {
  * of them.
  */
 void recon_shell_set_desktop(struct recon_shell *shell, int desktop) {
-    if (shell == NULL || desktop < 0 || desktop >= DESKTOP_COUNT) {
+    if (shell == NULL || desktop < 0 ||
+            desktop >= recon_shell_desktop_count()) {
         return;
     }
     shell->current_desktop = desktop;
@@ -4243,8 +4278,17 @@ int recon_shell_desktop(struct recon_shell *shell) {
     return shell != NULL ? shell->current_desktop : 0;
 }
 
+/*
+ * Four, or one when this account has turned them off.
+ *
+ * Everything that can reach another desktop is already guarded by this count
+ * -- the pager buttons, Alt+1..4, and Alt+Shift+1..4 to take a window along --
+ * so making the count answer the setting turns all three off together, with no
+ * second rule anywhere to fall out of step with the first.
+ */
 int recon_shell_desktop_count(void) {
-    return DESKTOP_COUNT;
+    return recon_registry_get_bool(RECON_REG_USER, RECON_DESKTOPS_KEY, true)
+        ? DESKTOP_COUNT : 1;
 }
 
 /*
@@ -4255,7 +4299,8 @@ int recon_shell_desktop_count(void) {
  * are one action -- "take this with me".
  */
 void recon_shell_move_to_desktop(struct recon_shell *shell, int desktop) {
-    if (shell == NULL || desktop < 0 || desktop >= DESKTOP_COUNT) {
+    if (shell == NULL || desktop < 0 ||
+            desktop >= recon_shell_desktop_count()) {
         return;
     }
     /* Held on to, because set_desktop below clears the focus when the window
@@ -4521,6 +4566,65 @@ static void show_clock_menu(struct recon_shell *shell) {
         shell->screen_height - TASKBAR_HEIGHT);
 }
 
+/*
+ * Four desktops or one, for this account.
+ *
+ * Turning them off is not hiding four buttons. Everything that was on desktops
+ * two to four comes back to the first one, and it has to: a window nothing can
+ * reach is worse than a window somebody has to go and find, and after this
+ * there is nothing left to reach it with -- the buttons are gone and Alt+2 has
+ * stopped answering, both because recon_shell_desktop_count says one.
+ *
+ * That is the whole reason this is a function rather than a registry write at
+ * the call site. The setting and the windows have to move together or the
+ * setting strands them.
+ */
+static void set_desktop_count(struct recon_shell *shell, bool many) {
+    if (shell == NULL) {
+        return;
+    }
+    if ((recon_shell_desktop_count() > 1) == many) {
+        return;             /* already what was asked for */
+    }
+
+    recon_registry_set_bool(RECON_REG_USER, RECON_DESKTOPS_KEY, many);
+
+    if (!many) {
+        /*
+         * Everything comes to the desktop you are standing on, and you do not
+         * move. Once there is one desktop it is the one you were already on,
+         * so nothing jumps and nothing has to be gone looking for.
+         *
+         * Expressed as "every window goes to desktop zero" because collapsing
+         * four into one renumbers the survivor to the first, and the two are
+         * the same act seen from either end. Moved rather than closed and
+         * rather than left where they were: somebody turning a feature off is
+         * not asking to lose what they had open under it, and after this there
+         * is nothing left to reach them with -- the buttons are gone and Alt+2
+         * has stopped answering, both because the count says one.
+         */
+        for (int i = 0; i < shell->app_count; i++) {
+            if (recon_appwin_desktop(shell->apps[i]) != 0) {
+                recon_appwin_set_desktop(shell->apps[i], 0);
+            }
+        }
+        struct recon_toplevel *toplevel;
+        wl_list_for_each(toplevel, &shell->server->toplevels, link) {
+            if (recon_toplevel_desktop(toplevel) != 0) {
+                recon_toplevel_set_desktop(toplevel, 0);
+            }
+        }
+
+        /* And the first one is where you are, which set_desktop only agrees to
+         * now that the count says one. */
+        shell->current_desktop = 0;
+        recon_shell_set_desktop(shell, 0);
+    }
+
+    recon_shell_restyle(shell);
+    recon_shell_refresh(shell);
+}
+
 static void context_activate(struct recon_shell *shell, uint32_t id) {
     /*
      * An application's entries are its own; the shell drew the menu but has no
@@ -4535,6 +4639,12 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
     }
 
     enum context_action action = (enum context_action)id;
+
+    if (shell->context_kind == RECON_CONTEXT_TASKBAR &&
+            (action == CTX_DESKTOPS_FOUR || action == CTX_DESKTOPS_ONE)) {
+        set_desktop_count(shell, action == CTX_DESKTOPS_FOUR);
+        return;
+    }
 
     if (shell->context_kind == RECON_CONTEXT_CLOCK) {
         switch (action) {
@@ -4882,6 +4992,22 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
             shell->context_kind = RECON_CONTEXT_TASKBAR;
             context_add(shell, "Watchtower", CTX_TASK_MANAGER, true, false);
             context_add(shell, "Show Desktop", CTX_SHOW_DESKTOP, true, true);
+
+            /*
+             * How many desktops, on the bar the buttons are on. Somebody who
+             * wants the corner back is looking at the corner, and this is the
+             * menu that corner already has.
+             */
+            bool many = recon_shell_desktop_count() > 1;
+            context_add(shell, "Four desktops", CTX_DESKTOPS_FOUR, true, false);
+            if (many) {
+                context_mark_last(shell);
+            }
+            context_add(shell, "One desktop", CTX_DESKTOPS_ONE, true, true);
+            if (!many) {
+                context_mark_last(shell);
+            }
+
             context_add(shell, "Refresh", CTX_REFRESH, true, false);
             context_show(shell, lx, ly);
             return true;

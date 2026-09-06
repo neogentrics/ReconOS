@@ -223,6 +223,20 @@ void recon_shell_clear_app_focus(struct recon_shell *shell);
  * are. Both are per-account, because both are about the person rather than the
  * machine.
  */
+/*
+ * Whether this account has four desktops or one.
+ *
+ * Off is genuinely one desktop rather than four with the buttons hidden. The
+ * difference matters: hiding the pager while leaving Alt+2 working would let
+ * somebody arrive on a desktop with nothing on screen saying where they are
+ * and no button to come back with, which is a worse place to be than a taskbar
+ * with four squares on it.
+ *
+ * Per account, like the clock's hour format. One person wanting four desktops
+ * and another wanting none is two preferences, not an argument.
+ */
+#define RECON_DESKTOPS_KEY "taskbar/desktops"
+
 #define RECON_BLANK_AFTER_KEY "display/blank-after"
 #define RECON_BLANK_LOCK_KEY "display/lock-on-wake"
 
