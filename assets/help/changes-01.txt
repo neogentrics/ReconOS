@@ -417,6 +417,65 @@ what it is for: "it looked like part of the window behind" is the beginning of
 every story about somebody approving the wrong thing. Same rule as there being
 no switch to turn a safety check off.
 
+The clock tells the right time. It was an hour slow: Central selected, the
+host reading 4:25 am, ReconOS reading 3:25 am. The page said plainly that
+nothing here follows daylight saving — true, and it did not stop the clock being
+wrong for most of the year for most of the people in the list.
+
+The original reasoning is not reversed. A rule engine for the world's
+daylight-saving legislation is a database with politics in it, revised by
+parliaments with no interest in this clock, and getting it wrong twice a year is
+worse than not having it. So summer time is a switch rather than a rule, and
+it starts from what the host thinks: tm_isdst says whether summer time is in
+force and the offset says by how much, so the two come apart into a standard
+zone and a switch without any rules being carried. Written with standard time
+arithmetic rather than tm_gmtoff, which is a BSD extension C11 does not have —
+a system that intends to run on its own kernel should not lean on what glibc
+adds to a standard structure.
+
+The time zone list had a scrollbar and no way to move it. Twenty-six zones,
+about nine rows of room, seventeen unreachable. The note directly above the
+fault describes the fault: it explains that every list in Appearance takes the
+wheel now, because one of them *"said 'scroll for the rest' under a list that
+could not be scrolled — a page telling somebody to do something it would not let
+them do."* The same sentence was true one page over.
+
+And checking against a time server told people to edit the Registry, which
+is not a setting, it is an instruction to go around one. It is a button now.
+
+Windows arrive from the desktop they came from. The first thing in ReconOS
+that moves on its own. Turning four desktops into one moves windows nobody asked
+to have moved, and a thing that happens without being explained looks like a
+fault — so they slide in from the side they were on. Desktop 3 is to the right
+of desktop 1 on the pager, so its windows come in from the right; the direction
+is the explanation.
+
+The offset is a display offset and never touches the window's position. A
+window animating in from off the right edge is, as far as everything else is
+concerned, already exactly where it belongs — hit testing, snapping, the taskbar
+and the clamp that keeps a title bar reachable all go on working on a position
+that never moved. Ease-out cubic in integer arithmetic, a quarter of a second,
+and the last step sets zero explicitly so the end of an animation is the same
+pixel as no animation at all.
+
+Desktop labels read on the wallpaper they are on. Reported from a
+screenshot. Three faults stacked: the shadow was drawn at one offset, so seven
+of a glyph's eight edges sat on the picture; the shadow roles carry alpha and
+were written into a premultiplied buffer unscaled, which is see-through and too
+bright; and a ring drawn where it is not needed blends with the label's own
+antialiased edges and costs the glyph weight for nothing.
+
+So the ring goes all the way round, premultiplied, and is drawn only when it
+is far enough from the wallpaper to be separating anything. The wallpaper's
+lightness is measured into a 16×9 grid where the picture is decoded — a grid
+rather than one number, because a wallpaper is often pale at the top and dark at
+the bottom and an average of that is wrong in both halves.
+
+The measurement agreed with the code and disagreed with the eye, and the eye
+was right. The contrast ratio came back 17:1 for a label that was barely
+readable, because it was answering "is there a dark pixel near a light one" —
+true throughout. What had changed was the weight of the strokes.
+
 Four desktops, or one, per account. Somebody who does not use four desktops
 should not have four buttons taking up the corner of their taskbar. Right-click
 the bar and choose.
