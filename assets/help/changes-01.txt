@@ -10,6 +10,15 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+scripts/check.sh runs everything under the sanitizers. Address and
+undefined behaviour, on all eighteen suites -- reading past an array, a double
+free, use after free, a shift wider than a word, signed overflow, a misaligned
+load. Every one of those is a bug that passes on the machine it was written on
+and fails somewhere else.
+
+All eighteen were clean the first time, which is worth saying precisely because
+it makes the next thing the script says worth believing.
+
 The compiler was never asked what it thought. There were no warning flags
 in CMakeLists.txt at all -- not through v0.1, not through v0.4 -- so the whole
 project had been building at gcc's default level, which says almost nothing.

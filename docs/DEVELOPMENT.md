@@ -30,6 +30,33 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
+### The sanitizers
+
+```bash
+./scripts/check.sh
+```
+
+Builds every test suite with the address and undefined-behaviour sanitizers and
+runs them. Silence is the result; anything printed is a real finding.
+
+They catch what a passing test does not: reading one byte past an array,
+freeing something twice, using memory after it was freed, shifting by more than
+a word, signed overflow, a misaligned load. Every one of those is a bug that
+passes on the machine it was written on and fails somewhere else, which is the
+worst kind to own -- and every one of them is invisible to a test that only
+checks the answer.
+
+Kept out of the ordinary build because the sanitizers are two to three times
+slower and change the memory layout, which is exactly why they find things and
+exactly why they are not what you want while iterating.
+
+Worth running before cutting a release, and after anything that touches
+parsing: a decoder handed a malformed file is where these live.
+
+All eighteen suites were clean the first time it was run, which is worth
+knowing precisely because it means the next thing it says will be worth
+believing.
+
 ### Warnings
 
 The build runs at `-Wall -Wextra`, and is clean. Keep it that way: the value of
