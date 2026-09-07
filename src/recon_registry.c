@@ -136,20 +136,48 @@ static struct entry *find(struct hive *hive, const char *key) {
  * Only three characters need it, and leaving the rest alone keeps the file
  * readable, which matters for something a person may want to repair by hand.
  */
+/*
+ * A value, written so the file can be read back as the same value.
+ *
+ * A backslash, a newline and a carriage return have to be escaped because the
+ * format is lines. **A space at either end has to be escaped too**, and that
+ * one was missing: the writer puts `key = value` and the reader trims what
+ * comes after the `=`, which takes the format's own space -- and any the value
+ * began with. So "  indented" was stored and came back as "indented", every
+ * time, silently, at the next start.
+ *
+ * That is the worst shape of bug this file could have. The setting works all
+ * session and is different after a restart, and what somebody blames is the
+ * setting rather than the store underneath it.
+ *
+ * Escaped as a backslash and a space, which needs nothing added to unescape:
+ * its last case copies whatever follows a backslash. Only the first and last
+ * characters, so an ordinary value with spaces in the middle still reads as
+ * itself when somebody opens the file -- which the header of that file invites
+ * them to do.
+ */
 static void escape(const char *value, char *out, size_t size) {
     size_t used = 0;
-    for (const char *c = value; *c != '\0' && used + 2 < size; c++) {
-        if (*c == '\\') {
+    size_t length = strlen(value);
+
+    for (size_t i = 0; i < length && used + 2 < size; i++) {
+        char c = value[i];
+        bool at_an_end = (i == 0 || i + 1 == length);
+
+        if (c == '\\') {
             out[used++] = '\\';
             out[used++] = '\\';
-        } else if (*c == '\n') {
+        } else if (c == '\n') {
             out[used++] = '\\';
             out[used++] = 'n';
-        } else if (*c == '\r') {
+        } else if (c == '\r') {
             out[used++] = '\\';
             out[used++] = 'r';
+        } else if (at_an_end && (c == ' ' || c == '\t')) {
+            out[used++] = '\\';
+            out[used++] = c;
         } else {
-            out[used++] = *c;
+            out[used++] = c;
         }
     }
     out[used] = '\0';

@@ -10,6 +10,29 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+A setting with a leading space lost it at the next start (BG-135). The
+registry is key = value lines and the reader trims what comes after the =
+-- which takes the format's own space, and any the value began with. The
+escaping handled a backslash, a newline and a carriage return, and nothing
+else.
+
+That is the worst shape of bug this file could have: the setting works all
+session and is different after a restart, so what somebody blames is the
+setting rather than the store underneath it. Trailing spaces survived,
+which is why nothing had noticed -- the half somebody would think to try is
+the half that worked.
+
+A space or tab at either end is now written as a backslash and the character,
+which needs nothing added to the reader: its last case already copies whatever
+follows a backslash, so files written by this version read on an older one and
+the other way round. Only the first and last characters, so an ordinary value
+still reads as itself when somebody opens the file, which its own header
+invites them to do.
+
+Found by a round-trip test of eighteen awkward values -- an equals sign, a
+hash, quotes, tabs, high bytes, a trailing backslash -- stored and read back
+once from memory and once after a restart. Four of them changed.
+
 The grapher plots data from a file, which was the last of the four shapes
 it was meant to ask about. Two numbers a line, separated by whitespace or a
 comma, # and blank lines skipped; three files at once, drawn as marks with a

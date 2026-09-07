@@ -223,6 +223,88 @@ static void test_persistence(void) {
 }
 
 /* A file somebody has edited by hand, or that got damaged. */
+/*
+ * Every awkward value, written down and read back.
+ *
+ * The registry is a text file of `key = value` lines, so every character that
+ * means something to that format is a chance for a value to come back as a
+ * different value. A setting that changes quietly when the system restarts is
+ * the worst shape of bug this file could have: it works all session, and what
+ * somebody blames is the setting.
+ *
+ * `escape` handles a backslash, a newline and a carriage return. What this
+ * asks is whether that is the whole list.
+ */
+static void test_every_value_survives(void) {
+    printf("what survives being written down\n");
+
+    static const struct { const char *name; const char *value; } AWKWARD[] = {
+        { "empty",              "" },
+        { "a space",            " " },
+        { "leading space",      "  indented" },
+        { "trailing space",     "trailing  " },
+        { "both",               "  both  " },
+        { "a tab",              "one\ttwo" },
+        { "a backslash",        "C:\\\\path" },
+        { "a trailing backslash", "ends with\\\\" },
+        { "a newline",          "one\ntwo" },
+        { "a carriage return",  "one\rtwo" },
+        { "an equals sign",     "a = b" },
+        { "a hash",             "#not a comment" },
+        { "a hash after text",  "value # not a comment" },
+        { "an escape sequence", "literally \\\\n" },
+        { "quotes",             "\"quoted\"" },
+        { "high bytes",         "caf\xc3\xa9 na\xc3\xafve" },
+        { "only separators",    " = = = " },
+        { "a long one",
+          "0123456789012345678901234567890123456789"
+          "0123456789012345678901234567890123456789" },
+    };
+
+    int lost = 0;
+    for (size_t i = 0; i < sizeof(AWKWARD) / sizeof(AWKWARD[0]); i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "trip/%zu", i);
+
+        if (!recon_registry_set(RECON_REG_USER, key, AWKWARD[i].value)) {
+            printf("        %s would not be stored\n", AWKWARD[i].name);
+            lost++;
+            continue;
+        }
+
+        /* Straight back, before anything has been written to disk. */
+        const char *now = recon_registry_get(RECON_REG_USER, key, "\0\0");
+        if (strcmp(now, AWKWARD[i].value) != 0) {
+            printf("        %s came back as '%s' in memory\n",
+                AWKWARD[i].name, now);
+            lost++;
+        }
+    }
+    check(lost == 0, "every value is what was put in, before a restart");
+
+    /*
+     * And after one, which is the half that matters. The value in memory is
+     * whatever was handed over; the value on disk has been through the format.
+     */
+    recon_registry_finish();
+    recon_registry_init();
+
+    int changed = 0;
+    for (size_t i = 0; i < sizeof(AWKWARD) / sizeof(AWKWARD[0]); i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "trip/%zu", i);
+        const char *back = recon_registry_get(RECON_REG_USER, key, "\0\0");
+        if (strcmp(back, AWKWARD[i].value) != 0) {
+            printf("        %-22s went in as '%s' and came back as '%s'\n",
+                AWKWARD[i].name, AWKWARD[i].value, back);
+            changed++;
+        }
+    }
+    check(changed == 0,
+        "AND EVERY VALUE IS THE SAME AFTER A RESTART -- a setting that "
+        "changes quietly is one the person blames rather than the file");
+}
+
 static void test_damaged_file(void) {
     printf("a file that is not quite right\n");
 
@@ -277,6 +359,7 @@ int main(void) {
     test_listing();
     test_removal();
     test_persistence();
+    test_every_value_survives();
     test_damaged_file();
 
     recon_registry_finish();

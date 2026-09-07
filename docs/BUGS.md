@@ -2574,3 +2574,26 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built the way a release is. Putting the small buffer back makes six suites
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
+
+### BG-135 — A setting with a leading space lost it at the next start
+
+- **Found in** v0.4.0. **Found by** writing a round-trip test for the registry
+  after `scripts/coverage.sh` put it at 57%: eighteen awkward values, stored
+  and read back, once from memory and once after a restart.
+- **What it was** The file is `key = value` lines and the reader trims what
+  comes after the `=`. That trim takes the format's own space -- and any the
+  value began with. `escape` handled a backslash, a newline and a carriage
+  return, and nothing else. So `"  indented"` was stored and came back as
+  `"indented"`, every time.
+- **The worst shape a bug in this file could have.** The setting works all
+  session and is different after a restart, so what somebody blames is the
+  setting rather than the store underneath it. Four of the eighteen values
+  changed: a lone space, a leading space, both-ends, and a value of separators.
+- **Trailing spaces survived**, which is why nothing had ever noticed: the
+  half of the problem somebody would think to try is the half that worked.
+- **Fixed in** v0.4.0. A space or tab at either end is written as a backslash
+  and the character. That needs nothing added to `unescape` -- its last case
+  already copies whatever follows a backslash -- so a file written by this
+  version reads correctly on an older one and the other way round. Only the
+  first and last characters are escaped, so an ordinary value still reads as
+  itself when somebody opens the file, which its own header invites.
