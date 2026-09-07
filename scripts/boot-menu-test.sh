@@ -123,6 +123,49 @@ else
 	fail=$((fail + 1))
 fi
 
+# --- and the countdown is really a countdown ---------------------------------
+#
+# The unattended test above proves the machine *proceeds*. It does not prove it
+# waited: a bounded wait that is accidentally zero, and one that is accidentally
+# a minute, look identical in a test that only checks the machine booted. So the
+# wait is measured.
+#
+# Timing it as `qemu | grep -q marker` does not work and looks like it does --
+# grep exits on the first match but the shell waits for the whole pipeline, and
+# QEMU runs on because the kernel idles for ever. Both cases then measure the
+# timeout, to the millisecond, which is the only reason the mistake was caught.
+
+time_to_kernel() {
+	o=$(mktemp)
+	qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic "$@" > "$o" 2>&1 &
+	pid=$!
+	start=$(date +%s%N)
+	ms=0
+	while [ "$ms" -lt 40000 ]; do
+		grep -q 'ReconOS kernel' "$o" 2>/dev/null && break
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.1
+		ms=$(( ( $(date +%s%N) - start ) / 1000000 ))
+	done
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+	rm -f "$o"
+	echo "$ms"
+}
+
+say "waits about five seconds, then starts anyway"
+with=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0 	-drive "file=$W/other.img,format=raw,if=none,id=o0" -device nvme,serial=o,drive=o0)
+alone=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0)
+diff=$(( with - alone ))
+
+if [ "$diff" -ge 3500 ] && [ "$diff" -le 8000 ]; then
+	echo "${diff} ms longer with a menu"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- ${diff} ms (${with} with a menu, ${alone} without)"
+	fail=$((fail + 1))
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
 	echo "  $pass of $pass: found the other systems, and touched none of them"

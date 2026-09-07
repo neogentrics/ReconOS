@@ -209,6 +209,30 @@ typedef struct {
  * file on *their* filesystem, and the only way to build one is to take the
  * device's own path and append a file node to it.
  */
+/* --- Reading a key -----------------------------------------------------
+ *
+ * `ReadKeyStroke` returns EFI_NOT_READY rather than waiting when nothing has
+ * been pressed, which is the behaviour a boot menu wants: a loader that blocks
+ * waiting for somebody is a machine that never comes back from a power cut
+ * because nobody was there to press anything.
+ */
+typedef struct {
+	UINT16 ScanCode;
+	CHAR16 UnicodeChar;
+} EFI_INPUT_KEY;
+
+typedef struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
+
+struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
+	EFI_STATUS (EFIAPI *Reset)(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *self,
+				   BOOLEAN extended);
+	EFI_STATUS (EFIAPI *ReadKeyStroke)(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *self,
+					   EFI_INPUT_KEY *key);
+	void *WaitForKey;
+};
+
+#define EFI_NOT_READY 0x8000000000000006ULL
+
 #define EFI_DEVICE_PATH_PROTOCOL_GUID \
 	{ 0x09576e91, 0x6d3f, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
 
@@ -380,7 +404,7 @@ typedef struct {
 	CHAR16 *FirmwareVendor;
 	UINT32 FirmwareRevision;
 	EFI_HANDLE ConsoleInHandle;
-	void *ConIn;
+	EFI_SIMPLE_TEXT_INPUT_PROTOCOL *ConIn;
 	EFI_HANDLE ConsoleOutHandle;
 	EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *ConOut;
 	EFI_HANDLE StandardErrorHandle;

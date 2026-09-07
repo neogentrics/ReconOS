@@ -218,6 +218,84 @@ void menu_print(void)
 	}
 }
 
+/* Offers the choice, and takes the default if nobody is there.
+ *
+ * **The default matters more than the menu does.** A machine that waits for a
+ * keypress is a machine that does not come back from a power cut, because
+ * nobody was there to press anything -- and the most likely reader of this menu
+ * is a machine restarting at three in the morning with nobody in the room. So
+ * the wait is bounded, short, and ends in ReconOS starting.
+ *
+ * Any key stops the countdown; a digit chooses. Stopping on any key rather than
+ * only on a digit is deliberate: somebody who reaches for the keyboard has
+ * decided to intervene, and losing the menu because they pressed the wrong
+ * thing first would be the sort of thing that makes people distrust it.
+ *
+ * Returns the index chosen, or -1 for "carry on and start ReconOS".
+ */
+int menu_choose(unsigned seconds)
+{
+	EFI_INPUT_KEY key;
+	unsigned left = seconds * 10;		/* tenths */
+	BOOLEAN paused = FALSE;
+
+	if (!entry_count)
+		return -1;
+
+	/* A machine with no console at all -- a server on a serial line the
+	 * firmware did not wire up, an appliance with no keyboard. There is
+	 * nobody to offer a choice to, and dereferencing this to find that
+	 * out would end the boot rather than the menu.
+	 *
+	 * The default is the right answer here rather than a fallback: a
+	 * machine nobody can talk to should start the system it has. */
+	if (!ST->ConIn)
+		return -1;
+
+	print("\n  ReconOS starts on its own; press a number to choose "
+	      "something else\n");
+
+	for (;;) {
+		EFI_STATUS s = ST->ConIn->ReadKeyStroke(ST->ConIn, &key);
+
+		if (!EFI_ERROR(s)) {
+			if (key.UnicodeChar >= '1' &&
+			    key.UnicodeChar <= '9') {
+				unsigned pick = (unsigned)(key.UnicodeChar - '1');
+
+				if (pick < entry_count)
+					return (int)pick;
+
+				/* A number nobody offered. Ignored rather than
+				 * treated as the default, because acting on a
+				 * key somebody pressed by mistake is worse
+				 * than doing nothing. */
+				continue;
+			}
+
+			if (key.UnicodeChar == '\r' || key.UnicodeChar == '\n')
+				return -1;	/* Enter: get on with it */
+
+			/* Anything else: they are here, so stop the clock and
+			 * wait for them to decide. */
+			if (!paused) {
+				paused = TRUE;
+				print("  waiting -- press a number, or Enter "
+				      "for ReconOS\n");
+			}
+			continue;
+		}
+
+		if (paused)
+			continue;
+
+		if (!left--)
+			return -1;
+
+		BS->Stall(100000);		/* a tenth of a second */
+	}
+}
+
 /* Starts one of them, and does not come back if it works.
  *
  * The other system is loaded by the firmware exactly as we were, with its own

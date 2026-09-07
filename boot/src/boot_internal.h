@@ -13,6 +13,7 @@
 /* Boot services, captured at entry. A pointer rather than a copy because the
  * firmware's table is the firmware's. */
 extern EFI_BOOT_SERVICES *BS;
+extern EFI_SYSTEM_TABLE *ST;
 
 void print(const char *s);
 void print_hex(UINT64 v);
@@ -38,6 +39,11 @@ EFI_DEVICE_PATH_PROTOCOL *file_device_path(const EFI_DEVICE_PATH_PROTOCOL *dev,
 unsigned menu_discover(EFI_HANDLE exclude);
 
 void menu_print(void);
+
+/* Offers the choice for `seconds`, and returns the index chosen or -1 for
+ * "start ReconOS". Bounded, because a loader that waits for a keypress is a
+ * machine that does not come back from a power cut. */
+int menu_choose(unsigned seconds);
 
 /* Starts one, and does not return if it works. */
 BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);

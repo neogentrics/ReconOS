@@ -717,8 +717,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 						  (void **)&self)))
 			from = self->DeviceHandle;
 
-		if (menu_discover(from))
+		if (menu_discover(from)) {
+			int pick;
+
 			menu_print();
+			pick = menu_choose(5);
+
+			/* If it starts, this does not return. If it declines,
+			 * we carry on and start ReconOS -- a machine that ends
+			 * up somewhere is better than one that ends up
+			 * nowhere. */
+			if (pick >= 0)
+				menu_boot((unsigned)pick, image);
+		}
 	}
 
 	kernel_image = read_kernel(&kernel_size);
