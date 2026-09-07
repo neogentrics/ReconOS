@@ -23,6 +23,41 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A skin can be renamed and deleted from the page it is edited on**, which
+was the last thing in that editor that meant opening the file by hand. Two
+buttons on a second row labelled *The skin itself*, because they act on the
+skin rather than on the chosen line -- five buttons together would have made
+Delete look like something that happens to `title.active`.
+
+Renaming moves three things at once, and that is the whole of why it is one
+function: the file's name, the name written inside it, and what the account
+remembers. Any two of them leaves a skin that half exists -- a file whose name
+and contents disagree loads under neither, and a rename the account has not
+been told about works until the next sign-in and then looks undone.
+
+It refuses a built-in, an empty name, a name with a slash (it becomes a file
+name, and `../Config/system` would write over the machine's settings), a name
+another skin has, and renaming a skin to what it is already called -- that last
+because the work removes the old file after writing the new one, which with
+both names the same would delete what it had just written. **Changing only the
+capitalisation is allowed**: a skin is found without regard to case, so
+`testing` and `Testing` are one skin but two files, and the old file still goes.
+
+Deleting asks first and says both things -- that the file goes and cannot be
+brought back, and, when it is the skin in use, that the default comes back with
+it. Then the editor leaves editing, rather than sitting there with every button
+writing to a file that is not there.
+
+Twenty-four checks, and the two that matter -- that the old file is gone, and
+that the account followed the rename -- confirmed by removing each in turn and
+watching the right checks fail.
+
+**And a second hand-assigned id collision.** The rename field took
+`HIT_FIELD_BASE + 8`, which the firewall's custom-rule name already had.
+Different pages, so no click could reach both, but the handler for one was
+about to run for the other. There is a map of which offsets are taken beside
+the definition now, so the next one is chosen by reading rather than guessing.
+
 **A ramp can be set, not only removed.** The list already showed one as
 `E8E8EC to D4DAE2`; the field is now filled with exactly that, and exactly that
 can be typed back -- one text in both directions.

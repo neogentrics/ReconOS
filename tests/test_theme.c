@@ -181,6 +181,101 @@ static void test_remembered(void) {
  * what lets one colour mean flat without a second control to say so -- and it
  * is only true if the two functions agree, which is what most of this checks.
  */
+/* Whether the system lists a skin by that name, the way it looks a skin up:
+ * without regard to case. */
+static bool listed(const char *name) {
+    for (int i = 0; i < recon_theme_count(); i++) {
+        struct recon_theme_info info;
+        if (recon_theme_at(i, &info) && strcasecmp(info.name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * Renaming a skin.
+ *
+ * Three things move together -- the file's name, the name written inside it,
+ * and what the account remembers -- and the failure worth catching is any two
+ * of them moving. A skin whose file says one name and whose filename says
+ * another loads under neither; one the account still remembers by the old name
+ * comes up as the default at the next sign-in, which looks like the rename
+ * having quietly undone itself.
+ */
+static void test_renaming(void) {
+    printf("renaming a skin\n");
+
+    /* Something of our own to rename: the built-in ones are refused, and
+     * rightly. */
+    check(recon_theme_copy("Classic", "Before", "A skin to rename"),
+        "a skin to rename");
+    check(recon_theme_set("Before"), "and it is the one in use");
+
+    check(!recon_theme_rename("Classic", "Something Else"),
+        "a built-in skin is refused, because the original comes back anyway");
+    check(!recon_theme_rename("Before", ""),
+        "an empty name is refused");
+    check(!recon_theme_rename("Before", "../Config/system"),
+        "AND A NAME WITH A SLASH IS REFUSED -- it becomes a file name, and "
+        "that one would write over the machine's settings");
+    check(!recon_theme_rename("Before", "Aqua"),
+        "a name another skin already has is refused");
+    check(!recon_theme_rename("Before", "Before"),
+        "and renaming a skin to what it is already called is refused rather "
+        "than done, because the work would delete what it had just written");
+    check(!recon_theme_rename("Nothing At All", "After"),
+        "a skin that is not there cannot be renamed");
+
+    /* Everything above should have left it exactly as it was. */
+    check(listed("Before"),
+        "none of those refusals renamed anything");
+
+    check(recon_theme_rename("Before", "After"), "and now it renames");
+
+    check(listed("After"), "the new name is there");
+    check(!listed("Before"), "and the old one is not");
+
+    check(!recon_fs_exists("/", RECON_DIR_THEMES "/Before" RECON_THEME_EXT),
+        "THE OLD FILE IS GONE -- a rename that leaves both is a copy");
+    check(recon_fs_exists("/", RECON_DIR_THEMES "/After" RECON_THEME_EXT),
+        "and the new file is there");
+
+    /* The name inside, not only the name of the file. */
+    size_t size = 0;
+    char *text = recon_fs_read("/",
+        RECON_DIR_THEMES "/After" RECON_THEME_EXT, &size);
+    check(text != NULL && strstr(text, "name = After") != NULL,
+        "and the name inside the file says so too");
+    free(text);
+
+    check(strcmp(recon_theme_current(), "After") == 0,
+        "the skin in use followed its own rename");
+    check(strcmp(recon_registry_get(RECON_REG_USER, RECON_THEME_KEY, ""),
+        "After") == 0,
+        "AND SO DID WHAT THE ACCOUNT REMEMBERS -- without this the rename "
+        "works until the next sign-in and then looks undone");
+
+    /*
+     * Changing only the capitalisation. A skin is found without regard to
+     * case, so this is the same skin -- but a different file, and the old one
+     * still has to go.
+     */
+    check(recon_theme_rename("After", "AFTER"),
+        "a skin may change only its capitalisation");
+    check(recon_fs_exists("/", RECON_DIR_THEMES "/AFTER" RECON_THEME_EXT),
+        "the new spelling is on disk");
+    check(!recon_fs_exists("/", RECON_DIR_THEMES "/After" RECON_THEME_EXT),
+        "and the old spelling is not, though the two are the same skin");
+    check(strcmp(recon_theme_current(), "AFTER") == 0,
+        "and it is still the one in use");
+
+    /* Put the shared state back for whatever runs next. */
+    check(recon_theme_set("Recon"), "back to the default");
+    check(recon_theme_uninstall("AFTER"), "and the skin is removed again");
+    check(!listed("AFTER"), "so it is gone");
+}
+
 static void test_a_colour_and_its_ramp(void) {
     printf("a colour and its ramp, written down and read back\n");
 
@@ -669,6 +764,7 @@ int main(void) {
     test_metrics();
     test_saying_a_measurement();
     test_a_colour_and_its_ramp();
+    test_renaming();
     test_glass();
     test_tint();
     test_damaged_file();

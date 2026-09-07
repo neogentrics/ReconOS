@@ -1787,23 +1787,130 @@ static size_t theme_to_text(const char *name, const char *description,
     return used;
 }
 
-bool recon_theme_copy(const char *source, const char *name,
-        const char *description) {
+/* Defined below, beside the rest of the file writing. */
+static bool write_theme_file(struct theme *theme);
+
+/*
+ * A name that can be a file name.
+ *
+ * Shared by copying and renaming, because the rule is about what a skin may
+ * be called rather than about how it came to be called that. A skin naming
+ * itself "../Config/system" would write itself over the machine's settings.
+ */
+static bool name_is_usable(const char *name) {
     if (name == NULL || *name == '\0') {
         set_error("a skin needs a name");
         return false;
     }
-
-    /*
-     * The name becomes a file name, so it cannot carry a separator. A skin
-     * calling itself "../Config/system" would write itself over the machine's
-     * settings.
-     */
     for (const char *c = name; *c != '\0'; c++) {
         if (*c == '/' || *c == '\\') {
             set_error("a skin's name cannot contain a slash");
             return false;
         }
+    }
+    return true;
+}
+
+bool recon_theme_rename(const char *name, const char *to) {
+    if (!name_is_usable(to)) {
+        return false;
+    }
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can rename a skin");
+        return false;
+    }
+
+    struct theme *theme = find_theme(name);
+    if (theme == NULL) {
+        set_error("there is no skin called '%s'", name != NULL ? name : "");
+        return false;
+    }
+    if (theme->info.built_in) {
+        set_error("'%s' ships with ReconOS and cannot be renamed",
+            theme->info.name);
+        return false;
+    }
+
+    /*
+     * Nothing to do, and saying so rather than doing it: the work below
+     * removes the old file after writing the new one, and with both names the
+     * same that would delete what it had just written.
+     */
+    if (strcmp(theme->info.name, to) == 0) {
+        set_error("'%s' is already its name", to);
+        return false;
+    }
+
+    /*
+     * Another skin already called that -- but not this one under a different
+     * capitalisation, which is the whole point of allowing that case.
+     */
+    for (int i = 0; i < g_count; i++) {
+        if (g_themes[i].used && &g_themes[i] != theme &&
+                strcasecmp(g_themes[i].info.name, to) == 0) {
+            set_error("there is already a skin called '%s'", to);
+            return false;
+        }
+    }
+
+    char was[48];
+    snprintf(was, sizeof(was), "%s", theme->info.name);
+
+    char old_path[RECON_PATH_MAX];
+    snprintf(old_path, sizeof(old_path), "%s/%s%s", RECON_DIR_THEMES, was,
+        RECON_THEME_EXT);
+
+    char new_path[RECON_PATH_MAX];
+    snprintf(new_path, sizeof(new_path), "%s/%s%s", RECON_DIR_THEMES, to,
+        RECON_THEME_EXT);
+
+    /*
+     * A file already there that is not this skin's own. Checked before
+     * anything is written, because the write below would otherwise land on
+     * top of somebody else's file and the removal after it would take this
+     * skin's old one -- losing both.
+     */
+    if (strcmp(old_path, new_path) != 0 &&
+            recon_fs_exists("/", new_path)) {
+        set_error("there is already a file at '%s'", new_path);
+        return false;
+    }
+
+    snprintf(theme->info.name, sizeof(theme->info.name), "%s", to);
+
+    if (!write_theme_file(theme)) {
+        snprintf(theme->info.name, sizeof(theme->info.name), "%s", was);
+        return false;
+    }
+
+    /*
+     * The old file, now that the new one exists. This order means a failure
+     * anywhere leaves the skin readable under one name or the other, never
+     * under neither -- and a stray file is something somebody can see and
+     * delete, which a missing one is not.
+     */
+    if (strcmp(old_path, new_path) != 0) {
+        recon_fs_remove("/", old_path);
+    }
+
+    /*
+     * What the account remembers, if this is the skin it is using. Without
+     * this the rename works until the next sign-in, when the remembered name
+     * matches nothing and the default comes up instead -- which looks like
+     * the rename having quietly undone itself.
+     */
+    if (g_current >= 0 && &g_themes[g_current] == theme) {
+        recon_registry_set(RECON_REG_USER, RECON_THEME_KEY, theme->info.name);
+    }
+
+    g_generation++;
+    return true;
+}
+
+bool recon_theme_copy(const char *source, const char *name,
+        const char *description) {
+    if (!name_is_usable(name)) {
+        return false;
     }
 
     /* Which skin is being copied: the one named, or the one in use. */

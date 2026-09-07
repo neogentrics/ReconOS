@@ -88,6 +88,21 @@
 #define HIT_ROW_BASE (RECON_APPWIN_HIT_USER + 100)
 #define HIT_ACTION_BASE (RECON_APPWIN_HIT_USER + 200)
 #define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 300)
+
+/*
+ * Which offsets from HIT_FIELD_BASE are taken.
+ *
+ * Hand-assigned numbers scattered across seven thousand lines, and the first
+ * new field wanted +8 -- which the firewall's custom-rule name already had.
+ * Different pages, so no click could reach both, but the handler for one was
+ * about to run for the other. Listed here so the next one is chosen by
+ * reading rather than by guessing.
+ *
+ *   0, 1  the account page's fields          6  a skin's colour or measurement
+ *   2, 3  the registry's key and value       7  the description of a new skin
+ *   5     the name of a new skin             8, 9  a firewall rule's name, port
+ */
+#define HIT_FIELD_RENAME (HIT_FIELD_BASE + 10)
 #define HIT_PENDING_BASE (RECON_APPWIN_HIT_USER + 400)
 #define HIT_AVATAR_BASE (RECON_APPWIN_HIT_USER + 500)
 #define HIT_WALLPAPER_BASE (RECON_APPWIN_HIT_USER + 600)
@@ -215,6 +230,9 @@ enum action {
      * the wrong one gets called from somewhere else later.
      */
     ACTION_SKIN_DEFAULT,
+    ACTION_BEGIN_RENAME_SKIN,
+    ACTION_CONFIRM_RENAME_SKIN,
+    ACTION_DELETE_SKIN,
     /* Passwords */
     ACTION_FORGET_SECRET,
 
@@ -628,6 +646,7 @@ enum question {
     QUESTION_EMPTY_BIN,
     QUESTION_CUSTOMIZE_SKIN,
     QUESTION_NEW_SKIN,
+    QUESTION_DELETE_SKIN,
     QUESTION_CLEAN_UP,
     /* Installing something already installed, when what is offered is newer.
      * The path being installed is in cp->name, which is why this one does not
@@ -804,6 +823,16 @@ struct control_panel {
     /* True while typing a colour into the field, which is the only time the
      * field exists -- a row is chosen first, then changed. */
     bool skin_value_editing;
+
+    /*
+     * Renaming the skin being edited, which is a different thing from naming
+     * a copy: `naming_skin` is the Themes page asking what to call something
+     * that does not exist yet, and this is the editor asking what to call
+     * something that does. Two flags rather than one, because the two are
+     * answered by different buttons on different pages and sharing a flag
+     * would make each of them able to end the other.
+     */
+    bool renaming_skin;
     struct recon_edit skin_value;
 
     bool registry_unlocked;
@@ -1608,6 +1637,24 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
 
     y += cp->list_h + PADDING;
 
+    if (cp->renaming_skin) {
+        char asking[120];
+        snprintf(asking, sizeof(asking), "A new name for %s:", cp->skin_name);
+        recon_draw_text(p, cp->font, x, y + ascent, w, asking, COLOR_DIM);
+        y += line;
+
+        recon_edit_draw(p, cp->font, x, y, 240, FIELD_HEIGHT,
+            &cp->skin_new_name);
+        recon_hit_add(p, x, y, 240, FIELD_HEIGHT, HIT_FIELD_RENAME);
+        y += FIELD_HEIGHT + 8;
+
+        int nbx = draw_button(cp, p, x, y, "Rename",
+            HIT_ACTION_BASE + ACTION_CONFIRM_RENAME_SKIN, true);
+        draw_button(cp, p, nbx, y, "Cancel",
+            HIT_ACTION_BASE + ACTION_SKIN_CANCEL, true);
+        return;
+    }
+
     if (cp->skin_value_editing) {
         char label[160];
         if (skin_row_is_metric(cp->skin_row)) {
@@ -1705,6 +1752,22 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
 
     draw_button(cp, p, bx, y, "Done",
         HIT_ACTION_BASE + ACTION_SKIN_DONE, true);
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    /*
+     * A second row, because these two are about the skin and the row above is
+     * about the line chosen in the list. Putting all five together would make
+     * Delete look like something that happens to `title.active`.
+     */
+    recon_draw_text(p, cp->font, x, y + ascent, w,
+        "The skin itself:", COLOR_DIM);
+    y += line + 4;
+
+    int rbx = draw_button(cp, p, x, y, "Rename",
+        HIT_ACTION_BASE + ACTION_BEGIN_RENAME_SKIN, true);
+    draw_button(cp, p, rbx, y, "Delete",
+        HIT_ACTION_BASE + ACTION_DELETE_SKIN, true);
 }
 
 /*
@@ -5427,6 +5490,35 @@ static void answered(void *user, int choice) {
         return;
     }
 
+    if (asked == QUESTION_DELETE_SKIN) {
+        char was[64];
+        snprintf(was, sizeof(was), "%s", cp->skin_name);
+
+        if (!recon_theme_uninstall(was)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            recon_appwin_refresh(cp->win);
+            return;
+        }
+
+        /*
+         * Out of the editor, because what it was editing is gone. Staying in
+         * it with every button writing to a file that no longer exists is a
+         * page that looks like it works and refuses everything.
+         */
+        cp->skin_editing = false;
+        cp->skin_value_editing = false;
+        cp->renaming_skin = false;
+        recon_edit_end(&cp->skin_value);
+        cp->skin_row = 0;
+        cp->skin_scroll = 0;
+
+        recon_access_apply(cp->font);
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "'%s' is gone.", was);
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
     if (asked == QUESTION_NEW_SKIN) {
         /*
          * Named for what they look like rather than for the skin behind each
@@ -6983,6 +7075,83 @@ static void do_action(struct control_panel *cp, enum action action) {
         break;
     }
 
+    case ACTION_BEGIN_RENAME_SKIN:
+        cp->renaming_skin = true;
+        cp->skin_value_editing = false;
+
+        /* The name it has, selected, so the common case -- fixing a typo in
+         * it -- is one keystroke rather than retyping the whole thing. */
+        recon_edit_begin(&cp->skin_new_name, cp->skin_name, false);
+        set_status(cp, false, "A new name for '%s'.", cp->skin_name);
+        break;
+
+    case ACTION_CONFIRM_RENAME_SKIN: {
+        /*
+         * Refused rather than shortened, the same as naming a copy: a skin
+         * saved under half the name somebody typed is a file they will not
+         * find again, and the name is also the file name.
+         */
+        char wanted[sizeof(cp->skin_name)];
+        size_t length = strlen(cp->skin_new_name.text);
+        if (length >= sizeof(wanted)) {
+            set_status(cp, true,
+                "That name is too long -- %zu characters at most.",
+                sizeof(wanted) - 1);
+            break;
+        }
+        memcpy(wanted, cp->skin_new_name.text, length + 1);
+
+        if (!recon_theme_rename(cp->skin_name, wanted)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+
+        /*
+         * The editor is holding the old name in three places, and all three
+         * have to move: what it is editing, what its heading says, and what
+         * every button below writes to.
+         */
+        char was[sizeof(cp->skin_name)];
+        snprintf(was, sizeof(was), "%s", cp->skin_name);
+        snprintf(cp->skin_name, sizeof(cp->skin_name), "%s", wanted);
+
+        cp->renaming_skin = false;
+        recon_edit_end(&cp->skin_new_name);
+
+        /* The skin list behind this window shows the name too. */
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "'%s' is called '%s' now.", was, cp->skin_name);
+        break;
+    }
+
+    case ACTION_DELETE_SKIN: {
+        /*
+         * Asked about, because it is the one button in this editor that
+         * destroys anything, and the thing it destroys is a file somebody may
+         * have spent an evening on.
+         *
+         * What happens to the desktop is said as well as what happens to the
+         * file. recon_theme_uninstall puts the default on first when the skin
+         * being removed is the one in use, and somebody who is not told that
+         * watches every colour on their screen change and has to work out
+         * whether something went wrong.
+         */
+        bool in_use = strcasecmp(recon_theme_current(), cp->skin_name) == 0;
+
+        char message[256];
+        snprintf(message, sizeof(message),
+            "Delete '%s'? The file goes with it and this cannot be undone.%s",
+            cp->skin_name,
+            in_use ? "\nIt is the skin in use, so the default comes back."
+                   : "");
+
+        static const char *const buttons[] = { "Delete", "Cancel" };
+        cp->question = QUESTION_DELETE_SKIN;
+        recon_appwin_ask(cp->win, "Delete Skin", message, buttons, 2,
+            answered);
+        break;
+    }
+
     case ACTION_SKIN_DEFAULT: {
         if (!skin_row_is_metric(cp->skin_row)) {
             break;
@@ -7020,6 +7189,10 @@ static void do_action(struct control_panel *cp, enum action action) {
         if (cp->skin_value_editing) {
             cp->skin_value_editing = false;
             recon_edit_end(&cp->skin_value);
+        }
+        if (cp->renaming_skin) {
+            cp->renaming_skin = false;
+            recon_edit_end(&cp->skin_new_name);
         }
         if (cp->naming_skin) {
             cp->naming_skin = false;
@@ -7336,6 +7509,7 @@ static void do_action(struct control_panel *cp, enum action action) {
     case ACTION_SKIN_DONE:
         cp->skin_editing = false;
         cp->skin_value_editing = false;
+        cp->renaming_skin = false;
         recon_edit_end(&cp->skin_value);
 
         /*
@@ -7639,6 +7813,12 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             return true;
         }
 
+        /* Renaming one takes the only field on that screen, so there is
+         * nothing to move focus between. */
+        if (hit_id == HIT_FIELD_RENAME) {
+            return true;
+        }
+
         /* Naming a skin: the name, then the line describing it. */
         if (hit_id == HIT_FIELD_BASE + 5) {
             cp->skin_desc_focused = false;
@@ -7793,6 +7973,21 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     /* Typing a colour into the skin editor. */
+    if (cp->renaming_skin) {
+        switch (recon_edit_key(&cp->skin_new_name, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            do_action(cp, ACTION_CONFIRM_RENAME_SKIN);
+            return true;
+        case RECON_EDIT_CANCEL:
+            do_action(cp, ACTION_SKIN_CANCEL);
+            return true;
+        case RECON_EDIT_CHANGED:
+        case RECON_EDIT_IGNORED:
+            return true;
+        }
+        return true;
+    }
+
     if (cp->skin_value_editing) {
         switch (recon_edit_key(&cp->skin_value, sym, modifiers)) {
         case RECON_EDIT_COMMIT:

@@ -635,6 +635,28 @@ bool recon_theme_install(const char *path);
  */
 bool recon_theme_uninstall(const char *name);
 
+/*
+ * Give an installed skin a different name.
+ *
+ * Three things have to move together and this is the only place that knows
+ * they are one operation: the file is named after the skin, the name is also
+ * written inside it, and the account remembers which skin it is using by name.
+ * Doing any two of those leaves a skin that half exists.
+ *
+ * Built-in skins are refused, for the reason removing one is: they are
+ * compiled in, so the renamed copy would sit beside the original that came
+ * back on the next start.
+ *
+ * **Changing only the capitalisation is allowed**, and is the case worth
+ * naming: a skin is found by name without regard to case, so "testing" and
+ * "Testing" are the same skin -- but they are different *files*, and the old
+ * one still has to go.
+ *
+ * False with recon_theme_last_error() explaining why. On failure the skin
+ * keeps the name it had and no file is left behind under the other one.
+ */
+bool recon_theme_rename(const char *name, const char *to);
+
 /* The name of a role, as it appears in a theme file. NULL if out of range. */
 const char *recon_theme_role_name(enum recon_theme_role role);
 

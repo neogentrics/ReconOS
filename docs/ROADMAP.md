@@ -1983,8 +1983,50 @@ alone."* An empty field has always been refused as not a colour, so the label
 described behaviour the code did not have -- which is worse than no label,
 because somebody clears the field on the strength of it.
 
-What is still done by editing the file: a skin cannot be renamed or deleted
-from the page it is edited on.
+**A skin can be renamed and deleted from the page it is edited on.** Two
+buttons on a second row under the others, labelled *The skin itself*, because
+they act on the skin rather than on the line chosen in the list -- five buttons
+together would have made Delete look like something that happens to
+`title.active`.
+
+**Renaming moves three things and this is the only place that knows they are
+one operation.** The file is named after the skin, the name is also written
+inside it, and the account remembers which skin it is using by name. Doing any
+two leaves a skin that half exists: a file whose name and contents disagree
+loads under neither, and a rename the account has not been told about works
+until the next sign-in and then looks as though it undid itself.
+
+`recon_theme_rename` refuses a built-in (the original would come back beside the
+copy at the next start), an empty name, a name with a slash in it (it becomes a
+file name, and `../Config/system` would write over the machine's settings), a
+name another skin already has, and renaming a skin to what it is already
+called -- that last because the work removes the old file after writing the new
+one, and with both names the same that would delete what it had just written.
+
+**Changing only the capitalisation is allowed**, and is the case worth naming: a
+skin is found without regard to case, so `testing` and `Testing` are the same
+skin -- but they are different *files*, and the old one still has to go.
+
+Deleting asks first, and says both things: that the file goes and cannot be
+brought back, and -- when it is the skin in use -- that the default comes back
+with it. Somebody who is not told that watches every colour on their screen
+change and has to work out whether something went wrong. Afterwards the editor
+leaves editing rather than sitting there with every button writing to a file
+that is not there.
+
+Twenty-four checks in `tests/test_theme.c`, and the two that matter are that
+the old file is gone (a rename that leaves both is a copy) and that the account
+followed it. Confirmed by removing each in turn and watching the right checks
+fail.
+
+**Known and left:** the Appearance window's own status line still names the old
+skin after a rename made in the editor, until anything else is clicked. The two
+are separate windows with separate state and no pointer between them, and
+adding one between two windows that can each be closed first is a worse defect
+than a stale line of description.
+
+**Nothing in this editor now needs the file opened by hand.** Colours, ramps,
+all ten measurements, renaming and deleting.
 
 **Buttons in applications round off; nothing else does.** `metric.corner` is
 read by the window frame and `metric.button-corner` by every button, and a
