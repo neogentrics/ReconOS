@@ -122,6 +122,10 @@
 #define HIT_FONT_BASE (RECON_APPWIN_HIT_USER + 1200)
 #define HIT_MODE_BASE (RECON_APPWIN_HIT_USER + 1240)
 #define HIT_ZONE_BASE (RECON_APPWIN_HIT_USER + 1280)
+/* One per tint, plus one for None at the base. Above the zones, which are the
+ * longest list on any page and the reason this starts at 1400 rather than
+ * next to them. */
+#define HIT_TINT_BASE (RECON_APPWIN_HIT_USER + 1400)
 /* The tick boxes on the Disk Cleanup page. */
 #define HIT_CLEAN_BASE (RECON_APPWIN_HIT_USER + 1000)
 
@@ -856,6 +860,20 @@ struct control_panel {
     bool reg_key_focused;
 
     char status[192];
+
+    /*
+     * When the status is describing a skin, the theme generation it was
+     * written at. Zero when it is describing anything else.
+     *
+     * The Appearance page's status names the selected skin, and the Skin
+     * Editor is a *different window with its own state*: renaming a skin
+     * there left this one still saying the old name until something else was
+     * clicked. There is no pointer between the two windows and adding one
+     * between two things that can each be closed first would be a worse
+     * defect than a stale line -- but recon_theme already counts its own
+     * changes, so the line can notice instead of being told.
+     */
+    unsigned status_named_skins_at;
     bool status_is_warning;
 
     /* Where the list was drawn, so a right click can tell a row from the
@@ -970,6 +988,23 @@ static void set_status(struct control_panel *cp, bool warning, const char *fmt, 
     vsnprintf(cp->status, sizeof(cp->status), fmt, args);
     va_end(args);
     cp->status_is_warning = warning;
+
+    /* Cleared here rather than at every call site: a message is not about the
+     * skins unless the one place that says so says so, immediately after. */
+    cp->status_named_skins_at = 0;
+}
+
+/*
+ * Say something that names a skin, and remember that it does.
+ *
+ * Separate from set_status so that being about the skins is a decision made
+ * once, where the sentence is written, rather than a flag every caller has to
+ * remember not to set.
+ */
+static void set_skin_status(struct control_panel *cp, const char *name,
+        const char *description) {
+    set_status(cp, false, "%s. %s", name, description);
+    cp->status_named_skins_at = recon_theme_generation();
 }
 
 /*
@@ -992,6 +1027,7 @@ static void clear_status(struct control_panel *cp) {
     }
     cp->status[0] = '\0';
     cp->status_is_warning = false;
+    cp->status_named_skins_at = 0;
 }
 
 /* --- Small drawing helpers --- */
@@ -2036,6 +2072,63 @@ static void draw_appearance_themes(struct control_panel *cp,
      */
     draw_button(cp, p, sbx, y, "New Skin",
         HIT_ACTION_BASE + ACTION_NEW_SKIN, true);
+
+    /*
+     * A tint, when the skin on screen accepts one.
+     *
+     * Glass is the only skin that does, and its six colours have existed
+     * since v0.4.0 with no way to reach them but the Terminal --
+     * `recon_tint_available` was written for "a page that should not offer a
+     * choice that cannot be made" and nothing had ever asked it.
+     *
+     * Shown rather than named. Six words in a row are six things somebody has
+     * to imagine; six colours are the thing itself. None is a word because
+     * the absence of a colour is not one.
+     */
+    if (!recon_tint_available()) {
+        return;
+    }
+
+    y += BUTTON_HEIGHT + PADDING;
+
+    const char *now = recon_tint_current();
+    recon_draw_text(p, cp->font, x, y + ascent,
+        recon_text_width(cp->font, "Tint:") + 8, "Tint:", COLOR_DIM);
+
+    int tx = x + recon_text_width(cp->font, "Tint:") + 10;
+    int swatch = BUTTON_HEIGHT - 6;
+
+    /* None first, because it is where somebody starts and where they come
+     * back to. */
+    bool bare = (now[0] == '\0');
+    recon_fill_rect(p, tx, y, swatch, swatch, COLOR_BUTTON);
+    recon_draw_bevel(p, tx, y, swatch, swatch, bare);
+    recon_draw_text(p, cp->font, tx + 5, y + (swatch + ascent) / 2 - 1,
+        swatch, "-", COLOR_TEXT);
+    recon_hit_add(p, tx, y, swatch, swatch, HIT_TINT_BASE);
+    tx += swatch + 6;
+
+    for (int i = 0; i < recon_tint_count(); i++) {
+        char name[RECON_TINT_NAME_MAX];
+        recon_color hue;
+        if (!recon_tint_at(i, name, sizeof(name)) ||
+                !recon_tint_colour(i, &hue)) {
+            continue;
+        }
+
+        recon_fill_rect(p, tx, y, swatch, swatch, hue);
+        /* Pressed for the one that is on, so which is chosen is visible
+         * without reading anything. */
+        recon_draw_bevel(p, tx, y, swatch, swatch,
+            strcasecmp(now, name) == 0);
+        recon_hit_add(p, tx, y, swatch, swatch, HIT_TINT_BASE + 1 + i);
+        tx += swatch + 6;
+    }
+
+    /* Which one, in words, because a swatch says the colour and not its
+     * name -- and the name is what the Terminal and the help both use. */
+    recon_draw_text(p, cp->font, tx + 4, y + (swatch + ascent) / 2 - 1,
+        w - (tx - x) - 8, bare ? "None" : now, COLOR_DIM);
 }
 
 /* --- Colours --- */
@@ -5309,6 +5402,18 @@ static void panel_draw(void *user, struct recon_panel *p,
         draw_page(cp, p, cx, cy, cw, ch);
     }
 
+    /*
+     * A line naming a skin, written before the skins changed, is describing
+     * something that may not be called that any more -- or may not be there
+     * at all. Dropped rather than corrected: what it said was true when it
+     * was said, and there is nothing to replace it with until somebody picks
+     * a row again.
+     */
+    if (cp->status_named_skins_at != 0 &&
+            cp->status_named_skins_at != recon_theme_generation()) {
+        clear_status(cp);
+    }
+
     /* Status, along the bottom. */
     int sy = y + h - STATUS_HEIGHT;
     recon_fill_rect(p, x, sy, w, STATUS_HEIGHT, COLOR_BG);
@@ -7569,6 +7674,38 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
      * unbounded >=, so an id that belongs to a base above the one being
      * tested is answered by the wrong branch and vanishes without a trace.
      */
+    /*
+     * A tint, and first because HIT_TINT_BASE is the highest base here.
+     *
+     * This was written below, with a comment about being above the row check
+     * -- which is true and beside the point. Every test in the ladder is an
+     * unbounded `>=`, so the only safe place for the highest base is the top:
+     * put lower down, every tint click was answered by the time zone branch
+     * and set a zone instead. Nothing failed and nothing was logged; the
+     * swatch simply did not take, which is what the comment two lines below
+     * has been warning about since before this was added.
+     */
+    if (hit_id >= HIT_TINT_BASE && hit_id <= HIT_TINT_BASE + 32) {
+        int which = (int)(hit_id - HIT_TINT_BASE) - 1;
+
+        char name[RECON_TINT_NAME_MAX];
+        const char *wanted = "";
+        if (which >= 0 && recon_tint_at(which, name, sizeof(name))) {
+            wanted = name;
+        }
+
+        if (!recon_tint_set(wanted)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            return true;
+        }
+
+        recon_access_apply(cp->font);
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, *wanted != 0
+            ? "The chrome is tinted %s." : "The tint is off.", wanted);
+        return true;
+    }
+
     if (hit_id >= HIT_ZONE_BASE) {
         int row = (int)(hit_id - HIT_ZONE_BASE);
         if (recon_clock_set_zone(cp->zone_scroll + row)) {
@@ -7883,7 +8020,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             struct recon_theme_info info;
             if (recon_theme_at(index, &info)) {
                 cp->selected = index;
-                set_status(cp, false, "%s. %s", info.name, info.description);
+                set_skin_status(cp, info.name, info.description);
             }
             return true;
         }

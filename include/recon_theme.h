@@ -337,6 +337,14 @@ bool recon_tint_at(int index, char *name, size_t size);
 const char *recon_tint_current(void);
 
 /*
+ * The hue a tint moves the chrome towards.
+ *
+ * For showing one rather than naming it. Six words in a row say six things
+ * somebody has to imagine; six colours say them.
+ */
+bool recon_tint_colour(int index, recon_color *out);
+
+/*
  * Put one on. The empty string, or "None", takes it off again.
  *
  * False when there is no such tint, or when the current skin does not accept

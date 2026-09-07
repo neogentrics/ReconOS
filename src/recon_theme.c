@@ -2342,6 +2342,14 @@ static const struct {
 
 #define TINT_COUNT ((int)(sizeof(TINTS) / sizeof(TINTS[0])))
 
+bool recon_tint_colour(int index, recon_color *out) {
+    if (index < 0 || index >= TINT_COUNT || out == NULL) {
+        return false;
+    }
+    *out = TINTS[index].hue;
+    return true;
+}
+
 /*
  * How far the chrome moves. Not a setting.
  *

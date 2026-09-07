@@ -2019,11 +2019,40 @@ the old file is gone (a rename that leaves both is a copy) and that the account
 followed it. Confirmed by removing each in turn and watching the right checks
 fail.
 
-**Known and left:** the Appearance window's own status line still names the old
-skin after a rename made in the editor, until anything else is clicked. The two
-are separate windows with separate state and no pointer between them, and
-adding one between two windows that can each be closed first is a worse defect
-than a stale line of description.
+**The stale line is fixed, and not with a pointer.** The Appearance window's
+status names the selected skin, and the Skin Editor is a different window with
+its own state -- renaming there left this one saying the old name. A pointer
+between two windows that can each be closed first would be a worse defect than
+a stale line, so instead the line *notices*: `recon_theme` already counts its
+own changes, so a status that names a skin remembers the generation it was
+written at and is dropped when that moves. Dropped rather than corrected --
+what it said was true when it was said, and there is nothing to replace it with
+until somebody picks a row again.
+
+Only that one sentence is generation-sensitive. `set_skin_status` exists so
+that being about the skins is decided once, where the sentence is written,
+rather than being a flag every caller has to remember not to set.
+
+**Glass's six colours are reachable from the Control Panel at last.** They have
+existed since v0.4.0 and the only way to reach them was the Terminal --
+`recon_tint_available` was written for *"a page that should not offer a choice
+that cannot be made"* and nothing had ever asked it. Glass is the only skin
+with `metric.tintable`, so the row appears under the skin list only when it is
+the skin on screen.
+
+Shown rather than named: six words in a row are six things somebody has to
+imagine, six swatches are the thing itself. The one in use is drawn pressed and
+named in words beside them, because a swatch says the colour and not its name,
+and the name is what the Terminal and the help both use.
+
+**And a fourth hit-id hazard in this file, which the file had already warned
+about.** The click ladder is descending and every test in it is an unbounded
+`>=`, with a comment at the top saying exactly what happens to an id belonging
+to a base above the one being tested: it *"is answered by the wrong branch and
+vanishes without a trace"*. The tint base is the highest in the file and the
+check went in near the bottom, so every tint click was answered by the time
+zone branch. Nothing failed and nothing was logged -- the swatch simply did not
+take. A photograph found it; reading the code I had just written did not.
 
 **Nothing in this editor now needs the file opened by hand.** Colours, ramps,
 all ten measurements, renaming and deleting.

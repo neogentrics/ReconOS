@@ -23,6 +23,34 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Glass's six colours are reachable from the Control Panel.** They have existed
+since v0.4.0 with no way to reach them but the Terminal --
+`recon_tint_available` was written for "a page that should not offer a choice
+that cannot be made" and nothing had ever asked it. Glass is the only skin with
+`metric.tintable`, so the row appears under the skin list only when Glass is
+the skin on screen.
+
+Shown rather than named: six swatches, the one in use drawn pressed, with its
+name in words beside them -- a swatch says the colour and not its name, and the
+name is what the Terminal and the help use.
+
+**The Appearance window's stale skin name is fixed, and not with a pointer.**
+Renaming in the Skin Editor left the Appearance window still naming the old
+skin, because they are separate windows with separate state. A pointer between
+two things that can each be closed first would be a worse defect than a stale
+line, so the line notices instead: `recon_theme` already counts its own
+changes, and a status that names a skin is dropped when that count moves.
+Dropped rather than corrected -- it was true when it was said, and there is
+nothing to replace it with until somebody picks a row again.
+
+**A fourth hit-id hazard, and this file had already written the warning.** The
+click ladder is descending and every test in it is an unbounded `>=`; the
+comment at the top says an id belonging to a base above the one being tested
+"is answered by the wrong branch and vanishes without a trace". The tint base
+is the highest in the file and the check went in near the bottom, so every tint
+click set a time zone instead. Nothing failed and nothing was logged. A
+photograph found it; re-reading the code I had just written did not.
+
 **A skin can be renamed and deleted from the page it is edited on**, which
 was the last thing in that editor that meant opening the file by hand. Two
 buttons on a second row labelled *The skin itself*, because they act on the
