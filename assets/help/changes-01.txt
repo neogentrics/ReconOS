@@ -10,6 +10,26 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+A sweep for the whole class: every fixed ceiling, and what it does when it
+is reached. Three of them were dropping data and saying nothing, which is the
+same failure three times in three subsystems:
+
+- The help's page cap, at 512 lines, which was hiding two thirds of the change
+  log. BG-123.
+- The web viewer's six ceilings, which are *correct* -- a page is somebody
+  else's file -- and were quiet about it. BG-124.
+- File Explorer's folder listing, at 512 entries, which said "512 items" about
+  a folder of six hundred. The number that did not fit was already known and
+  was being clamped away on the line that knew it. BG-125.
+
+And two caps added earlier the same night had the same fault: a package
+manifest silently dropped a seventeenth place line. Those refuse the install
+and name the limit now, because installing most of a package and reporting
+success is how a missing file turns up as something not working weeks later.
+
+The rule this leaves behind: a ceiling is often the right answer, and being
+quiet about reaching one never is.
+
 And the web viewer stopped cutting pages off in silence. Found by sweeping
 for the shape BG-123 had: a fixed ceiling that drops data quietly.
 recon_html.c has six of them, and unlike the help's they are *right* -- a

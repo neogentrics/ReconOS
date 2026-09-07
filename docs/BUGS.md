@@ -2305,3 +2305,25 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   aborted on a later assertion before writing the file, and reported the
   earlier change as done. **A page of five thousand paragraphs stopped at four
   thousand and still said nothing**, which is what said so.
+
+### BG-125 — A folder with more than 512 things in it looked complete
+
+- **Found in** v0.4.0. **Found by** continuing the sweep that produced BG-123
+  and BG-124: every fixed ceiling in the system, and what it does when reached.
+- **What it was** File Explorer read a folder into a 512-entry array and then
+  wrote `if (count > ENTRIES_MAX) count = ENTRIES_MAX;`. A folder of six
+  hundred files showed five hundred and twelve and said "512 items", which is
+  a sentence that is true about the window and false about the folder.
+- **The number that did not fit was already known and thrown away.**
+  `recon_fs_list` documents that it returns the total and writes as many as
+  fit; the line above was the only place that total existed, and it was being
+  clamped away on the same line.
+- **Fixed in** v0.4.0. The status line says "512 items ... and 88 more this
+  window cannot show", as an error rather than a note — a list that is short
+  and looks complete is the kind of wrong somebody acts on.
+- **Two caps added earlier the same night had the same fault**, in the package
+  manifest: a seventeenth `place` line and a seventeenth `setting` were
+  silently dropped. Those refuse the install and name the limit instead, which
+  is the rule everywhere else here — a thing that will not fit is said about,
+  not shortened. Installing most of a package and reporting success is how a
+  missing file turns up as something not working weeks later.

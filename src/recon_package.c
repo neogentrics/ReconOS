@@ -153,6 +153,12 @@ static bool read_manifest(const char *package, struct manifest *out) {
 
     memset(out, 0, sizeof(*out));
 
+    /* Set if the manifest asked for more than can be held, so the refusal
+     * below can name which limit it was rather than saying something is
+     * wrong. */
+    bool too_many_places = false;
+    bool too_many_settings = false;
+
     char *saveptr = NULL;
     for (char *line = strtok_r(text, "\n", &saveptr);
             line != NULL;
@@ -192,8 +198,20 @@ static bool read_manifest(const char *package, struct manifest *out) {
             snprintf(out->module, sizeof(out->module), "%s", value);
         } else if (strcasecmp(line, "icon") == 0) {
             snprintf(out->icon, sizeof(out->icon), "%s", value);
-        } else if (strcasecmp(line, "place") == 0 &&
-                out->place_count < PLACES_MAX) {
+        } else if (strcasecmp(line, "place") == 0) {
+            /*
+             * Refused rather than trimmed.
+             *
+             * Silently dropping the seventeenth `place` line would install
+             * most of a package and report success, and the missing file
+             * would turn up as something not working weeks later. The rule
+             * here is the same as everywhere else in this system: a thing
+             * that will not fit is said about, not shortened.
+             */
+            if (out->place_count >= PLACES_MAX) {
+                too_many_places = true;
+                continue;
+            }
             struct place *p = &out->places[out->place_count];
             if (split_two(value, p->file, sizeof(p->file),
                     p->into, sizeof(p->into))) {
@@ -203,8 +221,11 @@ static bool read_manifest(const char *package, struct manifest *out) {
              * same as any other line this does not understand -- but a line
              * naming a directory that is not allowed is a different thing and
              * is refused at install, where it can be said out loud. */
-        } else if (strcasecmp(line, "setting") == 0 &&
-                out->setting_count < SETTINGS_MAX) {
+        } else if (strcasecmp(line, "setting") == 0) {
+            if (out->setting_count >= SETTINGS_MAX) {
+                too_many_settings = true;
+                continue;
+            }
             struct setting *g = &out->settings[out->setting_count];
             if (split_two(value, g->key, sizeof(g->key),
                     g->value, sizeof(g->value))) {
@@ -216,6 +237,24 @@ static bool read_manifest(const char *package, struct manifest *out) {
     }
 
     free(text);
+
+    /*
+     * More than can be held is a refusal, not a trim.
+     *
+     * Silently dropping the seventeenth `place` line would install most of a
+     * package and report success, and the missing file would turn up as
+     * something not working weeks later.
+     */
+    if (too_many_places) {
+        set_error("'%s' wants to place more than %d files",
+            out->info.name, PLACES_MAX);
+        return false;
+    }
+    if (too_many_settings) {
+        set_error("'%s' wants to set more than %d settings",
+            out->info.name, SETTINGS_MAX);
+        return false;
+    }
 
     if (out->info.name[0] == '\0') {
         set_error("that package does not say what it is called");

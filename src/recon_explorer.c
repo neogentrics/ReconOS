@@ -213,6 +213,9 @@ struct recon_explorer {
 
     char cwd[RECON_PATH_MAX];
     struct recon_dirent entries[ENTRIES_MAX];
+    /* How many the folder had that would not fit, so the status line can say
+     * so rather than letting a short list look complete. */
+    int too_many;
     int entry_count;
 
     int selected;
@@ -313,7 +316,19 @@ static void reload(struct recon_explorer *ex) {
         set_status(ex, true, "%s", recon_fs_last_error());
         return;
     }
+    /*
+     * A folder larger than this window will hold, said out loud.
+     *
+     * recon_fs_list returns the total and writes as many as fit, so the number
+     * that did not fit was known here and thrown away -- a folder of six
+     * hundred files showed five hundred and twelve and looked complete. That
+     * is the same failure the change log had and the web viewer had: a
+     * ceiling is a reasonable answer and being quiet about reaching one is
+     * not.
+     */
+    ex->too_many = 0;
     if (ex->entry_count > ENTRIES_MAX) {
+        ex->too_many = ex->entry_count - ENTRIES_MAX;
         ex->entry_count = ENTRIES_MAX;
     }
 
@@ -354,9 +369,18 @@ static void reload(struct recon_explorer *ex) {
         }
     }
 
-    set_status(ex, false, "%d item%s   %d folder%s   %zu bytes",
-        ex->entry_count, ex->entry_count == 1 ? "" : "s",
-        dirs, dirs == 1 ? "" : "s", bytes);
+    if (ex->too_many > 0) {
+        /* An error rather than a note, because a list that is short and looks
+         * complete is the kind of wrong somebody acts on. */
+        set_status(ex, true, "%d item%s   %d folder%s   %zu bytes   -- and %d "
+            "more this window cannot show",
+            ex->entry_count, ex->entry_count == 1 ? "" : "s",
+            dirs, dirs == 1 ? "" : "s", bytes, ex->too_many);
+    } else {
+        set_status(ex, false, "%d item%s   %d folder%s   %zu bytes",
+            ex->entry_count, ex->entry_count == 1 ? "" : "s",
+            dirs, dirs == 1 ? "" : "s", bytes);
+    }
 }
 
 /* Record a place in the trail, dropping anything ahead of it. */

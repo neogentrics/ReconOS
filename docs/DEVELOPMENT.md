@@ -30,6 +30,27 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
+### Ceilings
+
+Fixed limits are fine and often necessary -- a reader that grows to fit
+whatever it is handed is one a hostile file can exhaust. What is never fine is
+reaching one quietly.
+
+A page cut off looks exactly like a page that ended. A folder listing 512 of
+600 files looks exactly like a folder of 512. Nobody scrolls to the bottom of a
+document to check whether it finished, so the failure is invisible from the
+outside and stays that way for as long as it takes somebody to count.
+
+So: when a limit is reached, say so where the result is shown, and say it as a
+problem rather than a note. Three subsystems had this at once -- the help, the
+web viewer and File Explorer -- and in one of them the number that did not fit
+was already known and was being thrown away on the line that knew it.
+
+Where the thing is being *built* rather than displayed, refuse instead. A
+package manifest with more entries than can be held is refused with the limit
+named; installing most of a package and reporting success is how a missing file
+turns up as something not working weeks later.
+
 ### Checking the help against the system
 
 The help is what somebody reads, so a sentence in it that is not true is worse
