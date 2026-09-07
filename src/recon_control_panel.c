@@ -1070,7 +1070,7 @@ static int draw_scrollbar(struct recon_panel *p, int x, int y, int h,
         at = travel;
     }
 
-    recon_fill_rect(p, x + 1, y + at, SCROLLBAR_WIDTH - 2, thumb,
+    recon_widget_highlight(p, x + 1, y + at, SCROLLBAR_WIDTH - 2, thumb,
         COLOR_SELECTED);
     return SCROLLBAR_WIDTH;
 }
@@ -1146,7 +1146,7 @@ static void draw_row_at(struct control_panel *cp, struct recon_panel *p,
     int ascent = recon_font_ascent(cp->font);
 
     if (selected) {
-        recon_fill_rect(p, x, y, w, ROW_HEIGHT, COLOR_SELECTED);
+        recon_widget_highlight(p, x, y, w, ROW_HEIGHT, COLOR_SELECTED);
     } else if (index % 2 == 1) {
         recon_fill_rect(p, x, y, w, ROW_HEIGHT, COLOR_ROW_ALT);
     }
@@ -1215,7 +1215,7 @@ static void draw_avatar_picker(struct control_panel *cp, struct recon_panel *p,
         const char *current = recon_avatar_of(cp->question_target);
         bool chosen = strcmp(current, name) == 0;
         if (chosen) {
-            recon_fill_rect(p, tx, ty, AVATAR_TILE - 4, AVATAR_TILE - 4,
+            recon_widget_highlight(p, tx, ty, AVATAR_TILE - 4, AVATAR_TILE - 4,
                 COLOR_SELECTED);
         }
 
@@ -1576,7 +1576,8 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         bool chosen = (role == cp->skin_row);
 
         if (chosen) {
-            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+            recon_widget_highlight_role(p, x, ry, w, ROW_HEIGHT,
+                RECON_THEME_SELECTION);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -2259,7 +2260,7 @@ static void draw_appearance_colours(struct control_panel *cp,
         bool picked = cp->skin_row == role;
 
         if (picked) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -2376,7 +2377,7 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
         bool in_use = strcmp(name, showing) == 0;
 
         if (on) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -3558,7 +3559,7 @@ static void draw_cleanup(struct control_panel *cp, struct recon_panel *p,
         bool selected = cp->selected == i;
 
         if (selected) {
-            recon_fill_rect(p, x, y, w, row_h, COLOR_SELECTED);
+            recon_widget_highlight(p, x, y, w, row_h, COLOR_SELECTED);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, y, w, row_h, COLOR_ROW_ALT);
         }
@@ -4014,7 +4015,8 @@ static void draw_firewall(struct control_panel *cp, struct recon_panel *p,
         bool chosen = (i == cp->selected);
 
         if (chosen) {
-            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+            recon_widget_highlight_role(p, x, ry, w, ROW_HEIGHT,
+                RECON_THEME_SELECTION);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -5061,7 +5063,8 @@ static void draw_registry(struct control_panel *cp, struct recon_panel *p,
         bool chosen = (cp->registry_scroll + i == cp->selected);
 
         if (chosen) {
-            recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
+            recon_widget_highlight_role(p, x, ry, w, ROW_HEIGHT,
+                RECON_THEME_SELECTION);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -5357,17 +5360,17 @@ static void draw_home(struct control_panel *cp, struct recon_panel *p,
         bool chosen = cp->selected == i;
 
         if (chosen) {
-            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_SELECTED);
+            recon_widget_highlight(p, tx, ty, TILE_W, TILE_H, COLOR_SELECTED);
         } else if (open) {
-            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_ROW_ALT);
+            recon_widget_highlight(p, tx, ty, TILE_W, TILE_H, COLOR_ROW_ALT);
         } else if (cp->hover_tile == i) {
-            recon_fill_rect(p, tx, ty, TILE_W, TILE_H, COLOR_PANEL);
+            recon_widget_highlight(p, tx, ty, TILE_W, TILE_H, COLOR_PANEL);
         }
 
         int icon_x = tx + (TILE_W - TILE_ICON) / 2;
         int icon_y = ty + (TILE_H - TILE_ICON - recon_font_line_height(cp->font)) / 2;
         if (!recon_icon_draw(p, PAGES[i].icon, icon_x, icon_y, TILE_ICON)) {
-            recon_fill_rect(p, icon_x, icon_y, TILE_ICON, TILE_ICON,
+            recon_widget_highlight(p, icon_x, icon_y, TILE_ICON, TILE_ICON,
                 COLOR_SELECTED);
         }
 

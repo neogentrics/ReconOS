@@ -1399,7 +1399,8 @@ static void draw_sidebar(struct recon_explorer *ex, struct recon_panel *p,
          * are as well as where you can go. */
         bool current = (strcmp(ex->cwd, path) == 0);
         if (current) {
-            recon_fill_rect(p, x + 2, iy, SIDEBAR_WIDTH - 6, 22, COLOR_SELECTED);
+            recon_widget_highlight(p, x + 2, iy, SIDEBAR_WIDTH - 6, 22,
+                COLOR_SELECTED);
         }
 
         int label_x = x + 8;
@@ -1800,7 +1801,7 @@ static void explorer_draw(void *user, struct recon_panel *p,
         bool is_dir = (entry->kind == RECON_FILE_DIRECTORY);
 
         if (selected) {
-            recon_fill_rect(p, lx, ry, lw, ROW_HEIGHT, COLOR_SELECTED);
+            recon_widget_highlight(p, lx, ry, lw, ROW_HEIGHT, COLOR_SELECTED);
         } else if (row % 2 == 1) {
             recon_fill_rect(p, lx, ry, lw, ROW_HEIGHT, COLOR_ROW_ALT);
         }

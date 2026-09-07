@@ -28,6 +28,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define ICON_WIDTH 88
 #define ICON_HEIGHT 82
@@ -623,7 +624,7 @@ void recon_desktop_refresh(struct recon_desktop *desktop) {
         const struct desktop_item *item = &desktop->items[i];
 
         if (i == desktop->selected) {
-            recon_fill_rect(p, item->x, item->y, ICON_WIDTH, ICON_HEIGHT,
+            recon_widget_highlight(p, item->x, item->y, ICON_WIDTH, ICON_HEIGHT,
                 COLOR_SELECTED);
         }
 

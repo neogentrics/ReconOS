@@ -980,7 +980,7 @@ static void player_draw(void *user, struct recon_panel *panel, int x, int y,
         int ry = top + row * ROW_HEIGHT;
 
         if (i == p->selected) {
-            recon_fill_rect(panel, x + PADDING, ry, list_w, ROW_HEIGHT,
+            recon_widget_highlight(panel, x + PADDING, ry, list_w, ROW_HEIGHT,
                 COLOR_SELECTED);
         }
 

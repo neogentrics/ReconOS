@@ -312,6 +312,23 @@ void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
     int radius, recon_color behind);
 
 /*
+ * A rounded rectangle drawn as a shape, filled or outlined, composited over
+ * whatever is already there.
+ *
+ * Prefer these to recon_round_rect. That one fills a square rectangle and then
+ * paints the corners back out with a colour the caller *believes* is behind
+ * them, which is a guess -- and every place the guess is wrong shows as a
+ * wedge of the wrong colour in the corner. It is wrong over a gradient, over
+ * a wallpaper, and whenever a caller passes its panel colour rather than the
+ * colour of the thing the control happens to be sitting on. These never
+ * overwrite the corner, so there is nothing to guess.
+ */
+void recon_fill_round_rect(struct recon_panel *panel, int x, int y, int w,
+    int h, int radius, recon_color color);
+void recon_stroke_round_rect(struct recon_panel *panel, int x, int y, int w,
+    int h, int radius, recon_color color);
+
+/*
  * The same, with a one-pixel outline laid along the curve.
  *
  * Blended over what is already there rather than painted onto a fresh
@@ -372,6 +389,25 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
  * person can press. A bevel on its own is right for a sunken text field or a
  * panel's own outline, and those should keep calling the bevel directly --
  * they are not buttons and do not round.
+ */
+/*
+ * Fill a button and edge it, as one rounded shape.
+ *
+ * The one to use. Nothing is told what is behind the corners because nothing
+ * paints over them: the shape is composited, so a button on a gradient, on a
+ * photograph or on a flat panel all come out right without this being told
+ * which it is.
+ */
+void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
+    bool pressed, recon_color face);
+
+/*
+ * The edge alone, for a caller that has already filled and drawn into the
+ * button -- which the taskbar has to, because it washes a put-away window's
+ * icon and title and the wash has to happen before the edge.
+ *
+ * Carves its corners back to `behind`, with the guess that implies. Prefer
+ * recon_fill_button wherever the fill can be left to it.
  */
 void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
     int h, bool pressed, recon_color behind);

@@ -1294,6 +1294,209 @@ void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
 }
 
 /*
+ * How much of one corner pixel lies inside a circle of this radius.
+ *
+ * The same sampling round_corners does, pulled out so a fill and a stroke can
+ * ask the same question and get answers that agree to the sample. Two curves
+ * computed separately are two curves that disagree by a pixel somewhere, and
+ * the somewhere is always a corner.
+ */
+static int corner_coverage(int radius, int dx, int dy, int shrink) {
+    const int SAMPLES = 4;
+    const int UNIT = SAMPLES * 2;
+
+    long long reach = (long long)radius * UNIT - (long long)shrink * UNIT;
+    if (reach < 0) {
+        reach = 0;
+    }
+
+    int inside = 0;
+    for (int sy = 0; sy < SAMPLES; sy++) {
+        for (int sx = 0; sx < SAMPLES; sx++) {
+            long long ox = (long long)(radius - dx) * UNIT - (2 * sx + 1);
+            long long oy = (long long)(radius - dy) * UNIT - (2 * sy + 1);
+            if (ox * ox + oy * oy <= reach * reach) {
+                inside++;
+            }
+        }
+    }
+    return (inside * 255) / (SAMPLES * SAMPLES);
+}
+
+/* Where the four corner boxes are, for a given offset into one of them. */
+static void corner_points(int x, int y, int w, int h, int dx, int dy,
+        int out[4][2]) {
+    out[0][0] = x + dx;             out[0][1] = y + dy;
+    out[1][0] = x + w - 1 - dx;     out[1][1] = y + dy;
+    out[2][0] = x + dx;             out[2][1] = y + h - 1 - dy;
+    out[3][0] = x + w - 1 - dx;     out[3][1] = y + h - 1 - dy;
+}
+
+/*
+ * Composite an opaque colour over a pixel that may not be opaque itself.
+ *
+ * blend_over keeps the destination's alpha, which is right where it is used --
+ * carving a corner replaces one opaque colour with another. It is wrong here,
+ * and invisibly so: the desktop's panel is *transparent* wherever the
+ * wallpaper shows through, so an anti-aliased edge blended onto it came out at
+ * alpha zero and simply did not exist. The straight parts of the shape were
+ * drawn with recon_fill_rect, which sets the pixel outright, so three
+ * rectangles appeared and the four curved corners did not -- a selection box
+ * with square bites out of it, which is what it had before rounding and looked
+ * like the rounding had not been applied at all.
+ *
+ * So: source-over, alpha included. The colour arriving is opaque and `amount`
+ * is how much of the pixel it covers, which makes `amount` the source alpha.
+ */
+static void blend_at(struct recon_panel *panel, int cx, int cy,
+        recon_color color, int coverage) {
+    if (coverage <= 0 || cx < 0 || cy < 0 ||
+            cx >= panel->width || cy >= panel->height) {
+        return;
+    }
+    if (coverage > 255) {
+        coverage = 255;
+    }
+
+    uint32_t *pixel = panel->pixels + (size_t)cy * panel->width + cx;
+    unsigned base_a = (*pixel >> 24) & 0xFFu;
+
+    /*
+     * The colour's own alpha multiplies the coverage.
+     *
+     * Several things drawn through here are translucent by design -- the
+     * desktop's selection box is, so that the wallpaper reads through it --
+     * and a corner composited at full strength came out as the *undimmed*
+     * colour beside a body that was dimmed: a bright rim around a darker
+     * shape. Coverage says how much of the pixel the shape covers and the
+     * colour says how solid the shape is, and the pixel wants both.
+     */
+    unsigned col_a = (color >> 24) & 0xFFu;
+    unsigned src_a = col_a * (unsigned)coverage / 255u;
+
+    /* Opaque colour on an opaque surface is the common case and needs none of
+     * the arithmetic below -- the colours mix and the alpha does not move. */
+    if (base_a == 0xFFu && col_a == 0xFFu) {
+        *pixel = blend_over(*pixel, color, coverage);
+        return;
+    }
+    unsigned kept = base_a * (255u - src_a) / 255u;
+    unsigned out_a = src_a + kept;
+    if (out_a == 0) {
+        *pixel = 0;
+        return;
+    }
+
+    uint32_t out = out_a << 24;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        unsigned over = (color >> shift) & 0xFFu;
+        unsigned base = (*pixel >> shift) & 0xFFu;
+        out |= ((over * src_a + base * kept) / out_a) << shift;
+    }
+    *pixel = out;
+}
+
+static int clamp_radius(int w, int h, int radius) {
+    int most = (w < h ? w : h) / 2;
+    if (radius > most) {
+        radius = most;
+    }
+    return radius < 0 ? 0 : radius;
+}
+
+/*
+ * A filled rounded rectangle, composited over what is already there.
+ *
+ * This is the shape drawn as a shape. What it replaces is: fill a square
+ * rectangle, then paint the corners back out with a colour the caller
+ * *believes* is behind them -- which is a guess, and every place the guess is
+ * wrong shows as a wedge of the wrong colour in the corner. It is wrong
+ * whenever the surface behind is a gradient rather than a flat fill, whenever
+ * it is a wallpaper, and whenever the caller passes the colour of the panel it
+ * is on rather than the colour of the thing it happens to be sitting on.
+ *
+ * Nothing has to be guessed here. The corner pixels are never overwritten, so
+ * whatever was behind them stays behind them, at whatever coverage the curve
+ * gives -- a gradient, a photograph or a flat fill, without this knowing which.
+ */
+void recon_fill_round_rect(struct recon_panel *panel, int x, int y, int w,
+        int h, int radius, recon_color color) {
+    if (panel == NULL || w <= 0 || h <= 0) {
+        return;
+    }
+    radius = clamp_radius(w, h, radius);
+    if (radius <= 0) {
+        recon_fill_rect(panel, x, y, w, h, color);
+        return;
+    }
+
+    /* Everything that is not a corner, as three plain rectangles. */
+    recon_fill_rect(panel, x, y + radius, w, h - radius * 2, color);
+    recon_fill_rect(panel, x + radius, y, w - radius * 2, radius, color);
+    recon_fill_rect(panel, x + radius, y + h - radius, w - radius * 2, radius,
+        color);
+
+    for (int dy = 0; dy < radius; dy++) {
+        for (int dx = 0; dx < radius; dx++) {
+            int coverage = corner_coverage(radius, dx, dy, 0);
+            if (coverage <= 0) {
+                continue;
+            }
+            int points[4][2];
+            corner_points(x, y, w, h, dx, dy, points);
+            for (int i = 0; i < 4; i++) {
+                blend_at(panel, points[i][0], points[i][1], color, coverage);
+            }
+        }
+    }
+}
+
+/*
+ * A one-pixel outline around the same shape, composited the same way.
+ *
+ * The ring is the difference between the curve and the curve one pixel in, so
+ * it is exactly as anti-aliased as the fill it edges and cannot drift away
+ * from it by a pixel at any point around the corner.
+ */
+void recon_stroke_round_rect(struct recon_panel *panel, int x, int y, int w,
+        int h, int radius, recon_color color) {
+    if (panel == NULL || w < 2 || h < 2) {
+        return;
+    }
+    radius = clamp_radius(w, h, radius);
+    if (radius <= 0) {
+        recon_stroke_rect(panel, x, y, w, h, color);
+        return;
+    }
+
+    int span_w = w - radius * 2;
+    int span_h = h - radius * 2;
+    if (span_w > 0) {
+        recon_fill_rect(panel, x + radius, y, span_w, 1, color);
+        recon_fill_rect(panel, x + radius, y + h - 1, span_w, 1, color);
+    }
+    if (span_h > 0) {
+        recon_fill_rect(panel, x, y + radius, 1, span_h, color);
+        recon_fill_rect(panel, x + w - 1, y + radius, 1, span_h, color);
+    }
+
+    for (int dy = 0; dy < radius; dy++) {
+        for (int dx = 0; dx < radius; dx++) {
+            int ring = corner_coverage(radius, dx, dy, 0)
+                - corner_coverage(radius, dx, dy, 1);
+            if (ring <= 0) {
+                continue;
+            }
+            int points[4][2];
+            corner_points(x, y, w, h, dx, dy, points);
+            for (int i = 0; i < 4; i++) {
+                blend_at(panel, points[i][0], points[i][1], color, ring);
+            }
+        }
+    }
+}
+
+/*
  * Round the corners and lay a one-pixel outline along the curve, in one pass.
  *
  * The outline has to be *composited* rather than painted, because a button is
@@ -1604,83 +1807,90 @@ int recon_button_radius(int w, int h) {
     return radius < most ? radius : most;
 }
 
+/*
+ * Fill a button and edge it, as one shape.
+ *
+ * `behind` is gone from this path. It was the colour a caller believed was
+ * underneath the corners, passed so the corners could be painted back out
+ * after a square fill -- a guess, and a wedge of the wrong colour wherever the
+ * guess was wrong. Over a gradient it was always wrong; over the wallpaper it
+ * was always wrong; and a caller that passed its own panel's colour rather
+ * than the colour of the strip the button actually sat on was wrong in a way
+ * nobody could see until a skin changed one of the two.
+ *
+ * Drawing the shape asks nobody anything. The corner pixels are never
+ * overwritten, so whatever is behind them stays there at whatever coverage the
+ * curve gives.
+ */
+void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
+        bool pressed, recon_color face) {
+    if (panel == NULL || w < 2 || h < 2) {
+        return;
+    }
+
+    recon_color light, dark;
+    bevel_colours(face, &light, &dark);
+    int radius = recon_button_radius(w, h);
+
+    recon_fill_round_rect(panel, x, y, w, h, radius, face);
+
+    /*
+     * --- The boundary ---
+     *
+     * A one-pixel outline in the shaded tone, all four sides, following the
+     * corner.
+     *
+     * It used to be a 95 bevel and nothing else: light on the top and left,
+     * dark on the bottom and right. That is a *lighting effect*, and it reads
+     * as an edge only while the button sits between its own highlight and the
+     * surface behind it -- true for as long as every skin was grey. On Glass
+     * the Calculator's keys are E8EBF5 and the panel they sit on is F0F2F8,
+     * eight levels apart, so the lit half landed lighter than the background
+     * and the top and left of every key stopped existing. Two edges out of
+     * four, which is what "they look incomplete" is a picture of.
+     */
+    recon_stroke_round_rect(panel, x, y, w, h, radius, dark);
+
+    /*
+     * --- The lighting, kept out of the corners ---
+     *
+     * Inset by one from the boundary and by the radius at each end, so it
+     * begins where the curve finishes. A highlight running the full width
+     * would reach round into the corner and sit outside the curve, putting a
+     * pale pixel where the outline should be.
+     */
+    if (w > radius * 2 + 4 && h > radius * 2 + 4) {
+        recon_color inner = pressed ? dark : light;
+        recon_fill_rect(panel, x + 1 + radius, y + 1,
+            w - 2 - radius * 2, 1, inner);
+        recon_fill_rect(panel, x + 1, y + 1 + radius,
+            1, h - 2 - radius * 2, inner);
+    }
+}
+
+/*
+ * The older shape of the same thing, for callers that have already filled.
+ *
+ * The taskbar is the one that has to: it fills a button, draws a window's icon
+ * and title into it, washes the lot when the window is put away, and only then
+ * asks for the edge -- so the fill cannot be moved into the edge routine
+ * without the wash losing its subject. It samples the face rather than being
+ * told, and `behind` is what its corners are carved back to, with the guess
+ * that implies.
+ */
 void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
         int h, bool pressed, recon_color behind) {
     if (panel == NULL || w < 2 || h < 2) {
         return;
     }
 
-    /* Read before anything is painted over: the caller filled this rectangle
-     * with the button's colour and that is what everything below is derived
-     * from. */
     recon_color face = bevel_face(panel, x, y, w, h);
     recon_color light, dark;
     bevel_colours(face, &light, &dark);
-
     int radius = recon_button_radius(w, h);
 
-    /*
-     * --- The boundary, as a rounded outline ---
-     *
-     * Painted as two shapes rather than stroked: the whole rectangle in the
-     * outline colour with its corners rounded away, then the inside of it
-     * back in the button's colour with *its* corners rounded away to the
-     * outline colour. What is left between the two curves is a one-pixel
-     * outline that follows the corner instead of stopping at it.
-     *
-     * A stroked rectangle cannot do this. recon_stroke_rect draws four
-     * straight lines and the rounding then carves the corner out of them, so
-     * the outline exists along the top and down the left and is simply absent
-     * across the diagonal -- which is the corner looking open, and was
-     * measured that way: rows 397 to 401 of a calculator key with nothing but
-     * fill fading into background where the edge should have been.
-     *
-     * The outline matters more than it sounds. A 95 bevel is a lighting
-     * effect and depends on the button being lighter than its own shadow and
-     * darker than its own highlight *relative to whatever is behind it*. That
-     * held while every skin was grey. On Glass the calculator's keys are
-     * E8EBF5 and the panel they sit on is F0F2F8 -- eight levels apart -- so
-     * the lit half landed lighter than the background and the top and left of
-     * every key stopped existing. Two edges out of four, which is what "they
-     * look incomplete" is a picture of. A boundary drawn in the shaded tone on
-     * all four sides is there whatever the button is sitting on.
-     */
-    /*
-     * --- The boundary ---
-     *
-     * A one-pixel outline in the shaded tone, all the way round and following
-     * the corner, blended over whatever is there rather than painted onto a
-     * surface of its own.
-     *
-     * It used to be a 95 bevel and nothing else: light on the top and left,
-     * dark on the bottom and right. That works while a button is darker than
-     * its own highlight *and* lighter than the surface behind it, which was
-     * true of every skin for as long as every skin was grey. On Glass the
-     * calculator's keys are E8EBF5 and the panel they sit on is F0F2F8 --
-     * eight levels apart -- so the light half landed lighter than the
-     * background and the top and left of every key stopped existing. Two
-     * edges out of four, which is what "they look incomplete" is a picture
-     * of.
-     *
-     * A boundary is not a lighting effect. It says where the button ends, so
-     * it is drawn in one tone on all four sides and is there whatever the
-     * button is sitting on. The highlight below is then free to be subtle,
-     * because it is no longer carrying that job.
-     */
     recon_round_rect_outline(panel, x, y, w, h, radius, behind, dark);
 
-    /*
-     * --- The lighting, kept out of the corners ---
-     *
-     * Inset by one from the boundary and by the radius at each end, so it
-     * begins where the curve finishes. A highlight that ran the full width
-     * would reach round into the corner and sit *outside* the inner curve,
-     * putting a pale pixel where the outline should be.
-     *
-     * Subtle on purpose. It is no longer carrying the job of saying where the
-     * button ends, so it can go back to being what it is -- a light source
-     * above and to the left.
-     */
     if (w > radius * 2 + 4 && h > radius * 2 + 4) {
         recon_color inner = pressed ? dark : light;
         recon_fill_rect(panel, x + 1 + radius, y + 1,

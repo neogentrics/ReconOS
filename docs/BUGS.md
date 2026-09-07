@@ -2575,6 +2575,67 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-143 — Every selection and hover highlight was square
+
+- **Found in** v0.4.0. **Found by** the author, going round the desktop:
+  "when you highlight something, it's square. They should be rounded too...
+  If I go to the desktop and I highlight the Recycle Bin, it's the same thing.
+  All the highlights are square. They should be matching the shape of
+  everything else."
+- **What it was** the same shape of fault as BG-138: around thirty plain
+  `recon_fill_rect` calls, one wherever a highlight was needed, each written
+  out where it was wanted. Nothing owned "what a highlight looks like", so
+  when everything else in the system learnt to round, they did not.
+- **Fixed in** v0.4.0. `recon_widget_highlight` rounds by the same rule a
+  button of that size rounds by, so a highlight and the thing it highlights
+  agree without either being told about the other, and a skin asking for
+  square gets square here too.
+- **Two compositing faults surfaced on the way**, both invisible until
+  something anti-aliased was drawn:
+  - **Blending onto a transparent pixel produced nothing.** `blend_over`
+    keeps the destination's alpha, which is correct where it was used --
+    carving a corner replaces one opaque colour with another -- and wrong for
+    compositing. The desktop's panel is transparent wherever the wallpaper
+    shows through, so the anti-aliased corners of the selection box came out
+    at alpha zero. The straight parts used `recon_fill_rect`, which sets the
+    pixel outright, so three rectangles appeared and four corners did not:
+    a selection box with square bites out of it, which looks exactly like the
+    rounding never having been applied.
+  - **The colour's own alpha was ignored.** The desktop's selection is
+    translucent so the wallpaper reads through it. Composited at full strength
+    the corners came out as the *undimmed* colour -- `2F7FD4` against a body
+    of `1B487D` -- a bright rim around a darker shape. Coverage says how much
+    of the pixel the shape covers and the colour says how solid the shape is;
+    the pixel wants both multiplied.
+
+### BG-142 — Every rounded corner was painted out with a guess at what was behind it
+
+- **Found in** v0.4.0. **Found by** the author: "now it has that weird corner
+  issue that the windows had... the buttons here in the corner have that same
+  thing, where the edges have that weird white triangle."
+- **What it was** `recon_round_rect` fills a square rectangle's corners with a
+  `behind` colour the caller passes -- a colour the caller *believes* is
+  underneath. Every place the belief is wrong shows as a wedge of the wrong
+  colour. It is wrong over a gradient always, because a graded surface has a
+  different colour on every row and one flat colour cannot be all of them;
+  wrong over a wallpaper; and wrong whenever a caller passes the colour of the
+  panel it is on rather than the colour of the strip the control is actually
+  sitting on.
+- The title bar was the worst case and the most visible: several skins grade
+  it, so the corners of every close, maximize and minimize button were carved
+  back to the bar's single named colour and were therefore wrong on every row
+  but one.
+- **Fixed in** v0.4.0. `recon_fill_round_rect` and `recon_stroke_round_rect`
+  draw the rounded shape *as a shape*, compositing it over what is already
+  there. The corner pixels are never overwritten, so whatever is behind them
+  stays behind them -- a gradient, a photograph or a flat fill -- without the
+  drawing code being told which. Nothing is guessed because nothing is
+  painted over.
+- `recon_draw_button_edge` keeps the old shape for the one caller that cannot
+  use the new one: the taskbar fills a button, draws a window's icon and title
+  into it, washes the lot when the window is put away, and only then asks for
+  the edge, so the fill cannot move into the edge routine.
+
 ### BG-141 — Half of every button's edge was missing on any skin that was not grey
 
 - **Found in** v0.4.0. **Found by** the author, pointing at the Calculator:

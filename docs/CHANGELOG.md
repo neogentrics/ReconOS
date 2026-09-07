@@ -23,6 +23,26 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A control is drawn as a shape, so its corners stop being a guess.** The
+rounding worked by filling a square rectangle and painting the corners back out
+with a colour the caller *believed* was behind them. Wrong over a gradient
+always -- a graded surface is a different colour on every row and one flat
+colour cannot be all of them -- and the title bar is graded on several skins,
+so every close, maximize and minimize button had a wedge of the wrong colour in
+each corner. Nothing paints over the corners now, so nothing has to know what
+is under them. BG-142.
+
+**Selections and hovers round like everything else.** Around thirty plain
+rectangles -- the selected file on the desktop, the chosen tile in the Control
+Panel, the row under the pointer in a list, the menu entry being pointed at --
+each written where it was wanted, so when the rest of the system learnt to
+round, they did not. One routine owns it now, and uses the same radius a button
+of that size gets. Two compositing faults surfaced doing it, both invisible
+until something anti-aliased was drawn onto the desktop: blending onto a
+*transparent* pixel kept the destination's alpha and so produced nothing at
+all, and the source colour's own alpha was ignored, which put a bright rim
+around a translucent highlight. BG-143.
+
 **Every button has a boundary now, in its own colour.** `recon_draw_bevel`
 carried a comment reading *"Fixed highlight and shadow for now; a skin would
 supply these."* Nothing ever did, so every button in the system was edged in

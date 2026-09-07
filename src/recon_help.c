@@ -839,7 +839,8 @@ static void help_draw(void *user, struct recon_panel *panel,
 
         bool chosen = (i == help->selected);
         if (chosen) {
-            recon_fill_role(panel, x + 2, ty, SIDEBAR_WIDTH - 4 - BAR_WIDTH,
+            recon_widget_highlight_role(panel, x + 2, ty,
+                SIDEBAR_WIDTH - 4 - BAR_WIDTH,
                 ROW_HEIGHT, RECON_THEME_SELECTION);
         }
 

@@ -1205,7 +1205,7 @@ static void draw_list(struct recon_mailwin *m, struct recon_panel *p,
         bool chosen = (i == m->selected);
 
         if (chosen) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT, COLOR_SELECTED);
         }
 
         uint32_t ink = chosen ? COLOR_SELECTED_TEXT : COLOR_TEXT;

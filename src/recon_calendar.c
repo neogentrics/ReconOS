@@ -502,7 +502,7 @@ static void calendar_draw(void *user, struct recon_panel *panel,
             cw->year == now.year;
 
         if (chosen) {
-            recon_fill_rect(panel, cx, cy, cell_w - 1, cell_h - 1,
+            recon_widget_highlight(panel, cx, cy, cell_w - 1, cell_h - 1,
                 COLOR_SELECTED);
         } else if (is_today) {
             recon_fill_rect(panel, cx, cy, cell_w - 1, cell_h - 1,

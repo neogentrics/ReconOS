@@ -439,7 +439,8 @@ static void draw_menubar(struct recon_taskmgr *tm, struct recon_panel *p,
         bool open = (tm->menu == MENUS[i]);
 
         if (open) {
-            recon_fill_rect(p, lx - 8, y + 2, lw, MENUBAR_HEIGHT - 4, COLOR_MENU_HILITE);
+            recon_widget_highlight(p, lx - 8, y + 2, lw, MENUBAR_HEIGHT - 4,
+                COLOR_MENU_HILITE);
         }
         recon_draw_text(p, tm->font, lx, baseline, lw, LABELS[i],
             open ? COLOR_MENU_HILITE_TEXT : COLOR_TEXT);
@@ -547,7 +548,8 @@ static void draw_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         bool selected = (proc->pid == tm->selected_pid);
 
         if (selected) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT,
+                COLOR_ROW_SELECTED);
         } else if (row % 2 == 1) {
             /* Banding makes a long list easier to read across. */
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
@@ -599,7 +601,8 @@ static void draw_app_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         bool selected = (tm->selected_row == tm->scroll + row);
 
         if (selected) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT,
+                COLOR_ROW_SELECTED);
         } else if (row % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -682,7 +685,8 @@ static void draw_service_rows(struct recon_taskmgr *tm, struct recon_panel *p,
         bool selected = (tm->selected_row == index);
 
         if (selected) {
-            recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+            recon_widget_highlight(p, x, ry, w, ROW_HEIGHT,
+                COLOR_ROW_SELECTED);
         } else if (index % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
         }
@@ -771,7 +775,8 @@ static void draw_user_rows(struct recon_taskmgr *tm, struct recon_panel *p,
             bool selected = (tm->selected_row == i);
 
             if (selected) {
-                recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_SELECTED);
+                recon_widget_highlight(p, x, ry, w, ROW_HEIGHT,
+                    COLOR_ROW_SELECTED);
             } else if (row % 2 == 1) {
                 recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
             }
@@ -992,7 +997,7 @@ static void draw_dropdown(struct recon_taskmgr *tm, struct recon_panel *p,
          */
         bool hovered = (tm->menu_hover == i);
         if (hovered) {
-            recon_fill_rect(p, dx + 1, iy, DROPDOWN_WIDTH - 2,
+            recon_widget_highlight(p, dx + 1, iy, DROPDOWN_WIDTH - 2,
                 DROPDOWN_ITEM_HEIGHT, COLOR_MENU_HILITE);
         }
 

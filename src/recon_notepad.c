@@ -1537,7 +1537,7 @@ static void draw_menubar(struct recon_notepad *np, struct recon_panel *panel,
         bool open = (np->menu_open == i);
 
         if (open) {
-            recon_fill_rect(panel, at, y + 1, width, MENUBAR_HEIGHT - 2,
+            recon_widget_highlight(panel, at, y + 1, width, MENUBAR_HEIGHT - 2,
                 COLOR_MENU_HILITE);
         }
         recon_draw_text(panel, np->font, at + 10,
@@ -1573,7 +1573,8 @@ static void draw_file_menu(struct recon_notepad *np, struct recon_panel *panel,
         bool hovered = (i == np->menu_hover);
 
         if (hovered) {
-            recon_fill_rect(panel, mx + 2, iy, MENU_WIDTH - 4, MENU_ITEM_HEIGHT,
+            recon_widget_highlight(panel, mx + 2, iy, MENU_WIDTH - 4,
+                MENU_ITEM_HEIGHT,
                 COLOR_MENU_HILITE);
         }
 
@@ -1814,9 +1815,8 @@ static void notepad_draw(void *user, struct recon_panel *panel,
                     }
 
                     if (to_x > from_x) {
-                        recon_fill_rect(panel, x + PADDING + from_x, ly,
-                            to_x - from_x, line_height - LINE_SPACING,
-                            COLOR_SELECTION);
+                        recon_widget_highlight(panel, x + PADDING + from_x, ly,
+                            to_x - from_x, line_height - LINE_SPACING, COLOR_SELECTION);
                     }
                 }
             }

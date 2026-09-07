@@ -58,6 +58,30 @@ enum recon_widget_state recon_widget_state_of(const struct recon_panel *panel,
         recon_panel_held(panel), id, disabled);
 }
 
+/* --- Highlights --- */
+
+void recon_widget_highlight(struct recon_panel *panel, int x, int y, int w,
+        int h, recon_color color) {
+    recon_fill_round_rect(panel, x, y, w, h,
+        recon_button_radius(w, h), color);
+}
+
+void recon_widget_highlight_role(struct recon_panel *panel, int x, int y,
+        int w, int h, enum recon_theme_role role) {
+    /*
+     * Through recon_fill_role when the skin grades this role, because a
+     * gradient is a per-row colour and cannot be reduced to one. Graded
+     * highlights stay square, which is the honest trade: a ramp drawn into a
+     * rounded shape needs the ramp and the shape computed together, and no
+     * skin currently grades a selection.
+     */
+    if (recon_theme_gradient(role, NULL, NULL)) {
+        recon_fill_role(panel, x, y, w, h, role);
+        return;
+    }
+    recon_widget_highlight(panel, x, y, w, h, recon_theme_color(role));
+}
+
 /* --- Buttons --- */
 
 /* What a look asks for at rest, before the state is applied. */
@@ -122,17 +146,18 @@ enum recon_widget_state recon_widget_button(struct recon_panel *panel,
         text = THEME(DIM);
     }
 
-    recon_fill_rect(panel, b->x, b->y, b->w, b->h, fill);
-
     /*
-     * The edge, sunk while it is held.
+     * Filled and edged as one rounded shape, sunk while it is held.
      *
-     * recon_draw_button_edge is what puts the skin's corner radius on, so
-     * this is also where every button in the system became round at once --
-     * or stayed square, under a skin that asked for square.
+     * `behind` is no longer read. It was what the corners were painted back
+     * out to after a square fill, and a wedge of the wrong colour appeared
+     * wherever the caller's belief about what was underneath did not match
+     * what was actually underneath -- over any gradient, always. The field is
+     * kept on the struct so that the handful of callers still setting it
+     * compile, and it is ignored.
      */
-    recon_draw_button_edge(panel, b->x, b->y, b->w, b->h,
-        state == RECON_WIDGET_ACTIVE, b->behind);
+    recon_fill_button(panel, b->x, b->y, b->w, b->h,
+        state == RECON_WIDGET_ACTIVE, fill);
 
     /*
      * The label, centred, and clipped at the button's own right edge.
@@ -259,8 +284,18 @@ enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
         fill = recon_widget_surface(fill, state);
     }
 
-    recon_fill_rect(panel, x, y, size, size, fill);
-    recon_draw_bevel(panel, x, y, size, size, state == RECON_WIDGET_ACTIVE);
+    /*
+     * Drawn as a rounded shape, so the corners are never painted over and
+     * there is nothing to guess about what is behind them.
+     *
+     * A title bar is the worst place for the old approach. Several skins put a
+     * *gradient* on it, so the colour a pixel of bar actually is depends on
+     * which row it is in -- and a corner carved back to the bar's single named
+     * colour was therefore wrong on every row but one, which is the pale wedge
+     * that showed at the corner of every close button.
+     */
+    recon_fill_button(panel, x, y, size, size,
+        state == RECON_WIDGET_ACTIVE, fill);
 
     recon_hit_add(panel, x, y, size, size, id);
     if (tip != NULL && tip[0] != '\0') {
@@ -279,15 +314,6 @@ enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
         caption_glyph(panel, x + nudge, y + nudge, size, glyph, ink);
     }
 
-    /*
-     * The corners last, so the glyph and the bevel are rounded off with the
-     * button rather than sticking out of it. Filled back to the bar rather
-     * than cleared: a hole here would show the wallpaper through the frame.
-     */
-    int radius = recon_button_radius(size, size);
-    if (radius > 0) {
-        recon_round_rect(panel, x, y, size, size, radius, behind);
-    }
-
+    (void)behind;
     return state;
 }

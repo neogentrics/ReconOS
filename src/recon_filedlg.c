@@ -332,7 +332,8 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
 
         bool selected = (index == dialog->selected);
         if (selected) {
-            recon_fill_rect(panel, list_x + 2, ry, list_w - 4, ROW_HEIGHT,
+            recon_widget_highlight(panel, list_x + 2, ry, list_w - 4,
+                ROW_HEIGHT,
                 COLOR_SELECTED);
         }
 

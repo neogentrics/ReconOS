@@ -2000,7 +2000,8 @@ static void draw_context(struct recon_shell *shell) {
         bool hovered = (i == shell->context_hover) && shell->context_items[i].enabled;
 
         if (hovered) {
-            recon_fill_role(p, CONTEXT_PADDING, y, width - CONTEXT_PADDING * 2,
+            recon_widget_highlight_role(p, CONTEXT_PADDING, y,
+                width - CONTEXT_PADDING * 2,
                 CONTEXT_ITEM_HEIGHT, RECON_THEME_MENU_HILITE);
         }
 
@@ -3057,9 +3058,8 @@ static void draw_menu(struct recon_shell *shell) {
         bool hovered = (shell->menu_hover == HIT_MENU_BASE + i);
 
         if (hovered) {
-            recon_fill_role(menu, MENU_PADDING, y,
-                MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
-                RECON_THEME_MENU_HILITE);
+            recon_widget_highlight_role(menu, MENU_PADDING, y,
+                MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT, RECON_THEME_MENU_HILITE);
         }
 
         int label_x = MENU_PADDING + TEXT_INSET;
@@ -3094,9 +3094,8 @@ static void draw_menu(struct recon_shell *shell) {
                 COLOR_MENU_SEPARATOR);
 
             if (hovered) {
-                recon_fill_role(menu, MENU_PADDING, y + 1,
-                    MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 1,
-                    RECON_THEME_MENU_HILITE);
+                recon_widget_highlight_role(menu, MENU_PADDING, y + 1,
+                    MENU_LEFT_WIDTH - MENU_PADDING * 2, MENU_ITEM_HEIGHT - 1, RECON_THEME_MENU_HILITE);
             }
 
             unsigned ink = hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT;
@@ -3150,7 +3149,8 @@ static void draw_menu(struct recon_shell *shell) {
         bool hovered = (shell->menu_hover == HIT_PLACE_BASE + i);
 
         if (hovered) {
-            recon_fill_role(menu, right_x, y, right_w, MENU_ITEM_HEIGHT,
+            recon_widget_highlight_role(menu, right_x, y, right_w,
+                MENU_ITEM_HEIGHT,
                 RECON_THEME_MENU_HILITE);
         }
 
@@ -3395,9 +3395,8 @@ static void draw_programs(struct recon_shell *shell) {
         bool hovered = (shell->programs_hover == i);
 
         if (hovered) {
-            recon_fill_role(p, MENU_PADDING, ry,
-                width - MENU_PADDING * 2, MENU_ITEM_HEIGHT,
-                RECON_THEME_MENU_HILITE);
+            recon_widget_highlight_role(p, MENU_PADDING, ry,
+                width - MENU_PADDING * 2, MENU_ITEM_HEIGHT, RECON_THEME_MENU_HILITE);
         }
 
         int icon = MENU_ITEM_HEIGHT - 10;

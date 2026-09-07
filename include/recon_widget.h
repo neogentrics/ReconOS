@@ -88,7 +88,7 @@
  * somebody could see. Not raised for a bug fix that makes a control finally do
  * what this file already says it does.
  */
-#define RECON_WIDGET_VERSION 1
+#define RECON_WIDGET_VERSION 2
 
 /* What is happening to a control right now. */
 enum recon_widget_state {
@@ -215,6 +215,31 @@ enum recon_widget_caption {
 enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
     int x, int y, int size, uint32_t id, enum recon_widget_caption glyph,
     recon_color behind, const char *tip);
+
+/*
+ * A selection or a hover highlight, rounded the way this skin's controls are.
+ *
+ * Every one of these was a plain rectangle: the selected file on the desktop,
+ * the chosen tile in the Control Panel, the row under the pointer in a list,
+ * the menu entry being pointed at. On a skin where nothing else in the window
+ * has a square corner, a square highlight is the one shape that does not
+ * belong -- and there were around thirty of them, each written out where it
+ * was needed, which is the same arrangement that left nothing reacting to the
+ * pointer.
+ *
+ * The radius is the button radius for a control of that size, so a highlight
+ * and the thing it is highlighting round by the same amount. A skin that asks
+ * for square gets square here too, without this being told.
+ */
+void recon_widget_highlight(struct recon_panel *panel, int x, int y, int w,
+    int h, recon_color color);
+
+/*
+ * The same, taking a skin role rather than a colour, for the callers that
+ * were using recon_fill_role.
+ */
+void recon_widget_highlight_role(struct recon_panel *panel, int x, int y,
+    int w, int h, enum recon_theme_role role);
 
 /* --- Interaction state --- */
 

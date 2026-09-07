@@ -74,6 +74,40 @@ against, so a module author cannot state it wrongly.
 
 ## Version history
 
+### Version 2 — v0.4.0
+
+What version 1 got wrong about edges, and the highlights it never covered.
+
+**A control is a shape now, not a rectangle with its corners painted out.**
+Version 1 filled a square rectangle and then carved the corners back to a
+`behind` colour the caller supplied — a colour the caller *believed* was
+underneath. Wrong over a gradient always, since a graded surface is a different
+colour on every row; wrong over a wallpaper; wrong whenever a caller passed its
+panel's colour rather than the colour of the strip the control sat on. Every
+one of those showed as a wedge of the wrong colour in the corner, most visibly
+on the caption buttons, because several skins grade the title bar.
+`recon_fill_round_rect` and `recon_stroke_round_rect` composite the shape over
+what is already there, so the corner pixels are never overwritten and there is
+nothing to guess. BG-142.
+
+**A button has a boundary, not only a bevel.** See BG-141: a 95 bevel is a
+lighting effect and vanishes when the button and the surface behind it are
+close in tone, which cost Glass the top and left edge of every key. Buttons now
+carry a one-pixel outline in the shaded tone on all four sides, following the
+corner, derived from the button's own colour.
+
+**Selections and hovers round like everything else.**
+`recon_widget_highlight` uses the button radius for a control of that size, so
+a highlight and the thing it highlights agree without either being told about
+the other. Around thirty hand-written `recon_fill_rect` calls went through it.
+BG-143.
+
+**Compositing respects alpha, both kinds.** The destination's, so an
+anti-aliased edge drawn onto a transparent panel is visible at all; and the
+source colour's, so a translucent highlight's corners are as translucent as its
+middle. Both were invisible until something anti-aliased was drawn onto the
+desktop.
+
 ### Version 1 — v0.4.0
 
 The first. Everything below is what "drawn against widget version 1" means.
