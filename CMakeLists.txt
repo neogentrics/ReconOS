@@ -275,7 +275,10 @@ add_subdirectory(modules)
 
 add_executable(recon_fs_tests
     tests/test_fs.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # The filesystem reports a path that resolves outside it, so the
+    # code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_fs_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -339,7 +342,10 @@ add_executable(recon_tls_tests
     tests/test_tls.c
     src/recon_tls.c
     src/recon_crypt.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # The filesystem reports a path that resolves outside it, so the
+    # code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_tls_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -424,7 +430,10 @@ target_link_libraries(recon_video_tests PRIVATE m)
 add_executable(recon_png_tests
     tests/test_png.c
     src/recon_png.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # The filesystem reports a path that resolves outside it, so the
+    # code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_png_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

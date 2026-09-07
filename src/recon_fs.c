@@ -26,6 +26,7 @@
 #include <unistd.h>
 
 #include "ReconOS.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 
 #define DEFAULT_HOST_ROOT "/recon"
@@ -145,6 +146,17 @@ static bool normalize(const char *cwd, const char *path, char *out, size_t size)
         }
         if (strcmp(token, "..") == 0) {
             if (depth == 0) {
+                /*
+                 * Refused, and deliberately NOT recorded.
+                 *
+                 * VT-B003 is raised for the other kind of escape -- a name
+                 * that resolves outside, which nobody types by accident -- and
+                 * not for this one. A `..` too many is an ordinary mistake in
+                 * a relative path, this function runs on every file operation
+                 * in the system, and a log line per attempt is a log somebody
+                 * can fill on purpose. The signal worth keeping is the rare
+                 * one; burying it under the common one loses both.
+                 */
                 set_error("path leaves the ReconOS root");
                 return false;
             }
@@ -266,6 +278,13 @@ bool recon_fs_resolve(const char *cwd, const char *path,
     }
     if (written < 0 || (size_t)written >= host_size) {
         set_error("path is too long");
+        /*
+         * Refused rather than shortened, which is the whole of B-004: a name
+         * cut to fit is a different file, and the caller would be told it
+         * succeeded.
+         */
+        recon_error_raisef(NULL, RECON_ERR_B004,
+            "'%s' does not fit in a path", canonical);
         return false;
     }
 
@@ -276,6 +295,14 @@ bool recon_fs_resolve(const char *cwd, const char *path,
      */
     if (!stays_inside(host_out)) {
         set_error("'%s' leads outside the ReconOS filesystem", canonical);
+        /*
+         * This one matters more than the textual escape above. That is
+         * somebody writing `..`; this is a name inside the filesystem that
+         * turns out to point outside it, which nobody types by accident.
+         */
+        recon_error_raisef(NULL, RECON_ERR_B003,
+            "'%s' resolves to somewhere outside the ReconOS filesystem",
+            canonical);
         return false;
     }
 

@@ -6,7 +6,7 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.4.0-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.4.0-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.0)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-23_suites,_1297_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-23_suites,_1300_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-134-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -71,7 +71,7 @@ written down as it was hit rather than guessed at in advance.
 | **Secrets** | A keyring: AES-256-GCM under a key derived from the account password at sign-in and never written down. Signing out makes everything kept unreadable. Nothing prints a secret back |
 | **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 23 suites, 1297 checks and 5,388 malformed inputs, no display needed |
+| **Tests** | 23 suites, 1300 checks and 5,388 malformed inputs, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in

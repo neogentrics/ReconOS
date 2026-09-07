@@ -196,6 +196,26 @@ void recon_error_set_screen(struct recon_server *server,
     g_screen = show;
 }
 
+/*
+ * True while a fault is being written down.
+ *
+ * Recording one goes through the filesystem, and the filesystem is a place
+ * faults come from -- so a raise can reach a raise. Without this that is
+ * unbounded: a path fault reported by writing to a path that also faults
+ * would recurse until the stack ran out, and the last thing the machine did
+ * would be to lose the record of what went wrong.
+ *
+ * The inner one is dropped rather than queued. It is a fault *about reporting
+ * a fault*, so the outer one is the news; and a queue here would be state that
+ * only exists during a failure, which is the worst kind to have to reason
+ * about.
+ *
+ * Not thread-safe, and does not need to be: ReconOS raises faults from the
+ * event loop, which is one thread. That is worth saying rather than assuming,
+ * because the day it is not true this is where it breaks.
+ */
+static bool g_reporting;
+
 void recon_error_raise(struct recon_server *server,
         enum recon_error_code code, const char *detail) {
     const struct recon_error_info *info = recon_error_at(code);
@@ -203,12 +223,29 @@ void recon_error_raise(struct recon_server *server,
         return;
     }
 
+    if (g_reporting) {
+        /* Straight to stderr, which needs nothing of ours. Something has gone
+         * wrong twice and losing the second one silently would be worse than
+         * a line nobody was watching for. */
+        fprintf(stderr, "ReconOS: %s while reporting another fault: %s\n",
+            info->code, (detail != NULL) ? detail : "");
+        return;
+    }
+    g_reporting = true;
+
     append_log(info, detail);
 
     if (info->level != RECON_ERROR_STOP) {
+        g_reporting = false;
         return;
     }
 
+    /*
+     * A stop does not clear the flag. Nothing after this returns to ordinary
+     * running -- the screen is drawn and the session ends -- and a fault
+     * raised from inside the error screen would be one more thing going wrong
+     * on top of the thing that already stopped the system.
+     */
     write_last_stop(info, detail);
 
     if (g_screen != NULL) {

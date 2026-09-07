@@ -2105,8 +2105,8 @@ the file. Looking inside is what the codec registry does for media; there is no
 equivalent for "would this program understand this", and there probably cannot
 be one without asking the program.
 
-**Eleven error codes are raised by nothing.** The catalogue defines
-forty-three and thirty-two of them are reachable, up from thirteen.
+**Nine error codes are raised by nothing.** The catalogue defines forty-three
+and thirty-four of them are reachable, up from thirteen.
 
 One of the twelve has no site because the thing it describes cannot happen:
 **E-005**, a program that could not be removed. Uninstalling is written not to

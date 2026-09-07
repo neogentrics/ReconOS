@@ -10,6 +10,24 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Raising a fault cannot raise a fault. Recording one writes through the
+filesystem, and the filesystem is a place faults come from, so a raise can
+reach a raise -- unbounded, and the last thing the machine would do is lose the
+record of what went wrong. The inner one now goes to stderr and returns. A stop
+deliberately does not clear the flag: nothing after it returns to ordinary
+running.
+
+VT-B003 and VT-B004 have sites, which the containment work gave them.
+B-003 is raised when a name resolves outside the filesystem -- and
+deliberately not when a path merely climbs out with ... That refusal is
+an ordinary mistake in a relative path, recon_fs_resolve runs on every file
+operation in the system, and a line per attempt is a log somebody can fill on
+purpose. The signal worth keeping is the rare one, and burying it under the
+common one loses both. There is a check for that: fifty refused .. paths
+write nothing.
+
+Thirty-four of the forty-three can now happen, up from thirteen.
+
 A link inside the filesystem read a file outside it (BG-133). normalize()
 splits a path on separators, drops ., pops on .. and refuses to go below the
 root -- complete against anything *written* in a path, and the twenty escape

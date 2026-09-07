@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "recon_error.h"
 #include "recon_fs.h"
 
 static int g_failures;
@@ -437,7 +438,72 @@ static void test_a_link_out_of_the_tree(void) {
     check(!followed,
         "A LINK POINTING OUT OF THE TREE DOES NOT READ WHAT IT POINTS AT");
 
+    /*
+     * And it is written down, because this one is worth counting.
+     *
+     * A `..` too many is an ordinary mistake and is deliberately not recorded
+     * -- this function runs on every file operation, and a line per attempt is
+     * a log somebody can fill on purpose. A name that resolves outside is a
+     * different thing: nobody types one by accident.
+     */
+    size_t log_size = 0;
+    char *log = recon_fs_read("/", RECON_ERROR_LOG, &log_size);
+    check(log != NULL && strstr(log, "B003") != NULL,
+        "and VT-B003 is in the log");
+    if (log != NULL) {
+        free(log);
+    }
+
     unlink(link);
+}
+
+static void test_a_common_mistake_is_not_logged(void) {
+    printf("what is refused and not recorded\n");
+
+    recon_fs_remove("/", RECON_ERROR_LOG);
+
+    /* Fifty ordinary escapes, the kind a relative path produces by accident. */
+    for (int i = 0; i < 50; i++) {
+        recon_fs_exists("/", "../../outside");
+    }
+
+    size_t size = 0;
+    char *log = recon_fs_read("/", RECON_ERROR_LOG, &size);
+    if (log != NULL) {
+        printf("        the log grew to %zu bytes\n", size);
+        free(log);
+    }
+    check(log == NULL,
+        "FIFTY REFUSED `..` PATHS WRITE NOTHING -- a log somebody can fill is "
+        "a log that has lost the entry worth finding");
+}
+
+static void test_reporting_cannot_report(void) {
+    printf("a fault raised while reporting one\n");
+
+    /*
+     * The guard, exercised rather than trusted.
+     *
+     * Recording a fault writes through the filesystem, and the filesystem is
+     * a place faults come from, so a raise can reach a raise. Without a guard
+     * that is unbounded and the last thing the machine does is lose the record
+     * of what went wrong.
+     *
+     * There is no way to make the log write fail from here, so what this
+     * proves is the cheaper half: raising while a raise is in progress does
+     * not recurse and does not lose the outer one. A recursion would not
+     * return.
+     */
+    recon_fs_remove("/", RECON_ERROR_LOG);
+    recon_error_raise(NULL, RECON_ERR_B003, "the outer one");
+
+    size_t size = 0;
+    char *log = recon_fs_read("/", RECON_ERROR_LOG, &size);
+    check(log != NULL && strstr(log, "the outer one") != NULL,
+        "a fault raised on its own is recorded and returns");
+    if (log != NULL) {
+        free(log);
+    }
 }
 
 static void test_clipboard(void) {
@@ -557,6 +623,8 @@ int main(void) {
     test_escapes();
     test_every_shape_of_escape();
     test_a_link_out_of_the_tree();
+    test_a_common_mistake_is_not_logged();
+    test_reporting_cannot_report();
     test_clipboard();
     test_private_files();
 
