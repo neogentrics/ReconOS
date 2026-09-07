@@ -2631,10 +2631,17 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   stays behind them -- a gradient, a photograph or a flat fill -- without the
   drawing code being told which. Nothing is guessed because nothing is
   painted over.
-- `recon_draw_button_edge` keeps the old shape for the one caller that cannot
-  use the new one: the taskbar fills a button, draws a window's icon and title
-  into it, washes the lot when the window is put away, and only then asks for
-  the edge, so the fill cannot move into the edge routine.
+- **The taskbar was left on the old path in the first attempt, and still had
+  the wedge.** It is the one control that cannot be drawn as a shape: it
+  fills, draws a window's icon and title into itself, *washes the lot* when
+  the window is put away, and only then asks for the edge -- the wash has to
+  cover the icon and the title, so it cannot come before them and the fill
+  cannot come after. Leaving it carving to `THEME(BAR)` left it wrong on
+  exactly the skins that grade the bar, which is where it had been reported.
+  It keeps its corner pixels before it starts and puts them back when it has
+  finished, which is exact where a colour is a guess. `recon_corners_keep`
+  and `recon_corners_restore`; nothing in the system passes a `behind`
+  colour any more.
 
 ### BG-141 — Half of every button's edge was missing on any skin that was not grey
 

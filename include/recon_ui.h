@@ -391,6 +391,45 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
  * they are not buttons and do not round.
  */
 /*
+ * --- For a control that must be drawn square and rounded afterwards ---
+ *
+ * recon_fill_button draws the shape, which is what nearly everything should
+ * do. One thing cannot: the taskbar fills a button, draws a window's icon and
+ * title into it, *washes the lot* when the window is put away, and only then
+ * asks for the edge -- and the wash has to cover the icon and the title, so it
+ * cannot happen before them and the fill cannot happen after.
+ *
+ * Such a caller keeps its corners before it starts and puts them back when it
+ * has finished. Exact, unlike a `behind` colour: what goes back is what was
+ * actually there, so it is right over a gradient, over a wallpaper and over
+ * anything else, without being told which it is.
+ *
+ * The radius is worked out from the rectangle, so a caller that keeps and
+ * restores the same rectangle cannot get the two out of step.
+ */
+#define RECON_CORNER_MAX 24
+
+struct recon_corners {
+    int radius;
+    int w, h;
+    bool held;
+    uint32_t pixels[4][RECON_CORNER_MAX * RECON_CORNER_MAX];
+};
+
+void recon_corners_keep(struct recon_panel *panel, int x, int y, int w, int h,
+    struct recon_corners *out);
+void recon_corners_restore(struct recon_panel *panel, int x, int y,
+    const struct recon_corners *keep);
+
+/*
+ * The edge alone -- outline and highlight, composited, filling nothing.
+ *
+ * For the caller above, after it has put its corners back.
+ */
+void recon_edge_button(struct recon_panel *panel, int x, int y, int w, int h,
+    bool pressed);
+
+/*
  * Fill a button and edge it, as one rounded shape.
  *
  * The one to use. Nothing is told what is behind the corners because nothing

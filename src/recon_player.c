@@ -765,8 +765,7 @@ static void draw_text_button(struct recon_player *p, struct recon_panel *panel,
         int x, int y, const char *label, uint32_t hit, bool on) {
     int ascent = recon_font_ascent(p->font);
 
-    recon_fill_rect(panel, x, y, BUTTON, BUTTON, COLOR_BAR);
-    recon_draw_button_edge(panel, x, y, BUTTON, BUTTON, false, COLOR_BG);
+    recon_fill_button(panel, x, y, BUTTON, BUTTON, false, COLOR_BAR);
 
     int w = recon_text_width(p->font, label);
     recon_draw_text(panel, p->font, x + (BUTTON - w) / 2,

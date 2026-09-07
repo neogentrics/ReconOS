@@ -2415,6 +2415,24 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
      * arrived at separately are two hover treatments that stop matching the
      * first time either is adjusted.
      */
+    /*
+     * The corners are kept before anything is drawn and put back at the end.
+     *
+     * This is the one control that cannot simply be drawn as a rounded shape.
+     * It fills, draws the window's icon and title into itself, and *washes the
+     * lot* when the window is put away -- and the wash has to cover the icon
+     * and the title, so it cannot come before them and the fill cannot come
+     * after. So the square drawing stays, and what was behind the corners is
+     * remembered and restored rather than guessed at.
+     *
+     * Guessing is what was here: the corners were carved back to THEME(BAR),
+     * a single flat colour, on skins that *grade* the bar -- so they were the
+     * wrong colour on every row but one. That is the pale wedge that showed at
+     * the corner of every taskbar button.
+     */
+    struct recon_corners keep;
+    recon_corners_keep(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, &keep);
+
     recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
         recon_widget_surface(recon_theme_color(fill),
             recon_widget_state_of(bar, id, false)));
@@ -2469,8 +2487,9 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
      * Filled back to the bar behind rather than cleared: a hole here would
      * show the wallpaper through the taskbar.
      */
-    recon_draw_button_edge(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
-        active || minimized, THEME(BAR));
+    recon_corners_restore(bar, x, TASKBAR_PADDING, &keep);
+    recon_edge_button(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
+        active || minimized);
 }
 
 /*
@@ -2583,24 +2602,13 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
         int bx = x + i * (DESKTOP_BUTTON + 2);
         bool current = (i == shell->current_desktop);
 
-        recon_fill_rect(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
-            BUTTON_HEIGHT,
+        recon_fill_button(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
+            BUTTON_HEIGHT, current,
             recon_widget_surface(recon_theme_color(current
                     ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON),
                 recon_widget_state_of(bar, HIT_DESKTOP_BASE + (uint32_t)i,
                     false)));
 
-        /*
-         * The button edge rather than a bare bevel, so these round with the
-         * skin like every other button. They were the last square things on a
-         * desktop whose windows and task buttons had rounded since v0.2.10 --
-         * and being in the corner is exactly where that gets noticed.
-         *
-         * Filled back to the bar rather than cleared, because a hole here shows
-         * the wallpaper through the middle of the taskbar.
-         */
-        recon_draw_button_edge(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
-            BUTTON_HEIGHT, current, THEME(BAR));
 
         /* Room for any int, not for the four this actually writes. The loop
          * bound became a function call and the compiler stopped being able to
@@ -2674,13 +2682,11 @@ static void draw_taskbar(struct recon_shell *shell) {
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
     recon_hit_tip(bar, "Programs, places, settings and help");
 
-    recon_fill_rect(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-        APPS_BUTTON_WIDTH, BUTTON_HEIGHT,
+    recon_fill_button(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open,
         recon_widget_surface(recon_theme_color(shell->menu_open
                 ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON),
             recon_widget_state_of(bar, HIT_APPS_BUTTON, false)));
-    recon_draw_button_edge(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open, THEME(BAR));
 
     /* A mark so the button reads as the system menu rather than a window. */
     int mark_size = BUTTON_HEIGHT - 10;

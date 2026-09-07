@@ -1822,6 +1822,100 @@ int recon_button_radius(int w, int h) {
  * overwritten, so whatever is behind them stays there at whatever coverage the
  * curve gives.
  */
+void recon_corners_keep(struct recon_panel *panel, int x, int y, int w, int h,
+        struct recon_corners *out) {
+    if (out == NULL) {
+        return;
+    }
+    out->held = false;
+    out->w = w;
+    out->h = h;
+    out->radius = recon_button_radius(w, h);
+
+    if (panel == NULL || out->radius <= 0 ||
+            out->radius > RECON_CORNER_MAX) {
+        return;
+    }
+
+    int r = out->radius;
+    for (int dy = 0; dy < r; dy++) {
+        for (int dx = 0; dx < r; dx++) {
+            int points[4][2];
+            corner_points(x, y, w, h, dx, dy, points);
+            for (int i = 0; i < 4; i++) {
+                int cx = points[i][0];
+                int cy = points[i][1];
+                uint32_t value = 0;
+                if (cx >= 0 && cy >= 0 && cx < panel->width &&
+                        cy < panel->height) {
+                    value = panel->pixels[(size_t)cy * panel->width + cx];
+                }
+                out->pixels[i][dy * r + dx] = value;
+            }
+        }
+    }
+    out->held = true;
+}
+
+void recon_corners_restore(struct recon_panel *panel, int x, int y,
+        const struct recon_corners *keep) {
+    if (panel == NULL || keep == NULL || !keep->held) {
+        return;
+    }
+
+    int r = keep->radius;
+    for (int dy = 0; dy < r; dy++) {
+        for (int dx = 0; dx < r; dx++) {
+            /*
+             * How much of this pixel the rounded shape does *not* cover, which
+             * is how much of what was here should come back. The same
+             * coverage the shape is drawn with, so the two meet exactly rather
+             * than leaving a seam a pixel wide.
+             */
+            int outside = 255 - corner_coverage(r, dx, dy, 0);
+            if (outside <= 0) {
+                continue;
+            }
+
+            int points[4][2];
+            corner_points(x, y, keep->w, keep->h, dx, dy, points);
+            for (int i = 0; i < 4; i++) {
+                blend_at(panel, points[i][0], points[i][1],
+                    keep->pixels[i][dy * r + dx] | 0xFF000000u, outside);
+            }
+        }
+    }
+}
+
+/*
+ * The edge alone: the outline and the highlight, filling nothing.
+ *
+ * Split out of recon_fill_button for the caller that has to do its own filling
+ * and drawing first. Everything about how a button's edge looks lives in one
+ * place either way -- this and recon_fill_button share it rather than each
+ * having an opinion.
+ */
+void recon_edge_button(struct recon_panel *panel, int x, int y, int w, int h,
+        bool pressed) {
+    if (panel == NULL || w < 2 || h < 2) {
+        return;
+    }
+
+    recon_color light, dark;
+    bevel_colours(bevel_face(panel, x, y, w, h), &light, &dark);
+    int radius = recon_button_radius(w, h);
+
+    recon_stroke_round_rect(panel, x, y, w, h, radius, dark);
+
+    if (w > radius * 2 + 4 && h > radius * 2 + 4) {
+        recon_color inner = pressed ? dark : light;
+        recon_fill_rect(panel, x + 1 + radius, y + 1,
+            w - 2 - radius * 2, 1, inner);
+        recon_fill_rect(panel, x + 1, y + 1 + radius,
+            1, h - 2 - radius * 2, inner);
+    }
+}
+
 void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
         bool pressed, recon_color face) {
     if (panel == NULL || w < 2 || h < 2) {
