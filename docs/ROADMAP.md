@@ -2038,11 +2038,17 @@ plane) and **a plot of data from a file** rather than of an expression, which
 needs a file picker, a format decision and an answer to what happens when a
 row will not parse. Neither is a variation on what is there.
 
-Also missing, and smaller: **implicit multiplication**. `sin(3t)` is what
-anybody writes and is not what `recon_expr` reads -- it wants `sin(3*t)`, and
-the hint under an empty plane says so rather than showing the form that does
-not work. Adding it is a change to the grammar with an ambiguity to settle
-(`e2`, `xt`), which is why it is written down here rather than done in passing.
+**Implicit multiplication is done.** `3t`, `2pi`, `2(x+1)`, `(x+1)(x-1)` and
+`3sin(x)` all mean what they look like, and the hint under an empty plane says
+`sin(3t)` again rather than teaching the one form that did not work.
+
+The ambiguities settled rather than avoided: `2 3` stays a mistake, because
+nobody writes six that way and letting it through turns a typo somebody can see
+into an answer they cannot question; `xt` stays one name, because there is one
+variable and reading it as a product would make every misspelled function name
+silently become one; and `2e3` is still two thousand while `2e` is two times e,
+which falls out of the number reader being greedy about exponents that are
+valid rather than from a rule of its own.
 
 **A package cannot be signed or depended on.** As of v0.4.0 it can ship files
 and settings as well as code, can be nothing but files -- so a wallpaper pack

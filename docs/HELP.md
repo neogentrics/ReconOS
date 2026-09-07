@@ -434,8 +434,13 @@ origin, and the angle sweeps round. `sin(3*t)` is a three-petal rose,
 `1+cos(t)` is a heart, and `t/3` is a spiral.
 
 The variable can be written `x` or `t` under either mode -- there is only one,
-so both mean the same thing. Multiplication has to be written out: `3*t`, not
-`3t`.
+so both mean the same thing. **`3t` means 3 times t**, and so do `2pi`,
+`2(x+1)` and `3sin(x)`: a number or a bracket against a name or a bracket is a
+multiplication, written the way anybody writes it.
+
+Two numbers with nothing between them is still a mistake -- `2 3` is refused
+rather than read as six -- and two letters are one name, because there is only
+one variable and `xt` was never going to be a product.
 
 Switching modes keeps what you typed and resets the view, because the two need
 very different scales. It is worth doing once with something in the fields: the

@@ -92,6 +92,26 @@ fourteen targets reports the sums -- recon_fs.c came out as "21% of 10920
 lines" when it has 780 -- so both columns were wrong, and the first version of
 this script printed them.
 
+3t means 3 times t. So do 2pi, 2(x+1), (x+1)(x-1) and 3sin(x).
+The grapher's hint had to read sin(3*t), which is teaching somebody the one
+form that does not work.
+
+The rule is a line: a value has just finished and the next character begins
+another one. What that deliberately excludes is as much of the point:
+
+* 2 3 is still a mistake. Nobody writes six that way, and letting
+  implicit multiplication swallow it turns a typo somebody can see into an
+  answer they cannot question.
+* xt is still one name. There is exactly one variable, so it was never
+  going to be a product -- and reading it as one would make every misspelled
+  function name silently become a multiplication.
+* 2e3 is still two thousand, and 2e is two times e. Scientific notation
+  and "two times e" are the same characters, and this settles it without a rule
+  of its own: the number reader is greedy about exponents that are *valid*, so
+  it takes all of 2e3 and stops at the e in 2e. Both answers are the ones
+  somebody typing them meant, and there is a test saying so, because the next
+  person to read that file will wonder.
+
 The grapher draws polar curves. A second mode beside "y of x": the
 expression is the distance from the origin and the angle sweeps round, so
 sin(3*t) is a three-petal rose, 1+cos(t) a cardioid, and t/3 a spiral --

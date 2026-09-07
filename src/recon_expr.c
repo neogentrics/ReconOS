@@ -10,7 +10,7 @@
  * The grammar, lowest binding first:
  *
  *   expression := term (('+' | '-') term)*
- *   term       := unary (('*' | '/') unary)*
+ *   term       := unary (('*' | '/' | nothing at all) unary)*
  *   unary      := ('-' | '+') unary | power
  *   power      := primary ('^' unary)?
  *   primary    := number | 'x' | name '(' expression ')' | '(' expression ')'
@@ -24,6 +24,31 @@
  * it, and power taking a unary on its right. The first version of this file had
  * them the other way round, with this same paragraph above it describing the
  * behaviour it did not have: -2^2 came to 4.
+ *
+ * --- Multiplication nobody wrote ---
+ *
+ * `3t` is 3*t, `2pi` is 2*pi, `2(x+1)` and `(x+1)(x-1)` and `3sin(x)` all mean
+ * what they look like. Everybody writes them that way and the grapher's own
+ * hint had to say "sin(3*t)" rather than "sin(3t)", which is teaching somebody
+ * the one form that does not work.
+ *
+ * The rule is one line: **a value has just finished and the next character
+ * begins another one.** A number, the variable, a constant or a closing bracket
+ * ends a value; a digit, a letter or an opening bracket begins one. Nothing
+ * else multiplies, so `2 3` is still two numbers with nothing between them and
+ * is still refused.
+ *
+ * What it does *not* do is join two names. `xt` is one name, is not something
+ * this knows, and says so -- there is exactly one variable, so `xt` was never
+ * going to be x times t, and reading it that way would make every misspelled
+ * function name silently become a product.
+ *
+ * The ambiguity worth naming is `2e3`. Scientific notation and "two times e
+ * cubed" are the same six characters, and this settles it the way everybody
+ * expects without a rule of its own: the number reader is greedy about
+ * exponents that are *valid*, so `2e3` is read whole as 2000, and `2e` is read
+ * as 2 with an `e` left over -- which the line above then multiplies. Both
+ * answers are the ones somebody typing them meant.
  */
 
 #include <ctype.h>
@@ -41,6 +66,16 @@ struct parser {
      * Sixteen because that is what the name buffer in parse_primary holds,
      * and a name longer than it could match would never be read. */
     char name[16];
+
+    /*
+     * True when the last thing read was a complete value.
+     *
+     * Which is the whole of how `3t` is told from `3 * t` and from `2 3`: a
+     * value having just ended, and a value beginning next, is a multiplication
+     * nobody wrote down. Set in parse_primary, where a value is what is being
+     * read, and cleared by every operator that takes one.
+     */
+    bool ended_a_value;
 
     /* Set the moment something is wrong, and never cleared -- the first
      * complaint is the useful one, and carrying on to find a second means
@@ -123,7 +158,25 @@ static double call_function(struct parser *p, const char *name, double arg) {
     return 0.0;
 }
 
+static double parse_primary_value(struct parser *p);
+
+/*
+ * A value, and a note that one was just read.
+ *
+ * The note is what parse_term uses to tell `3t` from `3 * t` and from an
+ * operator with nothing after it. Kept here, wrapping the reading, rather than
+ * set at each of the five places a value can be read -- which is five places
+ * to forget it, and forgetting it in one of them would make implicit
+ * multiplication work everywhere except after a function call.
+ */
 static double parse_primary(struct parser *p) {
+    p->ended_a_value = false;
+    double v = parse_primary_value(p);
+    p->ended_a_value = !p->bad;
+    return v;
+}
+
+static double parse_primary_value(struct parser *p) {
     skip_spaces(p);
 
     if (take(p, '(')) {
@@ -241,6 +294,26 @@ static double parse_power(struct parser *p) {
     return base;
 }
 
+/*
+ * Does a value begin here?
+ *
+ * Deliberately not "is this not an operator": `)` and the end of the text are
+ * neither, and treating them as the start of a value would multiply by
+ * whatever came next across a bracket.
+ */
+static bool a_value_begins(char c) {
+    /*
+     * A letter or an opening bracket. **Not a digit.**
+     *
+     * `2x` and `2(x+1)` are things people write. `2 3` is a typo -- nobody
+     * writes six that way -- and it was refused before this and stays refused,
+     * with the message it already had. Letting implicit multiplication swallow
+     * it would turn a mistake somebody can see into an answer they cannot
+     * question.
+     */
+    return isalpha((unsigned char)c) || c == '(';
+}
+
 static double parse_term(struct parser *p) {
     double left = parse_unary(p);
 
@@ -268,6 +341,17 @@ static double parse_term(struct parser *p) {
             } else {
                 left = checked(p, left / right);
             }
+        } else if (p->ended_a_value && a_value_begins(*p->at)) {
+            /*
+             * Nothing between two values means multiply.
+             *
+             * `ended_a_value` is set by parse_primary and is what keeps this
+             * from firing after an operator: in `2 * 3` the `*` is taken
+             * above, and in `2 +` there is no value to the left of the space.
+             * Without it this would read `sin` in `2 * sin(x)` as a second
+             * factor and multiply twice.
+             */
+            left = checked(p, left * parse_unary(p));
         } else {
             return left;
         }

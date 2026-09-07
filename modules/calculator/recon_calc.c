@@ -1580,16 +1580,14 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     }
     if (!anything) {
         /*
-         * The examples are written the way this grammar takes them, which
-         * means the multiplication signs are there. `sin(3t)` is what anybody
-         * would write and is not something recon_expr reads -- a hint showing
-         * it would be teaching the one thing that does not work.
+         * `sin(3t)` again, because it works again. The star was here for one
+         * commit, while the grammar could not read the form everybody writes.
          */
         recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2,
             w - 16, calc->graph_kind == GRAPH_POLAR
                 ? "Type a distance from the origin, in the angle t. "
-                  "For example: sin(3*t), 1+cos(t), t"
-                : "Type an expression in x. For example: sin(x), x^2-2, 1/x",
+                  "For example: sin(3t), 1+cos(t), t"
+                : "Type an expression in x. For example: sin(x), 2x^2-1, 1/x",
             COLOR_KEY_TEXT);
         return;
     }

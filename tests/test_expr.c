@@ -145,6 +145,57 @@ static void test_the_variable_by_another_name(void) {
     check(named_comes_to("x+1", "", 4, 5), "and so does an empty one");
 }
 
+static void test_multiplication_nobody_wrote(void) {
+    printf("Multiplication nobody wrote\n");
+
+    check(comes_to("3x", 4, 12), "a number against the variable");
+    check(comes_to("2pi", 0, 6.283185307179586), "and against a constant");
+    check(comes_to("2(x+1)", 3, 8), "and against a bracket");
+    check(comes_to("3sin(0)", 1, 0), "and against a function");
+    check(comes_to("(x+1)(x-1)", 3, 8), "two brackets side by side");
+    check(comes_to("x(x+1)", 3, 12), "the variable against a bracket");
+
+    /* It binds as multiplication does, not tighter. */
+    check(comes_to("2x^2", 3, 18), "2x^2 is 2*(x^2), not (2x)^2");
+    check(comes_to("1/2x", 4, 2), "and 1/2x is (1/2)*x, left to right");
+
+    /*
+     * The ambiguity worth naming.
+     *
+     * `2e3` is scientific notation and "two times e cubed" written the same
+     * six characters. This settles it without a rule of its own: the number
+     * reader is greedy about exponents that are valid, so it takes the whole
+     * of 2e3 -- and stops at the `e` in `2e`, which then multiplies. Both are
+     * what somebody typing them meant, and the test says so out loud because
+     * the next person to read this file will wonder.
+     */
+    check(comes_to("2e3", 0, 2000), "2e3 is two thousand, as it always was");
+    check(comes_to("2e", 0, 2 * 2.71828182845904523536),
+        "AND 2e IS TWO TIMES e, because there is no exponent to be greedy "
+        "about");
+
+    /*
+     * And what stays a mistake.
+     *
+     * Two numbers with nothing between them is a typo -- nobody writes six as
+     * "2 3" -- and letting implicit multiplication swallow it would turn a
+     * mistake somebody can see into an answer they cannot question.
+     */
+    char why[128] = "";
+    check(recon_expr_eval("2 3", 1, NULL, why, sizeof(why))
+        == RECON_EXPR_BAD, "two numbers with nothing between them is still "
+        "refused");
+    check(why[0] != '\0', "and still says so");
+
+    /*
+     * Nor does it join two names. There is one variable, so `xt` was never
+     * going to be x times t -- and reading it that way would make every
+     * misspelled function name silently become a product.
+     */
+    check(recon_expr_eval("xt", 1, NULL, NULL, 0) == RECON_EXPR_BAD,
+        "AND TWO LETTERS ARE ONE NAME, not a product");
+}
+
 static void test_functions(void) {
     printf("Functions\n");
 
@@ -235,6 +286,7 @@ int main(void) {
     test_precedence();
     test_x_and_constants();
     test_the_variable_by_another_name();
+    test_multiplication_nobody_wrote();
     test_functions();
     test_undefined_is_not_an_error();
     test_what_is_refused();
