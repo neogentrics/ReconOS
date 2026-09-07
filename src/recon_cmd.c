@@ -23,6 +23,7 @@
 #include "recon_firewall.h"
 #include "recon_service.h"
 #include "recon_fs.h"
+#include "recon_help.h"
 #include "recon_modules.h"
 #include "recon_package.h"
 #include "recon_net.h"
@@ -200,6 +201,16 @@ struct command {
 static const struct command COMMANDS[];
 static int command_count(void);
 
+/*
+ * How many help pages `help <word>` will name.
+ *
+ * Six rather than all of them: a word like "file" is in most of the document,
+ * and a terminal answering a question with forty lines has not answered it.
+ * The same reasoning as the Start menu's four, with a little more room because
+ * this is a scrollback rather than a fixed-height menu.
+ */
+#define HELP_HITS 6
+
 static void cmd_help(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc > 1) {
         for (int i = 0; i < command_count(); i++) {
@@ -221,7 +232,35 @@ static void cmd_help(struct recon_cmd_session *s, int argc, char **argv) {
             }
         }
 
-        out(s, "No command named '%s'.\n", argv[1]);
+        /*
+         * Not a command. Before saying so, ask the help.
+         *
+         * `help firewall` finds the command, which is right. `help printing`
+         * used to answer "No command named 'printing'", which is true and
+         * useless -- the system has a page about printing and had just
+         * declined to mention it. Somebody told the system has nothing to say
+         * about a subject stops asking, which is the same reasoning that put
+         * help pages in the Start menu's search.
+         *
+         * The search is `recon_help_search` and it needs no window, so this is
+         * a caller rather than a subsystem. Titles only here: a terminal is a
+         * narrow column and the page itself is one command away.
+         */
+        char titles[HELP_HITS][RECON_HELP_TITLE_MAX];
+        int found = recon_help_search(argv[1], titles, HELP_HITS);
+        if (found > 0) {
+            out(s, "No command named '%s', but the help has %s:\n\n",
+                argv[1], found == 1 ? "a page about it" : "pages about it");
+            for (int i = 0; i < found; i++) {
+                out(s, "  %s\n", titles[i]);
+            }
+            out(s, "\nOpen Help to read %s.\n",
+                found == 1 ? "it" : "them");
+            return;
+        }
+
+        out(s, "No command named '%s', and the help has no page about it.\n",
+            argv[1]);
         return;
     }
 

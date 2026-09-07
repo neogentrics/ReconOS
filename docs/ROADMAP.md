@@ -2011,12 +2011,36 @@ search worse at the thing it was already good at. Four pages at most, because
 the menu is a fixed height and a word like "file" is in most of the document --
 the rest is what opening Help is for.
 
-What is still missing is everywhere else. A file manager that could search file
-*contents*, a Terminal command that answers a question rather than listing
-commands, and an error message that offers the page about the thing that went
-wrong are all the same shape as this and none of them exist. The search itself
-is `recon_help_search`, which needs no window, so the cost of adding one of
-them is a caller rather than a subsystem.
+**The Terminal answers questions now.** `help <word>` looked for a command with
+that name and said "No command named 'password'" when there was not one --
+true, useless, and said by a system that has three pages about passwords and
+had just declined to mention them. It now falls through to `recon_help_search`
+and names what it found. Six at most: a word like "file" is in most of the
+document, and a terminal answering a question with forty lines has not answered
+it.
+
+Exactly as this note predicted, the cost was a caller rather than a subsystem.
+What it did *not* predict is that having a second caller would expose how the
+search orders its answers.
+
+**Ordering, which mattered more than the new caller.** `help password` answered
+with six pages of which three were release notes, and `skin` put "Files" above
+"How it looks". Both are the right set in the wrong order, and an answer whose
+best item is fourth is one somebody stops reading before reaching.
+
+Two things decide it now, and the first matters more: a page *named* after the
+word beats one that merely mentions it, and a page about a subject beats a
+release note. The second signal needed nothing added -- `make-help.sh` already
+writes the two kinds as `help-NN.txt` and `changes-NN.txt`, so the index
+carried the distinction all along. Release notes are ranked below rather than
+excluded, because one about the thing being asked about is a reasonable answer
+when there is nothing better.
+
+Both callers got it: the Start menu leads with Passwords now rather than
+Accounts.
+
+Still missing: a file manager that searches file *contents*, and an error
+message that offers the page about what went wrong.
 
 **The grapher plots y against x, and r against an angle.** Three curves, a
 plane that can be dragged, a wheel that zooms about the pointer, expressions

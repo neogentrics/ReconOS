@@ -1184,6 +1184,35 @@ struct recon_appwin *recon_help_create(struct recon_server *server,
     return help->win;
 }
 
+/*
+ * How many matches to consider before choosing which to keep.
+ *
+ * More than any caller asks for, because the choice below is between two kinds
+ * of page and taking the first `max` in index order would make that choice by
+ * accident.
+ */
+#define SEARCH_CANDIDATES 48
+
+/*
+ * A page of the change log rather than a page about a subject.
+ *
+ * `scripts/make-help.sh` writes the two kinds under different names --
+ * `help-NN.txt` and `changes-NN.txt` -- so the index already carries the
+ * distinction and nothing has to be added to make it.
+ *
+ * Why it matters: somebody typing "password" wants the page about accounts,
+ * not the three release notes that happen to mention the word. Before this,
+ * `help password` in the Terminal answered with six pages of which three were
+ * version entries, and the Start menu's four could all have been.
+ *
+ * Not *excluded*, because a release note about the thing somebody is asking
+ * about is a reasonable answer when there is nothing better -- only ranked
+ * below.
+ */
+static bool is_change_log(const char *file) {
+    return strncmp(file, "changes-", 8) == 0;
+}
+
 int recon_help_search(const char *needle,
         char titles[][RECON_HELP_TITLE_MAX], int max) {
     if (needle == NULL || *needle == '\0' || titles == NULL || max <= 0) {
@@ -1202,10 +1231,23 @@ int recon_help_search(const char *needle,
         return 0;
     }
 
-    int found = 0;
+    /*
+     * Every match, with a score, so the answer can be ordered by how good it
+     * is rather than by where it happened to sit in the index.
+     *
+     * Two things decide it, and the first matters more: a page *named* after
+     * the word is a better answer than one that merely mentions it somewhere.
+     * "skin" used to answer with Files first and "How it looks" fourth, which
+     * is the right set in the wrong order -- and an answer whose best item is
+     * fourth is one somebody stops reading before reaching.
+     */
+    char candidates[SEARCH_CANDIDATES][RECON_HELP_TITLE_MAX];
+    int scores[SEARCH_CANDIDATES];
+    int candidate_count = 0;
+
     char *saveptr = NULL;
     for (char *line = strtok_r(index, "\n", &saveptr);
-            line != NULL && found < max;
+            line != NULL && candidate_count < SEARCH_CANDIDATES;
             line = strtok_r(NULL, "\n", &saveptr)) {
         char *tab = strchr(line, '\t');
         if (tab == NULL) {
@@ -1221,7 +1263,8 @@ int recon_help_search(const char *needle,
             continue;
         }
 
-        bool matches = contains_ignoring_case(title, needle);
+        bool in_title = contains_ignoring_case(title, needle);
+        bool matches = in_title;
         if (!matches) {
             char page_path[RECON_PATH_MAX];
             if (recon_fs_join(page_path, sizeof(page_path), RECON_DIR_HELP,
@@ -1236,12 +1279,37 @@ int recon_help_search(const char *needle,
         }
 
         if (matches) {
-            snprintf(titles[found], RECON_HELP_TITLE_MAX, "%s", title);
-            found++;
+            /* Lower is better: named after it beats mentions it, and a
+             * subject beats a release note. */
+            int score = (in_title ? 0 : 1) + (is_change_log(file) ? 2 : 0);
+            snprintf(candidates[candidate_count], RECON_HELP_TITLE_MAX, "%s",
+                title);
+            scores[candidate_count] = score;
+            candidate_count++;
         }
     }
 
     free(index);
+
+    /*
+     * Emitted in score order, and within a score in the order the index gave
+     * them -- which is the order the help was written in, and is as good an
+     * answer as anything for pages that are equally relevant.
+     *
+     * Four passes over at most forty-eight entries rather than a sort: it is
+     * the same work, and it cannot get the stability wrong.
+     */
+    int found = 0;
+    for (int want = 0; want <= 3 && found < max; want++) {
+        for (int i = 0; i < candidate_count && found < max; i++) {
+            if (scores[i] == want) {
+                snprintf(titles[found], RECON_HELP_TITLE_MAX, "%s",
+                    candidates[i]);
+                found++;
+            }
+        }
+    }
+
     return found;
 }
 

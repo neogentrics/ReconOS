@@ -23,6 +23,22 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The Terminal answers questions.** `help password` used to say "No command
+named 'password'" -- true, useless, and said by a system with three pages about
+passwords that had just declined to mention them. It now names what the help
+has, six pages at most, because a word like "file" is in most of the document
+and a terminal answering with forty lines has not answered anything.
+
+**And the answers are in a better order, everywhere.** Adding the second caller
+exposed how `recon_help_search` ranked things: `password` returned six pages of
+which three were release notes, and `skin` put "Files" above "How it looks".
+Two signals decide it now -- a page named after the word beats one that merely
+mentions it, and a subject page beats a release note. The second needed nothing
+added, because `make-help.sh` already writes the two kinds as `help-NN.txt` and
+`changes-NN.txt`. Release notes are ranked below rather than dropped: one about
+the thing being asked about is a reasonable answer when there is nothing
+better. The Start menu leads with Passwords now rather than Accounts.
+
 **"Open with" looks inside the file now.** `recon_sniff` reads a file's first
 bytes and says what format it is in -- PNG, JPEG, GIF, BMP, ICO, WAV, MP3, MP4,
 zip, gzip, PDF, a program, a web page, or plain text. Evidence rather than a
