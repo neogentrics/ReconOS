@@ -1,13 +1,13 @@
-Photos opens PNG, JPEG, BMP, GIF and TGA. Double-clicking a picture
-anywhere opens it here.
+The Terminal runs ReconOS commands. It is not a Unix shell: nothing here
+reaches the machine underneath, and nothing outside ReconOS can be run from
+it.
 
-It shows one picture at a time, fitted to the window. Half and Double
-change the size, and Save as PNG writes the result out under a new name --
-it refuses to overwrite an existing file rather than asking, so nothing is ever
-lost to a mistyped name. A * in the title means there are changes that have
-not been saved.
+help lists every command. Some worth knowing:
 
-What is not on offer is making a small picture sharp. Enlarging shows the
-pixels that are there, larger. Inventing detail that was never in the picture
-needs a trained model, and a button promising a sharper photograph while
-delivering a confident invention is not a feature this wants.
+- dir, cd, type — look around and read a file
+- copy, move, rename, del — change things
+- theme, wallpaper — how it looks
+- net — what the network is doing
+- capture — a picture of the screen
+- reg — the settings the system remembers
+- bin — the Recycle Bin: list it, fill it, empty it

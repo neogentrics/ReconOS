@@ -1,16 +1,10 @@
-Drag a window by its title bar. Drag any edge or corner to resize it.
+The box at the bottom of the Apps menu searches programs, places, settings
+and this help. Type a word and matching pages appear under the matching
+programs, marked "Help:" -- click one and it opens here at that page.
 
-Drag a window until the pointer touches the left or right edge of the
-screen and let go, and it fills that half. Drag it to the top and it fills
-the screen. The middle button in the title bar puts it back where it was.
+Four pages at most, because the menu has to stay a menu. For more, open Help
+and use its own search box, which has no limit and shows you where in each page
+the word appears.
 
-The three buttons at the right of a title bar are minimize, maximize and
-close.
-
-A program written for Wayland rather than for ReconOS gets the same title bar
-as everything else, so it drags, resizes, minimizes, maximizes and closes the
-same way. Its edges are grabbed from just outside the window, where the
-cursor changes to show which way it will move.
-
-A program that insists on drawing its own frame is left alone rather than
-given a second one.
+F1 opens the page about whatever window is in front. With nothing in front
+it opens at the beginning.

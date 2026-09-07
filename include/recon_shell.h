@@ -160,6 +160,12 @@ int recon_shell_app_index(struct recon_shell *shell, const char *title);
 void recon_shell_open_named(struct recon_shell *shell, const char *title);
 
 /*
+ * Open Help at one topic. `label` may be the topic's title or the Start menu's
+ * "Help: <title>" form; everything before the first ": " is dropped.
+ */
+void recon_shell_open_help_topic(struct recon_shell *shell, const char *label);
+
+/*
  * Open the help at whatever the window in front is about, or at its first
  * page when nothing is in front or nothing says.
  *

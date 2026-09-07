@@ -1,12 +1,13 @@
-The Control Panel has an Accounts page. An administrator can add an
-account, set or clear its password, give it a picture, and make it an
-administrator or a limited account.
+Notepad opens, edits and saves text.
 
-Removing an account asks what to do about its folder: keeping the files and
-deleting them are separate decisions, and only one of them can be undone.
-
-A limited account cannot change anything in /System and cannot read
-another account's files.
-
-Lock covers the screen without ending your session — your windows stay
-open and only you can unlock it. Sign Out ends the session.
+- Ctrl+Z undoes, a word at a time. Ctrl+Y redoes.
+- Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste. They work between
+  Notepad, every text box in the system, and the Terminal.
+- Ctrl+A selects everything. Hold Shift with the arrow keys to select
+  by hand.
+- Ctrl+F finds text. It ignores capitals and carries on from the top when
+  it reaches the end. F3 finds the next one.
+- Ctrl+H is the same bar with a second field. Replace changes the
+  match in front of you and moves to the next; All changes every one from
+  the top of the document. Tab moves between the two fields, and either can
+  be undone.

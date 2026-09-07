@@ -1,9 +1,20 @@
-Icons on the desktop are the contents of your Desktop folder, so anything that
-writes a file there puts it on the desktop.
+The File Explorer shows your folders. Type a path into the bar at the top,
+or use the drop-down at its right for the places you go often.
 
-Drag an icon and it stays where you put it. Where you put things is
-remembered per account, as a position on a grid, so it survives the screen
-changing size.
+Click something once to select it, again to open it. A folder opens; a text
+file opens in Notepad. Something ReconOS has nothing to open with says so.
 
-Right-click the desktop to make a new folder, a new file, or a shortcut to
-a program.
+Right-click anything for what can be done to it, including Properties,
+which says what it is, how big it is and when it last changed.
+
+Deleting puts things in the Recycle Bin rather than destroying them, and
+each item remembers where it came from, so restoring puts it back. Shift and
+Delete skips the bin, after asking.
+
+From the Terminal the bin is the bin command: bin lists it, bin <name>
+puts something in, bin restore <name> takes it back out, and bin empty
+clears it. Note that del is not the same thing — it removes a file rather
+than binning it, and there is no undoing that.
+
+The Control Panel's Storage page says how much room the bin is holding,
+and can empty it.

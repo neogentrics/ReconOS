@@ -23,6 +23,21 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The Apps menu's search box finds help pages, not only programs.**
+
+Type a word and matching pages appear under the matching programs, marked
+"Help:". Clicking one opens Help at that page. Under the programs and never
+instead of them -- somebody typing "mail" wants Mail, and four pages about mail
+above it would have made the search worse at what it was already good at.
+
+Four at most, because the menu is a fixed height and a word like "file" is in
+most of the document; a menu that grew to fifty-one rows has stopped being one.
+The rest is what opening Help is for.
+
+The search is `recon_help_search`, which reads the pages off disk and needs no
+window -- so the next place that wants to answer a question rather than list
+commands costs a caller rather than a subsystem.
+
 **Choosing a program that does not open that kind of file asks first.**
 
 "Open with" offers every program that reads files, which is deliberate --

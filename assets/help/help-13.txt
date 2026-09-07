@@ -1,10 +1,9 @@
-Web fetches a page over HTTP or HTTPS and shows the text in it. It reads
-HTML's structure -- headings, paragraphs, lists, links -- and follows a link
-when you click one. An .html file on this machine opens here too.
+Media Player plays what ReconOS can decode: WAV and MP3 for sound, and MP4
+for video. Double-clicking a file that can be played opens it here.
 
-It is a reader, not a browser. No JavaScript, no images, no styling, no forms.
-A page that needs any of those shows what it says without them, which is
-sometimes everything and sometimes very little.
+A file it cannot decode is refused with a sentence saying so, rather than
+opening an empty window. Which formats can be played changes when a module
+brings a decoder -- Control Panel → Modules lists what is loaded.
 
-Every address is checked before it is fetched, and Control Panel → Firewall
-decides whether it may go out at all.
+Sound goes out through the machine underneath. On a machine with no sound card
+everything still works and says there is nothing to play through.

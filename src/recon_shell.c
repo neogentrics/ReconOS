@@ -345,10 +345,34 @@ static const struct {
 #define MENU_POWER_COUNT \
     ((int)(sizeof(MENU_POWER) / sizeof(MENU_POWER[0])))
 
+/*
+ * What one row of the menu is.
+ *
+ * A kind rather than the `is_shutdown` flag it replaces. There were two sorts
+ * of row and a bool said which; there are three now, and a second bool would
+ * have made "neither is set" a fourth state that means nothing.
+ */
+enum menu_kind {
+    MENU_KIND_APP,
+    MENU_KIND_SHUTDOWN,
+    /* A page of the help, offered when what was typed appears in one. The
+     * label is the topic's title, which is also how Help is asked for it. */
+    MENU_KIND_HELP,
+};
+
 struct menu_entry {
-    char label[64];
+    /*
+     * 96 rather than 64, because a help result is "Help: " and then a title
+     * that may be RECON_HELP_TITLE_MAX long, and this has to hold both.
+     *
+     * Not a matter of taste: the title is how Help is asked for the page, by
+     * exact text, so a title cut to fit here would be handed back and not
+     * found -- a menu entry that opens the help at the wrong page. The
+     * compiler said so at -Wformat-truncation before anything ran.
+     */
+    char label[96];
     char icon[64];
-    bool is_shutdown;
+    enum menu_kind kind;
 };
 
 /*
@@ -363,6 +387,17 @@ struct menu_entry {
 /* Where an account's use of an application is counted. */
 #define MENU_OPENS_PREFIX "start/opens"
 #define MENU_APPS_MAX 64
+
+/*
+ * How many help pages the search offers at once.
+ *
+ * Four, because they sit under the programs and the menu is a fixed height: a
+ * word like "file" is in most of the document, and a menu that grew to
+ * fifty-one rows for it would be a menu that has stopped being one. Somebody
+ * who wants the rest opens Help, whose own search has no such limit and shows
+ * where in each page the word is.
+ */
+#define MENU_HELP_MAX 4
 
 /*
  * Registry keys cannot contain spaces, and half the applications have one in
@@ -599,7 +634,7 @@ static int menu_apps(bool show_all, const char *filter,
             snprintf(out[shown].label, sizeof(out[shown].label), "%s",
                 app.name);
             snprintf(out[shown].icon, sizeof(out[shown].icon), "%s", app.icon);
-            out[shown].is_shutdown = false;
+            out[shown].kind = MENU_KIND_APP;
             shown++;
         }
         return shown;
@@ -621,7 +656,7 @@ static int menu_apps(bool show_all, const char *filter,
         }
         snprintf(found[total].label, sizeof(found[total].label), "%s", app.name);
         snprintf(found[total].icon, sizeof(found[total].icon), "%s", app.icon);
-        found[total].is_shutdown = false;
+        found[total].kind = MENU_KIND_APP;
         counts[total] = show_all ? 0 : opens_of(app.name);
         total++;
     }
@@ -658,6 +693,36 @@ static int menu_apps(bool show_all, const char *filter,
     for (int i = 0; i < shown; i++) {
         out[i] = found[i];
     }
+
+    /*
+     * Then the help, when something has been typed.
+     *
+     * After the programs and never instead of them: somebody typing "mail"
+     * wants Mail, and a menu that offered four pages about mail above it would
+     * have made the search worse for the thing it was already good at.
+     *
+     * Only while searching, because with nothing typed every page matches and
+     * the menu would be the help's table of contents.
+     */
+    if (searching && shown < max) {
+        char titles[MENU_HELP_MAX][RECON_HELP_TITLE_MAX];
+        int help_count = recon_help_search(filter, titles, MENU_HELP_MAX);
+
+        for (int i = 0; i < help_count && shown < max; i++) {
+            /*
+             * Said as a sentence rather than as a bare title. "Getting around"
+             * in a list under Mail and Media Player reads as a program nobody
+             * recognises; "Help: Getting around" reads as what it is.
+             */
+            snprintf(out[shown].label, sizeof(out[shown].label), "Help: %s",
+                titles[i]);
+            snprintf(out[shown].icon, sizeof(out[shown].icon), "%s",
+                RECON_ICON_HELP);
+            out[shown].kind = MENU_KIND_HELP;
+            shown++;
+        }
+    }
+
     return shown;
 }
 
@@ -2589,7 +2654,10 @@ static void draw_taskbar(struct recon_shell *shell) {
         shell->menu_open ? COLOR_TEXT : COLOR_BUTTON_TEXT);
     recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
         APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
-    recon_hit_tip(bar, "Programs, places and settings");
+    /* The help is in the list because the box searches it now. A tip that
+     * names three of the four things a box finds is a tip that teaches
+     * somebody not to type the fourth. */
+    recon_hit_tip(bar, "Programs, places, settings and help");
 
     /* One button per window, client or built-in, sharing the remaining
      * width. Both kinds appear here, because from the user's side there is no
@@ -4528,6 +4596,40 @@ void recon_shell_open_help(struct recon_shell *shell) {
         ? topic : "Getting around");
 }
 
+/*
+ * Open Help at one topic, named the way the Start menu's results name it.
+ *
+ * The label carries the "Help: " the menu put on the front, and the topic is
+ * what is after it -- stripped here rather than kept in a second field on
+ * every menu row, of which the other two kinds would never use it.
+ *
+ * A topic that does not exist opens the help at the beginning rather than
+ * doing nothing, which is the same rule F1 follows and for the same reason: a
+ * window that opens and shows the wrong page is a complaint; a key that does
+ * nothing at all is a broken system.
+ */
+void recon_shell_open_help_topic(struct recon_shell *shell, const char *label) {
+    if (shell == NULL || label == NULL) {
+        return;
+    }
+
+    const char *topic = label;
+    const char *colon = strstr(label, ": ");
+    if (colon != NULL) {
+        topic = colon + 2;
+    }
+
+    recon_shell_close_menu(shell);
+    recon_shell_open_named(shell, "Help");
+
+    struct recon_appwin *help = recon_installed_app_existing("Help");
+    if (help == NULL) {
+        return;
+    }
+    recon_help_show_topic(help, recon_help_topic_exists(topic)
+        ? topic : "Getting around");
+}
+
 void recon_shell_open_named(struct recon_shell *shell, const char *title) {
     if (shell == NULL || title == NULL) {
         return;
@@ -5463,7 +5565,7 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
         struct menu_entry entry;
         if (hit >= HIT_MENU_BASE && hit < HIT_PLACE_BASE &&
                 menu_entry_at(shell->menu_show_all, shell->menu_filter,
-                    index, &entry) && !entry.is_shutdown) {
+                    index, &entry) && entry.kind == MENU_KIND_APP) {
             /* Left open, for the reason above: the menu is what says which
              * program this is about. */
             shell->context_kind = RECON_CONTEXT_MENU_APP;
@@ -6354,10 +6456,16 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
                     menu_entry_at(shell->menu_show_all, shell->menu_filter, index, &entry)) {
                 /* Close the menu first: quitting never returns here. */
                 recon_shell_close_menu(shell);
-                if (entry.is_shutdown) {
+                switch (entry.kind) {
+                case MENU_KIND_SHUTDOWN:
                     recon_quit(shell->server);
-                } else {
+                    break;
+                case MENU_KIND_HELP:
+                    recon_shell_open_help_topic(shell, entry.label);
+                    break;
+                case MENU_KIND_APP:
                     recon_shell_open_named(shell, entry.label);
+                    break;
                 }
                 return true;
             }

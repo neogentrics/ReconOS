@@ -1,20 +1,17 @@
-The File Explorer shows your folders. Type a path into the bar at the top,
-or use the drop-down at its right for the places you go often.
+Four of them, or one. The numbers at the right of the taskbar say which you are
+on, and a dot under a number means that desktop has windows on it.
 
-Click something once to select it, again to open it. A folder opens; a text
-file opens in Notepad. Something ReconOS has nothing to open with says so.
+Alt+1 to Alt+4 switches. Hold Shift as well and the window you are
+using comes with you.
 
-Right-click anything for what can be done to it, including Properties,
-which says what it is, how big it is and when it last changed.
+A window on another desktop is not on this taskbar. That is deliberate: it is
+how four desktops stay four separate places rather than one crowded one.
 
-Deleting puts things in the Recycle Bin rather than destroying them, and
-each item remembers where it came from, so restoring puts it back. Shift and
-Delete skips the bin, after asking.
+Right click the taskbar to turn the four down to one, or back. It is
+remembered for your account, so it is your choice and not the machine's — and
+somebody who does not want four desktops should not have four numbers taking up
+room on their taskbar.
 
-From the Terminal the bin is the bin command: bin lists it, bin <name>
-puts something in, bin restore <name> takes it back out, and bin empty
-clears it. Note that del is not the same thing — it removes a file rather
-than binning it, and there is no undoing that.
-
-The Control Panel's Storage page says how much room the bin is holding,
-and can empty it.
+Turning them off does not lose anything. Every window on the other three comes
+to the one that is left, and slides in from where it was so you can see what
+arrived rather than finding windows you did not put there.

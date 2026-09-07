@@ -1,19 +1,27 @@
-Mail reads over IMAP or POP3 and sends over SMTP. Both halves of an account
-are on one form, because they are one account to the person filling it in; the
-sending half may be left blank if you only want to read.
+Some programs offer to keep a password for you. Mail does, on the screen where
+it asks for one: tick Remember this password and it is kept once the
+connection has worked.
 
-The connection is always encrypted and the far end is always checked. There
-is no unencrypted option and no setting that produces one. On port 587 the
-upgrade to encryption is required to succeed: a server that does not offer it,
-or something in the middle that removes the offer, ends the session rather than
-carrying on in the open.
+Kept is not the same as written down. It is encrypted with a key made from
+your account password, and that key exists only while you are signed in --
+it is never written anywhere. Signing out, locking the screen, or shutting
+down makes every kept password unreadable until you sign in again.
 
-Writing a letter takes To, Cc and Bcc, each a list separated by
-commas. Everyone named in all three receives it; only To and Cc appear in the
-letter itself, which is what a blind copy means. Attach a file adds up to
-eight files, twelve megabytes together. Files are read when you press Send, so
-what goes is the file as it is then.
+An account with no password has no keyring. There would be nothing to make
+a key from, so nothing offers to keep anything, and the tick box is not shown
+rather than shown and ignored.
 
-The password is not saved. It is used for the connection and forgotten when
-the window closes. Somewhere safe to keep it needs a key that exists only while
-somebody is signed in, and that does not exist yet.
+Control Panel -> Passwords lists what is being kept, by name and by which
+program asked. It does not show the passwords themselves and there is no way
+to make it: nothing in ReconOS will print one back to you. Choose one and
+press Forget and it is gone; whatever kept it will ask again next time.
+
+From the Terminal, keyring lists them, keyring forget <name> removes one,
+and keyring keep <name> <secret> adds one. There is no command that prints a
+secret, for the same reason.
+
+What this protects against, and what it does not. It protects a disk or a
+backup that somebody else has: without your password, what is stored is
+unreadable. It does not protect against somebody using your account while you
+are signed in -- at that point the key is in memory and the programs running
+are yours. Lock the screen when you walk away; that puts the key back.

@@ -1,13 +1,9 @@
-Notepad opens, edits and saves text.
+Icons on the desktop are the contents of your Desktop folder, so anything that
+writes a file there puts it on the desktop.
 
-- Ctrl+Z undoes, a word at a time. Ctrl+Y redoes.
-- Ctrl+C, Ctrl+X and Ctrl+V copy, cut and paste. They work between
-  Notepad, every text box in the system, and the Terminal.
-- Ctrl+A selects everything. Hold Shift with the arrow keys to select
-  by hand.
-- Ctrl+F finds text. It ignores capitals and carries on from the top when
-  it reaches the end. F3 finds the next one.
-- Ctrl+H is the same bar with a second field. Replace changes the
-  match in front of you and moves to the next; All changes every one from
-  the top of the document. Tab moves between the two fields, and either can
-  be undone.
+Drag an icon and it stays where you put it. Where you put things is
+remembered per account, as a position on a grid, so it survives the screen
+changing size.
+
+Right-click the desktop to make a new folder, a new file, or a shortcut to
+a program.

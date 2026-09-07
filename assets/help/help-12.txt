@@ -1,9 +1,13 @@
-Media Player plays what ReconOS can decode: WAV and MP3 for sound, and MP4
-for video. Double-clicking a file that can be played opens it here.
+Photos opens PNG, JPEG, BMP, GIF and TGA. Double-clicking a picture
+anywhere opens it here.
 
-A file it cannot decode is refused with a sentence saying so, rather than
-opening an empty window. Which formats can be played changes when a module
-brings a decoder -- Control Panel → Modules lists what is loaded.
+It shows one picture at a time, fitted to the window. Half and Double
+change the size, and Save as PNG writes the result out under a new name --
+it refuses to overwrite an existing file rather than asking, so nothing is ever
+lost to a mistyped name. A * in the title means there are changes that have
+not been saved.
 
-Sound goes out through the machine underneath. On a machine with no sound card
-everything still works and says there is nothing to play through.
+What is not on offer is making a small picture sharp. Enlarging shows the
+pixels that are there, larger. Inventing detail that was never in the picture
+needs a trained model, and a button promising a sharper photograph while
+delivering a confident invention is not a feature this wants.

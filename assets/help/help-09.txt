@@ -1,21 +1,65 @@
-Control Panel → Programs installs and removes programs, and Modules
-shows what is loaded and why anything refused to load.
+Control Panel → Appearance has three sections: Themes, Colours and
+Wallpapers. Choosing a skin in the list picks it out and shows what it is;
+Use This Skin puts it on. It is yours alone -- other accounts keep theirs,
+and the one in use says so beside its name.
 
-A program arrives as a package: a folder ending in .rpk with a
-package.txt inside saying what it is and what to place where. Installing
-writes down everything it put in place, so removing it takes back exactly
-that and nothing else.
+Ten ship. Four of them are for how people actually see: Deuteran,
+Protan and Tritan for the three kinds of colour vision deficiency, and
+Contrast for low vision. Reading softens the contrast and warms the
+background.
 
-A package does not have to contain a program. One that only places files -- a
-set of wallpapers, some skins, a few fonts -- is a package too. It may write
-into the folders that hold that kind of thing and nowhere else, so a package
-cannot put a file among the system's settings or its loaded code.
+Control Panel → Reading changes the spacing between letters and lines, the
+typeface and its size. Extra space between letters is the single adjustment
+with the most evidence behind it for a dyslexic reader.
 
-A file that is already there is left alone, and a package that finds one does
-not claim it: removing that package will not take away something that was
-already yours. The same is true of settings a package brings -- they are
-defaults, and one you had already chosen is left as you chose it.
+### Making a skin of your own
 
-Installing a program is an administrator's decision. A program runs inside
-ReconOS with everything ReconOS can do, which is closer to installing a driver
-than to saving a file.
+A skin is a text file in /System/Themes. theme install adds one somebody
+else wrote.
+
+Customize Skin, under the list, makes your own copy of the chosen skin. It
+asks first, then for a name and a line describing it, and then opens the Skin
+Editor in a window of its own -- beside the list rather than over it, because
+changing a colour is something you do while looking at the result.
+
+A copy rather than a blank file: a skin answers forty-eight questions about
+colour, and having them all answered already is a much easier place to start
+than an empty file. The skin that ships cannot be changed, only copied; a copy
+is yours and can be edited or deleted.
+
+The editor lists every colour with a swatch of what it currently is. Pick one,
+press Change Colour, and type a colour as RRGGBB — or AARRGGBB where it
+needs to be see-through. The change is immediate and is written to the file
+straight away; there is no separate save.
+
+The Colours section shows the colours of whichever skin is on. If that skin
+is one that ships, changing a colour offers to make your copy first.
+
+A skin can also change the shape of a window, by writing lines like these into
+its file:
+
+- metric.title-height and metric.border — how tall the bar is, and how
+  thick the frame around the contents.
+- metric.corner and metric.button-corner — how far the window's top corners
+  and the buttons are rounded. Zero is square.
+- metric.button-size — how big the three buttons are.
+- metric.buttons-left — 1 puts the buttons on the left of the bar instead
+  of the right. Close stays in the corner either way.
+- metric.buttons — which buttons there are, as a sum: 1 close, 2 maximize,
+  4 minimize. 7 is all three and is the usual. 5 is close and minimize.
+
+Close is always there. A skin that leaves it out gets it back, because a
+window nobody can close is not something a skin is allowed to make.
+
+A skin can also replace what is drawn *inside* the buttons. Put a picture named
+window-close, window-maximize, window-restore or window-minimize in
+/System/Icons and it is used instead of the shape. Supply one and the others
+keep theirs.
+
+Some colours are a *ramp* from one to another, shown as two halves of the
+swatch and a second value. Remove Ramp makes one flat.
+
+The ten skins that ship cannot be edited — they are built into ReconOS, so a
+change to their files would be ignored. Copy one first; the copy is yours.
+
+From the Terminal, theme copy <name> does the same thing.

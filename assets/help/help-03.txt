@@ -1,17 +1,16 @@
-Four of them, or one. The numbers at the right of the taskbar say which you are
-on, and a dot under a number means that desktop has windows on it.
+Drag a window by its title bar. Drag any edge or corner to resize it.
 
-Alt+1 to Alt+4 switches. Hold Shift as well and the window you are
-using comes with you.
+Drag a window until the pointer touches the left or right edge of the
+screen and let go, and it fills that half. Drag it to the top and it fills
+the screen. The middle button in the title bar puts it back where it was.
 
-A window on another desktop is not on this taskbar. That is deliberate: it is
-how four desktops stay four separate places rather than one crowded one.
+The three buttons at the right of a title bar are minimize, maximize and
+close.
 
-Right click the taskbar to turn the four down to one, or back. It is
-remembered for your account, so it is your choice and not the machine's — and
-somebody who does not want four desktops should not have four numbers taking up
-room on their taskbar.
+A program written for Wayland rather than for ReconOS gets the same title bar
+as everything else, so it drags, resizes, minimizes, maximizes and closes the
+same way. Its edges are grabbed from just outside the window, where the
+cursor changes to show which way it will move.
 
-Turning them off does not lose anything. Every window on the other three comes
-to the one that is left, and slides in from where it was so you can see what
-arrived rather than finding windows you did not put there.
+A program that insists on drawing its own frame is left alone rather than
+given a second one.

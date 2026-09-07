@@ -1,16 +1,10 @@
-Right-click a file, on the desktop or in File Explorer, and the menu offers
-Open with for every program that reads files. Choosing one opens the file
-*and* makes that program the one for every file of that kind -- so this is the
-way to say "always open these in that", not the way to open one thing once.
-Use the usual program, on the same menu, undoes it.
+Web fetches a page over HTTP or HTTPS and shows the text in it. It reads
+HTML's structure -- headings, paragraphs, lists, links -- and follows a link
+when you click one. An .html file on this machine opens here too.
 
-Control Panel -> Programs -> File Types lists every choice you have made
-and undoes any of them, which is where to look when something opens in a
-program you do not remember choosing.
+It is a reader, not a browser. No JavaScript, no images, no styling, no forms.
+A page that needs any of those shows what it says without them, which is
+sometimes everything and sometimes very little.
 
-If the program does not say it opens that kind of file, you are asked
-first. It is a warning and not a refusal: opening a picture in Notepad to
-look at what is inside it is a perfectly good reason, and so is sending a .log
-somewhere that is not the usual program. The dialog says which program, which
-file, and that the choice applies to every file of that kind -- because the
-surprise is not the file that opens as nonsense, it is the next one.
+Every address is checked before it is fetched, and Control Panel → Firewall
+decides whether it may go out at all.

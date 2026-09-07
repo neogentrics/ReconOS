@@ -84,6 +84,39 @@ void recon_help_show_topic(struct recon_appwin *win, const char *title);
 bool recon_help_topic_exists(const char *title);
 
 /*
+ * The longest a topic title is, for a caller holding results.
+ *
+ * Titles come from the headings in docs/HELP.md, so this is a property of that
+ * document rather than of anything here. Longer ones are skipped rather than
+ * cut, because a truncated title handed back would be asked for again by
+ * recon_help_show_topic and would not be found.
+ */
+#define RECON_HELP_TITLE_MAX 64
+
+/*
+ * Which topics mention this, by title, without opening Help.
+ *
+ * The same search the Help window's own box does -- titles and bodies, neither
+ * preferred, because the change log's topics are titled with version numbers
+ * so a title-only search finds nothing in two thirds of the document.
+ *
+ * Here rather than in the window because the Start menu asks it too. Somebody
+ * typing "firewall" into a box that searches programs and stops there is being
+ * told the system has nothing to say about firewalls, which is not true and is
+ * the kind of wrong answer that stops people asking again.
+ *
+ * Reads from disk every time and keeps nothing: this runs on a keystroke in a
+ * menu that is open for a couple of seconds, and a cache that outlives the
+ * menu is a cache that has to be invalidated when the help is regenerated.
+ * A hundred kilobytes read at typing speed is nothing.
+ *
+ * Fills `titles` and returns how many. Zero for an empty needle, so a menu
+ * with nothing typed into it does not list every page in the help.
+ */
+int recon_help_search(const char *needle,
+    char titles[][RECON_HELP_TITLE_MAX], int max);
+
+/*
  * What the change log says about the version now running, or "" if it says
  * nothing about it.
  *

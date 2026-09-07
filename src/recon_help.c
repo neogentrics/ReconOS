@@ -1184,6 +1184,67 @@ struct recon_appwin *recon_help_create(struct recon_server *server,
     return help->win;
 }
 
+int recon_help_search(const char *needle,
+        char titles[][RECON_HELP_TITLE_MAX], int max) {
+    if (needle == NULL || *needle == '\0' || titles == NULL || max <= 0) {
+        return 0;
+    }
+
+    char index_path[RECON_PATH_MAX];
+    if (!recon_fs_join(index_path, sizeof(index_path), RECON_DIR_HELP,
+            RECON_HELP_INDEX)) {
+        return 0;
+    }
+
+    size_t size = 0;
+    char *index = recon_fs_read("/", index_path, &size);
+    if (index == NULL) {
+        return 0;
+    }
+
+    int found = 0;
+    char *saveptr = NULL;
+    for (char *line = strtok_r(index, "\n", &saveptr);
+            line != NULL && found < max;
+            line = strtok_r(NULL, "\n", &saveptr)) {
+        char *tab = strchr(line, '\t');
+        if (tab == NULL) {
+            continue;
+        }
+        *tab = '\0';
+        const char *file = line;
+        const char *title = tab + 1;
+
+        /* Skipped rather than cut: a title cut to fit would be handed to
+         * recon_help_show_topic, which looks it up by exact text. */
+        if (strlen(title) >= RECON_HELP_TITLE_MAX) {
+            continue;
+        }
+
+        bool matches = contains_ignoring_case(title, needle);
+        if (!matches) {
+            char page_path[RECON_PATH_MAX];
+            if (recon_fs_join(page_path, sizeof(page_path), RECON_DIR_HELP,
+                    file)) {
+                size_t page_size = 0;
+                char *body = recon_fs_read("/", page_path, &page_size);
+                if (body != NULL) {
+                    matches = contains_ignoring_case(body, needle);
+                    free(body);
+                }
+            }
+        }
+
+        if (matches) {
+            snprintf(titles[found], RECON_HELP_TITLE_MAX, "%s", title);
+            found++;
+        }
+    }
+
+    free(index);
+    return found;
+}
+
 bool recon_help_topic_exists(const char *title) {
     if (title == NULL || *title == '\0') {
         return false;

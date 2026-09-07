@@ -1998,12 +1998,25 @@ is the thing a client could just *tell* us: nothing in the Wayland protocols
 carries an icon, and ReconOS's own protocol could, which would make this exact
 rather than looked up.
 
-**Help cannot be searched from anywhere but Help.** As of v0.4.0 it has a
-search box that filters on titles and on the text of every page, jumps to where
-the word is inside the page it lands on, and marks every line carrying it. F1
-opens the page about whatever window is in front, for every application. What
-is still missing is a way to search the help without opening it first -- from
-the Start menu's own search box, say, which searches programs and stops there.
+**The help is searchable from the Start menu, and from nowhere else yet.** As
+of v0.4.0 Help has a search box that filters on titles and on the text of every
+page, jumps to where the word is inside the page it lands on, and marks every
+line carrying it; F1 opens the page about whatever window is in front, for
+every application; and the Start menu's own box now offers matching help pages
+under the matching programs, which is what the earlier note here asked for.
+
+Under the programs and never instead of them: somebody typing "mail" wants
+Mail, and a menu that put four pages about mail above it would have made the
+search worse at the thing it was already good at. Four pages at most, because
+the menu is a fixed height and a word like "file" is in most of the document --
+the rest is what opening Help is for.
+
+What is still missing is everywhere else. A file manager that could search file
+*contents*, a Terminal command that answers a question rather than listing
+commands, and an error message that offers the page about the thing that went
+wrong are all the same shape as this and none of them exist. The search itself
+is `recon_help_search`, which needs no window, so the cost of adding one of
+them is a caller rather than a subsystem.
 
 **The grapher plots y against x and nothing else.** Three curves, a plane that
 can be dragged, a wheel that zooms about the pointer, expressions that survive

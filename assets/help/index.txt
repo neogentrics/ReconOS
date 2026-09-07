@@ -1,30 +1,31 @@
 help-01.txt	Getting around
-help-02.txt	Windows
-help-03.txt	Desktops
-help-04.txt	Files
-help-05.txt	The desktop
-help-06.txt	Writing
-help-07.txt	Accounts
-help-08.txt	How it looks
-help-09.txt	Programs
-help-10.txt	The Terminal
-help-11.txt	Pictures
-help-12.txt	Sound and video
-help-13.txt	The web viewer
-help-14.txt	Choosing what opens a file
-help-15.txt	Passwords
-help-16.txt	Mail
-help-17.txt	What is running
-help-18.txt	The Calculator
-help-19.txt	Dates
-help-20.txt	What opens a file
-help-21.txt	Pictures of the screen
-help-22.txt	Help and updates
-help-23.txt	Text and letters
-help-24.txt	The firewall
-help-25.txt	Reaching this machine from elsewhere
-help-26.txt	When something goes wrong
-help-27.txt	What is not built yet
+help-02.txt	Finding an answer
+help-03.txt	Windows
+help-04.txt	Desktops
+help-05.txt	Files
+help-06.txt	The desktop
+help-07.txt	Writing
+help-08.txt	Accounts
+help-09.txt	How it looks
+help-10.txt	Programs
+help-11.txt	The Terminal
+help-12.txt	Pictures
+help-13.txt	Sound and video
+help-14.txt	The web viewer
+help-15.txt	Choosing what opens a file
+help-16.txt	Passwords
+help-17.txt	Mail
+help-18.txt	What is running
+help-19.txt	The Calculator
+help-20.txt	Dates
+help-21.txt	What opens a file
+help-22.txt	Pictures of the screen
+help-23.txt	Help and updates
+help-24.txt	Text and letters
+help-25.txt	The firewall
+help-26.txt	Reaching this machine from elsewhere
+help-27.txt	When something goes wrong
+help-28.txt	What is not built yet
 changes-01.txt	v0.4.0
 changes-02.txt	v0.3.0
 changes-03.txt	v0.2.17

@@ -30,6 +30,19 @@ desktop. Click one to bring it forward; click the one in front to put it away.
 
 **Alt+Tab** steps through the open windows without touching the mouse.
 
+## Finding an answer
+
+The box at the bottom of the **Apps** menu searches programs, places, settings
+**and this help**. Type a word and matching pages appear under the matching
+programs, marked "Help:" -- click one and it opens here at that page.
+
+Four pages at most, because the menu has to stay a menu. For more, open Help
+and use its own search box, which has no limit and shows you where in each page
+the word appears.
+
+**F1** opens the page about whatever window is in front. With nothing in front
+it opens at the beginning.
+
 ## Windows
 
 Drag a window by its title bar. Drag any edge or corner to resize it.
