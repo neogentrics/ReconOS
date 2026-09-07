@@ -72,6 +72,17 @@ struct recon_menu_entry {
     uint32_t id;
     bool enabled;
     bool separator_after;
+
+    /*
+     * The one in force, out of several that are one choice.
+     *
+     * The shell's own menus have had this since the clock grew a twelve-hour
+     * and a twenty-four-hour entry; an application's could not say it, so a
+     * menu an application built that offered several answers to one question
+     * had no way to show which answer was current. File Explorer's "Open with"
+     * is the second such menu and the first outside the shell.
+     */
+    bool marked;
 };
 
 struct recon_menu_spec {
@@ -83,6 +94,15 @@ struct recon_menu_spec {
  * item is better than an application failing to open one. */
 void recon_menu_add(struct recon_menu_spec *menu, const char *label,
     uint32_t id, bool enabled, bool separator_after);
+
+/*
+ * Mark the entry just added as the one in force.
+ *
+ * A separate call rather than a sixth argument, because one menu in several
+ * uses it and six booleans in a row is a call nobody can read at the site --
+ * the same shape, and the same reasoning, as the shell's own adder.
+ */
+void recon_menu_mark_last(struct recon_menu_spec *menu);
 
 /*
  * What an application must provide. Only `draw` is required; the rest may be

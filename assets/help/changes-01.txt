@@ -18,6 +18,14 @@ one, and from now on", and an Open-with that opened once and changed nothing
 would have to be used every single time, which is the thing somebody reached
 for the menu to stop doing.
 
+It is offered in File Explorer as well as on the desktop, because the same file
+right-clicked in two places should offer the same things. That needed one thing
+an application could not do before: mark the entry that is in force. The shell's
+own menus have had marks since the clock grew a twelve-hour and a twenty-four-
+hour entry; an application's menu could not say it, so a menu an application
+built that offered several answers to one question had no way to show which
+answer was current.
+
 A choice is a *user's*, so it lives in their settings and beats everything an
 application declares -- it is the only rule in recon_props_opener that came
 from a person rather than from a deduction. "Use the usual program" appears

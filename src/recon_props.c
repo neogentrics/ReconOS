@@ -179,6 +179,23 @@ static bool opener_key(const char *name, char *out, size_t size) {
     return i > (size_t)at;
 }
 
+int recon_props_openers(const char **names, int max) {
+    int count = 0;
+    int total = recon_installed_app_count();
+
+    for (int i = 0; i < total && count < max; i++) {
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(i, &app) || app.disabled) {
+            continue;
+        }
+        if (app.opens[0] == '\0') {
+            continue;
+        }
+        names[count++] = recon_installed_app_resolve(app.name);
+    }
+    return count;
+}
+
 const char *recon_props_chosen_opener(const char *name) {
     char key[128];
     if (!opener_key(name, key, sizeof(key))) {

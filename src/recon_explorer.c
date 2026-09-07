@@ -174,6 +174,16 @@ enum explorer_context {
     EXCTX_SET_WALLPAPER,
     EXCTX_INSTALL_FONT,
     EXCTX_INSTALL_PROGRAM,
+    /* Back to whatever would open this if nobody had chosen. Offered only
+     * when there is a choice to undo. */
+    EXCTX_OPEN_WITH_DEFAULT,
+    /*
+     * One per application that opens files. Last in the enum and read as a
+     * base with an index on it, so an id added above cannot walk into the
+     * range -- the same arrangement the desktop's menu uses, and it has to be
+     * the same because both menus mean the same thing.
+     */
+    EXCTX_OPEN_WITH_BASE,
 };
 
 /*
@@ -2311,7 +2321,40 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
             return true;
         }
 
-        recon_menu_add(menu, is_dir ? "Open" : "Select", EXCTX_OPEN, true, true);
+        recon_menu_add(menu, is_dir ? "Open" : "Select", EXCTX_OPEN, true,
+            is_dir);
+
+        /*
+         * The same "Open with" the desktop offers, because the same file
+         * right-clicked in two places should offer the same things.
+         *
+         * Only for a file: a folder opens in this window and there is no
+         * second answer to offer.
+         */
+        if (!is_dir) {
+            const char *names[RECON_OPEN_WITH_MAX];
+            int count = recon_props_openers(names, RECON_OPEN_WITH_MAX);
+            const char *now = recon_props_opener(entry->name);
+            const char *chosen = recon_props_chosen_opener(entry->name);
+
+            for (int i = 0; i < count; i++) {
+                if (names[i] == NULL) {
+                    continue;
+                }
+                char label[64];
+                snprintf(label, sizeof(label), "Open with %s", names[i]);
+                recon_menu_add(menu, label,
+                    EXCTX_OPEN_WITH_BASE + (uint32_t)i, true,
+                    i == count - 1 && chosen == NULL);
+                if (now != NULL && strcmp(now, names[i]) == 0) {
+                    recon_menu_mark_last(menu);
+                }
+            }
+            if (chosen != NULL) {
+                recon_menu_add(menu, "Use the usual program",
+                    EXCTX_OPEN_WITH_DEFAULT, true, true);
+            }
+        }
 
         /*
          * A picture can become the background from wherever it is. Offered
@@ -2377,6 +2420,53 @@ static bool explorer_context(void *user, uint32_t hit_id, int cx, int cy,
 
 static void explorer_context_action(void *user, uint32_t id) {
     struct recon_explorer *ex = user;
+
+    /*
+     * "Open with", before the switch.
+     *
+     * A bounded range checked ahead of an enum, because the base has an index
+     * added to it and a switch cannot have a case for that. The same shape the
+     * desktop's menu uses -- and it has to be, because the two menus mean the
+     * same thing and diverging would be two answers to one question.
+     */
+    if (id >= EXCTX_OPEN_WITH_BASE &&
+            id < EXCTX_OPEN_WITH_BASE + RECON_OPEN_WITH_MAX &&
+            ex->selected >= 0 && ex->selected < ex->entry_count) {
+        const char *names[RECON_OPEN_WITH_MAX];
+        int count = recon_props_openers(names, RECON_OPEN_WITH_MAX);
+        int which = (int)(id - EXCTX_OPEN_WITH_BASE);
+
+        if (which >= 0 && which < count && names[which] != NULL) {
+            const char *file = ex->entries[ex->selected].name;
+            recon_props_set_opener(file, names[which]);
+
+            char path[RECON_PATH_MAX];
+            struct recon_server *server = recon_appwin_server(ex->win);
+            if (server != NULL &&
+                    recon_fs_join(path, sizeof(path), ex->cwd, file)) {
+                if (!recon_shell_open_file(server->shell, path)) {
+                    set_status(ex, true, "'%s' could not be opened with %s.",
+                        file, names[which]);
+                } else {
+                    set_status(ex, false, "'%s' files now open in %s.",
+                        strrchr(file, '.') != NULL ? strrchr(file, '.') : file,
+                        names[which]);
+                }
+            }
+        }
+        recon_appwin_refresh(ex->win);
+        return;
+    }
+
+    if (id == EXCTX_OPEN_WITH_DEFAULT &&
+            ex->selected >= 0 && ex->selected < ex->entry_count) {
+        const char *file = ex->entries[ex->selected].name;
+        recon_props_clear_opener(file);
+        set_status(ex, false, "'%s' files open in the usual program again.",
+            strrchr(file, '.') != NULL ? strrchr(file, '.') : file);
+        recon_appwin_refresh(ex->win);
+        return;
+    }
 
     switch ((enum explorer_context)id) {
     case EXCTX_SET_WALLPAPER: {

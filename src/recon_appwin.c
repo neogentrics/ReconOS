@@ -1495,6 +1495,14 @@ void recon_menu_add(struct recon_menu_spec *menu, const char *label,
     entry->id = id;
     entry->enabled = enabled;
     entry->separator_after = separator_after;
+    entry->marked = false;
+}
+
+void recon_menu_mark_last(struct recon_menu_spec *menu) {
+    if (menu == NULL || menu->count == 0) {
+        return;
+    }
+    menu->items[menu->count - 1].marked = true;
 }
 
 bool recon_appwin_context_at(struct recon_appwin *win, double lx, double ly,

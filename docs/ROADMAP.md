@@ -2004,13 +2004,12 @@ be declared. And there is no signing, no dependency between packages, and no
 upgrade -- installing over an existing package is refused rather than
 replacing it.
 
-**A file type can only be chosen from the desktop.** As of v0.4.0 an
-application declares what it opens, and a person can override that from a
-file's right-click menu -- "Open with", remembered per extension, with "Use the
-usual program" to undo it. What is missing is the same menu in File Explorer,
-which has its own context menu and does not offer this, and any page that lists
-the choices somebody has made: an association set months ago is currently only
-visible by right-clicking a file of that kind.
+**The choices somebody has made about file types are not listed anywhere.** As
+of v0.4.0 an application declares what it opens, and a person can override that
+from a file's right-click menu in File Explorer or on the desktop -- "Open
+with", remembered per extension, with "Use the usual program" to undo it. What
+is missing is a page of them: an association set months ago is only visible by
+right-clicking a file of that kind and looking for the mark.
 
 **Nothing can listen.** Streams connect outwards, plain or encrypted with the
 far end verified; there is still no way for an application to accept a

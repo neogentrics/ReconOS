@@ -229,7 +229,7 @@ enum context_action {
 };
 
 /* How many applications one "Open with" list may name. */
-#define OPEN_WITH_MAX 8
+#define OPEN_WITH_MAX RECON_OPEN_WITH_MAX
 
 /* The context menu. */
 #define CONTEXT_ITEM_HEIGHT 24
@@ -1965,35 +1965,6 @@ static void context_add(struct recon_shell *shell, const char *label,
 }
 
 /*
- * Every application that could open this file, and which one would.
- *
- * "Could" is a wider question than "does": the list is every application that
- * declares it opens files at all, because somebody choosing a different
- * program for a .log is choosing among the programs that read files, not among
- * the ones that claim that extension -- if it were the latter the list would
- * have one entry in it and be no use.
- *
- * Returns how many were found; `names` are registered names and stay valid as
- * long as the applications do.
- */
-static int applications_that_open(const char **names, int max) {
-    int count = 0;
-    int total = recon_installed_app_count();
-
-    for (int i = 0; i < total && count < max; i++) {
-        struct recon_installed_app app;
-        if (!recon_installed_app_at(i, &app) || app.disabled) {
-            continue;
-        }
-        if (app.opens[0] == '\0') {
-            continue;
-        }
-        names[count++] = recon_installed_app_resolve(app.name);
-    }
-    return count;
-}
-
-/*
  * The "Open with" part of a file's menu.
  *
  * Marked rather than ticked, because this is one choice with several faces
@@ -2003,7 +1974,7 @@ static int applications_that_open(const char **names, int max) {
 static void context_add_open_with(struct recon_shell *shell,
         const char *filename) {
     const char *names[OPEN_WITH_MAX];
-    int count = applications_that_open(names, OPEN_WITH_MAX);
+    int count = recon_props_openers(names, OPEN_WITH_MAX);
     if (count == 0) {
         return;
     }
@@ -4999,7 +4970,7 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
             id >= CTX_OPEN_WITH_BASE &&
             id < CTX_OPEN_WITH_BASE + OPEN_WITH_MAX) {
         const char *names[OPEN_WITH_MAX];
-        int count = applications_that_open(names, OPEN_WITH_MAX);
+        int count = recon_props_openers(names, OPEN_WITH_MAX);
         int which = (int)(id - CTX_OPEN_WITH_BASE);
 
         if (which >= 0 && which < count && names[which] != NULL) {
@@ -5460,6 +5431,11 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
             for (int i = 0; i < spec.count; i++) {
                 context_add_id(shell, spec.items[i].label, spec.items[i].id,
                     spec.items[i].enabled, spec.items[i].separator_after);
+                /* Carried through, or an application could say which entry is
+                 * in force and the menu would not show it. */
+                if (spec.items[i].marked) {
+                    context_mark_last(shell);
+                }
             }
             context_show(shell, lx, ly);
             return true;

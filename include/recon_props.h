@@ -85,6 +85,23 @@ const char *recon_props_opener(const char *name);
  *
  * `name` is a file's name; only its extension is used.
  */
+/*
+ * Every application that could open a file, for offering a choice among them.
+ *
+ * "Could" is a wider question than "does": this is every application that
+ * declares it opens files at all, because somebody choosing a different
+ * program for a .log is choosing among the programs that read files, not among
+ * the ones that claim that extension -- if it were the latter the list would
+ * have one entry in it and be no use.
+ *
+ * Fills `names` with registered names, which stay valid as long as the
+ * applications do, and returns how many. Turned-off applications are left out,
+ * because an application that is off should not be offered as somewhere to
+ * send a file.
+ */
+#define RECON_OPEN_WITH_MAX 8
+int recon_props_openers(const char **names, int max);
+
 bool recon_props_set_opener(const char *name, const char *application);
 bool recon_props_clear_opener(const char *name);
 
