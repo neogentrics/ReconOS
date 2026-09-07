@@ -348,6 +348,53 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-137 — The BIOS harness read a mirror of the screen and called it serial output
+
+- **Found:** 7 September 2026, while bringing up checkpoint 16, by turning the
+  VGA mirror off to check something unrelated.
+- **Cost:** an evening chasing a register-clobbering bug that did not exist.
+
+`qemu -nographic` mirrors the VGA text console to stdout. The BIOS loader
+printed with `INT 10h`, which writes to VGA, so its output appeared on the
+harness's stdin and everything looked connected. **It had never written a byte
+to a serial port.**
+
+Two things followed from that, and the second is the expensive one:
+
+1. **On a headless machine there would have been no output at all** — which is
+   every machine this loader is actually for. A bootloader whose only console is
+   a screen is a bootloader you cannot debug on the hardware it fails on.
+
+2. **The mirror drops characters.** `E:RD` arrived as `E:R`, and
+   `drive 0x80` as `drive 0x8`. A missing final character reads as truncation,
+   and truncation of a *hex byte* reads as the low nibble being lost — so the
+   search went straight to `print_hex_byte`, and found a plausible culprit:
+   the byte was held in `%cl` across an `INT 10h` call, and AH=0Eh promises to
+   preserve `AX` and nothing else. That reasoning is correct and the bug was not
+   there. It was rewritten to keep the byte in memory, which changed nothing,
+   because nothing had been wrong with it.
+
+**What settled it was one command, not more reading:** running with
+`-display none -serial stdio` instead of `-nographic`. The same loader produced
+**nothing whatsoever**, which is the true state of it, and every earlier
+observation was explained at once.
+
+- **Fixed in** kernel 0.0.11. Both stages write to COM1 themselves — stage 1
+  initialises the port — *and* keep the `INT 10h` call, because they are for two
+  different readers: the screen is where a person standing in front of a machine
+  that will not start is looking, and the serial port is where the harness and a
+  headless machine are. `scripts/bios-boot-test.sh` uses
+  `-display none -serial stdio` so that nothing but what the loader wrote can
+  reach it.
+
+- **The shape.** Every previous entry of this kind was a claim disagreeing with
+  an implementation. This one is a **harness measuring the wrong signal** — the
+  output was real, it simply was not coming from where the test believed. It
+  belongs with BG-133 and BG-134: three in two days where the thing under test
+  was not the thing being observed. The instrument is part of the experiment,
+  and *this* one also manufactured a bug rather than hiding one, which is the
+  more expensive direction to be wrong in.
+
 ### BG-134 — Eight test harnesses looked for a kernel instead of building one
 
 [#291](https://github.com/neogentrics/ReconOS/issues/291)

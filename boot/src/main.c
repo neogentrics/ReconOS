@@ -279,6 +279,12 @@ EFI_DEVICE_PATH_PROTOCOL *file_device_path(const EFI_DEVICE_PATH_PROTOCOL *dev,
 
 static char cmdline_buf[128];
 
+/* Set when the person chose recovery from the menu. It overrides the file on
+ * the EFI partition rather than being merged with it: recovery is a decision
+ * made in front of the machine, and whatever `\reconos\cmdline` says was
+ * decided earlier and elsewhere. */
+static BOOLEAN recovery_chosen = FALSE;
+
 static void read_cmdline(EFI_FILE_PROTOCOL *root)
 {
 	EFI_FILE_PROTOCOL *file;
@@ -834,18 +840,36 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 						  (void **)&self)))
 			from = self->DeviceHandle;
 
-		if (menu_discover(from)) {
+		unsigned found = menu_discover(from);
+
+		if (found) {
 			int pick;
 
 			menu_print();
-			pick = menu_choose(5);
+
+			/* Two seconds when recovery is the only extra entry,
+			 * five when there are other systems to read.
+			 *
+			 * Recovery is always offered, so every boot of every
+			 * machine now pauses -- and the pause is the price of
+			 * the environment being reachable at all. Two seconds
+			 * is chosen to be visible without being a tax: long
+			 * enough that somebody watching can act, short enough
+			 * that a machine restarting at three in the morning is
+			 * not kept waiting for a person who is not there. */
+			pick = menu_choose(found == 1 && menu_is_recovery(0) ? 2
+									    : 5);
 
 			/* If it starts, this does not return. If it declines,
 			 * we carry on and start ReconOS -- a machine that ends
 			 * up somewhere is better than one that ends up
 			 * nowhere. */
-			if (pick >= 0)
-				menu_boot((unsigned)pick, image);
+			if (pick >= 0) {
+				if (menu_is_recovery((unsigned)pick))
+					recovery_chosen = TRUE;
+				else
+					menu_boot((unsigned)pick, image);
+			}
 		}
 	}
 
@@ -855,6 +879,21 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	 * volume inside that call, and copying it earlier copied a buffer that
 	 * was still empty. Nothing failed -- the kernel simply received no
 	 * command line and behaved exactly as it does when there is none. */
+
+	/* And the override goes here for the same reason: read_kernel fills
+	 * cmdline_buf, so setting it before that call would be overwritten by
+	 * the file, and setting it after the copy below would never reach the
+	 * kernel. Between the two is the only correct place, and BG-131 was
+	 * exactly this mistake made once already. */
+	if (recovery_chosen) {
+		/* zero first, then eight bytes. copy() is a fixed-length byte
+		 * copy rather than a string copy, so asking it for
+		 * sizeof(cmdline_buf) would read 128 bytes out of a 9-byte
+		 * literal. */
+		zero(cmdline_buf, sizeof(cmdline_buf));
+		copy(cmdline_buf, "recovery", 8);
+	}
+
 	copy(boot_info.cmdline, cmdline_buf, sizeof(boot_info.cmdline));
 
 	if (cmdline_buf[0]) {

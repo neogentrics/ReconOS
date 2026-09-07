@@ -59,4 +59,11 @@ int menu_choose(unsigned seconds);
 /* Starts one, and does not return if it works. */
 BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);
 
+/* Is this entry the recovery environment rather than a system on the disk?
+ *
+ * Recovery is this loader starting our own kernel with a different command
+ * line, so it is not chain-loaded and menu_boot refuses it. The caller must ask
+ * this first. */
+BOOLEAN menu_is_recovery(unsigned index);
+
 #endif /* RECONBOOT_INTERNAL_H */

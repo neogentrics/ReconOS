@@ -86,7 +86,7 @@ out=$(timeout 60 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
 	-drive "file=$W/other.img,format=raw,if=none,id=o0" \
 	-device nvme,serial=o,drive=o0 2>&1 | tr -d '\r')
 
-listing=$(echo "$out" | sed -n '/Other systems/,/^$/p')
+listing=$(echo "$out" | sed -n '/On this machine/,/^$/p')
 
 # A harness that will not show its working is one whose result has to be taken
 # on trust, and the status board quotes these transcripts as evidence. Setting
@@ -113,13 +113,55 @@ else
 	fail=$((fail + 1))
 fi
 
+# Matched exactly rather than as a substring. "ReconOS recovery" is a legitimate
+# entry and contains the word, so `grep ReconOS` asks a question this test does
+# not mean: the claim is that the *disk we booted from* is not offered back as a
+# system to boot, not that the string never appears.
 say "does not offer the medium it booted from"
-if ! echo "$listing" | grep -q 'ReconOS'; then
+if ! echo "$listing" | grep -qE '^ +[0-9]+\. ReconOS *$'; then
 	echo "excluded"
 	pass=$((pass + 1))
 else
 	echo "FAILED -- it offered itself"
 	echo "$listing" | sed 's/^/      /'
+	fail=$((fail + 1))
+fi
+
+say "offers the recovery environment"
+if echo "$listing" | grep -q 'ReconOS recovery'; then
+	echo "listed, and last"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- unreachable without a second computer"
+	echo "$listing" | sed 's/^/      /'
+	fail=$((fail + 1))
+fi
+
+# --- and choosing it gets there ---------------------------------------------
+#
+# Being in the list is not the claim. The claim is that a person in front of a
+# machine that will not start can reach the recovery environment, and the only
+# way to test that is to be that person: press the key, and require the screen.
+#
+# The digit is sent repeatedly rather than once, because a single byte written
+# at start-up is delivered while the firmware is still initialising and there is
+# nothing yet to read it. Any key stops the countdown and a digit chooses, so a
+# stream arrives whenever the menu is ready for it; the extra digits afterwards
+# land in a kernel that is not reading the keyboard.
+say "and choosing it reaches recovery"
+rec=$( (i=0; while [ $i -lt 48 ]; do printf '3'; sleep 0.25; i=$((i + 1)); done) |
+	timeout 60 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
+		-drive "file=$W/medium.img,format=raw,if=none,id=m0" \
+		-device nvme,serial=m,drive=m0 \
+		-drive "file=$W/other.img,format=raw,if=none,id=o0" \
+		-device nvme,serial=o,drive=o0 2>&1 | tr -d '\r')
+
+if echo "$rec" | grep -q '=== ReconOS recovery ==='; then
+	echo "$(echo "$rec" | grep -cE '^ +nvme[0-9]') volumes looked at"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- the key was pressed and recovery did not start"
+	echo "$rec" | sed -n '/On this machine/,$p' | head -12 | sed 's/^/      /'
 	fail=$((fail + 1))
 fi
 
@@ -162,16 +204,27 @@ time_to_kernel() {
 	echo "$ms"
 }
 
-say "waits about five seconds, then starts anyway"
+# Two waits now, not one wait and no wait.
+#
+# Recovery is offered on every machine, so there is no longer a boot with no
+# menu at all: a disk with nothing else on it still gets a two-second pause, and
+# a disk with other systems gets five. This test used to subtract "no menu" from
+# "menu" and expect five seconds; it expected three and got it, which is the
+# subtraction working and the *baseline* having moved.
+#
+# So both are checked. The difference pins them relative to each other, and the
+# floor pins them absolutely -- a difference of three seconds is equally
+# consistent with 5-and-2 and with 33-and-30.
+say "waits five seconds with a menu, two without"
 with=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0 	-drive "file=$W/other.img,format=raw,if=none,id=o0" -device nvme,serial=o,drive=o0)
 alone=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0)
 diff=$(( with - alone ))
 
-if [ "$diff" -ge 3500 ] && [ "$diff" -le 8000 ]; then
-	echo "${diff} ms longer with a menu"
+if [ "$diff" -ge 2000 ] && [ "$diff" -le 4500 ] && [ "$alone" -ge 2000 ]; then
+	echo "${diff} ms apart, ${alone} ms alone"
 	pass=$((pass + 1))
 else
-	echo "FAILED -- ${diff} ms (${with} with a menu, ${alone} without)"
+	echo "FAILED -- ${diff} ms apart (${with} with others, ${alone} alone)"
 	fail=$((fail + 1))
 fi
 

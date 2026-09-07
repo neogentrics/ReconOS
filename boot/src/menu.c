@@ -72,6 +72,22 @@ static const struct {
 	{ u"\\System\\Library\\CoreServices\\boot.efi", "macOS" },
 };
 
+/* Recovery is not a system on the disk, so it is not in the table above and is
+ * not discovered. It is *this* loader starting *our* kernel with a different
+ * command line, and it is offered unconditionally.
+ *
+ * Unconditionally, because the machine that needs it is by definition the
+ * machine that is not working, and every other route to it assumes something
+ * that is already in doubt. Before this it was reached by editing
+ * `\reconos\cmdline` on the EFI partition -- from a second, working computer.
+ * A recovery environment you need a working computer to reach is most of the
+ * way to not having one.
+ *
+ * The sentinel is a null device handle: every discovered entry has a real one,
+ * because it came from a filesystem the firmware enumerated.
+ */
+#define RECOVERY_LABEL "ReconOS recovery"
+
 static void copy_path(CHAR16 *dst, const CHAR16 *src, unsigned max)
 {
 	unsigned i = 0;
@@ -92,6 +108,23 @@ static void copy_label(char *dst, const char *src, unsigned max)
 		i++;
 	}
 	dst[i] = 0;
+}
+
+static void add_recovery(void)
+{
+	if (entry_count >= MENU_MAX)
+		return;
+
+	entries[entry_count].device  = 0;
+	entries[entry_count].path[0] = 0;
+	copy_label(entries[entry_count].label, RECOVERY_LABEL,
+		   sizeof(entries[entry_count].label));
+	entry_count++;
+}
+
+BOOLEAN menu_is_recovery(unsigned index)
+{
+	return index < entry_count && entries[index].device == 0;
 }
 
 /* Is this system already listed on this disk?
@@ -197,6 +230,12 @@ unsigned menu_discover(EFI_HANDLE exclude)
 	}
 
 	BS->FreePool(handles);
+
+	/* Last, so that the numbering of the systems on the disk does not move
+	 * when recovery is added -- somebody who has learned that Windows is 2
+	 * should not find it is 3 after an update. */
+	add_recovery();
+
 	return entry_count;
 }
 
@@ -207,13 +246,19 @@ void menu_print(void)
 	if (!entry_count)
 		return;
 
-	print("\nOther systems on this machine:\n");
+	print("\nOn this machine:\n");
 
 	for (i = 0; i < entry_count; i++) {
 		print("  ");
 		print_dec(i + 1);
 		print(". ");
 		print(entries[i].label);
+
+		/* Said here rather than in a manual nobody has, on the one
+		 * screen a person reaches when the machine will not start. */
+		if (menu_is_recovery(i))
+			print("        (looks at the disks, changes nothing)");
+
 		print("\n");
 	}
 }
@@ -312,6 +357,13 @@ BOOLEAN menu_boot(unsigned index, EFI_HANDLE self)
 	EFI_STATUS s;
 
 	if (index >= entry_count)
+		return FALSE;
+
+	/* Recovery is ours, not somebody else's loader, and the caller is
+	 * expected to have handled it before getting here. Refused rather than
+	 * passed to HandleProtocol with a null handle, which would be a fault
+	 * in firmware from a mistake in us. */
+	if (menu_is_recovery(index))
 		return FALSE;
 
 	s = BS->HandleProtocol(entries[index].device, &dp_guid, (void **)&path);

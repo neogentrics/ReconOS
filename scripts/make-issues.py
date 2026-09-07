@@ -68,6 +68,10 @@ AREA = {
     126: 'storage', 127: 'storage', 128: 'startup', 129: 'kernel',
     130: 'storage', 131: 'startup', 132: 'startup', 133: 'build',
     134: 'build',
+    # 135 and 136 are the desktop session's, taken from main. 137 is the next
+    # free one, which was checked rather than assumed: the offer of "135+" had
+    # already been acted on by the time this needed a number.
+    137: 'startup',
 }
 
 

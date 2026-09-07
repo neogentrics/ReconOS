@@ -1868,6 +1868,49 @@ needed. A disk installed on a UEFI-only machine does not get one.
   if it is not. The kernel already handles a boot with no framebuffer, because
   AAVMF does not provide one — that path is tested, not hypothetical.
 
+### What runs today
+
+**Stage 1 and the hop to stage 2.** `boot/bios/`, built by the same clang and
+lld the rest of the project uses — no NASM, because adding an assembler to the
+dependency list to write 440 bytes would be a poor trade.
+
+```
+Booting from Hard Disk...
+ReconOS
+stage2 ok, drive 0x80
+```
+
+SeaBIOS, an IDE disk, and no UEFI anywhere in the machine. `scripts/bios-boot-test.sh`
+requires five things, and the last two are the ones that matter:
+
+| | |
+|---|---|
+| the firmware runs our 440 bytes | the claim |
+| stage 2 is read and jumped to | 440 bytes cannot hold a bootloader, so the design rests on this hop |
+| the boot drive survives the hop | `DL` is the only way to learn which disk the firmware picked |
+| **an unreadable stage 2 says `E:RD`** | a deliberate fault |
+| **one changed byte of stage 2's magic says `E:S2`** | a deliberate fault, and the only proof the check is connected |
+
+The first three would all pass with the magic check deleted.
+
+#### Two guards that are shown to fire, not assumed
+
+`.space 440 - (. - _start)` at the end of stage 1 fails to **assemble** if the
+code reaches the partition table — and `make -C boot/bios check` inserts 400
+bytes and requires the build to be refused. A stage 1 that overran would
+assemble, link, and then destroy the partition table of the first disk it was
+written to, which is the single worst thing this project could ship.
+
+The `0xAA55` signature is verified in the image after it is written, because
+`printf '\x55\xaa'` in dash writes the six literal characters `\x55\xaa` and the
+disk is then simply not bootable, with nothing to say so.
+
+### What is still to build here
+
+E820, the FAT32 reader, the signature check, A20, the GDT, page tables, long
+mode, and the ReconBoot handoff. Stage 2 is 135 bytes and prints; the list above
+is the rest of the checkpoint.
+
 ### What will be checked, and what would make the checkpoint a lie
 
 - A machine with **BIOS only** (SeaBIOS, no OVMF) boots the installed disk.

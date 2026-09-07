@@ -721,6 +721,30 @@ else
 	FAILED_PATHS+=("recovery")
 fi
 
+# Checkpoint 16, on a machine with no UEFI in it at all: SeaBIOS, an IDE disk,
+# and 440 bytes of ours in the first sector. Includes the two deliberate faults
+# -- an unreadable stage 2 and one changed byte of its magic -- because a loader
+# that jumps into an unidentified sector and one that checks are indistinguish-
+# able on a disk where the sector happens to be right.
+
+printf '%-46s' "  a machine with no UEFI runs our loader"
+
+bios_out=$(sh scripts/bios-boot-test.sh 2>&1)
+bios_rc=$?
+
+if [ "$bios_rc" -eq 0 ]; then
+	echo "$(echo "$bios_out" | grep -oE '[0-9]+ of [0-9]+: a machine.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$bios_rc" -eq 2 ]; then
+	echo "skipped, qemu is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$bios_out" | sed 's/^/      /' | head -16
+	failures=$((failures + 1))
+	FAILED_PATHS+=("bios loader")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."
