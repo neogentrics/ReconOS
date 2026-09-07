@@ -783,7 +783,44 @@ void recon_panel_commit(struct recon_panel *panel) {
         free(buf);
         return;
     }
-    memcpy(buf->pixels, panel->pixels, count * sizeof(uint32_t));
+    /*
+     * Straight alpha becomes premultiplied here, and nowhere else.
+     *
+     * Everything that draws into a panel works in straight alpha, which is
+     * what the arithmetic in recon_color_fade and recon_round_top_corners
+     * assumes and what makes them composable. wlroots renders this buffer
+     * with WLR_RENDER_BLEND_MODE_PREMULTIPLIED, which is a different
+     * agreement: it takes the colour as already scaled by its own alpha and
+     * adds it to what is behind.
+     *
+     * Handed straight alpha it therefore *adds the full colour* of every
+     * transparent pixel. A rounded corner -- alpha 0, RGB still holding the
+     * frame's edge colour -- came out as the edge colour at full strength,
+     * which is why every window looked square with a notch cut in it. Glass
+     * was wrong the same way and looked merely washed out rather than broken.
+     *
+     * Converting at the copy rather than in the drawing code keeps one model
+     * inside the program and one at the boundary, which is the only
+     * arrangement where "what alpha means" has a single answer in each place.
+     */
+    for (size_t i = 0; i < count; i++) {
+        uint32_t px = panel->pixels[i];
+        uint32_t a = (px >> 24) & 0xFFu;
+
+        if (a == 0xFFu) {
+            buf->pixels[i] = px;            /* the ordinary case */
+            continue;
+        }
+        if (a == 0u) {
+            buf->pixels[i] = 0u;            /* nothing there at all */
+            continue;
+        }
+
+        uint32_t r = (((px >> 16) & 0xFFu) * a + 127u) / 255u;
+        uint32_t g = (((px >> 8) & 0xFFu) * a + 127u) / 255u;
+        uint32_t b = ((px & 0xFFu) * a + 127u) / 255u;
+        buf->pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+    }
     buf->stride = (size_t)panel->width * 4;
 
     dump_panel(panel, buf->pixels);

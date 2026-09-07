@@ -2575,6 +2575,43 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-137 — Every rounded corner came out square, and every glass surface opaque
+
+- **Found in** v0.4.0. **Found by** the author looking at the screen and saying
+  the corners were "cut off" -- a notch of the frame's own colour where the
+  curve should have been. Every window had it, under every skin that asks for a
+  corner.
+- **What it was** ReconOS draws in **straight** alpha: `recon_color_fade`
+  scales the alpha channel and leaves the colour alone, and
+  `recon_round_top_corners` thins a corner pixel's alpha to zero while its RGB
+  still holds whatever the frame painted there. wlroots renders a scene buffer
+  with `WLR_RENDER_BLEND_MODE_PREMULTIPLIED`, which is a different agreement:
+  it takes the colour as **already scaled by its own alpha** and adds it to
+  what is behind.
+- So a fully transparent pixel carrying the edge colour was not skipped -- it
+  was **added at full strength**. The corner came out as the frame's edge
+  colour, which is why it read as a square with a bite taken out of it rather
+  than as a curve.
+- **The same fault made every glass surface look solid.** At 210 of 255 the
+  arithmetic became `behind * 0.18 + colour`, which saturates on any light
+  chrome: title bars and the taskbar looked opaque, and the skin that exists to
+  be see-through was the one that looked least like itself.
+- **Why it survived so long**: it is invisible on anything opaque, which is
+  almost everything. Only two features use alpha at all, and both were added
+  recently. And the wrongness *looks like a design decision* -- a square corner
+  and a solid taskbar are what a plainer skin would draw anyway.
+- **Fixed in** v0.4.0. The conversion happens in `recon_panel_commit`, at the
+  copy into the buffer handed to the scene, and nowhere else. Everything that
+  draws keeps working in straight alpha -- which is what makes `fade` and the
+  corner rounding composable, since each can be applied after the other -- and
+  the one place that hands pixels to somebody else's compositor converts them.
+  One model inside the program, one at the boundary.
+- **Found by measurement, after reading failed.** The corner code was read
+  three times and is correct; the buffer format is ARGB8888; `dump_panel` is
+  read-only. What settled it was printing the corner's alpha at commit --
+  `corner-alpha=0`, exactly right -- which moved the question downstream of
+  anything in this repository and left only what the compositor does with it.
+
 ### BG-136 — Every file dialog put a hole through the window behind it
 
 - **Found in** v0.4.0. **Found by** photographing a file picker newly added to
