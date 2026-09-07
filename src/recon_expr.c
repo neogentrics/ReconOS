@@ -37,6 +37,10 @@
 struct parser {
     const char *at;
     double x;
+    /* What the variable is called here, lowercased, or empty for just `x`.
+     * Sixteen because that is what the name buffer in parse_primary holds,
+     * and a name longer than it could match would never be read. */
+    char name[16];
 
     /* Set the moment something is wrong, and never cleared -- the first
      * complaint is the useful one, and carrying on to find a second means
@@ -150,6 +154,23 @@ static double parse_primary(struct parser *p) {
         }
         name[n] = '\0';
 
+        /*
+         * `x` is always the variable. So is whatever the caller called it --
+         * but only after the constants have had their turn.
+         *
+         * The order matters, and it is the header's promise: a caller who
+         * renames the variable to `e` gets the constant, because `e` silently
+         * ceasing to mean 2.718 inside every expression in that field is a far
+         * worse surprise than a rename that did not take.
+         *
+         * Written the other way round first, and the test for it failed. That
+         * is how the code and the header came to agree -- not by reading
+         * either of them.
+         *
+         * `x` stays accepted whatever the variable is called: there is only
+         * one variable, so sin(3x) typed into a field labelled r is
+         * unambiguous, and refusing it would be pedantry.
+         */
         if (strcmp(name, "x") == 0) {
             return p->x;
         }
@@ -158,6 +179,9 @@ static double parse_primary(struct parser *p) {
         }
         if (strcmp(name, "e") == 0) {
             return 2.71828182845904523536;
+        }
+        if (p->name[0] != '\0' && strcmp(name, p->name) == 0) {
+            return p->x;
         }
 
         if (!take(p, '(')) {
@@ -273,10 +297,33 @@ static double parse_expression(struct parser *p) {
 
 enum recon_expr_result recon_expr_eval(const char *text, double x,
         double *out, char *why, size_t why_size) {
+    return recon_expr_eval_named(text, NULL, x, out, why, why_size);
+}
+
+bool recon_expr_valid_named(const char *text, const char *name, char *why,
+        size_t why_size) {
+    return recon_expr_eval_named(text, name, 1.0, NULL, why, why_size)
+        != RECON_EXPR_BAD;
+}
+
+enum recon_expr_result recon_expr_eval_named(const char *text,
+        const char *name, double x, double *out, char *why,
+        size_t why_size) {
     struct parser p;
     memset(&p, 0, sizeof(p));
     p.at = text != NULL ? text : "";
     p.x = x;
+
+    /* Lowercased once here rather than at every use, because parse_primary
+     * lowercases what it reads and comparing the two any other way would make
+     * `T` and `t` different variables. */
+    if (name != NULL) {
+        size_t i = 0;
+        for (; name[i] != '\0' && i + 1 < sizeof(p.name); i++) {
+            p.name[i] = (char)tolower((unsigned char)name[i]);
+        }
+        p.name[i] = '\0';
+    }
 
     if (*p.at == '\0') {
         if (why != NULL && why_size > 0) {

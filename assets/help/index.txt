@@ -18,15 +18,16 @@ help-17.txt	Passwords
 help-18.txt	Mail
 help-19.txt	What is running
 help-20.txt	The Calculator
-help-21.txt	Dates
-help-22.txt	What opens a file
-help-23.txt	Pictures of the screen
-help-24.txt	Help and updates
-help-25.txt	Text and letters
-help-26.txt	The firewall
-help-27.txt	Reaching this machine from elsewhere
-help-28.txt	When something goes wrong
-help-29.txt	What is not built yet
+help-21.txt	Drawing a graph
+help-22.txt	Dates
+help-23.txt	What opens a file
+help-24.txt	Pictures of the screen
+help-25.txt	Help and updates
+help-26.txt	Text and letters
+help-27.txt	The firewall
+help-28.txt	Reaching this machine from elsewhere
+help-29.txt	When something goes wrong
+help-30.txt	What is not built yet
 changes-01.txt	v0.4.0
 changes-02.txt	v0.3.0
 changes-03.txt	v0.2.17

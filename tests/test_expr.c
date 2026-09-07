@@ -90,6 +90,61 @@ static void test_x_and_constants(void) {
     check(comes_to("PI", 0, 3.14159265358979323846), "and case does not matter");
 }
 
+/* The same shape as comes_to, with the variable called something else. */
+static bool named_comes_to(const char *text, const char *name, double value,
+        double expected) {
+    double out = 0.0;
+    if (recon_expr_eval_named(text, name, value, &out, NULL, 0)
+            != RECON_EXPR_OK) {
+        printf("        \"%s\" with %s=%g did not evaluate\n", text,
+            name != NULL ? name : "x", value);
+        return false;
+    }
+    /* The same tolerance comes_to uses, for the same reason. */
+    if (fabs(out - expected) > 1e-9 * (1.0 + fabs(expected))) {
+        printf("        \"%s\" came to %.17g, wanted %.17g\n", text, out,
+            expected);
+        return false;
+    }
+    return true;
+}
+
+static void test_the_variable_by_another_name(void) {
+    printf("The variable, called something else\n");
+
+    check(named_comes_to("t", "t", 3, 3), "t is the variable when it is named");
+    check(named_comes_to("2*t+1", "t", 4, 9), "and in an expression");
+    check(named_comes_to("sin(3*theta)", "theta", 0, 0),
+        "a longer name works too");
+
+    /*
+     * x keeps working whatever the variable is called. There is only one
+     * variable, so `sin(3x)` typed into a field labelled r is unambiguous,
+     * and refusing it would be pedantry rather than help.
+     */
+    check(named_comes_to("x*2", "t", 5, 10),
+        "AND x STILL MEANS THE VARIABLE, whatever it has been renamed to");
+
+    /* A letter that is not the variable is still not something this knows. */
+    char why[128] = "";
+    check(recon_expr_eval_named("q+1", "t", 1, NULL, why, sizeof(why))
+        == RECON_EXPR_BAD, "a different letter is refused");
+    check(why[0] != '\0', "and says which");
+
+    /*
+     * A caller who names the variable after a constant loses to the constant.
+     * Written down as a test rather than left to be discovered, because it is
+     * the one case where this quietly does something other than what was
+     * asked -- and guessing which of the two they meant would be worse.
+     */
+    check(named_comes_to("e", "e", 5, 2.71828182845904523536),
+        "naming the variable 'e' loses to the constant, as the header says");
+
+    /* NULL and empty mean x, so the two entry points are one function. */
+    check(named_comes_to("x+1", NULL, 4, 5), "no name means x");
+    check(named_comes_to("x+1", "", 4, 5), "and so does an empty one");
+}
+
 static void test_functions(void) {
     printf("Functions\n");
 
@@ -179,6 +234,7 @@ int main(void) {
     test_arithmetic();
     test_precedence();
     test_x_and_constants();
+    test_the_variable_by_another_name();
     test_functions();
     test_undefined_is_not_an_error();
     test_what_is_refused();

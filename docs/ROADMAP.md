@@ -2018,13 +2018,31 @@ wrong are all the same shape as this and none of them exist. The search itself
 is `recon_help_search`, which needs no window, so the cost of adding one of
 them is a caller rather than a subsystem.
 
-**The grapher plots y against x and nothing else.** Three curves, a plane that
-can be dragged, a wheel that zooms about the pointer, expressions that survive
-closing the window, and Save writes the plane into Pictures -- all as of
-v0.4.0. What is missing is other shapes of question: a parametric curve, a
-polar one, a plot of data from a file rather than of an expression. Each is a
-different thing to type in rather than a different way to draw, so each wants
-its own mode.
+**The grapher plots y against x, and r against an angle.** Three curves, a
+plane that can be dragged, a wheel that zooms about the pointer, expressions
+that survive closing the window, Save writes the plane into Pictures, and
+**polar** -- all as of v0.4.0.
+
+Polar is a mode rather than a flag because it is a different question, not a
+different way to draw: the curve is walked round in steps of angle rather than
+across in columns of pixels, several steps may land in one column and many in
+none, and it crosses itself as a matter of course. The two modes also have
+different natural scales -- ±10 draws every ordinary polar curve as a
+thumbnail -- so switching resets the view and keeps the expressions, which is
+what makes it teach: the same three lines are waves under one and a rose,
+cardioid and spiral under the other.
+
+What is still missing is **parametric** (x and y each a function of the same
+parameter, which needs two fields per curve and so a different form above the
+plane) and **a plot of data from a file** rather than of an expression, which
+needs a file picker, a format decision and an answer to what happens when a
+row will not parse. Neither is a variation on what is there.
+
+Also missing, and smaller: **implicit multiplication**. `sin(3t)` is what
+anybody writes and is not what `recon_expr` reads -- it wants `sin(3*t)`, and
+the hint under an empty plane says so rather than showing the form that does
+not work. Adding it is a change to the grammar with an ambiguity to settle
+(`e2`, `xt`), which is why it is written down here rather than done in passing.
 
 **A package cannot be signed or depended on.** As of v0.4.0 it can ship files
 and settings as well as code, can be nothing but files -- so a wallpaper pack

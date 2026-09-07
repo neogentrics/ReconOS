@@ -1,8 +1,23 @@
-Calendar shows a month at a time, with today marked. Clicking the clock on
-the taskbar opens the same view without opening a window.
+The Calculator's Graph tab draws up to three curves at once, each in its
+own colour, with a matching square beside the field it came from.
 
-Control Panel → Date and Time sets the time zone, chooses between a
-twelve- and twenty-four-hour clock, and says whether daylight saving is in
-force. Checking against a time server is a separate switch, off until it is
-turned on, because reaching out to a machine on the internet is not something
-to start doing without being asked.
+y of x is the ordinary kind: type an expression and it draws y against x.
+Polar asks a different question -- the expression is the distance from the
+origin, and the angle sweeps round. sin(3*t) is a three-petal rose,
+1+cos(t) is a heart, and t/3 is a spiral.
+
+The variable can be written x or t under either mode -- there is only one,
+so both mean the same thing. Multiplication has to be written out: 3*t, not
+3t.
+
+Switching modes keeps what you typed and resets the view, because the two need
+very different scales. It is worth doing once with something in the fields: the
+same three lines look completely different under the other question.
+
+Dragging moves the plane, the wheel zooms about the pointer, Reset
+goes back to the starting view for whichever mode you are in, and Save
+writes the picture into your Pictures folder under the date and time.
+
+A curve that has no value somewhere is broken rather than joined across the
+gap, so 1/x is drawn without the vertical line down the y axis that most
+graphers draw and call part of the function.

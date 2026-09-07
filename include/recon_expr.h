@@ -10,7 +10,7 @@
  * --- What it accepts ---
  *
  *   numbers        12, 3.5, .5, 1e-3
- *   the variable   x
+ *   the variable   x -- or t, or another single letter the caller names
  *   constants      pi, e
  *   arithmetic     + - * / ^, and unary minus
  *   grouping       ( )
@@ -64,6 +64,29 @@ enum recon_expr_result {
  */
 enum recon_expr_result recon_expr_eval(const char *text, double x,
     double *out, char *why, size_t why_size);
+
+/*
+ * The same, with the variable called something else.
+ *
+ * There is still exactly one variable; only its spelling changes. A polar
+ * curve is a function of an angle and a parametric one is a function of a
+ * parameter, and making somebody type `sin(3x)` for a rose because the
+ * evaluator happens to call its input x is the sort of small lie that makes a
+ * program feel like a program rather than like a tool.
+ *
+ * `name` is compared case-insensitively and must not be `pi` or `e`, which
+ * are constants -- passing either gets an expression where the constant wins,
+ * because a caller renaming the variable to `e` has made a mistake this cannot
+ * fix by guessing which one they meant.
+ *
+ * NULL or empty means x, so the two calls are the same call.
+ */
+enum recon_expr_result recon_expr_eval_named(const char *text,
+    const char *name, double value, double *out, char *why, size_t why_size);
+
+/* Whether it parses, with the variable called something else. */
+bool recon_expr_valid_named(const char *text, const char *name,
+    char *why, size_t why_size);
 
 /*
  * Whether the expression parses at all, without caring what it comes to.

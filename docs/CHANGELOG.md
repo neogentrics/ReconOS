@@ -23,6 +23,44 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The grapher draws polar curves.** A second mode beside "y of x": the
+expression is the distance from the origin and the angle sweeps round, so
+`sin(3*t)` is a three-petal rose, `1+cos(t)` a cardioid, and `t/3` a spiral --
+three at once, in their own colours, like everything else this grapher draws.
+
+A mode rather than a flag, because it is a different question and not a
+different way to draw. An ordinary curve has one point per column of pixels and
+cannot double back; a polar one has a point per step of angle, several of which
+land in the same column and many of which land in none, and it crosses itself
+as a matter of course. It keeps the one thing that matters from the other loop:
+an angle where the expression has no value breaks the stroke rather than being
+joined across, which is the same lie in a different coordinate system.
+
+Four turns rather than one, because a spiral is a polar curve and `r = t` over
+a single turn is a comma.
+
+**Switching modes keeps the expressions and resets the view.** Opposite
+decisions for one reason. ±10 is right for `x^2` and draws every ordinary polar
+curve as a thumbnail; ±2.5 is right for a rose and shows almost nothing of a
+parabola -- so carrying the view across would make the mode look broken
+whichever way you switched. The text stays because seeing the same three lines
+mean something else is the quickest way to understand what the mode is.
+
+**`recon_expr` will call its variable something else**, which is what made the
+above possible without a small lie. There is still exactly one variable; only
+its spelling changes, so a polar field can be a function of `t` rather than of
+an `x` that happens to be an angle. `x` stays accepted everywhere, and the
+grapher names the other spelling `t` under *both* modes -- the first version
+named it per mode, and switching back from polar left three fields reading
+"'t' is not something this knows", which is true, useless, and reads as the
+mode having broken what was typed.
+
+The order matters and there is a test for it: a caller who renames the variable
+to `e` gets the constant, because `e` silently ceasing to mean 2.718 inside
+every expression is a far worse surprise than a rename that did not take. That
+test failed first -- the code and its own header disagreed -- which is how they
+came to agree.
+
 **A package can be upgraded.** Installing over an existing one used to be
 refused outright, so the only way to a newer version was remove-then-install
 with whatever that loses.

@@ -178,6 +178,17 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
 #define GRAPH_SPAN 10.0
 
 /*
+ * And a polar one, which is a quarter of it.
+ *
+ * The two modes have genuinely different natural scales. Almost every polar
+ * curve anybody types has a radius of one or two -- sin(3t) is a rose that
+ * fits inside the unit circle, 1+cos(t) reaches two -- so drawing it in a
+ * window twenty units wide gives a shape the size of a thumbnail, which reads
+ * as the mode not working rather than as the view being wrong.
+ */
+#define GRAPH_SPAN_POLAR 2.5
+
+/*
  * How many curves at once.
  *
  * Three. Each takes a row above the picture, and a picture with six rows over
@@ -195,6 +206,24 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
  * getting right is exactly the thing worth keeping.
  */
 #define GRAPH_KEY_PREFIX "calculator/graph-"
+/* Which shape of question the fields are answering. Remembered with them,
+ * because an expression means a different curve under a different kind and
+ * coming back to the wrong one would look like the expressions being wrong. */
+#define GRAPH_KIND_KEY "calculator/graph-kind"
+
+/*
+ * How far round a polar curve is drawn, and how finely.
+ *
+ * Four turns rather than one, because a spiral is a polar curve and r = theta
+ * over a single turn is a comma. Curves that close after one turn are simply
+ * drawn over themselves three more times, which costs nothing and is invisible.
+ *
+ * The step is in radians and is what makes a rose look like a rose rather than
+ * a polygon. Fixed rather than derived from the zoom: the alternative is a
+ * curve that gets coarser as you zoom in, which is exactly backwards.
+ */
+#define POLAR_TURNS 4
+#define POLAR_STEPS 2400
 
 /*
  * How much one notch of the wheel changes the view.
@@ -262,6 +291,18 @@ struct recon_calc {
      */
     struct recon_edit formula[GRAPH_CURVES];
     int formula_focused;
+
+    /*
+     * What the fields mean.
+     *
+     * The same three fields under both, because the question changes and the
+     * number of curves worth comparing does not. A polar field holds r as a
+     * function of the angle; an ordinary one holds y as a function of x.
+     */
+    enum graph_kind {
+        GRAPH_XY,
+        GRAPH_POLAR,
+    } graph_kind;
 
     double span_x, span_y;
 
@@ -364,6 +405,30 @@ static void remember_graph(struct recon_calc *calc) {
         graph_key(i, key, sizeof(key));
         recon_registry_set(RECON_REG_USER, key, calc->formula[i].text);
     }
+    recon_registry_set(RECON_REG_USER, GRAPH_KIND_KEY,
+        calc->graph_kind == GRAPH_POLAR ? "polar" : "xy");
+}
+
+/*
+ * What the one variable may be called: `x`, and `t`.
+ *
+ * Both, in both modes, rather than one per mode. recon_expr always accepts
+ * `x`, so naming the other spelling `t` here means every expression works
+ * under either question -- and that is what makes switching modes teach
+ * something: the same three lines stay in the fields and mean a wave and then
+ * a circle.
+ *
+ * The alternative was tried first and photographed: with the variable called
+ * `x` in the ordinary mode, switching back from polar left three fields
+ * reading "'t' is not something this knows", which is true, useless, and
+ * reads as the mode having broken the expressions.
+ *
+ * The labels and the hint still name the idiomatic one for each mode. Which
+ * spelling somebody uses is not a thing this needs an opinion about; which
+ * one it *suggests* is.
+ */
+static const char *graph_variable(void) {
+    return "t";
 }
 
 /* --- Arithmetic --- */
@@ -748,6 +813,8 @@ static void equals(struct recon_calc *calc) {
 /* The plane itself, which is dragged to move about in it. */
 #define HIT_GRAPH_PLANE (RECON_APPWIN_HIT_USER + 905)
 /* One per curve. */
+#define HIT_GRAPH_XY (RECON_APPWIN_HIT_USER + 907)
+#define HIT_GRAPH_POLAR (RECON_APPWIN_HIT_USER + 908)
 #define HIT_GRAPH_FIELD_BASE (RECON_APPWIN_HIT_USER + 910)
 
 /* One of `n` values converted from `from` to `to` within a category. */
@@ -1090,6 +1157,96 @@ static void draw_convert_mode(struct recon_calc *calc,
  */
 #define GRAPH_BREAK_FACTOR 2
 
+/*
+ * One polar curve: r as a function of the angle.
+ *
+ * Its own function rather than a branch inside the loop below, because it is
+ * stepping something different. An ordinary curve has one point per column of
+ * pixels and cannot double back; a polar one has a point per step of angle,
+ * several of which may land in the same column and many of which land in none
+ * at all, and it crosses itself as a matter of course.
+ *
+ * What it keeps from the ordinary one is the honesty about gaps. An angle
+ * where the expression has no value breaks the stroke, so tan-shaped polar
+ * curves are not joined across the place where they run off to infinity -- the
+ * same lie, in a different coordinate system.
+ *
+ * Points are joined with straight segments rather than plotted as dots: at
+ * four turns and this step the gaps are sub-pixel near the origin and several
+ * pixels at the outside, and a curve made of dots is a dotted curve.
+ */
+static void draw_polar_curve(struct recon_calc *calc, struct recon_panel *panel,
+        const char *text, recon_color ink, int zero_x, int zero_y,
+        double per_unit_x, double per_unit_y, int x, int y, int w, int h) {
+    bool had_last = false;
+    int last_px = 0, last_py = 0;
+
+    double step = (POLAR_TURNS * 2.0 * 3.14159265358979323846) / POLAR_STEPS;
+
+    for (int i = 0; i <= POLAR_STEPS; i++) {
+        double angle = i * step;
+
+        double r = 0.0;
+        if (recon_expr_eval_named(text, graph_variable(), angle, &r, NULL, 0)
+                != RECON_EXPR_OK) {
+            had_last = false;
+            continue;
+        }
+
+        /*
+         * A negative r is drawn opposite the angle, which is what the
+         * convention says and what makes r = cos(2t) a four-petal rose rather
+         * than a two-petal one. cos and sin do this on their own -- the sign
+         * carries through the multiplication -- so there is nothing to write
+         * here except the note that it was not forgotten.
+         */
+        double px = zero_x + r * cos(angle) * per_unit_x;
+        double py = zero_y - r * sin(angle) * per_unit_y;
+
+        /* Far outside the box in either direction: nothing to draw and
+         * nothing to join to, so the stroke breaks rather than being dragged
+         * across the window by a value of ten thousand. */
+        if (!isfinite(px) || !isfinite(py) ||
+                px < x - w || px > x + w * 2 ||
+                py < y - h || py > y + h * 2) {
+            had_last = false;
+            continue;
+        }
+
+        int cx = (int)px;
+        int cy = (int)py;
+
+        if (had_last) {
+            /*
+             * A straight segment between the two, walked along whichever axis
+             * it covers more of -- the same idea as the column loop below,
+             * with neither axis privileged because a polar curve may be
+             * travelling in any direction.
+             */
+            int dx = cx - last_px;
+            int dy = cy - last_py;
+            int steps = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy)
+                ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+            for (int s = 1; s < steps; s++) {
+                int ix = last_px + dx * s / steps;
+                int iy = last_py + dy * s / steps;
+                if (ix >= x + 1 && ix < x + w - 1 &&
+                        iy >= y + 1 && iy < y + h - 1) {
+                    recon_fill_rect(panel, ix, iy, 1, 1, ink);
+                }
+            }
+        }
+
+        if (cx >= x + 1 && cx < x + w - 1 && cy >= y + 1 && cy < y + h - 1) {
+            recon_fill_rect(panel, cx, cy, 1, 1, ink);
+        }
+        last_px = cx;
+        last_py = cy;
+        had_last = true;
+    }
+    (void)calc;
+}
+
 /* How much of the plane is on screen at the start, either side of zero. */
 
 /*
@@ -1221,11 +1378,45 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
      * one they are pointing at -- and a legend that says "1, 2, 3" makes them
      * count the lines to find out.
      */
-    int label_w = recon_text_width(calc->font, "y =") + 6;
+    /*
+     * Which question the fields are answering, chosen before them.
+     *
+     * Two buttons rather than one that toggles, so the mode can be seen
+     * without being changed -- a single button reading "Polar" says neither
+     * what is showing nor what pressing it does.
+     */
+    static const struct { const char *label; uint32_t hit; int kind; } KINDS[] = {
+        { "y of x", HIT_GRAPH_XY, GRAPH_XY },
+        { "Polar", HIT_GRAPH_POLAR, GRAPH_POLAR },
+    };
+    int kx = x;
+    for (size_t i = 0; i < sizeof(KINDS) / sizeof(KINDS[0]); i++) {
+        bool on = (calc->graph_kind == (enum graph_kind)KINDS[i].kind);
+        int bw = recon_text_width(calc->font, KINDS[i].label) + 16;
+        recon_fill_rect(panel, kx, y, bw, line + 4,
+            on ? COLOR_KEY_ACCENT : COLOR_KEY);
+        recon_draw_bevel(panel, kx, y, bw, line + 4, on);
+        recon_draw_text(panel, calc->font, kx + 8, y + ascent + 2, bw,
+            KINDS[i].label, on ? COLOR_ACCENT_TEXT : COLOR_KEY_TEXT);
+        recon_hit_add(panel, kx, y, bw, line + 4, KINDS[i].hit);
+        kx += bw + 6;
+    }
+    y += line + 8;
+
+    /*
+     * "r =" and "y =" are the same width in this font and would not be in
+     * another, so the wider of the two decides -- otherwise the fields shift
+     * sideways when the mode changes, which reads as the layout breaking.
+     */
+    const char *field_label = calc->graph_kind == GRAPH_POLAR ? "r =" : "y =";
+    int label_w = recon_text_width(calc->font, "y =");
+    int polar_w = recon_text_width(calc->font, "r =");
+    label_w = (polar_w > label_w ? polar_w : label_w) + 6;
+
     for (int i = 0; i < GRAPH_CURVES; i++) {
         recon_fill_rect(panel, x, y + 2, 10, line - 2, curve_color(i));
-        recon_draw_text(panel, calc->font, x + 16, y + ascent, label_w, "y =",
-            COLOR_KEY_TEXT);
+        recon_draw_text(panel, calc->font, x + 16, y + ascent, label_w,
+            field_label, COLOR_KEY_TEXT);
         recon_edit_draw(panel, calc->font, x + 16 + label_w, y - 2,
             w - label_w - 16, line + 6, &calc->formula[i]);
         recon_hit_add(panel, x + 16 + label_w, y - 2, w - label_w - 16,
@@ -1388,8 +1579,17 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         }
     }
     if (!anything) {
+        /*
+         * The examples are written the way this grammar takes them, which
+         * means the multiplication signs are there. `sin(3t)` is what anybody
+         * would write and is not something recon_expr reads -- a hint showing
+         * it would be teaching the one thing that does not work.
+         */
         recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2,
-            w - 16, "Type an expression in x. For example: sin(x), x^2-2, 1/x",
+            w - 16, calc->graph_kind == GRAPH_POLAR
+                ? "Type a distance from the origin, in the angle t. "
+                  "For example: sin(3*t), 1+cos(t), t"
+                : "Type an expression in x. For example: sin(x), x^2-2, 1/x",
             COLOR_KEY_TEXT);
         return;
     }
@@ -1406,7 +1606,8 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     why[0] = '\0';
     for (int i = 0; i < GRAPH_CURVES && complaining < 0; i++) {
         if (calc->formula[i].text[0] != '\0' &&
-                !recon_expr_valid(calc->formula[i].text, why, sizeof(why))) {
+                !recon_expr_valid_named(calc->formula[i].text,
+                    graph_variable(), why, sizeof(why))) {
             complaining = i;
         }
     }
@@ -1415,11 +1616,28 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         if (calc->formula[c].text[0] == '\0' || c == complaining) {
             continue;
         }
-        if (!recon_expr_valid(calc->formula[c].text, NULL, 0)) {
+        if (!recon_expr_valid_named(calc->formula[c].text,
+                graph_variable(), NULL, 0)) {
             continue;
         }
 
         recon_color ink = curve_color(c);
+
+        /*
+         * A polar curve is walked round rather than across.
+         *
+         * The difference is not the drawing, it is what is being stepped: an
+         * ordinary curve has one point per column of pixels, and a polar one
+         * has a point per step of angle, several of which may land in the same
+         * column and many of which land in none. So it is its own loop rather
+         * than a flag inside the one below -- and it joins its points with the
+         * same rule, since a polar curve has asymptotes too.
+         */
+        if (calc->graph_kind == GRAPH_POLAR) {
+            draw_polar_curve(calc, panel, calc->formula[c].text, ink,
+                zero_x, zero_y, per_unit_x, per_unit_y, x, y, w, h);
+            continue;
+        }
 
         /*
          * One column of pixels at a time, joined to the last where joining
@@ -1440,8 +1658,8 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
             double vx = ((x + 1 + col) - zero_x) / per_unit_x;
 
             double vy = 0.0;
-            if (recon_expr_eval(calc->formula[c].text, vx, &vy, NULL, 0)
-                    != RECON_EXPR_OK) {
+            if (recon_expr_eval_named(calc->formula[c].text,
+                    graph_variable(), vx, &vy, NULL, 0) != RECON_EXPR_OK) {
                 had_last = false;
                 continue;
             }
@@ -1885,6 +2103,39 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         calc->span_x *= 2.0;
         calc->span_y *= 2.0;
         return true;
+    case HIT_GRAPH_XY:
+    case HIT_GRAPH_POLAR: {
+        enum graph_kind wanted = (hit_id == HIT_GRAPH_POLAR)
+            ? GRAPH_POLAR : GRAPH_XY;
+        if (calc->graph_kind == wanted) {
+            return true;
+        }
+        calc->graph_kind = wanted;
+
+        /*
+         * The expressions are kept across the change; the view is not.
+         *
+         * Opposite decisions, for the same reason. sin(x) is a wave and
+         * sin(t) is a circle, and seeing the same three lines mean something
+         * else is the quickest way to understand what the mode is -- so the
+         * text stays.
+         *
+         * The scale cannot stay. Twenty units wide is right for y = x^2 and
+         * draws every ordinary polar curve as a thumbnail; two and a half is
+         * right for a rose and shows almost nothing of a parabola. Carrying
+         * the old view across would make the mode look broken in whichever
+         * direction you switched.
+         */
+        calc->span_x = (wanted == GRAPH_POLAR) ? GRAPH_SPAN_POLAR : GRAPH_SPAN;
+        calc->span_y = calc->span_x;
+        calc->centre_x = 0.0;
+        calc->centre_y = 0.0;
+
+        calc->note[0] = '\0';
+        remember_graph(calc);
+        return true;
+    }
+
     case HIT_GRAPH_SAVE:
         /* Handled in the draw, where there is a panel to read from. A click
          * has no panel of its own, and reading the one from the last frame
@@ -1895,8 +2146,10 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         /* Back to where it started, which is the span AND the place -- a
          * Reset that left the view somewhere in the third quadrant would be
          * resetting half of what somebody had changed. */
-        calc->span_x = GRAPH_SPAN;
-        calc->span_y = GRAPH_SPAN;
+        /* Back to this mode's own scale, not to the other one's. */
+        calc->span_x = (calc->graph_kind == GRAPH_POLAR)
+            ? GRAPH_SPAN_POLAR : GRAPH_SPAN;
+        calc->span_y = calc->span_x;
         calc->centre_x = 0.0;
         calc->centre_y = 0.0;
         return true;
@@ -2251,6 +2504,9 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
         recon_edit_begin(&calc->formula[0], "sin(x)", false);
         calc->formula[0].active = false;
     }
+    calc->graph_kind = strcmp(recon_registry_get(RECON_REG_USER,
+        GRAPH_KIND_KEY, "xy"), "polar") == 0 ? GRAPH_POLAR : GRAPH_XY;
+
     calc->formula_focused = 0;
     calc->unit_to = 1;
 
