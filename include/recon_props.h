@@ -116,6 +116,25 @@ int recon_props_openers(const char **names, int max);
  */
 #define RECON_OPEN_WITH_PREFIX "open-with"
 
+/*
+ * Does this application say it opens files of this kind?
+ *
+ * The question recon_props_openers deliberately does not ask. That one offers
+ * every program that reads files at all, because narrowing it to the ones
+ * claiming the extension would leave a list with one entry in it and nothing
+ * to choose between -- which is the whole reason a person opened the menu.
+ *
+ * So the list stays wide and this is how a caller warns instead. A picture
+ * pointed at Notepad opens as a screen of binary, and that is a thing somebody
+ * is allowed to do; it is not a thing they should be able to do without being
+ * told first.
+ *
+ * False when the application does not exist, declares no file types, or
+ * declares some that do not include this one. True is a claim, not a promise:
+ * an application saying it opens .png can still fail on a particular file.
+ */
+bool recon_props_claims(const char *application, const char *name);
+
 bool recon_props_set_opener(const char *name, const char *application);
 bool recon_props_clear_opener(const char *name);
 

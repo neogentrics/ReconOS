@@ -114,9 +114,9 @@ exactly why they are not what you want while iterating.
 Worth running before cutting a release, and after anything that touches
 parsing: a decoder handed a malformed file is where these live.
 
-All eighteen suites were clean the first time it was run, which is worth
-knowing precisely because it means the next thing it says will be worth
-believing.
+All eighteen suites there were at the time were clean the first time it was
+run, which is worth knowing precisely because it means the next thing it says
+will be worth believing. It has stayed clean since, through nineteen.
 
 ### Warnings
 

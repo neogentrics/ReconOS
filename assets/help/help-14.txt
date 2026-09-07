@@ -1,27 +1,16 @@
-Some programs offer to keep a password for you. Mail does, on the screen where
-it asks for one: tick Remember this password and it is kept once the
-connection has worked.
+Right-click a file, on the desktop or in File Explorer, and the menu offers
+Open with for every program that reads files. Choosing one opens the file
+*and* makes that program the one for every file of that kind -- so this is the
+way to say "always open these in that", not the way to open one thing once.
+Use the usual program, on the same menu, undoes it.
 
-Kept is not the same as written down. It is encrypted with a key made from
-your account password, and that key exists only while you are signed in --
-it is never written anywhere. Signing out, locking the screen, or shutting
-down makes every kept password unreadable until you sign in again.
+Control Panel -> Programs -> File Types lists every choice you have made
+and undoes any of them, which is where to look when something opens in a
+program you do not remember choosing.
 
-An account with no password has no keyring. There would be nothing to make
-a key from, so nothing offers to keep anything, and the tick box is not shown
-rather than shown and ignored.
-
-Control Panel -> Passwords lists what is being kept, by name and by which
-program asked. It does not show the passwords themselves and there is no way
-to make it: nothing in ReconOS will print one back to you. Choose one and
-press Forget and it is gone; whatever kept it will ask again next time.
-
-From the Terminal, keyring lists them, keyring forget <name> removes one,
-and keyring keep <name> <secret> adds one. There is no command that prints a
-secret, for the same reason.
-
-What this protects against, and what it does not. It protects a disk or a
-backup that somebody else has: without your password, what is stored is
-unreadable. It does not protect against somebody using your account while you
-are signed in -- at that point the key is in memory and the programs running
-are yours. Lock the screen when you walk away; that puts the key back.
+If the program does not say it opens that kind of file, you are asked
+first. It is a warning and not a refusal: opening a picture in Notepad to
+look at what is inside it is a perfectly good reason, and so is sending a .log
+somewhere that is not the usual program. The dialog says which program, which
+file, and that the choice applies to every file of that kind -- because the
+surprise is not the file that opens as nonsense, it is the next one.

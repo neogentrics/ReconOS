@@ -205,6 +205,7 @@ enum pending_question {
     QUESTION_TRASH,      /* move to the recycle bin */
     QUESTION_PURGE,      /* delete permanently */
     QUESTION_EMPTY_BIN,
+    QUESTION_OPEN_WITH,  /* a program that does not claim this kind of file */
 };
 
 struct recon_explorer {
@@ -238,6 +239,10 @@ struct recon_explorer {
      */
     enum pending_question question;
     char question_target[RECON_NAME_MAX];
+    /* The second half of a question about two things -- which file, and which
+     * program. Only QUESTION_OPEN_WITH needs it, and a field is cheaper than
+     * a second question mechanism. */
+    char question_other[RECON_NAME_MAX];
 
     /* True while looking inside the recycle bin, which changes what the
      * actions mean: things there are restored or purged, not deleted again. */
@@ -625,6 +630,37 @@ static void do_commit_rename(struct recon_explorer *ex) {
 /* --- Deleting --- */
 
 /*
+ * Point a kind of file at a program, and open this one with it.
+ *
+ * Both, because choosing from this menu means "this one, and from now on" --
+ * the same reading the desktop's identical menu takes, and they have to agree.
+ *
+ * Its own function because two callers reach it now: the click, when the
+ * program says it opens this kind of file, and the answer to the warning, when
+ * it does not.
+ */
+static void open_with_now(struct recon_explorer *ex, const char *file,
+        const char *application) {
+    recon_props_set_opener(file, application);
+
+    char path[RECON_PATH_MAX];
+    struct recon_server *server = recon_appwin_server(ex->win);
+    if (server == NULL || !recon_fs_join(path, sizeof(path), ex->cwd, file)) {
+        return;
+    }
+
+    if (!recon_shell_open_file(server->shell, path)) {
+        set_status(ex, true, "'%s' could not be opened with %s.", file,
+            application);
+        return;
+    }
+
+    const char *dot = strrchr(file, '.');
+    set_status(ex, false, "'%s' files now open in %s.",
+        dot != NULL ? dot : file, application);
+}
+
+/*
  * The answer to whatever was asked.
  *
  * Called by the shell with the explorer's own pointer, so it does not need to
@@ -673,6 +709,11 @@ static void explorer_answer(void *user, int choice) {
         ex->selected = -1;
         reload(ex);
         set_status(ex, false, "The Recycle Bin is empty");
+        break;
+
+    case QUESTION_OPEN_WITH:
+        recon_props_set_opener(ex->question_target, ex->question_other);
+        open_with_now(ex, ex->question_target, ex->question_other);
         break;
 
     case QUESTION_NONE:
@@ -2462,21 +2503,33 @@ static void explorer_context_action(void *user, uint32_t id) {
 
         if (which >= 0 && which < count && names[which] != NULL) {
             const char *file = ex->entries[ex->selected].name;
-            recon_props_set_opener(file, names[which]);
 
-            char path[RECON_PATH_MAX];
-            struct recon_server *server = recon_appwin_server(ex->win);
-            if (server != NULL &&
-                    recon_fs_join(path, sizeof(path), ex->cwd, file)) {
-                if (!recon_shell_open_file(server->shell, path)) {
-                    set_status(ex, true, "'%s' could not be opened with %s.",
-                        file, names[which]);
-                } else {
-                    set_status(ex, false, "'%s' files now open in %s.",
-                        strrchr(file, '.') != NULL ? strrchr(file, '.') : file,
-                        names[which]);
-                }
+            /*
+             * Asked about first, when the program does not claim this kind of
+             * file. Not refused -- pointing a .log at Notepad is a reasonable
+             * thing to want, and so is opening a .png in it to see the header.
+             * Told first, because the same click makes it the program for
+             * every file of this kind, and a picture that opens as binary
+             * looks like a broken picture rather than a choice.
+             */
+            if (!recon_props_claims(names[which], file)) {
+                char message[512];
+                snprintf(message, sizeof(message),
+                    "%s does not say it opens files like '%s'. It will "
+                    "probably show something that is not readable.\n"
+                    "This becomes the program for every file of this kind. "
+                    "'Use the usual program', on the same menu, undoes it.",
+                    names[which], file);
+
+                snprintf(ex->question_other, sizeof(ex->question_other), "%s",
+                    names[which]);
+                ask_about(ex, QUESTION_OPEN_WITH, file, "Open With", message,
+                    "Open Anyway");
+                recon_appwin_refresh(ex->win);
+                return;
             }
+
+            open_with_now(ex, file, names[which]);
         }
         recon_appwin_refresh(ex->win);
         return;
@@ -2611,7 +2664,8 @@ static void explorer_describe(void *user, char *out, size_t size) {
     const char *stage =
         ex->question == QUESTION_TRASH ? "asking: move to bin" :
         ex->question == QUESTION_PURGE ? "asking: delete permanently" :
-        ex->question == QUESTION_EMPTY_BIN ? "asking: empty bin" : "idle";
+        ex->question == QUESTION_EMPTY_BIN ? "asking: empty bin" :
+        ex->question == QUESTION_OPEN_WITH ? "asking: open with" : "idle";
 
     const char *selected = "(none)";
     if (ex->selected >= 0 && ex->selected < ex->entry_count) {

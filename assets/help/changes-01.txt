@@ -10,6 +10,31 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Choosing a program that does not open that kind of file asks first.
+
+"Open with" offers every program that reads files, which is deliberate --
+narrowing it to the ones claiming the extension would leave a menu with one
+entry and nothing to choose between. So the list stays wide and the warning
+does the work: pick Notepad for a .png and it says so, names both ends, and
+says that the choice applies to every file of that kind rather than this one.
+It is a warning and not a refusal, because opening a picture in Notepad to look
+at its header is a real reason to do it.
+
+Both menus, the desktop's and File Explorer's, because they mean the same thing
+and two answers to one question is two places for them to disagree. The check
+itself is recon_props_claims, in recon_props where the rest of "what is
+this file and what opens it" lives.
+
+A dialog long enough to fill itself read a line that was never written
+(BG-127). dialog_wrap returned one more than it had written whenever the
+message overflowed, and the drawing read a row past the end of the array. The
+warning above is the first message in the system long enough to reach it. The
+count is clamped, the ceiling is ten rather than six, and -- the part that
+matters more than the number -- the last line now ends in "..." when there
+was more, so a dialog that is short and a dialog that lost its point look
+different. That is the same fault as the ceilings swept earlier in this
+release, in the one place that had been missed.
+
 Passwords can be kept, and there is a page that shows what is kept.
 
 Mail's sign-in screen now offers "Remember this password". Ticking it and

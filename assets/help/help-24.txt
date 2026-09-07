@@ -1,31 +1,19 @@
-Two ways, and they are not equally safe.
+Control Panel → Firewall decides what ReconOS may open and what may be
+opened to it. It is not the firewall of the machine underneath and does not
+touch that one.
 
-Over SSH. ReconOS listens on a socket that cannot leave the machine, and
-SSH can carry it:
+Outgoing connections are allowed by default and incoming ones are blocked,
+which is right almost always. Under that is a numbered list of rules, and
+the first rule that matches decides — so the order is part of the rule,
+and moving one changes what it does.
 
+Nine rules ship. The incoming ones are written down and switched off: the
+useful state for a rule about remote access is there, correct, and not in
+force until you want remote access. Turning one on is a switch rather than
+having to remember a port number.
 
-ssh -L /tmp/recon-there.sock:/tmp/reconos.sock user@this-machine
+A rule that is off is drawn dim. That is deliberate: written down and not in
+force is the most important thing about such a rule.
 
-
-Then nc -U /tmp/recon-there.sock from the other end. SSH does the encryption
-and decides who you are, both of which it is much better at than ReconOS.
-
-Over the network. remote key makes a key and shows it once. remote on
-opens TCP 7420, and every connection is asked for that key before it can run
-anything. The firewall rule has to be on as well — turning remote access on is
-not enough, and the refusal says which rule to turn on.
-
-The connection is encrypted. ReconOS makes itself a certificate the first
-time the port opens, and the key is offered over that rather than in front of
-it.
-
-Nothing vouches for that certificate — there is no authority to ask, and a
-machine that owns itself has none to ask. What stands in for one is the
-fingerprint: remote prints it, and so does Control Panel → Network. Check
-it matches what your client shows the first time you connect from somewhere,
-and the client should refuse from then on if it ever changes. That check is
-the whole protection, and it only works if somebody does it once.
-
-This is how SSH does it, for the same reason.
-
-remote on its own says which way in is open, and what the fingerprint is.
+Adding and removing rules is firewall in the Terminal for now. The rules are
+a plain text file in /System/Config, so they can be read without ReconOS.

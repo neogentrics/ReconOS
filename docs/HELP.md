@@ -284,6 +284,25 @@ sometimes everything and sometimes very little.
 Every address is checked before it is fetched, and **Control Panel → Firewall**
 decides whether it may go out at all.
 
+## Choosing what opens a file
+
+Right-click a file, on the desktop or in File Explorer, and the menu offers
+**Open with** for every program that reads files. Choosing one opens the file
+*and* makes that program the one for every file of that kind -- so this is the
+way to say "always open these in that", not the way to open one thing once.
+**Use the usual program**, on the same menu, undoes it.
+
+**Control Panel -> Programs -> File Types** lists every choice you have made
+and undoes any of them, which is where to look when something opens in a
+program you do not remember choosing.
+
+**If the program does not say it opens that kind of file, you are asked
+first.** It is a warning and not a refusal: opening a picture in Notepad to
+look at what is inside it is a perfectly good reason, and so is sending a `.log`
+somewhere that is not the usual program. The dialog says which program, which
+file, and that the choice applies to every file of that kind -- because the
+surprise is not the file that opens as nonsense, it is the next one.
+
 ## Passwords
 
 Some programs offer to keep a password for you. Mail does, on the screen where

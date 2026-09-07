@@ -888,13 +888,24 @@ struct recon_shell {
         DESKTOP_ASK_TRASH,
         DESKTOP_ASK_PURGE,
         DESKTOP_ASK_EMPTY_BIN,
+        DESKTOP_ASK_OPEN_WITH,
     } desktop_question;
     char desktop_question_target[RECON_NAME_MAX];
+    /* The second half of a question that is about two things -- which file,
+     * and which program. Only DESKTOP_ASK_OPEN_WITH needs it, and a second
+     * field is cheaper than a second question mechanism. */
+    char desktop_question_other[RECON_NAME_MAX];
 
     struct recon_panel *dialog;
     bool dialog_open;
     char dialog_title[64];
-    char dialog_message[256];
+    /*
+     * 512 rather than 256, because a warning has to say more than a question.
+     * "Move this to the Recycle Bin?" fits anywhere; "this program does not
+     * say it opens this, here is what will happen, and here is how to undo
+     * it" does not, and the half of that which got cut was the undo.
+     */
+    char dialog_message[512];
     char dialog_buttons[RECON_DIALOG_BUTTONS_MAX][24];
     int dialog_button_count;
     int dialog_default;   /* what Enter chooses */
@@ -1113,13 +1124,21 @@ static void tip_recheck(struct recon_shell *shell) {
 #define DIALOG_BUTTON_WIDTH 96
 #define DIALOG_BUTTON_GAP 8
 /*
- * Six, because a properties box is four facts and a question that needs
- * saying carefully is three or four lines of prose. It was three, which was
- * enough for every question there was at the time and silently dropped the
- * last line of anything longer -- the properties box lost "Changed ..." and
- * looked complete without it.
+ * Ten, and it says when it runs out.
+ *
+ * It was three, which was enough for every question there was at the time and
+ * silently dropped the last line of anything longer -- the properties box lost
+ * "Changed ..." and looked complete without it. Then six, which was enough
+ * until a warning had to say what would happen *and* how to undo it, and the
+ * half that got dropped was the undo.
+ *
+ * The number is not the fix. Dropping the end without saying so is the fix,
+ * and dialog_wrap now marks the last line when there was more. A dialog cannot
+ * refuse to appear the way a file write can refuse to truncate, so the mark is
+ * what is left -- and a visible "..." is the difference between a message that
+ * is short and a message that is missing its point.
  */
-#define DIALOG_LINE_MAX 6
+#define DIALOG_LINE_MAX 10
 
 /*
  * How wide this dialog has to be.
@@ -1195,6 +1214,31 @@ static int dialog_wrap(struct recon_shell *shell, const char *message,
         while (*word == ' ') {
             word++;
         }
+    }
+
+    /*
+     * The loop breaks with `count` one past the last line it wrote, so bring
+     * it back into the array before anything indexes with it.
+     *
+     * It did not, and `return count + 1` handed callers a number one larger
+     * than the array they had passed in -- so a message long enough to fill
+     * the dialog made the drawing read a line that was never written. It never
+     * showed, because a message that long had not been written yet.
+     */
+    if (count >= DIALOG_LINE_MAX) {
+        count = DIALOG_LINE_MAX - 1;
+    }
+
+    /*
+     * Something is left over, so the last line says so.
+     *
+     * Overwriting its end rather than appending: the line is already as wide
+     * as it can be, which is exactly why there was no room for the next one.
+     */
+    if (*word != '\0') {
+        size_t at = strlen(lines[count]);
+        at = at > 3 ? at - 3 : 0;
+        snprintf(lines[count] + at, sizeof(lines[count]) - at, "...");
     }
 
     return count + 1;
@@ -4820,6 +4864,10 @@ static void desktop_answered(void *user, int choice) {
         recon_fs_trash_empty();
         recon_desktop_reload(shell->desktop);
         break;
+    case DESKTOP_ASK_OPEN_WITH:
+        recon_props_set_opener(name, shell->desktop_question_other);
+        open_desktop_item(shell, name);
+        break;
     default:
         break;
     }
@@ -4832,7 +4880,7 @@ static void ask_desktop(struct recon_shell *shell, int question, const char *nam
     snprintf(shell->desktop_question_target,
         sizeof(shell->desktop_question_target), "%s", name != NULL ? name : "");
 
-    char message[320];
+    char message[512];
     const char *title;
     const char *go_ahead;
 
@@ -4847,6 +4895,25 @@ static void ask_desktop(struct recon_shell *shell, int question, const char *nam
         snprintf(message, sizeof(message),
             "Permanently delete %d item%s in the Recycle Bin? "
             "This cannot be undone.", count, count == 1 ? "" : "s");
+    } else if (question == DESKTOP_ASK_OPEN_WITH) {
+        title = "Open With";
+        go_ahead = "Open Anyway";
+        /*
+         * Named rather than described. "That program may not understand this
+         * file" is true of everything and warns about nothing; naming both
+         * ends lets somebody see at a glance whether they meant it.
+         *
+         * It says what will actually happen -- from now on, not once -- and
+         * where to undo it, because the entry that undoes it only appears on
+         * this menu after the choice has been made, so somebody who has not
+         * made it yet has never seen it.
+         */
+        snprintf(message, sizeof(message),
+            "%s does not say it opens files like '%s'. It will probably show "
+            "something that is not readable.\n"
+            "This becomes the program for every file of this kind. "
+            "'Use the usual program', on the same menu, undoes it.",
+            shell->desktop_question_other, name);
     } else if (question == DESKTOP_ASK_PURGE) {
         title = "Delete Permanently";
         go_ahead = "Delete";
@@ -5035,6 +5102,24 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
              * is one entry away, on this same menu, which is what makes the
              * stronger reading the safe one.
              */
+            /*
+             * Asked about first, when the program does not claim this kind of
+             * file. Not refused: pointing a .log at Notepad is a perfectly
+             * reasonable thing to want, and so is pointing a .png at it to see
+             * what is in the header. Told first, because the same click also
+             * makes it the program for every file of this kind, and a picture
+             * that opens as binary looks like a broken picture rather than
+             * like a choice somebody made.
+             */
+            if (!recon_props_claims(names[which], shell->context_target)) {
+                snprintf(shell->desktop_question_other,
+                    sizeof(shell->desktop_question_other), "%s", names[which]);
+                ask_desktop(shell, DESKTOP_ASK_OPEN_WITH,
+                    shell->context_target);
+                recon_shell_refresh(shell);
+                return;
+            }
+
             recon_props_set_opener(shell->context_target, names[which]);
             open_desktop_item(shell, shell->context_target);
         }

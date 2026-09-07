@@ -48,9 +48,7 @@ while [ $# -gt 0 ]; do
         --out) OUT_DIR="$2"; shift 2 ;;
         --pause) PAUSE="$2"; shift 2 ;;
         --fresh) rm -rf "$LOOK_ROOT"; shift ;;
-        # Implies --fresh: this rewrites the accounts file, and a copy
-        # made under the other rule would keep what it was made with.
-        --password) PASSWORD="$2"; rm -rf "$LOOK_ROOT"; shift 2 ;;
+        --password) PASSWORD="$2"; shift 2 ;;
         *) break ;;
     esac
 done
@@ -74,6 +72,19 @@ command -v socat >/dev/null || { echo "socat is not installed." >&2; exit 1; }
 # Copied rather than used in place, and the password cleared in the copy. The
 # alternative is a harness that needs somebody's real password typed into it,
 # which is a harness nobody runs.
+# Rebuilt when the password being asked for is not the one the existing copy
+# was built with -- and not otherwise. It used to rebuild on every run with
+# --password, which is correct and useless: anything staged in the copy for the
+# next run (a file on the desktop to right-click, a setting to photograph) was
+# thrown away before it could be looked at.
+STAMP="$LOOK_ROOT/.look-password"
+if [ -d "$LOOK_ROOT" ]; then
+    HAD="$(cat "$STAMP" 2>/dev/null || true)"
+    if [ "$HAD" != "$PASSWORD" ]; then
+        rm -rf "$LOOK_ROOT"
+    fi
+fi
+
 if [ ! -d "$LOOK_ROOT" ]; then
     if [ ! -d "$REAL_ROOT" ]; then
         echo "No ReconOS filesystem at $REAL_ROOT to copy." >&2
@@ -107,6 +118,7 @@ PYEOF
         sed -i -E 's/^([^#][^:]*):([^:]*):[0-9]+:[^:]*:.*$/\1:\2:0::/' \
             "$LOOK_ROOT/System/Config/users"
     fi
+    printf '%s' "$PASSWORD" > "$STAMP"
 fi
 rm -f "$LOOK_ROOT"/*.png
 

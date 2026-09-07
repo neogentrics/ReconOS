@@ -220,6 +220,55 @@ const char *recon_props_chosen_opener(const char *name) {
     return recon_installed_app_resolve(chosen);
 }
 
+bool recon_props_claims(const char *application, const char *name) {
+    if (application == NULL || name == NULL) {
+        return false;
+    }
+
+    const char *dot = strrchr(name, '.');
+    if (dot == NULL || dot == name || dot[1] == '\0') {
+        /* A file with no extension is not claimed by anything, and saying
+         * "no" here is what makes the caller warn rather than assume. */
+        return false;
+    }
+
+    int total = recon_installed_app_count();
+    for (int i = 0; i < total; i++) {
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(i, &app)) {
+            continue;
+        }
+        if (strcmp(app.name, application) != 0) {
+            continue;
+        }
+
+        /*
+         * The declared list is extensions with their dots, separated by
+         * spaces: ".png .jpg .bmp". Walked word by word rather than with
+         * strstr, because ".mp3" is inside ".mp3v" and a substring match would
+         * have an application that opens one claiming the other.
+         */
+        const char *at = app.opens;
+        while (*at != '\0') {
+            while (*at == ' ') {
+                at++;
+            }
+            const char *end = at;
+            while (*end != '\0' && *end != ' ') {
+                end++;
+            }
+            size_t length = (size_t)(end - at);
+            if (length > 0 && strlen(dot) == length &&
+                    strncasecmp(dot, at, length) == 0) {
+                return true;
+            }
+            at = end;
+        }
+        return false;
+    }
+    return false;
+}
+
 bool recon_props_set_opener(const char *name, const char *application) {
     char key[128];
     if (!opener_key(name, key, sizeof(key)) || application == NULL) {

@@ -2021,15 +2021,27 @@ whoever handed it over; nothing expresses a dependency between two; and
 installing over an existing package is refused rather than replacing it, so
 there is no upgrade, only remove-then-install with whatever that loses.
 
-**A file type can be given to a program that does not open it.** As of v0.4.0
-an application declares what it opens, a person can override that from a
-file's right-click menu in File Explorer or on the desktop, and
-**Control Panel -> Programs -> File Types** lists every choice made and undoes
-one. What is missing is any check that the choice makes sense: "Open with"
-offers every application that opens files at all, so a picture can be pointed
-at Notepad and will open there as a screen of binary. Offering only the ones
-that claim the extension would be no use -- that list has one entry -- so the
-answer is probably a warning rather than a shorter list.
+**A file type can still be given to a program that does not open it, and now
+it says so first.** As of v0.4.0 an application declares what it opens, a
+person can override that from a file's right-click menu in File Explorer or on
+the desktop, **Control Panel -> Programs -> File Types** lists every choice
+made and undoes one, and choosing a program that does not claim the extension
+asks before it takes effect.
+
+The warning rather than a shorter list, which is what the earlier note here
+predicted: offering only the applications that claim the extension would leave
+a menu with one entry and nothing to choose between, and pointing a `.log` at
+Notepad -- or a `.png` at it, to look at the header -- is a reasonable thing to
+want. The dialog names both ends, says the choice applies to every file of that
+kind rather than this one, and says where to undo it, because the entry that
+undoes it only appears once the choice has been made.
+
+What is still missing is a check with any depth to it. `recon_props_claims`
+compares extensions, so an application that claims `.png` and cannot read a
+particular one is not distinguished from one that can, and nothing looks inside
+the file. Looking inside is what the codec registry does for media; there is no
+equivalent for "would this program understand this", and there probably cannot
+be one without asking the program.
 
 **Twenty-nine error codes are raised by nothing.** The catalogue defines
 forty-two and thirteen of them are reachable. Some of the rest are reserved on

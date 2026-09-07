@@ -2358,3 +2358,28 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   the allocator does not return the pages, so the leak is invisible from
   outside the process. A checker that looks inside is the only thing that finds
   this class.
+
+### BG-127 — A long enough dialog read a line that was never written
+
+- **Found in** v0.4.0. **Found by** writing a message long enough to fill the
+  dialog, which nothing had done before: the warning about opening a file with
+  a program that does not claim it has to say what will happen *and* how to
+  undo it, and that is the first message in the system past four lines.
+- **What it was** `dialog_wrap` fills `lines[DIALOG_LINE_MAX][128]` and returns
+  how many it wrote. Its loop increments `count` and then breaks when
+  `count >= DIALOG_LINE_MAX`, so on a message that overflows it leaves the
+  loop with `count == DIALOG_LINE_MAX` and returns `count + 1` -- one larger
+  than the array the caller passed in. The drawing then reads `lines[i]` for
+  `i` up to and including `DIALOG_LINE_MAX`, **one row past the end**, and
+  draws whatever was on the stack there.
+- **Why nothing had seen it.** Every message in the system was short enough.
+  The ceiling was raised from three to six once already, for the properties
+  box, and the off-by-one came along with the code that raises it -- a bound
+  that is only wrong past the bound is invisible until something reaches it.
+- **Fixed in** v0.4.0. `count` is clamped back into the array before anything
+  indexes with it, and the ceiling is ten.
+- **And the reason it was reachable at all is recorded separately:** the
+  overflow was silent. A message longer than the dialog lost its tail and
+  looked complete, which is the same fault BG-123 through BG-125 were about.
+  The last line now ends in "..." when there was more, so a dialog that is
+  short and a dialog that is missing its point look different.
