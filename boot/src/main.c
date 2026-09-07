@@ -10,6 +10,7 @@
  */
 #include "efi.h"
 #include "reconboot.h"
+#include "boot_internal.h"
 
 /* Where the kernel is, and why the name carries the architecture.
  *
@@ -46,7 +47,7 @@ typedef void (*kernel_entry_fn)(struct reconboot *);
 #endif
 
 static EFI_SYSTEM_TABLE  *ST;
-static EFI_BOOT_SERVICES *BS;
+EFI_BOOT_SERVICES *BS;
 static EFI_HANDLE         IMAGE;
 
 /* --- Console ------------------------------------------------------------
@@ -54,7 +55,7 @@ static EFI_HANDLE         IMAGE;
  * UEFI speaks UTF-16. Everything here is ASCII, widened on the way out, because
  * a loader that needs a text encoding library has lost sight of its job. */
 
-static void print(const char *s)
+void print(const char *s)
 {
 	CHAR16 buf[128];
 	UINTN n = 0;
@@ -74,7 +75,7 @@ static void print(const char *s)
 	ST->ConOut->OutputString(ST->ConOut, buf);
 }
 
-static void print_hex(UINT64 v)
+void print_hex(UINT64 v)
 {
 	static const char digits[] = "0123456789abcdef";
 	char buf[19];
@@ -91,7 +92,7 @@ static void print_hex(UINT64 v)
 	print(&buf[i]);
 }
 
-static void print_dec(UINT64 v)
+void print_dec(UINT64 v)
 {
 	char buf[21];
 	int i = 20;
@@ -195,6 +196,74 @@ struct elf64_phdr {
  * changed on a stick without rebuilding anything. Absent is normal: most boots
  * want nothing said.
  */
+/* A device path naming a file on a device.
+ *
+ * The firmware hands out a path to the *disk*; LoadImage wants a path to the
+ * *file*. The second is the first with one more node on the end, and building
+ * it by hand is the whole of what a device-path library would do for this case.
+ *
+ * Every node is length-prefixed and packed with no padding, so the arithmetic
+ * is done in bytes and the length field is written a byte at a time -- a 16-bit
+ * store to an odd address faults on some machines, which is exactly why the
+ * specification defines that field as two bytes rather than one integer.
+ */
+EFI_DEVICE_PATH_PROTOCOL *file_device_path(const EFI_DEVICE_PATH_PROTOCOL *dev,
+					   const CHAR16 *file)
+{
+	const EFI_DEVICE_PATH_PROTOCOL *n = dev;
+	UINTN dev_bytes = 0, name_units = 0, node_bytes, total;
+	UINT8 *out;
+	EFI_DEVICE_PATH_PROTOCOL *node;
+	EFI_STATUS s;
+	UINTN i;
+
+	/* How long the device's own path is, up to but not including its
+	 * terminator -- which is being replaced rather than kept. */
+	while (!dp_is_end(n)) {
+		UINT16 l = dp_len(n);
+
+		if (l < 4)
+			return 0;		/* a node that cannot be true */
+		dev_bytes += l;
+		n = (const EFI_DEVICE_PATH_PROTOCOL *)((const UINT8 *)n + l);
+	}
+
+	while (file[name_units])
+		name_units++;
+	name_units++;				/* the terminator is part of it */
+
+	node_bytes = 4 + name_units * sizeof(CHAR16);
+	total = dev_bytes + node_bytes + 4;	/* + our own terminator */
+
+	s = BS->AllocatePool(EfiLoaderData, total, (void **)&out);
+	if (EFI_ERROR(s))
+		return 0;
+
+	for (i = 0; i < dev_bytes; i++)
+		out[i] = ((const UINT8 *)dev)[i];
+
+	node = (EFI_DEVICE_PATH_PROTOCOL *)(out + dev_bytes);
+	node->Type = MEDIA_DEVICE_PATH;
+	node->SubType = MEDIA_FILEPATH_DP;
+	dp_set_len(node, (UINT16)node_bytes);
+
+	{
+		UINT8 *chars = out + dev_bytes + 4;
+
+		for (i = 0; i < name_units; i++) {
+			chars[i * 2] = (UINT8)(file[i] & 0xFF);
+			chars[i * 2 + 1] = (UINT8)(file[i] >> 8);
+		}
+	}
+
+	node = (EFI_DEVICE_PATH_PROTOCOL *)(out + dev_bytes + node_bytes);
+	node->Type = END_DEVICE_PATH_TYPE;
+	node->SubType = END_ENTIRE_DEVICE_PATH;
+	dp_set_len(node, 4);
+
+	return (EFI_DEVICE_PATH_PROTOCOL *)out;
+}
+
 static char cmdline_buf[128];
 
 static void read_cmdline(EFI_FILE_PROTOCOL *root)
@@ -632,6 +701,25 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	print("\n  device tree  : ");
 	print_hex(boot_info.dtb);
 	print("\n");
+
+	/* What else is on this machine. Looked at every boot rather than kept
+	 * in a list, because a list has to be maintained as somebody installs
+	 * and removes systems, and a stale one offers a choice that does not
+	 * work on the one screen where nobody can investigate. */
+	{
+		EFI_LOADED_IMAGE_PROTOCOL *self;
+		EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+		EFI_HANDLE from = 0;
+
+		/* The medium we were loaded from, so that it is not offered back
+		 * to the person as something to boot. */
+		if (!EFI_ERROR(BS->HandleProtocol(image, &li_guid,
+						  (void **)&self)))
+			from = self->DeviceHandle;
+
+		if (menu_discover(from))
+			menu_print();
+	}
 
 	kernel_image = read_kernel(&kernel_size);
 

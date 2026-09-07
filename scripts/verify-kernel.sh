@@ -645,6 +645,29 @@ else
 	FAILED_PATHS+=("install then boot")
 fi
 
+# Installing beside another system is only half the promise. The other half is
+# still being able to reach it afterwards, and the fixture is shaped like a real
+# dual-boot machine -- Windows and Linux on one EFI partition -- rather than
+# like the code, which is what caught the first version listing only one.
+
+printf '%-46s' "  finds the other systems on the machine"
+
+menu_out=$(bash scripts/boot-menu-test.sh 2>&1)
+menu_rc=$?
+
+if [ "$menu_rc" -eq 0 ]; then
+	echo "$(echo "$menu_out" | grep -oE '[0-9]+ of [0-9]+: found the other.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$menu_rc" -eq 2 ]; then
+	echo "skipped, OVMF or mtools is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$menu_out" | sed 's/^/      /' | head -14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("boot menu")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."
