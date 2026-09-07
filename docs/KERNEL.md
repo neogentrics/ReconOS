@@ -16,10 +16,23 @@ desktop needs. This file is the kernel's side.
 
 `0.0.11`. The number says what works. What works: it boots four ways across two
 architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
-the byte, says where and why it faulted instead of resetting, keeps two
-clocks, services a hundred interrupts a second, runs threads and takes
-execution away from them, and is started by a bootloader we wrote.
+can do, knows what memory exists, hands pages of it out, runs on page tables it
+built itself, allocates memory by the byte, says where and why it faulted
+instead of resetting, keeps two clocks, services a hundred interrupts a second,
+runs threads and takes execution away from them, and is started by a bootloader
+we wrote — which refuses to start it if it is not signed.
+
+It also reads and writes disks over four drivers, reads every partition layout
+it has been shown, has a filesystem of its own that survives the power going
+out, reads and writes FAT32 well enough that somebody else's tools agree with
+it, installs itself onto a disk beside Windows without disturbing what is
+there, boots the machine it installed, offers the other systems it found, and
+says what is wrong with a machine that will not start.
+
+**272 self-tests across eighteen boot paths**, every format checked against a
+tool that did not write it. The number is what the verification run reports, not
+a total kept by hand: `scripts/verify-kernel.sh` prints it, and it is copied
+here after a green run rather than incremented when a test is added.
 
 ## What "finished" means
 
@@ -30,6 +43,33 @@ either firmware, without GRUB, without Linux, and without destroying whatever
 was already on the disk unless asked to.
 
 Every checkpoint below is a step on that path. None of them is a refactor.
+
+### But the eighteen checkpoints do not get all the way there
+
+They end at **checkpoint 17, the kernel booting on real hardware.** They do not
+end at the desktop running on it, and reading the list as though they do is a
+mistake this section used to invite.
+
+What the kernel does not have, and what the desktop would need before it could
+run on this kernel rather than on Linux:
+
+| Missing | Size of the gap |
+|---|---|
+| **Per-process address spaces** | `user_thread_create()` makes threads sharing one address space; the scheduler has no page-table switch |
+| **Process creation and ELF loading** | user code is a blob passed as a pointer. The *bootloader* parses ELF; the kernel does not |
+| **Memory syscalls** | there is no way for a program to ask for memory |
+| **File syscalls, and a namespace** | ReconFS and FAT32 are kernel-internal. No `open`, no paths, no VFS |
+| **A framebuffer driver** | the smallest of these — address, pitch and format already arrive in the boot info, and nothing yet reads them |
+| **Input** | none at all. PS/2 for virtual machines, USB HID for real ones, which needs checkpoint 11b |
+| **IPC and shared memory** | a display server is the first program that cannot be written without them |
+
+There are five system calls today: `exit`, `write`, `getpid`, `time`, `yield`.
+
+So **the desktop remaining a Linux program is the correct state, not a delay.**
+Joining the two halves is its own phase with its own list, and treating it as
+the tail of this one makes both boards wrong: the kernel's would look
+unfinished for missing things that were never on it, and the desktop's would
+look blocked on work that was never scheduled.
 
 ## The rule about other people's code
 
@@ -64,11 +104,22 @@ courtesy now rather than a dependency.
 | 11 | Block devices — storage the kernel can read and write | **Done** |
 | 11b | USB mass storage — a USB stack, and a disk on the end of it | |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | **Done** |
-| 13 | ReconFS — a filesystem of its own | |
-| 14 | Reads foreign filesystems well enough to install beside them | |
-| 15 | The installer | |
-| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | |
+| 13 | ReconFS — a filesystem of its own | **Done** |
+| 14 | Reads foreign filesystems well enough to install beside them | **Done** |
+| 15 | The installer | **Done** |
+| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | **Next**, designed |
 | 17 | Boots on real hardware: both architectures, both firmwares | |
+
+Asked for after this list was made, and not numbered into it:
+
+| Added | Status |
+|---|---|
+| The boot chain verifies itself — the loader refuses a kernel that is not ours | **Done**, boot-time half |
+| The other systems on the disk, found and offered | **Done** |
+| Three partitions: EFI, system, and programs | **Done** |
+| A recovery environment | **Done**, and not yet reachable without a second computer |
+| Gatekeeper — what the running system may load | |
+| macOS on hardware Apple never supported | Parked, on Joshua's call |
 
 Eighteen, numbered 0 to 17, is a lot to hold in your head, so they group into four stages: **the
 kernel exists** (0–3, done), **the kernel owns the machine** (4–10),
@@ -1257,8 +1308,11 @@ looks impossible:
 
 ### What is already known about ReconFS
 
-Not a design, just the constraints it has to satisfy, collected as they turned
-up:
+*Kept as written. These were the constraints collected before there was a
+design, and they are left here in that form because the design in
+[docs/RECONFS.md](RECONFS.md) — and the filesystem now built from it — has to
+keep answering them. A list of requirements is more useful unedited than
+retrofitted to match what was built.*
 
 - **Create-with-mode.** The desktop currently writes a TLS private key and
   *then* tightens it with `chmod`, leaving a window where a private key is
@@ -1431,29 +1485,129 @@ assumption.
 ### The installer
 
 Checkpoint 15, and the thing that turns all of the above into an operating
-system somebody can have. It needs: the boot medium to carry both loaders and
-both architectures; a partitioner that can read an existing layout and shrink a
-partition without losing what is in it; somewhere to write the bootloader that
-the machine's firmware will actually look at; and a first-run flow, which the
-desktop already has.
+system somebody can have.
+
+It is **the one piece of this system that runs once, on a stranger's machine,
+with their data already on it.** There is no second attempt and no undo. That
+single fact decides its shape.
+
+#### Deciding and doing are separate programs
+
+`install_plan()` reads the disk and returns a plan. It writes nothing — not a
+byte, not a flag, not a retry counter. `install_execute()` takes a plan and
+carries it out. They are split because a decision that can be inspected before
+it is acted on is a decision somebody can refuse, and because the deciding half
+can then be tested exhaustively against layouts it must never damage.
+
+`scripts/install-plan-test.sh` builds seven disks with `sgdisk` — which shares
+no code with this kernel and is what actually partitioned the disks we will
+meet — and requires the right answer on each: a blank disk, a disk with Windows
+on it, a disk with no gap, a gap too small, a GPT disk with no ESP, an ESP with
+no free space, and a GPT header with a nonsense entry count. The last three are
+refusals. **A disk whose layout cannot be read is the one disk never to write
+to**, and an ESP with no room must be refused by name rather than filled with a
+bootloader nobody can boot.
+
+Then `install_execute()` re-plans from the disk and **refuses if anything
+changed** since the plan it was handed. A plan is a statement about a disk at a
+moment; acting on a stale one is how an installer eats a partition that was not
+there when it looked.
+
+#### Three partitions, because an application should not be able to break the OS
+
+Asked for directly, and right:
+
+| Partition | Holds | Why separate |
+|---|---|---|
+| EFI System | the bootloader and the kernel | firmware can only read FAT32, and only here |
+| System | the operating system | so a full disk of programs cannot stop it booting |
+| Programs | installed applications, in a subdirectory per subsystem | **so a bad application damages an application, not the system** |
+
+The sizes are in `install.h` as named constants rather than numbers in the code:
+the ESP gets 256 MiB when we create one, the system volume takes a quarter of
+what is left within a 2 GiB floor and a 64 GiB ceiling, and programs get the
+rest. An existing ESP is **reused** rather than replaced — it belongs to the
+machine, not to us — but only after `fat32_free_clusters` says there is room in
+it.
+
+#### What it writes, and where it will not
+
+`install_gpt.c` preserves every partition entry it did not create **byte for
+byte**, including the ones it does not understand. It is not a partitioner that
+rewrites a table into its own idea of a good one; it is a program that adds
+entries to somebody else's table and leaves the rest exactly as found.
+
+`install_exec.c` writes only inside partitions it created in that same run. The
+boot files are copied last, so a machine interrupted mid-install has an unused
+partition rather than a bootloader pointing at a system that is not there.
+
+#### The GUIDs, and an honest note about them
+
+Partition GUIDs are derived from the name, the size, the clock and a counter.
+**There is no hardware randomness in this kernel yet**, so they are unique but
+not unguessable, and that is written in the source where somebody would look
+rather than left to be discovered. Nothing depends on them being secret; if
+something ever does, this is the line that has to change first.
+
+#### Verified end to end
+
+`scripts/install-onto-test.sh` installs onto a disk and checks the result with
+`sgdisk` and `mtools`. `scripts/install-then-boot-test.sh` then **boots the
+machine it just built**, under firmware, from the bootloader it just wrote —
+which is the only claim that matters and the only one the other two cannot make.
 
 ## Booting the other operating systems on the disk
 
-**Not built, and not currently true.** The bootloader loads our kernel from a
-fixed path and does nothing else -- it does not enumerate anything, and it
-cannot start anything but ReconOS. Written down because it is the kind of thing
-that gets assumed to work: installing beside Windows and then not being able to
-reach Windows is not a partial success.
+**Built.** `boot/src/menu.c`. ReconOS installs beside whatever was already
+there, and that promise is worthless if the machine then only boots ReconOS:
+installing beside Windows and then being unable to reach Windows is not a
+partial success, it is a machine somebody has lost the use of.
 
 Under UEFI this is more tractable than it sounds. Another operating system's
-loader is simply another `.EFI` file on an EFI System Partition, and starting it
-means loading and running it — the same operation the firmware performs on us.
+loader is an ordinary `.EFI` file on an EFI System Partition, and starting it is
+loading and running it — the same operation the firmware performed on us. No
+emulation, no patching, and no knowledge of what the other system is.
 
-| System | What to run |
+| System | What is run |
 |---|---|
+| ReconOS | `\EFI\ReconOS\BOOTX64.EFI`, offered first |
 | Windows | `\EFI\Microsoft\Boot\bootmgfw.efi` |
 | Linux | `\EFI\<distro>\grubx64.efi`, or its shim |
-| macOS | on a Mac, yes — `\System\Library\CoreServices\boot.efi`. On a PC, see below |
+| macOS | `\System\Library\CoreServices\boot.efi` — on a Mac; on a PC, see below |
+| anything | `\EFI\BOOT\BOOTX64.EFI`, the removable-media path |
+
+#### Found, not configured
+
+There is no list of installed systems anywhere. A configuration file would have
+to be kept correct as somebody installs and removes systems, and **a stale one
+is worse than none** — it offers a choice that does not work, on the one screen
+where a person has no way to investigate. So every ESP on every disk is looked
+at, every time, and what is there is what is offered.
+
+The paths are named rather than discovered. A `.EFI` file on an ESP is not
+necessarily a bootable system — firmware updates, diagnostic tools and vendor
+utilities live there too — and a menu of things that are not operating systems
+is worse than a short menu.
+
+#### It chooses without anybody present
+
+A boot menu that requires a keypress is a machine that does not come back from a
+power cut. The menu counts down and starts the first entry, and the countdown is
+bounded rather than driven by a clock that might not tick. `ST->ConIn` is
+checked for null: firmware with no console input is not a reason to hang
+forever at a prompt nobody can answer.
+
+#### What it does not do
+
+It does not touch the other system's files, its boot variables, or its
+partition. Chain-loading is the **least** invasive way to do this. The
+alternative — registering ourselves as the firmware's default and promising to
+hand control on — means editing NVRAM entries that somebody else's updater also
+edits, and losing that argument means a machine that boots to nothing.
+
+Checked by `scripts/boot-menu-test.sh`, which puts decoy loaders on several
+disks and requires each to be found exactly once, with the duplicate-labelled
+ones collapsed.
 
 ### macOS, and the two questions that get merged
 
@@ -1488,16 +1642,18 @@ parked as a side project, on Joshua's call, to be returned to once the rest of
 the system is finished. Recorded as a decision with a reason rather than as an
 oversight, so that returning to it starts from why it was set aside.**
 
-Two things this needs that do not exist yet: a **menu**, which is also how a
-recovery environment gets chosen and is the first real use for the framebuffer
-the loader already finds; and enumeration, which means looking at every ESP on
-every disk rather than only the one we were loaded from.
+The two things this needed -- a **menu**, and enumeration across every ESP on
+every disk rather than only the one we were loaded from -- both exist now, so
+booting an installed macOS on a Mac is a table entry rather than a project. The
+framebuffer the loader already finds is still unused: the menu is text, and a
+graphical one is worth having only once it can degrade to text, because AAVMF
+offers no framebuffer at all.
 
 ## Keeping the kernel from being modified
 
 Asked for as "so outside sources can't edit, modify or change the kernel". Two
 different mechanisms get merged under that heading and they solve different
-problems, so they are separated here before either is built:
+problems, so they are separated before either is discussed:
 
 - **Encryption** (what BitLocker is) protects data when somebody takes the drive
   out. It does nothing about modified code: a decrypted, running system happily
@@ -1507,6 +1663,25 @@ problems, so they are separated here before either is built:
 
 The request is the second. The mechanism is that the kernel is signed and the
 bootloader verifies the signature before jumping to it.
+
+**The boot-time half is built** — `boot/src/sha256.c` and `boot/src/rsa.c`, an
+RSA-2048 PKCS#1 v1.5 verification of a SHA-256 hash, checked by
+`scripts/signed-kernel-test.sh`. Hand-written rather than borrowed, which is
+defensible here for a specific reason and not only the from-scratch rule:
+**verification touches only public material.** There is no private key in the
+loader and nothing secret for a timing side channel to leak, which is exactly
+the property that makes hand-writing the *other* half — signing — a bad idea.
+The padding is checked in full rather than scanned for the hash, because a
+verifier that finds the digest wherever it appears is a verifier Bleichenbacher
+forged signatures against in 2006.
+
+There is no way to turn it off. A safety check with a switch beside it is a
+safety check that will be found switched off on the machine that needed it.
+An unsigned kernel is refused; the loader says so and stops, rather than
+carrying on with a warning nobody reads.
+
+The full argument, including what this does **not** protect against, is in
+[INTEGRITY.md](INTEGRITY.md).
 
 ### The part that decides whether any of it is real
 
@@ -1536,6 +1711,176 @@ it belongs to the desktop rather than the kernel; the kernel's share is the
 enforcement point for anything it loads into its own address space, and the
 per-process syscall personality from checkpoint 10 is already the seam a
 compatibility layer will hang off.
+
+## The recovery environment
+
+**Built.** `kernel/core/recovery.c`, reached by booting the kernel with
+`recovery` on its command line.
+
+### It must not depend on the thing it repairs
+
+That one rule settles the whole design:
+
+- it cannot live on the ReconOS system volume, because a broken system volume is
+  the most likely reason somebody is here;
+- it cannot need ReconFS to be mountable, for the same reason;
+- so it has to be reachable by firmware alone, which means the **EFI System
+  Partition** — the one volume the machine can read before anything of ours has
+  run.
+
+So recovery is **this same kernel**, doing something else with itself. Not a
+second kernel: a separate recovery build is a second thing to keep working, and
+the one time it matters is the one time nobody has been testing it. The kernel
+that boots you every day is the kernel that recovers you, and it is exercised
+every day.
+
+A separate recovery *partition* was the other option and is not needed. Windows
+uses one because its recovery environment is a whole second operating system;
+ours is a few thousand lines that already have to be on the ESP.
+
+### It looks, and it says what it found
+
+Nothing in it writes. That is not a first-version compromise, it is the shape of
+the thing: **a person arrives here because a machine will not start, which means
+they do not yet know why — and a tool that begins by repairing destroys the
+evidence of what was wrong.** Repair comes second, chosen explicitly, after
+somebody has read what this says.
+
+Every disk, then every volume. For a ReconFS volume it runs the checker, which
+derives the in-use set twice from disjoint fields, so a volume it calls sound is
+sound by two accounts rather than one:
+
+```
+  nvme0n1p2    2.0 GB  ReconFS, 4096-byte blocks
+               checked: DAMAGED -- reachable from the root but not allocated (block 17)
+  nvme0n1p3    5.7 GB  ReconFS, 4096-byte blocks
+               checked: sound (2968 blocks, 1 inodes)
+```
+
+A volume this kernel does not recognise is reported as **not recognised**, never
+as empty. Somebody looking at a disk they believe holds their data needs those
+to be different sentences, and this kernel understands two formats out of the
+many that exist.
+
+### Reachable, which it is not yet
+
+**As built, a person cannot get to it.** Recovery runs when `recovery` is on the
+kernel command line, and the command line comes from `\reconos\cmdline` on the
+ESP — a file you edit from a working computer. So the recovery environment for a
+machine that will not start currently requires a second machine to reach, which
+is most of the way to not having one.
+
+The fix is small and belongs in the loader: `cmdline_buf` is a static the loader
+fills before the handoff, so a menu entry that sets it to `recovery` and boots
+our own kernel is a few lines beside the chain-loading the menu already does.
+Written down here rather than left as an assumption, because *"the recovery
+environment is finished"* and *"a person can reach the recovery environment"*
+were about to be the same sentence.
+
+### How it is known to work
+
+`scripts/recovery-test.sh` installs a machine, breaks one of its two ReconFS
+volumes with `scripts/reconfs-check.py` — a second implementation written from
+the specification rather than from the kernel — and requires recovery to name
+the damaged volume and block, **still call the other volume sound**, and leave
+the disk byte-for-byte identical, which is checked by hashing it.
+
+**A recovery environment that has never been seen to report damage is not a
+recovery environment. It is a screen that says "sound", which is what a broken
+one says too.**
+
+The near-miss is worth keeping: the first attempt passed the damage tool its
+arguments the wrong way round. It damaged nothing, recovery reported *sound*,
+and the test went green — a correct answer about a volume nobody had broken. The
+tool now refuses that invocation, and the script checks that the damage took
+before it believes anything after it. That check is a test assertion in its own
+right, and it is the one that would have caught the whole thing.
+
+## Checkpoint 16 — a machine with no UEFI at all
+
+The last thing between here and real hardware, and the one checkpoint whose
+requirements are set by the two before it rather than by BIOS.
+
+### The rule that decides the whole design
+
+**The kernel must not be able to tell which loader started it.** It already
+cannot tell the difference between reconboot on OVMF, reconboot on AAVMF, PVH
+and Multiboot2 — every one of them arrives through the same ReconBoot protocol
+with a memory map, a framebuffer or an honest absence of one, and a command
+line. A BIOS loader that invented its own protocol would put a second shape of
+"how the machine was started" into a kernel that has spent sixteen checkpoints
+having exactly one.
+
+So the BIOS loader's job is not "boot the kernel". It is **produce a ReconBoot
+handoff from a machine that offers none of the things UEFI offers.**
+
+### And the rule that makes it harder than GRUB's equivalent
+
+**A BIOS path that does not check the kernel's signature is the off-switch we
+said did not exist.** An attacker who can write to the disk does not need to
+defeat the verification in reconboot; they only need to make the machine take
+the other path. Every claim in [INTEGRITY.md](INTEGRITY.md) is therefore a claim
+about *both* loaders or about neither.
+
+That single sentence sets the size of the problem, because it means SHA-256 and
+RSA-2048 have to run before the kernel does, on a machine whose first stage is
+**440 bytes**. Which forces the staging below rather than merely suggesting it.
+
+### Where the stages live
+
+| Stage | Where | Size | Job |
+|---|---|---|---|
+| 1 | MBR boot code | 440 bytes | check for INT 13h extensions, read stage 2, jump |
+| 2 | BIOS Boot Partition, GUID `21686148-…` | 1 MiB | E820, FAT32, verify, long mode, ReconBoot |
+
+The BIOS Boot Partition is the honest option of the two available. The other —
+hiding stage 2 in the gap between the MBR and the first partition — works, is
+what a lot of installers do, and depends on unallocated space that **nothing on
+the disk says is in use.** A partition entry is how a disk says "this is
+occupied"; using space that no entry covers means the next tool along is
+entitled to take it. This project does not install beside other systems by
+relying on them not to notice.
+
+The installer already writes GPT and already preserves entries it did not
+create, so adding a fourth entry is a size constant and a type GUID, not a new
+mechanism. It does move the layout: on a blank disk the first partition starts
+at `INSTALL_ALIGN_BLOCKS`, LBA 2048, so the BIOS Boot Partition takes that
+megabyte and the ESP moves to LBA 4096.
+
+**Three partitions is still the answer to the question that was asked.** EFI,
+system and programs are the ones that mean anything to somebody using the
+machine; the BIOS Boot Partition is a megabyte of loader that exists because
+firmware from 1981 cannot read a filesystem, and it is created only where it is
+needed. A disk installed on a UEFI-only machine does not get one.
+
+### What stage 2 has to do that UEFI did for us
+
+- **A memory map**, from `INT 15h, AX=E820` rather than `GetMemoryMap`. Same
+  destination structure, different source. The E820 entries need sorting and
+  overlap-resolving, which UEFI's map arrives already having had done to it.
+- **Read a filesystem.** UEFI hands out `SIMPLE_FILE_SYSTEM`; BIOS hands out
+  512-byte sector reads. Stage 2 needs its own FAT32 reader — read-only, and
+  much smaller than the kernel's, because it needs to open exactly two files.
+- **Get to long mode.** A20, a GDT, paging for the first four gigabytes, and the
+  switch. This is the part every tutorial covers and the part least likely to be
+  where the time goes.
+- **A framebuffer, or an honest absence.** VBE 2.0 if it is there, and text mode
+  if it is not. The kernel already handles a boot with no framebuffer, because
+  AAVMF does not provide one — that path is tested, not hypothetical.
+
+### What will be checked, and what would make the checkpoint a lie
+
+- A machine with **BIOS only** (SeaBIOS, no OVMF) boots the installed disk.
+- A machine with **UEFI only** still boots, unchanged.
+- A machine with **both** boots the same disk either way, and comes up
+  indistinguishable — same kernel version, same partitions found, same
+  ReconBoot protocol reported.
+- **An unsigned kernel is refused on the BIOS path too**, checked the same way
+  the UEFI path is checked: by showing the loader a kernel it should reject and
+  requiring it to say so and stop.
+
+The last one is the checkpoint. The first three are a bootloader; the fourth is
+whether the sentence "there is no way to turn it off" is true.
 
 ## Foreign filesystems, and why FAT32 is not optional
 

@@ -348,6 +348,51 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-134 — Eight test harnesses looked for a kernel instead of building one
+
+[#291](https://github.com/neogentrics/ReconOS/issues/291)
+
+- **Found:** 7 September 2026, hours after BG-133, by the recovery test failing
+  three of five assertions against a kernel that did not contain the code the
+  assertions were about.
+- **Cost:** nothing shipped. Two hours of reading `recovery.c` for a fault that
+  was not in it.
+
+Every harness that boots a kernel began the same way:
+
+    [ -f "$KERNEL" ] || { echo "build the kernel first: ..." >&2; exit 1; }
+
+*Exists* is not *current*. `scripts/recovery-test.sh` ran in the verification
+rig, whose tree is rsynced from the repository with `--exclude=build` — so the
+rig's `build/` was whatever the last run had left there, `recovery.c` had never
+been compiled into it, and the harness happily booted a kernel from before the
+feature existed and reported that the feature did not work.
+
+**This is BG-133 again, one night later, through a different door.** There a
+generated header was not a dependency; here the binary was not a target. Both
+end at the same place: *a test that ran a binary other than the one it was
+written to prove, and reported the result as though it had.* BG-133's stale
+loader hid the absence of a safety check; this one invented a bug that was not
+there. The register now has both directions of the same mistake.
+
+- **Fixed in** kernel 0.0.11. All eight harnesses build before they check:
+
+      make -C kernel ARCH="$ARCH" >/dev/null 2>&1 || true
+      [ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
+
+  The `|| true` is deliberate and the second line is the real test: a build
+  failure and a missing binary should be reported as *the kernel did not build*,
+  not as make's last line of output, which on a link error is about a symbol
+  nobody running a filesystem test is looking for.
+
+- **The shape.** A harness is a claim about what was tested. `[ -f ]` states
+  that a file with that name exists, which is not the claim anybody wanted.
+  This is the fifth entry in this register where a comment or a check said one
+  thing and the machine did another (BG-120, BG-122, BG-123, BG-132, this) —
+  and the second where the disagreeing party was a *test*, which is the worst
+  place for it, because a test is the thing everything else is believed on.
+
+
 ### BG-133 — The bootloader build ignored its headers, so a security check silently was not there
 
 [#292](https://github.com/neogentrics/ReconOS/issues/292)
@@ -400,7 +445,7 @@ safety check.
 
 ### BG-132 — A handle used two lines after it was closed, under a comment saying it was open
 
-[#291](https://github.com/neogentrics/ReconOS/issues/291)
+[#293](https://github.com/neogentrics/ReconOS/issues/293)
 
 - **Found:** 7 September 2026, the first time the loader tried to verify a
   kernel signature.
@@ -726,7 +771,7 @@ with a child was one the rig never asked about. This hid because the disk was
 16 MB. Every one of them is the same sentence: *the fault is real from the first
 line; what was missing was a machine big enough to show it.*
 
-### BG-125 — The device tree walk lost any node that had a child
+### BG-125 — The device tree walk lost any node that had a child, which is why the GICv3 fix could not be reached
 
 [#283](https://github.com/neogentrics/ReconOS/issues/283)
 
@@ -2042,7 +2087,10 @@ Areas, matching the [error code](ERRORS.md) letters where they apply:
 1. Take the next number. The highest in this file is the last one used.
 2. Write the entry — **Found in**, **Found by**, **Was**, and either
    **Fixed in** or **Open** and why.
-3. Add its area to the `AREA` table in `scripts/make-issues.py`.
+3. Add its area to the `AREA` table in `scripts/make-issues.py`. A number
+   missing from that table gets no area label and says nothing about it --
+   `AREA.get` returns `None` quietly -- which is how twenty entries came to be
+   filed with only `bug` on them.
 4. Run the script, which opens the issue with the same title and body:
 
    ```
@@ -2052,8 +2100,19 @@ Areas, matching the [error code](ERRORS.md) letters where they apply:
 
    Entries that already have an issue are left alone, so running it again is
    safe. One with a **Fixed in** line is created and then closed.
-5. Paste the issue link under the heading, and reference the number in the
-   commit that fixes it.
+5. The script writes the issue link under the heading itself. **Do not write
+   one by hand.** Two links were once put in as predictions of the number
+   GitHub would assign; neither issue existed, and because creation skips any
+   entry whose title it already sees, nothing would ever have looked at them
+   again. Reference the number in the commit that fixes it.
+6. Check the register against GitHub:
+
+   ```
+   python scripts/make-issues.py --check
+   ```
+
+   Every link must resolve to an issue whose title is that entry's. This is the
+   only step that can catch a link that is simply wrong.
 
 The **Was** field is the one that matters. A register full of symptoms is a
 list of complaints; a register full of causes is something to learn from.

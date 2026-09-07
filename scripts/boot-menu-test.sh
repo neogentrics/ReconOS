@@ -40,7 +40,11 @@ done
 
 make -C boot ARCH=x86_64 >/dev/null 2>&1 || true
 [ -f "$LOADER" ] || { echo "the bootloader is not built"; exit 2; }
-[ -f "$KERNEL" ] || { echo "build the kernel first"; exit 1; }
+# Built, not merely looked for. A script that only checks a binary exists
+# will happily test one compiled before the change it is meant to prove --
+# which is how a security check came to be silently absent (BG-133).
+make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
+[ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT INT TERM
@@ -83,6 +87,11 @@ out=$(timeout 60 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
 	-device nvme,serial=o,drive=o0 2>&1 | tr -d '\r')
 
 listing=$(echo "$out" | sed -n '/Other systems/,/^$/p')
+
+# A harness that will not show its working is one whose result has to be taken
+# on trust, and the status board quotes these transcripts as evidence. Setting
+# KEEP_LOG keeps the serial output; nothing else changes.
+[ -n "${KEEP_LOG:-}" ] && printf '%s\n' "$out" > "$KEEP_LOG"
 
 say "finds Windows beside Linux on one disk"
 if echo "$listing" | grep -q 'Windows' && echo "$listing" | grep -q 'Ubuntu'; then

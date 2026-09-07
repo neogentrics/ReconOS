@@ -39,7 +39,11 @@ else
 	KERNEL=kernel/build/x86_64/reconos-kernel.elf
 fi
 
-[ -f "$KERNEL" ] || { echo "build the kernel first: make -C kernel ARCH=$ARCH" >&2; exit 1; }
+# Built, not merely looked for. A script that only checks a binary exists
+# will happily test one compiled before the change it is meant to prove --
+# which is how a security check came to be silently absent (BG-133).
+make -C kernel ARCH="$ARCH" >/dev/null 2>&1 || true
+[ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 for t in sgdisk mkfs.vfat mcopy python3; do
 	command -v "$t" >/dev/null 2>&1 || { echo "need $t" >&2; exit 2; }
 done

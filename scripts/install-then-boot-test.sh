@@ -22,7 +22,11 @@ KERNEL=kernel/build/x86_64/reconos-kernel.elf
 LOADER=boot/build/x86_64/BOOTX64.EFI
 OVMF=/usr/share/ovmf/OVMF.fd
 
-[ -f "$KERNEL" ] || { echo "build the kernel first" >&2; exit 1; }
+# Built, not merely looked for. A script that only checks a binary exists
+# will happily test one compiled before the change it is meant to prove --
+# which is how a security check came to be silently absent (BG-133).
+make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
+[ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 [ -f "$OVMF" ] || { echo "OVMF is not installed"; exit 2; }
 for t in sgdisk mkfs.vfat mcopy mmd mdir; do
 	command -v "$t" >/dev/null 2>&1 || { echo "need $t" >&2; exit 2; }
@@ -97,6 +101,11 @@ say "the installed disk boots on its own"
 boot=$(timeout 90 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
 	-drive "file=$W/target.img,format=raw,if=none,id=t0" \
 	-device nvme,serial=target,drive=t0 2>&1 | tr -d '\r')
+
+# A harness that will not show its working is one whose result has to be taken
+# on trust, and the status board quotes these transcripts as evidence. Setting
+# KEEP_LOG keeps the serial output; nothing else changes.
+[ -n "${KEEP_LOG:-}" ] && printf '%s\n' "$boot" > "$KEEP_LOG"
 
 if echo "$boot" | grep -q 'ReconOS kernel'; then
 	echo "$(echo "$boot" | grep -oE 'ReconOS kernel [0-9.]+' | head -1)"

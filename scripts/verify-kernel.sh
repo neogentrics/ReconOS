@@ -698,6 +698,29 @@ else
 	FAILED_PATHS+=("signed kernel")
 fi
 
+# The recovery environment, shown a volume broken on purpose by a tool that
+# shares no code with the kernel. A recovery screen that has never been seen to
+# report damage is not a recovery screen -- it is one that says "sound", which
+# is what a broken one says too.
+
+printf '%-46s' "  recovery finds damage, and touches nothing"
+
+rec_out=$(bash scripts/recovery-test.sh 2>&1)
+rec_rc=$?
+
+if [ "$rec_rc" -eq 0 ]; then
+	echo "$(echo "$rec_out" | grep -oE '[0-9]+ of [0-9]+: found the damage.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$rec_rc" -eq 2 ]; then
+	echo "skipped, python3 is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$rec_out" | sed 's/^/      /' | head -16
+	failures=$((failures + 1))
+	FAILED_PATHS+=("recovery")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

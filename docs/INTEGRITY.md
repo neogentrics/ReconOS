@@ -73,6 +73,31 @@ development" is the one shipped by mistake.
 Development builds are handled by *signing them*, which is a build step, not a
 runtime switch.
 
+#### The exception, which was found by reading a test's own output
+
+That paragraph was not the whole truth, and the loader has been saying so on
+every boot:
+
+    signature    : not checked (this loader was built without a key)
+
+`verify_kernel()` is compiled out entirely when `RECONOS_KEY_PRESENT` is not
+defined, so **a loader built without a key runs anything.** There is no runtime
+flag — the claim above is true as far as it goes — but a build-time absence
+reaches the same place, and a sentence that says "no way to turn it off" while a
+build says otherwise is the shape of mistake this register is full of.
+
+Why it is still defensible, stated rather than assumed: a keyless loader is a
+build artifact of the test rig, and every harness that is *about* signing
+generates a key first — `scripts/signed-kernel-test.sh` proves the loader runs
+one signed kernel and refuses four that are not. Putting a keyless loader on
+somebody's ESP means replacing their loader, which is the root-of-trust problem
+already described above and is not made worse by this.
+
+**What has to change so this cannot ship:** the release build must fail when no
+key is present, rather than quietly producing a loader that verifies nothing.
+Written down now, while it is a two-line makefile guard, rather than after a
+release goes out with the announcement scrolling past on line four.
+
 ## The run-time half, which is the desktop's
 
 Refusing to load code the system has not been told to trust — the

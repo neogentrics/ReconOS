@@ -20,6 +20,7 @@ trusts the filter. Add a line here when you add an entry.
 """
 import io
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -56,6 +57,17 @@ AREA = {
     # the system is a track record of all of it.
     81: 'kernel', 82: 'build', 83: 'build', 84: 'build',
     85: 'storage', 86: 'storage', 87: 'storage', 88: 'storage', 89: 'storage', 90: 'storage', 91: 'kernel', 92: 'kernel',
+    # Renumbered from 082-093 when the kernel branch's register was found to
+    # have forked from main's. The table lagged that renumbering, so BG-114
+    # upward were opened carrying no area label at all -- AREA.get returns None
+    # and labels_for says nothing about it, which is the failure mode a lookup
+    # table has.
+    114: 'build', 115: 'build', 116: 'storage', 117: 'storage',
+    118: 'storage', 119: 'storage', 120: 'storage', 121: 'storage',
+    122: 'storage', 123: 'kernel', 124: 'kernel', 125: 'kernel',
+    126: 'storage', 127: 'storage', 128: 'startup', 129: 'kernel',
+    130: 'storage', 131: 'startup', 132: 'startup', 133: 'build',
+    134: 'build',
 }
 
 
@@ -131,8 +143,82 @@ def labels_for(entry):
     return out
 
 
+def link_into_register(bg, number):
+    """
+    Put the issue link under its heading in docs/BUGS.md.
+
+    Written by the script rather than by hand, because by hand it was written
+    *wrong*: two entries cited numbers guessed at ahead of the run instead of
+    read back from it, and `gh issue view` on both replied "Could not resolve".
+    A register whose links do not resolve is worse than one with no links,
+    because a number reads as evidence that somebody checked.
+    """
+    path = pathlib.Path('docs/BUGS.md')
+    text = path.read_text(encoding='utf-8')
+    i = text.find('### ' + bg + ' ')
+    if i < 0:
+        return False
+
+    j = text.index('\n', i) + 1
+    if text[j:j + 120].lstrip('\n').startswith('[#'):
+        return False
+
+    link = '\n' + '[#%s](https://github.com/%s/issues/%s)%s' % (
+        number, REPO, number, '\n')
+    text = text[:j] + link + text[j:]
+    path.write_bytes(text.encode('utf-8').replace(b'\r\n', b'\n'))
+    return True
+
+
+def check_links():
+    """
+    Every link in the register must resolve to an issue whose title is that
+    entry's title.
+
+    Nothing else here can catch a link that is simply wrong: creation skips an
+    entry whose title it already sees on GitHub, so a bad number is never looked
+    at again. Run after any hand-editing of the register.
+    """
+    text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')
+    out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
+              '--limit', '500', '--json', 'number,title'])
+    if out.returncode != 0:
+        print('could not list issues: ' + out.stderr.strip()[:160])
+        return 2
+
+    titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
+    linked = wrong = missing = 0
+
+    for m in re.finditer(r'^### (BG-\d+) .*$', text, re.M):
+        bg = m.group(1)
+        after = text[m.end():m.end() + 200].lstrip('\n')
+        cite = re.match(r'\[#(\d+)\]', after)
+
+        if not cite:
+            print('  %s  no issue link' % bg)
+            missing += 1
+            continue
+
+        linked += 1
+        n = int(cite.group(1))
+        have = titles.get(n)
+        if have is None:
+            print('  %s  cites #%d, which does not exist' % (bg, n))
+            wrong += 1
+        elif not have.startswith(bg):
+            print('  %s  cites #%d, which is %r' % (bg, n, have[:50]))
+            wrong += 1
+
+    print('%d links checked, %d wrong, %d entries unlinked'
+          % (linked, wrong, missing))
+    return 1 if wrong else 0
+
+
 def main():
     dry = '--dry-run' in sys.argv
+    if '--check' in sys.argv:
+        sys.exit(check_links())
+
     entries = parse('docs/BUGS.md')
     have = existing_titles()
     print(f'{len(entries)} entries, {len(have)} issues already there')
@@ -162,6 +248,7 @@ def main():
             continue
 
         url = made.stdout.strip().splitlines()[-1]
+        link_into_register(e['id'], url.rsplit('/', 1)[-1])
         if closed:
             gh(['issue', 'close', url, '--repo', REPO,
                 '--reason', 'completed'])

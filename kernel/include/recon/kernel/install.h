@@ -185,4 +185,13 @@ struct block_device *install_find_medium(struct block_device *exclude_disk);
  * `install-plan` appears on the command line. */
 void install_plan_run(void);
 
+/* The recovery environment: reports what the machine looks like when it will
+ * not start, and writes nothing. Runs when `recovery` is on the command line.
+ *
+ * It is this same kernel rather than a second one, booted from the EFI
+ * partition -- a recovery environment must not depend on the thing it
+ * repairs, and a separate recovery build is a second thing to keep working
+ * whose one moment of use is the moment nobody has been testing it. */
+void recovery_run(void);
+
 #endif /* RECON_KERNEL_INSTALL_H */

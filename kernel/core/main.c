@@ -153,6 +153,7 @@ void kmain(void)
 	reconfs_crash_run();
 	fat32_run();
 	fat32_write_run();
+	recovery_run();
 	install_plan_run();
 	install_execute_run();
 

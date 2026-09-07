@@ -31,7 +31,11 @@ KERNEL=kernel/build/x86_64/reconos-kernel.elf
 for t in openssl sgdisk mkfs.vfat mcopy mmd; do
 	command -v "$t" >/dev/null 2>&1 || { echo "need $t" >&2; exit 2; }
 done
-[ -f "$KERNEL" ] || { echo "build the kernel first"; exit 1; }
+# Built, not merely looked for. A script that only checks a binary exists
+# will happily test one compiled before the change it is meant to prove --
+# which is how a security check came to be silently absent (BG-133).
+make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
+[ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT INT TERM
