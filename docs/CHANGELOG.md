@@ -23,6 +23,20 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Every button has a boundary now, in its own colour.** `recon_draw_bevel`
+carried a comment reading *"Fixed highlight and shadow for now; a skin would
+supply these."* Nothing ever did, so every button in the system was edged in
+the same two greys whatever it was painted in. Worse, a 95 bevel is a lighting
+effect and reads as an edge only while the button sits between its own
+highlight and the surface behind it -- true for as long as every skin was grey.
+On Glass the Calculator's keys are `E8EBF5` and the panel they sit on is
+`F0F2F8`, eight levels apart, so the lit half landed lighter than the
+background and the top and left of every key stopped existing. Two edges out of
+four. A boundary is not a lighting effect: it is a one-pixel outline in the
+shaded tone, on all four sides, following the corner, derived from the button's
+own colour so a skin made this afternoon gets a correct edge without naming
+one. BG-141.
+
 **The icons are drawn at four times the size, because that is where the
 blockiness was.** They were 32 by 32, and `recon_draw_image` averages when it
 shrinks an image and takes the nearest pixel when it grows one -- which is

@@ -144,6 +144,18 @@ loud — 95 was square, and a soft edge drawn in a colour between the two a
 high-contrast skin promises is the opposite of what somebody who turned that on
 asked for.
 
+**A button has a boundary, not only a bevel.** The old edge was a 95 bevel --
+light on the top and left, dark on the bottom and right -- which is a *lighting
+effect*, and reads as an edge only while the button sits between its own
+highlight and the surface behind it. On Glass the Calculator keys are `E8EBF5`
+and their panel is `F0F2F8`; the lit half landed lighter than the background
+and two edges out of four stopped existing. Buttons now get a one-pixel outline
+in the shaded tone on all four sides, following the corner, blended over what
+is there rather than painted onto a fresh surface -- because the taskbar draws
+its icon and title first and asks for the edge afterwards. Both tones are
+derived from the button's own colour, so the edge is in the skin's palette
+rather than in grey, on any skin including one made this afternoon.
+
 **The corner radius scales with the button.** The metric is one number and
 buttons are not one size: a close button is 16 pixels square and a toolbar
 button is 28 by 20. A radius that curves the second turns the first into a

@@ -2575,6 +2575,50 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-141 — Half of every button's edge was missing on any skin that was not grey
+
+- **Found in** v0.4.0. **Found by** the author, pointing at the Calculator:
+  "there's this weird white space between the buttons. It doesn't even show
+  that they're rounded. So it just looks like they're incomplete... they have
+  these random edges that look like they've been cut, and then they're white.
+  They're not even colour tone like they're supposed to."
+- **What it was** two faults with one cause, and the cause was a comment
+  sitting in `recon_draw_bevel` that read *"Fixed highlight and shadow for now;
+  a skin would supply these."* Nothing ever did. Every button in the system was
+  edged in `EEEEEE` and `555555` whatever it was painted in -- so on a skin
+  whose buttons are lavender and whose panels are lavender, the edge was the
+  one thing on screen belonging to neither. That is the "not even colour tone"
+  half, and it is exactly what the comment predicted would go wrong.
+- **The other half is worse.** A 95 bevel is a *lighting effect*: light on the
+  top and left, dark on the bottom and right. It reads as an edge only while
+  the button is lighter than its own shadow and darker than its own highlight
+  **relative to whatever is behind it**. Measured on Glass: the Calculator's
+  keys are `E8EBF5` and the panel they sit on is `F0F2F8` -- eight levels
+  apart -- so the lit half of the bevel landed *lighter than the background*
+  and the top and left of every key stopped existing. Two edges out of four,
+  which is what "they look incomplete" is a picture of.
+- **Fixed in** v0.4.0. A boundary is not a lighting effect, so it is drawn as
+  one: a one-pixel outline in the shaded tone on all four sides, following the
+  corner, in a colour derived from the button's own. The highlight stays, and
+  is free to be subtle now that it is not the only thing saying where the edge
+  is. Both tones come from the surface, so a skin made this afternoon gets a
+  correct edge without naming one -- the same reasoning that decides hover.
+- **Three things went wrong while fixing it**, each found by measuring rather
+  than by looking, and each worth keeping:
+  - A stroked rectangle plus a corner carve leaves the outline present along
+    the top and down the left and **absent across the diagonal** -- rows 397
+    to 401 of a key had nothing but fill fading into background. An outline
+    has to follow the curve, so the curve has to draw it.
+  - Filling the interior to get a clean surface to carve **paints back over
+    the corner that was just cleared**, and the inner carve then restores the
+    *outline* colour there rather than the background: five rows of solid
+    `7B7D82` across the corner.
+  - Repainting the interior at all **erases what the caller already drew**.
+    The taskbar fills its buttons, draws the window's icon and title into
+    them, and asks for the edge afterwards -- so the fix produced two blank
+    rounded rectangles where two windows should have been. The outline is
+    composited now and fills nothing.
+
 ### BG-140 — recon_icon_get wrote through the pointers a caller had said were NULL
 
 - **Found in** v0.4.0, while fixing BG-139 and reading the function around it.

@@ -311,6 +311,18 @@ void recon_round_top_corners(struct recon_panel *panel, int radius,
 void recon_round_rect(struct recon_panel *panel, int x, int y, int w, int h,
     int radius, recon_color behind);
 
+/*
+ * The same, with a one-pixel outline laid along the curve.
+ *
+ * Blended over what is already there rather than painted onto a fresh
+ * surface, because a control is not always drawn before its contents -- the
+ * taskbar puts a window icon and title into a button and asks for the edge
+ * afterwards, and an outline that repainted the inside to get a clean surface
+ * would erase both.
+ */
+void recon_round_rect_outline(struct recon_panel *panel, int x, int y, int w,
+    int h, int radius, recon_color behind, recon_color edge);
+
 /* A one-pixel outline just inside the given rectangle. */
 void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);
