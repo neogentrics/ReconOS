@@ -1452,6 +1452,86 @@ void recon_fill_round_rect(struct recon_panel *panel, int x, int y, int w,
 }
 
 /*
+ * A filled rounded rectangle with its own outline, in one pass.
+ *
+ * Not a fill followed by a stroke. Those are two blends, and at a corner the
+ * second lands on a pixel the first has already part-covered -- so the outline
+ * comes out mixed with the *face* where it should be mixed with whatever is
+ * behind the control. On a light button over a dark title bar that shows as a
+ * pale wedge at each corner, which is precisely what it looked like: eight
+ * light pixels per button, one small triangle in each corner.
+ *
+ * A corner pixel is three things at once and has to be worked out as three:
+ * what is behind, outside the shape entirely; the outline, in the ring between
+ * the curve and the curve one pixel in; and the face, inside that. Doing it in
+ * one pass means the three shares add to exactly one pixel, and the outline
+ * keeps its own colour at whatever share of the pixel it actually occupies.
+ */
+void recon_fill_round_rect_edged(struct recon_panel *panel, int x, int y,
+        int w, int h, int radius, recon_color face, recon_color edge) {
+    if (panel == NULL || w < 2 || h < 2) {
+        return;
+    }
+    radius = clamp_radius(w, h, radius);
+    if (radius <= 0) {
+        recon_fill_rect(panel, x, y, w, h, face);
+        recon_stroke_rect(panel, x, y, w, h, edge);
+        return;
+    }
+
+    /* The straight runs: the face, then the outline along each edge. */
+    recon_fill_rect(panel, x, y + radius, w, h - radius * 2, face);
+    recon_fill_rect(panel, x + radius, y, w - radius * 2, radius, face);
+    recon_fill_rect(panel, x + radius, y + h - radius, w - radius * 2, radius,
+        face);
+
+    int span_w = w - radius * 2;
+    int span_h = h - radius * 2;
+    if (span_w > 0) {
+        recon_fill_rect(panel, x + radius, y, span_w, 1, edge);
+        recon_fill_rect(panel, x + radius, y + h - 1, span_w, 1, edge);
+    }
+    if (span_h > 0) {
+        recon_fill_rect(panel, x, y + radius, 1, span_h, edge);
+        recon_fill_rect(panel, x + w - 1, y + radius, 1, span_h, edge);
+    }
+
+    for (int dy = 0; dy < radius; dy++) {
+        for (int dx = 0; dx < radius; dx++) {
+            int outer = corner_coverage(radius, dx, dy, 0);
+            if (outer <= 0) {
+                continue;               /* wholly outside; leave it alone */
+            }
+            int inner = corner_coverage(radius, dx, dy, 1);
+
+            int points[4][2];
+            corner_points(x, y, w, h, dx, dy, points);
+            for (int i = 0; i < 4; i++) {
+                /*
+                 * The face first at its own share, then the outline over it
+                 * at the ring's share of what is left. Two blends, but the
+                 * second is scaled against the first rather than laid on top
+                 * of it, so the outline is never diluted by the face and what
+                 * is behind keeps exactly the share the curve leaves it.
+                 */
+                if (inner > 0) {
+                    blend_at(panel, points[i][0], points[i][1], face, inner);
+                }
+                int ring = outer - inner;
+                if (ring > 0) {
+                    int share = inner < 255
+                        ? (ring * 255) / (255 - inner) : 255;
+                    if (share > 255) {
+                        share = 255;
+                    }
+                    blend_at(panel, points[i][0], points[i][1], edge, share);
+                }
+            }
+        }
+    }
+}
+
+/*
  * A one-pixel outline around the same shape, composited the same way.
  *
  * The ring is the difference between the curve and the curve one pixel in, so
@@ -1706,7 +1786,7 @@ void recon_stroke_rect(struct recon_panel *panel, int x, int y, int w, int h,
  */
 static void bevel_colours(recon_color face, recon_color *light,
         recon_color *dark) {
-    *light = recon_color_mix(face, RECON_RGB(0xFF, 0xFF, 0xFF), 110);
+    *light = recon_color_highlight(face);
     *dark = recon_color_mix(face, RECON_RGB(0x00, 0x00, 0x00), 120);
 }
 
@@ -1926,7 +2006,7 @@ void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
     bevel_colours(face, &light, &dark);
     int radius = recon_button_radius(w, h);
 
-    recon_fill_round_rect(panel, x, y, w, h, radius, face);
+
 
     /*
      * --- The boundary ---
@@ -1943,7 +2023,7 @@ void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
      * and the top and left of every key stopped existing. Two edges out of
      * four, which is what "they look incomplete" is a picture of.
      */
-    recon_stroke_round_rect(panel, x, y, w, h, radius, dark);
+    recon_fill_round_rect_edged(panel, x, y, w, h, radius, face, dark);
 
     /*
      * --- The lighting, kept out of the corners ---

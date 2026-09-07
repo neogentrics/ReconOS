@@ -94,6 +94,36 @@ recon_color recon_color_mix(recon_color from, recon_color to,
     return out;
 }
 
+/*
+ * A surface with light falling on it.
+ *
+ * Not "part of the way to white", which is what this was and which is a
+ * different amount of change depending on where it starts. Mixing 110 of 255
+ * toward white lifts E8EBF5 by nine levels -- a soft sheen on a light button --
+ * and lifts 3A3E46 by *eighty-five*, which on Midnight put a pale grey bar
+ * across the top of every dark button. The fraction is constant and the effect
+ * is not.
+ *
+ * A light source adds roughly the same amount wherever it lands, so this adds:
+ * a proportion of the headroom, capped at a step. On something already light
+ * the proportion wins and the lift stays gentle; on something dark the cap
+ * wins and the lift stays gentle. Both come out looking like the same lamp.
+ */
+recon_color recon_color_highlight(recon_color base) {
+    const int MOST = 26;
+
+    uint32_t out = base & 0xFF000000u;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        int c = (int)((base >> shift) & 0xFF);
+        int room = ((255 - c) * 110) / 255;
+        if (room > MOST) {
+            room = MOST;
+        }
+        out |= (uint32_t)(c + room) << shift;
+    }
+    return out;
+}
+
 recon_color recon_color_fade(recon_color color, uint8_t alpha) {
     if (alpha == 255) {
         return color;

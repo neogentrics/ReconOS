@@ -2575,6 +2575,57 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-145 — The outline was diluted by the fill at every corner
+
+- **Found in** v0.4.0. **Found by** the author, going through the skins: "in
+  Recon, you can see those weird triangles too."
+- **What it was** a control was filled and then outlined -- two blends. At a
+  corner the second lands on a pixel the first has already *part*-covered, so
+  the outline came out mixed with the **face** where it should have been mixed
+  with whatever is behind the control. On a light button over a dark title bar
+  that is a pale wedge: measured on a Recon caption button, the corner ran
+  `464B5C 707070 9F9F9F C3C3C3 C8C8C8` -- two light greys sitting outside an
+  outline of `6A6A6A`.
+- Invisible on a light skin, because there the face and the background are
+  close enough that mixing with the wrong one of them barely shows. It needed
+  a dark title bar under a light button to become a shape anybody could point
+  at.
+- **Fixed in** v0.4.0. `recon_fill_round_rect_edged` does both in one pass. A
+  corner pixel is three things at once -- what is behind it, the outline, and
+  the face -- so it is worked out as three, and the three shares add to
+  exactly one pixel. Same corner afterwards: `2C3449 656567 6A6A6A 6A6A6A
+  C8C8C8`, every blend on the dark side of the outline.
+
+### BG-144 — A white line above the taskbar and above every button, on dark skins
+
+- **Found in** v0.4.0. **Found by** the author switching to a dark skin:
+  "there's this weird white line that appears above all the different buttons,
+  and I don't know why it's here. It's also appearing above the task bar too."
+  Faint in Beacon, a dark line in Protan, absent in Tritan, Contrast, Reading
+  and Aqua -- which is the shape of a fault that depends on how light the skin
+  is.
+- **Two of them, one cause.** The taskbar's top edge was a hardcoded
+  `E8E8E8`. Its own comment had already caught half of this -- "a fixed light
+  grey line on top of that was a stripe of the wrong colour across a blue
+  bar" -- and guarded against skins that *grade* the bar, which left every
+  skin that is merely **dark**. Midnight's bar is `24282E`, so the line was
+  four times its brightness and ran the full width of the screen.
+- The line above each button was the bevel highlight, mixed 110 of 255 toward
+  white. A constant fraction of the distance to white is not a constant
+  effect: it lifts `E8EBF5` by nine levels and `3A3E46` by **eighty-five**.
+  The same arithmetic that reads as a soft sheen on a light button is a pale
+  grey bar across a dark one.
+- **Fixed in** v0.4.0. `recon_color_highlight` adds a proportion of the
+  headroom capped at a step, so on something already light the proportion wins
+  and on something dark the cap does -- and both come out looking like the
+  same lamp. The taskbar's line is the bar's own colour through it, and the
+  guard for graded bars stays. Measured on Midnight: the button highlight went
+  from `8E9195` to `545860` against a face of `3A3E46`, and the bar's top line
+  from `E8E8E8` to `3E4248` against a bar of `24282E`.
+- **The third time this shape of fault has been found in one session.** A
+  fixed grey where a derived colour belongs: the bevel (BG-141), this line,
+  and this highlight. All three were written when every skin was grey.
+
 ### BG-143 — Every selection and hover highlight was square
 
 - **Found in** v0.4.0. **Found by** the author, going round the desktop:

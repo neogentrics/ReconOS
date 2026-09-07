@@ -23,6 +23,23 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Highlights are a step now, not a fraction of the way to white.** A constant
+fraction is not a constant effect: mixing 110 of 255 toward white lifts a light
+button by nine levels and a dark one by eighty-five, so every dark skin had a
+pale grey bar across the top of every button. The taskbar had its own version
+of the same thing -- a hardcoded `E8E8E8` along its top edge, which is a gentle
+lift on a light bar and a white stripe the width of the screen on Midnight's
+`24282E`. Both are derived from the surface now. Third time this shape of fault
+turned up in one session; all three were written when every skin was grey.
+BG-144.
+
+**Fill and outline are one pass, so the outline stops being diluted.** Drawn as
+two blends, the outline landed on a corner pixel the fill had already
+part-covered, and so came out mixed with the *face* rather than with what is
+behind the control -- a pale wedge in each corner, visible wherever a light
+button sits on dark chrome. A corner pixel is three things at once and is
+worked out as three. BG-145.
+
 **A control is drawn as a shape, so its corners stop being a guess.** The
 rounding worked by filling a square rectangle and painting the corners back out
 with a colour the caller *believed* was behind them. Wrong over a gradient

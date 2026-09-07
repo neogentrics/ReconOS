@@ -61,6 +61,15 @@ recon_color recon_color_fade(recon_color color, uint8_t alpha);
 recon_color recon_color_mix(recon_color from, recon_color to, uint8_t amount);
 
 /*
+ * A surface with light falling on it.
+ *
+ * A step, not a fraction of the distance to white -- because a fraction is a
+ * gentle sheen on something light and a pale stripe on something dark, and a
+ * highlight is supposed to look like the same lamp either way.
+ */
+recon_color recon_color_highlight(recon_color base);
+
+/*
  * How light a colour is, 0 to 255.
  *
  * Weighted the way an eye weights it rather than as a plain average: green
@@ -327,6 +336,18 @@ void recon_fill_round_rect(struct recon_panel *panel, int x, int y, int w,
     int h, int radius, recon_color color);
 void recon_stroke_round_rect(struct recon_panel *panel, int x, int y, int w,
     int h, int radius, recon_color color);
+
+/*
+ * The two together, in one pass.
+ *
+ * Prefer this to a fill followed by a stroke. Those are two blends, and at a
+ * corner the second lands on a pixel the first has already part-covered -- so
+ * the outline comes out mixed with the face rather than with what is behind
+ * the control, which on a light button over a dark title bar is a pale wedge
+ * in each corner.
+ */
+void recon_fill_round_rect_edged(struct recon_panel *panel, int x, int y,
+    int w, int h, int radius, recon_color face, recon_color edge);
 
 /*
  * The same, with a one-pixel outline laid along the curve.

@@ -2657,11 +2657,19 @@ static void draw_taskbar(struct recon_shell *shell) {
     /*
      * A highlight along the top edge lifts the bar off the wallpaper -- but
      * only where the skin fills the bar flat. A gradient already puts its
-     * lightest row at the top, and a fixed light grey line on top of that was
-     * a stripe of the wrong colour across a blue bar.
+     * lightest row at the top, and a line on top of that was a stripe of the
+     * wrong colour across a blue bar.
+     *
+     * The line is the bar's own colour with light on it, and it used to be a
+     * fixed E8E8E8. That is a gentle lift on a light bar and a *white stripe*
+     * across a dark one -- Midnight's bar is 24282E, so the line was four
+     * times its brightness and ran the full width of the screen. The guard
+     * above caught the gradient case when it was written and left the dark
+     * case, which is the same mistake in the other direction.
      */
     if (!recon_theme_gradient(RECON_THEME_BAR, NULL, NULL)) {
-        recon_fill_rect(bar, 0, 0, width, 1, RECON_RGB(0xE8, 0xE8, 0xE8));
+        recon_fill_rect(bar, 0, 0, width, 1,
+            recon_color_highlight(THEME(BAR)));
     }
 
     recon_hit_clear(bar);
