@@ -10,6 +10,17 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Watchtower said "0 shown" above the applications it was showing (BG-132).
+The footer's count came from a value the *draw* sets and the line was built on
+the timer, which runs first -- so the number was the previous frame's, and on
+the first frame it was zero. It corrected itself a second later, which is why
+it had survived: the wrong number is only up while somebody is still looking at
+the window they just opened.
+
+Found by photographing the whole desktop at the end of the night to check that
+eight thousand lines of change had not broken anything visible. Nothing was
+broken; this was.
+
 Four more codes, and one taken out again. VT-J001 when a program will not
 open -- which is silent from the outside, since something is clicked and
 nothing happens, and every way in goes through the one line that now reports

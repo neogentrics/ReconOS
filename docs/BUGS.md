@@ -2498,3 +2498,21 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **And the other half is checked too**, because the fix could have broken it
   without anybody noticing: an explicit `on = no` still turns the firewall off.
   A switch nobody can turn off is not a switch.
+
+### BG-132 — Watchtower said "0 shown" above the applications it was showing
+
+- **Found in** v0.4.0. **Found by** photographing the whole desktop at the end
+  of the night to check that eight thousand lines of change had not broken
+  anything visible. Nothing was broken; this was.
+- **What it was** The footer's count came from `rows_matching`, which is set by
+  whichever tab *draws* its rows. The line was built in `sample()`, which runs
+  on the timer **before** the draw -- so the number shown was the previous
+  frame's, and on the first frame it was whatever the struct was created with.
+  Opening Watchtower showed **"0 shown" above seven applications**.
+- **It corrected itself after a second**, at the next timer tick, which is why
+  it had survived: the wrong number is only on screen while somebody is still
+  looking at the window they have just opened.
+- **Fixed in** v0.4.0. The line is built after the rows and before the footer
+  that reports them, which is the only order in which the number can be the one
+  on screen. `sample()` still builds it too, so a tick with no redraw keeps the
+  processor and memory figures moving.

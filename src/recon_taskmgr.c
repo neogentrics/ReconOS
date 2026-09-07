@@ -303,19 +303,33 @@ static void apply_sort(struct recon_taskmgr *tm) {
     }
 }
 
-static void sample(struct recon_taskmgr *tm) {
-    if (!recon_proc_snapshot_refresh(tm->snapshot)) {
-        snprintf(tm->status, sizeof(tm->status), "Could not read process list");
-        return;
-    }
-    apply_sort(tm);
-
+/*
+ * The line along the bottom: how many rows, and what the machine is doing.
+ *
+ * Built where the count is known rather than where the figures are.
+ *
+ * `rows_matching` is set by whichever tab draws its rows; this used to be
+ * written in sample(), which runs on the timer *before* the draw -- so the
+ * number in the footer was the one from the previous frame, and on the first
+ * frame it was whatever the struct was created with. Opening Watchtower showed
+ * "0 shown" above seven applications for a second, every time.
+ */
+static void update_status(struct recon_taskmgr *tm) {
     snprintf(tm->status, sizeof(tm->status),
         "%d shown   CPU %.0f%%   Memory %zu / %zu MB",
         tm->rows_matching,
         recon_proc_total_cpu_percent(tm->snapshot),
         recon_proc_used_memory_kb(tm->snapshot) / 1024,
         recon_proc_total_memory_kb(tm->snapshot) / 1024);
+}
+
+static void sample(struct recon_taskmgr *tm) {
+    if (!recon_proc_snapshot_refresh(tm->snapshot)) {
+        snprintf(tm->status, sizeof(tm->status), "Could not read process list");
+        return;
+    }
+    apply_sort(tm);
+    update_status(tm);
 }
 
 static int on_timer(void *data) {
@@ -1000,6 +1014,11 @@ static void taskmgr_draw(void *user, struct recon_panel *p, int x, int y, int w,
     case TAB_USERS:        draw_user_rows(tm, p, x, rows_y, w, rows); break;
     default:               draw_rows(tm, p, x, rows_y, w, rows); break;
     }
+    /*
+     * After the rows and before the footer that reports them, which is the
+     * only order in which the number can be the one on screen.
+     */
+    update_status(tm);
     draw_footer(tm, p, x, y + h - FOOTER_HEIGHT, w);
 
     /* A sunken edge so the list reads as inset. */
