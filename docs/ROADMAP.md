@@ -2032,11 +2032,22 @@ thumbnail -- so switching resets the view and keeps the expressions, which is
 what makes it teach: the same three lines are waves under one and a rose,
 cardioid and spiral under the other.
 
-What is still missing is **parametric** (x and y each a function of the same
-parameter, which needs two fields per curve and so a different form above the
-plane) and **a plot of data from a file** rather than of an expression, which
-needs a file picker, a format decision and an answer to what happens when a
-row will not parse. Neither is a variation on what is there.
+**Parametric** is there too: x and y each a function of the same parameter,
+three curves, with the pair on one row rather than under each other so every
+mode keeps its three rows and the plane keeps its height. The parameter runs
+from -2pi to 2pi, which is a choice rather than a consequence -- there is no
+natural range for a parameter the way there is for an angle -- and it is the
+one that closes a circle and gives a parabola both arms.
+
+What is still missing:
+
+* **A parameter range somebody can set.** Two more fields above an already
+  crowded form, which is why the fixed range above is stated rather than
+  quietly chosen.
+* **A plot of data from a file** rather than of an expression. It needs a file
+  picker, a format decision, and an answer to what happens when a row will not
+  parse -- and that answer is the whole of the work, because a plot that
+  silently drops the rows it could not read is a graph of a different data set.
 
 **Implicit multiplication is done.** `3t`, `2pi`, `2(x+1)`, `(x+1)(x-1)` and
 `3sin(x)` all mean what they look like, and the hint under an empty plane says

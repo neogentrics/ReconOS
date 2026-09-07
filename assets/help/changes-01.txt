@@ -92,6 +92,26 @@ fourteen targets reports the sums -- recon_fs.c came out as "21% of 10920
 lines" when it has 780 -- so both columns were wrong, and the first version of
 this script printed them.
 
+The grapher draws parametric curves, which completes the three shapes of
+question it was always meant to ask. x and y are each a function of t, three
+curves at once, and the pair sits on one row rather than under each other -- so
+parametric has three rows like the other two modes and the plane keeps its
+height. Six rows over a small plane is a form with a graph attached.
+
+Both halves are needed. A curve with only its x filled in is not drawn, because
+half a pair is not a point -- and drawing the x against a y of zero would be a
+line nobody asked for that looks like an answer.
+
+The parameter runs from -2pi to 2pi, which is a choice rather than a
+consequence: there is no natural range for a parameter the way there is for an
+angle. It is the one that closes (cos t, sin t) and gives (t, t^2) both arms
+rather than half of one.
+
+Polar and parametric now share their drawing, because they were the same
+problem: a path walked by a parameter, several of whose steps land in one column
+of pixels and many of which land in none, and which crosses itself as a matter
+of course. Only the arithmetic that turns a step into a point differs.
+
 3t means 3 times t. So do 2pi, 2(x+1), (x+1)(x-1) and 3sin(x).
 The grapher's hint had to read sin(3*t), which is teaching somebody the one
 form that does not work.

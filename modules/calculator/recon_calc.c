@@ -226,6 +226,27 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
 #define POLAR_STEPS 2400
 
 /*
+ * How far the parameter runs in parametric mode, and how finely.
+ *
+ * Minus two pi to two pi. There is no natural range for a parameter the way
+ * there is for an angle, so this is a choice rather than a consequence, and it
+ * is the one that makes the two commonest things work: (cos t, sin t) closes
+ * its circle, and (t, t^2) is a parabola with both arms rather than half of
+ * one. Symmetric for that second reason -- a range starting at zero draws
+ * every even function as a hook.
+ *
+ * A range somebody can set is the obvious next thing and is two more fields
+ * above an already crowded form; it is written down in docs/ROADMAP.md rather
+ * than guessed at here.
+ */
+#define PARAM_FROM (-6.283185307179586)
+#define PARAM_TO 6.283185307179586
+#define PARAM_STEPS 2400
+
+/* Where the second half of a parametric pair is written down. */
+#define GRAPH_Y_KEY_PREFIX "calculator/graph-y-"
+
+/*
  * How much one notch of the wheel changes the view.
  *
  * The same factor as the Zoom in and Zoom out buttons, so the two agree and
@@ -302,7 +323,23 @@ struct recon_calc {
     enum graph_kind {
         GRAPH_XY,
         GRAPH_POLAR,
+        GRAPH_PARAM,
     } graph_kind;
+
+    /*
+     * The other half of a parametric curve.
+     *
+     * A second array rather than doubling the first, because only one mode has
+     * two fields per curve and the three above are the same three fields under
+     * all of them: switching modes keeps what was typed, and it can only do
+     * that if `formula[1]` means the same slot whichever question is being
+     * asked.
+     *
+     * Laid out beside its partner rather than under it, so parametric has
+     * three rows like the others rather than six. Two narrower fields on a row
+     * is a form; six rows over a small plane is a form with a graph attached.
+     */
+    struct recon_edit formula_y[GRAPH_CURVES];
 
     double span_x, span_y;
 
@@ -404,9 +441,18 @@ static void remember_graph(struct recon_calc *calc) {
         char key[64];
         graph_key(i, key, sizeof(key));
         recon_registry_set(RECON_REG_USER, key, calc->formula[i].text);
+
+        snprintf(key, sizeof(key), "%s%d", GRAPH_Y_KEY_PREFIX, i);
+        recon_registry_set(RECON_REG_USER, key, calc->formula_y[i].text);
     }
-    recon_registry_set(RECON_REG_USER, GRAPH_KIND_KEY,
-        calc->graph_kind == GRAPH_POLAR ? "polar" : "xy");
+
+    const char *kind = "xy";
+    if (calc->graph_kind == GRAPH_POLAR) {
+        kind = "polar";
+    } else if (calc->graph_kind == GRAPH_PARAM) {
+        kind = "parametric";
+    }
+    recon_registry_set(RECON_REG_USER, GRAPH_KIND_KEY, kind);
 }
 
 /*
@@ -429,6 +475,32 @@ static void remember_graph(struct recon_calc *calc) {
  */
 static const char *graph_variable(void) {
     return "t";
+}
+
+/* How many fields this mode has: three, or three pairs. */
+static int graph_field_count(const struct recon_calc *calc) {
+    return calc->graph_kind == GRAPH_PARAM ? GRAPH_CURVES * 2 : GRAPH_CURVES;
+}
+
+/*
+ * One field by number, counting the three main ones first.
+ *
+ * The numbering is what the hit ids and the focus both use, and keeping it in
+ * one function is what stops the click handler and the keyboard disagreeing
+ * about which box the caret is in -- which is the kind of fault that looks
+ * like typing into the wrong field at random.
+ */
+static struct recon_edit *graph_field(struct recon_calc *calc, int i) {
+    if (i < 0) {
+        i = 0;
+    }
+    if (i < GRAPH_CURVES) {
+        return &calc->formula[i];
+    }
+    if (i < GRAPH_CURVES * 2) {
+        return &calc->formula_y[i - GRAPH_CURVES];
+    }
+    return &calc->formula[0];
 }
 
 /* --- Arithmetic --- */
@@ -815,6 +887,7 @@ static void equals(struct recon_calc *calc) {
 /* One per curve. */
 #define HIT_GRAPH_XY (RECON_APPWIN_HIT_USER + 907)
 #define HIT_GRAPH_POLAR (RECON_APPWIN_HIT_USER + 908)
+#define HIT_GRAPH_PARAM (RECON_APPWIN_HIT_USER + 909)
 #define HIT_GRAPH_FIELD_BASE (RECON_APPWIN_HIT_USER + 910)
 
 /* One of `n` values converted from `from` to `to` within a category. */
@@ -1175,12 +1248,101 @@ static void draw_convert_mode(struct recon_calc *calc,
  * four turns and this step the gaps are sub-pixel near the origin and several
  * pixels at the outside, and a curve made of dots is a dotted curve.
  */
+/*
+ * One point at a time along a path, joined where joining is honest.
+ *
+ * Shared by the polar and parametric curves, because they are the same drawing
+ * problem: a path walked by a parameter, several of whose steps land in one
+ * column of pixels and many of which land in none, and which crosses itself as
+ * a matter of course. Only the arithmetic that turns a step into a point
+ * differs, and that is the caller's.
+ *
+ * `had` is what keeps a break a break: a step where the expression has no value
+ * starts a new stroke rather than being joined across the gap.
+ */
+struct path_pen {
+    bool had;
+    int last_x, last_y;
+};
+
+static void path_to(struct path_pen *pen, struct recon_panel *panel,
+        double px, double py, recon_color ink, int x, int y, int w, int h) {
+    /* Far outside the box in either direction: nothing to draw and nothing to
+     * join to, so the stroke breaks rather than being dragged across the
+     * window by a value of ten thousand. */
+    if (!isfinite(px) || !isfinite(py) ||
+            px < x - w || px > x + w * 2 ||
+            py < y - h || py > y + h * 2) {
+        pen->had = false;
+        return;
+    }
+
+    int cx = (int)px;
+    int cy = (int)py;
+
+    if (pen->had) {
+        /*
+         * Walked along whichever axis the segment covers more of, with
+         * neither privileged -- a path may be travelling in any direction,
+         * which is exactly what a column-at-a-time loop cannot express.
+         */
+        int dx = cx - pen->last_x;
+        int dy = cy - pen->last_y;
+        int steps = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy)
+            ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+        for (int s = 1; s < steps; s++) {
+            int ix = pen->last_x + dx * s / steps;
+            int iy = pen->last_y + dy * s / steps;
+            if (ix >= x + 1 && ix < x + w - 1 &&
+                    iy >= y + 1 && iy < y + h - 1) {
+                recon_fill_rect(panel, ix, iy, 1, 1, ink);
+            }
+        }
+    }
+
+    if (cx >= x + 1 && cx < x + w - 1 && cy >= y + 1 && cy < y + h - 1) {
+        recon_fill_rect(panel, cx, cy, 1, 1, ink);
+    }
+    pen->last_x = cx;
+    pen->last_y = cy;
+    pen->had = true;
+}
+
+/*
+ * One parametric curve: x and y each a function of the same parameter.
+ *
+ * Both halves are asked at every step and either may have no value there --
+ * so a step is drawn only when both answer, which is the honest reading: a
+ * point needs two coordinates and half of one is not a place.
+ */
+static void draw_param_curve(struct recon_panel *panel, const char *fx,
+        const char *fy, recon_color ink, int zero_x, int zero_y,
+        double per_unit_x, double per_unit_y, int x, int y, int w, int h) {
+    struct path_pen pen = { false, 0, 0 };
+    double step = (PARAM_TO - PARAM_FROM) / PARAM_STEPS;
+
+    for (int i = 0; i <= PARAM_STEPS; i++) {
+        double t = PARAM_FROM + i * step;
+
+        double vx = 0.0;
+        double vy = 0.0;
+        if (recon_expr_eval_named(fx, graph_variable(), t, &vx, NULL, 0)
+                != RECON_EXPR_OK ||
+            recon_expr_eval_named(fy, graph_variable(), t, &vy, NULL, 0)
+                != RECON_EXPR_OK) {
+            pen.had = false;
+            continue;
+        }
+
+        path_to(&pen, panel, zero_x + vx * per_unit_x,
+            zero_y - vy * per_unit_y, ink, x, y, w, h);
+    }
+}
+
 static void draw_polar_curve(struct recon_calc *calc, struct recon_panel *panel,
         const char *text, recon_color ink, int zero_x, int zero_y,
         double per_unit_x, double per_unit_y, int x, int y, int w, int h) {
-    bool had_last = false;
-    int last_px = 0, last_py = 0;
-
+    struct path_pen pen = { false, 0, 0 };
     double step = (POLAR_TURNS * 2.0 * 3.14159265358979323846) / POLAR_STEPS;
 
     for (int i = 0; i <= POLAR_STEPS; i++) {
@@ -1189,7 +1351,7 @@ static void draw_polar_curve(struct recon_calc *calc, struct recon_panel *panel,
         double r = 0.0;
         if (recon_expr_eval_named(text, graph_variable(), angle, &r, NULL, 0)
                 != RECON_EXPR_OK) {
-            had_last = false;
+            pen.had = false;
             continue;
         }
 
@@ -1200,49 +1362,8 @@ static void draw_polar_curve(struct recon_calc *calc, struct recon_panel *panel,
          * carries through the multiplication -- so there is nothing to write
          * here except the note that it was not forgotten.
          */
-        double px = zero_x + r * cos(angle) * per_unit_x;
-        double py = zero_y - r * sin(angle) * per_unit_y;
-
-        /* Far outside the box in either direction: nothing to draw and
-         * nothing to join to, so the stroke breaks rather than being dragged
-         * across the window by a value of ten thousand. */
-        if (!isfinite(px) || !isfinite(py) ||
-                px < x - w || px > x + w * 2 ||
-                py < y - h || py > y + h * 2) {
-            had_last = false;
-            continue;
-        }
-
-        int cx = (int)px;
-        int cy = (int)py;
-
-        if (had_last) {
-            /*
-             * A straight segment between the two, walked along whichever axis
-             * it covers more of -- the same idea as the column loop below,
-             * with neither axis privileged because a polar curve may be
-             * travelling in any direction.
-             */
-            int dx = cx - last_px;
-            int dy = cy - last_py;
-            int steps = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy)
-                ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
-            for (int s = 1; s < steps; s++) {
-                int ix = last_px + dx * s / steps;
-                int iy = last_py + dy * s / steps;
-                if (ix >= x + 1 && ix < x + w - 1 &&
-                        iy >= y + 1 && iy < y + h - 1) {
-                    recon_fill_rect(panel, ix, iy, 1, 1, ink);
-                }
-            }
-        }
-
-        if (cx >= x + 1 && cx < x + w - 1 && cy >= y + 1 && cy < y + h - 1) {
-            recon_fill_rect(panel, cx, cy, 1, 1, ink);
-        }
-        last_px = cx;
-        last_py = cy;
-        had_last = true;
+        path_to(&pen, panel, zero_x + r * cos(angle) * per_unit_x,
+            zero_y - r * sin(angle) * per_unit_y, ink, x, y, w, h);
     }
     (void)calc;
 }
@@ -1388,6 +1509,7 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     static const struct { const char *label; uint32_t hit; int kind; } KINDS[] = {
         { "y of x", HIT_GRAPH_XY, GRAPH_XY },
         { "Polar", HIT_GRAPH_POLAR, GRAPH_POLAR },
+        { "Parametric", HIT_GRAPH_PARAM, GRAPH_PARAM },
     };
     int kx = x;
     for (size_t i = 0; i < sizeof(KINDS) / sizeof(KINDS[0]); i++) {
@@ -1408,19 +1530,55 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
      * another, so the wider of the two decides -- otherwise the fields shift
      * sideways when the mode changes, which reads as the layout breaking.
      */
-    const char *field_label = calc->graph_kind == GRAPH_POLAR ? "r =" : "y =";
+    const char *field_label = "y =";
+    if (calc->graph_kind == GRAPH_POLAR) {
+        field_label = "r =";
+    } else if (calc->graph_kind == GRAPH_PARAM) {
+        field_label = "x =";
+    }
+
     int label_w = recon_text_width(calc->font, "y =");
-    int polar_w = recon_text_width(calc->font, "r =");
-    label_w = (polar_w > label_w ? polar_w : label_w) + 6;
+    for (int i = 0; i < 2; i++) {
+        int other = recon_text_width(calc->font, i == 0 ? "r =" : "x =");
+        if (other > label_w) {
+            label_w = other;
+        }
+    }
+    label_w += 6;
+
+    /*
+     * Parametric puts its pair on one row rather than under each other, so
+     * every mode has three rows and the plane keeps its height. Two narrower
+     * fields is a form; six rows over a small plane is a form with a graph
+     * attached.
+     */
+    bool paired = (calc->graph_kind == GRAPH_PARAM);
+    int room = w - label_w - 16;
+    int field_w = paired ? (room - label_w - 8) / 2 : room;
 
     for (int i = 0; i < GRAPH_CURVES; i++) {
         recon_fill_rect(panel, x, y + 2, 10, line - 2, curve_color(i));
-        recon_draw_text(panel, calc->font, x + 16, y + ascent, label_w,
+
+        int at = x + 16;
+        recon_draw_text(panel, calc->font, at, y + ascent, label_w,
             field_label, COLOR_KEY_TEXT);
-        recon_edit_draw(panel, calc->font, x + 16 + label_w, y - 2,
-            w - label_w - 16, line + 6, &calc->formula[i]);
-        recon_hit_add(panel, x + 16 + label_w, y - 2, w - label_w - 16,
-            line + 6, HIT_GRAPH_FIELD_BASE + (uint32_t)i);
+        at += label_w;
+        recon_edit_draw(panel, calc->font, at, y - 2, field_w, line + 6,
+            &calc->formula[i]);
+        recon_hit_add(panel, at, y - 2, field_w, line + 6,
+            HIT_GRAPH_FIELD_BASE + (uint32_t)i);
+        at += field_w + 8;
+
+        if (paired) {
+            recon_draw_text(panel, calc->font, at, y + ascent, label_w, "y =",
+                COLOR_KEY_TEXT);
+            at += label_w;
+            recon_edit_draw(panel, calc->font, at, y - 2, field_w, line + 6,
+                &calc->formula_y[i]);
+            recon_hit_add(panel, at, y - 2, field_w, line + 6,
+                HIT_GRAPH_FIELD_BASE + (uint32_t)(GRAPH_CURVES + i));
+        }
+
         y += line + 6;
     }
     y += 4;
@@ -1573,8 +1731,8 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
      * and not an instruction.
      */
     bool anything = false;
-    for (int i = 0; i < GRAPH_CURVES; i++) {
-        if (calc->formula[i].text[0] != '\0') {
+    for (int i = 0; i < graph_field_count(calc); i++) {
+        if (graph_field(calc, i)->text[0] != '\0') {
             anything = true;
         }
     }
@@ -1587,6 +1745,9 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
             w - 16, calc->graph_kind == GRAPH_POLAR
                 ? "Type a distance from the origin, in the angle t. "
                   "For example: sin(3t), 1+cos(t), t"
+                : calc->graph_kind == GRAPH_PARAM
+                ? "Type x and y, both in t. For example: cos(t) and sin(t), "
+                  "or t and t^2"
                 : "Type an expression in x. For example: sin(x), 2x^2-1, 1/x",
             COLOR_KEY_TEXT);
         return;
@@ -1602,11 +1763,14 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     int complaining = -1;
     char why[128];
     why[0] = '\0';
-    for (int i = 0; i < GRAPH_CURVES && complaining < 0; i++) {
-        if (calc->formula[i].text[0] != '\0' &&
-                !recon_expr_valid_named(calc->formula[i].text,
-                    graph_variable(), why, sizeof(why))) {
-            complaining = i;
+    for (int i = 0; i < graph_field_count(calc) && complaining < 0; i++) {
+        struct recon_edit *field = graph_field(calc, i);
+        if (field->text[0] != '\0' &&
+                !recon_expr_valid_named(field->text, graph_variable(), why,
+                    sizeof(why))) {
+            /* The swatch names a curve, not a field, so a complaint about the
+             * y of the second pair points at the second colour. */
+            complaining = i % GRAPH_CURVES;
         }
     }
 
@@ -1634,6 +1798,21 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         if (calc->graph_kind == GRAPH_POLAR) {
             draw_polar_curve(calc, panel, calc->formula[c].text, ink,
                 zero_x, zero_y, per_unit_x, per_unit_y, x, y, w, h);
+            continue;
+        }
+
+        if (calc->graph_kind == GRAPH_PARAM) {
+            /* Both halves, or nothing: half a pair is not a curve, and
+             * drawing the x against a y of zero would be a line somebody did
+             * not ask for that looks like an answer. */
+            if (calc->formula_y[c].text[0] == '\0' ||
+                    !recon_expr_valid_named(calc->formula_y[c].text,
+                        graph_variable(), NULL, 0)) {
+                continue;
+            }
+            draw_param_curve(panel, calc->formula[c].text,
+                calc->formula_y[c].text, ink, zero_x, zero_y, per_unit_x,
+                per_unit_y, x, y, w, h);
             continue;
         }
 
@@ -2068,13 +2247,16 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
      * above it and it is matched with an open-ended `>=`.
      */
     if (hit_id >= HIT_GRAPH_FIELD_BASE &&
-            hit_id < HIT_GRAPH_FIELD_BASE + GRAPH_CURVES) {
+            hit_id < HIT_GRAPH_FIELD_BASE + GRAPH_CURVES * 2) {
         int i = (int)(hit_id - HIT_GRAPH_FIELD_BASE);
-        for (int j = 0; j < GRAPH_CURVES; j++) {
-            calc->formula[j].active = (j == i);
+        /* Every field, not the three of this mode: a caret left on a
+         * parametric y after switching back would be drawn on a box that is
+         * not there. */
+        for (int j = 0; j < GRAPH_CURVES * 2; j++) {
+            graph_field(calc, j)->active = (j == i);
         }
         calc->formula_focused = i;
-        recon_edit_focus(&calc->formula[i]);
+        recon_edit_focus(graph_field(calc, i));
         return true;
     }
 
@@ -2102,9 +2284,14 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         calc->span_y *= 2.0;
         return true;
     case HIT_GRAPH_XY:
-    case HIT_GRAPH_POLAR: {
-        enum graph_kind wanted = (hit_id == HIT_GRAPH_POLAR)
-            ? GRAPH_POLAR : GRAPH_XY;
+    case HIT_GRAPH_POLAR:
+    case HIT_GRAPH_PARAM: {
+        enum graph_kind wanted = GRAPH_XY;
+        if (hit_id == HIT_GRAPH_POLAR) {
+            wanted = GRAPH_POLAR;
+        } else if (hit_id == HIT_GRAPH_PARAM) {
+            wanted = GRAPH_PARAM;
+        }
         if (calc->graph_kind == wanted) {
             return true;
         }
@@ -2124,10 +2311,17 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
          * the old view across would make the mode look broken in whichever
          * direction you switched.
          */
-        calc->span_x = (wanted == GRAPH_POLAR) ? GRAPH_SPAN_POLAR : GRAPH_SPAN;
+        calc->span_x = (wanted == GRAPH_XY) ? GRAPH_SPAN : GRAPH_SPAN_POLAR;
         calc->span_y = calc->span_x;
         calc->centre_x = 0.0;
         calc->centre_y = 0.0;
+
+        /* A caret on a field this mode does not show would be drawn on
+         * nothing. Back to the first, which every mode has. */
+        if (calc->formula_focused >= graph_field_count(calc)) {
+            graph_field(calc, calc->formula_focused)->active = false;
+            calc->formula_focused = 0;
+        }
 
         calc->note[0] = '\0';
         remember_graph(calc);
@@ -2221,14 +2415,14 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * rather than like part of the same thing.
          */
         if (sym == XKB_KEY_Tab) {
-            calc->formula[calc->formula_focused].active = false;
+            graph_field(calc, calc->formula_focused)->active = false;
             calc->formula_focused =
-                (calc->formula_focused + 1) % GRAPH_CURVES;
-            recon_edit_focus(&calc->formula[calc->formula_focused]);
+                (calc->formula_focused + 1) % graph_field_count(calc);
+            recon_edit_focus(graph_field(calc, calc->formula_focused));
             return true;
         }
 
-        switch (recon_edit_key(&calc->formula[calc->formula_focused], sym,
+        switch (recon_edit_key(graph_field(calc, calc->formula_focused), sym,
                 modifiers)) {
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_COMMIT:
@@ -2495,6 +2689,15 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
         if (kept[0] != '\0') {
             remembered = true;
         }
+
+        char y_key[64];
+        snprintf(y_key, sizeof(y_key), "%s%d", GRAPH_Y_KEY_PREFIX, i);
+        const char *kept_y = recon_registry_get(RECON_REG_USER, y_key, "");
+        recon_edit_begin(&calc->formula_y[i], kept_y, false);
+        calc->formula_y[i].active = false;
+        if (kept_y[0] != '\0') {
+            remembered = true;
+        }
     }
 
     if (!remembered &&
@@ -2502,8 +2705,14 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
         recon_edit_begin(&calc->formula[0], "sin(x)", false);
         calc->formula[0].active = false;
     }
-    calc->graph_kind = strcmp(recon_registry_get(RECON_REG_USER,
-        GRAPH_KIND_KEY, "xy"), "polar") == 0 ? GRAPH_POLAR : GRAPH_XY;
+    const char *kept_kind = recon_registry_get(RECON_REG_USER,
+        GRAPH_KIND_KEY, "xy");
+    calc->graph_kind = GRAPH_XY;
+    if (strcmp(kept_kind, "polar") == 0) {
+        calc->graph_kind = GRAPH_POLAR;
+    } else if (strcmp(kept_kind, "parametric") == 0) {
+        calc->graph_kind = GRAPH_PARAM;
+    }
 
     calc->formula_focused = 0;
     calc->unit_to = 1;
