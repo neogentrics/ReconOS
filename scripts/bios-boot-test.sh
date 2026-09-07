@@ -253,6 +253,23 @@ if command -v sgdisk >/dev/null 2>&1 && command -v mkfs.vfat >/dev/null 2>&1; th
 			echo "$gpt" | grep -a -E 'esp:|kernel:' | sed 's/^/      /'
 			fail=$((fail + 1))
 		fi
+
+		# Real mode addresses one megabyte and the kernel belongs above
+		# it, so every byte crosses through INT 15h AH=87h -- whose
+		# count is in words, which is exactly the kind of detail that
+		# transfers half an image and leaves something that looks
+		# nearly right. The loader reads the destination back, because
+		# a copy that silently did nothing leaves zeroes, and on a
+		# machine just powered on so does a failed read.
+		say "and puts it above the first megabyte"
+		if echo "$gpt" | grep -q 'bytes at 0x100000, and it is an ELF'; then
+			echo "$(echo "$gpt" | sed -n 's/^kernel: \([0-9]*\) bytes at.*/\1/p') bytes across, ELF header intact"
+			pass=$((pass + 1))
+		else
+			echo "FAILED"
+			echo "$gpt" | grep -a 'kernel:' | sed 's/^/      /'
+			fail=$((fail + 1))
+		fi
 	fi
 else
 	say "finds the EFI partition in a real GPT"

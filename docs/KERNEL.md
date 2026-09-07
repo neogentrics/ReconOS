@@ -1992,10 +1992,47 @@ look like one question until a file grows.
 writes it in, taking the offset from the symbol table rather than counting bytes
 in a hex dump. There is no literal left to be wrong.
 
+#### The signature, and the same two source files
+
+**A BIOS path that does not check the kernel's signature is the off-switch the
+UEFI path deliberately does not have.** An attacker who can write to the disk
+would not need to defeat the check in reconboot; they would only need to make
+the machine take this path instead. So every claim in
+[INTEGRITY.md](INTEGRITY.md) is a claim about both loaders or about neither.
+
+Stage 2 compiles **the same `sha256.c` and `rsa.c`** the UEFI loader does, for
+16-bit real mode, and uses them unchanged. Not copies: the same files. Two
+implementations of a signature check is two chances to be wrong with one set of
+tests between them, and the untested one is the one that will be wrong. If the
+padding check in `rsa.c` is ever corrected, both loaders are corrected.
+
+Sharing them needed two small changes and no forks:
+
+- the declarations moved from `boot_internal.h` into a new `crypto.h`, because
+  there are now two callers and only one is a UEFI application — stage 2 has no
+  use for the rest of that header, and including it collided with its own
+  `print`. Duplicating the context struct into stage 2 was the easy alternative
+  and exactly the wrong one: that is how two copies silently diverge.
+- `sha256()` grew an incremental form, `sha256_init/update/final`, because the
+  kernel is hashed **as it is read** — the only moment each byte is reachable is
+  while its cluster sits in a low buffer, since real mode cannot read back what
+  it has put above the first megabyte. The one-shot is now written in terms of
+  the incremental one, so the path the BIOS loader depends on is the path the
+  existing tests already cover.
+
+`scripts/bios-signed-test.sh` shows it four kernels — signed, unsigned, one byte
+changed after signing, and one validly signed by a different key — with the
+signatures made by `openssl`, which shares no code with the verifier. The last
+case is the one that matters: everything is well-formed, and a verifier that
+checks the padding and forgets the modulus passes it.
+
+The byte in the tampered case is changed at offset 40000, well past the ELF
+header, so that the loader's own *"is this an ELF"* check cannot be what catches
+it.
+
 ### What is still to build here
 
-Reading the file into memory above the first megabyte, the signature check, A20,
-the GDT, page tables, long mode, and the ReconBoot handoff.
+A20, the GDT, page tables, long mode, and the ReconBoot handoff.
 
 ### What will be checked, and what would make the checkpoint a lie
 

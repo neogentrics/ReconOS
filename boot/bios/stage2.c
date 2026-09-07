@@ -7,12 +7,14 @@
  *
  * What belongs here, in order:
  *
- *   - the memory map, from INT 15h AX=E820           [done]
- *   - a FAT32 reader, because the BIOS hands out sectors and the kernel is a
- *     file on the EFI partition                       [next]
+ *   - the memory map, from INT 15h AX=E820                          [done]
+ *   - a FAT32 reader, because the BIOS hands out sectors and the
+ *     kernel is a file on the EFI partition                         [done]
+ *   - moving it above the first megabyte, which real mode cannot
+ *     address, through INT 15h AH=87h                               [done]
  *   - the signature check, because **a BIOS path that skips it is the
- *     off-switch the UEFI path deliberately does not have**
- *   - A20, a GDT, page tables and the switch to long mode
+ *     off-switch the UEFI path deliberately does not have**         [done]
+ *   - A20, a GDT, page tables and the switch to long mode           [next]
  *   - the ReconBoot handoff, identical to the one the UEFI loader builds, so
  *     that the kernel cannot tell which loader started it
  *
@@ -33,6 +35,27 @@
  * BIOS machine quietly booting the kernel from before the last update is
  * exactly the divergence this project keeps finding in itself. */
 #define KERNEL_NAME "kernel-x86_64.elf"
+
+/* Where the kernel goes. The same address the UEFI loader places it at,
+ * because the kernel is linked for it and neither loader gets a say. */
+#define KERNEL_LOAD 0x100000
+
+/* The UEFI loader's SHA-256 and RSA, compiled for real mode and used unchanged.
+ *
+ * Not a copy: the same two source files. Two implementations of a signature
+ * check is two chances to be wrong and one set of tests, and the untested one
+ * is the one that will be wrong. If the padding check in rsa.c is ever
+ * corrected, both loaders are corrected.
+ *
+ * efi.h is included for its integer types only. Nothing in it that touches
+ * firmware is reachable from here, which is why the ms_abi calling convention
+ * on its protocol declarations is warned about and ignored in the makefile. */
+#include "efi.h"
+#include "crypto.h"
+
+#if __has_include("signing_key.h")
+#include "signing_key.h"
+#endif
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -541,6 +564,247 @@ static u32 dir_find(u8 drive, u32 dir_cluster, const char *want, u32 *size)
 	return 0;
 }
 
+/* --- getting bytes above the first megabyte --------------------------------
+ *
+ * Real mode addresses one megabyte, and every byte this loader can reach lives
+ * below 0x10000 -- the segment registers are zero, so a C pointer here is a
+ * 16-bit offset. The kernel is seven hundred kilobytes and belongs at 0x100000.
+ *
+ * INT 15h AH=87h is the way across: the BIOS enters protected mode, copies from
+ * one descriptor to another, and comes back. Up to 64KB a call, and the count
+ * is in **words**, which is the sort of detail that produces a transfer of
+ * exactly half the intended length and an image that looks almost right.
+ *
+ * The alternative is unreal mode -- enter protected mode, load a data segment
+ * with a four-gigabyte limit, drop back to real mode and keep the limit. It is
+ * faster and it is what most bootloaders do. It also means every pointer in
+ * this file stops meaning what C thinks it means, and the compiler is emitting
+ * 16-bit addressing on the assumption that it does. That trade is not worth
+ * making for a copy that happens once at boot.
+ */
+
+struct desc {
+	u16 limit;
+	u16 base_lo;
+	u8  base_mid;
+	u8  access;
+	u8  attr;
+	u8  base_hi;
+} __attribute__((packed));
+
+/* The six descriptors AH=87h expects, in the order it expects them: null, the
+ * table itself, source, destination, BIOS code segment, BIOS stack. Only the
+ * middle two are ours to fill; the BIOS writes the ones it needs. */
+static struct desc gdt87[6];
+
+static void set_desc(struct desc *d, u32 base, u16 bytes)
+{
+	d->limit    = bytes - 1;
+	d->base_lo  = (u16)base;
+	d->base_mid = (u8)(base >> 16);
+	d->access   = 0x93;		/* present, data, read-write */
+	d->attr     = 0;
+	d->base_hi  = (u8)(base >> 24);
+}
+
+/* Between any two physical addresses, in either direction. Both the load and
+ * the read-back that checks it go through here, so there is one place where the
+ * word count and the descriptor layout can be wrong. */
+static int copy_phys(u32 dest, u32 src, u16 bytes)
+{
+	u16 ax = 0x8700;
+	u16 cx;
+	int failed, i;
+
+	/* An odd byte count would lose its last byte to a word count that
+	 * rounds down, so it is rounded up: the extra byte is inside the
+	 * destination the caller has already reserved. */
+	if (bytes & 1)
+		bytes++;
+
+	for (i = 0; i < (int)sizeof(gdt87); i++)
+		((u8 *)gdt87)[i] = 0;
+
+	set_desc(&gdt87[2], src, bytes);
+	set_desc(&gdt87[3], dest, bytes);
+
+	cx = bytes / 2;			/* words, not bytes */
+
+	__asm__ __volatile__("int $0x15"
+			     : "=@ccc"(failed), "+a"(ax)
+			     : "c"(cx), "S"(gdt87)
+			     : "memory");
+
+	/* AH is the status: zero is success. Checked as well as the carry flag,
+	 * because a BIOS reporting failure only in AH and not in the flag is
+	 * within the letter of the specification. */
+	return !failed && (ax >> 8) == 0;
+}
+
+static int copy_high(u32 dest, const void *src, u16 bytes)
+{
+	return copy_phys(dest, (u32)src, bytes);
+}
+
+/* --- reading the kernel ---------------------------------------------------- */
+
+/* One cluster at a time. Sixteen kilobytes is the largest cluster this will
+ * accept, which covers an EFI partition up to about eight gigabytes; anything
+ * larger is refused by name rather than read incorrectly. The buffer has to
+ * live below 0x10000 with everything else, which is what sets the ceiling. */
+#define CLUSTER_MAX 16384
+static u8 cluster_buf[CLUSTER_MAX];
+
+/* Hashed on the way past, not afterwards.
+ *
+ * The only moment each byte is reachable is while its cluster sits in the low
+ * buffer: once it is above the first megabyte, real mode cannot read it back
+ * without another BIOS call per chunk. So the digest is accumulated here, and
+ * `ctx` is optional so that this function also serves reads that are not the
+ * kernel.
+ */
+static u32 read_file(u8 drive, u32 cluster, u32 size, u32 dest,
+		     struct sha256_ctx *ctx)
+{
+	u32 cluster_bytes = (u32)sectors_per_cluster * 512;
+	u32 done = 0;
+
+	if (cluster_bytes > CLUSTER_MAX)
+		return 0;
+
+	while (cluster && done < size) {
+		u32 want = size - done;
+		u8 s;
+
+		if (want > cluster_bytes)
+			want = cluster_bytes;
+
+		for (s = 0; s < sectors_per_cluster; s++)
+			if (!disk_read(drive, cluster_lba(cluster) + s, 1,
+				       &cluster_buf[(u32)s * 512]))
+				return done;
+
+		if (ctx)
+			sha256_update(ctx, cluster_buf, want);
+
+		if (!copy_high(dest + done, cluster_buf, (u16)want))
+			return done;
+
+		done += want;
+		cluster = fat_next(drive, cluster);
+	}
+
+	return done;
+}
+
+/* A small file, into a buffer down here. The signature is 256 bytes and has to
+ * be read where it can be looked at, rather than pushed above the megabyte with
+ * the kernel. */
+static u32 read_small(u8 drive, u32 cluster, u32 size, u8 *out, u32 max)
+{
+	u32 cluster_bytes = (u32)sectors_per_cluster * 512;
+	u32 done = 0;
+
+	if (size > max || cluster_bytes > CLUSTER_MAX)
+		return 0;
+
+	while (cluster && done < size) {
+		u32 want = size - done;
+		u32 i;
+		u8 s;
+
+		if (want > cluster_bytes)
+			want = cluster_bytes;
+
+		for (s = 0; s < sectors_per_cluster; s++)
+			if (!disk_read(drive, cluster_lba(cluster) + s, 1,
+				       &cluster_buf[(u32)s * 512]))
+				return done;
+
+		for (i = 0; i < want; i++)
+			out[done + i] = cluster_buf[i];
+
+		done += want;
+		cluster = fat_next(drive, cluster);
+	}
+
+	return done;
+}
+
+/* Reads back what was written, which is the only way to know it arrived.
+ *
+ * A copy that silently did nothing leaves whatever was at the destination
+ * before -- and on a machine that has just been powered on, that is zeroes,
+ * which is exactly what a failed read looks like from here. */
+static int check_landed(u32 dest)
+{
+	if (!copy_phys((u32)sector, dest, 512))
+		return 0;
+
+	return sector[0] == 0x7F && sector[1] == 'E' && sector[2] == 'L' &&
+	       sector[3] == 'F';
+}
+
+/* --- the signature ---------------------------------------------------------
+ *
+ * **A BIOS path that does not check the kernel's signature is the off-switch
+ * the UEFI path deliberately does not have.** An attacker who can write to the
+ * disk would not need to defeat the check in reconboot; they would only need to
+ * make the machine take this path instead. So every claim in docs/INTEGRITY.md
+ * is a claim about both loaders or about neither.
+ *
+ * The wording of the refusals is deliberately the same as the UEFI loader's. A
+ * person who has met one of these messages once should not have to learn it
+ * again because the firmware underneath was different.
+ */
+
+#define SIGNATURE_NAME KERNEL_NAME ".sig"
+
+static u8 sig_buf[256];
+static struct sha256_ctx hash;
+
+static int verify(struct sha256_ctx *ctx, u32 dir, u8 drive)
+{
+#ifndef RECONOS_KEY_PRESENT
+	(void)ctx; (void)dir; (void)drive;
+
+	/* Built without a key. Announced on every boot rather than silent,
+	 * because a build that cannot check is a fact somebody should be told
+	 * rather than a default they discover later. */
+	print("signature: not checked (this loader was built without a key)\n");
+	return 1;
+#else
+	UINT8 digest[32];
+	u32 sig_cluster, sig_size = 0;
+
+	sig_cluster = dir_find(drive, dir, SIGNATURE_NAME, &sig_size);
+	if (!sig_cluster) {
+		print("\nreconboot: this kernel is not signed, and this loader "
+		      "only runs signed kernels.\n");
+		return 0;
+	}
+
+	if (sig_size != sizeof(sig_buf) ||
+	    read_small(drive, sig_cluster, sig_size, sig_buf,
+		       sizeof(sig_buf)) != sig_size) {
+		print("\nreconboot: the signature file is not 256 bytes.\n");
+		return 0;
+	}
+
+	sha256_final(ctx, digest);
+
+	if (!rsa2048_verify(reconos_signing_modulus, sig_buf, digest)) {
+		print("\nreconboot: this kernel's signature does not match. It "
+		      "has been changed since it was built, or it is not "
+		      "ours.\n");
+		return 0;
+	}
+
+	print("signature: good\n");
+	return 1;
+#endif
+}
+
 /* --- what there is to say so far ------------------------------------------ */
 
 static u64 esp_lba;
@@ -578,7 +842,7 @@ void stage2_main(u32 boot_drive)
 	}
 
 	{
-		u32 dir, file, size = 0;
+		u32 dir, file, size = 0, got;
 
 		dir = dir_find((u8)boot_drive, root_cluster, "reconos", 0);
 		if (!dir) {
@@ -594,9 +858,33 @@ void stage2_main(u32 boot_drive)
 
 		print("kernel: " KERNEL_NAME ", ");
 		print_dec(size);
-		print(" bytes, cluster ");
-		print_dec(file);
-		print("\n");
+		print(" bytes\n");
+
+		sha256_init(&hash);
+		got = read_file((u8)boot_drive, file, size, KERNEL_LOAD,
+				&hash);
+		if (got != size) {
+			print("kernel: only ");
+			print_dec(got);
+			print(" bytes reached memory\n");
+			goto done;
+		}
+
+		/* Read back, because a copy that silently did nothing leaves
+		 * whatever was at the destination -- and on a machine just
+		 * powered on that is zeroes, which is what a failed read looks
+		 * like from here too. */
+		if (!check_landed(KERNEL_LOAD)) {
+			print("kernel: what landed at 1 MB is not an ELF\n");
+			goto done;
+		}
+
+		print("kernel: ");
+		print_dec(got);
+		print(" bytes at 0x100000, and it is an ELF\n");
+
+		if (!verify(&hash, dir, (u8)boot_drive))
+			goto done;
 	}
 
 done:

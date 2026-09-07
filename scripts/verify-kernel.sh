@@ -745,6 +745,29 @@ else
 	FAILED_PATHS+=("bios loader")
 fi
 
+# And the same machine again, with a key. The BIOS path shares reconboot's
+# sha256.c and rsa.c rather than reimplementing them, so this is checking that
+# they were *reached* -- a loader that never calls the verifier is exactly what
+# an attacker who can write to the disk would arrange.
+
+printf '%-46s' "  the BIOS path refuses an unsigned kernel"
+
+bsig_out=$(sh scripts/bios-signed-test.sh 2>&1)
+bsig_rc=$?
+
+if [ "$bsig_rc" -eq 0 ]; then
+	echo "$(echo "$bsig_out" | grep -oE '[0-9]+ of [0-9]+: the BIOS path.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$bsig_rc" -eq 2 ]; then
+	echo "skipped, openssl or a disk tool is missing"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$bsig_out" | sed 's/^/      /' | head -14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("bios signature")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

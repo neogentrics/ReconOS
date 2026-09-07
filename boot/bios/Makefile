@@ -50,10 +50,27 @@ $(BUILD)/stage2_c.o: stage2.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS16) -MMD -MP -c $< -o $@
 
-$(BUILD)/stage2.elf: $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o stage2.ld
-	$(LD) -T stage2.ld -o $@ $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o
+# The UEFI loader's SHA-256 and RSA, compiled for real mode. The same two source
+# files, not copies of them: two implementations of a signature check is two
+# chances to be wrong and one set of tests.
+#
+# -Wno-ignored-attributes because efi.h declares UEFI protocols with the ms_abi
+# calling convention, which this target has no notion of. Stage 2 never calls
+# one -- it includes efi.h for its integer types.
+CRYPTO_OBJS := $(BUILD)/sha256.o $(BUILD)/rsa.o
 
--include $(BUILD)/stage2_c.d
+$(BUILD)/%.o: ../src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS16) -Wno-ignored-attributes -I../include -I../src \
+		-MMD -MP -c $< -o $@
+
+$(BUILD)/stage2_c.o: CFLAGS16 += -Wno-ignored-attributes -I../include -I../src
+
+$(BUILD)/stage2.elf: $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o $(CRYPTO_OBJS) stage2.ld
+	$(LD) -T stage2.ld -o $@ $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o \
+		$(CRYPTO_OBJS)
+
+-include $(BUILD)/stage2_c.d $(CRYPTO_OBJS:.o=.d)
 
 $(BUILD)/stage2.bin: $(BUILD)/stage2.elf
 	$(OBJCOPY) -O binary $< $@

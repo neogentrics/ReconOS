@@ -38,7 +38,26 @@ make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
 [ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 
 W=$(mktemp -d)
-trap 'rm -rf "$W"' EXIT INT TERM
+
+# The key this test generates goes into the *source tree* -- the loader compiles
+# the public modulus in, so there is nowhere else for it to go. That makes this
+# script one that changes the repository, and a test that changes the repository
+# changes every test run after it (BG-139): with a key left behind, every
+# harness that boots an unsigned kernel is correctly refused, and paths fail for
+# a reason that has nothing to do with them.
+#
+# So the previous state is put back, whatever happens. The loader is rebuilt
+# afterwards by whoever needs it, because the header is a tracked dependency --
+# which it was not until BG-133.
+KEYHDR=boot/src/signing_key.h
+if [ -f "$KEYHDR" ]; then
+	cp "$KEYHDR" "$W.keyhdr"
+	restore_key() { mv "$W.keyhdr" "$KEYHDR"; }
+else
+	restore_key() { rm -f "$KEYHDR"; }
+fi
+
+trap 'restore_key; rm -rf "$W"' EXIT INT TERM
 
 pass=0
 fail=0

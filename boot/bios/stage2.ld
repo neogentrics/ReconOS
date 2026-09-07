@@ -45,4 +45,17 @@ SECTIONS
 		*(.note*)
 		*(.eh_frame*)
 	}
+
+	/* Real mode with a zero segment addresses 64KB, and every pointer in
+	 * stage 2 is an offset into it. Code and data crossing 0x10000 would
+	 * not fail to link and would not fault: the addresses would wrap and
+	 * write over the interrupt vector table at zero, which is a machine
+	 * that stops for reasons no message could explain.
+	 *
+	 * Checked here because it is the kind of limit something grows into
+	 * quietly -- the sector count in stage 1 was such a limit, and it was
+	 * found by a boot failure rather than by a build (BG-138).
+	 */
+	ASSERT(__bss_end <= 0x10000,
+	       "stage 2 has grown past the 64KB real mode can address")
 }

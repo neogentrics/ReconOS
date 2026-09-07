@@ -88,33 +88,86 @@ static void block(UINT32 *h, const UINT8 *p)
  * do anything else with it, so there is no case here for a streaming interface
  * and none is offered -- an unused incremental API is a second code path that
  * only ever gets exercised by its own test. */
-void sha256(const void *data, UINTN len, UINT8 out[32])
+/* --- incremental, and the one-shot built out of it --------------------------
+ *
+ * The BIOS loader cannot hash the kernel in one call. Real mode addresses one
+ * megabyte and the kernel is loaded above it, so the only moment each byte is
+ * reachable is while its cluster sits in a low buffer on the way past -- which
+ * means hashing as it is read, a piece at a time.
+ *
+ * `sha256()` is then written in terms of the same three functions rather than
+ * kept as a separate implementation. Two implementations of a hash is two
+ * chances to be wrong and one set of tests, and the one-shot is the one with
+ * test coverage -- so the incremental path is made to be the tested path.
+ */
+
+void sha256_init(struct sha256_ctx *c)
 {
-	UINT32 h[8] = {
+	static const UINT32 iv[8] = {
 		0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
 		0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 	};
-	const UINT8 *p = data;
-	UINT8 tail[128];
-	UINTN full = len / 64;
-	UINTN rest = len % 64;
-	UINTN tail_len;
-	UINT64 bits = (UINT64)len * 8;
 	UINTN i;
 
-	for (i = 0; i < full; i++)
-		block(h, p + i * 64);
+	for (i = 0; i < 8; i++)
+		c->h[i] = iv[i];
+	c->buffered = 0;
+	c->bits = 0;
+}
 
-	/* The padding: the message, a single 1 bit, zeroes, and the length in
-	 * bits as a 64-bit big-endian number. The length is of the *original*
-	 * message, which is the field that is easy to fill in from the padded
-	 * length by accident and produces a hash that is wrong for every input
-	 * rather than for some. */
-	for (i = 0; i < rest; i++)
-		tail[i] = p[full * 64 + i];
+void sha256_update(struct sha256_ctx *c, const void *data, UINTN len)
+{
+	const UINT8 *p = data;
 
-	tail[rest] = 0x80;
-	tail_len = rest + 1;
+	c->bits += (UINT64)len * 8;
+
+	/* Fill a partial block first, then take whole blocks straight from the
+	 * caller's buffer, then keep whatever is left over. A caller handing in
+	 * lengths that are not multiples of 64 is the normal case here: a FAT
+	 * cluster is, a file's last cluster is not. */
+	while (len) {
+		UINTN room = 64 - c->buffered;
+		UINTN take = len < room ? len : room;
+		UINTN i;
+
+		if (!c->buffered && len >= 64) {
+			block(c->h, p);
+			p += 64;
+			len -= 64;
+			continue;
+		}
+
+		for (i = 0; i < take; i++)
+			c->buf[c->buffered + i] = p[i];
+
+		c->buffered += take;
+		p += take;
+		len -= take;
+
+		if (c->buffered == 64) {
+			block(c->h, c->buf);
+			c->buffered = 0;
+		}
+	}
+}
+
+void sha256_final(struct sha256_ctx *c, UINT8 out[32])
+{
+	UINT8 tail[128];
+	UINTN tail_len;
+	UINT64 bits = c->bits;
+	UINTN i;
+
+	/* The padding: what is left of the message, a single 1 bit, zeroes, and
+	 * the length in bits as a 64-bit big-endian number. The length is of
+	 * the *original* message, which is the field that is easy to fill in
+	 * from the padded length by accident and produces a hash that is wrong
+	 * for every input rather than for some. */
+	for (i = 0; i < c->buffered; i++)
+		tail[i] = c->buf[i];
+
+	tail[c->buffered] = 0x80;
+	tail_len = c->buffered + 1;
 
 	while ((tail_len % 64) != 56)
 		tail[tail_len++] = 0;
@@ -124,14 +177,23 @@ void sha256(const void *data, UINTN len, UINT8 out[32])
 	tail_len += 8;
 
 	for (i = 0; i < tail_len; i += 64)
-		block(h, tail + i);
+		block(c->h, tail + i);
 
 	for (i = 0; i < 8; i++) {
-		out[i * 4]     = (UINT8)(h[i] >> 24);
-		out[i * 4 + 1] = (UINT8)(h[i] >> 16);
-		out[i * 4 + 2] = (UINT8)(h[i] >> 8);
-		out[i * 4 + 3] = (UINT8)h[i];
+		out[i * 4]     = (UINT8)(c->h[i] >> 24);
+		out[i * 4 + 1] = (UINT8)(c->h[i] >> 16);
+		out[i * 4 + 2] = (UINT8)(c->h[i] >> 8);
+		out[i * 4 + 3] = (UINT8)c->h[i];
 	}
+}
+
+void sha256(const void *data, UINTN len, UINT8 out[32])
+{
+	struct sha256_ctx c;
+
+	sha256_init(&c);
+	sha256_update(&c, data, len);
+	sha256_final(&c, out);
 }
 
 /* Checked against the published vectors, at boot, every time.

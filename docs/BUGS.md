@@ -348,6 +348,52 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-139 — Two tests generated a signing key into the source tree and left it there
+
+- **Found:** 7 September 2026, by the verification matrix failing five paths
+  that had nothing wrong with them.
+- **Cost:** nothing shipped. Twenty minutes, and it would have cost far more the
+  first time somebody else ran the suite.
+
+`signed-kernel-test.sh` and `bios-signed-test.sh` both generate a signing key,
+and the public modulus is **compiled into the loader** — so it is written to
+`boot/src/signing_key.h`, in the source tree, because there is nowhere else for
+it to go. Both scripts cleaned up their temporary directory. Neither put the
+tree back.
+
+So running either one leaves the repository in a state where **the loader
+verifies signatures**, and every other harness boots an unsigned kernel. The
+loader refuses them, correctly, and the matrix reports:
+
+    5 path(s) failed:
+        reconboot, UEFI
+        reconboot, UEFI
+      install then boot
+      boot menu
+      bios signature
+
+Five failures, none of them a fault in what they were testing.
+
+**It is only order that hid this.** Inside the matrix the signing tests run
+last, so nothing came after them to be affected. It surfaced when one was run on
+its own beforehand — which is the ordinary way to work on a single harness.
+
+- **Fixed in** kernel 0.0.11. Both scripts save `signing_key.h` if it exists,
+  and restore it — or remove it — from a trap, so the tree is as it was however
+  the script ends. The loader is rebuilt afterwards by whoever needs it, because
+  that header is a tracked dependency, which it was not until BG-133.
+
+- **The shape.** The instrument changing the thing it measures, which is BG-137
+  four hours earlier wearing a different coat: there, the test observed a signal
+  the loader was not producing; here, the test *produced* a condition the next
+  test then observed. Both are the harness being part of the experiment rather
+  than outside it.
+
+  Worth naming the direction that did **not** happen and could have: a leftover
+  key makes a test that expects *"signature: not checked"* see a real check
+  instead. That way round, a test passes for the wrong reason rather than
+  failing for one — and nobody investigates a pass.
+
 ### BG-138 — Stage 2 outgrew the number of sectors stage 1 reads, and the magic check passed anyway
 
 [#295](https://github.com/neogentrics/ReconOS/issues/295)
@@ -552,6 +598,29 @@ about injecting faults — *the edit orphans a function, the build fails, and th
 previous binary runs and passes*. Same mechanism, different trigger, and a worse
 consequence: there the stale binary hid a fix, here it hid the absence of a
 safety check.
+
+**Seen a third time, 7 September 2026, and header dependencies do not fix this
+one.** The BIOS loader reaches the same key through
+`#if __has_include("signing_key.h")`. On a build made *before* the key existed
+the answer was no, so **the header never entered the `.d` file** — and creating
+it afterwards triggered no rebuild. `-MMD` records what a compile *did* include;
+a generated header that does not exist yet cannot be recorded as a dependency of
+the compile that did not find it.
+
+The verification rig keeps its build directory between runs, so it ran a stage 2
+compiled with no key: it announced *"not checked"*, ran everything it was given,
+and all four refusal cases failed for a reason that was not the reason. Local
+runs passed, because there the object had been built after the key.
+
+Two fixes, and the second is the one that generalises:
+
+  - `bios-signed-test.sh` deletes stage 2's objects before building, as
+    `signed-kernel-test.sh` already did for the UEFI loader;
+  - and it now **asks first whether the loader can refuse at all**, failing
+    immediately with that as the reason if the answer is "not checked". A
+    harness that cannot tell *"the check said no"* from *"there was no check"*
+    is reporting on the wrong thing, and reports four confusing failures instead
+    of one clear one.
 
 ### BG-132 — A handle used two lines after it was closed, under a comment saying it was open
 
