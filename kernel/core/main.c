@@ -15,6 +15,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/partition.h>
 #include <recon/kernel/fat32.h>
+#include <recon/kernel/install.h>
 #include <recon/kernel/reconfs.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
@@ -152,6 +153,8 @@ void kmain(void)
 	reconfs_crash_run();
 	fat32_run();
 	fat32_write_run();
+	install_plan_run();
+	install_execute_run();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

@@ -43,6 +43,8 @@ const char *fat32_strerror(enum fat32_status s)
 	case FAT32_ERR_CORRUPT:     return "a cluster chain that cannot be true";
 	case FAT32_ERR_NOMEM:       return "out of memory";
 	case FAT32_ERR_UNSUPPORTED: return "a layout this reader does not handle";
+	case FAT32_ERR_TOO_SMALL_FOR_FAT32:
+		return "too small to be FAT32 at any cluster size";
 	}
 	return "unknown";
 }

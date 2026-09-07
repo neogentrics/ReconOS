@@ -133,6 +133,7 @@ enum fat32_status {
 	FAT32_ERR_CORRUPT,	/* a chain that loops, or leaves the volume */
 	FAT32_ERR_NOMEM,
 	FAT32_ERR_UNSUPPORTED,
+	FAT32_ERR_TOO_SMALL_FOR_FAT32,	/* no cluster size gives >65524 of them */
 };
 
 const char *fat32_strerror(enum fat32_status s);
@@ -270,6 +271,17 @@ enum fat32_status fat32_free_clusters(struct fat32 *fs, u32 *out);
  * comparing against content this kernel did not write. Runs when
  * `fat32=<device>` names one on the command line. Reads only; writes nothing. */
 void fat32_run(void);
+
+/* Lays down a fresh FAT32 filesystem, for the one case the installer needs it:
+ * a machine with no EFI System Partition needs one, and an ESP is FAT32 by
+ * specification.
+ *
+ * Deliberately the smallest formatter that produces something firmware and
+ * everybody else's tools accept, not a general mkfs. A volume too small to
+ * reach 65,525 clusters at any cluster size is refused rather than written as
+ * FAT16 wearing a FAT32 label -- there is no flag that makes a volume FAT32,
+ * only the count. */
+enum fat32_status fat32_format(struct block_device *dev, const char *label);
 
 /* Writes a handful of files for somebody else's tools to read back, and
  * reports what it managed. Runs when `fat32-write=<device>` names one,

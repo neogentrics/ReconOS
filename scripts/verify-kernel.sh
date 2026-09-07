@@ -571,6 +571,57 @@ for a in x86_64 aarch64; do
 	fi
 done
 
+# --- Deciding, before there is any doing ------------------------------------
+#
+# The installer is the one piece here that runs once, on a stranger's machine,
+# with their data on it. So the deciding is a separate half that writes nothing,
+# and it is checked against layouts sgdisk built -- including four it must
+# *refuse*. A planner that always says yes would pass a test that only asked
+# whether it produced a plan.
+
+echo
+echo "installer"
+
+printf '%-46s' "  plans or refuses seven real layouts"
+
+plan_out=$(bash scripts/install-plan-test.sh x86_64 2>&1)
+plan_rc=$?
+
+if [ "$plan_rc" -eq 0 ]; then
+	echo "$(echo "$plan_out" | grep -oE '[0-9]+ of [0-9]+ layouts.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$plan_rc" -eq 2 ]; then
+	echo "skipped, sgdisk or mtools is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$plan_out" | sed 's/^/      /' | head -18
+	failures=$((failures + 1))
+	FAILED_PATHS+=("install planner")
+fi
+
+# And the doing. Installs for real -- onto a blank disk, and beside an existing
+# system whose data, bootloader and table entries must all survive byte for
+# byte. The claim being checked is not "it installed".
+
+printf '%-46s' "  installs, and the disk's contents survive"
+
+onto_out=$(bash scripts/install-onto-test.sh x86_64 2>&1)
+onto_rc=$?
+
+if [ "$onto_rc" -eq 0 ]; then
+	echo "$(echo "$onto_out" | grep -oE '[0-9]+ of [0-9]+: installed.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$onto_rc" -eq 2 ]; then
+	echo "skipped, sgdisk or mtools is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$onto_out" | sed 's/^/      /' | head -20
+	failures=$((failures + 1))
+	FAILED_PATHS+=("install onto")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

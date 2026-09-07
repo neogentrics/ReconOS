@@ -1437,6 +1437,106 @@ partition without losing what is in it; somewhere to write the bootloader that
 the machine's firmware will actually look at; and a first-run flow, which the
 desktop already has.
 
+## Booting the other operating systems on the disk
+
+**Not built, and not currently true.** The bootloader loads our kernel from a
+fixed path and does nothing else -- it does not enumerate anything, and it
+cannot start anything but ReconOS. Written down because it is the kind of thing
+that gets assumed to work: installing beside Windows and then not being able to
+reach Windows is not a partial success.
+
+Under UEFI this is more tractable than it sounds. Another operating system's
+loader is simply another `.EFI` file on an EFI System Partition, and starting it
+means loading and running it — the same operation the firmware performs on us.
+
+| System | What to run |
+|---|---|
+| Windows | `\EFI\Microsoft\Boot\bootmgfw.efi` |
+| Linux | `\EFI\<distro>\grubx64.efi`, or its shim |
+| macOS | on a Mac, yes — `\System\Library\CoreServices\boot.efi`. On a PC, see below |
+
+### macOS, and the two questions that get merged
+
+**Booting an installed macOS from ReconOS on a Mac** is the same job as Windows.
+Apple's firmware is present, macOS's own `boot.efi` is on the ESP, and starting
+it is loading and running a file. Tractable, and it belongs with the menu.
+
+**Making macOS boot on hardware Apple never supported** is a different thing
+entirely, and it is what OpenCore exists to do. It is not a bootloader feature;
+it is a bootloader. What it does, roughly, is:
+
+  - inject and patch **ACPI** tables so the machine describes itself the way
+    macOS expects a Mac to;
+  - present **Apple's own UEFI protocols**, which are not in the UEFI
+    specification and which `boot.efi` requires to be there;
+  - inject **kexts** — drivers — into the running kernel's cache for hardware
+    Apple never wrote drivers for;
+  - patch the macOS kernel in memory for the checks it makes about being on a
+    Mac.
+
+OpenCore Legacy Patcher (`dortania/OpenCore-Legacy-Patcher`, built on
+`acidanthera/OpenCorePkg`) is where that is done and is worth *reading*: it is
+the best available description of what macOS demands of the firmware under it.
+
+It is not worth *copying*, and not only for the from-scratch rule. Every one of
+those four is a moving target chased against each macOS release by people who do
+nothing else. Taking it on means signing up to that maintenance forever, in
+exchange for a capability that is not what ReconOS is for.
+
+**So: boot an installed macOS on a Mac — yes, planned. Boot macOS on a PC —
+parked as a side project, on Joshua's call, to be returned to once the rest of
+the system is finished. Recorded as a decision with a reason rather than as an
+oversight, so that returning to it starts from why it was set aside.**
+
+Two things this needs that do not exist yet: a **menu**, which is also how a
+recovery environment gets chosen and is the first real use for the framebuffer
+the loader already finds; and enumeration, which means looking at every ESP on
+every disk rather than only the one we were loaded from.
+
+## Keeping the kernel from being modified
+
+Asked for as "so outside sources can't edit, modify or change the kernel". Two
+different mechanisms get merged under that heading and they solve different
+problems, so they are separated here before either is built:
+
+- **Encryption** (what BitLocker is) protects data when somebody takes the drive
+  out. It does nothing about modified code: a decrypted, running system happily
+  runs a tampered kernel.
+- **Code integrity** (what Secure Boot and Gatekeeper are) protects against
+  running something that is not what it claims to be.
+
+The request is the second. The mechanism is that the kernel is signed and the
+bootloader verifies the signature before jumping to it.
+
+### The part that decides whether any of it is real
+
+**A verification is worth exactly what its root of trust is worth.** If our
+bootloader checks the kernel but anybody can replace our bootloader, an attacker
+replaces both and the check is theatre.
+
+Protecting the loader is what UEFI Secure Boot exists for: the firmware holds
+the keys and refuses to run a loader it cannot verify. Getting there needs one
+of two things, and both are decisions rather than code —
+
+  1. the machine's owner enrolls a ReconOS key into their firmware, which works
+     on any machine and is a thing a person has to be walked through; or
+  2. our loader is signed by Microsoft's UEFI CA, via shim, which works out of
+     the box and means accepting somebody else's signing policy.
+
+Until one of those is chosen, signature-checking the kernel is still worth
+doing — it catches corruption, a half-written update, and casual tampering —
+but it is **not** protection against an attacker who can write to the ESP, and
+saying otherwise would be the sort of security claim this project does not make.
+
+### And the run-time half
+
+Refusing to load code the system has not been told to trust, adjustable by
+somebody with authority over the machine, is the Gatekeeper-shaped half. Most of
+it belongs to the desktop rather than the kernel; the kernel's share is the
+enforcement point for anything it loads into its own address space, and the
+per-process syscall personality from checkpoint 10 is already the seam a
+compatibility layer will hang off.
+
 ## Foreign filesystems, and why FAT32 is not optional
 
 Checkpoint 14 exists for one reason: **the UEFI System Partition is FAT32 by
