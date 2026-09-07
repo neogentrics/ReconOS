@@ -18,6 +18,7 @@
 #include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_theme.h"
+#include "recon_titlebar.h"
 #include "recon_ui.h"
 
 /*
@@ -29,8 +30,17 @@
 #define TITLE_HEIGHT recon_theme_metric(RECON_METRIC_TITLE_HEIGHT)
 #define BUTTON_SIZE recon_theme_metric(RECON_METRIC_BUTTON_SIZE)
 #define CORNER recon_theme_metric(RECON_METRIC_CORNER)
-#define TITLE_INSET 6
-#define BUTTON_GAP 2
+/*
+ * The same as recon_appwin's, which they were not.
+ *
+ * This file used 6 and 2 where the built-in frame used 8 and 3, so a client
+ * window's buttons sat two pixels from where a ReconOS window's did. Nobody
+ * wrote down a reason and the note at the top of this file argues against it:
+ * "a client window that looked *nearly* like a ReconOS window would be worse
+ * than one that plainly does not."
+ */
+#define TITLE_INSET 8
+#define BUTTON_GAP 3
 
 #define COLOR_TITLE_TEXT THEME(TITLE_TEXT)
 #define COLOR_TITLE_TEXT_INACTIVE THEME(TITLE_TEXT_INACTIVE)
@@ -101,18 +111,23 @@ static void window_box(struct recon_decor *decor, int *x, int *y, int *w,
 
 /* --- Drawing --- */
 
-static void draw_buttons(struct recon_decor *decor) {
+static void draw_buttons(struct recon_decor *decor,
+        const struct recon_titlebar_layout *bar) {
     struct recon_panel *p = decor->panel;
-    int title_height = TITLE_HEIGHT;
     int button = BUTTON_SIZE;
-    int top = (title_height - button) / 2;
-    int right = decor->width - TITLE_INSET;
 
-    const enum hit ids[3] = { HIT_CLOSE, HIT_MAXIMIZE, HIT_MINIMIZE };
+    const enum hit ids[RECON_TITLEBAR_BUTTON_COUNT] = {
+        HIT_CLOSE, HIT_MAXIMIZE, HIT_MINIMIZE,
+    };
 
-    for (int i = 0; i < 3; i++) {
-        int bx = right - (i + 1) * button - i * BUTTON_GAP;
-        int by = top;
+    for (int i = 0; i < RECON_TITLEBAR_BUTTON_COUNT; i++) {
+        /* Left out by the skin. */
+        if (bar->button[i].w == 0) {
+            continue;
+        }
+
+        int bx = bar->button[i].x;
+        int by = bar->button[i].y;
 
         recon_fill_rect(p, bx, by, button, button, COLOR_BUTTON);
         recon_draw_button_edge(p, bx, by, button, button, false,
@@ -178,22 +193,21 @@ static void draw(struct recon_decor *decor) {
         decor->toplevel->xdg_toplevel != NULL)
         ? decor->toplevel->xdg_toplevel->app_id : NULL;
 
-    int text_x = TITLE_INSET;
-    int icon_size = title_height - 8;
-    if (recon_icon_draw(p, recon_appicon_for(app_id), TITLE_INSET, 4,
-            icon_size)) {
-        text_x = TITLE_INSET + icon_size + 6;
-    }
+    /* Where everything goes, from the same function the built-in frame asks --
+     * which is what makes a skin that moves the buttons move them here too. */
+    struct recon_titlebar_layout bar;
+    recon_titlebar_layout(decor->width, TITLE_INSET, BUTTON_GAP, true, &bar);
 
-    int buttons_width = 3 * BUTTON_SIZE + 2 * BUTTON_GAP + TITLE_INSET * 2;
+    recon_icon_draw(p, recon_appicon_for(app_id), bar.icon.x, bar.icon.y,
+        bar.icon.w);
 
-    recon_draw_text(p, decor->font, text_x, (title_height + ascent) / 2 - 1,
-        decor->width - buttons_width - text_x, decor->title,
+    recon_draw_text(p, decor->font, bar.text_x, (title_height + ascent) / 2 - 1,
+        bar.text_width, decor->title,
         decor->focused ? COLOR_TITLE_TEXT : COLOR_TITLE_TEXT_INACTIVE);
-    recon_hit_add(p, 0, 0, decor->width - buttons_width + TITLE_INSET,
-        title_height, HIT_TITLEBAR);
+    recon_hit_add(p, bar.drag.x, bar.drag.y, bar.drag.w, bar.drag.h,
+        HIT_TITLEBAR);
 
-    draw_buttons(decor);
+    draw_buttons(decor, &bar);
 
     recon_stroke_rect(p, 0, 0, decor->width, title_height, COLOR_EDGE);
 

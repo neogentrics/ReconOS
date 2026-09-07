@@ -2017,9 +2017,11 @@ connection. Accepting means deciding what may reach this machine, which is a
 larger question than deciding what it may reach, and it should not be answered
 by accident while building the outgoing half.
 
-**Where a title bar's buttons sit is fixed.** A skin can set the frame's
-height, border, corner radius and button size; it cannot move the buttons to
-the left, or ask for fewer of them.
+**A skin cannot change the shape of the buttons' glyphs.** As of v0.4.0 it can
+move them to either side and ask for fewer of them, and close is always there
+and always outermost. What is still fixed is what is drawn inside each one: the
+cross, the box and the bar are rectangles in C, so a skin that wanted a dot or
+a different maximize glyph has nowhere to say so.
 
 **No recovery, no advanced startup, no reinstall.** All three need a kernel
 and a bootloader, and all three have a Control Panel page saying so.

@@ -17,6 +17,7 @@
 #include "recon_registry.h"
 #include "recon_shell.h"
 #include "recon_theme.h"
+#include "recon_titlebar.h"
 #include "recon_ui.h"
 
 /* --- Frame metrics --- */
@@ -157,33 +158,33 @@ static void restore_geometry(struct recon_appwin *win);
  * Glyphs are drawn as rectangles rather than text so they do not depend on a
  * font having loaded.
  */
-static void draw_buttons(struct recon_appwin *win) {
+static void draw_buttons(struct recon_appwin *win,
+        const struct recon_titlebar_layout *bar) {
     struct recon_panel *p = win->panel;
-    int right = win->width - TITLE_INSET;
 
-    struct {
-        uint32_t id;
-        int cx;
-    } buttons[3];
+    static const uint32_t IDS[RECON_TITLEBAR_BUTTON_COUNT] = {
+        HIT_CLOSE, HIT_MAXIMIZE, HIT_MINIMIZE,
+    };
 
-    for (int i = 0; i < 3; i++) {
-        buttons[i].cx = right - (i + 1) * BUTTON_SIZE - i * BUTTON_GAP;
-    }
-    buttons[0].id = HIT_CLOSE;
-    buttons[1].id = HIT_MAXIMIZE;
-    buttons[2].id = HIT_MINIMIZE;
+    for (int i = 0; i < RECON_TITLEBAR_BUTTON_COUNT; i++) {
+        /* A width of zero is how the layout says the skin left this one out.
+         * Asked here rather than asking the skin again, so the drawing and the
+         * hit regions cannot disagree about which buttons exist. */
+        if (bar->button[i].w == 0) {
+            continue;
+        }
 
-    for (int i = 0; i < 3; i++) {
-        int bx = buttons[i].cx;
-        int by = BUTTON_TOP;
+        int bx = bar->button[i].x;
+        int by = bar->button[i].y;
+        uint32_t id = IDS[i];
 
         recon_fill_rect(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, COLOR_BUTTON);
         recon_draw_bevel(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, false);
-        recon_hit_add(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, buttons[i].id);
+        recon_hit_add(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, id);
 
         /* Three glyphs and no words. The middle one changes meaning with the
          * window's state, so it says which meaning it has now. */
-        switch (buttons[i].id) {
+        switch (id) {
         case HIT_CLOSE:
             recon_hit_tip(p, "Close");
             break;
@@ -197,7 +198,7 @@ static void draw_buttons(struct recon_appwin *win) {
             break;
         }
 
-        switch (buttons[i].id) {
+        switch (id) {
         case HIT_MINIMIZE:
             /* A bar along the bottom. */
             recon_fill_rect(p, bx + 4, by + BUTTON_SIZE - 6, 8, 2, COLOR_GLYPH);
@@ -249,18 +250,22 @@ static void draw_frame(struct recon_appwin *win) {
     recon_fill_role(p, 0, 0, win->width, TITLE_HEIGHT,
         win->focused ? RECON_THEME_TITLE_ACTIVE : RECON_THEME_TITLE_INACTIVE);
 
-    /* An icon at the left, so a window says what it is before it is read. */
-    int text_x = TITLE_INSET;
-    /* The window's own, which is the application's unless it said otherwise
-     * -- and the same one the taskbar draws, because both ask here. */
-    const char *icon = recon_appwin_icon(win);
-    int icon_size = TITLE_HEIGHT - 8;
-    if (recon_icon_draw(p, icon, TITLE_INSET, 4, icon_size)) {
-        text_x = TITLE_INSET + icon_size + 6;
-    }
+    /*
+     * Where everything on the bar goes, asked once.
+     *
+     * This used to be worked out here and again in recon_decor with different
+     * constants, so a client window's buttons sat two pixels from a built-in
+     * window's -- and a skin that moved them would have had to be taught in
+     * both places.
+     */
+    struct recon_titlebar_layout bar;
+    recon_titlebar_layout(win->width, TITLE_INSET, BUTTON_GAP, true, &bar);
 
-    /* The title bar is draggable except where the buttons are. */
-    int buttons_width = 3 * BUTTON_SIZE + 2 * BUTTON_GAP + TITLE_INSET * 2;
+    /* An icon beside the title, so a window says what it is before it is read.
+     * The window's own, which is the application's unless it said otherwise --
+     * and the same one the taskbar draws, because both ask here. */
+    recon_icon_draw(p, recon_appwin_icon(win), bar.icon.x, bar.icon.y,
+        bar.icon.w);
     /*
      * The colour that goes with the bar underneath it.
      *
@@ -277,13 +282,13 @@ static void draw_frame(struct recon_appwin *win) {
      * "Control Panel" in its own title bar is two windows as far as anybody
      * reading the screen is concerned.
      */
-    recon_draw_text(p, win->font, text_x, (TITLE_HEIGHT + ascent) / 2 - 1,
-        win->width - buttons_width - text_x, recon_appwin_title(win),
+    recon_draw_text(p, win->font, bar.text_x, (TITLE_HEIGHT + ascent) / 2 - 1,
+        bar.text_width, recon_appwin_title(win),
         win->focused ? COLOR_TITLE_TEXT : COLOR_TITLE_TEXT_INACTIVE);
-    recon_hit_add(p, 0, 0, win->width - buttons_width + TITLE_INSET, TITLE_HEIGHT,
+    recon_hit_add(p, bar.drag.x, bar.drag.y, bar.drag.w, bar.drag.h,
         HIT_TITLEBAR);
 
-    draw_buttons(win);
+    draw_buttons(win, &bar);
 
     recon_draw_bevel(p, 0, 0, win->width, win->height, false);
     recon_stroke_rect(p, 0, 0, win->width, win->height, COLOR_EDGE);

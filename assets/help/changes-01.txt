@@ -10,6 +10,36 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+A skin can move the title bar's buttons, and ask for fewer of them. Two
+metrics: metric.buttons-left puts them on the left, and metric.buttons is a
+sum -- 1 close, 2 maximize, 4 minimize -- so a skin can have just a close
+button, or close and minimize, and the icon and title take back the room the
+missing ones would have used rather than leaving a hole.
+
+Close cannot be taken away. The metric's range refuses zero, and
+recon_titlebar puts the close bit back regardless of what arrives -- both,
+because a range is a promise about what a skin *file* may say and the other is
+a promise about what is *drawn*, and only the second is a guarantee. A skin is a
+file somebody downloads; a window nobody can close by mouse is not a look
+anybody chose. Checked by writing a skin that asks for zero buttons and
+photographing the close button it got anyway.
+
+Close is outermost on whichever side they are -- nearest the right edge on the
+right, nearest the left edge on the left. The button somebody reaches for
+without looking is the one in the corner, and a layout that put maximize there
+would close windows by accident from the other direction.
+
+The layout is worked out in one place now, for both frames. ReconOS draws
+two title bars -- one around its own windows and one around a client's -- and
+each worked out its own. They used different insets and different gaps, so a
+client window's buttons sat two pixels from a built-in window's. recon_decor's
+own header argues against exactly that: *"a client window that looked nearly
+like a ReconOS window would be worse than one that plainly does not; near-misses
+read as a fault rather than as a difference."* Both ask recon_titlebar now,
+which is worth more than the two pixels -- it means a skin that moves the
+buttons moves them on every window, not on the windows whoever made the change
+remembered to look at.
+
 scripts/check.sh runs everything under the sanitizers. Address and
 undefined behaviour, on all eighteen suites -- reading past an array, a double
 free, use after free, a shift wider than a word, signed overflow, a misaligned

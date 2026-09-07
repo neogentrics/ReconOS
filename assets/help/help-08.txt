@@ -35,6 +35,22 @@ straight away; there is no separate save.
 The Colours section shows the colours of whichever skin is on. If that skin
 is one that ships, changing a colour offers to make your copy first.
 
+A skin can also change the shape of a window, by writing lines like these into
+its file:
+
+- metric.title-height and metric.border — how tall the bar is, and how
+  thick the frame around the contents.
+- metric.corner and metric.button-corner — how far the window's top corners
+  and the buttons are rounded. Zero is square.
+- metric.button-size — how big the three buttons are.
+- metric.buttons-left — 1 puts the buttons on the left of the bar instead
+  of the right. Close stays in the corner either way.
+- metric.buttons — which buttons there are, as a sum: 1 close, 2 maximize,
+  4 minimize. 7 is all three and is the usual. 5 is close and minimize.
+
+Close is always there. A skin that leaves it out gets it back, because a
+window nobody can close is not something a skin is allowed to make.
+
 Some colours are a *ramp* from one to another, shown as two halves of the
 swatch and a second value. Remove Ramp makes one flat.
 

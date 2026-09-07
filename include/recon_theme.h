@@ -211,8 +211,42 @@ enum recon_theme_metric {
      */
     RECON_METRIC_TINTABLE,
 
+    /*
+     * Which side of the title bar the buttons are on: 0 for the right, 1 for
+     * the left.
+     *
+     * Close stays outermost either way -- nearest the right edge on the right,
+     * nearest the left edge on the left. That is not a detail: the button
+     * somebody reaches for without looking is the one in the corner, and a
+     * layout that put maximize there would be a layout that closes windows by
+     * accident in the other direction.
+     */
+    RECON_METRIC_BUTTONS_LEFT,
+
+    /*
+     * Which buttons a window has, as a sum: 1 close, 2 maximize, 4 minimize.
+     * Seven is all three and is the default.
+     *
+     * **Close cannot be taken away.** A skin that removed it would make every
+     * window in the system unclosable by mouse, and a skin is a file somebody
+     * downloads -- so the 1 is put back whatever the skin asked for, in the
+     * one place that reads this. It is the same rule as everywhere else here:
+     * a safety property is not something a setting gets to switch off.
+     *
+     * Maximize and minimize are genuinely optional. A layout with only a close
+     * button is a real design and not a broken one.
+     */
+    RECON_METRIC_BUTTONS,
+
     RECON_METRIC_COUNT,
 };
+
+/* The bits in RECON_METRIC_BUTTONS. */
+#define RECON_BUTTON_CLOSE    1
+#define RECON_BUTTON_MAXIMIZE 2
+#define RECON_BUTTON_MINIMIZE 4
+#define RECON_BUTTONS_ALL     (RECON_BUTTON_CLOSE | RECON_BUTTON_MAXIMIZE | \
+                               RECON_BUTTON_MINIMIZE)
 
 /*
  * What the current skin says, or the default when it says nothing.

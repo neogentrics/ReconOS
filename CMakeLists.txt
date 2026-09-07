@@ -153,6 +153,7 @@ add_executable(ReconOS
     src/recon_appicon.c
     src/recon_props.c
     src/recon_theme.c
+    src/recon_titlebar.c
     src/recon_procinfo.c
     src/recon_shell.c
     src/recon_taskmgr.c
@@ -293,6 +294,7 @@ target_include_directories(recon_registry_tests PRIVATE
 add_executable(recon_theme_tests
     tests/test_theme.c
     src/recon_theme.c
+    src/recon_titlebar.c
     src/recon_color.c
     src/recon_registry.c
     src/recon_fs.c
@@ -472,6 +474,7 @@ target_include_directories(recon_version_tests PRIVATE
 add_executable(recon_access_tests
     tests/test_access.c
     src/recon_theme.c
+    src/recon_titlebar.c
     # The theme colours a role through the tint lens now, so it needs the
     # arithmetic that does it. Costs nothing: recon_color.c has no dependencies.
     src/recon_color.c

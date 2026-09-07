@@ -628,6 +628,18 @@ static const struct {
     { "metric.chrome-opacity", 255, 140, 255 },
     { "metric.icon-gloss",       0,   0,   1 },
     { "metric.tintable",         0,   0,   1 },
+    { "metric.buttons-left",     0,   0,   1 },
+    /*
+     * The default is all three, and the floor is one rather than zero.
+     *
+     * Zero would be a window with no buttons at all, and the range is the
+     * first place to say that is not on offer -- the second is
+     * recon_titlebar, which puts the close bit back whatever arrives here.
+     * Both, because a range is a promise about what a skin file may say and
+     * the other is a promise about what is drawn, and only the second is a
+     * guarantee.
+     */
+    { "metric.buttons",          7,   1,   7 },
 };
 
 _Static_assert(sizeof(METRICS) / sizeof(METRICS[0]) == RECON_METRIC_COUNT,
