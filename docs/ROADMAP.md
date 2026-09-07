@@ -1990,10 +1990,11 @@ seven missing pages are written and a topic that does not exist is complained
 about rather than passed over. What is still missing is finding a word *within*
 a page, and any way to search the help without opening it first.
 
-**Calculator is still deliberately shallow.** Notepad can select, cut, copy,
-paste, undo, find and replace; the Calculator does arithmetic and nothing
-else, which is the right amount for a thing that exists to prove an
-application can be a module.
+**The grapher cannot be saved or zoomed by the wheel.** Three curves at once
+and a plane that can be dragged, as of v0.4.0. What is missing is scrolling to
+zoom -- the wheel does nothing over the plane -- and any way to keep an
+expression: closing the window loses what was typed, and there is nowhere for a
+graph to be written down as a picture or as a file.
 
 **A package cannot ship a setting or a data file.** The manifest understands
 a module and an icon; anything else a program wants to place has nowhere to

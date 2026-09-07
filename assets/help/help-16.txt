@@ -7,6 +7,9 @@ Six modes, chosen along the top.
   shown as a bit pattern has to be exact about every one of those bits.
 - Date is how far apart two dates are.
 - Convert changes units.
-- Graph draws an expression in *x*.
+- Graph draws up to three expressions in *x* at once, each in its own
+  colour with a swatch beside its field. Drag the picture to move about in it;
+  Zoom in, Zoom out and Reset do the rest, and Reset puts back the place as
+  well as the size.
 
 Every key has a keyboard equivalent, including the number pad.

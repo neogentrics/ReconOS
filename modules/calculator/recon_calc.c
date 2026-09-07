@@ -171,6 +171,16 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
     [CALC_GRAPH]      = { 0, 0, NULL },
 };
 
+#define GRAPH_SPAN 10.0
+
+/*
+ * How many curves at once.
+ *
+ * Three. Each takes a row above the picture, and a picture with six rows over
+ * it is a form with a graph attached.
+ */
+#define GRAPH_CURVES 3
+
 struct recon_calc {
     struct recon_font *font;
 
@@ -216,8 +226,59 @@ struct recon_calc {
      * edges instead means zoom has to work out a centre first, and rounding
      * moves it a little every time somebody presses the button.
      */
-    struct recon_edit formula;
+    /*
+     * The curves, and which field is being typed into.
+     *
+     * Three rather than one because a grapher exists to compare -- "is x^2
+     * above or below 2^x" is the question, and answering it by typing one,
+     * looking, typing the other and remembering is not answering it. Three
+     * rather than more because each needs a row above the picture, and a
+     * picture with six rows over it is a form with a graph attached.
+     */
+    struct recon_edit formula[GRAPH_CURVES];
+    int formula_focused;
+
     double span_x, span_y;
+
+    /*
+     * Where the middle of the picture is, in the plane.
+     *
+     * It was always the origin, which makes a grapher that can only ever look
+     * at one place: every interesting part of log(x) is to the right of it,
+     * and zooming in to see the shape of something near x=10 moves it off the
+     * screen.
+     */
+    double centre_x, centre_y;
+
+    /*
+     * Dragging the plane about.
+     *
+     * The centre at the moment the drag began is remembered rather than
+     * updated as it goes, so the point under the pointer stays under the
+     * pointer -- accumulating small steps instead drifts, and a picture that
+     * slides out from under the finger holding it feels broken in a way that
+     * is hard to name.
+     */
+    bool panning;
+    int pan_from_x, pan_from_y;
+    double pan_centre_x, pan_centre_y;
+
+    /* Pixels per unit, worked out while drawing and needed while dragging. */
+    double per_unit;
+
+    /*
+     * The window, kept so that panning can ask for a redraw.
+     *
+     * A click is redrawn by the shell because the shell knows a click may have
+     * changed something. Pointer motion is not -- most motion changes nothing,
+     * and redrawing every window on every pixel of movement would be a
+     * compositor that never idles. So a handler that DOES change something on
+     * motion has to say so, and the first version of this did not: the plane
+     * moved, the numbers moved, and the picture went on showing where it used
+     * to be. It looked exactly like the drag not being delivered at all, and
+     * an afternoon could go into checking the input path.
+     */
+    struct recon_appwin *win;
 
 };
 
@@ -596,10 +657,13 @@ static void equals(struct recon_calc *calc) {
 #define HIT_FROM_BASE (RECON_APPWIN_HIT_USER + 700)
 #define HIT_TO_BASE (RECON_APPWIN_HIT_USER + 800)
 #define HIT_DATE_FIELD (RECON_APPWIN_HIT_USER + 900)
-#define HIT_GRAPH_FIELD (RECON_APPWIN_HIT_USER + 901)
 #define HIT_GRAPH_IN (RECON_APPWIN_HIT_USER + 902)
 #define HIT_GRAPH_OUT (RECON_APPWIN_HIT_USER + 903)
 #define HIT_GRAPH_HOME (RECON_APPWIN_HIT_USER + 904)
+/* The plane itself, which is dragged to move about in it. */
+#define HIT_GRAPH_PLANE (RECON_APPWIN_HIT_USER + 905)
+/* One per curve. */
+#define HIT_GRAPH_FIELD_BASE (RECON_APPWIN_HIT_USER + 910)
 
 /* One of `n` values converted from `from` to `to` within a category. */
 static double convert(const struct calc_category *cat, int from, int to,
@@ -942,23 +1006,67 @@ static void draw_convert_mode(struct recon_calc *calc,
 #define GRAPH_BREAK_FACTOR 2
 
 /* How much of the plane is on screen at the start, either side of zero. */
-#define GRAPH_SPAN 10.0
+
+/*
+ * The colour of each curve.
+ *
+ * The first is the skin's own readout accent, which every skin already defines
+ * to be legible against the readout it sits on. The other two are that colour
+ * with its hue rotated a third of the way round and two thirds -- by shuffling
+ * the channels, which for a saturated colour is exactly that rotation.
+ *
+ * Rotating rather than picking three fixed colours keeps the skin's character
+ * and keeps the *lightness*, which is the half of a colour that decides
+ * whether it can be seen at all: recon_color_tint uses the shuffled colour as
+ * a hue reference and puts the accent's own lightness back.
+ *
+ * On a skin whose readout accent is grey there is no hue to rotate, so all
+ * three come out the same. That is why each field has a swatch beside it: the
+ * picture says which curve is where, and the swatch says which field drew it,
+ * and only one of those can fail.
+ */
+static recon_color curve_color(int i) {
+    recon_color accent = THEME(READOUT_ACCENT);
+    if (i <= 0) {
+        return accent;
+    }
+
+    uint32_t r = (accent >> 16) & 0xFF;
+    uint32_t g = (accent >> 8) & 0xFF;
+    uint32_t b = accent & 0xFF;
+
+    recon_color shuffled = (i == 1)
+        ? RECON_RGB(b, r, g)
+        : RECON_RGB(g, b, r);
+
+    return recon_color_tint(accent, shuffled, 255);
+}
 
 static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         int x, int y, int w, int bottom) {
     int ascent = recon_font_ascent(calc->font);
     int line = recon_font_line_height(calc->font);
 
-    /* The expression, above the picture of it. */
-    /* Wide enough for "y =", which twenty pixels cut to "y...". */
+    /*
+     * The expressions, above the picture of them.
+     *
+     * A swatch in each curve's colour rather than a number, because what
+     * somebody wants to know looking at three lines is which field drew the
+     * one they are pointing at -- and a legend that says "1, 2, 3" makes them
+     * count the lines to find out.
+     */
     int label_w = recon_text_width(calc->font, "y =") + 6;
-    recon_draw_text(panel, calc->font, x, y + ascent, label_w, "y =",
-        COLOR_KEY_TEXT);
-    recon_edit_draw(panel, calc->font, x + label_w, y - 2, w - label_w,
-        line + 6, &calc->formula);
-    recon_hit_add(panel, x + label_w, y - 2, w - label_w, line + 6,
-        HIT_GRAPH_FIELD);
-    y += line + 10;
+    for (int i = 0; i < GRAPH_CURVES; i++) {
+        recon_fill_rect(panel, x, y + 2, 10, line - 2, curve_color(i));
+        recon_draw_text(panel, calc->font, x + 16, y + ascent, label_w, "y =",
+            COLOR_KEY_TEXT);
+        recon_edit_draw(panel, calc->font, x + 16 + label_w, y - 2,
+            w - label_w - 16, line + 6, &calc->formula[i]);
+        recon_hit_add(panel, x + 16 + label_w, y - 2, w - label_w - 16,
+            line + 6, HIT_GRAPH_FIELD_BASE + (uint32_t)i);
+        y += line + 6;
+    }
+    y += 4;
 
     /* Zoom, and a way back to where it started. */
     int bx = x;
@@ -978,8 +1086,8 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     }
 
     char range[64];
-    snprintf(range, sizeof(range), "x %+.2f to %+.2f", -calc->span_x,
-        calc->span_x);
+    snprintf(range, sizeof(range), "x %+.2f to %+.2f",
+        calc->centre_x - calc->span_x, calc->centre_x + calc->span_x);
     recon_draw_text(panel, calc->font, bx + 6, y + ascent + 3, w - (bx - x),
         range, COLOR_KEY_TEXT);
     y += line + 12;
@@ -1018,102 +1126,197 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     double per_unit_x = (w / 2.0) / calc->span_x;
     double per_unit_y = per_unit_x;
     calc->span_y = (h / 2.0) / per_unit_y;
+    calc->per_unit = per_unit_x;
 
+    /*
+     * The plane takes drags, and is registered before the curves are drawn
+     * over it -- nothing else claims this rectangle, so it does not matter
+     * where in the drawing it goes, and here is where the geometry is known.
+     */
+    recon_hit_add(panel, x, y, w, h, HIT_GRAPH_PLANE);
+
+    /*
+     * Where zero is on screen, which is the middle only when the view has not
+     * been moved. Everything below measures from these rather than from the
+     * middle of the box, which is the whole of what panning is.
+     */
+    int zero_x = mid_x - (int)(calc->centre_x * per_unit_x);
+    int zero_y = mid_y + (int)(calc->centre_y * per_unit_y);
+
+    /*
+     * Drawn outward from zero and clipped to the box, rather than counted
+     * from the middle. Once the view can be moved, zero is not the middle --
+     * and a grid counted from the middle would slide half a line at a time as
+     * the plane moved under it, which looks like the grid being wrong rather
+     * than like the view moving.
+     */
     if (per_unit_x >= 8.0) {
-        for (int i = 1; i * per_unit_x < w / 2.0; i++) {
+        for (int i = 1; i < 4000; i++) {
             int dx = (int)(i * per_unit_x);
-            recon_fill_rect(panel, mid_x + dx, y + 1, 1, h - 2, COLOR_GRID);
-            recon_fill_rect(panel, mid_x - dx, y + 1, 1, h - 2, COLOR_GRID);
+            bool any = false;
+            if (zero_x + dx > x && zero_x + dx < x + w - 1) {
+                recon_fill_rect(panel, zero_x + dx, y + 1, 1, h - 2,
+                    COLOR_GRID);
+                any = true;
+            }
+            if (zero_x - dx > x && zero_x - dx < x + w - 1) {
+                recon_fill_rect(panel, zero_x - dx, y + 1, 1, h - 2,
+                    COLOR_GRID);
+                any = true;
+            }
+            if (!any && zero_x - dx <= x && zero_x + dx >= x + w - 1) {
+                break;
+            }
         }
     }
     if (per_unit_y >= 8.0) {
-        for (int i = 1; i * per_unit_y < h / 2.0; i++) {
+        for (int i = 1; i < 4000; i++) {
             int dy = (int)(i * per_unit_y);
-            recon_fill_rect(panel, x + 1, mid_y + dy, w - 2, 1, COLOR_GRID);
-            recon_fill_rect(panel, x + 1, mid_y - dy, w - 2, 1, COLOR_GRID);
+            bool any = false;
+            if (zero_y + dy > y && zero_y + dy < y + h - 1) {
+                recon_fill_rect(panel, x + 1, zero_y + dy, w - 2, 1,
+                    COLOR_GRID);
+                any = true;
+            }
+            if (zero_y - dy > y && zero_y - dy < y + h - 1) {
+                recon_fill_rect(panel, x + 1, zero_y - dy, w - 2, 1,
+                    COLOR_GRID);
+                any = true;
+            }
+            if (!any && zero_y - dy <= y && zero_y + dy >= y + h - 1) {
+                break;
+            }
         }
     }
 
-    /* The axes, brighter than the grid, because they are where zero is. */
-    recon_fill_rect(panel, x + 1, mid_y, w - 2, 1, COLOR_AXIS);
-    recon_fill_rect(panel, mid_x, y + 1, 1, h - 2, COLOR_AXIS);
+    /* The axes, brighter than the grid, because they are where zero is --
+     * drawn only when zero is somewhere on screen to draw. */
+    if (zero_y > y && zero_y < y + h - 1) {
+        recon_fill_rect(panel, x + 1, zero_y, w - 2, 1, COLOR_AXIS);
+    }
+    if (zero_x > x && zero_x < x + w - 1) {
+        recon_fill_rect(panel, zero_x, y + 1, 1, h - 2, COLOR_AXIS);
+    }
 
-    if (calc->formula.text[0] == '\0') {
-        recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2, w - 16,
-            "Type an expression in x. For example: sin(x), x^2-2, 1/x",
+    /*
+     * Nothing typed anywhere, so say what to type.
+     *
+     * Asked of all three rather than the first, because somebody who has
+     * cleared the first field and left the other two should see their curves
+     * and not an instruction.
+     */
+    bool anything = false;
+    for (int i = 0; i < GRAPH_CURVES; i++) {
+        if (calc->formula[i].text[0] != '\0') {
+            anything = true;
+        }
+    }
+    if (!anything) {
+        recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2,
+            w - 16, "Type an expression in x. For example: sin(x), x^2-2, 1/x",
             COLOR_KEY_TEXT);
         return;
     }
 
+    /*
+     * The first thing wrong, named, and only the first.
+     *
+     * Three complaints stacked on top of each other in a box this size is a
+     * picture nobody can see. The one reported is the first field with
+     * something wrong in it, and its swatch says which.
+     */
+    int complaining = -1;
     char why[128];
-    if (!recon_expr_valid(calc->formula.text, why, sizeof(why))) {
-        recon_draw_text(panel, calc->font, x + 8, y + h - 10 - ascent / 2, w - 16, why,
-            COLOR_WARNING);
-        return;
+    why[0] = '\0';
+    for (int i = 0; i < GRAPH_CURVES && complaining < 0; i++) {
+        if (calc->formula[i].text[0] != '\0' &&
+                !recon_expr_valid(calc->formula[i].text, why, sizeof(why))) {
+            complaining = i;
+        }
     }
 
-    /*
-     * One column of pixels at a time, joined to the last where joining them is
-     * honest.
-     *
-     * `had_last` is what makes an asymptote look like an asymptote: a column
-     * where the function has no value breaks the line, so the next point
-     * starts a new stroke rather than being joined across the gap. Without it
-     * 1/x is drawn with a vertical line down the y axis, which is not part of
-     * the function and is the commonest way a grapher lies.
-     */
-    bool had_last = false;
-    int last_y = 0;
-
-    for (int col = 0; col < w - 2; col++) {
-        double vx = ((col - (w - 2) / 2.0) / (w / 2.0)) * calc->span_x;
-
-        double vy = 0.0;
-        if (recon_expr_eval(calc->formula.text, vx, &vy, NULL, 0)
-                != RECON_EXPR_OK) {
-            had_last = false;
+    for (int c = 0; c < GRAPH_CURVES; c++) {
+        if (calc->formula[c].text[0] == '\0' || c == complaining) {
+            continue;
+        }
+        if (!recon_expr_valid(calc->formula[c].text, NULL, 0)) {
             continue;
         }
 
-        double py = mid_y - vy * per_unit_y;
+        recon_color ink = curve_color(c);
 
-        /* Off the top or bottom by a long way. Clamped rather than skipped, so
-         * a curve leaving the window is drawn up to the edge instead of
-         * stopping short of it. */
-        if (py < y - h) {
-            py = y - h;
-        }
-        if (py > y + h * 2) {
-            py = y + h * 2;
-        }
-        int cy = (int)py;
+        /*
+         * One column of pixels at a time, joined to the last where joining
+         * them is honest.
+         *
+         * `had_last` is what makes an asymptote look like an asymptote: a
+         * column where the function has no value breaks the line, so the next
+         * point starts a new stroke rather than being joined across the gap.
+         * Without it 1/x is drawn with a vertical line down the y axis, which
+         * is not part of the function and is the commonest way a grapher lies.
+         */
+        bool had_last = false;
+        int last_y = 0;
 
-        if (had_last) {
-            int from = last_y < cy ? last_y : cy;
-            int to = last_y < cy ? cy : last_y;
+        for (int col = 0; col < w - 2; col++) {
+            /* Measured from where zero is rather than from the middle of the
+             * box, which is what makes the curve move with the grid. */
+            double vx = ((x + 1 + col) - zero_x) / per_unit_x;
 
-            /*
-             * A jump wider than the window is a break, not a slope. See the
-             * note on GRAPH_BREAK_FACTOR: this is what stops tan(x) being
-             * drawn as a row of walls.
-             */
-            if (to - from > h * GRAPH_BREAK_FACTOR) {
+            double vy = 0.0;
+            if (recon_expr_eval(calc->formula[c].text, vx, &vy, NULL, 0)
+                    != RECON_EXPR_OK) {
                 had_last = false;
-            } else {
-                for (int py2 = from; py2 <= to; py2++) {
-                    if (py2 >= y + 1 && py2 < y + h - 1) {
-                        recon_fill_rect(panel, x + 1 + col, py2, 1, 1,
-                            COLOR_CURVE);
+                continue;
+            }
+
+            double py = zero_y - vy * per_unit_y;
+
+            /* Off the top or bottom by a long way. Clamped rather than
+             * skipped, so a curve leaving the window is drawn up to the edge
+             * instead of stopping short of it. */
+            if (py < y - h) {
+                py = y - h;
+            }
+            if (py > y + h * 2) {
+                py = y + h * 2;
+            }
+            int cy = (int)py;
+
+            if (had_last) {
+                int from = last_y < cy ? last_y : cy;
+                int to = last_y < cy ? cy : last_y;
+
+                /*
+                 * A jump wider than the window is a break, not a slope. See
+                 * the note on GRAPH_BREAK_FACTOR: this is what stops tan(x)
+                 * being drawn as a row of walls.
+                 */
+                if (to - from > h * GRAPH_BREAK_FACTOR) {
+                    had_last = false;
+                } else {
+                    for (int py2 = from; py2 <= to; py2++) {
+                        if (py2 >= y + 1 && py2 < y + h - 1) {
+                            recon_fill_rect(panel, x + 1 + col, py2, 1, 1,
+                                ink);
+                        }
                     }
                 }
             }
-        }
 
-        if (cy >= y + 1 && cy < y + h - 1) {
-            recon_fill_rect(panel, x + 1 + col, cy, 1, 1, COLOR_CURVE);
+            if (cy >= y + 1 && cy < y + h - 1) {
+                recon_fill_rect(panel, x + 1 + col, cy, 1, 1, ink);
+            }
+            last_y = cy;
+            had_last = true;
         }
-        last_y = cy;
-        had_last = true;
+    }
+
+    if (complaining >= 0) {
+        recon_fill_rect(panel, x + 8, y + h - 14 - ascent / 2, 10, line - 2,
+            curve_color(complaining));
+        recon_draw_text(panel, calc->font, x + 24,
+            y + h - 10 - ascent / 2, w - 32, why, COLOR_WARNING);
     }
 }
 
@@ -1430,6 +1633,19 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
     (void)cx;
     (void)cy;
 
+    /*
+     * A release ends a drag wherever it lands.
+     *
+     * Before the `!pressed` refusal below, because the pointer is usually not
+     * over the plane by the time the button comes up -- a drag that ends off
+     * the edge of the picture would otherwise leave the plane still following
+     * the mouse with nothing held down.
+     */
+    if (!pressed && calc->panning) {
+        calc->panning = false;
+        return true;
+    }
+
     if (!pressed || hit_id < RECON_APPWIN_HIT_USER) {
         return false;
     }
@@ -1439,9 +1655,34 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
      * open-ended >= and these are numbered above it, so anything checked after
      * it would be read as a date field.
      */
+    /*
+     * A curve's field. Bounded and checked before the switch, for the reason
+     * the switch itself is checked before HIT_DATE_FIELD: these are numbered
+     * above it and it is matched with an open-ended `>=`.
+     */
+    if (hit_id >= HIT_GRAPH_FIELD_BASE &&
+            hit_id < HIT_GRAPH_FIELD_BASE + GRAPH_CURVES) {
+        int i = (int)(hit_id - HIT_GRAPH_FIELD_BASE);
+        for (int j = 0; j < GRAPH_CURVES; j++) {
+            calc->formula[j].active = (j == i);
+        }
+        calc->formula_focused = i;
+        recon_edit_focus(&calc->formula[i]);
+        return true;
+    }
+
     switch (hit_id) {
-    case HIT_GRAPH_FIELD:
-        recon_edit_focus(&calc->formula);
+    case HIT_GRAPH_PLANE:
+        /*
+         * A press on the plane begins a drag. The centre at this moment is
+         * remembered rather than updated as the pointer moves, so the point
+         * under the pointer stays under it.
+         */
+        calc->panning = true;
+        calc->pan_from_x = cx;
+        calc->pan_from_y = cy;
+        calc->pan_centre_x = calc->centre_x;
+        calc->pan_centre_y = calc->centre_y;
         return true;
     case HIT_GRAPH_IN:
         /* Halved rather than stepped by a fixed amount, so zooming in and out
@@ -1454,8 +1695,13 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         calc->span_y *= 2.0;
         return true;
     case HIT_GRAPH_HOME:
+        /* Back to where it started, which is the span AND the place -- a
+         * Reset that left the view somewhere in the third quadrant would be
+         * resetting half of what somebody had changed. */
         calc->span_x = GRAPH_SPAN;
         calc->span_y = GRAPH_SPAN;
+        calc->centre_x = 0.0;
+        calc->centre_y = 0.0;
         return true;
     default:
         break;
@@ -1520,11 +1766,22 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
      * characters in "x^2-2".
      */
     if (calc->mode == CALC_GRAPH) {
-        if (sym == XKB_KEY_Left || sym == XKB_KEY_Right) {
-            /* Left and right move the caret, which is what they do in a field.
-             * The graph is panned by nothing yet; zooming is on the buttons. */
+        /*
+         * Tab moves between the three curves, which is what Tab does on every
+         * other form in the system. Without it the second and third fields can
+         * only be reached with the mouse, which makes them feel like an extra
+         * rather than like part of the same thing.
+         */
+        if (sym == XKB_KEY_Tab) {
+            calc->formula[calc->formula_focused].active = false;
+            calc->formula_focused =
+                (calc->formula_focused + 1) % GRAPH_CURVES;
+            recon_edit_focus(&calc->formula[calc->formula_focused]);
+            return true;
         }
-        switch (recon_edit_key(&calc->formula, sym, modifiers)) {
+
+        switch (recon_edit_key(&calc->formula[calc->formula_focused], sym,
+                modifiers)) {
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_COMMIT:
         case RECON_EDIT_CANCEL:
@@ -1605,6 +1862,41 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 }
 
+/*
+ * Moving the plane while the button is held.
+ *
+ * Measured from where the drag began rather than from the last position, so
+ * the point that was under the pointer stays under it: accumulating small
+ * steps drifts, and a picture that slides out from under the finger holding it
+ * feels broken in a way that is hard to name.
+ *
+ * Dragging right moves the view LEFT -- the plane comes with the pointer, the
+ * way a map does. The opposite is technically also a choice and is the one
+ * nobody expects.
+ */
+static void calc_motion(void *user, uint32_t hit_id, int cx, int cy) {
+    struct recon_calc *calc = user;
+    (void)hit_id;
+
+    if (!calc->panning || calc->per_unit <= 0.0) {
+        return;
+    }
+    calc->centre_x = calc->pan_centre_x -
+        (cx - calc->pan_from_x) / calc->per_unit;
+    calc->centre_y = calc->pan_centre_y +
+        (cy - calc->pan_from_y) / calc->per_unit;
+
+    /* And ask to be drawn. See the note on `win`. */
+    recon_appwin_refresh(calc->win);
+}
+
+/* The plane says it can be dragged, because a thing that can be dragged and
+ * looks exactly like a thing that cannot is a thing nobody drags. */
+static const char *calc_cursor(void *user, uint32_t hit_id) {
+    (void)user;
+    return (hit_id == HIT_GRAPH_PLANE) ? "grab" : NULL;
+}
+
 static void calc_destroy(void *user) {
     free(user);
 }
@@ -1648,6 +1940,8 @@ static const struct recon_appwin_impl CALC_IMPL = {
     .draw = calc_draw,
     .click = calc_click,
     .key = calc_key_press,
+    .motion = calc_motion,
+    .cursor = calc_cursor,
     .destroy = calc_destroy,
 };
 
@@ -1667,8 +1961,15 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
      */
     calc->span_x = GRAPH_SPAN;
     calc->span_y = GRAPH_SPAN;
-    recon_edit_begin(&calc->formula, "sin(x)", false);
-    calc->formula.active = false;
+    for (int i = 0; i < GRAPH_CURVES; i++) {
+        recon_edit_begin(&calc->formula[i], "", false);
+        calc->formula[i].active = false;
+    }
+    /* One example, in the first field, so the mode shows what it does the
+     * moment it is opened rather than an empty plane and an instruction. */
+    recon_edit_begin(&calc->formula[0], "sin(x)", false);
+    calc->formula_focused = 0;
+    calc->formula[0].active = false;
     calc->unit_to = 1;
 
     /* Both dates start at today, so the difference starts at zero and moves
@@ -1681,12 +1982,12 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
 
     clear_all(calc);
 
-    struct recon_appwin *win = recon_appwin_create(server, font, &CALC_IMPL, calc);
-    if (win == NULL) {
+    calc->win = recon_appwin_create(server, font, &CALC_IMPL, calc);
+    if (calc->win == NULL) {
         free(calc);
         return NULL;
     }
-    return win;
+    return calc->win;
 }
 
 /* --- The module --- */

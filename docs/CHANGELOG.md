@@ -23,6 +23,36 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The grapher draws three curves and can be moved about.** A grapher exists to
+compare -- "is x^2 above or below 2^x" is the question, and answering it by
+typing one, looking, typing the other and remembering is not answering it. Three
+fields, each with a swatch in its curve's colour, so the picture says which
+line is where and the swatch says which field drew it.
+
+The colours are the skin's own readout accent with its hue rotated a third and
+two thirds of the way round, which keeps the skin's character and keeps the
+*lightness* -- the half of a colour that decides whether it can be seen at all.
+Three fixed colours would be legible on some skins and invisible on others.
+
+**And the view can be dragged.** It was always centred on the origin, which
+makes a grapher that can only look at one place: every interesting part of
+log(x) is to the right of it, and zooming in on something near x=10 moves it
+off the screen. The plane comes with the pointer the way a map does, the centre
+at the moment the drag began is remembered rather than accumulated so the point
+under the pointer stays under it, and Reset puts back the place as well as the
+span.
+
+The grid is drawn outward from where zero actually is and clipped, rather than
+counted from the middle of the box. Counted from the middle it would slide half
+a line at a time as the plane moved under it, which looks like the grid being
+wrong rather than like the view moving.
+
+BG-121 is the hour that went into the first version of the drag: `motion`
+changed the view and did not ask for a redraw, so the numbers moved, the state
+was right, and the picture went on showing where it used to be. It looked
+exactly like the drag not being delivered. Two `fprintf`s settled it in one
+run.
+
 **Help can be searched.** A box above the topic list, filtering on titles and
 on the text of every page. Both, because the change log's topics are titled
 with version numbers -- a title-only search would find nothing in two thirds of

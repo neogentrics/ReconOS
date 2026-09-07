@@ -2202,3 +2202,28 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   topic at boot would mean building every window at boot, which is the idle
   weight this system exists to avoid. It also catches topics set at runtime,
   which is how the Control Panel names a page per section.
+
+### BG-121 — Dragging the graph changed everything except the picture
+
+- **Found in** v0.4.0. **Found by** dragging the new panning and watching
+  nothing move.
+- **What it was** `motion` changed the view and did not ask for a redraw. A
+  click is redrawn by the shell, because a click may have changed something;
+  pointer motion is not, because most motion changes nothing and redrawing
+  every window on every pixel of movement is a compositor that never idles.
+- **It looked exactly like the drag not being delivered at all**, which is the
+  expensive part. The obvious suspects are all in the input path — is the hit
+  region there, does a press reach the application, is motion delivered while a
+  button is held — and all three were fine.
+- **Settled by instrumenting rather than reasoning about it**: two `fprintf`s,
+  one on the press and one on the motion, and the log said `panning=1` with
+  coordinates arriving. The state was right and the screen was stale, which
+  narrowed it to one line.
+- **Fixed in** v0.4.0. `recon_appwin_refresh` from the motion handler. The
+  window pointer is now kept for that reason and the reason is written beside
+  it, because a handler that changes something on motion is rare enough that
+  the next one will make the same mistake.
+- **The same shape as a note already in `recon_help_show_topic`**: "the page
+  was chosen and the window went on showing the one before it -- which looked
+  exactly like the topic not being found". Twice now, in two files, with the
+  same symptom and the same cause.
