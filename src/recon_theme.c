@@ -645,9 +645,9 @@ static const struct {
      * toolbar button is taller than that, and the ceiling was stopping a
      * skin asking for a pill.
      */
-    { "metric.corner",        5,  0,  16 },
+    { "metric.corner",        6,  0,  16 },
     { "metric.button-size",  16, 10,  32 },
-    { "metric.button-corner", 4,  0,  12 },
+    { "metric.button-corner", 8,  0,  16 },
     { "metric.chrome-opacity", 255, 140, 255 },
     { "metric.icon-gloss",       0,   0,   1 },
     { "metric.tintable",         0,   0,   1 },
@@ -1126,10 +1126,12 @@ static const struct metric_spec SHAPE_BEACON[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_CORNER,        7 },
     { RECON_METRIC_BUTTON_SIZE,  18 },
-    /* Five rather than three. At three the corner was there but had to be
-     * looked for, which is the worst of both: the cost of rounding without
-     * the difference it was meant to make. */
-    { RECON_METRIC_BUTTON_CORNER, 5 },
+    /* What it asks for, not what it gets: recon_button_radius trims this to
+     * three tenths of the button's shorter side, so 9 is a real curve on a
+     * toolbar button and 5 on the 18-pixel caption buttons above. It was
+     * three once, where the corner was there but had to be looked for --
+     * the cost of rounding without the difference it was meant to make. */
+    { RECON_METRIC_BUTTON_CORNER, 9 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -1141,7 +1143,7 @@ static const struct metric_spec SHAPE_AQUA[] = {
     { RECON_METRIC_TITLE_HEIGHT, 28 },
     { RECON_METRIC_BORDER,        1 },
     { RECON_METRIC_CORNER,        9 },
-    { RECON_METRIC_BUTTON_CORNER, 4 },
+    { RECON_METRIC_BUTTON_CORNER, 8 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -1160,9 +1162,9 @@ static const struct metric_spec SHAPE_AQUA[] = {
 static const struct metric_spec SHAPE_GLASS[] = {
     { RECON_METRIC_TITLE_HEIGHT,  30 },
     { RECON_METRIC_BORDER,         1 },
-    { RECON_METRIC_CORNER,        10 },
+    { RECON_METRIC_CORNER,        12 },
     { RECON_METRIC_BUTTON_SIZE,   18 },
-    { RECON_METRIC_BUTTON_CORNER,  5 },
+    { RECON_METRIC_BUTTON_CORNER, 10 },
     { RECON_METRIC_CHROME_OPACITY, 210 },
     { RECON_METRIC_ICON_GLOSS, 1 },
     { RECON_METRIC_TINTABLE, 1 },

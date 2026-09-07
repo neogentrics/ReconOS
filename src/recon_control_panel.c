@@ -2022,9 +2022,21 @@ static void draw_appearance_themes(struct control_panel *cp,
          * disagree with the skin. This one cannot, because it is the same
          * arithmetic the skin will use on every button in the system.
          */
-        int sample_r = recon_theme_metric_of(i, RECON_METRIC_BUTTON_CORNER);
         int sample_h = ROW_HEIGHT - 10;
         int sample_w = sample_h * 2;
+
+        /*
+         * The same trim recon_button_radius applies, done here because that
+         * one reads the *current* skin and this row is showing another one.
+         * Without it a skin asking for ten would be drawn as a lozenge in the
+         * list and as a gentle curve everywhere else, which makes the list a
+         * worse guide than no list.
+         */
+        int sample_r = recon_theme_metric_of(i, RECON_METRIC_BUTTON_CORNER);
+        int sample_most = (sample_h < sample_w ? sample_h : sample_w) * 3 / 10;
+        if (sample_r > sample_most) {
+            sample_r = sample_most;
+        }
         int sample_x = x + w - 12 - sample_w;
         int sample_y = ry + 5;
 

@@ -365,6 +365,17 @@ void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
     int h, bool pressed, recon_color behind);
 
 /*
+ * What corner radius a button of this size gets, given what the skin asked
+ * for.
+ *
+ * Exposed for the few things that draw a rounded button themselves and have
+ * to round something else to match it -- the ring around a dialog's default
+ * answer, an icon inset into a button. They should be asking this rather than
+ * reading the metric and subtracting a guess.
+ */
+int recon_button_radius(int w, int h);
+
+/*
  * Draw text with its left edge at x and its baseline at y.
  *
  * Clipped to max_width, with a trailing ellipsis when it doesn't fit, so long

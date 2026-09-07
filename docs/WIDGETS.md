@@ -144,6 +144,18 @@ loud — 95 was square, and a soft edge drawn in a colour between the two a
 high-contrast skin promises is the opposite of what somebody who turned that on
 asked for.
 
+**The corner radius scales with the button.** The metric is one number and
+buttons are not one size: a close button is 16 pixels square and a toolbar
+button is 28 by 20. A radius that curves the second turns the first into a
+circle, and a radius that suits the first is two pixels of diagonal on the
+second -- which is not a curve, it is a chamfer, and a chamfer is exactly what
+"the edges look like they have been cut off" describes. It was measured at two
+before this existed. `recon_button_radius(w, h)` gives what a button of that
+size can have: what the skin asked for, capped at three tenths of the shorter
+side. A quarter still reads as square on anything small; a third reads as a
+lozenge on anything wide. Every skin's `metric.button-corner` went up to suit,
+since it is now trimmed rather than taken literally.
+
 **The skin list shows shape, not only colour.** Each row in Appearance draws a
 sample of that skin's own button, in that skin's numbers -- so two skins that
 share a palette and differ entirely in whether their buttons round can be told

@@ -1445,7 +1445,12 @@ static void draw_dialog(struct recon_shell *shell) {
             recon_stroke_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
                 DIALOG_BUTTON_HEIGHT - 4, COLOR_ACCENT);
 
-            int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER) - 2;
+            /* The button's own radius, less the two pixels the ring is
+              * inset by -- asked rather than assumed, because what the skin
+              * asked for and what a button this size gets are now two
+              * different numbers. */
+            int radius = recon_button_radius(DIALOG_BUTTON_WIDTH,
+                DIALOG_BUTTON_HEIGHT) - 2;
             if (radius > 0) {
                 recon_round_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
                     DIALOG_BUTTON_HEIGHT - 4, radius,

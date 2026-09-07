@@ -1421,11 +1421,42 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
  * producing two shapes of button inside one window is not a theme, it is a
  * list of the files somebody remembered to change.
  */
+/*
+ * The radius a button of this size actually gets.
+ *
+ * The metric is one number and buttons are not one size. A close button is 16
+ * pixels square and a toolbar button is 28 by 20; a radius that curves the
+ * second nicely turns the first into a circle, and a radius that suits the
+ * first is two pixels of diagonal on the second -- which is not a curve at
+ * all. Two pixels of gradation is a *chamfer*, and a chamfer is exactly what
+ * "the edges look like they have been cut off" describes. It was measured at
+ * two before this existed.
+ *
+ * So the metric is what a skin asks for and this is what it can have: never
+ * more than three tenths of the shorter side. Three tenths because a quarter
+ * still reads as square on anything small and a third starts reading as a
+ * lozenge on anything wide.
+ *
+ * The alternative -- a second metric for small buttons -- is two numbers that
+ * have to be kept in a relationship, which is a relationship somebody will
+ * eventually get wrong on a skin they are making at the time.
+ */
+int recon_button_radius(int w, int h) {
+    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    if (radius <= 0) {
+        return 0;
+    }
+
+    int shortest = w < h ? w : h;
+    int most = shortest * 3 / 10;
+    return radius < most ? radius : most;
+}
+
 void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
         int h, bool pressed, recon_color behind) {
     recon_draw_bevel(panel, x, y, w, h, pressed);
 
-    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    int radius = recon_button_radius(w, h);
     if (radius > 0) {
         recon_round_rect(panel, x, y, w, h, radius, behind);
     }

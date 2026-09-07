@@ -284,7 +284,7 @@ enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
      * button rather than sticking out of it. Filled back to the bar rather
      * than cleared: a hole here would show the wallpaper through the frame.
      */
-    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+    int radius = recon_button_radius(size, size);
     if (radius > 0) {
         recon_round_rect(panel, x, y, size, size, radius, behind);
     }
