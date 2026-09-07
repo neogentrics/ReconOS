@@ -35,6 +35,7 @@
 #include "recon_clock.h"
 #include "recon_control_panel.h"
 #include "recon_desktop.h"
+#include "recon_error.h"
 #include "recon_explorer.h"
 #include "recon_notepad.h"
 #include "recon_photos.h"
@@ -4642,6 +4643,14 @@ void recon_shell_open_named(struct recon_shell *shell, const char *title) {
     /* Built on demand if this is the first time. */
     struct recon_appwin *win = recon_installed_app_window(title);
     if (win == NULL) {
+        /*
+         * A code as well as a log line, because from the outside this is
+         * silent: something is clicked in the menu and nothing happens. Every
+         * way in comes through here -- the menu, the desktop, a file being
+         * opened, `apps` in the Terminal -- so one line covers all of them.
+         */
+        recon_error_raisef(NULL, RECON_ERR_J001, "%s: %s", title,
+            recon_modules_last_error());
         wlr_log(WLR_ERROR, "ReconOS: cannot open '%s': %s", title,
             recon_modules_last_error());
         return;

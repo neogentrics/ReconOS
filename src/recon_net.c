@@ -359,6 +359,15 @@ enum recon_net_result recon_net_resolve(const char *host, char *out,
     int status = getaddrinfo(host, NULL, &hints, &found);
     if (status != 0 || found == NULL) {
         set_error("%s: %s", host, gai_strerror(status));
+        /*
+         * Recorded, because a name that will not resolve is the commonest
+         * network fault there is and the one most often blamed on the program
+         * that hit it. "Mail could not connect" and "this machine cannot look
+         * up any name" are different problems with the same symptom, and the
+         * log is where the difference is visible.
+         */
+        recon_error_raisef(NULL, RECON_ERR_F003, "%s: %s", host,
+            gai_strerror(status));
         return RECON_NET_NO_SUCH_HOST;
     }
 
@@ -483,6 +492,7 @@ static int probe_ready(int fd, uint32_t mask, void *data) {
         probe_finish(probe, RECON_NET_OK);
     } else {
         set_error("%s", strerror(error));
+        recon_error_raisef(NULL, RECON_ERR_F002, "%s", strerror(error));
         probe_finish(probe, RECON_NET_UNREACHABLE);
     }
     return 0;

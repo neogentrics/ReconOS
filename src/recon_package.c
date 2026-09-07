@@ -503,6 +503,17 @@ bool recon_package_install(const char *path) {
 
     struct manifest manifest;
     if (!read_manifest(path, &manifest)) {
+        /*
+         * Raised here rather than in read_manifest, which several callers use
+         * only to have a look at a folder.
+         *
+         * It was in the reader, and `install` on a folder that is not a
+         * package produced two identical lines in the log for one action --
+         * once from the install and once from the read that builds the
+         * message about it. Installing is the thing that failed; looking is
+         * not.
+         */
+        recon_error_raisef(NULL, RECON_ERR_E003, "%s", g_error);
         return false;
     }
 
@@ -939,6 +950,16 @@ bool recon_package_uninstall(const char *name) {
     char wrote[SETTINGS_MAX][128];
     int wrote_count = 0;
     if (!read_receipt(name, NULL, placed, &count, wrote, &wrote_count)) {
+        /*
+         * Not VT-E005, though it was for one draft.
+         *
+         * read_receipt fails only when the file is not there, and that means
+         * "nothing called this is installed" -- which is a different thing
+         * from "a program could not be removed", and putting that code here
+         * would send somebody looking up a removal that never started. A code
+         * on the wrong condition is worse than a code nothing raises, which is
+         * the whole argument the roadmap makes about unreachable ones.
+         */
         return false;
     }
 

@@ -10,6 +10,29 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Four more codes, and one taken out again. VT-J001 when a program will not
+open -- which is silent from the outside, since something is clicked and
+nothing happens, and every way in goes through the one line that now reports
+it. VT-F003 when a name will not resolve, because "Mail could not connect" and
+"this machine cannot look up any name" are different problems with the same
+symptom. VT-F002 when a connection fails. VT-E003 when a folder is not a
+package.
+
+VT-E003 was raised in the shared manifest reader first, and install on a
+folder that is not a package put two identical lines in the log for one
+action -- once from the install and once from the read that builds the message
+about it. Installing is the thing that failed; looking is not. Moved.
+
+VT-E005 was wired and then taken out. It says "a program could not be
+removed", and the only failure path in uninstalling is the receipt not being
+there -- which means *nothing called this is installed*, a different thing. A
+code on the wrong condition sends somebody looking up a removal that never
+started, and is worse than a code nothing raises, which is the whole argument
+this project makes about unreachable ones. Uninstalling is written not to fail,
+so there is no site; the roadmap says so.
+
+Thirty-two of the forty-three can now happen, up from thirteen.
+
 A program asking for a help page that is not there says so (VT-M002, a new
 code). The check existed and ran only when somebody pressed F1, for the window
 in front -- so a program naming a page nobody wrote stayed invisible until the

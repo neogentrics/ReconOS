@@ -2105,8 +2105,17 @@ the file. Looking inside is what the codec registry does for media; there is no
 equivalent for "would this program understand this", and there probably cannot
 be one without asking the program.
 
-**Fifteen error codes are raised by nothing.** The catalogue defines
-forty-three and twenty-eight of them are reachable, up from thirteen. Some of the
+**Eleven error codes are raised by nothing.** The catalogue defines
+forty-three and thirty-two of them are reachable, up from thirteen.
+
+One of the twelve has no site because the thing it describes cannot happen:
+**E-005**, a program that could not be removed. Uninstalling is written not to
+fail -- a file somebody already deleted by hand is not an error, because
+refusing would make a package impossible to remove because of a tidy-up months
+ago -- so there is no failure to report. It was wired for one draft to the
+"there is no such program" path, which is a different thing, and taken out
+again: a code on the wrong condition sends somebody looking up a removal that
+never started, and is worse than a code nothing raises. Some of the
 rest are reserved on purpose -- a number is never reused, so writing one down
 before the fault exists is the intended way to work -- but a document
 describing a code somebody can look up, for a fault the system cannot report,
