@@ -7,6 +7,21 @@ Polar asks a different question -- the expression is the distance from the
 origin, and the angle sweeps round. sin(3t) is a three-petal rose,
 1+cos(t) is a heart, and t/3 is a spiral.
 
+Data plots the numbers in a file instead of an expression. Type the path
+of a file with two numbers on each line, separated by a space or a comma;
+lines starting with # are ignored, so a heading is fine. Three files can be
+shown at once.
+
+It tells you what it could not read. A line that is not two numbers is
+counted and the count appears under the plot -- "54 points. 6 lines were not
+two numbers and were left out." A plot that quietly dropped them would look
+exactly like a plot of the right data. There is room for four thousand points
+per file, and if there are more it says how many were left.
+
+The points are drawn in the order they appear in the file, not sorted, because
+a data plot is often a path rather than a function. The view fits itself to the
+data when you choose a file; Reset fits it again.
+
 Parametric takes two expressions per curve, x and y, both in t. Try
 cos(t) and sin(t) for a circle, or sin(2t) and sin(3t) for a figure
 that would be hard to describe any other way. Both halves are needed: a curve

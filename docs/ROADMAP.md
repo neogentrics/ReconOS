@@ -2039,15 +2039,38 @@ from -2pi to 2pi, which is a choice rather than a consequence -- there is no
 natural range for a parameter the way there is for an angle -- and it is the
 one that closes a circle and gives a parabola both arms.
 
+**And data from a file**, which was the last of the four shapes. Two numbers a
+line, separated by whitespace or a comma; `#` and blank lines are skipped and
+are not counted as bad, because a file with a heading on it is one somebody
+made by hand and meant. Three files at once, in their own colours, drawn as
+marks with a line through them -- both, because points alone hide how far apart
+two readings are and a line alone makes measurements look like a function.
+
+The decision that took the time was **what happens to a line that is not two
+numbers**: it is counted, and the count is drawn beside the plot. A plot that
+silently drops the rows it could not read is a picture of a data set nobody has
+and looks exactly like a picture of the right one. So does one that stops at
+the first bad line. Neither refusing nor ignoring: draw what was read and say
+what was not. The four-thousand-point ceiling reports itself the same way.
+
+Not sorted by x, deliberately -- a data plot is often a path, a position over
+time or a hysteresis loop, and sorting one draws something that never happened.
+The view is fitted to the data when a file is read, because a file of readings
+between 0 and 1000 in a window ten units wide shows nothing, and what somebody
+concludes from that is that the mode does not work.
+
 What is still missing:
 
-* **A parameter range somebody can set.** Two more fields above an already
-  crowded form, which is why the fixed range above is stated rather than
-  quietly chosen.
-* **A plot of data from a file** rather than of an expression. It needs a file
-  picker, a format decision, and an answer to what happens when a row will not
-  parse -- and that answer is the whole of the work, because a plot that
-  silently drops the rows it could not read is a graph of a different data set.
+* **A parameter range somebody can set** for the parametric mode. Two more
+  fields above an already crowded form, which is why the fixed range above is
+  stated rather than quietly chosen.
+* **A file picker for the data mode.** The path is typed, like everything else
+  in the grapher's fields. `recon_filedlg` exists and Mail uses it; putting it
+  here means a button beside three fields that are already tight.
+* **A decimal comma.** The separator between two numbers may be a comma, so
+  the decimal point may not be. That is stated in the reader rather than
+  handled, and handling it means knowing what language the machine is set to,
+  which nothing here does yet.
 
 **Implicit multiplication is done.** `3t`, `2pi`, `2(x+1)`, `(x+1)(x-1)` and
 `3sin(x)` all mean what they look like, and the hint under an empty plane says

@@ -10,6 +10,34 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+The grapher plots data from a file, which was the last of the four shapes
+it was meant to ask about. Two numbers a line, separated by whitespace or a
+comma, # and blank lines skipped; three files at once, drawn as marks with a
+line through them. Both, because points alone hide how far apart two readings
+are and a line alone makes measurements look like a function.
+
+The decision that took the time was what happens to a line that is not two
+numbers. It is counted, and the count is drawn beside the plot -- "54 points.
+6 lines were not two numbers and were left out." A plot that silently drops the
+rows it could not read is a picture of a data set nobody has, and it looks
+exactly like a picture of the right one; so does one that stops at the first
+bad line. Neither refusing nor ignoring: draw what was read and say what was
+not. The four-thousand-point ceiling reports itself the same way.
+
+Not sorted by x, deliberately: a data plot is often a path -- a position over
+time, a hysteresis loop -- and sorting one draws something that never happened.
+
+The view fits itself to the data when a file is read, and only then, so
+panning afterwards is not undone on the next frame. A file of readings between
+0 and 1000 in a window ten units wide shows nothing at all, and what somebody
+concludes from that is that the mode does not work.
+
+The first version of it drew nothing: the loop that draws curves still ran each
+field through the expression grammar before reaching the data branch, and a
+path is not an expression. Every file was skipped and then reported as having
+no numbers in it, which is what a file that was never opened looks like from
+the other end.
+
 Raising a fault cannot raise a fault. Recording one writes through the
 filesystem, and the filesystem is a place faults come from, so a raise can
 reach a raise -- unbounded, and the last thing the machine would do is lose the

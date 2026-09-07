@@ -247,6 +247,21 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
 #define GRAPH_Y_KEY_PREFIX "calculator/graph-y-"
 
 /*
+ * How many points one data file may put on the plane.
+ *
+ * A ceiling rather than an allocation, and one that says when it is reached:
+ * a file with more rows is drawn up to here and the line under the plane says
+ * how many were left. Silently drawing the first four thousand of nine
+ * thousand would be a picture of a different data set, which is the same fault
+ * as silently dropping a row that will not parse.
+ *
+ * Four thousand because the plane is a few hundred pixels across and points
+ * beyond that are drawing on each other; a file that needs more needs a
+ * different kind of chart.
+ */
+#define DATA_POINTS_MAX 4000
+
+/*
  * How much one notch of the wheel changes the view.
  *
  * The same factor as the Zoom in and Zoom out buttons, so the two agree and
@@ -324,6 +339,7 @@ struct recon_calc {
         GRAPH_XY,
         GRAPH_POLAR,
         GRAPH_PARAM,
+        GRAPH_DATA,
     } graph_kind;
 
     /*
@@ -340,6 +356,29 @@ struct recon_calc {
      * is a form; six rows over a small plane is a form with a graph attached.
      */
     struct recon_edit formula_y[GRAPH_CURVES];
+
+    /*
+     * A file's worth of points, and what reading it came to.
+     *
+     * Held rather than re-read every frame: the plane redraws on every pointer
+     * move while somebody is dragging it, and reading a file per frame would
+     * make dragging a graph of a large file feel like dragging through mud.
+     * `loaded` is the path these points came from, so a changed field is
+     * noticed without anything having to announce it.
+     *
+     * `bad` and `over` are the two honest answers this mode owes: rows that
+     * were not numbers, and rows there was no room for. A plot that quietly
+     * dropped either would be a picture of a data set nobody has.
+     */
+    struct data_set {
+        char loaded[RECON_PATH_MAX];
+        double x[DATA_POINTS_MAX];
+        double y[DATA_POINTS_MAX];
+        int count;
+        int bad;
+        int over;
+        bool read_failed;
+    } data[GRAPH_CURVES];
 
     double span_x, span_y;
 
@@ -451,6 +490,8 @@ static void remember_graph(struct recon_calc *calc) {
         kind = "polar";
     } else if (calc->graph_kind == GRAPH_PARAM) {
         kind = "parametric";
+    } else if (calc->graph_kind == GRAPH_DATA) {
+        kind = "data";
     }
     recon_registry_set(RECON_REG_USER, GRAPH_KIND_KEY, kind);
 }
@@ -888,6 +929,7 @@ static void equals(struct recon_calc *calc) {
 #define HIT_GRAPH_XY (RECON_APPWIN_HIT_USER + 907)
 #define HIT_GRAPH_POLAR (RECON_APPWIN_HIT_USER + 908)
 #define HIT_GRAPH_PARAM (RECON_APPWIN_HIT_USER + 909)
+#define HIT_GRAPH_DATA (RECON_APPWIN_HIT_USER + 907 + 100)
 #define HIT_GRAPH_FIELD_BASE (RECON_APPWIN_HIT_USER + 910)
 
 /* One of `n` values converted from `from` to `to` within a category. */
@@ -1339,6 +1381,178 @@ static void draw_param_curve(struct recon_panel *panel, const char *fx,
     }
 }
 
+/*
+ * Read a file of numbers into one curve's points.
+ *
+ * The format is the one somebody would write without being told: two numbers
+ * a line, separated by whitespace or a comma. Blank lines and lines starting
+ * with `#` are skipped and are not counted as bad, because a file with a
+ * heading on it is a file somebody made by hand and meant.
+ *
+ * --- What happens to a line that is not two numbers ---
+ *
+ * It is counted, and the count is shown. That is the whole of this mode's
+ * design and the reason it took a decision rather than an afternoon: a plot
+ * that silently drops the rows it could not read is a picture of a different
+ * data set, and it looks exactly like a picture of the right one. So does a
+ * plot that stops at the first bad line and shows half.
+ *
+ * Neither refusing nor ignoring, then: draw what was read and say what was
+ * not. The same answer the rest of this system gives about ceilings.
+ */
+static bool load_data(struct data_set *set, const char *path) {
+    if (strcmp(set->loaded, path) == 0) {
+        return false;   /* Already the file in the field. */
+    }
+
+    snprintf(set->loaded, sizeof(set->loaded), "%s", path);
+    set->count = 0;
+    set->bad = 0;
+    set->over = 0;
+    set->read_failed = false;
+
+    if (path[0] == '\0') {
+        return true;
+    }
+
+    size_t size = 0;
+    char *text = recon_fs_read("/", path, &size);
+    if (text == NULL) {
+        set->read_failed = true;
+        return true;
+    }
+
+    char *save = NULL;
+    for (char *line = strtok_r(text, "\n", &save);
+            line != NULL;
+            line = strtok_r(NULL, "\n", &save)) {
+
+        while (*line == ' ' || *line == '\t' || *line == '\r') {
+            line++;
+        }
+        if (*line == '\0' || *line == '#') {
+            continue;
+        }
+
+        /* A comma is a separator, not a decimal point: this reads numbers the
+         * way strtod does, and strtod's decimal point is a dot. Saying so
+         * matters on a machine set to a language that writes them the other
+         * way round, and this does not pretend to handle that. */
+        char *end = NULL;
+        double x = strtod(line, &end);
+        if (end == line) {
+            set->bad++;
+            continue;
+        }
+        while (*end == ' ' || *end == '\t' || *end == ',') {
+            end++;
+        }
+        char *second = end;
+        double y = strtod(second, &end);
+        if (end == second) {
+            set->bad++;
+            continue;
+        }
+
+        if (set->count >= DATA_POINTS_MAX) {
+            set->over++;
+            continue;
+        }
+        set->x[set->count] = x;
+        set->y[set->count] = y;
+        set->count++;
+    }
+
+    free(text);
+    return true;
+}
+
+/*
+ * Put the view where the data is.
+ *
+ * A plot of readings is not a plot of a function: an expression can be looked
+ * at anywhere and still be an expression, while a file of measurements is a
+ * particular set of numbers in particular units. Somebody plotting readings
+ * between 0 and 1000 into a window ten units wide sees nothing at all, and
+ * what they conclude is that the mode does not work.
+ *
+ * So the view is fitted when a file is read, and only then -- panning and
+ * zooming afterwards are somebody's own and are not undone on the next frame.
+ *
+ * A margin of a tenth, so the outermost points are not drawn on the edge of
+ * the plane where half a mark is outside it. A set with no spread -- every
+ * reading the same, or one reading -- gets a unit either side rather than a
+ * span of zero, which would divide by nothing.
+ */
+static void fit_to_data(struct recon_calc *calc) {
+    double low_x = 0, high_x = 0, low_y = 0, high_y = 0;
+    bool any = false;
+
+    for (int c = 0; c < GRAPH_CURVES; c++) {
+        const struct data_set *set = &calc->data[c];
+        for (int i = 0; i < set->count; i++) {
+            if (!any) {
+                low_x = high_x = set->x[i];
+                low_y = high_y = set->y[i];
+                any = true;
+                continue;
+            }
+            if (set->x[i] < low_x) { low_x = set->x[i]; }
+            if (set->x[i] > high_x) { high_x = set->x[i]; }
+            if (set->y[i] < low_y) { low_y = set->y[i]; }
+            if (set->y[i] > high_y) { high_y = set->y[i]; }
+        }
+    }
+
+    if (!any) {
+        return;   /* Nothing read, so nothing to look at. */
+    }
+
+    calc->centre_x = (low_x + high_x) / 2.0;
+    calc->centre_y = (low_y + high_y) / 2.0;
+
+    double wide = (high_x - low_x) / 2.0;
+    double tall = (high_y - low_y) / 2.0;
+    double span = (wide > tall) ? wide : tall;
+    if (!(span > 0.0)) {
+        span = 1.0;
+    }
+    calc->span_x = span * 1.1;
+    calc->span_y = calc->span_x;
+}
+
+/*
+ * One data set, drawn as points with a line through them.
+ *
+ * Both, because either alone lies about a different thing: points alone hide
+ * how few there are between two far apart, and a line alone makes measurements
+ * look like a function. A mark at every reading and a line joining them says
+ * what was measured and in what order.
+ *
+ * Not sorted by x. The order in the file is the order they are joined in,
+ * because a data plot is often a path -- a position over time, a hysteresis
+ * loop -- and sorting one would draw something that never happened.
+ */
+static void draw_data_set(struct recon_panel *panel, const struct data_set *set,
+        recon_color ink, int zero_x, int zero_y, double per_unit_x,
+        double per_unit_y, int x, int y, int w, int h) {
+    struct path_pen pen = { false, 0, 0 };
+
+    for (int i = 0; i < set->count; i++) {
+        double px = zero_x + set->x[i] * per_unit_x;
+        double py = zero_y - set->y[i] * per_unit_y;
+        path_to(&pen, panel, px, py, ink, x, y, w, h);
+
+        /* And a mark, so a single reading is visible and so the readings can
+         * be told from the line between them. */
+        int cx = (int)px;
+        int cy = (int)py;
+        if (cx >= x + 2 && cx < x + w - 2 && cy >= y + 2 && cy < y + h - 2) {
+            recon_fill_rect(panel, cx - 1, cy - 1, 3, 3, ink);
+        }
+    }
+}
+
 static void draw_polar_curve(struct recon_calc *calc, struct recon_panel *panel,
         const char *text, recon_color ink, int zero_x, int zero_y,
         double per_unit_x, double per_unit_y, int x, int y, int w, int h) {
@@ -1510,6 +1724,7 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         { "y of x", HIT_GRAPH_XY, GRAPH_XY },
         { "Polar", HIT_GRAPH_POLAR, GRAPH_POLAR },
         { "Parametric", HIT_GRAPH_PARAM, GRAPH_PARAM },
+        { "Data", HIT_GRAPH_DATA, GRAPH_DATA },
     };
     int kx = x;
     for (size_t i = 0; i < sizeof(KINDS) / sizeof(KINDS[0]); i++) {
@@ -1535,11 +1750,17 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         field_label = "r =";
     } else if (calc->graph_kind == GRAPH_PARAM) {
         field_label = "x =";
+    } else if (calc->graph_kind == GRAPH_DATA) {
+        field_label = "file";
     }
 
-    int label_w = recon_text_width(calc->font, "y =");
-    for (int i = 0; i < 2; i++) {
-        int other = recon_text_width(calc->font, i == 0 ? "r =" : "x =");
+    /* The widest of them decides, so the fields do not shift sideways when
+     * the mode changes -- which reads as the layout breaking rather than as
+     * the label being a different word. */
+    static const char *LABELS[] = { "y =", "r =", "x =", "file" };
+    int label_w = 0;
+    for (size_t i = 0; i < sizeof(LABELS) / sizeof(LABELS[0]); i++) {
+        int other = recon_text_width(calc->font, LABELS[i]);
         if (other > label_w) {
             label_w = other;
         }
@@ -1748,6 +1969,9 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
                 : calc->graph_kind == GRAPH_PARAM
                 ? "Type x and y, both in t. For example: cos(t) and sin(t), "
                   "or t and t^2"
+                : calc->graph_kind == GRAPH_DATA
+                ? "Type the path of a file with two numbers on each line. "
+                  "For example: /Users/you/Documents/readings.txt"
                 : "Type an expression in x. For example: sin(x), 2x^2-1, 1/x",
             COLOR_KEY_TEXT);
         return;
@@ -1765,6 +1989,12 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     why[0] = '\0';
     for (int i = 0; i < graph_field_count(calc) && complaining < 0; i++) {
         struct recon_edit *field = graph_field(calc, i);
+        /* A path is not an expression, and running it through the grammar
+         * would complain about a slash. What is wrong with a file is said
+         * below, where the file has been read. */
+        if (calc->graph_kind == GRAPH_DATA) {
+            break;
+        }
         if (field->text[0] != '\0' &&
                 !recon_expr_valid_named(field->text, graph_variable(), why,
                     sizeof(why))) {
@@ -1778,8 +2008,16 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         if (calc->formula[c].text[0] == '\0' || c == complaining) {
             continue;
         }
-        if (!recon_expr_valid_named(calc->formula[c].text,
-                graph_variable(), NULL, 0)) {
+        /*
+         * A data file's field holds a path, not an expression, and a path is
+         * not one -- so this check has to come after the mode is known rather
+         * than before it. It did not, and every data file was skipped here
+         * and then reported as having no numbers in it, which is what a file
+         * that was never opened looks like from the other end.
+         */
+        if (calc->graph_kind != GRAPH_DATA &&
+                !recon_expr_valid_named(calc->formula[c].text,
+                    graph_variable(), NULL, 0)) {
             continue;
         }
 
@@ -1795,6 +2033,23 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
          * than a flag inside the one below -- and it joins its points with the
          * same rule, since a polar curve has asymptotes too.
          */
+        if (calc->graph_kind == GRAPH_DATA) {
+            if (load_data(&calc->data[c], calc->formula[c].text)) {
+                /*
+                 * A file changed under this frame, so the view it is being
+                 * drawn into is the old one. Fitted now and drawn properly on
+                 * the next frame, which is one frame of the wrong scale after
+                 * typing a path -- unnoticeable, and the alternative is
+                 * working out the geometry twice in one draw.
+                 */
+                fit_to_data(calc);
+                recon_appwin_refresh(calc->win);
+            }
+            draw_data_set(panel, &calc->data[c], ink, zero_x, zero_y,
+                per_unit_x, per_unit_y, x, y, w, h);
+            continue;
+        }
+
         if (calc->graph_kind == GRAPH_POLAR) {
             draw_polar_curve(calc, panel, calc->formula[c].text, ink,
                 zero_x, zero_y, per_unit_x, per_unit_y, x, y, w, h);
@@ -1888,6 +2143,62 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
             curve_color(complaining));
         recon_draw_text(panel, calc->font, x + 24,
             y + h - 10 - ascent / 2, w - 32, why, COLOR_WARNING);
+    }
+
+    /*
+     * What reading the files came to, said out loud.
+     *
+     * This is the whole reason the data mode is a mode rather than an
+     * afternoon. A plot that quietly drops the rows it could not read is a
+     * picture of a data set nobody has, and it looks exactly like a picture of
+     * the right one -- so the count of what did not go in is drawn next to the
+     * thing that did.
+     *
+     * The first file with something to say is the one reported, the same rule
+     * the expression complaint above follows, and its swatch says which.
+     */
+    if (calc->graph_kind == GRAPH_DATA) {
+        for (int c = 0; c < GRAPH_CURVES; c++) {
+            const struct data_set *set = &calc->data[c];
+            if (calc->formula[c].text[0] == '\0') {
+                continue;
+            }
+
+            /* Room for the whole path plus the sentence around it. The
+             * path is what somebody typed and is what they would fix, so it
+             * is named in full rather than by its last part. */
+            char said[RECON_PATH_MAX + 96];
+            if (set->read_failed) {
+                snprintf(said, sizeof(said), "%s could not be read.",
+                    calc->formula[c].text);
+            } else if (set->bad > 0 && set->over > 0) {
+                snprintf(said, sizeof(said),
+                    "%d points. %d line%s were not two numbers, and %d more "
+                    "would not fit.", set->count, set->bad,
+                    set->bad == 1 ? "" : "s", set->over);
+            } else if (set->bad > 0) {
+                snprintf(said, sizeof(said),
+                    "%d points. %d line%s %s not two numbers and %s left out.",
+                    set->count, set->bad, set->bad == 1 ? "" : "s",
+                    set->bad == 1 ? "was" : "were",
+                    set->bad == 1 ? "was" : "were");
+            } else if (set->over > 0) {
+                snprintf(said, sizeof(said),
+                    "%d points, which is all there is room for. %d more are "
+                    "in the file.", set->count, set->over);
+            } else if (set->count > 0) {
+                continue;   /* Nothing to say: every line went in. */
+            } else {
+                snprintf(said, sizeof(said), "%s has no numbers in it.",
+                    calc->formula[c].text);
+            }
+
+            recon_fill_rect(panel, x + 8, y + h - 14 - ascent / 2, 10,
+                line - 2, curve_color(c));
+            recon_draw_text(panel, calc->font, x + 24,
+                y + h - 10 - ascent / 2, w - 32, said, COLOR_WARNING);
+            break;
+        }
     }
 
     /*
@@ -2285,12 +2596,15 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         return true;
     case HIT_GRAPH_XY:
     case HIT_GRAPH_POLAR:
-    case HIT_GRAPH_PARAM: {
+    case HIT_GRAPH_PARAM:
+    case HIT_GRAPH_DATA: {
         enum graph_kind wanted = GRAPH_XY;
         if (hit_id == HIT_GRAPH_POLAR) {
             wanted = GRAPH_POLAR;
         } else if (hit_id == HIT_GRAPH_PARAM) {
             wanted = GRAPH_PARAM;
+        } else if (hit_id == HIT_GRAPH_DATA) {
+            wanted = GRAPH_DATA;
         }
         if (calc->graph_kind == wanted) {
             return true;
@@ -2338,6 +2652,12 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         /* Back to where it started, which is the span AND the place -- a
          * Reset that left the view somewhere in the third quadrant would be
          * resetting half of what somebody had changed. */
+        if (calc->graph_kind == GRAPH_DATA) {
+            /* Back to the data, which is what "the starting view" means when
+             * the plane is showing a file rather than a function. */
+            fit_to_data(calc);
+            return true;
+        }
         /* Back to this mode's own scale, not to the other one's. */
         calc->span_x = (calc->graph_kind == GRAPH_POLAR)
             ? GRAPH_SPAN_POLAR : GRAPH_SPAN;
@@ -2712,6 +3032,8 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
         calc->graph_kind = GRAPH_POLAR;
     } else if (strcmp(kept_kind, "parametric") == 0) {
         calc->graph_kind = GRAPH_PARAM;
+    } else if (strcmp(kept_kind, "data") == 0) {
+        calc->graph_kind = GRAPH_DATA;
     }
 
     calc->formula_focused = 0;
