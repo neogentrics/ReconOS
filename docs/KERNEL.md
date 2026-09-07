@@ -1905,11 +1905,55 @@ The `0xAA55` signature is verified in the image after it is written, because
 `printf '\x55\xaa'` in dash writes the six literal characters `\x55\xaa` and the
 disk is then simply not bootable, with nothing to say so.
 
+#### Stage 2 is C, and that was worth finding out early
+
+`clang -m16` emits real-mode code from ordinary C. What is left of this
+checkpoint is a FAT32 reader, an RSA-2048 check over a SHA-256 hash, page tables
+and a handoff structure — and in 16-bit assembly that would be hundreds of lines
+nobody could review against the UEFI loader that already does the same four jobs
+in C. Only three things need assembly, and they are the three that cannot be
+said in C: the magic number has to be the first four bytes, the segment
+registers have to be right before any pointer is touched, and there has to be a
+stack before there can be a call.
+
+The entry stub also **zeroes `.bss`**, because `objcopy -O binary` drops NOBITS
+sections: they occupy no bytes in the image, so whatever the firmware left at
+those addresses would otherwise be the initial value of every static. On this
+machine that is usually zero, which is the worst case — it would work here and
+fail on a machine whose firmware had used the memory.
+
+The memory map is read, and reported:
+
+```
+e820: 7 regions, 127 MB usable      -m 128M
+e820: 7 regions, 511 MB usable      -m 512M
+```
+
+Two machine sizes, because *"it printed a number"* and *"it read the machine"*
+look identical on one. The same argument the boot-path evidence rests on.
+
+The first version returned **nought regions on every machine**, in a routine
+whose assembly equivalent had worked minutes earlier: the inline assembly named
+`eax` in both the input and the output list — `"+a"` for the returned signature
+and `"a"` for the `0xE820` going in — so two values shared one register and the
+call was never correctly made. Each register is now one read-write operand.
+
+### Where the kernel is read from, and why not from raw blocks
+
+The kernel is a **file on the EFI partition**, read with the FAT32 reader below,
+and not from raw blocks the installer reserved. Raw blocks would delete the
+FAT32 reader entirely and are much the cheaper thing to build.
+
+They would also put **a second copy of the kernel on the disk**, which every
+system update would have to keep in step with the first. A BIOS machine quietly
+booting the kernel from before the last update is exactly the class of
+divergence this project keeps finding in itself, and the way not to have it is
+not to have the second copy.
+
 ### What is still to build here
 
-E820, the FAT32 reader, the signature check, A20, the GDT, page tables, long
-mode, and the ReconBoot handoff. Stage 2 is 135 bytes and prints; the list above
-is the rest of the checkpoint.
+The FAT32 reader, the signature check, A20, the GDT, page tables, long mode, and
+the ReconBoot handoff.
 
 ### What will be checked, and what would make the checkpoint a lie
 

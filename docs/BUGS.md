@@ -350,6 +350,8 @@ broken says nothing about the work.
 
 ### BG-137 — The BIOS harness read a mirror of the screen and called it serial output
 
+[#294](https://github.com/neogentrics/ReconOS/issues/294)
+
 - **Found:** 7 September 2026, while bringing up checkpoint 16, by turning the
   VGA mirror off to check something unrelated.
 - **Cost:** an evening chasing a register-clobbering bug that did not exist.

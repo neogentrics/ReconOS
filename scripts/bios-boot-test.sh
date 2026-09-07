@@ -71,8 +71,12 @@ make_disk() {
 # So the harness reads the same port a headless machine would, and nothing but
 # what the loader actually wrote can reach it.
 boot() {
-	timeout 20 qemu-system-x86_64 -m 128M -display none -serial stdio \
-		-no-reboot -drive "file=$1,format=raw,if=ide" 2>&1 | tr -d '\r'
+	boot_with 128M "$1"
+}
+
+boot_with() {
+	timeout 20 qemu-system-x86_64 -m "$1" -display none -serial stdio \
+		-no-reboot -drive "file=$2,format=raw,if=ide" 2>&1 | tr -d '\r'
 }
 
 # --- the machine boots what we wrote ---------------------------------------
@@ -106,6 +110,38 @@ if echo "$out" | grep -q 'drive 0x80'; then
 	pass=$((pass + 1))
 else
 	echo "FAILED -- $(echo "$out" | grep -o 'drive 0x..' | head -1)"
+	fail=$((fail + 1))
+fi
+
+# --- the memory map --------------------------------------------------------
+
+say "reads a memory map from the BIOS"
+regions=$(echo "$out" | sed -n 's/^e820: \([0-9]*\) regions.*/\1/p')
+if [ -n "$regions" ] && [ "$regions" -ge 4 ]; then
+	echo "${regions} regions"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- '$(echo "$out" | grep e820 || echo 'no e820 line')'"
+	fail=$((fail + 1))
+fi
+
+# The one that a constant cannot pass.
+#
+# "It printed a number" and "it read the machine" look identical in a test run
+# on one machine size. Two sizes, and the number has to follow -- which is the
+# same argument the boot-path evidence rests on, and the reason the kernel is
+# booted at several processor counts rather than one.
+say "and the total follows the machine, not a constant"
+small=$(boot_with 128M "$W/good.img" | sed -n 's/^e820: [0-9]* regions, \([0-9]*\) MB.*/\1/p')
+large=$(boot_with 512M "$W/good.img" | sed -n 's/^e820: [0-9]* regions, \([0-9]*\) MB.*/\1/p')
+
+if [ -n "$small" ] && [ -n "$large" ] &&
+   [ "$small" -ge 100 ] && [ "$small" -le 128 ] &&
+   [ "$large" -ge 480 ] && [ "$large" -le 512 ]; then
+	echo "${small} MB at 128M, ${large} MB at 512M"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- ${small:-none} MB at 128M, ${large:-none} MB at 512M"
 	fail=$((fail + 1))
 fi
 

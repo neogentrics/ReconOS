@@ -29,12 +29,31 @@ ASFLAGS := -target i386-unknown-none -ffreestanding -nostdlib \
 
 all: $(BUILD)/stage1.bin $(BUILD)/stage2.bin
 
-$(BUILD)/stage2.o: stage2.S
+# Stage 2 is C, compiled with -m16.
+#
+# clang emits real-mode code from ordinary C, which matters because what is left
+# of this checkpoint -- a FAT32 reader, an RSA-2048 check over a SHA-256 hash,
+# page tables and a handoff structure -- would otherwise be hundreds of lines of
+# 16-bit assembly nobody could review against the UEFI loader that already does
+# the same jobs in C.
+#
+# -Os rather than -O2: this has a megabyte of partition and no reason to trade
+# size for speed, and smaller code in the first stages is smaller reading.
+CFLAGS16 := -target i386-unknown-none -m16 -ffreestanding -nostdlib -fno-pic \
+            -Os -Wall -Wextra -Werror
+
+$(BUILD)/stage2_entry.o: stage2_entry.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/stage2.elf: $(BUILD)/stage2.o stage2.ld
-	$(LD) -T stage2.ld -o $@ $<
+$(BUILD)/stage2_c.o: stage2.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS16) -MMD -MP -c $< -o $@
+
+$(BUILD)/stage2.elf: $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o stage2.ld
+	$(LD) -T stage2.ld -o $@ $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o
+
+-include $(BUILD)/stage2_c.d
 
 $(BUILD)/stage2.bin: $(BUILD)/stage2.elf
 	$(OBJCOPY) -O binary $< $@
