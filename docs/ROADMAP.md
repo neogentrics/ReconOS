@@ -2059,11 +2059,33 @@ The view is fitted to the data when a file is read, because a file of readings
 between 0 and 1000 in a window ten units wide shows nothing, and what somebody
 concludes from that is that the mode does not work.
 
-What is still missing:
+**Nothing is still missing from this mode.** The three gaps named here through
+v0.4.0 -- a settable parameter range, a file picker, and the decimal comma --
+are all done, and the how of each is below.
 
-* **A parameter range somebody can set** for the parametric mode. Two more
-  fields above an already crowded form, which is why the fixed range above is
-  stated rather than quietly chosen.
+**The parameter range is somebody's to set, and it took no extra row either.**
+Two fields on the button row, in the space the x range was using -- and the x
+range is not drawn in parametric mode any more, because it describes the *view*
+and the plane already shows that, while how far the parameter runs cannot be
+seen by looking. The first attempt left the range text drawn as well and it was
+clipped to "x -2.50 to ...", which is worse than absent.
+
+They hold expressions rather than numbers, evaluated by `recon_expr` with no
+variable, so `2pi`, `-pi/2` and `3` all work. The defaults are written as
+`-2pi` and `2pi` for the same reason: a field reading `-2pi` says what the
+range *is* in a way `-6.283185` does not, and it is what somebody would have
+typed. Tab reaches them, because a field only the mouse can get to is one
+somebody has to be told about.
+
+A bound that does not evaluate falls back to the default **and says so under
+the buttons**. Falling back quietly would draw a right-looking curve over the
+wrong range -- the same shape of fault as the decimal comma, a picture that is
+wrong and looks right. Reversed bounds are swapped rather than refused, because
+from and to describe an interval here and not a direction: the curve is the
+same set of points either way round, so there is nothing to tell anybody.
+
+Confirmed by photograph: `(cos t, sin t)` with t from 0 to pi draws the upper
+half of the circle, and nothing else.
 
 **The file picker is done, and it cost the field width rather than a row.**
 The objection was that a button beside three already-tight fields would crowd

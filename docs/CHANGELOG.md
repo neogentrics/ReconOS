@@ -23,6 +23,22 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**How far the parameter runs is somebody's to set.** Two fields on the
+grapher's button row in parametric mode, holding expressions rather than
+numbers -- `2pi`, `-pi/2` and `3` all work, and the defaults are written
+`-2pi` and `2pi` because that says what the range is in a way `-6.283185`
+does not. Tab reaches them. The x range is no longer drawn in that mode: it
+describes the view, which the plane already shows, and leaving it there got it
+clipped to "x -2.50 to ...".
+
+A bound that does not evaluate falls back to the default and says so under the
+buttons, rather than quietly drawing a right-looking curve over the wrong
+range. Reversed bounds are swapped without comment, because from and to
+describe an interval and not a direction here.
+
+That empties the grapher's list of named gaps: the parameter range, the file
+picker and the decimal comma were the three, and all three are done.
+
 **Every file dialog was putting a hole through the window behind it.** The
 dialog dims what is behind so it reads as a question, and `dim` is a
 translucent black -- but it was laid down with `recon_fill_rect`, which writes

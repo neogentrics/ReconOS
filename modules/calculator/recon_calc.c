@@ -237,9 +237,11 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
  * one. Symmetric for that second reason -- a range starting at zero draws
  * every even function as a hook.
  *
- * A range somebody can set is the obvious next thing and is two more fields
- * above an already crowded form; it is written down in docs/ROADMAP.md rather
- * than guessed at here.
+ * These are the defaults now rather than the rule: the two fields on the
+ * button row set the range, and fall back to these when they are empty or do
+ * not evaluate. Putting them on that row rather than on a fourth one is the
+ * same trade the Choose button makes -- a row would come off the plane, and
+ * the plane is what the mode is for.
  */
 #define PARAM_FROM (-6.283185307179586)
 #define PARAM_TO 6.283185307179586
@@ -247,6 +249,10 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
 
 /* Where the second half of a parametric pair is written down. */
 #define GRAPH_Y_KEY_PREFIX "calculator/graph-y-"
+/* The parameter's bounds, kept with the expressions for the same reason: a
+ * range somebody chose to suit their curve is part of the curve. */
+#define GRAPH_TFROM_KEY "calculator/graph-t-from"
+#define GRAPH_TTO_KEY "calculator/graph-t-to"
 
 /*
  * How many points one data file may put on the plane.
@@ -453,6 +459,17 @@ struct recon_calc {
     bool want_save;
 
     /*
+     * How far the parameter runs, in parametric mode.
+     *
+     * Expressions rather than numbers, evaluated by recon_expr with no
+     * variable -- so "2pi", "-pi/2" and "3" all work, and somebody who has
+     * just typed `cos(t)` into the field above does not have to switch to
+     * thinking in decimals to say how far round it goes.
+     */
+    struct recon_edit t_from;
+    struct recon_edit t_to;
+
+    /*
      * Choosing a data file rather than typing its path.
      *
      * Drawn inside this window, like every other file dialog in the system,
@@ -518,6 +535,9 @@ static void remember_graph(struct recon_calc *calc) {
         kind = "data";
     }
     recon_registry_set(RECON_REG_USER, GRAPH_KIND_KEY, kind);
+
+    recon_registry_set(RECON_REG_USER, GRAPH_TFROM_KEY, calc->t_from.text);
+    recon_registry_set(RECON_REG_USER, GRAPH_TTO_KEY, calc->t_to.text);
 }
 
 /*
@@ -542,9 +562,19 @@ static const char *graph_variable(void) {
     return "t";
 }
 
-/* How many fields this mode has: three, or three pairs. */
+/*
+ * How many fields this mode has: three, three pairs, or three pairs and the
+ * two bounds.
+ *
+ * The bounds are in the count so Tab reaches them. A field only the mouse can
+ * get to is one somebody has to be told about.
+ */
+#define GRAPH_BOUNDS 2
+
 static int graph_field_count(const struct recon_calc *calc) {
-    return calc->graph_kind == GRAPH_PARAM ? GRAPH_CURVES * 2 : GRAPH_CURVES;
+    return calc->graph_kind == GRAPH_PARAM
+        ? GRAPH_CURVES * 2 + GRAPH_BOUNDS
+        : GRAPH_CURVES;
 }
 
 /*
@@ -564,6 +594,12 @@ static struct recon_edit *graph_field(struct recon_calc *calc, int i) {
     }
     if (i < GRAPH_CURVES * 2) {
         return &calc->formula_y[i - GRAPH_CURVES];
+    }
+    if (i == GRAPH_CURVES * 2) {
+        return &calc->t_from;
+    }
+    if (i == GRAPH_CURVES * 2 + 1) {
+        return &calc->t_to;
     }
     return &calc->formula[0];
 }
@@ -1390,6 +1426,49 @@ static void path_to(struct path_pen *pen, struct recon_panel *panel,
 }
 
 /*
+ * How far the parameter runs, as the two fields say.
+ *
+ * Falls back to the defaults whenever the fields do not give an answer -- so
+ * an empty pair, a half-typed expression, or two numbers that are the same all
+ * draw the curve they drew before rather than drawing nothing. A grapher that
+ * blanks while somebody is partway through typing a bound is a grapher that
+ * looks broken every time it is used.
+ *
+ * Reversed bounds are swapped rather than refused. From and to describe an
+ * interval here, not a direction: the curve is the same set of points either
+ * way round, so there is nothing to tell somebody about.
+ */
+static void param_range(const struct recon_calc *calc, double *from,
+        double *to, bool *fell_back) {
+    *from = PARAM_FROM;
+    *to = PARAM_TO;
+    *fell_back = false;
+
+    double a = 0.0;
+    double b = 0.0;
+    if (recon_expr_eval(calc->t_from.text, 0.0, &a, NULL, 0) != RECON_EXPR_OK ||
+            recon_expr_eval(calc->t_to.text, 0.0, &b, NULL, 0) !=
+                RECON_EXPR_OK) {
+        *fell_back = true;
+        return;
+    }
+
+    if (!isfinite(a) || !isfinite(b) || a == b) {
+        *fell_back = true;
+        return;
+    }
+
+    if (a > b) {
+        double swap = a;
+        a = b;
+        b = swap;
+    }
+
+    *from = a;
+    *to = b;
+}
+
+/*
  * One parametric curve: x and y each a function of the same parameter.
  *
  * Both halves are asked at every step and either may have no value there --
@@ -1397,13 +1476,14 @@ static void path_to(struct path_pen *pen, struct recon_panel *panel,
  * point needs two coordinates and half of one is not a place.
  */
 static void draw_param_curve(struct recon_panel *panel, const char *fx,
-        const char *fy, recon_color ink, int zero_x, int zero_y,
-        double per_unit_x, double per_unit_y, int x, int y, int w, int h) {
+        const char *fy, double from, double to, recon_color ink, int zero_x,
+        int zero_y, double per_unit_x, double per_unit_y, int x, int y, int w,
+        int h) {
     struct path_pen pen = { false, 0, 0 };
-    double step = (PARAM_TO - PARAM_FROM) / PARAM_STEPS;
+    double step = (to - from) / PARAM_STEPS;
 
     for (int i = 0; i <= PARAM_STEPS; i++) {
-        double t = PARAM_FROM + i * step;
+        double t = from + i * step;
 
         double vx = 0.0;
         double vy = 0.0;
@@ -1863,12 +1943,70 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         bx += bw + 6;
     }
 
+    /*
+     * In parametric mode the button row carries the two bounds instead of the
+     * x range. The x range is still true, but it describes the *view*, which
+     * the plane already shows; how far the parameter runs is the thing that
+     * cannot be seen by looking and is the thing somebody wants to change.
+     */
+    if (paired) {
+        int bounds_w = recon_text_width(calc->font, "-000.00") + 20;
+        int label = recon_text_width(calc->font, "t") + 6;
+        int to_w = recon_text_width(calc->font, "to") + 8;
+
+        if (bx + label + bounds_w + to_w + bounds_w < x + w) {
+            recon_draw_text(panel, calc->font, bx + 6, y + ascent + 3, label,
+                "t", COLOR_KEY_TEXT);
+            bx += label + 6;
+
+            recon_edit_draw(panel, calc->font, bx, y, bounds_w, line + 6,
+                &calc->t_from);
+            recon_hit_add(panel, bx, y, bounds_w, line + 6,
+                HIT_GRAPH_FIELD_BASE + (uint32_t)(GRAPH_CURVES * 2));
+            bx += bounds_w + 4;
+
+            recon_draw_text(panel, calc->font, bx, y + ascent + 3, to_w,
+                "to", COLOR_KEY_TEXT);
+            bx += to_w;
+
+            recon_edit_draw(panel, calc->font, bx, y, bounds_w, line + 6,
+                &calc->t_to);
+            recon_hit_add(panel, bx, y, bounds_w, line + 6,
+                HIT_GRAPH_FIELD_BASE + (uint32_t)(GRAPH_CURVES * 2 + 1));
+            bx += bounds_w + 6;
+        }
+    }
+
     char range[64];
     snprintf(range, sizeof(range), "x %+.2f to %+.2f",
         calc->centre_x - calc->span_x, calc->centre_x + calc->span_x);
     /* What Save did, if it has done anything, in place of the range -- the
      * range is always true and the note is news. */
+    /*
+     * A bound that does not evaluate falls back to the default, and says so.
+     * Falling back silently would draw the right-looking curve over the wrong
+     * range, which is the same shape of fault as the decimal comma: a picture
+     * that is wrong and looks right.
+     */
     const char *under = calc->note[0] != '\0' ? calc->note : range;
+    if (paired && calc->note[0] == '\0') {
+        /*
+         * Nothing, normally. The bounds fields have taken the room the x range
+         * used, and the range was being drawn into what was left and clipped
+         * to "x -2.50 to ..." -- which is worse than absent. The plane shows
+         * the view; the fields show the parameter; there is nothing left for
+         * this line to say unless something is wrong.
+         */
+        under = "";
+
+        double from = 0.0;
+        double to = 0.0;
+        bool fell_back = false;
+        param_range(calc, &from, &to, &fell_back);
+        if (fell_back) {
+            under = "t runs -2pi to 2pi; the bounds are not two numbers.";
+        }
+    }
     recon_draw_text(panel, calc->font, bx + 6, y + ascent + 3, w - (bx - x),
         under, COLOR_KEY_TEXT);
     y += line + 12;
@@ -2106,9 +2244,14 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
                         graph_variable(), NULL, 0)) {
                 continue;
             }
+            double from = PARAM_FROM;
+            double to = PARAM_TO;
+            bool fell_back = false;
+            param_range(calc, &from, &to, &fell_back);
+
             draw_param_curve(panel, calc->formula[c].text,
-                calc->formula_y[c].text, ink, zero_x, zero_y, per_unit_x,
-                per_unit_y, x, y, w, h);
+                calc->formula_y[c].text, from, to, ink, zero_x, zero_y,
+                per_unit_x, per_unit_y, x, y, w, h);
             continue;
         }
 
@@ -2653,12 +2796,12 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
      * above it and it is matched with an open-ended `>=`.
      */
     if (hit_id >= HIT_GRAPH_FIELD_BASE &&
-            hit_id < HIT_GRAPH_FIELD_BASE + GRAPH_CURVES * 2) {
+            hit_id < HIT_GRAPH_FIELD_BASE + GRAPH_CURVES * 2 + GRAPH_BOUNDS) {
         int i = (int)(hit_id - HIT_GRAPH_FIELD_BASE);
         /* Every field, not the three of this mode: a caret left on a
          * parametric y after switching back would be drawn on a box that is
          * not there. */
-        for (int j = 0; j < GRAPH_CURVES * 2; j++) {
+        for (int j = 0; j < GRAPH_CURVES * 2 + GRAPH_BOUNDS; j++) {
             graph_field(calc, j)->active = (j == i);
         }
         calc->formula_focused = i;
@@ -3146,6 +3289,18 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
         recon_edit_begin(&calc->formula[0], "sin(x)", false);
         calc->formula[0].active = false;
     }
+    /*
+     * The defaults are written as expressions rather than as 6.28, because
+     * they are then the same thing somebody would type -- and a field showing
+     * "-2pi" says what the range *is* in a way "-6.283185" does not.
+     */
+    recon_edit_begin(&calc->t_from,
+        recon_registry_get(RECON_REG_USER, GRAPH_TFROM_KEY, "-2pi"), false);
+    calc->t_from.active = false;
+    recon_edit_begin(&calc->t_to,
+        recon_registry_get(RECON_REG_USER, GRAPH_TTO_KEY, "2pi"), false);
+    calc->t_to.active = false;
+
     const char *kept_kind = recon_registry_get(RECON_REG_USER,
         GRAPH_KIND_KEY, "xy");
     calc->graph_kind = GRAPH_XY;
