@@ -33,10 +33,43 @@
 #include <string.h>
 
 #include "recon_avatar.h"
+#include "recon_registry.h"
 #include "recon_fs.h"
 #include "recon_icon_gen.h"
 
+/*
+ * --- Two sizes, and the difference between them is the whole point ---
+ *
+ * ICON_SIZE is the *coordinate space* every drawing function below works in.
+ * It has always been 32 and stays 32, so every rectangle and disc in this file
+ * keeps the numbers it was written with.
+ *
+ * ICON_PIXELS is what actually gets written to disk, four times larger.
+ *
+ * The reason is what happens at the other end. recon_draw_image averages when
+ * it shrinks an image and takes the nearest pixel when it grows one -- and
+ * growing is right for pixel art, where blurring upward is worse than the
+ * steps. But the login screen draws an account picture at around seventy
+ * pixels, and a 32-pixel source grown to seventy means every pixel of the
+ * drawing becomes a 2.25-pixel block. That is exactly the "pixelated image
+ * made in paint" it was described as, and no amount of redrawing at 32 would
+ * have fixed it, because the fault is not in the drawing.
+ *
+ * At 128 every size ReconOS asks for -- 16 in a menu, 22 on a task button, 32
+ * on the desktop, 72 on the login screen -- is a *shrink*, and the averaging
+ * path that already exists handles all of them. The upscale is never reached.
+ *
+ * It also makes the round things round. A disc drawn at 128 and averaged down
+ * to 32 has a soft edge; the same disc drawn at 32 has a staircase, and a
+ * staircase on a circle is the single clearest signal that something was made
+ * pixel by pixel.
+ *
+ * Costs sixteen times the memory of one icon -- 64KB, held one at a time --
+ * and runs once, when the filesystem is built.
+ */
 #define ICON_SIZE 32
+#define ICON_SCALE 4
+#define ICON_PIXELS (ICON_SIZE * ICON_SCALE)
 
 /* Packed 0xAARRGGBB, matching the UI layer's colours. */
 typedef uint32_t color;
@@ -105,9 +138,9 @@ static color shade(color c, int towards_white, int towards_black) {
  * icon with a glossy box behind it.
  */
 static void gloss(color *px) {
-    for (int y = 0; y < ICON_SIZE; y++) {
-        for (int x = 0; x < ICON_SIZE; x++) {
-            color c = px[y * ICON_SIZE + x];
+    for (int y = 0; y < ICON_PIXELS; y++) {
+        for (int x = 0; x < ICON_PIXELS; x++) {
+            color c = px[y * ICON_PIXELS + x];
             if ((c >> 24) == 0) {
                 continue;              /* nothing here to light */
             }
@@ -117,10 +150,10 @@ static void gloss(color *px) {
              * across the middle, so the two halves meet without a seam.
              */
             int light = 0, dark = 0;
-            if (y < ICON_SIZE / 2) {
-                light = 56 * (ICON_SIZE / 2 - y) / (ICON_SIZE / 2);
+            if (y < ICON_PIXELS / 2) {
+                light = 56 * (ICON_PIXELS / 2 - y) / (ICON_PIXELS / 2);
             } else {
-                dark = 40 * (y - ICON_SIZE / 2) / (ICON_SIZE / 2);
+                dark = 40 * (y - ICON_PIXELS / 2) / (ICON_PIXELS / 2);
             }
 
             /*
@@ -134,8 +167,11 @@ static void gloss(color *px) {
              * point worth relying on -- and because the shape is not sensitive
              * enough to need any more precision than this.
              */
-            int dx = (x - ICON_SIZE / 2) * 1024 / 19;
-            int dy = (y + 11) * 1024 / 21;
+            /* The ellipse in real pixels: every constant here was measured
+             * against a 32-wide icon, so each is scaled with the canvas
+             * rather than retuned -- the shape is the same shape. */
+            int dx = (x - ICON_PIXELS / 2) * 1024 / (19 * ICON_SCALE);
+            int dy = (y + 11 * ICON_SCALE) * 1024 / (21 * ICON_SCALE);
             int inside = 1024 * 1024 - (dx * dx + dy * dy);
             if (inside > 0) {
                 /* Falls off towards the arc rather than stopping at it, so the
@@ -143,8 +179,12 @@ static void gloss(color *px) {
                 light += 58 * inside / (1024 * 1024);
             }
 
-            /* The rim: the topmost drawn pixel of this column. */
-            bool rim = (y == 0) || ((px[(y - 1) * ICON_SIZE + x] >> 24) == 0);
+            /* The rim: the top edge of this column, as thick as one
+             * coordinate-space pixel. A one-real-pixel rim at this size is a
+             * hairline that averages away to nothing, which is the same as
+             * not having drawn it. */
+            bool rim = (y < ICON_SCALE)
+                || ((px[(y - ICON_SCALE) * ICON_PIXELS + x] >> 24) == 0);
             if (rim) {
                 light += 46;
             }
@@ -152,16 +192,39 @@ static void gloss(color *px) {
             if (light > 200) {
                 light = 200;
             }
-            px[y * ICON_SIZE + x] = shade(c, light, dark);
+            px[y * ICON_PIXELS + x] = shade(c, light, dark);
         }
     }
 }
 
 /* --- Drawing --- */
 
+/*
+ * One coordinate-space pixel: a block of ICON_SCALE by ICON_SCALE real ones.
+ *
+ * Keeping the coarse coordinate space is what lets every drawing function in
+ * this file stay exactly as it was written. A rectangle at 32 is a rectangle
+ * at 128 -- its edges are axis-aligned, so nothing is gained by describing it
+ * more finely. What *is* gained at 128 happens in fill_disc below, where the
+ * edge is not axis-aligned and the extra resolution is the difference between
+ * a circle and a staircase.
+ */
 static void plot(color *px, int x, int y, color c) {
-    if (x >= 0 && y >= 0 && x < ICON_SIZE && y < ICON_SIZE) {
-        px[y * ICON_SIZE + x] = c;
+    if (x < 0 || y < 0 || x >= ICON_SIZE || y >= ICON_SIZE) {
+        return;
+    }
+    for (int row = 0; row < ICON_SCALE; row++) {
+        for (int col = 0; col < ICON_SCALE; col++) {
+            px[(y * ICON_SCALE + row) * ICON_PIXELS + x * ICON_SCALE + col] = c;
+        }
+    }
+}
+
+/* The same, addressing a real pixel rather than a block. For the few things
+ * that want the finer grid -- which means the curves. */
+static void plot_fine(color *px, int x, int y, color c) {
+    if (x >= 0 && y >= 0 && x < ICON_PIXELS && y < ICON_PIXELS) {
+        px[y * ICON_PIXELS + x] = c;
     }
 }
 
@@ -184,15 +247,97 @@ static void stroke_rect(color *px, int x, int y, int w, int h, color c) {
     }
 }
 
-/* A filled disc, for anything round. */
+/*
+ * A filled disc, for anything round -- drawn on the fine grid.
+ *
+ * This is where the four times pays for itself. A disc tested block by block
+ * has a staircase four real pixels tall on every step, which is the thing that
+ * makes a drawn icon look drawn. Tested pixel by pixel it has a staircase one
+ * real pixel tall, and one pixel of stair at 128 averages away to nothing by
+ * the time anything asks for it at 32 or at 72.
+ *
+ * The arguments stay in the coarse space, so every existing caller is
+ * unchanged and every existing icon comes out where it was.
+ */
 static void fill_disc(color *px, int cx, int cy, int radius, color c) {
-    for (int y = cy - radius; y <= cy + radius; y++) {
-        for (int x = cx - radius; x <= cx + radius; x++) {
-            int dx = x - cx;
-            int dy = y - cy;
-            if (dx * dx + dy * dy <= radius * radius) {
-                plot(px, x, y, c);
+    int fcx = cx * ICON_SCALE + ICON_SCALE / 2;
+    int fcy = cy * ICON_SCALE + ICON_SCALE / 2;
+    int fr = radius * ICON_SCALE;
+
+    for (int y = fcy - fr; y <= fcy + fr; y++) {
+        for (int x = fcx - fr; x <= fcx + fr; x++) {
+            int dx = x - fcx;
+            int dy = y - fcy;
+            if (dx * dx + dy * dy <= fr * fr) {
+                plot_fine(px, x, y, c);
             }
+        }
+    }
+}
+
+/*
+ * The overlap of two discs: a pointed oval, which is the shape of a leaf and
+ * of nothing else that is easy to draw with rectangles.
+ *
+ * On the fine grid, like fill_disc, because both of its edges are curved and
+ * both of its ends come to a point -- and a point drawn in blocks is not a
+ * point, it is a corner.
+ */
+static void fill_lens(color *px, int ax, int ay, int bx, int by, int radius,
+        color c) {
+    int fax = ax * ICON_SCALE + ICON_SCALE / 2;
+    int fay = ay * ICON_SCALE + ICON_SCALE / 2;
+    int fbx = bx * ICON_SCALE + ICON_SCALE / 2;
+    int fby = by * ICON_SCALE + ICON_SCALE / 2;
+    int fr = radius * ICON_SCALE;
+
+    for (int y = 0; y < ICON_PIXELS; y++) {
+        for (int x = 0; x < ICON_PIXELS; x++) {
+            int dax = x - fax, day = y - fay;
+            int dbx = x - fbx, dby = y - fby;
+            if (dax * dax + day * day <= fr * fr &&
+                    dbx * dbx + dby * dby <= fr * fr) {
+                plot_fine(px, x, y, c);
+            }
+        }
+    }
+}
+
+/*
+ * An arc: the part of a ring between two angles, given as a cone rather than
+ * in degrees.
+ *
+ * `spread` is how far to either side of straight up the arc reaches, measured
+ * as a fraction of the radius -- so an arc drawn at several radii keeps the
+ * same *shape*, which is what makes a stack of them read as a signal spreading
+ * out rather than as three unrelated curves. The first attempt at this walked
+ * x and solved for y, which flattens badly near the ends and produced
+ * something that looked like a palm tree.
+ */
+static void stroke_arc(color *px, int cx, int cy, int radius, int thickness,
+        int spread_num, int spread_den, color c) {
+    int fcx = cx * ICON_SCALE + ICON_SCALE / 2;
+    int fcy = cy * ICON_SCALE + ICON_SCALE / 2;
+    int fr = radius * ICON_SCALE;
+    int ft = thickness * ICON_SCALE;
+
+    long long inner = (long long)(fr - ft) * (fr - ft);
+    long long outer = (long long)fr * fr;
+
+    for (int y = fcy - fr; y <= fcy; y++) {
+        for (int x = fcx - fr; x <= fcx + fr; x++) {
+            int dx = x - fcx;
+            int dy = y - fcy;             /* negative: above the centre */
+            long long d = (long long)dx * dx + (long long)dy * dy;
+            if (d > outer || d < inner) {
+                continue;
+            }
+            /* Inside the cone when the sideways distance is small enough
+             * relative to how far up we are. */
+            if (abs(dx) * spread_den > -dy * spread_num) {
+                continue;
+            }
+            plot_fine(px, x, y, c);
         }
     }
 }
@@ -360,7 +505,7 @@ static void draw_shutdown(color *px) {
  * readers expect it to be there.
  */
 static bool write_ico(const char *recon_path, const color *px) {
-    int w = ICON_SIZE, h = ICON_SIZE;
+    int w = ICON_PIXELS, h = ICON_PIXELS;
     size_t mask_stride = (((size_t)w + 31) / 32) * 4;
     size_t image_bytes = (size_t)w * h * 4;
     size_t mask_bytes = mask_stride * (size_t)h;
@@ -378,7 +523,13 @@ static bool write_ico(const char *recon_path, const color *px) {
     p[4] = 1; /* one image */
     p += 6;
 
-    /* ICONDIRENTRY */
+    /*
+     * ICONDIRENTRY.
+     *
+     * Width and height are single bytes here, and zero means 256 -- which is
+     * why 128 is the largest useful canvas short of taking the 256 special
+     * case. Both fit.
+     */
     p[0] = (unsigned char)w;
     p[1] = (unsigned char)h;
     p[4] = 1;  /* planes */
@@ -392,8 +543,19 @@ static bool write_ico(const char *recon_path, const color *px) {
     /* BITMAPINFOHEADER */
     unsigned char *dib = p;
     dib[0] = 40;
-    dib[4] = (unsigned char)w;
-    dib[8] = (unsigned char)(h * 2);
+
+    /*
+     * Written as full little-endian 32-bit fields rather than as low bytes.
+     *
+     * They were low bytes, which was correct for exactly as long as the canvas
+     * was 32: the doubled height an ICO header carries is 256 at a 128-pixel
+     * icon, and 256 in one byte is zero. A height of zero is not a small
+     * mistake in a bitmap header -- it is an image every reader declines.
+     */
+    dib[4] = (unsigned char)(w & 0xFF);
+    dib[5] = (unsigned char)((w >> 8) & 0xFF);
+    dib[8] = (unsigned char)((h * 2) & 0xFF);
+    dib[9] = (unsigned char)(((h * 2) >> 8) & 0xFF);
     dib[12] = 1;
     dib[14] = 32;
     p += 40;
@@ -658,13 +820,35 @@ static void draw_avatar_mountain(color *px) {
     }
 }
 
+/*
+ * A leaf, and it used to be a vertical smear.
+ *
+ * The old one tapered symmetrically from the middle, which is the shape of a
+ * grain of rice. A leaf is the *overlap of two circles* -- pointed at both
+ * ends, curved along both sides -- and it has to be tilted, because a leaf
+ * standing straight up reads as a flame or an eye. The midrib and a stem
+ * settle which end is which.
+ */
 static void draw_avatar_leaf(color *px) {
-    avatar_disc(px, RGB(0x4E, 0x7C, 0x4E));
-    for (int y = 0; y < 16; y++) {
-        int w = (y < 8 ? y : 15 - y) + 2;
-        fill_rect(px, 16 - w / 2, 8 + y, w, 1, RGB(0xB8, 0xE0, 0x90));
+    avatar_disc(px, RGB(0x28, 0x3E, 0x2A));
+
+    fill_lens(px, 6, 22, 22, 6, 15, RGB(0x7E, 0xC0, 0x58));
+
+    /* The midrib, along the long axis, and veins off it. */
+    for (int i = 0; i < 18; i++) {
+        plot(px, 7 + i, 24 - i, RGB(0x3E, 0x74, 0x38));
+        if (i % 4 == 2) {
+            plot(px, 7 + i + 1, 24 - i - 2, RGB(0x3E, 0x74, 0x38));
+            plot(px, 7 + i + 2, 24 - i - 3, RGB(0x3E, 0x74, 0x38));
+            plot(px, 7 + i - 2, 24 - i + 1, RGB(0x3E, 0x74, 0x38));
+            plot(px, 7 + i - 3, 24 - i + 2, RGB(0x3E, 0x74, 0x38));
+        }
     }
-    fill_rect(px, 15, 9, 1, 14, RGB(0x3A, 0x5E, 0x3A));
+
+    /* The stem, past the lower point. */
+    for (int i = 0; i < 4; i++) {
+        plot(px, 6 - i, 25 + i, RGB(0x5A, 0x46, 0x2E));
+    }
 }
 
 static void draw_avatar_wave(color *px) {
@@ -692,14 +876,32 @@ static void draw_avatar_star(color *px) {
     }
 }
 
+/*
+ * A gear, and it used to read as a crosshair.
+ *
+ * Four stubby teeth on a disc is a reticle: the eye takes short marks at the
+ * cardinal points as sights, not as gearing. Eight teeth is what makes it
+ * machinery -- at four the gaps are larger than the teeth and the shape has
+ * no rim left to be a rim.
+ */
 static void draw_avatar_gear(color *px) {
-    avatar_disc(px, RGB(0x5E, 0x5E, 0x68));
-    fill_disc(px, 16, 16, 9, RGB(0xC8, 0xC8, 0xD0));
-    for (int i = 0; i < 4; i++) {
-        fill_rect(px, 15, 4 + i * 8, 3, 4, RGB(0xC8, 0xC8, 0xD0));
-        fill_rect(px, 4 + i * 8, 15, 4, 3, RGB(0xC8, 0xC8, 0xD0));
+    avatar_disc(px, RGB(0x3E, 0x42, 0x4E));
+
+    /* Eight teeth: four square-on and four on the diagonals. */
+    for (int i = 0; i < 2; i++) {
+        int off = i * 20;
+        fill_rect(px, 13, 3 + off, 6, 8, RGB(0xC8, 0xCC, 0xD4));
+        fill_rect(px, 3 + off, 13, 8, 6, RGB(0xC8, 0xCC, 0xD4));
     }
-    fill_disc(px, 16, 16, 4, RGB(0x5E, 0x5E, 0x68));
+    for (int i = 0; i < 4; i++) {
+        int cx = (i % 2 == 0) ? 8 : 24;
+        int cy = (i < 2) ? 8 : 24;
+        fill_disc(px, cx, cy, 4, RGB(0xC8, 0xCC, 0xD4));
+    }
+
+    fill_disc(px, 16, 16, 11, RGB(0xC8, 0xCC, 0xD4));
+    fill_disc(px, 16, 16, 9, RGB(0xA0, 0xA6, 0xB0));
+    fill_disc(px, 16, 16, 5, RGB(0x3E, 0x42, 0x4E));
 }
 
 static void draw_avatar_moon(color *px) {
@@ -710,15 +912,364 @@ static void draw_avatar_moon(color *px) {
     plot(px, 24, 24, RGB(0xF0, 0xEC, 0xD0));
 }
 
-static void draw_avatar_flame(color *px) {
-    avatar_disc(px, RGB(0x6E, 0x2A, 0x1E));
-    for (int y = 0; y < 16; y++) {
-        int w = (y < 5 ? y : (y < 11 ? 5 : 20 - y)) + 1;
-        fill_rect(px, 16 - w, 8 + y, w * 2, 1, RGB(0xF0, 0xA0, 0x30));
+/*
+ * A campfire, and it used to be a flame that read as one anyway.
+ *
+ * "It looks odd" was the note, and the reason is that a bare tapering blob is
+ * not a picture of anything -- there is nothing in it to say what it is, so
+ * whoever looks at it supplies the nearest thing, and the nearest thing to an
+ * orange tapering blob on a dark red disc is a campfire. Given that everybody
+ * was going to read it as a campfire, it should be one: two crossed logs give
+ * the flame something to be *on*, which is the whole difference between a
+ * shape and a picture.
+ */
+static void draw_avatar_campfire(color *px) {
+    avatar_disc(px, RGB(0x22, 0x1A, 0x2E));
+
+    /* The flame first, so the logs sit in front of it. Three tongues, the
+     * outer two shorter, because a single symmetrical one reads as a leaf. */
+    for (int y = 0; y < 15; y++) {
+        int w = (y < 5 ? y : (y < 10 ? 5 : 19 - y)) + 1;
+        fill_rect(px, 16 - w, 7 + y, w * 2, 1, RGB(0xE0, 0x62, 0x20));
+    }
+    for (int y = 0; y < 10; y++) {
+        int w = (y < 3 ? y : (y < 7 ? 3 : 12 - y)) + 1;
+        fill_rect(px, 16 - w, 12 + y, w * 2, 1, RGB(0xF6, 0xA8, 0x30));
+    }
+    for (int y = 0; y < 6; y++) {
+        int w = (y < 2 ? y : (y < 4 ? 2 : 7 - y)) + 1;
+        fill_rect(px, 16 - w / 2, 16 + y, w, 1, RGB(0xFA, 0xE8, 0xA0));
+    }
+
+    /* Two logs, crossed, with a lit end each. The angle is what makes them
+     * logs rather than a bench. */
+    for (int i = 0; i < 15; i++) {
+        int y = 24 + i / 6;
+        fill_rect(px, 8 + i, y, 1, 3, RGB(0x6A, 0x46, 0x2C));
+        fill_rect(px, 8 + i, y, 1, 1, RGB(0x8C, 0x60, 0x3C));
+    }
+    for (int i = 0; i < 15; i++) {
+        int y = 26 - i / 6;
+        fill_rect(px, 8 + i, y, 1, 3, RGB(0x5A, 0x3A, 0x24));
+        fill_rect(px, 8 + i, y, 1, 1, RGB(0x7C, 0x52, 0x32));
+    }
+
+    /* Embers where the logs meet the flame. */
+    plot(px, 13, 24, RGB(0xF0, 0x80, 0x28));
+    plot(px, 18, 25, RGB(0xF0, 0x80, 0x28));
+}
+
+/*
+ * --- Sixteen more ---
+ *
+ * Asked for as a set rather than one at a time, and that is the right way to
+ * ask: eight pictures is not a choice, it is a shortage that everybody works
+ * around by keeping whichever one they were given. Twenty-four is enough that
+ * two accounts on the same machine rarely collide.
+ *
+ * Same rules as the first eight. Drawn rather than shipped, so the set is
+ * complete the moment ReconOS first runs with nothing borrowed and nobody's
+ * licence to honour. Each is a plain shape on a coloured disc, and each has
+ * to be *identifiable* at the size a login screen shows it -- which rules out
+ * anything whose meaning lives in fine detail. The dark discs and the light
+ * ones alternate roughly, so a grid of them does not read as one texture.
+ */
+
+/* A tower with a lit lamp. The one the system is named for. */
+/*
+ * A lighthouse. The one the system is named for, so it is worth getting right.
+ *
+ * The first attempt was fourteen rows tall on a thirty-two pixel canvas with
+ * four stripes across it, and read as a spool of thread: too squat to be a
+ * tower, and striped often enough that the stripes became the subject. Taller,
+ * narrower, two bands, and the light drawn as a wedge going out to each side
+ * rather than as two floating bars -- a beam has to be attached to the lamp or
+ * it is just weather.
+ */
+static void draw_avatar_lighthouse(color *px) {
+    avatar_disc(px, RGB(0x16, 0x26, 0x3C));
+
+    /* The beam: a wedge each side, widening away from the lamp. */
+    for (int i = 0; i < 10; i++) {
+        int spread = 1 + i / 2;
+        fill_rect(px, 11 - i, 10 - spread / 2, 1, spread + 1,
+            RGB(0x2E, 0x4A, 0x6C));
+        fill_rect(px, 20 + i, 10 - spread / 2, 1, spread + 1,
+            RGB(0x2E, 0x4A, 0x6C));
+    }
+
+    /* The tower: tall, with a gentle taper. */
+    for (int y = 0; y < 17; y++) {
+        int w = 5 + y / 4;
+        color band = (y >= 4 && y < 8) || (y >= 12 && y < 16)
+            ? RGB(0xC4, 0x3A, 0x2E) : RGB(0xEC, 0xEC, 0xF0);
+        fill_rect(px, 16 - w / 2, 12 + y, w, 1, band);
+    }
+
+    /* The lamp room, and the gallery it stands on. */
+    fill_rect(px, 13, 7, 6, 5, RGB(0xF8, 0xE0, 0x70));
+    fill_rect(px, 12, 11, 8, 1, RGB(0x8A, 0x8A, 0x94));
+    fill_rect(px, 12, 6, 8, 1, RGB(0x8A, 0x8A, 0x94));
+    plot(px, 16, 4, RGB(0x8A, 0x8A, 0x94));
+    plot(px, 16, 5, RGB(0x8A, 0x8A, 0x94));
+
+    /* The rock it stands on. */
+    fill_rect(px, 8, 29, 16, 2, RGB(0x3E, 0x46, 0x50));
+    fill_rect(px, 10, 27, 12, 2, RGB(0x4A, 0x52, 0x5E));
+}
+
+/* The project's own mark: a body and two panels. */
+static void draw_avatar_satellite(color *px) {
+    avatar_disc(px, RGB(0x14, 0x18, 0x2C));
+    fill_rect(px, 14, 12, 5, 9, RGB(0xD0, 0xD4, 0xDC));
+    fill_rect(px, 5, 14, 8, 5, RGB(0x50, 0x84, 0xC8));
+    fill_rect(px, 20, 14, 8, 5, RGB(0x50, 0x84, 0xC8));
+    fill_rect(px, 9, 14, 1, 5, RGB(0x28, 0x50, 0x88));
+    fill_rect(px, 24, 14, 1, 5, RGB(0x28, 0x50, 0x88));
+    fill_rect(px, 15, 21, 3, 5, RGB(0x9A, 0x9A, 0xA4));
+    fill_disc(px, 16, 27, 3, RGB(0xE8, 0xE8, 0xF0));
+    fill_disc(px, 16, 27, 1, RGB(0x14, 0x18, 0x2C));
+}
+
+/* A ringed planet: the ring is what stops it being a dot. */
+static void draw_avatar_planet(color *px) {
+    avatar_disc(px, RGB(0x1A, 0x14, 0x2E));
+    fill_disc(px, 16, 15, 8, RGB(0xE0, 0x9A, 0x50));
+    fill_disc(px, 13, 12, 3, RGB(0xF0, 0xBC, 0x78));
+    for (int x = 2; x < 30; x++) {
+        int dy = (x - 16) / 6;
+        plot(px, x, 21 - dy, RGB(0xC8, 0xB8, 0xE8));
+        plot(px, x, 22 - dy, RGB(0xA0, 0x8C, 0xC8));
+    }
+    fill_disc(px, 16, 15, 7, RGB(0xE0, 0x9A, 0x50));
+    fill_disc(px, 13, 12, 3, RGB(0xF0, 0xBC, 0x78));
+}
+
+/* Rays, so it is a sun and not a circle. */
+static void draw_avatar_sun(color *px) {
+    avatar_disc(px, RGB(0x2A, 0x4E, 0x74));
+    for (int i = 0; i < 4; i++) {
+        fill_rect(px, 15, 3 + i * 9, 2, 4, RGB(0xF8, 0xD8, 0x60));
+        fill_rect(px, 3 + i * 9, 15, 4, 2, RGB(0xF8, 0xD8, 0x60));
+    }
+    fill_disc(px, 16, 16, 8, RGB(0xF8, 0xC8, 0x40));
+    fill_disc(px, 14, 14, 4, RGB(0xFC, 0xE8, 0x90));
+}
+
+/* Three overlapping discs and a flat base. */
+static void draw_avatar_cloud(color *px) {
+    avatar_disc(px, RGB(0x5A, 0x86, 0xB4));
+    fill_disc(px, 12, 17, 6, RGB(0xF0, 0xF4, 0xF8));
+    fill_disc(px, 19, 15, 7, RGB(0xF0, 0xF4, 0xF8));
+    fill_disc(px, 23, 19, 5, RGB(0xF0, 0xF4, 0xF8));
+    fill_rect(px, 7, 19, 19, 5, RGB(0xF0, 0xF4, 0xF8));
+    fill_rect(px, 7, 23, 19, 1, RGB(0xC8, 0xD4, 0xE0));
+}
+
+/* A bolt: two wedges offset, which is what gives it the kink. */
+static void draw_avatar_bolt(color *px) {
+    avatar_disc(px, RGB(0x30, 0x2A, 0x50));
+    for (int y = 0; y < 10; y++) {
+        fill_rect(px, 17 - y / 2, 6 + y, 6, 1, RGB(0xF8, 0xE0, 0x50));
+    }
+    fill_rect(px, 10, 16, 12, 2, RGB(0xF8, 0xE0, 0x50));
+    for (int y = 0; y < 10; y++) {
+        fill_rect(px, 15 - y / 2, 17 + y, 5, 1, RGB(0xF0, 0xC8, 0x38));
+    }
+}
+
+/* A drop: a disc with a point on top. */
+static void draw_avatar_drop(color *px) {
+    avatar_disc(px, RGB(0x1E, 0x4A, 0x60));
+    for (int y = 0; y < 11; y++) {
+        int w = y / 2 + 1;
+        fill_rect(px, 16 - w / 2, 6 + y, w + 1, 1, RGB(0x70, 0xC8, 0xE8));
+    }
+    fill_disc(px, 16, 20, 7, RGB(0x70, 0xC8, 0xE8));
+    fill_disc(px, 13, 18, 2, RGB(0xC8, 0xEC, 0xF8));
+}
+
+/* A pine: three tiers, because one triangle is a traffic cone. */
+static void draw_avatar_pine(color *px) {
+    avatar_disc(px, RGB(0x24, 0x3A, 0x2E));
+    fill_rect(px, 15, 24, 3, 5, RGB(0x6A, 0x46, 0x2C));
+    for (int tier = 0; tier < 3; tier++) {
+        int top = 6 + tier * 6;
+        for (int y = 0; y < 9; y++) {
+            int w = 3 + y + tier * 2;
+            fill_rect(px, 16 - w / 2, top + y, w, 1, RGB(0x4E, 0x8C, 0x50));
+        }
+    }
+}
+
+/* A shield: straight shoulders, tapering to a point. */
+static void draw_avatar_shield(color *px) {
+    avatar_disc(px, RGB(0x3A, 0x2A, 0x24));
+    for (int y = 0; y < 20; y++) {
+        int w = y < 11 ? 18 : 18 - (y - 11) * 2;
+        if (w < 2) {
+            break;
+        }
+        fill_rect(px, 16 - w / 2, 7 + y, w, 1, RGB(0xC8, 0xB0, 0x60));
+    }
+    for (int y = 0; y < 14; y++) {
+        int w = y < 8 ? 10 : 10 - (y - 8) * 2;
+        if (w < 2) {
+            break;
+        }
+        fill_rect(px, 16 - w / 2, 10 + y, w, 1, RGB(0x8C, 0x2E, 0x2E));
+    }
+}
+
+/* A book, open, with a gutter down the middle. */
+static void draw_avatar_book(color *px) {
+    avatar_disc(px, RGB(0x2E, 0x2A, 0x40));
+    fill_rect(px, 5, 10, 22, 15, RGB(0xF0, 0xEC, 0xE0));
+    fill_rect(px, 5, 10, 22, 1, RGB(0xC8, 0xC4, 0xB8));
+    fill_rect(px, 15, 9, 2, 17, RGB(0x8C, 0x4E, 0x2E));
+    for (int i = 0; i < 4; i++) {
+        fill_rect(px, 8, 14 + i * 3, 6, 1, RGB(0xB0, 0xAC, 0xA0));
+        fill_rect(px, 18, 14 + i * 3, 6, 1, RGB(0xB0, 0xAC, 0xA0));
+    }
+}
+
+/* A mug with a handle and something hot in it. */
+static void draw_avatar_mug(color *px) {
+    avatar_disc(px, RGB(0x40, 0x38, 0x30));
+    fill_rect(px, 8, 13, 14, 13, RGB(0xE8, 0xE8, 0xEC));
+    fill_rect(px, 8, 13, 14, 2, RGB(0x8C, 0x5A, 0x38));
+    fill_rect(px, 22, 16, 4, 2, RGB(0xE8, 0xE8, 0xEC));
+    fill_rect(px, 25, 16, 2, 7, RGB(0xE8, 0xE8, 0xEC));
+    fill_rect(px, 22, 22, 4, 2, RGB(0xE8, 0xE8, 0xEC));
+    for (int i = 0; i < 6; i++) {
+        plot(px, 12 + (i % 2), 6 + i, RGB(0xB0, 0xB8, 0xC0));
+        plot(px, 18 - (i % 2), 6 + i, RGB(0xB0, 0xB8, 0xC0));
+    }
+}
+
+/* A quaver: a head, a stem and a flag. */
+static void draw_avatar_note(color *px) {
+    avatar_disc(px, RGB(0x28, 0x22, 0x3E));
+    fill_disc(px, 12, 22, 5, RGB(0xE8, 0xD8, 0xF0));
+    fill_rect(px, 15, 8, 3, 15, RGB(0xE8, 0xD8, 0xF0));
+    for (int i = 0; i < 7; i++) {
+        fill_rect(px, 18, 8 + i, 4 - i / 3, 1, RGB(0xE8, 0xD8, 0xF0));
+    }
+}
+
+/* A rocket: a body, a nose, two fins and a flame. */
+static void draw_avatar_rocket(color *px) {
+    avatar_disc(px, RGB(0x18, 0x22, 0x3A));
+    for (int y = 0; y < 6; y++) {
+        int w = y + 1;
+        fill_rect(px, 16 - w / 2, 5 + y, w, 1, RGB(0xD8, 0xDC, 0xE4));
+    }
+    fill_rect(px, 13, 11, 6, 11, RGB(0xE8, 0xEC, 0xF0));
+    fill_disc(px, 16, 15, 2, RGB(0x50, 0x90, 0xC8));
+    fill_rect(px, 9, 17, 4, 6, RGB(0xC4, 0x3A, 0x2E));
+    fill_rect(px, 19, 17, 4, 6, RGB(0xC4, 0x3A, 0x2E));
+    for (int y = 0; y < 5; y++) {
+        int w = 5 - y;
+        fill_rect(px, 16 - w / 2, 22 + y, w, 1, RGB(0xF8, 0xC0, 0x40));
+    }
+}
+
+/* A cut gem: a table on top and facets below. */
+static void draw_avatar_gem(color *px) {
+    avatar_disc(px, RGB(0x24, 0x2E, 0x3E));
+    fill_rect(px, 9, 11, 14, 4, RGB(0x88, 0xE0, 0xD8));
+    fill_rect(px, 11, 9, 10, 2, RGB(0xB8, 0xF0, 0xE8));
+    for (int y = 0; y < 12; y++) {
+        int w = 14 - y - y / 2;
+        if (w < 1) {
+            break;
+        }
+        fill_rect(px, 16 - w / 2, 15 + y, w, 1, RGB(0x50, 0xB0, 0xB8));
+    }
+    fill_rect(px, 15, 15, 2, 9, RGB(0x88, 0xE0, 0xD8));
+}
+
+/* A compass rose: a needle on a dial. */
+static void draw_avatar_compass(color *px) {
+    avatar_disc(px, RGB(0x2E, 0x38, 0x2A));
+    fill_disc(px, 16, 16, 12, RGB(0xE4, 0xE0, 0xD0));
+    fill_disc(px, 16, 16, 10, RGB(0xF4, 0xF0, 0xE4));
+    for (int y = 0; y < 9; y++) {
+        int w = y / 2 + 1;
+        fill_rect(px, 16 - w / 2, 7 + y, w, 1, RGB(0xC4, 0x3A, 0x2E));
     }
     for (int y = 0; y < 9; y++) {
-        int w = (y < 3 ? y : (y < 6 ? 3 : 11 - y)) + 1;
-        fill_rect(px, 16 - w / 2, 15 + y, w, 1, RGB(0xF8, 0xE8, 0x90));
+        int w = 5 - y / 2;
+        fill_rect(px, 16 - w / 2, 16 + y, w, 1, RGB(0x50, 0x58, 0x64));
+    }
+    fill_disc(px, 16, 16, 2, RGB(0x2E, 0x38, 0x2A));
+}
+
+/* A beacon: a mast throwing three arcs. */
+/*
+ * A beacon: a mast throwing three arcs.
+ *
+ * The arcs were computed by walking x and solving for y, which is fine near
+ * the top of a circle and wrong at the sides -- so they flattened out into
+ * fronds and the whole thing read as a palm tree. stroke_arc walks the ring
+ * itself and cuts it with a cone, which keeps the same shape at every radius.
+ */
+static void draw_avatar_signal(color *px) {
+    avatar_disc(px, RGB(0x1A, 0x26, 0x2E));
+
+    for (int ring = 0; ring < 3; ring++) {
+        stroke_arc(px, 16, 14, 6 + ring * 4, 1, 3, 5,
+            RGB(0x58, 0xC8, 0xA0));
+    }
+
+    /* The mast, and feet, so the arcs have something to come from. */
+    fill_rect(px, 15, 13, 2, 14, RGB(0xD8, 0xDC, 0xE4));
+    for (int i = 0; i < 5; i++) {
+        plot(px, 15 - i, 27 - i / 2, RGB(0xD8, 0xDC, 0xE4));
+        plot(px, 16 + i, 27 - i / 2, RGB(0xD8, 0xDC, 0xE4));
+    }
+    fill_disc(px, 16, 12, 2, RGB(0xF8, 0xE0, 0x60));
+}
+
+/*
+ * A tent, which is what the winding path should have been.
+ *
+ * A path bending down a 32-pixel disc is four pixels wide and mostly
+ * ambiguous, and with a round marker at the top it read as a match. A tent is
+ * a silhouette -- one triangle, one dark opening -- and it goes with the
+ * campfire, which is the other thing anybody keeps out here.
+ */
+static void draw_avatar_tent(color *px) {
+    avatar_disc(px, RGB(0x1E, 0x2E, 0x2A));
+
+    for (int y = 0; y < 16; y++) {
+        int w = y + 2;
+        fill_rect(px, 16 - w, 11 + y, w * 2, 1, RGB(0xC8, 0x8A, 0x40));
+        /* A lit face and a shaded one, so it has a side. */
+        fill_rect(px, 16, 11 + y, w, 1, RGB(0xA8, 0x70, 0x32));
+    }
+
+    /* The opening: a narrow triangle up the middle. */
+    for (int y = 0; y < 12; y++) {
+        int w = y / 2 + 1;
+        fill_rect(px, 16 - w / 2, 15 + y, w + 1, 1, RGB(0x22, 0x1C, 0x18));
+    }
+
+    /* The ridge and the guy line. */
+    fill_rect(px, 15, 9, 2, 3, RGB(0x8A, 0x5E, 0x2C));
+    for (int i = 0; i < 5; i++) {
+        plot(px, 17 + i, 10 + i, RGB(0x6E, 0x7A, 0x62));
+    }
+    fill_rect(px, 4, 27, 24, 1, RGB(0x36, 0x46, 0x3A));
+}
+
+/* Two curved strokes: a person, without a face to get wrong. */
+static void draw_avatar_person(color *px) {
+    avatar_disc(px, RGB(0x46, 0x50, 0x64));
+    fill_disc(px, 16, 12, 6, RGB(0xE8, 0xEC, 0xF0));
+    for (int y = 0; y < 9; y++) {
+        int w = 10 + y;
+        fill_rect(px, 16 - w / 2, 21 + y, w, 1, RGB(0xE8, 0xEC, 0xF0));
     }
 }
 
@@ -808,12 +1359,148 @@ static const struct generated_icon ICONS[] = {
     { RECON_AVATAR_PREFIX "star", draw_avatar_star },
     { RECON_AVATAR_PREFIX "gear", draw_avatar_gear },
     { RECON_AVATAR_PREFIX "moon", draw_avatar_moon },
-    { RECON_AVATAR_PREFIX "flame", draw_avatar_flame },
+    { RECON_AVATAR_PREFIX "campfire", draw_avatar_campfire },
     { RECON_AVATAR_PREFIX "key", draw_avatar_key },
+
+    /* The sixteen added in v0.4.0. Appended rather than sorted in, so an
+     * account that already chose one of the first eight keeps the picture it
+     * chose -- the choice is stored by name, but the picker shows them in
+     * this order and moving them would shuffle the grid under somebody who
+     * had learnt where theirs sits. */
+    { RECON_AVATAR_PREFIX "lighthouse", draw_avatar_lighthouse },
+    { RECON_AVATAR_PREFIX "satellite", draw_avatar_satellite },
+    { RECON_AVATAR_PREFIX "planet", draw_avatar_planet },
+    { RECON_AVATAR_PREFIX "sun", draw_avatar_sun },
+    { RECON_AVATAR_PREFIX "cloud", draw_avatar_cloud },
+    { RECON_AVATAR_PREFIX "bolt", draw_avatar_bolt },
+    { RECON_AVATAR_PREFIX "drop", draw_avatar_drop },
+    { RECON_AVATAR_PREFIX "pine", draw_avatar_pine },
+    { RECON_AVATAR_PREFIX "shield", draw_avatar_shield },
+    { RECON_AVATAR_PREFIX "book", draw_avatar_book },
+    { RECON_AVATAR_PREFIX "mug", draw_avatar_mug },
+    { RECON_AVATAR_PREFIX "note", draw_avatar_note },
+    { RECON_AVATAR_PREFIX "rocket", draw_avatar_rocket },
+    { RECON_AVATAR_PREFIX "gem", draw_avatar_gem },
+    { RECON_AVATAR_PREFIX "compass", draw_avatar_compass },
+    { RECON_AVATAR_PREFIX "signal", draw_avatar_signal },
+    { RECON_AVATAR_PREFIX "tent", draw_avatar_tent },
+    { RECON_AVATAR_PREFIX "person", draw_avatar_person },
 };
 
+/*
+ * --- Which drawing of the icons a system has ---
+ *
+ * Raised whenever the generated set changes in a way somebody would see.
+ *
+ * The rule up to now was "write an icon if it is not already there", and it
+ * has a promise inside it worth keeping: an icon somebody replaced stays
+ * replaced, so the generated set is a starting point rather than something
+ * reimposed on every start. What it also meant, and nobody intended, is that
+ * an icon *improved* here never reaches a machine that has run ReconOS once.
+ * The set was not a default. It was a one-time imprint.
+ *
+ * So: remember which generation wrote each file, and a fingerprint of what it
+ * wrote. On a later start, an icon is rewritten only when the generation has
+ * moved on *and* the file on disk is still byte-for-byte what this program put
+ * there. Anything else -- a replaced icon, a hand-edited one -- is left alone
+ * and stops being tracked, which is the original promise stated precisely
+ * instead of approximately.
+ *
+ *   1  the set as it stood through v0.3.x, drawn at 32 by 32
+ *   2  v0.4.0: drawn at 128 and downsampled by whatever shows it; the flame
+ *      became a campfire; eighteen more account pictures; gear, leaf,
+ *      lighthouse and the beacon redrawn after looking at them
+ */
+#define ICONS_GENERATION 2
+
+#define ICONS_GENERATION_KEY "icons/generation"
+
+/*
+ * CRC-32, so "is this still the file we wrote" can be asked of a whole icon
+ * without keeping a copy of it.
+ *
+ * A hash rather than a size: two drawings of the same icon are the same
+ * length, and length alone would call a replaced icon unchanged. Not a
+ * cryptographic one -- nobody is trying to forge an icon, and the question is
+ * only whether it drifted.
+ */
+static unsigned long crc32_of(const unsigned char *data, size_t length) {
+    static unsigned long table[256];
+    static bool ready;
+
+    if (!ready) {
+        for (unsigned long i = 0; i < 256; i++) {
+            unsigned long c = i;
+            for (int k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320UL ^ (c >> 1)) : (c >> 1);
+            }
+            table[i] = c;
+        }
+        ready = true;
+    }
+
+    unsigned long crc = 0xFFFFFFFFUL;
+    for (size_t i = 0; i < length; i++) {
+        crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFUL;
+}
+
+static void stamp_key(const char *path, char *out, size_t size) {
+    snprintf(out, size, "icons/stamp/%s", path);
+}
+
+/* What is on disk right now, or 0 for a file that is not there. */
+static unsigned long crc_of_file(const char *path) {
+    size_t size = 0;
+    char *data = recon_fs_read("/", path, &size);
+    if (data == NULL) {
+        return 0;
+    }
+    unsigned long crc = crc32_of((const unsigned char *)data, size);
+    free(data);
+    return crc;
+}
+
+/*
+ * Should this file be written?
+ *
+ * Missing: yes. Present and still exactly what a previous generation of this
+ * program wrote, with the generation since moved on: yes, and that is the
+ * whole point of the machinery. Present and different from what we recorded:
+ * no, somebody owns it now.
+ */
+static bool should_write(const char *path, bool overwrite, bool moved_on) {
+    if (overwrite || !recon_fs_exists("/", path)) {
+        return true;
+    }
+    if (!moved_on) {
+        return false;
+    }
+
+    char key[RECON_REGISTRY_KEY_MAX];
+    stamp_key(path, key, sizeof(key));
+
+    const char *recorded = recon_registry_get(RECON_REG_SYSTEM, key, "");
+    if (recorded[0] == '\0') {
+        /* Written before stamps existed. Its bytes cannot be vouched for, so
+         * it is treated as somebody's -- the safe direction, and it costs one
+         * generation of staleness on a system upgrading from before v0.4.0. */
+        return false;
+    }
+    return strtoul(recorded, NULL, 16) == crc_of_file(path);
+}
+
+static void record_stamp(const char *path) {
+    char key[RECON_REGISTRY_KEY_MAX];
+    char value[16];
+    stamp_key(path, key, sizeof(key));
+    snprintf(value, sizeof(value), "%08lX", crc_of_file(path));
+    recon_registry_set(RECON_REG_SYSTEM, key, value);
+}
+
 int recon_icons_write_defaults(bool overwrite) {
-    color *px = malloc((size_t)ICON_SIZE * ICON_SIZE * sizeof(color));
+    color *px = malloc((size_t)ICON_PIXELS * ICON_PIXELS * sizeof(color));
     if (px == NULL) {
         return 0;
     }
@@ -825,6 +1512,10 @@ int recon_icons_write_defaults(bool overwrite) {
         RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY);
     recon_fs_mkdir("/", glossy_dir);
 
+    /* Has the drawing changed since this system was last written to? */
+    bool moved_on = recon_registry_get_int(RECON_REG_SYSTEM,
+        ICONS_GENERATION_KEY, 0) < ICONS_GENERATION;
+
     int written = 0;
     for (size_t i = 0; i < sizeof(ICONS) / sizeof(ICONS[0]); i++) {
         char path[RECON_PATH_MAX];
@@ -832,11 +1523,14 @@ int recon_icons_write_defaults(bool overwrite) {
             RECON_DIR_SYSTEM_ICONS, ICONS[i].name);
 
         /* A replaced icon stays replaced: the generated set is a default, not
-         * something the system re-imposes on every start. */
-        if (overwrite || !recon_fs_exists("/", path)) {
-            memset(px, 0, (size_t)ICON_SIZE * ICON_SIZE * sizeof(color));
+         * something the system re-imposes on every start. An unreplaced one
+         * is brought up to date, which is the other half of being a default
+         * rather than an imprint. */
+        if (should_write(path, overwrite, moved_on)) {
+            memset(px, 0, (size_t)ICON_PIXELS * ICON_PIXELS * sizeof(color));
             ICONS[i].draw(px);
             if (write_ico(path, px)) {
+                record_stamp(path);
                 written++;
             }
         }
@@ -851,15 +1545,29 @@ int recon_icons_write_defaults(bool overwrite) {
          */
         snprintf(path, sizeof(path), "%s/%s/%s.ico",
             RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, ICONS[i].name);
-        if (!overwrite && recon_fs_exists("/", path)) {
+        if (!should_write(path, overwrite, moved_on)) {
             continue;
         }
-        memset(px, 0, (size_t)ICON_SIZE * ICON_SIZE * sizeof(color));
+        memset(px, 0, (size_t)ICON_PIXELS * ICON_PIXELS * sizeof(color));
         ICONS[i].draw(px);
         gloss(px);
         if (write_ico(path, px)) {
+            record_stamp(path);
             written++;
         }
+    }
+
+    /* Clear away the files for pictures this program has since renamed, so
+     * the picker offers the new name and not both. */
+    recon_avatar_retire_old_files();
+
+    /*
+     * Recorded last, so a run that is interrupted part way through tries
+     * again next time rather than deciding it is finished.
+     */
+    if (moved_on) {
+        recon_registry_set_int(RECON_REG_SYSTEM, ICONS_GENERATION_KEY,
+            ICONS_GENERATION);
     }
 
     free(px);

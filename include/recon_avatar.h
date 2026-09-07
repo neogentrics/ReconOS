@@ -48,6 +48,16 @@ const char *recon_avatar_of(const char *account);
 bool recon_avatar_set(const char *account, const char *avatar);
 
 /*
+ * Delete the files for pictures this program has renamed.
+ *
+ * Called after the icon set is written, so the picker offers the new name and
+ * not both. Accounts that had chosen the old one follow it -- see the table in
+ * recon_avatar.c -- which is why this can be a deletion rather than a
+ * migration somebody has to run.
+ */
+void recon_avatar_retire_old_files(void);
+
+/*
  * Draw an account's picture, whatever it turns out to be.
  *
  * Always draws something: an account with no picture chosen, or one whose

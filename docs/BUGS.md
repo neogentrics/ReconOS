@@ -2575,6 +2575,47 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-140 — recon_icon_get wrote through the pointers a caller had said were NULL
+
+- **Found in** v0.4.0, while fixing BG-139 and reading the function around it.
+  Not found by it happening.
+- **What it was** `recon_icon_get(name, width, height)` filled in both out
+  parameters on a cache hit without checking either for NULL.
+  `recon_appicon` calls it as `recon_icon_get(shortened, NULL, NULL)` -- it
+  wants to know whether an icon exists by that name and nothing else -- and
+  that call reaches the write on any cached hit.
+- **Why nothing crashed**: the cache held 32 entries and stopped accepting
+  new ones (BG-139), and the name recon_appicon asks about is a client's
+  application id, which is rarely one of the first 32 icons a running desktop
+  loads. The condition that hid one bug hid the other.
+- **Fixed in** v0.4.0. Both writes are guarded. Found by reading, which is
+  worth noting because most things here were not.
+
+### BG-139 — The icon cache filled up and then answered every further name with nothing
+
+- **Found in** v0.4.0. **Found by** adding sixteen account pictures and seeing
+  six of the twenty-four drawn in the picker -- which looks exactly like
+  sixteen pictures having failed to be written, and is why it was chased in
+  the generator first.
+- **What it was** the cache held 32 icons, and once full `recon_icon_get`
+  returned NULL for every name not already in it. Not evict, not reload each
+  time. Refuse. Nothing said so: `recon_icon_draw` returns false and its
+  callers draw their own fallback, which is the same thing they do for an
+  icon that genuinely does not exist.
+- The desktop, the taskbar and the window frames fill most of 32 between them
+  before an application opens, so the fault belonged to whichever screen next
+  wanted several icons at once -- and it moved depending on what had been
+  opened first, which is the worst property a bug can have.
+- **Why it survived**: 32 was chosen when the whole system had fewer icons than
+  that, and every screen since had wanted a handful. The account picture
+  chooser was the first to want two dozen. At eight pictures it showed all
+  eight and the limit was invisible.
+- **Fixed in** v0.4.0. Full now means evict the least recently used, and the
+  bound is on bytes rather than on count -- 32 by 32 icons were four kilobytes
+  each and the generated set is 128 by 128 now, sixteen times that, while an
+  icon somebody drops in the folder has no size limit at all. A count alone
+  was a bound on the wrong quantity.
+
 ### BG-138 — Nothing in the system reacted to being pointed at or pressed
 
 - **Found in** v0.4.0. **Found by** the author, looking at the three buttons in

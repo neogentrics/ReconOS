@@ -10,6 +10,7 @@
 #include "ReconOS.h"
 #include "recon_avatar.h"
 #include "recon_fs.h"
+#include "recon_icon_gen.h"
 #include "recon_icons.h"
 #include "recon_registry.h"
 #include "recon_ui.h"
@@ -104,13 +105,84 @@ static void avatar_key(const char *account, char *out, size_t size) {
     snprintf(out, size, "users/%s/avatar", account != NULL ? account : "");
 }
 
+/*
+ * Pictures that were renamed, and what they became.
+ *
+ * Renaming a generated picture is not a free act: the choice is stored by
+ * name, so the account that had chosen it wakes up pointing at a name nothing
+ * draws any more. That falls back to the drawn initial, correctly and
+ * silently, and from the outside it looks exactly like the picture having been
+ * lost -- which is what happened when `flame` became `campfire`: an account
+ * that had picked the flame got its letter back and nobody was told why.
+ *
+ * Following the rename is the least surprising thing that can happen. The
+ * table is short and it will stay short, because the way to keep it short is
+ * to not rename pictures.
+ */
+static const struct {
+    const char *was;
+    const char *now;
+} RENAMED[] = {
+    /* v0.4.0: redrawn as an actual campfire, logs and all, and named for what
+     * it had always been read as. */
+    { RECON_AVATAR_PREFIX "flame", RECON_AVATAR_PREFIX "campfire" },
+    /* v0.4.0: a winding path at this size read as a match. */
+    { RECON_AVATAR_PREFIX "trail", RECON_AVATAR_PREFIX "tent" },
+};
+
 const char *recon_avatar_of(const char *account) {
     if (account == NULL || *account == '\0') {
         return "";
     }
     char key[RECON_REGISTRY_KEY_MAX];
     avatar_key(account, key, sizeof(key));
-    return recon_registry_get(RECON_REG_SYSTEM, key, "");
+
+    const char *chosen = recon_registry_get(RECON_REG_SYSTEM, key, "");
+    if (chosen[0] == '\0') {
+        return chosen;
+    }
+
+    for (size_t i = 0; i < sizeof(RENAMED) / sizeof(RENAMED[0]); i++) {
+        if (strcmp(chosen, RENAMED[i].was) != 0) {
+            continue;
+        }
+        /*
+         * Written back rather than translated on every read, so the choice on
+         * disk says what the account actually has -- and so this loop stops
+         * being reached for that account the moment it has run once.
+         */
+        recon_registry_set(RECON_REG_SYSTEM, key, RENAMED[i].now);
+        g_scanned = false;
+        return recon_registry_get(RECON_REG_SYSTEM, key, "");
+    }
+
+    return chosen;
+}
+
+/*
+ * The files those names used to be in, cleared away.
+ *
+ * Only ones this program wrote: an .ico by a retired name is ours, because the
+ * name existed nowhere but in our own table. A .png by the same name is
+ * somebody's and is left, which is also why the picker would still offer it --
+ * a picture in the folder is a picture on offer, and that rule does not get an
+ * exception for names we happen to have used.
+ */
+void recon_avatar_retire_old_files(void) {
+    for (size_t i = 0; i < sizeof(RENAMED) / sizeof(RENAMED[0]); i++) {
+        char path[RECON_PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s.ico", RECON_DIR_SYSTEM_ICONS,
+            RENAMED[i].was);
+        if (recon_fs_exists("/", path)) {
+            recon_fs_remove("/", path);
+        }
+        snprintf(path, sizeof(path), "%s/%s/%s.ico", RECON_DIR_SYSTEM_ICONS,
+            RECON_ICONS_GLOSSY, RENAMED[i].was);
+        if (recon_fs_exists("/", path)) {
+            recon_fs_remove("/", path);
+        }
+    }
+    g_scanned = false;
 }
 
 bool recon_avatar_set(const char *account, const char *avatar) {

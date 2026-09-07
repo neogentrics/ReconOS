@@ -23,6 +23,39 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The icons are drawn at four times the size, because that is where the
+blockiness was.** They were 32 by 32, and `recon_draw_image` averages when it
+shrinks an image and takes the nearest pixel when it grows one -- which is
+right for pixel art, and wrong for an account picture the login screen draws at
+seventy pixels, where every pixel of the drawing becomes a 2.25-pixel block.
+Redrawing at 32 would not have helped; the fault was not in the drawing. At 128
+every size ReconOS asks for is a shrink, and the averaging that already existed
+handles all of them. Round things are round now: a disc drawn at 128 and
+averaged down has a soft edge, where the same disc drawn at 32 has a staircase.
+
+**And they can be improved, which they could not before.** The rule was "write
+an icon if it is not already there", which keeps a real promise -- a replaced
+icon stays replaced -- and quietly meant an icon *improved* here never reached
+a machine that had run ReconOS once. The set was not a default, it was a
+one-time imprint. Each icon now carries the generation that wrote it and a
+fingerprint of what was written, and is brought up to date only when the
+generation has moved on and the file is still byte-for-byte ours. `icons
+refresh` does that on demand; `icons replace` overwrites the lot, its own word
+because it is the one that can lose something.
+
+**Eighteen more account pictures, and the flame became a campfire.** Eight was
+not a choice, it was a shortage. The flame was described as looking odd, and
+the reason is that a bare tapering blob is not a picture of anything -- so
+whoever looks at it supplies the nearest thing, and the nearest thing is a
+campfire. Given that everybody was going to read it as one, it should be one:
+two crossed logs give the flame something to be *on*. Four of the new ones were
+redrawn after being looked at rather than reasoned about -- a gear with four
+short teeth is a crosshair, a symmetrical taper is a grain of rice and not a
+leaf, a fourteen-row lighthouse is a spool of thread, and three arcs computed
+by walking x and solving for y flatten into a palm tree. An account that had
+chosen a picture since renamed follows the rename rather than silently falling
+back to its initial.
+
 **A widget layer, and it is the answer to why nothing reacted to the
 pointer.** Every application in ReconOS drew its own buttons -- a fill, a
 bevel, a label, a hit region and a tooltip, five or six lines at a time,

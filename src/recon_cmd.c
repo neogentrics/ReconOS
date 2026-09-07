@@ -24,6 +24,8 @@
 #include "recon_service.h"
 #include "recon_fs.h"
 #include "recon_help.h"
+#include "recon_icon_gen.h"
+#include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_package.h"
 #include "recon_net.h"
@@ -2466,6 +2468,59 @@ static void cmd_users(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "             [password <name> [password]] [signout]\n");
 }
 
+/*
+ * The icon set: what is there, and how to take a newer drawing of it.
+ *
+ * `icons` alone says how many there are and which generation wrote them.
+ *
+ * `icons refresh` writes any icon that is missing or that is still exactly
+ * what an older generation of ReconOS put there. An icon somebody replaced is
+ * left alone, because the fingerprint on disk no longer matches the one
+ * recorded and that is what "somebody owns this now" looks like.
+ *
+ * `icons replace` overwrites the lot, replaced ones included. Its own word
+ * rather than a flag on the first: they are different questions, and the
+ * second is the one that can lose something.
+ */
+static void cmd_icons(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "The system's pictures live in %s.\n",
+            RECON_DIR_SYSTEM_ICONS);
+        out(s, "'icons refresh' takes a newer drawing of any that are still "
+            "the ones ReconOS drew.\n");
+        out(s, "'icons replace' overwrites every one, including any you have "
+            "put there yourself.\n");
+        return;
+    }
+
+    bool replace = strcasecmp(argv[1], "replace") == 0;
+    if (!replace && strcasecmp(argv[1], "refresh") != 0) {
+        out(s, "Usage: icons [refresh|replace]\n");
+        return;
+    }
+
+    if (!recon_users_may_administer()) {
+        out(s, "Changing the system's pictures is an administrator's to do.\n");
+        return;
+    }
+
+    int written = recon_icons_write_defaults(replace);
+
+    /* The cache holds what was loaded from the old files, so it has to go or
+     * nothing on screen changes until something else happens to clear it. */
+    recon_icons_forget();
+    if (s->server != NULL) {
+        recon_shell_refresh(s->server->shell);
+    }
+
+    if (written == 0) {
+        out(s, "Nothing to do -- every picture is either current or one of "
+            "yours.\n");
+    } else {
+        out(s, "Wrote %d picture%s.\n", written, written == 1 ? "" : "s");
+    }
+}
+
 static void cmd_windows(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
 
@@ -3256,6 +3311,9 @@ static const struct command COMMANDS[] = {
     { "rename",   "rename <name> <new>",   "Rename a file or folder",           cmd_rename },
     { "move",     "move <name> <dest>",    "Move a file or folder",             cmd_move },
     { "copy",     "copy <name> <dest>",    "Copy a file or folder",             cmd_copy },
+    { "icons",    "icons [refresh|replace]",
+                                       "The picture set, and taking a newer one",
+                                                                          cmd_icons },
     { "windows",  "windows",               "List open windows",                 cmd_windows },
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
