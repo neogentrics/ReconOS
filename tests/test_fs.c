@@ -275,6 +275,171 @@ static void test_escapes(void) {
     check(recon_fs_exists("/", "/Temp/round-trip"), "and lands where it says");
 }
 
+/*
+ * Every shape of escape anybody has ever written, tried against every call
+ * that takes a path.
+ *
+ * The four cases above are the ones somebody thinks of. These are the ones
+ * that get past a check written by somebody who thought of those four: a `..`
+ * that arrives after enough real segments to look harmless, doubled slashes,
+ * a `.` between the dots, a path that is nothing but separators, and the
+ * absolute form of each.
+ *
+ * The property is one sentence and it is worth stating as one: **no path
+ * reaches a file outside the ReconOS root.** Not "is refused" -- some of these
+ * are perfectly legal paths that stay inside -- but that whatever they name is
+ * under the root.
+ */
+static void test_every_shape_of_escape(void) {
+    printf("escaping the root, exhaustively\n");
+
+    static const char *OUT[] = {
+        "..",
+        "../",
+        "/..",
+        "/../",
+        "../..",
+        "/../../",
+        "../../../../../../../../etc/passwd",
+        "/../etc/passwd",
+        "//../etc",
+        "/.././../etc",
+        "/./../etc",
+        "/Temp/../../etc",
+        "/Temp/../..",
+        "/Temp/./../../etc/passwd",
+        "/Users/../../etc",
+        "Temp/../../outside",
+        "./../outside",
+        ".././outside",
+        "/Temp/..%2f..%2fetc",   /* not decoded here, so it is a NAME */
+        "/Temp/....//../etc",
+    };
+
+    int escaped = 0;
+    for (size_t i = 0; i < sizeof(OUT) / sizeof(OUT[0]); i++) {
+        char host[RECON_PATH_MAX];
+        char canonical[RECON_PATH_MAX];
+
+        /* From two different working directories, because a relative path is
+         * resolved against one and an escape that needs depth to work would
+         * only show from the deeper one. */
+        static const char *FROM[] = { "/", "/Temp" };
+        for (size_t f = 0; f < sizeof(FROM) / sizeof(FROM[0]); f++) {
+            if (!recon_fs_resolve(FROM[f], OUT[i], host, sizeof(host),
+                    canonical, sizeof(canonical))) {
+                continue;   /* refused, which is one right answer */
+            }
+            /*
+             * Allowed, so it must have landed inside. The host path has to
+             * begin with the root and the next character has to be a
+             * separator or the end -- "/tmp/recon-x" and "/tmp/recon-xyz" both
+             * start with the same eleven characters, and only one of them is
+             * inside.
+             */
+            const char *here = recon_fs_host_root();
+            size_t len = strlen(here);
+            bool inside = strncmp(host, here, len) == 0 &&
+                (host[len] == '\0' || host[len] == '/');
+            if (!inside) {
+                escaped++;
+                printf("        '%s' from '%s' resolved to %s\n",
+                    OUT[i], FROM[f], host);
+            }
+        }
+    }
+
+    check(escaped == 0,
+        "NO PATH REACHES A FILE OUTSIDE THE ROOT, however it is written");
+
+    /*
+     * And the calls that take a path, rather than the resolver alone: a
+     * resolver that is right and a caller that does not use it is the same
+     * hole one layer up.
+     *
+     * A write that *succeeds* is not the failure. Two of the paths above are
+     * perfectly ordinary names -- `..%2f..%2fetc` is not decoded here, so it
+     * is one filename with per-cent signs in it, and `....//../etc`
+     * normalises to `/Temp/etc`. Both stay inside and both should work. What
+     * counts is where the bytes ended up, which is why this asks the resolver
+     * where that was rather than assuming a refusal.
+     *
+     * The first version of this counted every successful write and reported
+     * two failures that were the test being wrong.
+     */
+    const char *root = recon_fs_host_root();
+    size_t root_len = strlen(root);
+    int leaked = 0;
+    for (size_t i = 0; i < sizeof(OUT) / sizeof(OUT[0]); i++) {
+        if (!recon_fs_write("/", OUT[i], "x", 1)) {
+            continue;
+        }
+        char host[RECON_PATH_MAX];
+        if (!recon_fs_resolve("/", OUT[i], host, sizeof(host), NULL, 0) ||
+                strncmp(host, root, root_len) != 0 ||
+                (host[root_len] != '\0' && host[root_len] != '/')) {
+            leaked++;
+            printf("        wrote outside through '%s'\n", OUT[i]);
+        }
+    }
+    check(leaked == 0, "and nothing lands outside through one");
+
+    /* A path that leaves and comes back is still allowed, because it stays
+     * inside -- the point is not to refuse `..`, it is to refuse leaving. */
+    check(recon_fs_mkdir("/Temp", "../Temp/there-and-back"),
+        "and a path that leaves and returns still works");
+}
+
+static void test_a_link_out_of_the_tree(void) {
+    printf("a symbolic link pointing outside\n");
+
+    /*
+     * The one escape the textual check cannot see.
+     *
+     * normalize() splits on '/', drops '.', pops on '..' and refuses to go
+     * below the root. That is complete against anything *written* in a path.
+     * It says nothing about what the resulting name turns out to be on the
+     * host: a link inside the tree pointing at /etc is a path that normalises
+     * perfectly and lands outside.
+     *
+     * ReconOS has no way to make one -- there is no command for it -- but the
+     * host root is an ordinary directory somebody can copy files into, and
+     * `cp -a` of a tree that has one brings it along. So this makes one the
+     * way it would arrive and asks what happens.
+     */
+    char host[RECON_PATH_MAX];
+    if (!recon_fs_resolve("/", "/Temp", host, sizeof(host), NULL, 0)) {
+        check(false, "could not find somewhere to put a link");
+        return;
+    }
+
+    char link[RECON_PATH_MAX + 16];
+    snprintf(link, sizeof(link), "%s/way-out", host);
+    unlink(link);
+
+    /* Pointed at something that exists on every machine this runs on and that
+     * ReconOS has no business reading. */
+    if (symlink("/etc/hostname", link) != 0) {
+        printf("        (this host will not make a link; skipped)\n");
+        return;
+    }
+
+    size_t size = 0;
+    char *through = recon_fs_read("/", "/Temp/way-out", &size);
+    bool followed = (through != NULL && size > 0);
+    if (through != NULL) {
+        free(through);
+    }
+
+    if (followed) {
+        printf("        it read %zu bytes of /etc/hostname\n", size);
+    }
+    check(!followed,
+        "A LINK POINTING OUT OF THE TREE DOES NOT READ WHAT IT POINTS AT");
+
+    unlink(link);
+}
+
 static void test_clipboard(void) {
     printf("the clipboard\n");
 
@@ -390,6 +555,8 @@ int main(void) {
     test_protection();
     test_reading_across_accounts();
     test_escapes();
+    test_every_shape_of_escape();
+    test_a_link_out_of_the_tree();
     test_clipboard();
     test_private_files();
 

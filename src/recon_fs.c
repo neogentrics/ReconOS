@@ -2,7 +2,17 @@
  * The ReconOS filesystem. See include/recon_fs.h.
  */
 
-#define _POSIX_C_SOURCE 200809L
+/*
+ * 700 is the XSI version of POSIX.2008, so it is a superset of the
+ * _POSIX_C_SOURCE 200809L this used to ask for.
+ *
+ * The reason for the change is realpath, which glibc puts behind
+ * _XOPEN_SOURCE >= 500 rather than behind POSIX alone -- so with the old macro
+ * it compiled to an implicit declaration returning int, and the containment
+ * check below was comparing a truncated pointer. It passed its test, which is
+ * the part worth remembering: -Wall said so and the test did not.
+ */
+#define _XOPEN_SOURCE 700
 
 #include <dirent.h>
 #include <errno.h>
@@ -21,6 +31,19 @@
 #define DEFAULT_HOST_ROOT "/recon"
 
 static char g_host_root[RECON_PATH_MAX];
+
+/*
+ * The same root with every link along it resolved.
+ *
+ * Kept beside the written one because containment has to be judged against
+ * what the host will actually open, and the root itself may sit under a link:
+ * /tmp is one on several systems, and comparing a resolved path against an
+ * unresolved root would then call every path an escape.
+ *
+ * Empty until the root exists, which is the first run's ordering: set_root is
+ * called before make_tree.
+ */
+static char g_host_root_real[RECON_PATH_MAX];
 static char g_error[256];
 static char g_user[RECON_NAME_MAX] = RECON_USER_ADMIN;
 static char g_user_path[RECON_PATH_MAX];
@@ -153,6 +176,81 @@ static bool normalize(const char *cwd, const char *path, char *out, size_t size)
     return true;
 }
 
+/*
+ * Does this host path stay inside the root once the host has had its say?
+ *
+ * normalize() is complete against anything *written* in a path -- it splits on
+ * separators, drops `.`, pops on `..` and refuses to go below the root. It says
+ * nothing about what the resulting name turns out to be, and that is a real
+ * difference: a symbolic link inside the tree pointing at /etc normalises
+ * perfectly and lands outside. Reading one returned thirteen bytes of
+ * /etc/hostname before this existed.
+ *
+ * ReconOS has no way to make a link -- there is no command for it -- so this
+ * is not a hole somebody opens from inside. The host root is an ordinary
+ * directory, though, and `cp -a` of a tree that contains one brings it along.
+ * A containment rule that holds only while nobody copies anything in is not
+ * one.
+ *
+ * The path may not exist yet, which is most of the work: a write creates its
+ * file. So this resolves the deepest part that *does* exist and judges that,
+ * which is also what catches a link used as a directory halfway along rather
+ * than only as the last name.
+ */
+static bool stays_inside(const char *host_path) {
+    if (g_host_root_real[0] == '\0') {
+        /* Before the root exists there is nothing to compare against, and the
+         * only caller then is the code creating it. */
+        return true;
+    }
+
+    char work[RECON_PATH_MAX];
+    if ((size_t)snprintf(work, sizeof(work), "%s", host_path) >= sizeof(work)) {
+        return false;
+    }
+
+    /*
+     * Allocated by realpath rather than written into a buffer of ours.
+     *
+     * realpath's second argument must be at least PATH_MAX bytes, which is
+     * 4096 on Linux while RECON_PATH_MAX is 1024. A smaller one is not a
+     * truncation, it is undefined behaviour -- and in any build with
+     * _FORTIFY_SOURCE on, which is any optimised one, glibc checks the size
+     * and **aborts the process**. It did: the first optimised build of this
+     * function died on the first path it resolved.
+     *
+     * Passing NULL makes realpath allocate what it needs, which is POSIX and
+     * has no such rule to get wrong. The Debug build the tests run under is
+     * not fortified, so the version with the small buffer passed every check
+     * this project has -- and would have aborted on the first path resolve of
+     * a release.
+     */
+    char *real = NULL;
+    for (;;) {
+        real = realpath(work, NULL);
+        if (real != NULL) {
+            break;
+        }
+        /* Not there yet. Step up to the parent and ask about that instead. */
+        char *slash = strrchr(work, '/');
+        if (slash == NULL || slash == work) {
+            /* Walked up to the host's own root without finding anything that
+             * exists, which cannot be inside ours. */
+            return false;
+        }
+        *slash = '\0';
+    }
+
+    size_t len = strlen(g_host_root_real);
+    /* The character after the root has to be a separator or the end:
+     * "/tmp/recon-a" and "/tmp/recon-along" share their first twelve, and
+     * only one of them is inside. */
+    bool inside = strncmp(real, g_host_root_real, len) == 0 &&
+        (real[len] == '\0' || real[len] == '/');
+    free(real);
+    return inside;
+}
+
 bool recon_fs_resolve(const char *cwd, const char *path,
         char *host_out, size_t host_size, char *canonical_out, size_t canonical_size) {
     char canonical[RECON_PATH_MAX];
@@ -168,6 +266,16 @@ bool recon_fs_resolve(const char *cwd, const char *path,
     }
     if (written < 0 || (size_t)written >= host_size) {
         set_error("path is too long");
+        return false;
+    }
+
+    /*
+     * And the check the text alone cannot make. Refused rather than clamped,
+     * for the same reason `..` is: a path that meant somewhere else is worse
+     * than a path that failed.
+     */
+    if (!stays_inside(host_out)) {
+        set_error("'%s' leads outside the ReconOS filesystem", canonical);
         return false;
     }
 
@@ -253,6 +361,21 @@ bool recon_fs_init(const char *host_root) {
                 return false;
             }
         }
+    }
+
+    /*
+     * The root, with the host's links resolved, so containment can be judged
+     * against what will actually be opened. Done once here rather than on
+     * every path, and after make_tree, because realpath needs it to exist.
+     */
+    char *resolved = realpath(g_host_root, NULL);
+    if (resolved != NULL) {
+        snprintf(g_host_root_real, sizeof(g_host_root_real), "%s", resolved);
+        free(resolved);
+    } else {
+        /* Nothing resolved means nothing to compare against, and refusing to
+         * start over that would be worse than the textual check alone. */
+        snprintf(g_host_root_real, sizeof(g_host_root_real), "%s", g_host_root);
     }
 
     /* The standard layout, created on first run so the system always has the

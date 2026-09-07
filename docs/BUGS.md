@@ -2516,3 +2516,61 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   that reports them, which is the only order in which the number can be the one
   on screen. `sample()` still builds it too, so a tick with no redraw keeps the
   processor and memory figures moving.
+
+### BG-133 — A link inside the filesystem read a file outside it
+
+- **Found in** v0.4.0. **Found by** writing an exhaustive escape sweep for
+  `recon_fs`, after `scripts/coverage.sh` put that file at 46% -- the largest
+  untested surface left, and the one that owns containment.
+- **What it was** `normalize()` splits a path on separators, drops `.`, pops on
+  `..` and refuses to go below the root. That is complete against anything
+  *written* in a path, and the twenty escape shapes the new sweep tries all
+  come back refused or land inside. **It says nothing about what the resulting
+  name turns out to be on the host.** A symbolic link inside the tree pointing
+  at `/etc` normalises perfectly and lands outside.
+- **Measured, not argued about.** The test made a link at `/Temp/way-out`
+  pointing at `/etc/hostname` and asked `recon_fs_read` for it. It returned
+  thirteen bytes of `/etc/hostname`.
+- **How one gets in.** ReconOS cannot make a link -- there is no command for
+  it. The host root is an ordinary directory, though, and `cp -a` of a tree
+  containing one brings it along; `scripts/look.sh` copies the filesystem that
+  way on every run. A containment rule that holds only while nobody copies
+  anything in is not one.
+- **Fixed in** v0.4.0. `recon_fs_resolve` now resolves the deepest part of the
+  host path that exists and refuses anything that does not land under the root
+  -- which also catches a link used as a directory halfway along, not only as
+  the last name. The root is resolved once at startup because the root itself
+  may sit under a link: `/tmp` is one on several systems.
+- **What it costs, measured.** A resolve goes from about 150 ns to 6-10 us --
+  forty to seventy times. In the system that is 100 ms once, on the very first
+  start, while the whole tree is being written: **216 ms to 317 ms**. Every
+  start after that is 92 ms either way, because there is nothing left to write.
+- **And the fix had a bug of its own, in the same line, twice.** See BG-134.
+
+### BG-134 — The containment fix aborted every optimised build
+
+- **Found in** v0.4.0, in the change that fixed BG-133, before it shipped.
+  **Found by** benchmarking the cost of that change, which meant building it
+  at `-O2` for the first time.
+- **What it was** `realpath`'s second argument must be at least `PATH_MAX`
+  bytes -- 4096 on Linux -- and it was given a `RECON_PATH_MAX` buffer, which
+  is 1024. That is not a truncation. With `_FORTIFY_SOURCE` on, which is any
+  optimised build on this distribution, glibc checks the size and **kills the
+  process**. ReconOS aborted on the first path it resolved.
+- **Every check this project has said it was fine.** Twenty-three suites, the
+  address and undefined-behaviour sanitizers, and the static analyzer, all
+  clean -- because `build.sh`, `check.sh`, `analyze.sh` and `coverage.sh` every
+  one of them pass `-DCMAKE_BUILD_TYPE=Debug`, and Debug is not fortified.
+  **`scripts/package.sh` builds Release**, so the one configuration that ships
+  was the one configuration nothing ran.
+- **`realpath` was also declared implicitly**, because glibc puts it behind
+  `_XOPEN_SOURCE >= 500` rather than the `_POSIX_C_SOURCE` this file asked
+  for -- so it returned `int` and the result was a truncated pointer. The
+  compiler said so and the tests did not.
+- **Fixed in** v0.4.0. `realpath(path, NULL)` allocates what it needs, which
+  is POSIX and has no size rule to get wrong, and the file asks for
+  `_XOPEN_SOURCE 700`.
+- **And `scripts/check.sh` now runs every suite twice**: once sanitized, once
+  built the way a release is. Putting the small buffer back makes six suites
+  abort in the second pass while the first stays clean, which is the shape of
+  the whole class.

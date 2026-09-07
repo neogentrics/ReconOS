@@ -118,6 +118,28 @@ All eighteen suites there were at the time were clean the first time it was
 run, which is worth knowing precisely because it means the next thing it says
 will be worth believing. It has stayed clean since, through nineteen.
 
+### The build that ships
+
+`scripts/check.sh` runs every suite twice: once under the sanitizers, and once
+built the way `scripts/package.sh` builds what it distributes.
+
+The second pass exists because of a specific hole. Every build this project
+makes for itself is Debug -- `build.sh`, `check.sh`, `analyze.sh` and
+`coverage.sh` all pass `-DCMAKE_BUILD_TYPE=Debug` -- and the one that is not is
+`package.sh`, which builds Release. **So the configuration that actually ships
+was the one configuration nothing ran.**
+
+A containment check added to `recon_fs` passed twenty-three suites, both
+sanitizers and the analyzer, and aborted on the first path it resolved in an
+optimised build: `realpath`'s second argument must be at least `PATH_MAX`, and
+with `_FORTIFY_SOURCE` on -- which is any optimised build here -- glibc checks
+the size and kills the process. Debug is not fortified, so nothing could see it.
+
+Putting that buffer back makes six suites abort in the second pass while the
+first stays clean, which is the shape of the class: optimisation changes what
+the compiler may assume and what the library checks, and neither sanitizer
+looks at either.
+
 ### What the tests actually run
 
 ```

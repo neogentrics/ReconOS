@@ -14,6 +14,23 @@
 # This is worth running before cutting a release, and after anything that
 # touches parsing -- a decoder handed a malformed file is where these live.
 #
+# --- And then again, optimised ---
+#
+# Every build this project makes for itself is Debug: build.sh, this script,
+# analyze.sh and coverage.sh all pass -DCMAKE_BUILD_TYPE=Debug. The one that
+# is not is scripts/package.sh, which builds Release -- so the thing that
+# actually ships is the one configuration nothing tests.
+#
+# That is not theoretical. A containment check added to recon_fs passed the
+# sanitizers, the analyzer and every suite, and **aborted on the first path it
+# resolved in an optimised build**: realpath's second argument must be at
+# least PATH_MAX, and with _FORTIFY_SOURCE on -- which is any optimised build
+# on this distribution -- glibc checks the size and kills the process. Debug
+# is not fortified, so nothing here could see it.
+#
+# So the suites are run twice: once sanitized, once the way a release is
+# built. The second pass is fast, because it is the same sources.
+#
 #   ./scripts/check.sh
 #
 # Silence is the result. Anything printed is a real finding.
@@ -66,4 +83,48 @@ done
 
 echo "$ran suites under address and undefined-behaviour sanitizers"
 [ $found -eq 0 ] && echo "clean"
-exit $found
+# A finding in the sanitized pass stops here: the optimised one would report
+# the same thing again, and two copies of one finding is a longer list rather
+# than a fuller one.
+if [ "$found" != "0" ]; then
+    exit "$found"
+fi
+
+# --- The same suites, built the way a release is ---
+#
+# Optimisation changes what the compiler may assume and what glibc checks, and
+# the two together find a class the sanitizers cannot: fortified calls whose
+# size rules are only enforced when the optimiser can see the size.
+RELEASE_DIR="${RECONOS_RELEASE_BUILD:-$REPO_DIR/build-release-check}"
+
+cmake -S "$REPO_DIR" -B "$RELEASE_DIR" \
+    -DCMAKE_BUILD_TYPE=Release >/dev/null
+
+release_targets=()
+for t in "$REPO_DIR"/tests/test_*.c; do
+    name="recon_$(basename "$t" .c | sed 's/^test_//')_tests"
+    release_targets+=("$name")
+done
+
+cmake --build "$RELEASE_DIR" -j"$(nproc)" --target "${release_targets[@]}" \
+    >/dev/null 2>&1 || {
+    echo "Some targets did not build optimised; running what did." >&2
+}
+
+release_ran=0
+release_found=0
+for t in "$RELEASE_DIR"/*_tests; do
+    [ -x "$t" ] || continue
+    release_ran=$((release_ran + 1))
+    if ! out=$("$t" 2>&1); then
+        echo "== $(basename "$t") failed when built optimised"
+        printf '%s\n' "$out" | tail -5
+        release_found=1
+    fi
+done
+
+echo "$release_ran suites built the way a release is"
+if [ "$release_found" = "1" ]; then
+    exit 1
+fi
+echo "clean"

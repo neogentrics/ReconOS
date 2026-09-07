@@ -23,6 +23,38 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A link inside the filesystem read a file outside it** (BG-133). `normalize()`
+splits a path on separators, drops `.`, pops on `..` and refuses to go below the
+root -- complete against anything *written* in a path, and the twenty escape
+shapes in the new sweep all come back refused or land inside. It says nothing
+about what the resulting name turns out to be on the host, and a symbolic link
+inside the tree pointing at `/etc` normalises perfectly and lands outside.
+
+Measured rather than argued about: the test made a link at `/Temp/way-out`
+pointing at `/etc/hostname` and asked `recon_fs_read` for it. It returned
+thirteen bytes of `/etc/hostname`.
+
+ReconOS cannot make a link -- there is no command for it -- but the host root is
+an ordinary directory and `cp -a` of a tree containing one brings it along;
+`scripts/look.sh` copies the filesystem that way on every run. A containment
+rule that holds only while nobody copies anything in is not one.
+
+`recon_fs_resolve` now resolves the deepest part of the host path that exists
+and refuses anything not under the root, which also catches a link used as a
+directory halfway along. **What it costs, measured:** a resolve goes from about
+150 ns to 6-10 microseconds, which in the system is 100 ms once, on the very
+first start, while the whole tree is written -- 216 ms to 317 ms. Every start
+after that is 92 ms either way.
+
+**And that fix aborted every optimised build** (BG-134), which was found by
+benchmarking it. `realpath` wants a `PATH_MAX` buffer and was given a
+`RECON_PATH_MAX` one; with `_FORTIFY_SOURCE` on, glibc kills the process. It
+was also declared implicitly, because glibc puts `realpath` behind
+`_XOPEN_SOURCE` rather than `_POSIX_C_SOURCE` -- so it returned `int` and the
+result was a truncated pointer. Twenty-three suites, both sanitizers and the
+analyzer all said it was fine. `scripts/check.sh` now runs every suite twice,
+the second time built the way a release is.
+
 **Watchtower said "0 shown" above the applications it was showing** (BG-132).
 The footer's count came from a value the *draw* sets and the line was built on
 the timer, which runs first -- so the number was the previous frame's, and on

@@ -6,6 +6,7 @@ build/
 build-sanitized/
 build-analyzed/
 build-coverage/
+build-release-check/
 *.gcno
 *.gcda
 *.gcov
