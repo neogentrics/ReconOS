@@ -10,6 +10,18 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+And the web viewer stopped cutting pages off in silence. Found by sweeping
+for the shape BG-123 had: a fixed ceiling that drops data quietly.
+recon_html.c has six of them, and unlike the help's they are *right* -- a
+page is somebody else's file and can be any size, and a reader that grows to
+fit whatever it is handed is one a hostile page can exhaust. The comment beside
+them already said as much.
+
+What was wrong was the quiet. A page cut off at four thousand blocks looks
+exactly like a page that ended, and nobody scrolls to the bottom of a document
+to check whether it finished. Every ceiling records being reached now, and the
+status line says the rest is not shown. BG-124.
+
 The help search finds the word inside the page, not only the page. Typing
 narrows the topic list, and the page that opens is scrolled to where the word
 actually is, with every line carrying it marked. A search that filters forty

@@ -871,6 +871,20 @@ static void show_document(struct recon_web *w, struct recon_html_document *page,
             "this does not have. There is nothing to show.");
     } else if (recon_html_block_count(w->page) == 0) {
         set_status(w, true, "There is nothing readable there.");
+    } else if (recon_html_was_truncated(w->page)) {
+        /*
+         * Said out loud, because a page cut off looks exactly like a page that
+         * ended.
+         *
+         * The ceilings themselves are right -- a page is somebody else's file
+         * and a reader that grows to fit whatever it is handed is one a
+         * hostile page can exhaust. What was wrong was being quiet: somebody
+         * reading a truncated page has no way to know the rest is there, and
+         * scrolling to the bottom of a document is not how anybody checks.
+         */
+        set_status(w, true, "%d blocks, %zu KB -- and this page is larger "
+            "than this reader will hold, so the rest of it is not shown.",
+            recon_html_block_count(w->page), length / 1024);
     } else {
         set_status(w, false, "%d blocks, %zu KB",
             recon_html_block_count(w->page), length / 1024);

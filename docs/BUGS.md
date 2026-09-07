@@ -2283,3 +2283,25 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   change log to check it ends where it should; the failure looks exactly like
   the document being that long. It took a feature that *jumps* to a place, and
   then does not, for the missing part to become visible.
+
+### BG-124 — The web viewer cut a long page off and said nothing
+
+- **Found in** v0.4.0. **Found by** sweeping for the shape BG-123 had, which is
+  a fixed ceiling that drops data quietly. `recon_html.c` has six of them.
+- **The ceilings are right and are not the bug.** A page is somebody else's file
+  and can be any size; a reader that grows to fit whatever it is handed is one a
+  hostile page can exhaust. Truncating is the correct answer and the comment
+  beside them already said so.
+- **The silence was the bug.** A page cut off at four thousand blocks looks
+  exactly like a page that ended, and nobody scrolls to the bottom of a document
+  to check whether it finished. The status line said "4000 blocks, 453 KB" as
+  though that were the whole of it.
+- **Fixed in** v0.4.0. Every ceiling records that it was reached and the status
+  line says the rest is not shown.
+- **The first attempt reported nothing, and the test caught it.** Five of the
+  six ceilings were marked and the sixth — `close_block`, which is the path
+  every ordinary paragraph closes through, and therefore the only one a long
+  page reaches — was not. The edit had been written; the script that made it
+  aborted on a later assertion before writing the file, and reported the
+  earlier change as done. **A page of five thousand paragraphs stopped at four
+  thousand and still said nothing**, which is what said so.

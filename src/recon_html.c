@@ -43,6 +43,10 @@ struct recon_html_document {
     struct recon_html_block_entry *blocks;
     int block_count;
 
+    /* Set when any ceiling was reached, so the reader can say the page is
+     * incomplete rather than letting it look finished. */
+    bool truncated;
+
     struct recon_html_link *links;
     int link_count;
 
@@ -115,6 +119,7 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     }
 
     if (b->d->run_count >= RUNS_MAX) {
+        b->d->truncated = true;
         return;
     }
     struct recon_html_run *run = &b->d->runs[b->d->run_count++];
@@ -170,6 +175,20 @@ static void close_block(struct builder *b) {
      * closing it up rewrites a document that used its gaps.
      */
     bool keep_empty = (b->kind == RECON_HTML_PRE);
+
+    /*
+     * The ceiling, recorded before it is acted on.
+     *
+     * This is the path a long page actually takes -- every paragraph closes
+     * through here -- so a version that marked the other five ceilings and
+     * not this one reported nothing at all. Which is what happened: a page of
+     * five thousand paragraphs stopped at four thousand and the status line
+     * said "4000 blocks" as though that were the whole of it.
+     */
+    if (b->d->block_count >= BLOCKS_MAX) {
+        b->d->truncated = true;
+    }
+
     if ((count <= 0 && !keep_empty) || b->d->block_count >= BLOCKS_MAX) {
         b->d->run_count = b->first_run;
         return;
@@ -190,7 +209,9 @@ static void break_block(struct builder *b) {
 
 static void add_rule(struct builder *b) {
     close_block(b);
-    if (b->d->block_count < BLOCKS_MAX) {
+    if (b->d->block_count >= BLOCKS_MAX) {
+        b->d->truncated = true;
+    } else {
         struct recon_html_block_entry *block = &b->d->blocks[b->d->block_count++];
         block->kind = RECON_HTML_RULE;
         block->level = 0;
@@ -646,11 +667,18 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
                 if (is_link) {
                     char href[2048];
                     if (attribute(attrs, attrs_length, "href", href,
-                            sizeof(href)) && href[0] != '\0' &&
-                            d->link_count < LINKS_MAX) {
-                        snprintf(d->links[d->link_count].href,
-                            sizeof(d->links[d->link_count].href), "%s", href);
-                        b.link = d->link_count++;
+                            sizeof(href)) && href[0] != '\0') {
+                        if (d->link_count >= LINKS_MAX) {
+                            /* The ceiling stands; the silence does not. A
+                             * page whose links stop working two thousand in
+                             * looks like a page with broken links. */
+                            d->truncated = true;
+                        } else {
+                            snprintf(d->links[d->link_count].href,
+                                sizeof(d->links[d->link_count].href), "%s",
+                                href);
+                            b.link = d->link_count++;
+                        }
                     }
                 }
             } else {
@@ -826,7 +854,12 @@ struct recon_html_document *recon_html_plain(const char *text, size_t length) {
      * keeps the shape and lets the viewer scroll it.
      */
     size_t at = 0;
-    while (at < length && d->block_count < BLOCKS_MAX) {
+    /* The ceiling is deliberate; being quiet about reaching it was not. */
+    while (at < length) {
+        if (d->block_count >= BLOCKS_MAX) {
+            d->truncated = true;
+            break;
+        }
         const char *newline = memchr(text + at, '\n', length - at);
         size_t line = (newline != NULL) ? (size_t)(newline - (text + at))
                                         : length - at;
@@ -835,6 +868,7 @@ struct recon_html_document *recon_html_plain(const char *text, size_t length) {
         }
 
         if (d->text_used + line + 1 >= TEXT_MAX) {
+            d->truncated = true;
             break;
         }
 
@@ -844,7 +878,9 @@ struct recon_html_document *recon_html_plain(const char *text, size_t length) {
         block->first_run = d->run_count;
         block->run_count = 0;
 
-        if (line > 0 && d->run_count < RUNS_MAX) {
+        if (line > 0 && d->run_count >= RUNS_MAX) {
+            d->truncated = true;
+        } else if (line > 0) {
             size_t start = d->text_used;
             memcpy(d->text + start, text + at, line);
             d->text_used += line;
@@ -880,6 +916,10 @@ void recon_html_free(struct recon_html_document *document) {
 
 const char *recon_html_title(const struct recon_html_document *document) {
     return document != NULL ? document->title : "";
+}
+
+bool recon_html_was_truncated(const struct recon_html_document *document) {
+    return document != NULL && document->truncated;
 }
 
 int recon_html_block_count(const struct recon_html_document *document) {

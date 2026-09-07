@@ -97,6 +97,20 @@ void recon_html_free(struct recon_html_document *document);
 const char *recon_html_title(const struct recon_html_document *document);
 
 int recon_html_block_count(const struct recon_html_document *document);
+
+/*
+ * Whether the page was bigger than this reader will hold.
+ *
+ * The ceilings in recon_html.c are deliberate -- a page is somebody else's
+ * file and can be any size, and a reader that grows to fit whatever it is
+ * handed is one a hostile page can exhaust. Truncating is the right answer.
+ *
+ * Being quiet about it is not. A page cut off at four thousand blocks looks
+ * exactly like a page that ended, and somebody reading it has no way to know
+ * the rest is missing -- the same failure the help had, where the change log
+ * stopped a third of the way through and said nothing.
+ */
+bool recon_html_was_truncated(const struct recon_html_document *document);
 const struct recon_html_block_entry *recon_html_block_at(
     const struct recon_html_document *document, int index);
 
