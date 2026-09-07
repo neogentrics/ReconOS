@@ -2013,6 +2013,15 @@ with", remembered per extension, with "Use the usual program" to undo it. What
 is missing is a page of them: an association set months ago is only visible by
 right-clicking a file of that kind and looking for the mark.
 
+**Twenty-nine error codes are raised by nothing.** The catalogue defines
+forty-two and thirteen of them are reachable. Some of the rest are reserved on
+purpose -- a number is never reused, so writing one down before the fault
+exists is the intended way to work -- but a document that describes a code
+somebody can look up, for a fault the system cannot report, is making the same
+promise the help was making about topics that did not exist. The three startup
+ones were wired in v0.4.0; the rest are counted and named in
+`include/recon_errors.def`.
+
 **Nothing can listen.** Streams connect outwards, plain or encrypted with the
 far end verified; there is still no way for an application to accept a
 connection. Accepting means deciding what may reach this machine, which is a

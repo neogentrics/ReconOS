@@ -2475,6 +2475,25 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 
         /* The application table needs the shell to enumerate built-ins. */
         server->shell = recon_shell_create(server, width, height);
+        if (server->shell == NULL) {
+            /*
+             * VT-A001. The shell fails to be built for exactly one reason
+             * that happens in practice: recon_font_system found nothing to
+             * draw with, and everything the shell makes needs a font.
+             *
+             * The return was not checked at all before, so a machine with no
+             * font carried on with a NULL shell and fell over somewhere
+             * further in, with a message about whatever dereferenced it
+             * first. A001 has described this since the catalogue was written.
+             *
+             * A stop, and it does not return: there is nothing to draw the
+             * error screen with either, which is the case recon_error's
+             * "nothing registered" path exists for.
+             */
+            recon_error_raise(server, RECON_ERR_A001,
+                "No usable font was found, so nothing can be drawn.");
+            return;
+        }
         recon_apps_init(server);
 
         /*
@@ -2826,13 +2845,41 @@ int main(int argc, char **argv) {
 
     server.socket_name = wl_display_add_socket_auto(server.wl_display);
     if (server.socket_name == NULL) {
-        wlr_log(WLR_ERROR, "ReconOS: failed to create Wayland socket");
+        /*
+         * VT-A004, which the catalogue has described since it was written and
+         * which nothing raised.
+         *
+         * A log line saying "failed to create Wayland socket" is true and is
+         * not something anybody can look up. The code is, and the entry
+         * already names the three usual causes -- XDG_RUNTIME_DIR missing,
+         * unwritable, or holding a socket from a copy that did not shut down.
+         *
+         * NULL for the server, because there is nothing to draw an error
+         * screen with yet: no socket means no windows. recon_error_raise
+         * handles that by writing the record and saying so on stderr, which
+         * is the whole reason it takes a server rather than assuming one.
+         */
+        recon_error_raise(NULL, RECON_ERR_A004,
+            "XDG_RUNTIME_DIR is missing, cannot be written to, or already "
+            "holds a socket.");
         wl_display_destroy(server.wl_display);
         return 1;
     }
 
     if (!wlr_backend_start(server.backend)) {
-        wlr_log(WLR_ERROR, "ReconOS: failed to start backend");
+        /*
+         * VT-A003. The backend is what finds a screen, so a backend that will
+         * not start is a machine with nothing to draw on -- which is what that
+         * code has always described and what nothing has ever raised.
+         *
+         * The two causes are worth telling apart and this cannot tell them
+         * apart, so it names both: on real hardware the graphics driver did
+         * not come up, and in a window the host compositor refused the
+         * connection.
+         */
+        recon_error_raise(NULL, RECON_ERR_A003,
+            "The graphics driver did not come up, or the compositor this is "
+            "running inside refused the connection.");
         wl_display_destroy(server.wl_display);
         return 1;
     }

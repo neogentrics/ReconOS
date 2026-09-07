@@ -10,6 +10,26 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Three startup failures report the code that was written for them. The error
+catalogue defines forty-two codes and, counted for the first time, thirty-two
+of them were raised by nothing. Some of that is deliberate -- a code is never
+reused, so reserving one ahead is fine -- but three were describing failures the
+system genuinely hits and reported as log lines instead:
+
+- VT-A001, no usable font. recon_shell_create's return was not checked at
+  all, so a machine with no font carried on with a NULL shell and fell over
+  further in, complaining about whatever dereferenced it first.
+- VT-A003, no display to draw on, for a backend that will not start.
+- VT-A004, the Wayland socket could not be created.
+
+A log line saying "failed to create Wayland socket" is true and is not
+something anybody can look up. Forced the failure by making XDG_RUNTIME_DIR
+unwritable and watched VT-A004 come out with the catalogue's own description
+of the three usual causes.
+
+Twenty-nine codes are still raised by nothing, which is now a counted number
+rather than an unexamined one.
+
 The help was audited against the system. Everything it claims that can be
 checked from outside was checked by driving the desktop and looking: the five
 power buttons are named as the help names them, Alt+Tab moves the focus,
