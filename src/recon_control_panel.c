@@ -1399,59 +1399,15 @@ static void draw_passwords(struct control_panel *cp, struct recon_panel *p,
 /* --- Writing a skin --- */
 
 /* A colour as a person types it: six digits, or eight when the alpha matters. */
-static void colour_text(recon_color c, char *out, size_t size) {
-    if ((c >> 24) == 0xFF) {
-        snprintf(out, size, "%06X", c & 0xFFFFFFu);
-    } else {
-        snprintf(out, size, "%08X", c);
-    }
-}
-
 /*
- * Read a colour somebody typed.
- *
- * Six digits are opaque and eight carry an alpha, the same as a skin file --
- * so what is typed here and what is in the file are the same notation, and
- * somebody who has read one can write the other.
+ * Thin, because the notation belongs to the skin file rather than to this
+ * page, and because there it can be tested without a window. Kept as a name
+ * of its own only so the call sites read the same as they always did.
  */
-static bool colour_parse(const char *text, recon_color *out) {
-    while (*text == ' ' || *text == '#') {
-        text++;
-    }
-
-    unsigned long value = 0;
-    int digits = 0;
-    for (; *text != '\0'; text++) {
-        if (*text == ' ') {
-            break;
-        }
-        int digit;
-        if (*text >= '0' && *text <= '9') {
-            digit = *text - '0';
-        } else if (*text >= 'a' && *text <= 'f') {
-            digit = *text - 'a' + 10;
-        } else if (*text >= 'A' && *text <= 'F') {
-            digit = *text - 'A' + 10;
-        } else {
-            return false;
-        }
-        value = value * 16 + (unsigned long)digit;
-        digits++;
-        if (digits > 8) {
-            return false;
-        }
-    }
-
-    if (digits == 6) {
-        *out = (recon_color)(0xFF000000u | value);
-        return true;
-    }
-    if (digits == 8) {
-        *out = (recon_color)value;
-        return true;
-    }
-    return false;
+static void colour_text(recon_color c, char *out, size_t size) {
+    recon_theme_colour_text(c, out, size);
 }
+
 
 /*
  * Every colour the chosen skin answers, and what it answers.
@@ -1678,7 +1634,15 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
                     skin_row_name(cp->skin_row), least, most);
             }
         } else {
-            snprintf(label, sizeof(label), "%s. Empty leaves it alone.",
+            /*
+             * It used to say "Empty leaves it alone", and that was never
+             * true: an empty field is refused as not a colour, the same as
+             * anything else that is not one. A label describing behaviour the
+             * code does not have is worse than no label, because somebody
+             * clears the field on the strength of it.
+             */
+            snprintf(label, sizeof(label),
+                "%s: RRGGBB, or 'RRGGBB to RRGGBB' for a ramp.",
                 skin_row_name(cp->skin_row));
         }
         recon_draw_text(p, cp->font, x, y + ascent, w, label, COLOR_DIM);
@@ -1701,8 +1665,8 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         on_metric
             ? "Pick a measurement to change it. A skin is a file; this "
               "writes to it."
-            : "Pick a colour to change it. A skin is a file; this writes to "
-              "it.",
+            : "Pick a colour to change it, or give it a ramp. A skin is a "
+              "file; this writes to it.",
         COLOR_DIM);
     y += line + PADDING;
 
@@ -1723,9 +1687,15 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
             HIT_ACTION_BASE + ACTION_SKIN_DEFAULT,
             recon_theme_metric_is_set(skin_row_metric(cp->skin_row)));
     } else {
-        /* Flattening is its own button rather than a value you can type,
-         * because "no gradient" is not a colour and there is nothing to type
-         * for it. */
+        /*
+         * Kept, though typing one colour over two now does the same thing.
+         *
+         * The reason it used to give -- that there was nothing to type for
+         * "no gradient" -- stopped being true the moment the field started
+         * holding the whole value. What is left is that it is one click
+         * against selecting a field and deleting half of it, and removing a
+         * ramp is the commonest thing anybody does to one.
+         */
         recon_color from, to;
         bool ramped = recon_theme_gradient((enum recon_theme_role)cp->skin_row,
             &from, &to);
@@ -6866,11 +6836,23 @@ static void do_action(struct control_panel *cp, enum action action) {
                 break;
             }
 
-            char current[16];
-            colour_text(recon_theme_color((enum recon_theme_role)cp->skin_row),
-                current, sizeof(current));
+            /*
+             * The whole value, ramp included, so that what the list shows is
+             * what the field holds and what can be typed back. That is what
+             * makes one colour able to mean "flat" without a control of its
+             * own to say so.
+             */
+            enum recon_theme_role role = (enum recon_theme_role)cp->skin_row;
+            recon_color from = recon_theme_color(role);
+            recon_color to = from;
+            bool ramped = recon_theme_gradient(role, &from, &to);
+
+            char current[48];
+            recon_theme_ramp_text(from, ramped, to, current, sizeof(current));
             recon_edit_begin(&cp->skin_value, current, false);
-            set_status(cp, false, "%s, as RRGGBB or AARRGGBB.",
+
+            set_status(cp, false,
+                "%s, as RRGGBB -- or 'RRGGBB to RRGGBB' for a ramp.",
                 skin_row_name(cp->skin_row));
             break;
         }
@@ -6956,15 +6938,32 @@ static void do_action(struct control_panel *cp, enum action action) {
             break;
         }
 
-        if (!colour_parse(typed, &colour)) {
+        bool ramped = false;
+        recon_color far = 0;
+        if (!recon_theme_ramp_parse(typed, &colour, &ramped, &far)) {
             set_status(cp, true,
-                "'%s' is not a colour. Six digits, or eight with an alpha.",
-                typed);
+                "'%s' is not a colour. Six digits, or eight with an alpha -- "
+                "and 'RRGGBB to RRGGBB' for a ramp.", typed);
             break;
         }
 
         if (!recon_theme_set_role(cp->skin_name,
                 (enum recon_theme_role)cp->skin_row, colour)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+
+        /*
+         * The ramp, always -- including turning it off when one colour was
+         * typed over two.
+         *
+         * The field holds the whole value, so leaving the old far end in
+         * place would produce a colour nobody asked for and nobody typed:
+         * the row would read "AABBCC to D4DAE2" after somebody had typed
+         * "AABBCC" and watched the field accept it.
+         */
+        if (!recon_theme_set_gradient(cp->skin_name,
+                (enum recon_theme_role)cp->skin_row, ramped, far)) {
             set_status(cp, true, "%s", recon_theme_last_error());
             break;
         }

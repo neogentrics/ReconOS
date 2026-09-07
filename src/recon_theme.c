@@ -652,6 +652,146 @@ const char *recon_theme_metric_name(enum recon_theme_metric metric) {
     return METRICS[metric].name;
 }
 
+void recon_theme_colour_text(recon_color colour, char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return;
+    }
+    /* Eight digits only when the alpha says something. Writing FF on the
+     * front of every colour makes the common case harder to read for the
+     * sake of the rare one. */
+    if ((colour >> 24) == 0xFFu) {
+        snprintf(out, size, "%06X", colour & 0xFFFFFFu);
+    } else {
+        snprintf(out, size, "%08X", colour);
+    }
+}
+
+/*
+ * One colour token, leaving `at` on whatever follows it.
+ *
+ * Split out from the parse so that the pair below can read two of them and
+ * still insist that nothing unexpected is left over.
+ */
+static bool colour_token(const char **at, recon_color *out) {
+    const char *text = *at;
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    if (*text == '#') {
+        text++;
+    }
+
+    unsigned long value = 0;
+    int digits = 0;
+    while (*text != '\0') {
+        int digit;
+        if (*text >= '0' && *text <= '9') {
+            digit = *text - '0';
+        } else if (*text >= 'a' && *text <= 'f') {
+            digit = *text - 'a' + 10;
+        } else if (*text >= 'A' && *text <= 'F') {
+            digit = *text - 'A' + 10;
+        } else {
+            break;
+        }
+        value = value * 16 + (unsigned long)digit;
+        digits++;
+        if (digits > 8) {
+            return false;
+        }
+        text++;
+    }
+
+    if (digits == 6) {
+        *out = (recon_color)(0xFF000000u | value);
+    } else if (digits == 8) {
+        *out = (recon_color)value;
+    } else {
+        return false;
+    }
+
+    *at = text;
+    return true;
+}
+
+/* Whether only spaces are left. */
+static bool nothing_left(const char *text) {
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    return *text == '\0';
+}
+
+bool recon_theme_colour_parse(const char *text, recon_color *out) {
+    if (text == NULL || out == NULL) {
+        return false;
+    }
+    const char *at = text;
+    return colour_token(&at, out) && nothing_left(at);
+}
+
+void recon_theme_ramp_text(recon_color from, bool ramped, recon_color to,
+        char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return;
+    }
+
+    char first[16];
+    recon_theme_colour_text(from, first, sizeof(first));
+
+    if (!ramped) {
+        snprintf(out, size, "%s", first);
+        return;
+    }
+
+    char second[16];
+    recon_theme_colour_text(to, second, sizeof(second));
+    snprintf(out, size, "%s to %s", first, second);
+}
+
+bool recon_theme_ramp_parse(const char *text, recon_color *from, bool *ramped,
+        recon_color *to) {
+    if (text == NULL || from == NULL || ramped == NULL || to == NULL) {
+        return false;
+    }
+
+    const char *at = text;
+    if (!colour_token(&at, from)) {
+        return false;
+    }
+
+    if (nothing_left(at)) {
+        *ramped = false;
+        *to = *from;
+        return true;
+    }
+
+    /*
+     * "to" between them, spelled out. An arrow was considered and dropped:
+     * this is the word the list already uses, and a notation somebody has to
+     * be taught is one more thing than a notation they have already read.
+     */
+    while (*at == ' ' || *at == '\t') {
+        at++;
+    }
+    if ((at[0] != 't' && at[0] != 'T') || (at[1] != 'o' && at[1] != 'O')) {
+        return false;
+    }
+    at += 2;
+
+    /* A space after it, so "toAABBCC" is not a ramp and neither is "tot". */
+    if (*at != ' ' && *at != '\t') {
+        return false;
+    }
+
+    if (!colour_token(&at, to) || !nothing_left(at)) {
+        return false;
+    }
+
+    *ramped = true;
+    return true;
+}
+
 bool recon_theme_metric_is_set(enum recon_theme_metric metric) {
     if (metric < 0 || metric >= RECON_METRIC_COUNT ||
             g_current < 0 || g_current >= g_count) {

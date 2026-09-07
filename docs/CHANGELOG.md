@@ -23,6 +23,32 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A ramp can be set, not only removed.** The list already showed one as
+`E8E8EC to D4DAE2`; the field is now filled with exactly that, and exactly that
+can be typed back -- one text in both directions.
+
+That round trip is what lets **one colour mean flat** with no separate control
+to say so. A field holding the whole value is one somebody replaces rather than
+edits part of, so typing `AABBCC` over `E8E8EC to D4DAE2` has said what the
+role should be; keeping the old far end would leave a colour nobody asked for
+and nobody typed. Same reasoning as `metric.buttons` reading its three names.
+
+`Remove Ramp` stays as a one-click shortcut, but the reason it used to give --
+that there was nothing to type for "no gradient" -- is no longer true, and the
+comment saying so has gone.
+
+The notation moved into `recon_theme`, where it belongs (it is the skin file's,
+not the Control Panel's) and where it can be tested without a window. The parse
+got strict on the way: the old one stopped at the first space and returned what
+it had, so **`AABBCC junk` was accepted as `AABBCC`** with the junk silently
+dropped. Twenty-one checks; the one that matters is that one colour means flat,
+confirmed by making it keep the ramp and watching that check fail.
+
+And the field's label said *"Empty leaves it alone."* It never did -- an empty
+field has always been refused as not a colour. A label describing behaviour the
+code does not have is worse than no label, because somebody clears the field on
+the strength of it.
+
 **The skin editor sets the four measurements -- all ten of them.** They sit
 under the colours in the same list, because they are the same kind of thing: a
 line in a skin file. Down walks off the last colour onto the first measurement

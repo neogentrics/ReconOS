@@ -1952,8 +1952,39 @@ and there it can be tested without a window. Twenty-nine checks in
 `tests/test_theme.c`, and the one that matters is that the range is refused --
 confirmed by making it clamp instead and watching two of them fail.
 
-What is still done by editing the file: a ramp can be removed but not set, and
-a skin cannot be renamed or deleted from the page it is edited on.
+**A ramp can be set, and the field holds the whole value.** The list already
+showed one as `E8E8EC to D4DAE2`; the field is now filled with exactly that,
+and exactly that can be typed back. One text, both directions.
+
+That round trip is what lets **one colour mean flat** without a control of its
+own to say so. A field showing the whole value is a field somebody replaces
+rather than edits a part of: typing `AABBCC` over `E8E8EC to D4DAE2` has said
+what the role should be, and quietly keeping the old far end would leave a
+colour nobody asked for and nobody typed. The same reasoning as
+`metric.buttons` reading `close maximize minimize` -- what is shown is what is
+typed back.
+
+`Remove Ramp` stays, and the reason it used to give is gone. It said flattening
+needed a button because there was nothing to type for "no gradient"; there is
+now. What is left is that it is one click against selecting a field and
+deleting half of it, and removing a ramp is the commonest thing anybody does to
+one.
+
+Two things it took, both in `recon_theme` where they can be tested without a
+window. The notation moved there -- it is the skin file's, not the Control
+Panel's -- and the parse got strict: the old one stopped at the first space and
+returned what it had, so **`AABBCC junk` was accepted as `AABBCC`** and the
+junk was silently dropped. Twenty-one checks, and the one that matters is that
+one colour means flat, confirmed by making it keep the ramp and watching that
+check fail.
+
+Also corrected while in there: the field's label said *"Empty leaves it
+alone."* An empty field has always been refused as not a colour, so the label
+described behaviour the code did not have -- which is worse than no label,
+because somebody clears the field on the strength of it.
+
+What is still done by editing the file: a skin cannot be renamed or deleted
+from the page it is edited on.
 
 **Buttons in applications round off; nothing else does.** `metric.corner` is
 read by the window frame and `metric.button-corner` by every button, and a

@@ -172,6 +172,99 @@ static void test_remembered(void) {
  * somebody who types 4000 should be told the range, not silently given 48 and
  * left thinking it worked.
  */
+/*
+ * A colour and its ramp, written down and read back.
+ *
+ * The property the whole design rests on is that these are the SAME text. The
+ * list shows "E8E8EC to D4DAE2"; the field is filled with it; what somebody
+ * types back is the whole value rather than an edit to part of it. That is
+ * what lets one colour mean flat without a second control to say so -- and it
+ * is only true if the two functions agree, which is what most of this checks.
+ */
+static void test_a_colour_and_its_ramp(void) {
+    printf("a colour and its ramp, written down and read back\n");
+
+    char said[64];
+
+    recon_theme_ramp_text(0xFF1C1C20u, false, 0, said, sizeof(said));
+    check(strcmp(said, "1C1C20") == 0, "a flat colour is six digits");
+
+    recon_theme_ramp_text(0xFFE8E8ECu, true, 0xFFD4DAE2u, said, sizeof(said));
+    check(strcmp(said, "E8E8EC to D4DAE2") == 0,
+        "and a ramp is the word the list already uses");
+
+    /* Eight digits only when the alpha says something, because FF on the
+     * front of every colour makes the common case harder to read. */
+    recon_theme_ramp_text(0x80112233u, false, 0, said, sizeof(said));
+    check(strcmp(said, "80112233") == 0,
+        "an alpha that is not FF is written out");
+
+    /* --- and back --- */
+
+    recon_color from = 0;
+    recon_color to = 0;
+    bool ramped = true;
+
+    check(recon_theme_ramp_parse("1C1C20", &from, &ramped, &to) &&
+        from == 0xFF1C1C20u && !ramped,
+        "ONE COLOUR MEANS FLAT -- the field holds the whole value, so what "
+        "somebody types replaces the whole value");
+
+    check(recon_theme_ramp_parse("E8E8EC to D4DAE2", &from, &ramped, &to) &&
+        from == 0xFFE8E8ECu && ramped && to == 0xFFD4DAE2u,
+        "and two colours are a ramp");
+
+    check(recon_theme_ramp_parse("  E8E8EC   to   D4DAE2  ", &from, &ramped,
+        &to) && ramped && to == 0xFFD4DAE2u, "spaces anywhere");
+    check(recon_theme_ramp_parse("#E8E8EC to #D4DAE2", &from, &ramped, &to) &&
+        ramped, "and a hash on either, the way a file may write it");
+    check(recon_theme_ramp_parse("e8e8ec TO d4dae2", &from, &ramped, &to) &&
+        from == 0xFFE8E8ECu && ramped, "in either case");
+
+    /*
+     * The round trip, which is the property the field depends on: what the
+     * list shows, typed back, is what the list showed.
+     */
+    recon_theme_ramp_text(0xFF2A5BC8u, true, 0x804A8BE8u, said, sizeof(said));
+    check(recon_theme_ramp_parse(said, &from, &ramped, &to) &&
+        from == 0xFF2A5BC8u && ramped && to == 0x804A8BE8u,
+        "AND WHAT IT WRITES, IT READS -- including an alpha on the far end");
+
+    /* --- what it will not take --- */
+
+    check(!recon_theme_ramp_parse("E8E8EC to", &from, &ramped, &to),
+        "a ramp with nothing to ramp to is refused");
+    check(!recon_theme_ramp_parse("to D4DAE2", &from, &ramped, &to),
+        "and one with nothing to ramp from");
+    check(!recon_theme_ramp_parse("E8E8EC to D4DAE2 extra", &from, &ramped,
+        &to), "trailing rubbish is not part of a colour");
+    check(!recon_theme_ramp_parse("E8E8EC D4DAE2", &from, &ramped, &to),
+        "two colours with no word between them is not a ramp");
+    check(!recon_theme_ramp_parse("E8E8EC toD4DAE2", &from, &ramped, &to),
+        "and neither is one with no space after the word");
+    check(!recon_theme_ramp_parse("E8E8EC tot D4DAE2", &from, &ramped, &to),
+        "'tot' is not 'to'");
+    check(!recon_theme_ramp_parse("", &from, &ramped, &to),
+        "nothing is not a colour");
+    check(!recon_theme_ramp_parse("ABC", &from, &ramped, &to),
+        "three digits is not a colour, however common that is elsewhere");
+    check(!recon_theme_ramp_parse("E8E8ECD", &from, &ramped, &to),
+        "and neither is seven");
+    check(!recon_theme_ramp_parse(NULL, &from, &ramped, &to),
+        "nor nothing at all");
+
+    /*
+     * The laxity this replaced. The old parse stopped at the first space and
+     * returned what it had, so the junk was silently dropped and somebody who
+     * mistyped got a colour they did not ask for with no sign of it.
+     */
+    recon_color one = 0;
+    check(!recon_theme_colour_parse("AABBCC junk", &one),
+        "'AABBCC junk' IS REFUSED -- it used to be accepted as AABBCC");
+    check(recon_theme_colour_parse("  AABBCC  ", &one) && one == 0xFFAABBCCu,
+        "though spaces around it are still fine");
+}
+
 static void test_saying_a_measurement(void) {
     printf("saying a measurement, and reading one back\n");
 
@@ -575,6 +668,7 @@ int main(void) {
     test_files();
     test_metrics();
     test_saying_a_measurement();
+    test_a_colour_and_its_ramp();
     test_glass();
     test_tint();
     test_damaged_file();

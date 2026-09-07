@@ -547,6 +547,48 @@ bool recon_theme_set_gradient(const char *name, enum recon_theme_role role,
     bool on, recon_color to);
 
 /*
+ * --- Writing a colour down, and reading one back ---
+ *
+ * Six hex digits, or eight when the alpha matters: the same notation a skin
+ * file uses, so what somebody types and what is in the file are the same
+ * thing and reading one teaches the other.
+ */
+void recon_theme_colour_text(recon_color colour, char *out, size_t size);
+
+/*
+ * One colour, and nothing after it.
+ *
+ * Strict about the whole string, unlike the version this replaced -- that one
+ * stopped at the first space and returned what it had, so "AABBCC junk" was
+ * accepted as AABBCC and the junk was silently dropped.
+ */
+bool recon_theme_colour_parse(const char *text, recon_color *out);
+
+/*
+ * A colour and its ramp, written the way a list shows them:
+ * "E8E8EC to D4DAE2", or "1C1C20" when there is no ramp.
+ *
+ * The same text in both directions. A field showing the whole value is a
+ * field somebody can retype the whole value into, which is what makes
+ * `recon_theme_ramp_parse` below able to mean "flat" without a second control
+ * to say it.
+ */
+void recon_theme_ramp_text(recon_color from, bool ramped, recon_color to,
+    char *out, size_t size);
+
+/*
+ * The inverse.
+ *
+ * **One colour means flat.** The text is the whole value, not an edit to part
+ * of it, so what somebody types is what they get -- a field reading
+ * "E8E8EC to D4DAE2" that is replaced with "AABBCC" has been told to be
+ * AABBCC, and quietly keeping the old far end would produce a colour nobody
+ * asked for and nobody typed.
+ */
+bool recon_theme_ramp_parse(const char *text, recon_color *from, bool *ramped,
+    recon_color *to);
+
+/*
  * A frame measurement, or `on` false to hand it back to the default.
  *
  * Clamped to what the system will accept before it is written, so a file
