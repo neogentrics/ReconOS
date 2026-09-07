@@ -31,6 +31,7 @@
 #include "recon_package.h"
 #include "recon_net.h"
 #include "recon_procinfo.h"
+#include "recon_props.h"
 #include "recon_registry.h"
 #include "recon_server.h"
 #include "recon_shell.h"
@@ -126,6 +127,14 @@ enum action {
     ACTION_UNLOAD_MODULE,
     /* Registry */
     ACTION_UNLOCK_REGISTRY,
+    /*
+     * Forget the program chosen for a kind of file.
+     *
+     * Only ever removes a choice, never sets a different one -- the program a
+     * file type came with cannot be deleted, only overridden, which is the
+     * same rule the presets follow everywhere else here.
+     */
+    ACTION_FORGET_TYPE,
     ACTION_LOCK_REGISTRY,
     ACTION_REGISTRY_HIVE,
     ACTION_REGISTRY_EDIT,
@@ -401,11 +410,23 @@ static const struct {
 enum programs_tab {
     PROGRAMS_INSTALLED,
     PROGRAMS_SYSTEM,
+    /*
+     * The file types somebody has chosen a program for.
+     *
+     * "Open with" on a file's menu writes a choice and there was nowhere to
+     * see the choices: an association set months ago was visible only by
+     * right-clicking a file of that kind and looking for the mark. A setting
+     * you cannot find is a setting you cannot undo.
+     *
+     * Here rather than on a page of its own because it is about which program
+     * opens what, and this is the page about programs.
+     */
+    PROGRAMS_TYPES,
     PROGRAMS_TABS,
 };
 
 static const char *const PROGRAMS_TAB_NAMES[PROGRAMS_TABS] = {
-    "Installed", "System Apps",
+    "Installed", "System Apps", "File Types",
 };
 
 /*
@@ -3723,8 +3744,12 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
     int bottom = y + h;
 
     y = draw_heading(cp, p, x, y, w,
-        cp->programs == PROGRAMS_SYSTEM ? "System Apps" : "Programs",
-        cp->programs == PROGRAMS_SYSTEM
+        cp->programs == PROGRAMS_TYPES ? "File Types"
+            : cp->programs == PROGRAMS_SYSTEM ? "System Apps" : "Programs",
+        cp->programs == PROGRAMS_TYPES
+            ? "Kinds of file you have chosen a program for. Everything else "
+              "opens in whatever handles it."
+            : cp->programs == PROGRAMS_SYSTEM
             ? "What ships with ReconOS. These cannot be removed."
             : "What has been installed here. Applications come from modules "
               "in /Apps.");
@@ -3751,6 +3776,57 @@ static void draw_programs(struct control_panel *cp, struct recon_panel *p,
     }
     recon_fill_rect(p, x, y + SECTION_HEIGHT - 1, w, 1, COLOR_SEPARATOR);
     y += SECTION_HEIGHT + PADDING;
+
+    /*
+     * The chosen file types are a different kind of row -- an extension and a
+     * program rather than an application and where it came from -- so they get
+     * their own drawing rather than being squeezed through the one below.
+     */
+    if (cp->programs == PROGRAMS_TYPES) {
+        int total = recon_registry_count(RECON_REG_USER,
+            RECON_OPEN_WITH_PREFIX);
+
+        cp->list_h = bottom - y - BUTTON_HEIGHT - PADDING * 2;
+        int shown = cp->list_h / ROW_HEIGHT;
+        if (shown < 1) {
+            shown = 1;
+        }
+        if (cp->selected >= total) {
+            cp->selected = total - 1;
+        }
+
+        for (int row = 0; row < shown && row < total; row++) {
+            const char *key = NULL;
+            const char *value = NULL;
+            if (!recon_registry_at(RECON_REG_USER, RECON_OPEN_WITH_PREFIX,
+                    row, &key, &value)) {
+                break;
+            }
+
+            /* The key is "open-with/.png"; the part worth showing is the
+             * extension, which is everything after the slash. */
+            const char *ext = strrchr(key, '/');
+            ext = (ext != NULL) ? ext + 1 : key;
+
+            char detail[160];
+            snprintf(detail, sizeof(detail), "opens in %s", value);
+
+            draw_row(cp, p, x, y + row * ROW_HEIGHT, w, row, ext, detail,
+                row == cp->selected);
+        }
+
+        if (total == 0) {
+            recon_draw_text(p, cp->font, x + 10,
+                y + (ROW_HEIGHT + ascent) / 2 - 2, w - 20,
+                "You have not chosen a program for any kind of file. "
+                "Right click a file and use Open with.", COLOR_DIM);
+        }
+
+        y += cp->list_h + PADDING;
+        draw_button(cp, p, x, y, "Use the usual program again",
+            HIT_ACTION_BASE + ACTION_FORGET_TYPE, total > 0);
+        return;
+    }
 
     struct recon_installed_app apps[64];
     int count = programs_in_tab(cp, apps, 64);
@@ -5612,6 +5688,30 @@ static void do_action(struct control_panel *cp, enum action action) {
             break;
         }
         set_status(cp, false, "Unloaded '%s'.", module.name);
+        break;
+    }
+
+    case ACTION_FORGET_TYPE: {
+        const char *key = NULL;
+        const char *value = NULL;
+        if (!recon_registry_at(RECON_REG_USER, RECON_OPEN_WITH_PREFIX,
+                cp->selected, &key, &value)) {
+            set_status(cp, true, "There is nothing chosen there.");
+            break;
+        }
+
+        /* Copied before the removal: `key` points into the registry and the
+         * removal is what invalidates it. */
+        char ext[64];
+        const char *dot = strrchr(key, '/');
+        snprintf(ext, sizeof(ext), "%s", (dot != NULL) ? dot + 1 : key);
+
+        char full[RECON_REGISTRY_KEY_MAX];
+        snprintf(full, sizeof(full), "%s", key);
+        recon_registry_remove(RECON_REG_USER, full);
+
+        set_status(cp, false, "%s files open in the usual program again.",
+            ext);
         break;
     }
 

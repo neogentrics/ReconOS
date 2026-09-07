@@ -355,6 +355,10 @@ so every file of that kind opens there from now on.
 back. It only ever removes your choice -- the program a file type came with
 cannot be deleted, only overridden.
 
+**Control Panel -> Programs -> File Types** lists every kind of file you have
+chosen a program for, in one place, and undoes any of them. Everything not
+listed there opens in whatever handles it.
+
 ## Pictures of the screen
 
 **Print Screen** saves a picture of the whole screen into your Pictures

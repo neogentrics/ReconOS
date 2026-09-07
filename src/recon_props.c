@@ -162,7 +162,7 @@ static bool opener_key(const char *name, char *out, size_t size) {
         return false;
     }
 
-    int at = snprintf(out, size, "open-with/");
+    int at = snprintf(out, size, RECON_OPEN_WITH_PREFIX "/");
     if (at < 0 || (size_t)at >= size) {
         return false;
     }

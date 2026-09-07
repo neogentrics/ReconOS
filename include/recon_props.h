@@ -102,6 +102,20 @@ const char *recon_props_opener(const char *name);
 #define RECON_OPEN_WITH_MAX 8
 int recon_props_openers(const char **names, int max);
 
+/*
+ * Where a chosen opener is written down: the section of the registry.
+ *
+ * **No trailing slash.** The registry's own listing takes a prefix and checks
+ * that what follows it is a separator or the end, so "open-with/" matches
+ * nothing at all -- the character after it is the dot of the extension. The
+ * slash belongs to the key being built, not to the name of the section.
+ *
+ * That cost a round: the page listed nothing while the keys were plainly in
+ * the file, because one constant was standing for two slightly different
+ * things.
+ */
+#define RECON_OPEN_WITH_PREFIX "open-with"
+
 bool recon_props_set_opener(const char *name, const char *application);
 bool recon_props_clear_opener(const char *name);
 

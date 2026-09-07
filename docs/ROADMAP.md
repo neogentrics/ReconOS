@@ -2008,12 +2008,15 @@ whoever handed it over; nothing expresses a dependency between two; and
 installing over an existing package is refused rather than replacing it, so
 there is no upgrade, only remove-then-install with whatever that loses.
 
-**The choices somebody has made about file types are not listed anywhere.** As
-of v0.4.0 an application declares what it opens, and a person can override that
-from a file's right-click menu in File Explorer or on the desktop -- "Open
-with", remembered per extension, with "Use the usual program" to undo it. What
-is missing is a page of them: an association set months ago is only visible by
-right-clicking a file of that kind and looking for the mark.
+**A file type can be given to a program that does not open it.** As of v0.4.0
+an application declares what it opens, a person can override that from a
+file's right-click menu in File Explorer or on the desktop, and
+**Control Panel -> Programs -> File Types** lists every choice made and undoes
+one. What is missing is any check that the choice makes sense: "Open with"
+offers every application that opens files at all, so a picture can be pointed
+at Notepad and will open there as a screen of binary. Offering only the ones
+that claim the extension would be no use -- that list has one entry -- so the
+answer is probably a warning rather than a shorter list.
 
 **Twenty-nine error codes are raised by nothing.** The catalogue defines
 forty-two and thirteen of them are reachable. Some of the rest are reserved on

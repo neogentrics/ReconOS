@@ -10,6 +10,22 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Control Panel → Programs → File Types lists the kinds of file somebody has
+chosen a program for, and "Use the usual program again" undoes one. An
+association set months ago was visible only by right-clicking a file of that
+kind and looking for the mark -- a setting you cannot find is a setting you
+cannot undo.
+
+On the Programs page rather than a page of its own, because it is about which
+program opens what and that is the page about programs.
+
+One round went into a constant standing for two slightly different things. The
+registry's listing takes a prefix and checks that what follows it is a
+separator or the end, so "open-with/" matches nothing -- the character after
+it is the dot of the extension. The slash belongs to the key being built, not
+to the name of the section. The page listed nothing while the keys were plainly
+in the file.
+
 The compositor was run under the leak checker for the first time, rather
 than only the test suites -- which cover what can be tested without a screen,
 and a panel is not one of those things.
