@@ -10,6 +10,30 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+The error catalogue is checked by something other than reading it.
+recon_error.c was linked into eight test targets and exercised by none of
+them, which coverage said and reading did not -- and eleven codes had just been
+wired into the system on the strength of reading.
+
+include/recon_errors.def states three rules at the top and nothing enforced
+any of them. Two of the three the compiler already enforces, which was
+found by breaking them rather than by assuming either way: the macro builds an
+enumerator out of the area and the number, so a repeated pair is a
+redeclaration and the build stops. That is written into the test, because a
+check claiming to be load-bearing and not being is worse than no check.
+
+What the compiler does not catch, and breaking them proved this does: an area
+letter outside the listed areas -- VT-I001 compiles perfectly and reads as
+VT-1001 on a screen somebody is squinting at because the system has stopped --
+and a code with an empty summary, which is a code somebody looks up and finds
+blank.
+
+Also checked: that raising one reaches the log with the detail *and* what the
+code means, that a second is added rather than replacing the first, that a
+fault leaves nothing for the next start to report, and the whole of A-005 --
+including that a caught crash takes precedence over it, which had only been
+verified by hand.
+
 One damaged byte in the firewall's rules file turned the firewall off
 (BG-131). The switch was read as "yes or on means yes, anything else means no",
 so on = yqs meant off -- silently, and looking exactly like somebody having

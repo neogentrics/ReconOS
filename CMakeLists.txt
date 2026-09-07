@@ -609,6 +609,19 @@ add_executable(recon_titlebar_tests
 target_include_directories(recon_titlebar_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# The error catalogue, and what raising one does. Linked into eight targets and
+# exercised by none of them, which coverage said and reading did not. The rules
+# at the top of include/recon_errors.def -- a number never reused, an area
+# letter that is one of the listed areas -- were stated and unenforced; a
+# duplicate is two hundred lines from its twin and invisible in the file.
+add_executable(recon_error_tests
+    tests/test_error.c
+    src/recon_error.c
+    src/recon_fs.c)
+
+target_include_directories(recon_error_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 # AES-GCM comes from mbedTLS, for the reason stated in the keyring's header:
 # the thing that actually protects a password is not written here.
 target_link_libraries(recon_keyring_tests PRIVATE
