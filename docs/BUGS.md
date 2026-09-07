@@ -348,6 +348,54 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-131 — The bootloader never passed a command line, for four checkpoints
+
+[#290](https://github.com/neogentrics/ReconOS/issues/290)
+
+- **Found:** 6 September 2026, writing the first test that installs from a real
+  medium and then boots the installed disk.
+- **Cost:** nothing yet, and it would have cost the entire installer.
+
+The handoff structure has carried a `cmdline` field since checkpoint 4, and the
+kernel has always honoured it — `reconboot.c` copies it and hands it to
+`boot_info()`. **The loader never filled it in.** Every firmware boot handed the
+kernel an empty command line.
+
+**Why four checkpoints of testing did not notice.** Every option the kernel
+takes was being passed with QEMU's `-append`, and `-append` only exists on the
+`-kernel` path — which loads the kernel directly and *skips this bootloader
+entirely*. So the rig was exercising two things and neither was the real one:
+boots with a command line that had no loader in them, and boots with a loader
+that had no command line. The combination a real machine performs was never run.
+
+The cost only appears when something needs it. An installed system, or an
+install medium, had no way to tell the kernel anything at all: the installer
+could not be told which disk to write to, and a recovery mode could not be asked
+for. **The protocol supported it and the implementation quietly did not**, which
+is the same shape as several faults this month — a comment and its code
+disagreeing with nothing arranged to notice.
+
+The loader now reads an optional `\reconos\cmdline` from the medium. A file
+rather than something built in, because the point is that it can be changed on a
+stick without rebuilding. Absent is normal. CR and LF are stripped, because a
+file edited on Windows ends CR LF and a command line with a carriage return in
+it matches nothing — which presents as an option being ignored for no visible
+reason.
+
+**And the second mistake, on the way to fixing the first.** The copy into the
+handoff was placed *above* the call that reads the file, so it copied a buffer
+that was still empty. Nothing failed: the kernel received no command line and
+behaved exactly as it does when there is none, which is indistinguishable from
+working.
+
+What settled it was the *order of the loader's own output* — it prints
+`framebuffer` and `acpi rsdp` before `kernel: ... bytes read`, so the handoff was
+being built before the kernel was read, and the copy sat in the handoff. Source
+reads top to bottom; a machine does not. Not given its own number because it
+never existed outside an afternoon, but recorded because the shape is the
+recurring one: **a value that was correct when computed, consumed at a moment
+when it was not yet.**
+
 ### BG-130 — Every rewrite renamed the file, including the one firmware looks for
 
 [#288](https://github.com/neogentrics/ReconOS/issues/288)

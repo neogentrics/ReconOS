@@ -177,6 +177,60 @@ struct elf64_phdr {
 
 /* --- Reading the kernel off the volume we booted from ------------------- */
 
+/* An optional command line, read from a file beside the kernel.
+ *
+ * The handoff structure has carried a `cmdline` field since checkpoint 4 and
+ * the kernel has always honoured it. **This loader never filled it in**, so on
+ * every firmware boot the kernel got an empty command line -- and nothing
+ * noticed, because every option the kernel takes was being passed by QEMU's
+ * `-append`, which only exists on the `-kernel` path that skips this loader
+ * entirely.
+ *
+ * The cost is not obvious until you meet it: an installed system, or an install
+ * medium, had no way to tell the kernel anything at all. The installer could
+ * not be told which disk to write to; a recovery mode could not be asked for.
+ * The protocol supported it and the implementation quietly did not. (BG-131)
+ *
+ * A file rather than something built in, because the point is that it can be
+ * changed on a stick without rebuilding anything. Absent is normal: most boots
+ * want nothing said.
+ */
+static char cmdline_buf[128];
+
+static void read_cmdline(EFI_FILE_PROTOCOL *root)
+{
+	EFI_FILE_PROTOCOL *file;
+	EFI_STATUS s;
+	UINTN size = sizeof(cmdline_buf) - 1;
+	UINTN i;
+
+	cmdline_buf[0] = '\0';
+
+	s = root->Open(root, &file, (CHAR16 *)u"\\reconos\\cmdline",
+		       EFI_FILE_MODE_READ, 0);
+	if (EFI_ERROR(s))
+		return;
+
+	s = file->Read(file, &size, cmdline_buf);
+	file->Close(file);
+
+	if (EFI_ERROR(s)) {
+		cmdline_buf[0] = '\0';
+		return;
+	}
+
+	cmdline_buf[size] = '\0';
+
+	/* One line, and no line ending. A file edited on Windows ends CR LF,
+	 * and a command line with a carriage return in it matches nothing --
+	 * which presents as an option being ignored for no visible reason. */
+	for (i = 0; i < size; i++)
+		if (cmdline_buf[i] == '\r' || cmdline_buf[i] == '\n') {
+			cmdline_buf[i] = '\0';
+			break;
+		}
+}
+
 static void *read_kernel(UINTN *size_out)
 {
 	EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -207,6 +261,8 @@ static void *read_kernel(UINTN *size_out)
 	s = fs->OpenVolume(fs, &root);
 	if (EFI_ERROR(s))
 		fail("opening the volume", s);
+
+	read_cmdline(root);
 
 	s = root->Open(root, &file, (CHAR16 *)KERNEL_PATH, EFI_FILE_MODE_READ, 0);
 	if (EFI_ERROR(s)) {
@@ -578,6 +634,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	print("\n");
 
 	kernel_image = read_kernel(&kernel_size);
+
+	/* After read_kernel, not before: the command line is read from the
+	 * volume inside that call, and copying it earlier copied a buffer that
+	 * was still empty. Nothing failed -- the kernel simply received no
+	 * command line and behaved exactly as it does when there is none. */
+	copy(boot_info.cmdline, cmdline_buf, sizeof(boot_info.cmdline));
+
+	if (cmdline_buf[0]) {
+		print("  command line : ");
+		print(cmdline_buf);
+		print("\n");
+	}
 	print("  kernel       : ");
 	print_dec(kernel_size);
 	print(" bytes read\n");

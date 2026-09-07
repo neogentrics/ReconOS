@@ -163,6 +163,23 @@ enum install_verdict install_execute(struct block_device *disk,
 /* Plans and executes against the disk named by `install-onto=<device>`. */
 void install_execute_run(void);
 
+/* Copies the bootloader and kernels from the medium ReconOS booted from onto
+ * the EFI partition it is installing to. What gets installed is whatever that
+ * medium carries -- which is the same thing that just booted, and if it
+ * booted, it works on this machine.
+ *
+ * A loader with no kernel, or a kernel with no loader, is a failed install
+ * rather than a count of files copied. */
+enum install_verdict install_copy_boot(struct block_device *source_esp,
+				       struct block_device *target_esp);
+
+/* The EFI partition of the medium this kernel was booted from, found by
+ * looking for one holding \EFI\BOOT that is not on the disk being installed
+ * to. Found rather than named: a flag somebody has to get right, gotten
+ * wrong, means copying a bootloader off a disk that is about to be
+ * overwritten. */
+struct block_device *install_find_medium(struct block_device *exclude_disk);
+
 /* Plans an install against every disk the block layer can see and prints the
  * result. Reads only; there is no execution behind it yet. Runs when
  * `install-plan` appears on the command line. */

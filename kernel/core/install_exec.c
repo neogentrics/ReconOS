@@ -50,10 +50,36 @@ static struct block_device *slice_for(struct block_device *disk, u8 index,
 				    BLOCK_SCHEME_GPT);
 }
 
+/* The EFI partition already on this disk, which the plan chose to reuse.
+ *
+ * Found by looking for the one holding \\EFI rather than by index, because a
+ * table this install just rewrote has entries in slots that were free, and an
+ * index from before the write is a number that no longer means what it did.
+ */
+static struct block_device *esp_existing(struct block_device *disk)
+{
+	unsigned i;
+
+	for (i = 0; i < block_device_count(); i++) {
+		struct block_device *d = block_device_at(i);
+		struct fat32 fs;
+		struct fat32_entry e;
+
+		if (d->parent != disk->id)
+			continue;
+		if (fat32_mount(d, &fs) != FAT32_OK)
+			continue;
+		if (fat32_walk(&fs, "/EFI", &e) == FAT32_OK && e.is_dir)
+			return d;
+	}
+
+	return 0;
+}
+
 enum install_verdict install_execute(struct block_device *disk,
 				     const struct install_plan *plan)
 {
-	struct block_device *esp, *system, *programs;
+	struct block_device *system, *programs;
 	enum install_verdict v;
 	enum fat32_status fst;
 	enum reconfs_status rst;
@@ -101,7 +127,8 @@ enum install_verdict install_execute(struct block_device *disk,
 		return INSTALL_TOO_MANY_SLICES;
 
 	if (!plan->reuse_esp) {
-		esp = slice_for(disk, 1, &plan->esp);
+		struct block_device *esp = slice_for(disk, 1, &plan->esp);
+
 		if (!esp)
 			return INSTALL_TOO_MANY_SLICES;
 
@@ -131,6 +158,31 @@ enum install_verdict install_execute(struct block_device *disk,
 		return INSTALL_IO;
 	}
 	kputs("  programs volume    : ReconFS, made\n");
+
+	/* And the step that makes the machine boot. Last, because everything
+	 * before it is preparation that a half-finished install leaves merely
+	 * unused -- while a bootloader is the one file whose absence firmware
+	 * notices and whose corruption firmware runs. */
+	{
+		struct block_device *medium = install_find_medium(disk);
+		struct block_device *target = plan->reuse_esp
+					    ? esp_existing(disk)
+					    : slice_for(disk, 1, &plan->esp);
+
+		if (!medium) {
+			kputs("  bootloader         : no install medium "
+			      "found; the disk is prepared but will not "
+			      "boot\n");
+			return INSTALL_OK;
+		}
+
+		if (!target)
+			return INSTALL_TOO_MANY_SLICES;
+
+		v = install_copy_boot(medium, target);
+		if (v != INSTALL_OK)
+			return v;
+	}
 
 	return INSTALL_OK;
 }

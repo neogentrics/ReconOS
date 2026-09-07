@@ -622,6 +622,29 @@ else
 	FAILED_PATHS+=("install onto")
 fi
 
+# The one test that checks what the project is for, rather than that a part of
+# it works: a bare disk, an install medium, and afterwards the disk boots on its
+# own with the medium gone. Everything the installer got wrong shows up as a
+# firmware that finds no system.
+
+printf '%-46s' "  installs from media, and the disk boots"
+
+e2e_out=$(bash scripts/install-then-boot-test.sh 2>&1)
+e2e_rc=$?
+
+if [ "$e2e_rc" -eq 0 ]; then
+	echo "$(echo "$e2e_out" | grep -oE '[0-9]+ of [0-9]+: installed from media.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$e2e_rc" -eq 2 ]; then
+	echo "skipped, OVMF or mtools is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$e2e_out" | sed 's/^/      /' | head -20
+	failures=$((failures + 1))
+	FAILED_PATHS+=("install then boot")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."
