@@ -67,6 +67,23 @@ struct recon_appwin *recon_help_create(struct recon_server *server,
 void recon_help_show_topic(struct recon_appwin *win, const char *title);
 
 /*
+ * Whether a topic with this title exists.
+ *
+ * For the startup check that every application's declared help topic is a real
+ * one. That declaration lives beside the application and the topics live in
+ * docs/HELP.md, and nothing made the two agree: the Web viewer and Mail both
+ * asked for a page called "Networking" that has never existed, so F1 from
+ * either of them silently left whatever page was already showing. Photos, the
+ * player and the Calendar each asked for "Writing", which exists and is about
+ * Notepad -- which is worse, because it looks like an answer.
+ *
+ * Checked at startup and complained about in the log, because a wrong topic
+ * cannot be seen from either file on its own and shows up as a key that does
+ * nothing.
+ */
+bool recon_help_topic_exists(const char *title);
+
+/*
  * What the change log says about the version now running, or "" if it says
  * nothing about it.
  *

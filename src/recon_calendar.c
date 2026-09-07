@@ -799,7 +799,7 @@ static void calendar_destroy(void *user) {
 
 static const struct recon_appwin_impl CALENDAR_IMPL = {
     .title = "Calendar",
-    .help = "Writing",
+    .help = "Dates",
     .icon = RECON_ICON_CALENDAR,
     .default_width = 700,
     .default_height = 460,

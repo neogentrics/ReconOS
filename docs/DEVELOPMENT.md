@@ -30,6 +30,32 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
+### Building from a copy, and the trap in it
+
+Working on one machine and building on another -- editing on Windows and
+compiling in WSL, say -- means copying the tree across, and `rsync -a` is the
+obvious way to do it. It has a trap that costs an afternoon exactly once.
+
+`-a` implies `-t`, which preserves the *source's* modification time. So a file
+that is edited, copied over, and then reverted arrives with an mtime OLDER than
+the object file built from the version in between. `make` compares those two
+times, decides the object is current, and skips it. The build succeeds, reports
+nothing wrong, and produces a binary containing the change before last.
+
+What it looks like from outside is a fix that did not take -- and then a second
+attempt at the same fix, and a third, each one correct and each one measured
+against a binary that does not contain it.
+
+Copy without preserving times:
+
+```bash
+rsync -rlpgoD --checksum --no-times --delete --exclude build --exclude .git     /path/to/source/ ~/build-tree/
+```
+
+Files whose contents match are still skipped, which is the point of
+`--checksum`; files that are copied get the current time, so make rebuilds
+them.
+
 ### Headless testing
 
 The compositor can run with no display at all, which makes automated testing

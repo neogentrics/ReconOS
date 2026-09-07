@@ -1611,6 +1611,13 @@ static void calc_destroy(void *user) {
 
 static const struct recon_appwin_impl CALC_IMPL = {
     .title = "Calculator",
+    /*
+     * F1 goes to the page about this, like every other window. A module's
+     * application is not a lesser one: it names a topic in the system's help
+     * the same way a built-in does, and the shell says so in the log if the
+     * page is not there.
+     */
+    .help = "The Calculator",
     .icon = RECON_ICON_CALCULATOR,
     /*
      * Wide enough for five mode names and a six-column scientific keypad.

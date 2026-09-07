@@ -813,7 +813,7 @@ static void web_destroy(void *user) {
 
 static const struct recon_appwin_impl WEB_IMPL = {
     .title = WEB_APPLICATION,
-    .help = "Networking",
+    .help = "The web viewer",
     .icon = RECON_ICON_WEB,
     .default_width = 800,
     .default_height = 600,

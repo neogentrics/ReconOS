@@ -1,28 +1,12 @@
-ReconOS names its faults so you can look one up. A code reads like this:
+Six modes, chosen along the top.
 
+- Standard is arithmetic.
+- Scientific adds trigonometry, logarithms, powers and factorials.
+- Programmer works in hexadecimal, decimal, octal and binary at once, with
+  the bitwise operations, in whole numbers rather than decimals -- a number
+  shown as a bit pattern has to be exact about every one of those bits.
+- Date is how far apart two dates are.
+- Convert changes units.
+- Graph draws an expression in *x*.
 
-VT-A001
-
-
-VT is the system. The letter says which part of it — A is startup, B is
-storage, C is accounts, and so on. The number says which fault.
-
-errors VT-A001 in the Terminal says what a code means. errors on
-its own lists every code there is, and errors log is what has actually
-happened on this machine.
-
-There are three kinds:
-
-- STOP — the system cannot continue. It shows a screen with the code on it
-  and writes the code and the time into /System/Logs. The next start says
-  what happened.
-- fault — something failed and the rest carried on. Reported where it
-  happened.
-- note — written down, and nothing broke.
-
-If the last run stopped, the first screen after the startup screen says so
-once, with the code. The machine in front of you is working; the message is
-about the run before it.
-
-The full list is also in docs/ERRORS.md in the repository, for when you have
-a code and not a working machine.
+Every key has a keyboard equivalent, including the number pad.

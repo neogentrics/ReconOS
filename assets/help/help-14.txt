@@ -1,19 +1,19 @@
-Control Panel → Firewall decides what ReconOS may open and what may be
-opened to it. It is not the firewall of the machine underneath and does not
-touch that one.
+Mail reads over IMAP or POP3 and sends over SMTP. Both halves of an account
+are on one form, because they are one account to the person filling it in; the
+sending half may be left blank if you only want to read.
 
-Outgoing connections are allowed by default and incoming ones are blocked,
-which is right almost always. Under that is a numbered list of rules, and
-the first rule that matches decides — so the order is part of the rule,
-and moving one changes what it does.
+The connection is always encrypted and the far end is always checked. There
+is no unencrypted option and no setting that produces one. On port 587 the
+upgrade to encryption is required to succeed: a server that does not offer it,
+or something in the middle that removes the offer, ends the session rather than
+carrying on in the open.
 
-Nine rules ship. The incoming ones are written down and switched off: the
-useful state for a rule about remote access is there, correct, and not in
-force until you want remote access. Turning one on is a switch rather than
-having to remember a port number.
+Writing a letter takes To, Cc and Bcc, each a list separated by
+commas. Everyone named in all three receives it; only To and Cc appear in the
+letter itself, which is what a blind copy means. Attach a file adds up to
+eight files, twelve megabytes together. Files are read when you press Send, so
+what goes is the file as it is then.
 
-A rule that is off is drawn dim. That is deliberate: written down and not in
-force is the most important thing about such a rule.
-
-Adding and removing rules is firewall in the Terminal for now. The rules are
-a plain text file in /System/Config, so they can be read without ReconOS.
+The password is not saved. It is used for the connection and forgotten when
+the window closes. Somewhere safe to keep it needs a key that exists only while
+somebody is signed in, and that does not exist yet.

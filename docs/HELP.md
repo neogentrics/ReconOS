@@ -203,6 +203,106 @@ it.
 - **reg** — the settings the system remembers
 - **bin** — the Recycle Bin: list it, fill it, empty it
 
+## Pictures
+
+**Photos** opens PNG, JPEG, BMP, GIF and TGA. Double-clicking a picture
+anywhere opens it here.
+
+It shows one picture at a time, fitted to the window. **Half** and **Double**
+change the size, and **Save as PNG** writes the result out under a new name --
+it refuses to overwrite an existing file rather than asking, so nothing is ever
+lost to a mistyped name. A `*` in the title means there are changes that have
+not been saved.
+
+What is not on offer is making a small picture sharp. Enlarging shows the
+pixels that are there, larger. Inventing detail that was never in the picture
+needs a trained model, and a button promising a sharper photograph while
+delivering a confident invention is not a feature this wants.
+
+## Sound and video
+
+**Media Player** plays what ReconOS can decode: WAV and MP3 for sound, and MP4
+for video. Double-clicking a file that can be played opens it here.
+
+A file it cannot decode is refused with a sentence saying so, rather than
+opening an empty window. Which formats can be played changes when a module
+brings a decoder -- **Control Panel → Modules** lists what is loaded.
+
+Sound goes out through the machine underneath. On a machine with no sound card
+everything still works and says there is nothing to play through.
+
+## The web viewer
+
+**Web** fetches a page over HTTP or HTTPS and shows the text in it. It reads
+HTML's structure -- headings, paragraphs, lists, links -- and follows a link
+when you click one. An `.html` file on this machine opens here too.
+
+It is a reader, not a browser. No JavaScript, no images, no styling, no forms.
+A page that needs any of those shows what it says without them, which is
+sometimes everything and sometimes very little.
+
+Every address is checked before it is fetched, and **Control Panel → Firewall**
+decides whether it may go out at all.
+
+## Mail
+
+**Mail** reads over IMAP or POP3 and sends over SMTP. Both halves of an account
+are on one form, because they are one account to the person filling it in; the
+sending half may be left blank if you only want to read.
+
+**The connection is always encrypted and the far end is always checked.** There
+is no unencrypted option and no setting that produces one. On port 587 the
+upgrade to encryption is required to succeed: a server that does not offer it,
+or something in the middle that removes the offer, ends the session rather than
+carrying on in the open.
+
+Writing a letter takes **To**, **Cc** and **Bcc**, each a list separated by
+commas. Everyone named in all three receives it; only To and Cc appear in the
+letter itself, which is what a blind copy means. **Attach a file** adds up to
+eight files, twelve megabytes together. Files are read when you press Send, so
+what goes is the file as it is then.
+
+**The password is not saved.** It is used for the connection and forgotten when
+the window closes. Somewhere safe to keep it needs a key that exists only while
+somebody is signed in, and that does not exist yet.
+
+## What is running
+
+**Watchtower** lists the windows that are open and the memory the system is
+using, and can close a window that has stopped answering. **Ctrl+Alt+Del**
+opens it.
+
+It is not a process list. ReconOS asks the machine underneath to create every
+process it runs, so what a process is belongs to that machine and not to this
+one -- and a list that showed some of them and called itself complete would be
+worse than one that does not pretend.
+
+## The Calculator
+
+Six modes, chosen along the top.
+
+- **Standard** is arithmetic.
+- **Scientific** adds trigonometry, logarithms, powers and factorials.
+- **Programmer** works in hexadecimal, decimal, octal and binary at once, with
+  the bitwise operations, in whole numbers rather than decimals -- a number
+  shown as a bit pattern has to be exact about every one of those bits.
+- **Date** is how far apart two dates are.
+- **Convert** changes units.
+- **Graph** draws an expression in *x*.
+
+Every key has a keyboard equivalent, including the number pad.
+
+## Dates
+
+**Calendar** shows a month at a time, with today marked. Clicking the clock on
+the taskbar opens the same view without opening a window.
+
+**Control Panel → Date and Time** sets the time zone, chooses between a
+twelve- and twenty-four-hour clock, and says whether daylight saving is in
+force. Checking against a time server is a separate switch, off until it is
+turned on, because reaching out to a machine on the internet is not something
+to start doing without being asked.
+
 ## Pictures of the screen
 
 **Print Screen** saves a picture of the whole screen into your Pictures

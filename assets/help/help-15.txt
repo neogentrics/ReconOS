@@ -1,31 +1,8 @@
-Two ways, and they are not equally safe.
+Watchtower lists the windows that are open and the memory the system is
+using, and can close a window that has stopped answering. Ctrl+Alt+Del
+opens it.
 
-Over SSH. ReconOS listens on a socket that cannot leave the machine, and
-SSH can carry it:
-
-
-ssh -L /tmp/recon-there.sock:/tmp/reconos.sock user@this-machine
-
-
-Then nc -U /tmp/recon-there.sock from the other end. SSH does the encryption
-and decides who you are, both of which it is much better at than ReconOS.
-
-Over the network. remote key makes a key and shows it once. remote on
-opens TCP 7420, and every connection is asked for that key before it can run
-anything. The firewall rule has to be on as well — turning remote access on is
-not enough, and the refusal says which rule to turn on.
-
-The connection is encrypted. ReconOS makes itself a certificate the first
-time the port opens, and the key is offered over that rather than in front of
-it.
-
-Nothing vouches for that certificate — there is no authority to ask, and a
-machine that owns itself has none to ask. What stands in for one is the
-fingerprint: remote prints it, and so does Control Panel → Network. Check
-it matches what your client shows the first time you connect from somewhere,
-and the client should refuse from then on if it ever changes. That check is
-the whole protection, and it only works if somebody does it once.
-
-This is how SSH does it, for the same reason.
-
-remote on its own says which way in is open, and what the fingerprint is.
+It is not a process list. ReconOS asks the machine underneath to create every
+process it runs, so what a process is belongs to that machine and not to this
+one -- and a list that showed some of them and called itself complete would be
+worse than one that does not pretend.

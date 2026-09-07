@@ -23,6 +23,33 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Help can be searched.** A box above the topic list, filtering on titles and
+on the text of every page. Both, because the change log's topics are titled
+with version numbers -- a title-only search would find nothing in two thirds of
+the document -- and because somebody typing the name of a page they already
+know they want should get it.
+
+The corpus is about a hundred kilobytes across forty-odd files, read once and
+kept, because a search box that reads forty files per letter typed is a search
+box that feels broken. Ctrl+F puts the caret in it, the same key that finds
+text in Notepad. Escape empties it and gives the whole list back. Typing while
+a page is open does not move off that page unless the search filters it away,
+so looking something up does not lose the place of somebody who was reading.
+
+**And F1 now opens the page it says it will.** The help has been promising that
+it opens "at the page about whatever you are looking at", and it kept that
+promise for four applications out of ten. Web and Mail both asked for a page
+called "Networking" that has never existed, so F1 from either left whatever was
+already showing; Photos, the player and the Calendar each asked for "Writing",
+which exists and is about Notepad -- which is worse, because it looks like an
+answer.
+
+Seven pages written that did not exist, every application pointed at its own,
+and a topic that does not exist is now said out loud in the log and falls back
+to the beginning rather than being passed over quietly. The name is declared
+beside the application and the pages are written somewhere else, and nothing
+made the two agree; this is what makes the disagreement visible. BG-120.
+
 **An application says what it opens, and a module can say it too.** The answer
 to "what opens a .png?" was a list of extensions inside one function in the
 system -- a long way from the application that opens one, and with no way for a

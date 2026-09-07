@@ -35,6 +35,7 @@
 #define ROW_HEIGHT 24
 #define LINE_SPACING 3
 
+#define HIT_SEARCH (RECON_APPWIN_HIT_USER + 300)
 #define HIT_TOPIC_BASE (RECON_APPWIN_HIT_USER + 1)
 #define HIT_SIDEBAR (RECON_APPWIN_HIT_USER + 199)
 #define HIT_BODY (RECON_APPWIN_HIT_USER + 200)
@@ -54,6 +55,20 @@
 struct topic {
     char file[RECON_NAME_MAX];
     char title[TITLE_MAX];
+
+    /*
+     * The page's text, read once and kept, for searching.
+     *
+     * NULL until somebody searches. The whole corpus is about a hundred
+     * kilobytes across forty-odd files, which is small enough to hold and far
+     * too much to re-read on every keystroke -- and a search box that reads
+     * forty files per letter typed is a search box that feels broken.
+     *
+     * Freed when the window closes. Not refreshed while it is open: an update
+     * that rewrites the pages also rewrites the index, and load_index runs
+     * again on the next F1, which clears these.
+     */
+    char *body;
     /* True for a change-log entry rather than a help page. The two are one
      * list with a divider, not two lists: they are read the same way. */
     bool is_change;
@@ -97,6 +112,23 @@ struct recon_help {
      */
     int topic_scroll;
     int topic_rows;
+
+    /*
+     * What was typed in the search box, and which topics it leaves.
+     *
+     * `shown` holds indices into `topics` rather than a copy of them, so a
+     * row on screen and the topic it names cannot drift apart -- and so
+     * everything below that walks the list keeps working on a filtered one by
+     * looking up one extra time.
+     *
+     * With the box empty, `shown` is every topic in order, which is why there
+     * is no separate "not searching" path through any of this. A filter that
+     * matches everything is the same code as no filter, and one code path is
+     * one thing to get right.
+     */
+    struct recon_edit search;
+    int shown[TOPICS_MAX];
+    int shown_count;
 
     /*
      * Which pane the pointer is over.
@@ -205,6 +237,13 @@ int recon_help_write_defaults(void) {
 /* --- Reading it back --- */
 
 static void load_index(struct recon_help *help) {
+    /* The cached page text belongs to the topics being replaced. Reading the
+     * index again without this leaks the whole corpus every time -- which is
+     * every F1, because show_topic re-reads. */
+    for (int i = 0; i < help->topic_count; i++) {
+        free(help->topics[i].body);
+        help->topics[i].body = NULL;
+    }
     help->topic_count = 0;
 
     char path[RECON_PATH_MAX];
@@ -450,6 +489,108 @@ static void wrap_topic(struct recon_help *help, int width) {
     free(text);
 }
 
+/*
+ * Whether `haystack` contains `needle`, ignoring case.
+ *
+ * Its own rather than strcasestr, which is a GNU extension and would make this
+ * file need _GNU_SOURCE to search a string. Nothing here is fast: it runs over
+ * a hundred kilobytes once per keystroke, which at typing speed is nothing,
+ * and the version that is fast is a great deal more code to get wrong.
+ */
+static bool contains_ignoring_case(const char *haystack, const char *needle) {
+    if (haystack == NULL || needle == NULL || *needle == '\0') {
+        return false;
+    }
+    size_t n = strlen(needle);
+    for (const char *p = haystack; *p != '\0'; p++) {
+        if (strncasecmp(p, needle, n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The page's text, read once and kept. NULL if it cannot be read, which is
+ * not an error here -- a page that is missing simply matches nothing. */
+static const char *body_of(struct recon_help *help, int i) {
+    if (help->topics[i].body != NULL) {
+        return help->topics[i].body;
+    }
+
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), RECON_DIR_HELP,
+            help->topics[i].file)) {
+        return NULL;
+    }
+    size_t size = 0;
+    help->topics[i].body = recon_fs_read("/", path, &size);
+    return help->topics[i].body;
+}
+
+/*
+ * Which topics the search leaves, in the order they are listed.
+ *
+ * Titles are searched as well as bodies, and neither is preferred: the change
+ * log's topics are titled with version numbers, so a title-only search would
+ * find nothing in two thirds of this document, and a body-only search would
+ * miss somebody typing the name of the page they already know they want.
+ */
+static void refilter(struct recon_help *help) {
+    const char *needle = help->search.text;
+
+    help->shown_count = 0;
+    for (int i = 0; i < help->topic_count; i++) {
+        if (needle[0] == '\0' ||
+                contains_ignoring_case(help->topics[i].title, needle) ||
+                contains_ignoring_case(body_of(help, i), needle)) {
+            help->shown[help->shown_count++] = i;
+        }
+    }
+
+    /*
+     * Keep showing the page that was open if it survived the filter;
+     * otherwise take the first result.
+     *
+     * Not "always jump to the first result": somebody who is reading a page
+     * and types into the box to look for something *within* the system should
+     * not lose the page under them on the first letter. Jumping only when the
+     * page has been filtered away is the version that does what both people
+     * meant.
+     */
+    if (help->shown_count == 0) {
+        return;
+    }
+    for (int i = 0; i < help->shown_count; i++) {
+        if (help->shown[i] == help->selected) {
+            return;
+        }
+    }
+    help->selected = help->shown[0];
+    help->page.scroll = 0;
+    help->page.wrapped_width = 0;
+}
+
+/*
+ * The topic `by` places from the chosen one, among the results.
+ *
+ * Returns the chosen one unchanged at either end, so holding an arrow key
+ * stops at the edge rather than wrapping -- a list that wraps means somebody
+ * reading through it never learns they have reached the end.
+ */
+static int step(struct recon_help *help, int by) {
+    for (int i = 0; i < help->shown_count; i++) {
+        if (help->shown[i] != help->selected) {
+            continue;
+        }
+        int want = i + by;
+        if (want < 0 || want >= help->shown_count) {
+            return help->selected;
+        }
+        return help->shown[want];
+    }
+    return (help->shown_count > 0) ? help->shown[0] : help->selected;
+}
+
 static void choose(struct recon_help *help, int index) {
     if (index < 0 || index >= help->topic_count) {
         return;
@@ -489,26 +630,64 @@ static void help_draw(void *user, struct recon_panel *panel,
     recon_fill_rect(panel, x + SIDEBAR_WIDTH, y, 1, h, COLOR_SEPARATOR);
 
     /*
+     * The search box, at the top of the list it filters.
+     *
+     * Above the topics rather than over the page, because what it changes is
+     * the list: a box beside the text would read as "find in this page", which
+     * is a different thing and is not what this does.
+     */
+    int search_h = ROW_HEIGHT;
+    recon_edit_draw(panel, help->font, x + PADDING / 2, y + PADDING / 2,
+        SIDEBAR_WIDTH - PADDING, search_h - 2, &help->search);
+    recon_hit_add(panel, x + PADDING / 2, y + PADDING / 2,
+        SIDEBAR_WIDTH - PADDING, search_h - 2, HIT_SEARCH);
+
+    /* What it is for, in the box, until there is something in it. An empty
+     * box with no label is a box nobody types in. */
+    if (help->search.text[0] == '\0') {
+        recon_draw_text(panel, help->font, x + PADDING / 2 + 6,
+            y + PADDING / 2 + (search_h - 2 + ascent) / 2 - 2,
+            SIDEBAR_WIDTH - PADDING - 12, "Search the help", COLOR_DIM);
+    }
+
+    int list_y = y + PADDING / 2 + search_h + 4;
+    int list_h = h - (list_y - y);
+
+    /*
      * How many rows fit, and keeping the chosen one among them.
      *
      * Chased rather than merely clamped: the arrow keys walk the list, and a
      * selection that walked off the bottom would move the highlight to
      * somewhere nobody can see while the page beside it changed.
      */
-    help->topic_rows = (h - PADDING) / ROW_HEIGHT;
+    help->topic_rows = (list_h - PADDING / 2) / ROW_HEIGHT;
     if (help->topic_rows < 1) {
         help->topic_rows = 1;
     }
 
-    if (help->selected >= 0) {
-        if (help->selected < help->topic_scroll) {
-            help->topic_scroll = help->selected;
-        } else if (help->selected >= help->topic_scroll + help->topic_rows) {
-            help->topic_scroll = help->selected - help->topic_rows + 1;
+    /*
+     * The scroll is a position in the FILTERED list, so the chosen topic is
+     * chased by where it sits among the results rather than by its index in
+     * the whole document. Chasing the index instead scrolls a two-result list
+     * to row thirty.
+     */
+    int chosen_row = -1;
+    for (int i = 0; i < help->shown_count; i++) {
+        if (help->shown[i] == help->selected) {
+            chosen_row = i;
+            break;
         }
     }
-    if (help->topic_scroll > help->topic_count - help->topic_rows) {
-        help->topic_scroll = help->topic_count - help->topic_rows;
+
+    if (chosen_row >= 0) {
+        if (chosen_row < help->topic_scroll) {
+            help->topic_scroll = chosen_row;
+        } else if (chosen_row >= help->topic_scroll + help->topic_rows) {
+            help->topic_scroll = chosen_row - help->topic_rows + 1;
+        }
+    }
+    if (help->topic_scroll > help->shown_count - help->topic_rows) {
+        help->topic_scroll = help->shown_count - help->topic_rows;
     }
     if (help->topic_scroll < 0) {
         help->topic_scroll = 0;
@@ -525,16 +704,22 @@ static void help_draw(void *user, struct recon_panel *panel,
      * could not be chosen. A region that exists to catch what the others miss
      * has to sit underneath them.
      */
-    recon_hit_add(panel, x, y, SIDEBAR_WIDTH, h, HIT_SIDEBAR);
+    recon_hit_add(panel, x, list_y, SIDEBAR_WIDTH, list_h, HIT_SIDEBAR);
 
-    int ty = y + PADDING / 2;
+    int ty = list_y;
     bool divided = false;
 
+    if (help->shown_count == 0) {
+        recon_draw_text(panel, help->font, x + PADDING, ty + ascent,
+            SIDEBAR_WIDTH - PADDING * 2, "Nothing matches.", COLOR_DIM);
+    }
+
     for (int row = 0; row < help->topic_rows; row++) {
-        int i = help->topic_scroll + row;
-        if (i >= help->topic_count) {
+        int at = help->topic_scroll + row;
+        if (at >= help->shown_count) {
             break;
         }
+        int i = help->shown[at];
 
         /*
          * A rule where the change log begins. The two halves are read
@@ -546,7 +731,7 @@ static void help_draw(void *user, struct recon_panel *panel,
          */
         if (help->topics[i].is_change && !divided) {
             divided = true;
-            if (i > help->topic_scroll) {
+            if (at > help->topic_scroll) {
                 ty += 6;
                 recon_fill_rect(panel, x + PADDING, ty,
                     SIDEBAR_WIDTH - PADDING * 2 - BAR_WIDTH, 1,
@@ -559,7 +744,7 @@ static void help_draw(void *user, struct recon_panel *panel,
             }
         }
 
-        if (ty + ROW_HEIGHT > y + h) {
+        if (ty + ROW_HEIGHT > list_y + list_h) {
             break;
         }
 
@@ -579,9 +764,9 @@ static void help_draw(void *user, struct recon_panel *panel,
         ty += ROW_HEIGHT;
     }
 
-    draw_scrollbar(panel, x + SIDEBAR_WIDTH - BAR_WIDTH - 2, y + PADDING / 2,
-        h - PADDING, help->topic_scroll, help->topic_rows,
-        help->topic_count);
+    draw_scrollbar(panel, x + SIDEBAR_WIDTH - BAR_WIDTH - 2, list_y,
+        list_h - PADDING / 2, help->topic_scroll, help->topic_rows,
+        help->shown_count);
 
     /* --- The page --- */
     int body_x = x + SIDEBAR_WIDTH + 1 + PADDING * 2;
@@ -688,11 +873,22 @@ static bool help_click(void *user, uint32_t hit_id, int cx, int cy,
     if (!pressed) {
         return false;
     }
-    if (hit_id >= HIT_TOPIC_BASE && hit_id < HIT_BODY) {
-        choose(help, (int)(hit_id - HIT_TOPIC_BASE));
+    if (hit_id == HIT_SEARCH) {
+        recon_edit_focus(&help->search);
         return true;
     }
-    return hit_id == HIT_BODY;
+    if (hit_id >= HIT_TOPIC_BASE && hit_id < HIT_BODY) {
+        choose(help, (int)(hit_id - HIT_TOPIC_BASE));
+        /* Clicking a topic hands the keyboard back to the page, so the arrow
+         * keys scroll what was just chosen rather than editing the box. */
+        help->search.active = false;
+        return true;
+    }
+    if (hit_id == HIT_BODY || hit_id == HIT_SIDEBAR) {
+        help->search.active = false;
+        return true;
+    }
+    return false;
 }
 
 static void help_motion(void *user, uint32_t hit_id, int cx, int cy) {
@@ -718,8 +914,8 @@ static void help_scroll(void *user, double delta) {
          * back by the selection would make the wheel feel like it was
          * fighting the mouse.
          */
-        if (help->topic_scroll > help->topic_count - help->topic_rows) {
-            help->topic_scroll = help->topic_count - help->topic_rows;
+        if (help->topic_scroll > help->shown_count - help->topic_rows) {
+            help->topic_scroll = help->shown_count - help->topic_rows;
         }
         if (help->topic_scroll < 0) {
             help->topic_scroll = 0;
@@ -735,7 +931,40 @@ static void help_scroll(void *user, double delta) {
 
 static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_help *help = user;
-    (void)modifiers;
+
+    /*
+     * Ctrl+F puts the caret in the search box, the same key that finds text
+     * in Notepad. Somebody who has learnt it in one place should not have to
+     * learn it again in the other.
+     */
+    if ((modifiers & WLR_MODIFIER_CTRL) != 0 &&
+            (sym == XKB_KEY_f || sym == XKB_KEY_F)) {
+        recon_edit_focus(&help->search);
+        return true;
+    }
+
+    if (help->search.active) {
+        /* Escape empties the box and gives the whole list back, which is the
+         * only way out that does not involve deleting what was typed one
+         * character at a time. */
+        if (sym == XKB_KEY_Escape) {
+            recon_edit_begin(&help->search, "", false);
+            help->search.active = false;
+            refilter(help);
+            return true;
+        }
+        /* Return leaves the results standing and hands the keyboard to the
+         * page, so the arrows read rather than type. */
+        if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+            help->search.active = false;
+            return true;
+        }
+        if (recon_edit_key(&help->search, sym, modifiers)) {
+            refilter(help);
+            help->topic_scroll = 0;
+            return true;
+        }
+    }
 
     switch (sym) {
     case XKB_KEY_Down:
@@ -760,11 +989,16 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return true;
     /* Stepping through the topics from the keyboard, so the whole document
      * can be read without reaching for the mouse. */
+    /*
+     * Through the results, not through the whole document. Stepping into a
+     * topic the search has filtered out would show a page that is not on the
+     * list beside it, which reads as the list being wrong.
+     */
     case XKB_KEY_Right:
-        choose(help, help->selected + 1);
+        choose(help, step(help, +1));
         return true;
     case XKB_KEY_Left:
-        choose(help, help->selected - 1);
+        choose(help, step(help, -1));
         return true;
     default:
         return false;
@@ -774,14 +1008,18 @@ static bool help_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 static void help_describe(void *user, char *out, size_t size) {
     struct recon_help *help = user;
     snprintf(out, size, "topic %d of %d: %s, line %d of %d",
-        help->selected + 1, help->topic_count,
+        help->selected + 1, help->shown_count,
         (help->selected >= 0 && help->selected < help->topic_count)
             ? help->topics[help->selected].title : "(none)",
         help->page.scroll + 1, help->page.line_count);
 }
 
 static void help_destroy(void *user) {
-    free(user);
+    struct recon_help *help = user;
+    for (int i = 0; i < help->topic_count; i++) {
+        free(help->topics[i].body);
+    }
+    free(help);
 }
 
 static const struct recon_appwin_impl HELP_IMPL = {
@@ -811,6 +1049,9 @@ struct recon_appwin *recon_help_create(struct recon_server *server,
     help->font = font;
     load_index(help);
     help->selected = help->topic_count > 0 ? 0 : -1;
+    recon_edit_begin(&help->search, "", false);
+    help->search.active = false;
+    refilter(help);
 
     help->win = recon_appwin_create(server, font, &HELP_IMPL, help);
     if (help->win == NULL) {
@@ -818,6 +1059,42 @@ struct recon_appwin *recon_help_create(struct recon_server *server,
         return NULL;
     }
     return help->win;
+}
+
+bool recon_help_topic_exists(const char *title) {
+    if (title == NULL || *title == '\0') {
+        return false;
+    }
+
+    /*
+     * Read off disk rather than out of a window, because this is asked at
+     * startup, before there is one -- and because the pages on disk are what a
+     * window would read anyway.
+     */
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), RECON_DIR_HELP, RECON_HELP_INDEX)) {
+        return false;
+    }
+
+    size_t size = 0;
+    char *text = recon_fs_read("/", path, &size);
+    if (text == NULL) {
+        return false;
+    }
+
+    bool found = false;
+    char *saveptr = NULL;
+    for (char *line = strtok_r(text, "\n", &saveptr);
+            line != NULL && !found;
+            line = strtok_r(NULL, "\n", &saveptr)) {
+        char *tab = strchr(line, '\t');
+        if (tab != NULL && strcasecmp(tab + 1, title) == 0) {
+            found = true;
+        }
+    }
+
+    free(text);
+    return found;
 }
 
 void recon_help_show_topic(struct recon_appwin *win, const char *title) {
@@ -832,6 +1109,17 @@ void recon_help_show_topic(struct recon_appwin *win, const char *title) {
     /* Re-read first: the topics may have been rewritten by an update since
      * this window was built. */
     load_index(help);
+
+    /*
+     * And the search is cleared, because being sent to a page is an answer to
+     * a different question than the one in the box. F1 from Notepad landing on
+     * a Writing page that is not in the list beside it -- because a search
+     * from ten minutes ago is still filtering -- looks like the list is
+     * broken.
+     */
+    recon_edit_begin(&help->search, "", false);
+    help->search.active = false;
+    refilter(help);
 
     for (int i = 0; i < help->topic_count; i++) {
         if (strcasecmp(help->topics[i].title, title) == 0) {

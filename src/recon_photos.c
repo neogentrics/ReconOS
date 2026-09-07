@@ -1158,7 +1158,7 @@ static void photos_destroy(void *user) {
 
 static const struct recon_appwin_impl PHOTOS_IMPL = {
     .title = "Photos",
-    .help = "Writing",
+    .help = "Pictures",
     .icon = RECON_ICON_PHOTOS,
     .default_width = 640,
     .default_height = 480,

@@ -2173,3 +2173,32 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Fixed in** v0.4.0. The built-in table uses designated initialisers, so a
   field added anywhere in the struct cannot silently shift another. The struct
   is public and will gain another field; this is what stops it happening twice.
+
+### BG-120 — Five applications' F1 opened the wrong page, or none
+
+- **Found in** v0.4.0. **Found by** searching the help for "Networking" while
+  testing the new search box, and getting no results — for a topic two
+  applications name.
+- **What it was** `recon_appwin_impl` carries a `help` field naming a topic,
+  and the topics are written in `docs/HELP.md`. Nothing made the two agree.
+  - **Web** and **Mail** both asked for a page called **"Networking"**, which
+    has never existed. F1 from either left whatever page was already showing.
+  - **Photos**, **Media Player** and **Calendar** each asked for **"Writing"**,
+    which exists and is about Notepad. That is worse: it looks like an answer.
+  - **Watchtower** asked for "Programs", which is about installing software.
+  - The **Calculator** named no topic at all.
+- **The help itself made the promise**: *"F1 opens this help at the page about
+  whatever you are looking at."* It kept it for four applications out of ten.
+- **Fixed in** v0.4.0, in three parts:
+  - Seven topics written that did not exist: Pictures, Sound and video, The
+    web viewer, Mail, What is running, The Calculator, Dates.
+  - Every application pointed at its own page, the Calculator included.
+  - **A topic that does not exist is now complained about in the log and falls
+    back to the first page**, which is the other half of what the help
+    promises. Verified by pointing Photos at a page called "No Such Page",
+    watching the error appear, and watching Help open at "Getting around".
+- **The check is at the point of use, not at startup**, because an
+  application's window is built the first time it is opened — checking every
+  topic at boot would mean building every window at boot, which is the idle
+  weight this system exists to avoid. It also catches topics set at runtime,
+  which is how the Control Panel names a page per section.

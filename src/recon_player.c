@@ -1190,7 +1190,7 @@ static void player_destroy(void *user) {
 
 static const struct recon_appwin_impl PLAYER_IMPL = {
     .title = PLAYER_APPLICATION,
-    .help = "Writing",
+    .help = "Sound and video",
     .icon = RECON_ICON_PLAYER,
     .default_width = 520,
     .default_height = 420,

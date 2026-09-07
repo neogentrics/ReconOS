@@ -1559,7 +1559,7 @@ static void mailwin_destroy(void *user) {
 
 static const struct recon_appwin_impl MAIL_IMPL = {
     .title = "Mail",
-    .help = "Networking",
+    .help = "Mail",
     .icon = RECON_ICON_MAIL,
     .default_width = 720,
     .default_height = 520,

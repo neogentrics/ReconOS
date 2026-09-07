@@ -4329,9 +4329,33 @@ void recon_shell_open_help(struct recon_shell *shell) {
     recon_shell_close_menu(shell);
     recon_shell_open_named(shell, "Help");
 
-    if (topic != NULL && topic[0] != '\0') {
-        recon_help_show_topic(recon_installed_app_existing("Help"), topic);
+    struct recon_appwin *help = recon_installed_app_existing("Help");
+
+    /*
+     * At the page about the window in front, or at the beginning.
+     *
+     * The second half is new and is what the help itself has been promising:
+     * "with nothing in front it opens at the beginning". What actually
+     * happened was that a window with no topic -- or with one naming a page
+     * that does not exist -- left whatever page was already showing, so F1
+     * appeared to answer and had not.
+     *
+     * A topic that does not exist is complained about rather than passed over
+     * quietly. It cannot be seen from either side: the name is declared beside
+     * the application and the pages are written in docs/HELP.md, and nothing
+     * makes the two agree. The Web viewer and Mail both asked for a page
+     * called "Networking" that has never existed; Photos, the player and the
+     * Calendar each asked for "Writing", which exists and is about Notepad --
+     * which is worse, because it looks like an answer.
+     */
+    if (topic != NULL && topic[0] != '\0' && !recon_help_topic_exists(topic)) {
+        wlr_log(WLR_ERROR, "ReconOS: no help topic called '%s' -- opening at "
+            "the beginning instead", topic);
+        topic = NULL;
     }
+
+    recon_help_show_topic(help, (topic != NULL && topic[0] != '\0')
+        ? topic : "Getting around");
 }
 
 void recon_shell_open_named(struct recon_shell *shell, const char *title) {

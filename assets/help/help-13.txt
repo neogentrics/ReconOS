@@ -1,10 +1,10 @@
-Text is read as UTF-8, so accents, dashes, quotation marks and other alphabets
-draw the way they are written — in file names as well as in this help.
+Web fetches a page over HTTP or HTTPS and shows the text in it. It reads
+HTML's structure -- headings, paragraphs, lists, links -- and follows a link
+when you click one. An .html file on this machine opens here too.
 
-A character the font has no drawing for appears as an empty box. That is the
-font saying so rather than the character being lost: the file still has it,
-and it will keep it.
+It is a reader, not a browser. No JavaScript, no images, no styling, no forms.
+A page that needs any of those shows what it says without them, which is
+sometimes everything and sometimes very little.
 
-A keyboard laid out for a language with accents in it types them, and the
-arrow keys and Backspace step over a whole character rather than a byte of
-one.
+Every address is checked before it is fetched, and Control Panel → Firewall
+decides whether it may go out at all.

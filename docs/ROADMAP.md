@@ -1983,11 +1983,12 @@ hands its compositor an `app_id`, not a picture; guessing an icon from a
 reverse-DNS string would be wrong more often than right, and looking one up
 against `/System/Icons` needs a mapping nothing writes yet.
 
-**Help has no search, and no way in from where you are.** The topic list is
-short enough to read, but the change log makes it thirty entries and neither
-half can be searched. Nor can an application ask for the page about itself:
-`recon_help_show_topic` exists and nothing calls it, so somebody stuck in the
-Control Panel has to find Help and then find the right page.
+**Help cannot be searched from anywhere but Help.** As of v0.4.0 it has a
+search box that filters on titles and on the text of every page, and F1 opens
+the page about whatever window is in front -- for every application, now that
+seven missing pages are written and a topic that does not exist is complained
+about rather than passed over. What is still missing is finding a word *within*
+a page, and any way to search the help without opening it first.
 
 **Calculator is still deliberately shallow.** Notepad can select, cut, copy,
 paste, undo, find and replace; the Calculator does arithmetic and nothing

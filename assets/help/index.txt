@@ -8,13 +8,20 @@ help-07.txt	Accounts
 help-08.txt	How it looks
 help-09.txt	Programs
 help-10.txt	The Terminal
-help-11.txt	Pictures of the screen
-help-12.txt	Help and updates
-help-13.txt	Text and letters
-help-14.txt	The firewall
-help-15.txt	Reaching this machine from elsewhere
-help-16.txt	When something goes wrong
-help-17.txt	What is not built yet
+help-11.txt	Pictures
+help-12.txt	Sound and video
+help-13.txt	The web viewer
+help-14.txt	Mail
+help-15.txt	What is running
+help-16.txt	The Calculator
+help-17.txt	Dates
+help-18.txt	Pictures of the screen
+help-19.txt	Help and updates
+help-20.txt	Text and letters
+help-21.txt	The firewall
+help-22.txt	Reaching this machine from elsewhere
+help-23.txt	When something goes wrong
+help-24.txt	What is not built yet
 changes-01.txt	v0.4.0
 changes-02.txt	v0.3.0
 changes-03.txt	v0.2.17
