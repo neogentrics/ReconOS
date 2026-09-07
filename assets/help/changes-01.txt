@@ -10,6 +10,44 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+scripts/coverage.sh, and the two things it found immediately. A fourth
+question for the tools: the warnings, the sanitizers and the analyzer look at
+code, and this looks at the *tests* and says which parts of the code they never
+touch.
+
+It exists because twice in one night a test passed while testing nothing. Two
+files came back at zero:
+
+* recon_firewall.c had no test suite at all -- a security component,
+  compiled into the network target as a dependency and never once called. That
+  is the worst shape a gap can have: the file appears in a test target's source
+  list, so it looks tested from every angle except the one that counts. It has
+  a suite now, and what is tested is the *answer* rather than the bookkeeping --
+  order deciding, a rule that is off not being consulted, a rule for one program
+  not answering for another, the firewall being switched off allowing everything
+  and saying so, and a rule that ships not being removable. Fifty-six
+  checks. The ordering rule was then inverted on purpose to confirm the suite
+  notices, and it named exactly the four checks about order.
+* recon_titlebar.c had none either, and it holds the rule this project
+  states most loudly: close is always there and always outermost. That had been
+  proved by writing a skin that asks for no buttons and photographing the close
+  button it got anyway -- one skin, needing a display. It is now proved for all
+  eight sets of buttons on both sides, without a screen, in a millisecond.
+
+And that test found BG-130 on its first run. A window's title had eight
+pixels less room with the buttons on the right than on the left, because the
+left-hand branch left a margin between the title and the buttons and the
+right-hand one did not. The right is the default. A long title is clipped at
+exactly that width, so the "..." finished against the button rather than short
+of it. Nobody had noticed by looking, which is what eight pixels on one edge is
+like.
+
+The coverage number is the most any single suite runs, not the union, and
+the script says so at length. gcov given every .gcda for a file linked into
+fourteen targets reports the sums -- recon_fs.c came out as "21% of 10920
+lines" when it has 780 -- so both columns were wrong, and the first version of
+this script printed them.
+
 The grapher draws polar curves. A second mode beside "y of x": the
 expression is the distance from the origin and the angle sweeps round, so
 sin(3*t) is a three-petal rose, 1+cos(t) a cardioid, and t/3 a spiral --

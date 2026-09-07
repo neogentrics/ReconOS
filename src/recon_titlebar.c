@@ -109,7 +109,23 @@ void recon_titlebar_layout(int width, int inset, int gap, bool with_icon,
             at += icon_size + 6;
         }
         out->text_x = at;
-        out->text_width = width - taken - at;
+        /*
+         * The same `inset` of clear space between the title and the buttons
+         * that the other side leaves.
+         *
+         * It was not there, and the two sides differed by exactly that much
+         * for no reason anybody had chosen: with the buttons on the left the
+         * title started an inset clear of them, and with the buttons on the
+         * right its room ran up to the leftmost button's edge. A title longer
+         * than the room is clipped at exactly this width with an ellipsis, so
+         * on that side the "..." finished against the button rather than a
+         * margin short of it.
+         *
+         * Found by a test asserting the two sides give the title the same
+         * room, which they should and did not. Nobody had noticed by looking,
+         * which is what eight pixels on one edge is like.
+         */
+        out->text_width = width - taken - at - inset;
 
         out->drag.x = 0;
         out->drag.w = width - taken;

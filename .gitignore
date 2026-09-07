@@ -5,6 +5,10 @@ build/
 # every switch between them is a full rebuild.
 build-sanitized/
 build-analyzed/
+build-coverage/
+*.gcno
+*.gcda
+*.gcov
 out/
 *.o
 *.a

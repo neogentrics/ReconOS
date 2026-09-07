@@ -573,6 +573,42 @@ target_include_directories(recon_malformed_tests PRIVATE
 
 target_link_libraries(recon_malformed_tests PRIVATE m)
 
+# The firewall, which had no suite at all until scripts/coverage.sh said so:
+# 747 lines, compiled into the network target as a dependency and never once
+# called. What is tested is the answer rather than the bookkeeping -- order
+# deciding, a rule that is off not being consulted, a rule for one program not
+# answering for another, and a rule that ships not being removable.
+add_executable(recon_firewall_tests
+    tests/test_firewall.c
+    src/recon_firewall.c
+    src/recon_registry.c
+    src/recon_error.c
+    src/recon_fs.c)
+
+target_include_directories(recon_firewall_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Where the things on a title bar go -- the other file coverage found at zero.
+# Small, and it holds the rule this project states most loudly: close is always
+# there and always outermost. That had been proved by photographing one skin;
+# this proves it for all eight sets of buttons on both sides, without a screen.
+add_executable(recon_titlebar_tests
+    tests/test_titlebar.c
+    src/recon_titlebar.c
+    src/recon_theme.c
+    # Installing and copying a skin is administration, so the theme asks who
+    # is signed in. Nobody is, in a test, and the answer to that is the one
+    # recon_users gives rather than a stub that would answer differently.
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_color.c
+    src/recon_registry.c
+    src/recon_error.c
+    src/recon_fs.c)
+
+target_include_directories(recon_titlebar_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 # AES-GCM comes from mbedTLS, for the reason stated in the keyring's header:
 # the thing that actually protects a password is not written here.
 target_link_libraries(recon_keyring_tests PRIVATE

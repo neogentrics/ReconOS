@@ -118,6 +118,44 @@ All eighteen suites there were at the time were clean the first time it was
 run, which is worth knowing precisely because it means the next thing it says
 will be worth believing. It has stayed clean since, through nineteen.
 
+### What the tests actually run
+
+```
+./scripts/coverage.sh            what each file under test comes to
+./scripts/coverage.sh --zero     the functions no suite runs
+```
+
+The fourth question for the tools, and it answers a different kind of doubt
+from the other three. The warnings, the sanitizers and the analyzer look at
+code; this looks at the *tests*, and says which parts of the code they have
+never touched.
+
+It earns its place because twice in one night a test passed while testing
+nothing -- the MP4 fixture in `tests/test_malformed.c` was a header with no
+sample table, so the walk it was written for never ran, and that was found by
+deleting a bounds check on purpose rather than by reading anything. A number
+saying "this function is at 0%" would have said it directly.
+
+**What it found the first time it was run:** two files at zero.
+`recon_firewall.c`, 249 lines of a security component with no suite at all --
+compiled into the network target as a dependency and never called, which is the
+worst shape a gap can have, because the file appears in a test target's source
+list and looks tested from every angle except the one that counts. And
+`recon_titlebar.c`, which holds the rule this project states most loudly and
+had been checked by photographing one skin.
+
+**The number is the most any single suite runs, not the union.** A file linked
+into fourteen targets is compiled fourteen times, and gcov given all fourteen
+`.gcda` files reports the sums -- `recon_fs.c` came out as "21% of 10920 lines"
+when it has 780. Both columns were wrong and the first version of this script
+printed them. Each suite is measured on its own now and the best figure kept,
+which answers "is anything not run at all" exactly and deliberately does not
+answer "how much of this is covered in total".
+
+It is a measurement, not a target. Chasing a percentage produces tests that
+execute code without asserting anything about it, which is worse than no test
+because it looks like coverage.
+
 ### Malformed input
 
 ```

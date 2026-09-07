@@ -2443,3 +2443,24 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Fixed in** v0.4.0. Both read the copy. The copy is path-sized, and the
   comment above it says what it is for, since the reason cannot be seen from
   either handler.
+
+### BG-130 — A window's title had eight pixels less room on one side than the other
+
+- **Found in** v0.4.0. **Found by** the first test ever written for
+  `recon_titlebar`, which `scripts/coverage.sh` had just reported as one of two
+  files no suite runs a line of.
+- **What it was** With the buttons on the left, the title started an `inset`
+  clear of them. With the buttons on the right -- which is the default and what
+  every skin that ships uses -- its room ran up to the leftmost button's edge
+  with no gap at all. So the two sides gave the title different room, by
+  exactly one inset, for no reason anybody had chosen.
+- **What it did.** A title longer than the room is clipped at exactly that
+  width with an ellipsis, so on the default side the "..." finished against the
+  button rather than a margin short of it.
+- **Why nobody had noticed.** Eight pixels on one edge, on the side almost
+  nobody compares against the other, in a layout that has to be *read* to see
+  the difference: the two branches are forty lines apart and each is correct on
+  its own terms.
+- **Fixed in** v0.4.0. The right-hand branch leaves the same `inset` the
+  left-hand one does. The test asserts the two sides give the title the same
+  room, which is the property rather than the arithmetic.
