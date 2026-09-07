@@ -350,6 +350,8 @@ broken says nothing about the work.
 
 ### BG-139 — Two tests generated a signing key into the source tree and left it there
 
+[#296](https://github.com/neogentrics/ReconOS/issues/296)
+
 - **Found:** 7 September 2026, by the verification matrix failing five paths
   that had nothing wrong with them.
 - **Cost:** nothing shipped. Twenty minutes, and it would have cost far more the
