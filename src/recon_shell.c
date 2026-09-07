@@ -26,6 +26,7 @@
 
 #include "recon_server.h"
 #include "recon_shell.h"
+#include "recon_appicon.h"
 #include "recon_appwin.h"
 #include "recon_calendar.h"
 #include "recon_mailwin.h"
@@ -2580,10 +2581,17 @@ static void draw_taskbar(struct recon_shell *shell) {
             break;
         }
 
-        /* A client window has no icon of its own, so it gets the generic
-         * application one rather than nothing. */
+        /*
+         * The client's own icon where one can be found for its app_id.
+         *
+         * This is where it matters most: a title bar shows one window at a
+         * time, and the taskbar shows all of them at once -- six clients with
+         * the same generic icon is a row of buttons distinguishable only by
+         * reading, which is the thing an icon exists to save.
+         */
         draw_task_button(shell, bar, x, button_width, baseline,
-            recon_toplevel_title(toplevel), RECON_ICON_APP,
+            recon_toplevel_title(toplevel),
+            recon_appicon_for(recon_toplevel_app_id(toplevel)),
             recon_toplevel_is_focused(toplevel),
             recon_toplevel_is_minimized(toplevel));
 

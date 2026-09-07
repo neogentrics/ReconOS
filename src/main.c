@@ -71,6 +71,7 @@
 #include "recon_service.h"
 #include "recon_apps.h"
 #include "recon_modules.h"
+#include "recon_appicon.h"
 #include "recon_capture.h"
 #include "recon_wallpaper.h"
 #include "recon_net.h"
@@ -585,6 +586,14 @@ const char *recon_toplevel_title(struct recon_toplevel *toplevel) {
     }
     const char *title = toplevel->xdg_toplevel->title;
     return title != NULL ? title : "Untitled";
+}
+
+const char *recon_toplevel_app_id(struct recon_toplevel *toplevel) {
+    if (toplevel == NULL || toplevel->xdg_toplevel == NULL) {
+        return "";
+    }
+    const char *id = toplevel->xdg_toplevel->app_id;
+    return id != NULL ? id : "";
 }
 
 /* Wayland tells us which process is on the other end of a client connection. */
@@ -2664,6 +2673,11 @@ int main(int argc, char **argv) {
      * would have customised and want kept -- and help describing a version
      * the system is no longer running is worse than no help at all.
      */
+    /* The client-icon mapping, if nobody has one yet. Beside the help
+     * because both are files a person may edit, and unlike the help this one
+     * is never overwritten. */
+    recon_appicon_write_default();
+
     int topics = recon_help_write_defaults();
     if (topics > 0) {
         wlr_log(WLR_INFO, "ReconOS: %d help topics", topics);

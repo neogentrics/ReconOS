@@ -305,6 +305,16 @@ int recon_toplevel_desktop(struct recon_toplevel *toplevel);
 void recon_toplevel_set_desktop_showing(struct recon_toplevel *toplevel,
     bool showing);
 const char *recon_toplevel_title(struct recon_toplevel *toplevel);
+
+/*
+ * What the client calls itself: "org.gnome.Calculator", "foot".
+ *
+ * Empty rather than NULL when a client has not said, so a caller can pass it
+ * straight on without asking. It is what recon_appicon turns into a picture,
+ * and it is the only thing a Wayland client offers that identifies the
+ * program rather than the window -- a title changes with the document.
+ */
+const char *recon_toplevel_app_id(struct recon_toplevel *toplevel);
 bool recon_toplevel_is_focused(struct recon_toplevel *toplevel);
 /* The process behind a client window, or 0 if it cannot be determined. */
 int recon_toplevel_pid(struct recon_toplevel *toplevel);

@@ -23,6 +23,30 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A client window gets its own icon.** A Wayland client hands its compositor an
+`app_id` and never a picture, so every client window wore the same generic
+icon -- honest, and also a taskbar where six different programs look identical.
+
+The note this replaces said that guessing an icon from a reverse-DNS string
+would be wrong more often than right, and that is true of *guessing*. What is
+done instead has three rules and every answer has to be confirmed against
+something that exists: a mapping written down in `/System/Config/app-icons`, an
+application ReconOS has registered under that name, or the last dotted part of
+the app_id **if an icon by that name is actually there**. The third looks like
+guessing and is not -- it cannot produce a wrong picture, only a right one or
+none, because the file has to exist before it is used. The failure mode is "no
+better than before", which is the only failure mode worth having.
+
+The written-down mapping comes first, because it is the one rule that is a
+statement rather than a deduction: it is how to say "no, this client is not the
+thing its name reduces to". It is created once with the format in it and never
+overwritten, unlike the help pages -- a line added by hand that the system
+replaced on the next boot would be a file nobody edits twice.
+
+Checked by handing the compositor three app_ids and looking at what it drew:
+one taken from the mapping file, one resolved to a registered application, and
+one that reduces to nothing, which correctly kept the generic icon.
+
 **The grapher draws three curves and can be moved about.** A grapher exists to
 compare -- "is x^2 above or below 2^x" is the question, and answering it by
 typing one, looking, typing the other and remembering is not answering it. Three

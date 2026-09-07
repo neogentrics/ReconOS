@@ -1978,10 +1978,12 @@ says the same thing about the whole file, and it is worth repeating here
 because a page listing an IP address looks exactly like an operating system
 doing networking: *"It is ReconOS reporting what it was told."*
 
-**A client window's title bar carries a generic icon.** A Wayland client
-hands its compositor an `app_id`, not a picture; guessing an icon from a
-reverse-DNS string would be wrong more often than right, and looking one up
-against `/System/Icons` needs a mapping nothing writes yet.
+**A client window's icon is looked up, not asked for.** As of v0.4.0 an
+app_id becomes a picture by three rules, each of which has to be confirmed
+against something that exists -- see `recon_appicon.h`. What is still missing
+is the thing a client could just *tell* us: nothing in the Wayland protocols
+carries an icon, and ReconOS's own protocol could, which would make this exact
+rather than looked up.
 
 **Help cannot be searched from anywhere but Help.** As of v0.4.0 it has a
 search box that filters on titles and on the text of every page, and F1 opens

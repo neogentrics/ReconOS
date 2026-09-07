@@ -127,6 +127,7 @@ add_executable(ReconOS
     src/recon_help.c
     src/recon_package.c
     src/recon_clip.c
+    src/recon_appicon.c
     src/recon_props.c
     src/recon_theme.c
     src/recon_procinfo.c

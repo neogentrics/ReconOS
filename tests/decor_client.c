@@ -379,7 +379,17 @@ int main(int argc, char **argv) {
     c.toplevel = xdg_surface_get_toplevel(c.xdg_surface);
     xdg_toplevel_add_listener(c.toplevel, &TOPLEVEL_LISTENER, &c);
     xdg_toplevel_set_title(c.toplevel, c.title);
-    xdg_toplevel_set_app_id(c.toplevel, "reconos.decor_client");
+    /*
+     * Settable from the environment, so the icon rules can be exercised.
+     *
+     * recon_appicon turns an app_id into a picture by three rules, and the
+     * only way to check they do what they claim is to hand the compositor
+     * several app_ids and look at what it drew. A test client that can only
+     * ever call itself one thing can prove one of the three.
+     */
+    const char *app_id = getenv("DECOR_CLIENT_APP_ID");
+    xdg_toplevel_set_app_id(c.toplevel,
+        (app_id != NULL && *app_id != '\0') ? app_id : "reconos.decor_client");
 
     /*
      * The whole point. Asked for before the first commit, so the compositor's

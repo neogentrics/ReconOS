@@ -14,6 +14,7 @@
 
 #include "ReconOS.h"
 #include "recon_decor.h"
+#include "recon_appicon.h"
 #include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_theme.h"
@@ -162,14 +163,25 @@ static void draw(struct recon_decor *decor) {
         decor->focused ? RECON_THEME_TITLE_ACTIVE : RECON_THEME_TITLE_INACTIVE);
 
     /*
-     * A generic application icon, because a Wayland client does not hand its
-     * compositor a picture. The app_id could be looked up against the icon
-     * folder later; guessing at one from a reverse-DNS string would be
-     * wrong more often than right.
+     * The client's own icon where there is one, and the generic application
+     * icon where there is not.
+     *
+     * A Wayland client hands its compositor an app_id and never a picture, so
+     * every client window used to wear the same generic icon -- honest, and
+     * also a taskbar where six different programs look identical.
+     * recon_appicon has the three rules and the reason none of them is a
+     * guess; the short version is that every answer has to be confirmed
+     * against a file that exists, so the worst case is the icon that was
+     * already being drawn.
      */
+    const char *app_id = (decor->toplevel != NULL &&
+        decor->toplevel->xdg_toplevel != NULL)
+        ? decor->toplevel->xdg_toplevel->app_id : NULL;
+
     int text_x = TITLE_INSET;
     int icon_size = title_height - 8;
-    if (recon_icon_draw(p, RECON_ICON_APP, TITLE_INSET, 4, icon_size)) {
+    if (recon_icon_draw(p, recon_appicon_for(app_id), TITLE_INSET, 4,
+            icon_size)) {
         text_x = TITLE_INSET + icon_size + 6;
     }
 
