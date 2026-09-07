@@ -350,6 +350,8 @@ broken says nothing about the work.
 
 ### BG-138 — Stage 2 outgrew the number of sectors stage 1 reads, and the magic check passed anyway
 
+[#295](https://github.com/neogentrics/ReconOS/issues/295)
+
 - **Found:** 7 September 2026, by the BIOS harness, on the commit that added a
   FAT32 reader.
 - **Cost:** nothing shipped. It is here for the shape of it.
