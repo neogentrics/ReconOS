@@ -30,7 +30,31 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
-### Ceilings
+### The leak checker, on the compositor itself
+
+`scripts/check.sh` covers the test suites. The compositor is not in them --
+most of what it does needs a screen -- so it has to be checked separately:
+
+```bash
+cmake -S . -B build-leak -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_C_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+cmake --build build-leak --target ReconOS
+```
+
+Then run it headless with `ASAN_OPTIONS=detect_leaks=1:log_path=/tmp/leak`,
+drive a session through `scripts/look.sh`, and **shut down with the `shutdown`
+command** rather than killing it -- a process that is killed never runs its
+teardown, and the report is then a list of everything, which is a list nobody
+reads.
+
+Most of what it reports belongs to wlroots and libwayland and is held to exit.
+Grep the stacks for `src/` and `modules/` frames; those are ours.
+
+**Do not measure this with RSS.** Thirty shell restarts leaking three panels
+and a timer each showed *no* change in resident memory, because the allocator
+does not return the pages. The obvious measurement says there is nothing wrong.
+
 
 Fixed limits are fine and often necessary -- a reader that grows to fit
 whatever it is handed is one a hostile file can exhaust. What is never fine is

@@ -2327,3 +2327,34 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   is the rule everywhere else here — a thing that will not fit is said about,
   not shortened. Installing most of a package and reporting success is how a
   missing file turns up as something not working weeks later.
+
+### BG-126 — The shell forgot three panels and a timer when it was destroyed
+
+- **Found in** v0.4.0. **Found by** running the *compositor* under the leak
+  checker rather than only the test suites. The suites cover what can be
+  tested without a screen; a panel is not one of those things, so nothing had
+  ever looked.
+- **What it was** `recon_shell_create` makes nine panels and four timers.
+  `recon_shell_destroy` freed six panels and three timers. The tooltip, the
+  All Programs list, the screen blanker and the slide timer were simply
+  missed — which is what a list of nine calls that has to match a list of nine
+  calls somewhere else invites.
+- **The timer is the serious one, and it is not a leak.** A timer left on the
+  event loop still points at the shell that has been freed, and `on_slide_tick`
+  dereferences it on the first line. The shell is destroyed on
+  `services restart Shell` as well as at shutdown, so **restarting the shell
+  while a window was sliding would have written into freed memory.** Nobody has
+  hit it because a restart takes a deliberate command and a slide lasts a
+  quarter of a second — which is exactly the kind of window that stays open for
+  years and then closes on somebody once.
+- **Fixed in** v0.4.0. All nine panels and all four timers, in the order they
+  are created, so the two lists read side by side.
+- **Measured, not assumed.** The leak checker's total for a session that opens
+  every application and shuts down cleanly went from **8,097,016 bytes to
+  4,245,584**, and the only ReconOS frame left in the report is
+  `wlr_renderer_autocreate`, which is wlroots holding something to exit.
+- **Resident memory was flat across thirty shell restarts both before and
+  after**, which is worth recording because it is why this was never noticed:
+  the allocator does not return the pages, so the leak is invisible from
+  outside the process. A checker that looks inside is the only thing that finds
+  this class.

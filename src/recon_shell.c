@@ -3876,6 +3876,22 @@ void recon_shell_destroy(struct recon_shell *shell) {
     }
     if (shell->blank_timer != NULL) {
         wl_event_source_remove(shell->blank_timer);
+        shell->blank_timer = NULL;
+    }
+    /*
+     * The slide timer, which this had never removed.
+     *
+     * Four timers are created a few lines apart and three were removed here.
+     * Worse than a leak: a timer left on the event loop still points at a
+     * shell that has been freed, so a shell restart during a window slide
+     * would have fired on_slide_tick against freed memory. Nobody has hit it
+     * because a restart takes a deliberate command and a slide lasts a quarter
+     * of a second, which is exactly the kind of window that stays open for
+     * years and then closes on somebody once.
+     */
+    if (shell->slide_timer != NULL) {
+        wl_event_source_remove(shell->slide_timer);
+        shell->slide_timer = NULL;
     }
 
     recon_desktop_destroy(shell->desktop);
@@ -3885,6 +3901,31 @@ void recon_shell_destroy(struct recon_shell *shell) {
     recon_panel_destroy(shell->security);
     recon_panel_destroy(shell->dim);
     recon_panel_destroy(shell->menu);
+    /*
+     * The tooltip and the All Programs list, which this had never freed.
+     *
+     * Found by running the compositor itself under the leak checker rather
+     * than only the test suites -- the suites cover the parts that can be
+     * tested without a screen, and a panel is not one of them. Both are
+     * created beside the seven above and were simply missed, which is what a
+     * list of seven destroy calls invites.
+     */
+    /*
+     * All nine, in the order they are created above, so the two lists can be
+     * read side by side.
+     *
+     * Three were missing -- the tooltip, the All Programs list and the screen
+     * blanker -- and were found by running the compositor under the leak
+     * checker rather than only the test suites. The suites cover what can be
+     * tested without a screen and a panel is not one of those things.
+     *
+     * A list of nine calls that has to match a list of nine calls somewhere
+     * else is exactly the shape that goes wrong, which is why the two are now
+     * in the same order and why this note says so.
+     */
+    recon_panel_destroy(shell->tip);
+    recon_panel_destroy(shell->programs);
+    recon_panel_destroy(shell->blank);
     recon_panel_destroy(shell->taskbar);
     free(shell);
 }

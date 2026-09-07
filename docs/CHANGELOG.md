@@ -23,6 +23,34 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The compositor was run under the leak checker for the first time**, rather
+than only the test suites -- which cover what can be tested without a screen,
+and a panel is not one of those things.
+
+`recon_shell_create` makes nine panels and four timers. `recon_shell_destroy`
+freed six and three. The tooltip, the All Programs list, the screen blanker and
+the slide timer were missed, which is what a list of nine calls that has to
+match a list of nine calls somewhere else invites.
+
+**The timer is the serious one and it is not a leak.** A timer left on the
+event loop still points at a shell that has been freed, and `on_slide_tick`
+dereferences it on its first line. The shell is destroyed by
+`services restart Shell` as well as at shutdown, so restarting the shell while
+a window was sliding would have written into freed memory. Nobody has hit it
+because a restart takes a deliberate command and a slide lasts a quarter of a
+second -- the kind of window that stays open for years and then closes on
+somebody once.
+
+The checker's total for a session that opens every application and shuts down
+cleanly went from **8,097,016 bytes to 4,245,584**, and the only ReconOS frame
+left is `wlr_renderer_autocreate`.
+
+Worth recording alongside: **resident memory was flat across thirty shell
+restarts both before and after the fix.** The allocator does not hand the pages
+back, so this class of bug is invisible from outside the process, and measuring
+RSS -- the obvious thing to reach for -- would have said there was nothing
+wrong. A checker that looks inside is the only thing that finds it. BG-126.
+
 **A graph can be saved as a picture.** A Save button writes the plane into
 Pictures as a PNG, named for the moment it was taken -- a grapher that saved
 over `graph.png` would lose the one somebody kept.
