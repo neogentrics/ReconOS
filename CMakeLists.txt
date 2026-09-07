@@ -36,12 +36,48 @@ add_compile_definitions(WLR_USE_UNSTABLE)
 #
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
+#
+# Configure the suites without the compositor.
+#
+# Every test target here was written to need no window -- that is the property
+# they were designed around and it is stated all over this file. It was not
+# *true of the build*, though: `pkg_check_modules(WLR REQUIRED wlroots)` ran
+# before anything, so configuring at all needed wlroots 0.17.1, and a machine
+# without it could not run a single suite.
+#
+# That is what kept the sweeps off any machine but this one. With this option
+# the twenty-five suites build against stock libraries, which is what makes
+# running them automatically possible.
+#
+#   cmake -B build -DRECONOS_TESTS_ONLY=ON
+#
+option(RECONOS_TESTS_ONLY
+    "Build only the test suites, with no compositor and no wlroots" OFF)
+
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(WLR REQUIRED wlroots)
+
+# Needed by the suites as well as the compositor, so outside the guard below.
 pkg_check_modules(WAYLAND REQUIRED wayland-server)
 pkg_check_modules(XKB REQUIRED xkbcommon)
 # Used directly for damage region tests; wlroots exposes pixman in its API.
 pkg_check_modules(PIXMAN REQUIRED pixman-1)
+
+# zlib for writing PNG, and mbedTLS for the network port's encryption. Both
+# are needed by suites of their own, which is why they are found here rather
+# than beside the compositor that also uses them.
+pkg_check_modules(ZLIB REQUIRED zlib)
+
+# Found by name rather than by pkg-config because mbedTLS 2.x does not ship a
+# .pc file on the distributions this builds on -- worth saying, because the
+# obvious first assumption on seeing find_library is that somebody did not know
+# about pkg_check_modules.
+find_library(MBEDTLS_LIB mbedtls REQUIRED)
+find_library(MBEDX509_LIB mbedx509 REQUIRED)
+find_library(MBEDCRYPTO_LIB mbedcrypto REQUIRED)
+
+if(NOT RECONOS_TESTS_ONLY)
+
+pkg_check_modules(WLR REQUIRED wlroots)
 pkg_check_modules(WAYLAND_PROTOCOLS REQUIRED wayland-protocols)
 pkg_check_modules(WAYLAND_SCANNER REQUIRED wayland-scanner)
 
@@ -211,18 +247,9 @@ target_include_directories(ReconOS SYSTEM PRIVATE
 # a module links but every ReconOS function it calls is undefined at load.
 set_target_properties(ReconOS PROPERTIES ENABLE_EXPORTS ON)
 
-# zlib for writing PNG. Already present as a wlroots dependency; named here
-# because ReconOS calls it directly now and a transitive dependency is not a
-# promise.
-pkg_check_modules(ZLIB REQUIRED zlib)
-
-# mbedTLS, for the network port's encryption. Found by name rather than by
-# pkg-config because 2.x does not ship a .pc file on the distributions this
-# builds on -- which is worth saying, because the obvious first assumption on
-# seeing find_library here is that somebody did not know about pkg_check_modules.
+# zlib and mbedTLS are found near the top now, because suites of their own
+# need them and those are built even when the compositor is not.
 #
-# Three libraries, and all three are needed: mbedtls is the protocol,
-# mbedx509 is the certificate parsing, mbedcrypto is the primitives.
 # ALSA, for making a sound. Optional: a machine with no audio library still
 # builds a desktop, and the path it then takes is the same one a machine with
 # no sound *card* takes -- which is worth having be the same code rather than
@@ -238,10 +265,6 @@ if(ALSA_FOUND)
 else()
     message(STATUS "ALSA not found; ReconOS will build without audio")
 endif()
-
-find_library(MBEDTLS_LIB mbedtls REQUIRED)
-find_library(MBEDX509_LIB mbedx509 REQUIRED)
-find_library(MBEDCRYPTO_LIB mbedcrypto REQUIRED)
 
 if(ALSA_FOUND)
     target_compile_definitions(ReconOS PRIVATE RECON_HAVE_ALSA)
@@ -267,6 +290,8 @@ target_compile_definitions(ReconOS PRIVATE
     RECONOS_MODULE_DIR="${CMAKE_BINARY_DIR}/modules")
 
 add_subdirectory(modules)
+
+endif()   # NOT RECONOS_TESTS_ONLY
 
 # --- Tests ---
 #
@@ -694,6 +719,18 @@ target_link_libraries(recon_net_tests PRIVATE ${WAYLAND_LIBRARIES}
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 target_include_directories(recon_net_tests PRIVATE ${WAYLAND_INCLUDE_DIRS})
 
+#
+# Every suite, registered.
+#
+# Eleven of the twenty-five were, and the other fourteen -- including the
+# malformed-input sweep, the firewall, the keyring and the error catalogue --
+# had to be found and run by hand. That is not a small gap: `ctest` reporting
+# "100% tests passed" while more than half the suites had not been run is
+# exactly the shape of green this project keeps writing tests against.
+#
+# The names are what a person would call the thing rather than the target's
+# filename, because they are what ctest prints.
+#
 enable_testing()
 add_test(NAME filesystem COMMAND recon_fs_tests)
 add_test(NAME registry COMMAND recon_registry_tests)
@@ -706,6 +743,20 @@ add_test(NAME accessibility COMMAND recon_access_tests)
 add_test(NAME hashing COMMAND recon_crypt_tests)
 add_test(NAME accounts COMMAND recon_users_tests)
 add_test(NAME network COMMAND recon_net_tests)
+add_test(NAME expressions COMMAND recon_expr_tests)
+add_test(NAME reading-numbers COMMAND recon_data_tests)
+add_test(NAME what-a-file-is COMMAND recon_sniff_tests)
+add_test(NAME text-in-a-picture COMMAND recon_ocr_tests)
+add_test(NAME matching-letters COMMAND recon_ocr_match_tests)
+add_test(NAME video COMMAND recon_video_tests)
+add_test(NAME png COMMAND recon_png_tests)
+add_test(NAME images COMMAND recon_image_tests)
+add_test(NAME sending-mail COMMAND recon_smtp_tests)
+add_test(NAME keyring COMMAND recon_keyring_tests)
+add_test(NAME malformed-input COMMAND recon_malformed_tests)
+add_test(NAME firewall COMMAND recon_firewall_tests)
+add_test(NAME title-bars COMMAND recon_titlebar_tests)
+add_test(NAME error-catalogue COMMAND recon_error_tests)
 
 # --- A Wayland client, for testing what ReconOS does with somebody else's
 #     window ---
@@ -718,7 +769,11 @@ add_test(NAME network COMMAND recon_net_tests)
 # draw their frames regardless.
 #
 # Not registered with ctest: it needs a compositor to connect to, which is the
-# thing under test rather than something the test can arrange.
+# thing under test rather than something the test can arrange -- so it is not
+# built at all under RECONOS_TESTS_ONLY, where by definition there is none. It
+# also needs the protocol generator, which is part of the compositor half.
+
+if(NOT RECONOS_TESTS_ONLY)
 
 pkg_check_modules(WAYLAND_CLIENT REQUIRED wayland-client)
 
@@ -762,3 +817,5 @@ target_include_directories(decor_client PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
     ${WAYLAND_CLIENT_INCLUDE_DIRS})
 target_link_libraries(decor_client PRIVATE ${WAYLAND_CLIENT_LIBRARIES} rt)
+
+endif()   # NOT RECONOS_TESTS_ONLY

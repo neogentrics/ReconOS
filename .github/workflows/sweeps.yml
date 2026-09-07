@@ -1,0 +1,130 @@
+# The three sweeps, run by a machine instead of by somebody remembering to.
+#
+# scripts/check.sh, scripts/analyze.sh and scripts/coverage.sh have existed for
+# a while and were all run by hand. The gap that produced BG-134 is exactly the
+# kind that closes: a containment check passed the sanitizers, the analyzer and
+# every suite, then aborted on the first path it resolved in an *optimised*
+# build -- and every build this project makes for itself is Debug, so nothing
+# here could see it. check.sh runs the suites twice now, and so does this.
+#
+# None of this needs wlroots. Every suite was written to need no window, which
+# was true of the code and not of the build: `pkg_check_modules(WLR REQUIRED)`
+# ran before anything else, so configuring at all wanted wlroots 0.17.1 and a
+# runner could not have got that far. -DRECONOS_TESTS_ONLY=ON is what makes
+# these jobs possible; the compositor is still built the ordinary way, by hand,
+# on a machine that has wlroots.
+#
+# What is deliberately NOT here: building the compositor. Doing that would mean
+# pinning a wlroots build on a runner, and the first thing to go stale would be
+# the pin rather than the code. A green run here means "the parts that can be
+# checked without a screen are sound", which is what these suites promise.
+
+name: sweeps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Everything the suites need and nothing the compositor does.
+  DEPENDENCIES: >-
+    build-essential cmake pkg-config
+    libwayland-dev libxkbcommon-dev libpixman-1-dev zlib1g-dev libmbedtls-dev
+
+jobs:
+  suites:
+    name: Suites, sanitized and then as a release is built
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the suites need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPENDENCIES
+
+      # Address and undefined-behaviour sanitizers, the same flags check.sh
+      # uses. What these catch that the assertions do not is reading one byte
+      # past an array -- which usually returns a plausible value and passes.
+      - name: Configure, sanitized
+        run: |
+          cmake -S . -B build/sanitized \
+            -DRECONOS_TESTS_ONLY=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build, sanitized
+        run: cmake --build build/sanitized -j"$(nproc)"
+
+      # All twenty-five, because they are all registered with ctest now.
+      # Eleven were, and the other fourteen had to be found and run by hand --
+      # so "100% tests passed" used to be true of less than half of them.
+      - name: Run every suite, sanitized
+        run: ctest --test-dir build/sanitized --output-on-failure
+
+      # And again the way scripts/package.sh builds, because that is the
+      # configuration that ships and the one nothing used to test.
+      - name: Configure, as a release is built
+        run: cmake -S . -B build/release -DRECONOS_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+
+      # Counted rather than gated. An optimised build sees things a Debug one
+      # cannot -- -Wformat-truncation needs the optimiser's value ranges to
+      # decide a path might be cut -- and there are twelve such sites in the
+      # tree today. Failing on them would make this red on its first run,
+      # which is how somebody learns to ignore a red build. Reported here so
+      # the number can only go down.
+      - name: Build, as a release is built
+        run: cmake --build build/release -j"$(nproc)" 2>&1 | tee release.log
+
+      - name: Warnings only an optimised build sees
+        run: |
+          sites=$(grep "warning:" release.log             | grep -oE "^[^:]+:[0-9]+" | sort -u | wc -l)
+          echo "### Release build: $sites places warn" >> "$GITHUB_STEP_SUMMARY"
+          grep "warning:" release.log | grep -oE "^[^:]+:[0-9]+" | sort -u             | sed "s/^/    /" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Run every suite again, optimised
+        run: ctest --test-dir build/release --output-on-failure
+
+  analyzer:
+    name: Static analyzer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install what the suites need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPENDENCIES
+
+      # -fanalyzer walks paths the compiler's ordinary warnings do not: a
+      # pointer that can be NULL on one branch and is dereferenced on another,
+      # a leak on an error path nothing exercises.
+      - name: Configure with the analyzer
+        run: |
+          cmake -S . -B build/analyzed \
+            -DRECONOS_TESTS_ONLY=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="-fanalyzer"
+
+      # Not -Werror. The analyzer has false positives and turning it into a
+      # gate would mean the first one stops every branch until somebody
+      # silences it -- and silencing analyzer warnings is how a real one gets
+      # hidden. The output is here to be read.
+      - name: Build with the analyzer
+        run: cmake --build build/analyzed -j"$(nproc)" 2>&1 | tee analyzer.log
+
+      - name: What it said
+        run: |
+          count=$(grep -c "\[-Wanalyzer" analyzer.log || true)
+          echo "### Analyzer: $count warnings" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" != "0" ]; then
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep "\[-Wanalyzer" analyzer.log | head -40 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
