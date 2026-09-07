@@ -10,6 +10,32 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+A file type can be chosen, not only inherited. Right-clicking a file offers
+"Open with" for every application that opens files, with the one that would
+open it marked. Choosing one remembers the choice for that extension and opens
+the file with it -- both, because choosing a program from a menu means "this
+one, and from now on", and an Open-with that opened once and changed nothing
+would have to be used every single time, which is the thing somebody reached
+for the menu to stop doing.
+
+A choice is a *user's*, so it lives in their settings and beats everything an
+application declares -- it is the only rule in recon_props_opener that came
+from a person rather than from a deduction. "Use the usual program" appears
+only when there is a choice to undo, and clears it rather than setting a
+different one, which is the same rule the presets follow everywhere else: what
+shipped cannot be deleted, what you added can.
+
+The key is the extension lowercased, so choosing a program for a photograph
+applies to the next one even if the camera shouts its file names. A chosen
+application that has since been uninstalled falls back to the declared answer
+rather than leaving a file type pointing at nothing.
+
+Menus hold twenty-four entries now rather than sixteen, and an overflow
+complains in the log. The "Open with" list is as long as the number of
+applications that open files, which grows every time somebody installs a
+module -- a menu that silently stopped at its limit would lose Properties, and
+nothing on screen says a menu is short.
+
 A client window gets its own icon. A Wayland client hands its compositor an
 app_id and never a picture, so every client window wore the same generic
 icon -- honest, and also a taskbar where six different programs look identical.

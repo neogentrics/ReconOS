@@ -308,6 +308,17 @@ force. Checking against a time server is a separate switch, off until it is
 turned on, because reaching out to a machine on the internet is not something
 to start doing without being asked.
 
+## What opens a file
+
+Double-clicking a file opens it in whichever program handles that kind. Right
+click one and **Open with** lists the programs that can, with a mark beside the
+one that would. Choosing a different one opens the file **and remembers it**,
+so every file of that kind opens there from now on.
+
+**Use the usual program** appears once you have chosen something, and puts it
+back. It only ever removes your choice -- the program a file type came with
+cannot be deleted, only overridden.
+
 ## Pictures of the screen
 
 **Print Screen** saves a picture of the whole screen into your Pictures

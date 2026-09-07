@@ -69,6 +69,31 @@ const char *recon_props_kind(const struct recon_dirent *entry,
 const char *recon_props_opener(const char *name);
 
 /*
+ * --- Choosing what opens a kind of file ---
+ *
+ * Everything recon_props_opener does on its own is inheritance: an application
+ * says what it opens and the system agrees. That covers the common case and
+ * has no room in it for somebody who simply wants a different program -- two
+ * applications claiming the same extension was first-come, and there was no
+ * way to change one without uninstalling something.
+ *
+ * A choice made here is a *user's*, so it lives in their settings and beats
+ * everything an application declares. Clearing it goes back to the declared
+ * answer rather than to nothing, which is the same rule the presets follow
+ * everywhere else in this system: what shipped cannot be deleted, and what you
+ * added can.
+ *
+ * `name` is a file's name; only its extension is used.
+ */
+bool recon_props_set_opener(const char *name, const char *application);
+bool recon_props_clear_opener(const char *name);
+
+/* The chosen application for this kind of file, or NULL when nobody has
+ * chosen one. Distinct from recon_props_opener, which always has an answer:
+ * this says whether the answer was a decision. */
+const char *recon_props_chosen_opener(const char *name);
+
+/*
  * The icon a file should be drawn with, by its name.
  *
  * Never NULL: a name nothing recognises gets the plain sheet, which is what

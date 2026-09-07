@@ -1,2 +1,8 @@
-Print Screen saves a picture of the whole screen into your Pictures
-folder. So does the capture command, which can also be given a path.
+Double-clicking a file opens it in whichever program handles that kind. Right
+click one and Open with lists the programs that can, with a mark beside the
+one that would. Choosing a different one opens the file and remembers it,
+so every file of that kind opens there from now on.
+
+Use the usual program appears once you have chosen something, and puts it
+back. It only ever removes your choice -- the program a file type came with
+cannot be deleted, only overridden.

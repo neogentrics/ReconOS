@@ -211,7 +211,25 @@ enum context_action {
      * clock's, so both are shown and the one in force is marked. */
     CTX_DESKTOPS_FOUR,
     CTX_DESKTOPS_ONE,
+    /*
+     * Go back to whatever would open this if nobody had chosen.
+     *
+     * Offered only when there is a choice to undo, so it is never a menu entry
+     * that does nothing -- and it clears the choice rather than setting a
+     * different one, which is the same rule the presets follow: what shipped
+     * cannot be deleted, what you added can.
+     */
+    CTX_OPEN_WITH_DEFAULT,
+    /*
+     * One per application that can open this file. Last in the enum, and read
+     * as a base with an index on it, so adding an action above cannot walk
+     * into the range.
+     */
+    CTX_OPEN_WITH_BASE,
 };
+
+/* How many applications one "Open with" list may name. */
+#define OPEN_WITH_MAX 8
 
 /* The context menu. */
 #define CONTEXT_ITEM_HEIGHT 24
@@ -1898,6 +1916,16 @@ static void draw_context(struct recon_shell *shell) {
 static void context_add_id(struct recon_shell *shell, const char *label,
         uint32_t id, bool enabled, bool separator) {
     if (shell->context_item_count >= CONTEXT_ITEMS_MAX) {
+        /*
+         * Said out loud rather than passed over.
+         *
+         * A menu that quietly stops at its limit loses whatever was added
+         * last, which is usually Properties -- and nothing on screen says a
+         * menu is short. The list is as long as the number of applications
+         * that can open a file, so this is reachable by installing modules
+         * rather than by anything in this build.
+         */
+        wlr_log(WLR_ERROR, "ReconOS: menu is full; '%s' left out", label);
         return;
     }
     int i = shell->context_item_count++;
@@ -1935,6 +1963,74 @@ static void context_add(struct recon_shell *shell, const char *label,
     shell->context_items[i].separator_after = separator;
     shell->context_items[i].marked = false;
 }
+
+/*
+ * Every application that could open this file, and which one would.
+ *
+ * "Could" is a wider question than "does": the list is every application that
+ * declares it opens files at all, because somebody choosing a different
+ * program for a .log is choosing among the programs that read files, not among
+ * the ones that claim that extension -- if it were the latter the list would
+ * have one entry in it and be no use.
+ *
+ * Returns how many were found; `names` are registered names and stay valid as
+ * long as the applications do.
+ */
+static int applications_that_open(const char **names, int max) {
+    int count = 0;
+    int total = recon_installed_app_count();
+
+    for (int i = 0; i < total && count < max; i++) {
+        struct recon_installed_app app;
+        if (!recon_installed_app_at(i, &app) || app.disabled) {
+            continue;
+        }
+        if (app.opens[0] == '\0') {
+            continue;
+        }
+        names[count++] = recon_installed_app_resolve(app.name);
+    }
+    return count;
+}
+
+/*
+ * The "Open with" part of a file's menu.
+ *
+ * Marked rather than ticked, because this is one choice with several faces
+ * rather than several switches -- the same treatment the clock's menu gives to
+ * twelve-hour and twenty-four-hour.
+ */
+static void context_add_open_with(struct recon_shell *shell,
+        const char *filename) {
+    const char *names[OPEN_WITH_MAX];
+    int count = applications_that_open(names, OPEN_WITH_MAX);
+    if (count == 0) {
+        return;
+    }
+
+    const char *now = recon_props_opener(filename);
+    const char *chosen = recon_props_chosen_opener(filename);
+
+    for (int i = 0; i < count; i++) {
+        if (names[i] == NULL) {
+            continue;
+        }
+        char label[64];
+        snprintf(label, sizeof(label), "Open with %s", names[i]);
+
+        context_add_id(shell, label, CTX_OPEN_WITH_BASE + (uint32_t)i,
+            true, i == count - 1 && chosen == NULL);
+        if (now != NULL && strcmp(now, names[i]) == 0) {
+            context_mark_last(shell);
+        }
+    }
+
+    if (chosen != NULL) {
+        context_add(shell, "Use the usual program", CTX_OPEN_WITH_DEFAULT,
+            true, true);
+    }
+}
+
 
 /* Show the menu at a point, kept on screen if it would run off an edge. */
 static void context_show(struct recon_shell *shell, double lx, double ly) {
@@ -4890,6 +4986,47 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
 
     enum context_action action = (enum context_action)id;
 
+    /*
+     * "Open with", before the switch below.
+     *
+     * A bounded range checked ahead of an enum, because CTX_OPEN_WITH_BASE is
+     * a base with an index added to it and a switch cannot have a case for
+     * that. Checked first for the same reason every other bounded range in
+     * this system is checked first: what follows is open-ended about ids it
+     * does not recognise.
+     */
+    if (shell->context_kind == RECON_CONTEXT_DESKTOP_ITEM &&
+            id >= CTX_OPEN_WITH_BASE &&
+            id < CTX_OPEN_WITH_BASE + OPEN_WITH_MAX) {
+        const char *names[OPEN_WITH_MAX];
+        int count = applications_that_open(names, OPEN_WITH_MAX);
+        int which = (int)(id - CTX_OPEN_WITH_BASE);
+
+        if (which >= 0 && which < count && names[which] != NULL) {
+            /*
+             * Remembered, and then opened.
+             *
+             * Both, because choosing a program from this menu means "this one,
+             * and from now on" -- an "Open with" that opened once and changed
+             * nothing would have to be used every single time, which is the
+             * thing somebody reached for this menu to stop doing. Undoing it
+             * is one entry away, on this same menu, which is what makes the
+             * stronger reading the safe one.
+             */
+            recon_props_set_opener(shell->context_target, names[which]);
+            open_desktop_item(shell, shell->context_target);
+        }
+        recon_shell_refresh(shell);
+        return;
+    }
+
+    if (shell->context_kind == RECON_CONTEXT_DESKTOP_ITEM &&
+            action == CTX_OPEN_WITH_DEFAULT) {
+        recon_props_clear_opener(shell->context_target);
+        recon_shell_refresh(shell);
+        return;
+    }
+
     if (shell->context_kind == RECON_CONTEXT_TASKBAR &&
             (action == CTX_DESKTOPS_FOUR || action == CTX_DESKTOPS_ONE)) {
         set_desktop_count(shell, action == CTX_DESKTOPS_FOUR);
@@ -5378,7 +5515,15 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
                 return true;
             }
 
-            context_add(shell, "Open", CTX_OPEN, true, true);
+            context_add(shell, "Open", CTX_OPEN, true, !is_dir ? false : true);
+            /*
+             * Only for a file. A folder opens in the explorer and there is no
+             * second answer to offer -- a list of programs that could open a
+             * directory would be a list of one, wearing a menu.
+             */
+            if (!is_dir) {
+                context_add_open_with(shell, name);
+            }
             context_add(shell, "Cut", CTX_CUT, true, false);
             context_add(shell, "Copy", CTX_COPY, true, true);
             context_add(shell, "Rename", CTX_RENAME, true, false);

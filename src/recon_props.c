@@ -12,6 +12,7 @@
 #include "recon_codec.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_registry.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 
@@ -145,6 +146,80 @@ const char *recon_props_kind(const struct recon_dirent *entry,
     return "File";
 }
 
+/* --- Choosing what opens a kind of file --- */
+
+/*
+ * Where one extension's chosen application is written down.
+ *
+ * Keyed by the extension including its dot and lowercased, so ".PNG" and
+ * ".png" are one setting -- choosing a program for a photograph and finding it
+ * did not apply to the next photograph because the camera shouts its file
+ * names would be a setting that looks broken.
+ */
+static bool opener_key(const char *name, char *out, size_t size) {
+    const char *dot = strrchr(name != NULL ? name : "", '.');
+    if (dot == NULL || dot == name || dot[1] == '\0') {
+        return false;
+    }
+
+    int at = snprintf(out, size, "open-with/");
+    if (at < 0 || (size_t)at >= size) {
+        return false;
+    }
+
+    size_t i = (size_t)at;
+    for (const char *p = dot; *p != '\0' && i + 1 < size; p++, i++) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        out[i] = c;
+    }
+    out[i] = '\0';
+    return i > (size_t)at;
+}
+
+const char *recon_props_chosen_opener(const char *name) {
+    char key[128];
+    if (!opener_key(name, key, sizeof(key))) {
+        return NULL;
+    }
+
+    const char *chosen = recon_registry_get(RECON_REG_USER, key, "");
+    if (chosen[0] == '\0') {
+        return NULL;
+    }
+
+    /*
+     * Only if it still exists.
+     *
+     * An application chosen and then uninstalled would otherwise leave a file
+     * type pointing at nothing, and double-clicking it would do nothing at all
+     * with no way to find out why. Falling back to the declared answer is what
+     * somebody would want and is also what happens if this is never cleaned
+     * up -- so it is not cleaned up here, because a read that quietly writes
+     * is a surprise nobody needs.
+     */
+    return recon_installed_app_resolve(chosen);
+}
+
+bool recon_props_set_opener(const char *name, const char *application) {
+    char key[128];
+    if (!opener_key(name, key, sizeof(key)) || application == NULL) {
+        return false;
+    }
+    return recon_registry_set(RECON_REG_USER, key, application);
+}
+
+bool recon_props_clear_opener(const char *name) {
+    char key[128];
+    if (!opener_key(name, key, sizeof(key))) {
+        return false;
+    }
+    recon_registry_remove(RECON_REG_USER, key);
+    return true;
+}
+
 const char *recon_props_opener(const char *name) {
     if (name == NULL) {
         return NULL;
@@ -153,6 +228,19 @@ const char *recon_props_opener(const char *name) {
     const char *dot = strrchr(name, '.');
     if (dot == NULL || dot == name || dot[1] == '\0') {
         return NULL;
+    }
+
+    /*
+     * What somebody chose, before anything anybody declared.
+     *
+     * Everything below is inheritance -- an application says what it opens and
+     * the system agrees -- and a choice is not inheritance. It is the only
+     * rule here that came from a person, so it is the only one allowed to
+     * contradict the rest.
+     */
+    const char *chosen = recon_props_chosen_opener(name);
+    if (chosen != NULL) {
+        return chosen;
     }
 
     /*

@@ -52,7 +52,20 @@ struct recon_appwin;
  * the application only says what should be in it.
  */
 
-#define RECON_MENU_MAX 16
+/*
+ * How many entries one menu may hold.
+ *
+ * Sixteen was enough until a file's menu grew an "Open with" list, which is as
+ * long as the number of applications that can open a file -- a number that
+ * grows every time somebody installs a module. A menu that silently dropped
+ * its last entry would lose Properties because three modules registered a file
+ * type, and nothing anywhere would say so.
+ *
+ * Twenty-four, and an overflow now complains in the log rather than being
+ * passed over. Both halves matter: the room, so the ordinary case fits, and
+ * the complaint, so the day it does not fit is a day somebody finds out.
+ */
+#define RECON_MENU_MAX 24
 
 struct recon_menu_entry {
     char label[48];
