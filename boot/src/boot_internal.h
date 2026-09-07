@@ -19,6 +19,17 @@ void print(const char *s);
 void print_hex(UINT64 v);
 void print_dec(UINT64 v);
 
+/* SHA-256 of a whole message. Written out rather than borrowed -- see
+ * sha256.c for why that is the safe choice for a verifier specifically. */
+void sha256(const void *data, UINTN len, UINT8 out[32]);
+BOOLEAN sha256_self_test(void);
+
+/* Verifies a 256-byte PKCS#1 v1.5 signature over a SHA-256 digest, against a
+ * 256-byte modulus with exponent 65537. Everything it touches is public, which
+ * is why writing it out is defensible here -- see rsa.c. */
+BOOLEAN rsa2048_verify(const UINT8 *modulus, const UINT8 *sig,
+		       const UINT8 digest[32]);
+
 /* Builds a device path naming a *file on a device*, by copying the device's own
  * path and appending a file node to it.
  *

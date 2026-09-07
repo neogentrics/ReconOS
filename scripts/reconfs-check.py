@@ -27,6 +27,7 @@ It writes nothing, ever. That is what makes it safe to run on an image that is
 about to be examined again.
 """
 import struct
+import os
 import sys
 
 BLOCK_MIN = 4096
@@ -504,10 +505,34 @@ def damage(path, how):
 
 
 def main():
-    if len(sys.argv) >= 3 and sys.argv[1] == "--damage":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--damage":
         # reconfs-check.py --damage <how> <image>
-        damage(sys.argv[3], sys.argv[2])
-        print(f"damaged {sys.argv[2]}")
+        #
+        # The two arguments are checked and named, because getting them the
+        # wrong way round used to *look like it worked*: the script would try to
+        # open the mode as a file, print an error into a wall of setup output,
+        # damage nothing -- and the run afterwards would report the volume
+        # sound, which is exactly what a correct checker says about a volume
+        # nobody broke. A green result for a test that never ran.
+        if len(sys.argv) != 4:
+            print("usage: reconfs-check.py --damage "
+                  "checksum|unallocated|torn <image>")
+            return 2
+
+        how, path = sys.argv[2], sys.argv[3]
+
+        if how not in ("checksum", "unallocated", "torn"):
+            print(f"'{how}' is not a damage mode. Did you put the image "
+                  f"first? The mode comes first:")
+            print("  reconfs-check.py --damage unallocated disk.img")
+            return 2
+
+        if not os.path.exists(path):
+            print(f"no such image: {path}")
+            return 2
+
+        damage(path, how)
+        print(f"damaged {path}: {how}")
         return 0
 
     if len(sys.argv) < 2:

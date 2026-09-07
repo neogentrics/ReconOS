@@ -668,6 +668,36 @@ else
 	FAILED_PATHS+=("boot menu")
 fi
 
+# The loader refusing a kernel that is not ours. The signature is made by
+# openssl, which shares no code with the verifier -- a verifier checked against
+# signatures produced by its own arithmetic is checked against its own
+# misunderstandings.
+#
+# Four refusals, and only the last is an attacker: a valid signature by somebody
+# else's key. A verifier that catches corruption while accepting any well-formed
+# signature is worth nothing at all.
+
+echo
+echo "integrity"
+
+printf '%-46s' "  runs a signed kernel, refuses four others"
+
+sig_out=$(bash scripts/signed-kernel-test.sh 2>&1)
+sig_rc=$?
+
+if [ "$sig_rc" -eq 0 ]; then
+	echo "$(echo "$sig_out" | grep -oE '[0-9]+ of [0-9]+: ran the signed.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$sig_rc" -eq 2 ]; then
+	echo "skipped, openssl or OVMF is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$sig_out" | sed 's/^/      /' | head -14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("signed kernel")
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
 	echo "$passes self-tests across every path, no failures${skipped:+ ($skipped skipped)}."

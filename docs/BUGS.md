@@ -348,6 +348,105 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-133 — The bootloader build ignored its headers, so a security check silently was not there
+
+[#292](https://github.com/neogentrics/ReconOS/issues/292)
+
+- **Found:** 7 September 2026, by the verification rig, on a change whose own
+  test had just passed.
+- **Cost:** nothing shipped. It is here because of what it would have cost.
+
+`boot/Makefile` compiled each object against its `.c` file and nothing else --
+no `-MMD`, no dependency files. Changing a header rebuilt nothing.
+
+That was survivable while every header was checked in and changed by hand. It
+stopped being survivable the moment one became **generated**:
+`scripts/make-signing-key.sh` writes `src/signing_key.h`, and `make` then
+compared `main.o` against `main.c`, found it unchanged, and reused a loader
+compiled *before the key existed*.
+
+**The direction of the failure is the whole point.** The stale loader announced
+itself plainly and did the wrong thing anyway:
+
+    signature    : not checked (this loader was built without a key)
+    ReconOS kernel 0.0.11
+
+An unsigned kernel ran, on a machine that had just been given a signing key, and
+the test that generated the key was satisfied — **because the loader it tested
+was not the loader it had asked for.** A security feature that is silently
+absent, with a green test beside it.
+
+**Why the test could not catch it and the rig could.** In the tree the test was
+written in, the generated header happened to exist *before* the build, so the
+loader was correct by accident. The rig starts from a clean copy of the
+repository, where the header does not exist because it is deliberately not
+committed — so the rig produced the stale binary and the isolated run never
+could. This is the argument for running everything on every change rather than
+the test just written.
+
+Fixed twice, on purpose:
+
+  - `-MMD -MP` in `boot/Makefile`, so headers are dependencies as they are
+    everywhere else in the project;
+  - and the test deletes the loader before rebuilding, because its entire
+    subject is a loader that trusts a specific key. A test should not depend on
+    the dependency tracking being right in order to prove the thing it tests.
+
+**The shape.** This is the hazard already written into this project's own notes
+about injecting faults — *the edit orphans a function, the build fails, and the
+previous binary runs and passes*. Same mechanism, different trigger, and a worse
+consequence: there the stale binary hid a fix, here it hid the absence of a
+safety check.
+
+### BG-132 — A handle used two lines after it was closed, under a comment saying it was open
+
+[#291](https://github.com/neogentrics/ReconOS/issues/291)
+
+- **Found:** 7 September 2026, the first time the loader tried to verify a
+  kernel signature.
+- **Cost:** most of an hour, all of it spent suspecting the wrong code.
+
+The verification step needs the volume the kernel came from, because the
+signature is a second file on it. The volume was closed two lines above the
+call:
+
+    file->Close(file);
+    root->Close(root);          <-- here
+
+    *size_out = size;
+
+    /* Verified here, where the volume it came from is still open ... */
+    if (!verify_kernel(root, buf, size)) {
+
+Calling through the closed handle landed in freed pool memory, which EDK II
+fills with `0xAF`, so the machine stopped with:
+
+    !!!! X64 Exception Type - 0D(#GP - General Protection) !!!!
+    RIP  - AFAFAFAFAFAFAFAF
+
+**Why that misled for so long.** `RIP` full of one repeated byte looks exactly
+like a smashed return address, and the code added in the same commit was
+hand-written 2048-bit arithmetic with several 512-byte structures on the stack.
+Every hypothesis followed from there. It was the wrong shape entirely: `0xAF` is
+not stack corruption, it is *freed pool*, and it was naming the actual fault the
+whole time.
+
+**What settled it, in one run.** Compiling the verifier out -- the loader has a
+path for a build with no key -- and booting again. It crashed identically, which
+proved the crypto innocent immediately and reduced the remaining surface to a
+few lines. Reading them was then enough.
+
+**The part worth keeping.** The comment claiming the volume was still open was
+written in the same minute as the bug, by the same person, and it is what made
+the handle look innocent. This is the fourth time this month that a *comment
+describing an intention* has sent the investigation away from code sitting two
+lines from it — see BG-118, BG-125, BG-127.
+
+  A comment states what somebody meant. Only the machine states what happens.
+
+The volume is closed after the verification now, which is the only place it can
+be.
+
 ### BG-131 — The bootloader never passed a command line, for four checkpoints
 
 [#290](https://github.com/neogentrics/ReconOS/issues/290)

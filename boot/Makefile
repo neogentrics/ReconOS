@@ -73,9 +73,24 @@ $(EFI): $(OBJS)
 	$(LD) $(LDFLAGS) $(OBJS) -out:$@
 	@echo "  built $@"
 
+# Header dependencies, tracked rather than assumed.
+#
+# Without -MMD, changing a header rebuilds nothing: make compares each object
+# against its .c file alone and sees no reason to act. That was survivable while
+# the headers were checked in, and stopped being survivable the moment one of
+# them became *generated* -- scripts/make-signing-key.sh writes
+# src/signing_key.h, and the build happily reused a loader compiled before the
+# key existed.
+#
+# The failure was silent in the worst possible direction: the loader announced
+# "signature : not checked (built without a key)" and ran an unsigned kernel,
+# and the test that generated the key was satisfied because the loader it tested
+# was not the loader it had just asked for. (BG-133)
 $(BUILD)/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJS:.o=.d)
 
 all-arches:
 	$(MAKE) ARCH=x86_64
