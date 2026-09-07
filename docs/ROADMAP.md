@@ -1992,11 +1992,13 @@ opens the page about whatever window is in front, for every application. What
 is still missing is a way to search the help without opening it first -- from
 the Start menu's own search box, say, which searches programs and stops there.
 
-**A graph cannot be written down.** Three curves, a plane that can be dragged,
-a wheel that zooms about the pointer, and expressions that survive closing the
-window -- all as of v0.4.0. What is missing is saving the picture: there is no
-way to put a graph in a file or on a page, which is what somebody wants it for
-once they have got it right.
+**The grapher plots y against x and nothing else.** Three curves, a plane that
+can be dragged, a wheel that zooms about the pointer, expressions that survive
+closing the window, and Save writes the plane into Pictures -- all as of
+v0.4.0. What is missing is other shapes of question: a parametric curve, a
+polar one, a plot of data from a file rather than of an expression. Each is a
+different thing to type in rather than a different way to draw, so each wants
+its own mode.
 
 **A package cannot be signed, depended on, or upgraded.** As of v0.4.0 it can
 ship files and settings as well as code, and can be nothing but files -- so a

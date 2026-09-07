@@ -608,6 +608,23 @@ struct recon_panel {
     size_t hit_count;
 };
 
+bool recon_panel_read(struct recon_panel *panel, int x, int y, int w, int h,
+        uint32_t *out) {
+    if (panel == NULL || out == NULL || w <= 0 || h <= 0) {
+        return false;
+    }
+    if (x < 0 || y < 0 || x + w > panel->width || y + h > panel->height) {
+        return false;
+    }
+
+    for (int row = 0; row < h; row++) {
+        memcpy(out + (size_t)row * w,
+            panel->pixels + (size_t)(y + row) * panel->width + x,
+            (size_t)w * sizeof(uint32_t));
+    }
+    return true;
+}
+
 /* A wlr_buffer over the panel's pixels, handed to the scene graph. */
 /*
  * A committed buffer owns its pixels outright rather than pointing back at the

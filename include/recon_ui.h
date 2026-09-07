@@ -201,6 +201,25 @@ int recon_font_line_height(struct recon_font *font);
  */
 struct recon_panel;
 
+/*
+ * Read a rectangle of a panel's pixels, as ARGB8888.
+ *
+ * For saving part of what is on screen -- a graph, a picture somebody drew --
+ * without going through screen capture, which would take the whole screen and
+ * everything sitting on top of it.
+ *
+ * Copies into `out`, which must hold w * h pixels. False when the rectangle
+ * runs outside the panel, rather than clamping: a caller asking for something
+ * that is not there has a bug, and a smaller picture than it asked for is a
+ * bug that looks like a feature.
+ *
+ * The panel's pixels are what was last drawn into it, so this is only
+ * meaningful straight after a draw -- which is when anybody wants it.
+ */
+bool recon_panel_read(struct recon_panel *panel, int x, int y, int w, int h,
+    uint32_t *out);
+
+
 struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
     int width, int height);
 void recon_panel_destroy(struct recon_panel *panel);

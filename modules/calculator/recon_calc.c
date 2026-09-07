@@ -17,7 +17,10 @@
 #include "recon_calc_modes.h"
 #include "recon_clock.h"
 #include "recon_module.h"
+#include "recon_fs.h"
+#include "recon_png.h"
 #include "recon_registry.h"
+#include "recon_users.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 
@@ -301,6 +304,30 @@ struct recon_calc {
     /* The middle of the plane, in content coordinates, so motion can turn a
      * pixel into a value without re-deriving the layout. */
     int plane_mid_x, plane_mid_y;
+
+    /*
+     * The plane's rectangle, in the window's own coordinates.
+     *
+     * Recorded while drawing, because that is the only place it is worked out
+     * and Save has to copy exactly those pixels. Deriving it a second time
+     * would be a second copy of the layout arithmetic, and two copies of one
+     * rule is how a saved picture comes to have somebody else's buttons along
+     * the top of it.
+     */
+    int plane_x, plane_y, plane_w, plane_h;
+
+    /* What the last Save did, said under the buttons. */
+    char note[160];
+
+    /*
+     * A Save asked for and not yet done.
+     *
+     * Done during the next draw rather than at the click, because saving means
+     * reading the panel's pixels and a click does not have the panel. It also
+     * means the picture is of the frame the person was looking at when they
+     * pressed the button, which is what they meant.
+     */
+    bool want_save;
 
     /*
      * The window, kept so that panning can ask for a redraw.
@@ -717,6 +744,7 @@ static void equals(struct recon_calc *calc) {
 #define HIT_GRAPH_IN (RECON_APPWIN_HIT_USER + 902)
 #define HIT_GRAPH_OUT (RECON_APPWIN_HIT_USER + 903)
 #define HIT_GRAPH_HOME (RECON_APPWIN_HIT_USER + 904)
+#define HIT_GRAPH_SAVE (RECON_APPWIN_HIT_USER + 906)
 /* The plane itself, which is dragged to move about in it. */
 #define HIT_GRAPH_PLANE (RECON_APPWIN_HIT_USER + 905)
 /* One per curve. */
@@ -1065,6 +1093,87 @@ static void draw_convert_mode(struct recon_calc *calc,
 /* How much of the plane is on screen at the start, either side of zero. */
 
 /*
+ * Write the plane out as a picture.
+ *
+ * The pixels the window last drew, cropped to the plane, rather than a second
+ * drawing of the same thing into a buffer. A second drawing is a second copy
+ * of every rule about where a curve goes, and the two would drift -- the saved
+ * picture would stop being a picture of what was on screen, which is the one
+ * thing it has to be.
+ *
+ * Into Pictures, under a name that says what it is and when, because a grapher
+ * that saved over graph.png would lose the one somebody kept.
+ */
+static void save_graph(struct recon_calc *calc, struct recon_panel *panel) {
+    if (calc->plane_w <= 0 || calc->plane_h <= 0) {
+        snprintf(calc->note, sizeof(calc->note),
+            "There is nothing drawn to save yet.");
+        return;
+    }
+
+    size_t count = (size_t)calc->plane_w * (size_t)calc->plane_h;
+    uint32_t *pixels = malloc(count * sizeof(*pixels));
+    if (pixels == NULL) {
+        snprintf(calc->note, sizeof(calc->note),
+            "There was not enough memory to save it.");
+        return;
+    }
+
+    if (!recon_panel_read(panel, calc->plane_x, calc->plane_y,
+            calc->plane_w, calc->plane_h, pixels)) {
+        free(pixels);
+        snprintf(calc->note, sizeof(calc->note),
+            "The graph could not be read off the screen.");
+        return;
+    }
+
+    struct recon_clock_time now;
+    recon_clock_now(&now);
+
+    char name[128];
+    snprintf(name, sizeof(name), "Graph %04d-%02d-%02d %02d%02d%02d.png",
+        now.year, now.month, now.day, now.hour, now.minute, now.second);
+
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), "/Users", name)) {
+        free(pixels);
+        snprintf(calc->note, sizeof(calc->note), "That path is too long.");
+        return;
+    }
+
+    /* The signed-in person's own Pictures folder, which is where every other
+     * picture this system writes goes. */
+    const char *user = recon_users_current();
+    char folder[RECON_PATH_MAX];
+    if (user == NULL ||
+            snprintf(folder, sizeof(folder), "/Users/%s/Pictures", user) >=
+                (int)sizeof(folder) ||
+            !recon_fs_join(path, sizeof(path), folder, name)) {
+        free(pixels);
+        snprintf(calc->note, sizeof(calc->note),
+            "There is nowhere to save it to.");
+        return;
+    }
+
+    /*
+     * Opaque. The plane is drawn on the readout's colour and has no
+     * transparency in it, and a PNG with an alpha channel full of 255 is a
+     * third larger for nothing.
+     */
+    bool ok = recon_png_write(path, pixels, calc->plane_w, calc->plane_h,
+        false);
+    free(pixels);
+
+    if (ok) {
+        snprintf(calc->note, sizeof(calc->note), "Saved as %s in Pictures.",
+            name);
+    } else {
+        snprintf(calc->note, sizeof(calc->note), "%s",
+            recon_png_last_error());
+    }
+}
+
+/*
  * The colour of each curve.
  *
  * The first is the skin's own readout accent, which every skin already defines
@@ -1131,6 +1240,7 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         { "Zoom in", HIT_GRAPH_IN },
         { "Zoom out", HIT_GRAPH_OUT },
         { "Reset", HIT_GRAPH_HOME },
+        { "Save", HIT_GRAPH_SAVE },
     };
     for (size_t i = 0; i < sizeof(BUTTONS) / sizeof(BUTTONS[0]); i++) {
         int bw = recon_text_width(calc->font, BUTTONS[i].label) + 16;
@@ -1145,8 +1255,11 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     char range[64];
     snprintf(range, sizeof(range), "x %+.2f to %+.2f",
         calc->centre_x - calc->span_x, calc->centre_x + calc->span_x);
+    /* What Save did, if it has done anything, in place of the range -- the
+     * range is always true and the note is news. */
+    const char *under = calc->note[0] != '\0' ? calc->note : range;
     recon_draw_text(panel, calc->font, bx + 6, y + ascent + 3, w - (bx - x),
-        range, COLOR_KEY_TEXT);
+        under, COLOR_KEY_TEXT);
     y += line + 12;
 
     int h = bottom - y;
@@ -1186,6 +1299,10 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     calc->per_unit = per_unit_x;
     calc->plane_mid_x = mid_x;
     calc->plane_mid_y = mid_y;
+    calc->plane_x = x;
+    calc->plane_y = y;
+    calc->plane_w = w;
+    calc->plane_h = h;
 
     /*
      * The plane takes drags, and is registered before the curves are drawn
@@ -1376,6 +1493,21 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
             curve_color(complaining));
         recon_draw_text(panel, calc->font, x + 24,
             y + h - 10 - ascent / 2, w - 32, why, COLOR_WARNING);
+    }
+
+    /*
+     * A Save, at the very end, once the plane holds everything it is going to.
+     *
+     * The note it leaves is drawn on the *next* frame -- this one has already
+     * drawn where the note goes. That is a frame of delay on a message about a
+     * file that has just been written, which nobody will see as a delay, and
+     * it is the price of the picture being of what was on screen rather than
+     * of a redraw arranged for the camera.
+     */
+    if (calc->want_save) {
+        calc->want_save = false;
+        save_graph(calc, panel);
+        recon_appwin_refresh(calc->win);
     }
 }
 
@@ -1753,6 +1885,12 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         calc->span_x *= 2.0;
         calc->span_y *= 2.0;
         return true;
+    case HIT_GRAPH_SAVE:
+        /* Handled in the draw, where there is a panel to read from. A click
+         * has no panel of its own, and reading the one from the last frame
+         * would save the graph as it was before whatever this click changed. */
+        calc->want_save = true;
+        return true;
     case HIT_GRAPH_HOME:
         /* Back to where it started, which is the span AND the place -- a
          * Reset that left the view somewhere in the third quadrant would be
@@ -1845,6 +1983,8 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case RECON_EDIT_COMMIT:
         case RECON_EDIT_CANCEL:
             remember_graph(calc);
+            /* The note is about a picture of the old expression. */
+            calc->note[0] = '\0';
             return true;
         case RECON_EDIT_IGNORED:
             return false;

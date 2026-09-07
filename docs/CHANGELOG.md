@@ -23,6 +23,23 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A graph can be saved as a picture.** A Save button writes the plane into
+Pictures as a PNG, named for the moment it was taken -- a grapher that saved
+over `graph.png` would lose the one somebody kept.
+
+The pixels are the ones the window last drew, cropped to the plane, rather than
+a second drawing of the same thing into a buffer. A second drawing is a second
+copy of every rule about where a curve goes, and the two would drift: the saved
+picture would stop being a picture of what was on screen, which is the one
+thing it has to be. `recon_panel_read` is new and does exactly that -- a
+rectangle of a panel, refusing rather than clamping when the rectangle is not
+inside it, because a smaller picture than was asked for is a bug that looks
+like a feature.
+
+The save happens at the end of a draw rather than at the click, because a click
+has no panel to read from -- and because it makes the picture one of the frame
+the person was looking at when they pressed the button.
+
 **A sweep for the whole class: every fixed ceiling, and what it does when it
 is reached.** Three of them were dropping data and saying nothing, which is the
 same failure three times in three subsystems:
