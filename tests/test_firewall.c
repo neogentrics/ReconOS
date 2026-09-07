@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "recon_error.h"
 #include "recon_firewall.h"
 #include "recon_fs.h"
 
@@ -303,6 +304,170 @@ static void test_what_ships_cannot_be_deleted(void) {
     check(recon_firewall_set_rule_on(built_in, true), "and back on");
 }
 
+/* Put a rules file in place and read it, the way a start does. */
+static bool load_file(const char *text) {
+    if (!recon_fs_write("/", RECON_FIREWALL_FILE, text, strlen(text))) {
+        return false;
+    }
+    return recon_firewall_init();
+}
+
+static void test_reading_a_file(void) {
+    printf("Reading the rules back off the disk\n");
+
+    /*
+     * Nothing had ever read this file in a test. scripts/coverage.sh named the
+     * functions: parse_rule, action_from, protocol_from, add_rule, all at zero.
+     * It is the one part of a firewall somebody edits by hand, which makes it
+     * the one part most likely to arrive damaged.
+     */
+    check(load_file(
+        "# a firewall\n"
+        "on = yes\n"
+        "default in = block\n"
+        "default out = allow\n"
+        "rule = on|out|tcp|4000|*|block|Written down\n"),
+        "a file is read");
+
+    check(recon_firewall_is_on(), "the switch comes back on");
+    check(recon_firewall_default(RECON_FW_IN) == RECON_FW_BLOCK &&
+        recon_firewall_default(RECON_FW_OUT) == RECON_FW_ALLOW,
+        "and both defaults");
+
+    bool found = false;
+    for (int i = 0; i < recon_firewall_count(); i++) {
+        struct recon_fw_rule rule;
+        if (recon_firewall_at(i, &rule) &&
+                strcmp(rule.name, "Written down") == 0) {
+            found = rule.port_from == 4000 && rule.port_to == 4000 &&
+                rule.action == RECON_FW_BLOCK &&
+                rule.direction == RECON_FW_OUT && rule.enabled &&
+                rule.program[0] == '\0';
+        }
+    }
+    check(found, "and the rule, with every field it was written with");
+    check(!recon_firewall_allows(RECON_FW_OUT, RECON_FW_TCP, 4000, NULL,
+        NULL, 0), "AND IT IS IN FORCE, which is the point of reading it");
+}
+
+static void test_a_file_that_is_damaged(void) {
+    printf("A rules file that is damaged\n");
+
+    /*
+     * The question this is really asking: which way does it fail?
+     *
+     * recon_firewall_init says a firewall that fails open because its file is
+     * missing is worse than no firewall. Missing is handled -- the defaults
+     * are in memory before the file is opened. Damaged is a different case and
+     * had nothing saying what it does.
+     */
+    check(load_file(
+        "on = yes\n"
+        "rule = on|out|tcp|4100|*|block|Good\n"
+        "rule = this line is not a rule\n"
+        "rule = on|out|tcp\n"
+        "nonsense without an equals sign\n"
+        "rule = on|out|tcp|4101|*|block|Also good\n"),
+        "a file with three broken lines in it is read");
+
+    check(!recon_firewall_allows(RECON_FW_OUT, RECON_FW_TCP, 4100, NULL,
+        NULL, 0), "the rule before them still works");
+    check(!recon_firewall_allows(RECON_FW_OUT, RECON_FW_TCP, 4101, NULL,
+        NULL, 0),
+        "AND SO DOES THE ONE AFTER -- a line that will not parse is skipped, "
+        "not a reason to stop reading");
+
+    /*
+     * And the switch.
+     *
+     * This is the line that decides whether there is a firewall at all, and
+     * `on` is read as "yes or on means yes, anything else means no". A byte
+     * damaged anywhere in that value therefore turns the firewall OFF, which
+     * is the exact failure the module's own header says is worse than having
+     * none. Written down here as what the system does rather than what it
+     * ought to; if it should refuse instead, this test is where that argument
+     * gets settled.
+     */
+    check(load_file("on = yqs\n"), "a file whose switch is damaged is read");
+    printf("        the switch came back %s\n",
+        recon_firewall_is_on() ? "ON" : "OFF");
+    check(recon_firewall_is_on(),
+        "AND THE FIREWALL IS STILL ON -- a damaged switch must not be read "
+        "as somebody having turned it off");
+
+    /*
+     * And the other half, which the fix could have broken and would not have
+     * been noticed: refusing to read damage must not mean refusing to read a
+     * decision. A switch nobody can turn off is not a switch.
+     */
+    check(load_file("on = no\n"), "a file that plainly says off is read");
+    check(!recon_firewall_is_on(), "and the firewall is off");
+    check(load_file("on = OFF\n"), "in any case, and by either word");
+    check(!recon_firewall_is_on(), "still off");
+    check(load_file("on = yes\n") && recon_firewall_is_on(), "and back on");
+
+    /*
+     * The two defaults had the same shape of fault and the more dangerous
+     * direction: an unreadable `default out` became allow.
+     */
+    check(load_file("on = yes\ndefault out = bloc\n"),
+        "a file whose outgoing default is damaged is read");
+    check(recon_firewall_default(RECON_FW_OUT) == RECON_FW_ALLOW,
+        "it keeps what was already there rather than taking a guess");
+    check(load_file("on = yes\ndefault out = block\n") &&
+        recon_firewall_default(RECON_FW_OUT) == RECON_FW_BLOCK,
+        "and a word it does understand still decides");
+
+    /*
+     * And it says so, rather than only doing the safe thing quietly.
+     *
+     * A setting that was ignored is what VT-H003 is for, and it had no site
+     * in the whole system until this. Checked here because the raise is a
+     * line nothing else exercises: without this it could be deleted and every
+     * check above would still pass.
+     */
+    size_t size = 0;
+    char *log = recon_fs_read("/", RECON_ERROR_LOG, &size);
+    check(log != NULL, "the error log exists");
+    if (log != NULL) {
+        check(strstr(log, "H003") != NULL,
+            "AND VT-H003 IS IN IT -- the safe answer is also an announced one");
+        free(log);
+    }
+}
+
+static void test_what_is_written_comes_back(void) {
+    printf("A round trip\n");
+
+    check(load_file("on = yes\n"), "start from a file with no rules");
+    check(recon_firewall_count() == 0,
+        "a file with no rules means no rules, not the defaults");
+
+    struct recon_fw_rule rule = rule_for("Round trip", RECON_FW_IN,
+        5000, 5010, "Mail", RECON_FW_ALLOW);
+    check(recon_firewall_add(&rule), "a rule is added");
+
+    /* Added rules are written as they are added, so starting again reads
+     * them back without anything here saving deliberately. */
+    check(recon_firewall_init(), "and the firewall is started again");
+
+    struct recon_fw_rule back;
+    bool same = false;
+    for (int i = 0; i < recon_firewall_count(); i++) {
+        if (recon_firewall_at(i, &back) &&
+                strcmp(back.name, "Round trip") == 0) {
+            same = back.direction == RECON_FW_IN &&
+                back.port_from == 5000 && back.port_to == 5010 &&
+                strcmp(back.program, "Mail") == 0 &&
+                back.action == RECON_FW_ALLOW && back.enabled;
+        }
+    }
+    check(same,
+        "AND COMES BACK WITH EVERY FIELD, including the range and the "
+        "program -- a field lost in writing is a rule that means something "
+        "else after a restart");
+}
+
 static void test_the_names(void) {
     printf("Saying what a rule is, in words\n");
 
@@ -349,6 +514,9 @@ int main(void) {
     test_the_default();
     test_turning_it_off();
     test_what_ships_cannot_be_deleted();
+    test_reading_a_file();
+    test_a_file_that_is_damaged();
+    test_what_is_written_comes_back();
     test_the_names();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

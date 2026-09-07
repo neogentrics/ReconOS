@@ -2464,3 +2464,37 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Fixed in** v0.4.0. The right-hand branch leaves the same `inset` the
   left-hand one does. The test asserts the two sides give the title the same
   room, which is the property rather than the arithmetic.
+
+### BG-131 — One damaged byte in the rules file turned the firewall off
+
+- **Found in** v0.4.0. **Found by** writing the first test that reads the rules
+  file, which `scripts/coverage.sh --zero` had just named: `parse_rule`,
+  `action_from`, `protocol_from` and `add_rule`, all at zero. The rules file is
+  the one part of a firewall somebody edits by hand, which makes it the part
+  most likely to arrive damaged.
+- **What it was** The switch was read as
+  `g_on = (value is "yes" or value is "on")`. Everything else is therefore
+  **no**. A single byte damaged anywhere in that value -- `on = yqs` -- turned
+  the firewall off, with nothing said and nothing to see: the Control Panel
+  shows the switch as off, which looks exactly like somebody having turned it
+  off.
+- **The same shape, twice more, in the more dangerous direction.**
+  `default in` fell back to block, which is safe. `default out` fell back to
+  **allow**. So damage to this file did not make the firewall complain, it made
+  it weaker, quietly, in the direction nobody would choose.
+- **It contradicts the module's own note.** `recon_firewall_init` says, at the
+  top: "A firewall that fails open because its file is missing is worse than no
+  firewall, because it looks like one." Missing was handled -- the defaults are
+  in memory before the file is opened. Damaged was not, and damaged is the case
+  the sentence describes.
+- **Measured, not reasoned about.** The test wrote `on = yqs` and printed the
+  switch it got back: OFF. That line is still in the test, printing what it
+  reads, so the next person to change this sees the answer rather than the
+  assertion.
+- **Fixed in** v0.4.0. A value that is neither yes nor no leaves the setting
+  alone -- at whatever the built-in defaults put there a moment earlier, which
+  is a working set by construction -- and **VT-H003 is raised**, which is what
+  that code is for and which had no site anywhere in the system until this.
+- **And the other half is checked too**, because the fix could have broken it
+  without anybody noticing: an explicit `on = no` still turns the firewall off.
+  A switch nobody can turn off is not a switch.

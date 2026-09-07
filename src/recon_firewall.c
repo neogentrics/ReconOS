@@ -114,15 +114,57 @@ const char *recon_fw_port_name(int port) {
  * and because a format nobody can read is a format nobody can check.
  */
 
-static enum recon_fw_action action_from(const char *word,
-        enum recon_fw_action fallback) {
+/*
+ * A word this file understands, or a refusal to guess.
+ *
+ * `known` comes back false for anything that is neither, and every caller in
+ * the loader now keeps what it already had rather than taking the fallback.
+ * The fallback stays for the rule parser, where a damaged word in one rule
+ * means one rule is wrong rather than the whole firewall.
+ */
+static enum recon_fw_action action_from_checked(const char *word,
+        enum recon_fw_action fallback, bool *known) {
     if (strcasecmp(word, "allow") == 0) {
+        if (known != NULL) { *known = true; }
         return RECON_FW_ALLOW;
     }
     if (strcasecmp(word, "block") == 0) {
+        if (known != NULL) { *known = true; }
         return RECON_FW_BLOCK;
     }
+    if (known != NULL) { *known = false; }
     return fallback;
+}
+
+static enum recon_fw_action action_from(const char *word,
+        enum recon_fw_action fallback) {
+    return action_from_checked(word, fallback, NULL);
+}
+
+/*
+ * Is this word yes, no, or neither?
+ *
+ * Three answers, and the third is the whole reason this exists. It was
+ * `g_on = (value is "yes" or "on")`, which reads everything else as no -- so a
+ * single damaged byte anywhere in that value turned the firewall **off**,
+ * silently, which is precisely the failure recon_firewall_init's own note
+ * calls worse than having no firewall at all.
+ *
+ * Measured, not reasoned about: a test wrote `on = yqs` and read the switch
+ * back off.
+ */
+static bool yes_or_no(const char *word, bool *value) {
+    if (strcasecmp(word, "yes") == 0 || strcasecmp(word, "on") == 0 ||
+            strcasecmp(word, "true") == 0 || strcmp(word, "1") == 0) {
+        *value = true;
+        return true;
+    }
+    if (strcasecmp(word, "no") == 0 || strcasecmp(word, "off") == 0 ||
+            strcasecmp(word, "false") == 0 || strcmp(word, "0") == 0) {
+        *value = false;
+        return true;
+    }
+    return false;
 }
 
 static enum recon_fw_protocol protocol_from(const char *word) {
@@ -418,13 +460,45 @@ bool recon_firewall_init(void) {
         char *key = trim(at);
         char *value = trim(equals + 1);
 
+        /*
+         * A value this does not understand leaves the setting alone.
+         *
+         * Every one of these three had a fallback, and every fallback was the
+         * more permissive of the two: an unreadable switch meant off, and an
+         * unreadable `default out` meant allow. So damage to this file did not
+         * make the firewall complain, it made it weaker -- quietly, in exactly
+         * the direction nobody would choose.
+         *
+         * What is kept instead is what write_defaults put there a moment ago,
+         * which is a working set by construction. And VT-H003 is raised, which
+         * is what that code is for and had no site until now: a setting was
+         * ignored, and the person is told which line.
+         */
         if (strcasecmp(key, "on") == 0) {
-            g_on = (strcasecmp(value, "yes") == 0 ||
-                    strcasecmp(value, "on") == 0);
-        } else if (strcasecmp(key, "default in") == 0) {
-            g_defaults[RECON_FW_IN] = action_from(value, RECON_FW_BLOCK);
-        } else if (strcasecmp(key, "default out") == 0) {
-            g_defaults[RECON_FW_OUT] = action_from(value, RECON_FW_ALLOW);
+            bool on = false;
+            if (yes_or_no(value, &on)) {
+                g_on = on;
+            } else {
+                recon_error_raisef(NULL, RECON_ERR_H003,
+                    "%s: 'on = %s' is neither yes nor no; the firewall is "
+                    "left on", RECON_FIREWALL_FILE, value);
+            }
+        } else if (strcasecmp(key, "default in") == 0 ||
+                strcasecmp(key, "default out") == 0) {
+            enum recon_fw_direction which =
+                (strcasecmp(key, "default in") == 0)
+                    ? RECON_FW_IN : RECON_FW_OUT;
+            bool known = false;
+            enum recon_fw_action action = action_from_checked(value,
+                g_defaults[which], &known);
+            if (known) {
+                g_defaults[which] = action;
+            } else {
+                recon_error_raisef(NULL, RECON_ERR_H003,
+                    "%s: '%s = %s' is neither allow nor block; it is left as "
+                    "%s", RECON_FIREWALL_FILE, key, value,
+                    recon_fw_action_name(g_defaults[which]));
+            }
         } else if (strcasecmp(key, "rule") == 0) {
             if (g_count >= RECON_FIREWALL_RULES_MAX) {
                 continue;

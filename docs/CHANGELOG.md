@@ -23,6 +23,26 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**One damaged byte in the firewall's rules file turned the firewall off**
+(BG-131). The switch was read as "yes or on means yes, anything else means no",
+so `on = yqs` meant off -- silently, and looking exactly like somebody having
+turned it off. The two defaults had the same fault in the more dangerous
+direction: an unreadable `default out` became **allow**.
+
+Damage to that file did not make the firewall complain. It made it weaker,
+quietly, in the direction nobody would choose -- which is the failure
+`recon_firewall_init`'s own note calls worse than having no firewall at all.
+Missing was handled; damaged was the case the sentence actually describes.
+
+A value that is neither yes nor no now leaves the setting where the built-in
+defaults put it, and **VT-H003 is raised** -- a setting was ignored, which is
+what that code is for and which had no site anywhere until now. An explicit
+`on = no` still works, and there is a check for that too, because the fix could
+have made the switch unusable without anybody noticing.
+
+Found by writing the first test that reads that file, which
+`scripts/coverage.sh --zero` had just named as four functions nothing runs.
+
 **`scripts/coverage.sh`, and the two things it found immediately.** A fourth
 question for the tools: the warnings, the sanitizers and the analyzer look at
 code, and this looks at the *tests* and says which parts of the code they never
