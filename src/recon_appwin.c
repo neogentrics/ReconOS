@@ -12,6 +12,8 @@
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_error.h"
+#include "recon_help.h"
 #include "recon_icons.h"
 #include "recon_server.h"
 #include "recon_registry.h"
@@ -147,6 +149,28 @@ struct recon_appwin {
      */
     bool geometry_restored;
 };
+
+/*
+ * Does the page this window asks F1 for actually exist?
+ *
+ * A NOTE rather than a fault: the window works, F1 works, and it opens the
+ * help at the beginning instead of at the page nobody wrote. What is wrong is
+ * a name, and it cannot be seen from either side -- the name is declared
+ * beside the program and the pages are written in docs/HELP.md, with nothing
+ * making the two agree.
+ *
+ * Once had five of these at the same time. Web and Mail both asked for
+ * "Networking", which has never existed; Photos, the player and the Calendar
+ * each asked for "Writing", which exists and is about Notepad -- worse,
+ * because it looks like an answer.
+ */
+static void check_help_topic(const char *topic) {
+    if (topic == NULL || topic[0] == '\0' || recon_help_topic_exists(topic)) {
+        return;
+    }
+    recon_error_raisef(NULL, RECON_ERR_M002,
+        "a window asks for the help page '%s', which is not one", topic);
+}
 
 static void save_geometry(struct recon_appwin *win);
 static void restore_geometry(struct recon_appwin *win);
@@ -545,6 +569,20 @@ struct recon_appwin *recon_appwin_create(struct recon_server *server,
     win->user = user;
     recon_text_copy(win->help_topic, sizeof(win->help_topic),
         impl->help != NULL ? impl->help : "");
+
+    /*
+     * Checked here, where the declaration first enters the system.
+     *
+     * It used to be checked only when somebody pressed F1, and only for the
+     * window in front -- so a program naming a page that does not exist was
+     * invisible until the one person who needed help happened to be in it.
+     * recon_help.h claimed this ran "at startup", which it never could: the
+     * topic is declared in an impl, and an impl is only reachable once a
+     * window is being made from it.
+     *
+     * This is that moment, and it is the earliest one there is.
+     */
+    check_help_topic(win->help_topic);
 
     win->width = impl->default_width > 0 ? impl->default_width : 400;
     win->height = impl->default_height > 0 ? impl->default_height : 300;
@@ -966,6 +1004,9 @@ void recon_appwin_set_help_topic(struct recon_appwin *win,
     }
     recon_text_copy(win->help_topic, sizeof(win->help_topic),
         topic != NULL ? topic : "");
+    /* An application that changes its topic as it moves between views can get
+     * this wrong the same way, and in a place even harder to reach. */
+    check_help_topic(win->help_topic);
 }
 
 const char *recon_appwin_help_topic(struct recon_appwin *win) {

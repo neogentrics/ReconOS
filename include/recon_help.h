@@ -77,9 +77,17 @@ void recon_help_show_topic(struct recon_appwin *win, const char *title);
  * player and the Calendar each asked for "Writing", which exists and is about
  * Notepad -- which is worse, because it looks like an answer.
  *
- * Checked at startup and complained about in the log, because a wrong topic
- * cannot be seen from either file on its own and shows up as a key that does
- * nothing.
+ * Checked when a window declaring one is made, and reported as VT-M002.
+ *
+ * This said "at startup", which it never could and never did: the topic is
+ * declared in an application's impl, and an impl is only reachable once a
+ * window is being made from it. What actually happened was that the check ran
+ * when somebody pressed F1, for the window in front -- so a program naming a
+ * page that does not exist stayed invisible until the one person who needed
+ * help happened to be in it.
+ *
+ * Window creation is the earliest moment the declaration exists, so that is
+ * where it is checked now.
  */
 bool recon_help_topic_exists(const char *title);
 

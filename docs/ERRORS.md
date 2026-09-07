@@ -155,4 +155,5 @@ happened on that machine.
 | Code | Severity | What it means |
 | --- | --- | --- |
 | **VT-M001** | fault | **The help could not be written out** — The help pages are copied into /System/Help at every start and this one failed. Whatever was there from last time is still there. |
+| **VT-M002** | note | **A program asks for a help page that is not there** — The program names the page F1 should open and no page has that title. F1 opens the help at the beginning instead. The name is declared beside the program and the pages are written in docs/HELP.md; nothing makes the two agree, so this is the only place the disagreement is visible. |
 

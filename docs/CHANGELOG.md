@@ -23,6 +23,25 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A program asking for a help page that is not there says so** (VT-M002, a new
+code). The check existed and ran only when somebody pressed F1, for the window
+in front -- so a program naming a page nobody wrote stayed invisible until the
+one person who needed help happened to be in it.
+
+`recon_help.h` said the check ran "at startup", which it never could and never
+did: the topic is declared in an application's impl, and an impl is only
+reachable once a window is being made from it. That is the earliest moment
+there is, and it is where the check runs now. The header says what happens.
+
+Nothing fires today -- every application's topic exists -- which was checked by
+opening all eleven of them and then by pointing Notepad at a page that does not
+exist and watching VT-M002 arrive. There were once five of these at the same
+time: Web and Mail both asked for "Networking", which has never existed, and
+Photos, the player and the Calendar each asked for "Writing", which exists and
+is about Notepad.
+
+Twenty-eight of the forty-three codes can now happen, up from thirteen.
+
 **The error catalogue is checked by something other than reading it.**
 `recon_error.c` was linked into eight test targets and exercised by none of
 them, which coverage said and reading did not -- and eleven codes had just been

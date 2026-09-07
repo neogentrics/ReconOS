@@ -2105,8 +2105,8 @@ the file. Looking inside is what the codec registry does for media; there is no
 equivalent for "would this program understand this", and there probably cannot
 be one without asking the program.
 
-**Eighteen error codes are raised by nothing.** The catalogue defines
-forty-two and twenty-four of them are reachable, up from thirteen. Some of the
+**Fifteen error codes are raised by nothing.** The catalogue defines
+forty-three and twenty-eight of them are reachable, up from thirteen. Some of the
 rest are reserved on purpose -- a number is never reused, so writing one down
 before the fault exists is the intended way to work -- but a document
 describing a code somebody can look up, for a fault the system cannot report,
