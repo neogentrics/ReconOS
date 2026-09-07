@@ -24,7 +24,6 @@
 
 #define TOPICS_MAX 64
 #define TITLE_MAX 48
-#define LINES_MAX 512
 #define LINE_MAX 200
 /* One paragraph of source, gathered before it is wrapped. Sized by the length
  * of the longest paragraph anybody would write, not by any count of lines. */
@@ -82,8 +81,27 @@ struct topic {
  * and in what surrounds it, not in how prose is broken into lines.
  */
 struct page {
-    char lines[LINES_MAX][LINE_MAX];
+    /*
+     * The wrapped lines, allocated for the page being shown.
+     *
+     * It was `char lines[512][200]` -- a hundred kilobytes per page whether
+     * the page was two lines or a thousand, and a hard stop at 512 with
+     * nothing said when a page was longer. The change log for one version is
+     * already past that, so the bottom two thirds of it could not be read and
+     * nothing on screen suggested there was anything there: it ended, and
+     * "491 more lines below" counted only as far as the cap.
+     *
+     * Found by searching the help for a word that was in the change log and
+     * getting a page scrolled to the top -- the seek worked and the word was
+     * not among the lines that had been kept.
+     *
+     * Grown as it fills rather than counted first. Counting means walking the
+     * text twice with the same wrapping rules, and two implementations of one
+     * rule is how they come to disagree about where a line breaks.
+     */
+    char (*lines)[LINE_MAX];
     int line_count;
+    int line_capacity;
 
     /* What the lines were broken to fit. Re-wrapped when the window changes
      * width, which is also how "not wrapped yet" is said: zero. */
@@ -129,6 +147,16 @@ struct recon_help {
     struct recon_edit search;
     int shown[TOPICS_MAX];
     int shown_count;
+
+    /*
+     * Scroll to the searched-for word on the next draw.
+     *
+     * Set when a page is chosen while something is in the search box, and
+     * cleared once done. It cannot happen at the moment of choosing because
+     * the page is wrapped to a width that is only known while drawing, and
+     * "line 40" means nothing until there are lines.
+     */
+    bool seek;
 
     /*
      * Which pane the pointer is over.
@@ -279,6 +307,27 @@ static void load_index(struct recon_help *help) {
 }
 
 /* Add one wrapped paragraph to the page. */
+/*
+ * Room for one more line. False only when there is no memory, which leaves the
+ * page short -- and short is what this replaced, so it says so rather than
+ * stopping quietly.
+ */
+static bool room_for_a_line(struct page *page) {
+    if (page->line_count < page->line_capacity) {
+        return true;
+    }
+
+    int want = (page->line_capacity > 0) ? page->line_capacity * 2 : 64;
+    char (*grown)[LINE_MAX] = realloc(page->lines,
+        (size_t)want * LINE_MAX);
+    if (grown == NULL) {
+        return false;
+    }
+    page->lines = grown;
+    page->line_capacity = want;
+    return true;
+}
+
 static void wrap_paragraph(struct page *page, struct recon_font *font,
         const char *text, int width, const char *hanging) {
     char current[LINE_MAX];
@@ -289,7 +338,7 @@ static void wrap_paragraph(struct page *page, struct recon_font *font,
         word++;
     }
 
-    while (*word != '\0' && page->line_count < LINES_MAX) {
+    while (*word != '\0') {
         const char *end = strchr(word, ' ');
         size_t length = (end != NULL) ? (size_t)(end - word) : strlen(word);
 
@@ -320,7 +369,13 @@ static void wrap_paragraph(struct page *page, struct recon_font *font,
         if (current[0] != '\0' &&
                 (overflows ||
                  recon_text_width(font, candidate) > width)) {
-            snprintf(page->lines[page->line_count++], LINE_MAX, "%s", current);
+            if (!room_for_a_line(page)) {
+                return;
+            }
+            if (!room_for_a_line(page)) {
+            return;
+        }
+        snprintf(page->lines[page->line_count++], LINE_MAX, "%s", current);
 
             /* A list item indents its continuation, so the bullet marks the
              * start of the item rather than the start of every line of it. */
@@ -342,7 +397,10 @@ static void wrap_paragraph(struct page *page, struct recon_font *font,
         }
     }
 
-    if (current[0] != '\0' && page->line_count < LINES_MAX) {
+    if (current[0] != '\0' && room_for_a_line(page)) {
+        if (!room_for_a_line(page)) {
+            return;
+        }
         snprintf(page->lines[page->line_count++], LINE_MAX, "%s", current);
     }
 }
@@ -390,7 +448,8 @@ static void wrap_text(struct page *page, struct recon_font *font,
     char *line = rest;
     bool done = false;
 
-    while (page->line_count < LINES_MAX) {
+    /* No cap. The page grows to hold what it is given; see struct page. */
+    for (;;) {
         char *newline = NULL;
         if (!done) {
             newline = strchr(rest, '\n');
@@ -464,6 +523,8 @@ static void wrap_text(struct page *page, struct recon_font *font,
 
 /* The chosen topic, read from disk and wrapped. */
 static void wrap_topic(struct recon_help *help, int width) {
+    /* The lines are reused; only the count goes back to nothing, so a page
+     * re-wrapped for a new window width does not buy the memory again. */
     help->page.line_count = 0;
     help->page.wrapped_width = width;
 
@@ -557,11 +618,27 @@ static void refilter(struct recon_help *help) {
      * page has been filtered away is the version that does what both people
      * meant.
      */
+    /*
+     * And find the word inside whatever page ends up showing.
+     *
+     * Before the two returns below, not after, because the search text has
+     * changed on *every* keystroke and so has where the word is. Set only on
+     * the branch that changes the page, it fired once -- on the first letter
+     * typed, which matches almost anywhere -- and then the early return below
+     * skipped it for every letter after. So a search for "STARTTLS" scrolled
+     * to wherever "S" first appeared and stayed there, in a page of five
+     * hundred lines.
+     */
+    help->seek = help->search.text[0] != '\0';
+
     if (help->shown_count == 0) {
         return;
     }
     for (int i = 0; i < help->shown_count; i++) {
         if (help->shown[i] == help->selected) {
+            /* The page stays, but it is re-wrapped so the seek above has
+             * lines to look through on the next draw. */
+            help->page.wrapped_width = 0;
             return;
         }
     }
@@ -599,6 +676,17 @@ static void choose(struct recon_help *help, int index) {
     help->page.scroll = 0;
     /* Re-wrapped on the next draw, which is where the width is known. */
     help->page.wrapped_width = 0;
+
+    /*
+     * And found again inside the page, once it has been wrapped.
+     *
+     * A search that narrows forty topics to one and then shows the top of it
+     * has done half the job: on a long page the word somebody searched for
+     * may be nowhere on the screen, and the answer looks like the search was
+     * wrong. Deferred rather than done here because the lines do not exist
+     * yet -- they are broken to a width nobody knows until the next draw.
+     */
+    help->seek = help->search.text[0] != '\0';
 }
 
 /* --- Drawing --- */
@@ -779,6 +867,24 @@ static void help_draw(void *user, struct recon_panel *panel,
         wrap_topic(help, body_w);
     }
 
+    /*
+     * The first line with the searched-for word on it, put near the top.
+     *
+     * Two lines above it rather than exactly at it, so the sentence it is part
+     * of has somewhere to begin -- a match pinned to the very first row reads
+     * as the middle of something.
+     */
+    if (help->seek && help->search.text[0] != '\0') {
+        help->seek = false;
+        for (int i = 0; i < help->page.line_count; i++) {
+            if (contains_ignoring_case(help->page.lines[i],
+                    help->search.text)) {
+                help->page.scroll = (i > 2) ? i - 2 : 0;
+                break;
+            }
+        }
+    }
+
     int body_y = y + PADDING;
 
     if (help->selected >= 0 && help->selected < help->topic_count) {
@@ -824,6 +930,22 @@ static void help_draw(void *user, struct recon_panel *panel,
          * of your own" to appear on screen.
          */
         const char *line = help->page.lines[index];
+
+        /*
+         * A line carrying the searched-for word, marked.
+         *
+         * The whole line rather than the word itself: drawing a box around
+         * one word means measuring where in the line it starts, which is a
+         * second text measurement that has to agree with the drawing's, and
+         * two measurements of one string is how they end up disagreeing. A
+         * marked line says "it is here" well enough to read from.
+         */
+        if (help->search.text[0] != '\0' &&
+                contains_ignoring_case(line, help->search.text)) {
+            recon_fill_role(panel, body_x - 4, body_y + i * line_height - 1,
+                body_w + 8, line_height, RECON_THEME_FIELD_SELECTION);
+        }
+
         if (line[0] == '#') {
             const char *text = line;
             while (*text == '#') {
@@ -1019,6 +1141,7 @@ static void help_destroy(void *user) {
     for (int i = 0; i < help->topic_count; i++) {
         free(help->topics[i].body);
     }
+    free(help->page.lines);
     free(help);
 }
 
@@ -1434,7 +1557,11 @@ static void notice_describe(void *user, char *out, size_t size) {
 }
 
 static void notice_destroy(void *user) {
-    free(user);
+    struct recon_notice *notice = user;
+    /* Its page is allocated the same way the help's is, and has to go the
+     * same way. Two windows share the struct; both have to free it. */
+    free(notice->page.lines);
+    free(notice);
 }
 
 static const struct recon_appwin_impl NOTICE_IMPL = {

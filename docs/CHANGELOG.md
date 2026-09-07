@@ -23,6 +23,29 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The help search finds the word inside the page, not only the page.** Typing
+narrows the topic list, and the page that opens is scrolled to where the word
+actually is, with every line carrying it marked. A search that filters forty
+topics to one and then shows the top of it has done half the job: on a long
+page the word may be nowhere on screen, and the answer looks like the search
+was wrong.
+
+That found **BG-123**, which is worse than the feature is good. A page held
+`char lines[512][200]` and every loop filling it stopped at 512. **One version's
+change log is about 73 KB**, which wraps to well over a thousand lines — so the
+bottom two thirds of it could not be reached by scrolling, the "N more lines
+below" note counted only as far as the cap, and nothing said so. Anybody who has
+opened the change log has been reading a third of it.
+
+It also cost a hundred kilobytes per page whichever page it was, twice over, for
+a two-line topic and the whole change log alike. The lines are allocated and
+grown as they fill now: no cap, and a short page costs what a short page costs.
+
+Nobody scrolls to the bottom of a change log to check it ends where it should —
+the failure looks exactly like the document being that long. It took a feature
+that *jumps* to a place, and then did not, for the missing part to become
+visible.
+
 **Three startup failures report the code that was written for them.** The error
 catalogue defines forty-two codes and, counted for the first time, thirty-two
 of them were raised by nothing. Some of that is deliberate -- a code is never

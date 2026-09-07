@@ -2258,3 +2258,28 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   them. A window with two fields needed the second half, which is somebody
   telling the fields which one it is, and there was no way to find those except
   by looking at each form.
+
+### BG-123 — The change log was cut off at 512 lines and did not say so
+
+- **Found in** v0.4.0. **Found by** searching the help for "STARTTLS", getting
+  the change log as the only result, and landing on the top of it. The search
+  was working; the word was not among the lines the page had kept.
+- **What it was** `struct page` held `char lines[512][200]` and every loop that
+  filled it stopped at 512. A page longer than that ended there, and the "N more
+  lines below" note counted only as far as the cap — so the bottom two thirds of
+  one version's change log could not be reached by scrolling, and nothing on
+  screen suggested there was anything to reach.
+- **v0.4.0's own entry is about 73 KB**, which wraps to well over a thousand
+  lines. Anybody opening the change log has been reading a third of it.
+- **A hundred kilobytes per page, whichever page it was.** A two-line topic and
+  the whole change log cost the same, because the array was sized for the worst
+  case and there were two of them — the help window and the What's New notice.
+- **Fixed in** v0.4.0. The lines are allocated and grown as they fill, so there
+  is no cap and a short page costs what a short page costs. Grown rather than
+  counted first, because counting means walking the text twice with the same
+  wrapping rules, and two implementations of one rule is how they come to
+  disagree about where a line breaks.
+- **Why it took a search feature to find it.** Nobody scrolls to the bottom of a
+  change log to check it ends where it should; the failure looks exactly like
+  the document being that long. It took a feature that *jumps* to a place, and
+  then does not, for the missing part to become visible.
