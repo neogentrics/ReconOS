@@ -23,6 +23,35 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A file that writes 3,14 is no longer read as the point (3, 14).** The
+grapher's data mode used `strtod`, whose decimal point is a dot, always. Handed
+a file written where the convention is a comma that is not a refusal and not a
+mangled number -- it is a *different number*: `3,14 2,71` reads as x = 3, the
+comma is skipped as a separator, y = 14. Two valid numbers, no bad line
+counted, a point five hundred times too high.
+
+Every other way that reader can fail announces itself. This one produced a
+wrong picture indistinguishable from a right one, which is the failure the
+whole mode was designed against.
+
+The fix asks the file rather than the machine, which is the part worth keeping.
+A machine's language setting says how the person at the keyboard writes
+numbers; the file was written by somebody else. A row votes for the comma only
+if it is two whitespace-separated tokens each holding one comma and no dot;
+any row with a dot, or using a comma to separate, votes against; and the comma
+wins only if it has votes and nothing contradicts it. Mixed files are read the
+ordinary way rather than guessed at, plain integers vote for neither, and when
+the comma does win the plot says so underneath rather than leaving the
+interpretation invisible.
+
+**And the reader moved out of the Calculator to be testable.**
+`src/recon_data.c`, for the same reason `recon_expr` is not in there: it
+touches no screen and can be asked questions with known answers. The suite is
+the twenty-fourth, and its first check names the wrong answer out loud -- with
+the sniff deleted on purpose it reports "first point came back as (3, 14); it
+should be (3.14, 2.71)" rather than a bare mismatch. A passing test that has
+never been seen to fail is not a test yet.
+
 **Every day from 1970 to 2100, turned into a number and back again.** 47,847
 of them, which takes no measurable time. The eight dates the clock suite
 already checked are well chosen -- 2000 is a leap year, 2100 is not, and both

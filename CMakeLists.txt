@@ -118,6 +118,7 @@ add_executable(ReconOS
     src/recon_png.c
     src/recon_image.c
     src/recon_expr.c
+    src/recon_data.c
     src/recon_themewl.c
     src/recon_fonts.c
     src/recon_wallpaper.c
@@ -478,6 +479,21 @@ target_include_directories(recon_expr_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(recon_expr_tests PRIVATE m)
+
+# Reading two columns of numbers out of a file. Worth a suite of its own for
+# one reason: every way this can fail announces itself except one. A file
+# written with decimal commas is not refused and not mangled by a dot-only
+# reader -- it comes back as different numbers, with no bad lines counted. The
+# suite names that wrong answer explicitly, so removing the check fails loudly
+# rather than quietly plotting the wrong picture.
+add_executable(recon_data_tests
+    tests/test_data.c
+    src/recon_data.c)
+
+target_include_directories(recon_data_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_data_tests PRIVATE m)
 
 # Comparing versions with strcmp is right for nine releases and wrong on the
 # tenth, in the direction that makes an update system refuse the update.

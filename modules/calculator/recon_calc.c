@@ -13,6 +13,7 @@
 #include "recon_appwin.h"
 #include "recon_icons.h"
 #include "recon_calc.h"
+#include "recon_data.h"
 #include "recon_expr.h"
 #include "recon_calc_modes.h"
 #include "recon_clock.h"
@@ -378,6 +379,10 @@ struct recon_calc {
         int bad;
         int over;
         bool read_failed;
+        /* Which character the file wrote its decimal points with. Recorded
+         * rather than assumed, and said out loud, because reading a file the
+         * other way round is silently wrong rather than visibly wrong. */
+        bool comma_decimal;
     } data[GRAPH_CURVES];
 
     double span_x, span_y;
@@ -1410,6 +1415,7 @@ static bool load_data(struct data_set *set, const char *path) {
     set->bad = 0;
     set->over = 0;
     set->read_failed = false;
+    set->comma_decimal = false;
 
     if (path[0] == '\0') {
         return true;
@@ -1422,46 +1428,13 @@ static bool load_data(struct data_set *set, const char *path) {
         return true;
     }
 
-    char *save = NULL;
-    for (char *line = strtok_r(text, "\n", &save);
-            line != NULL;
-            line = strtok_r(NULL, "\n", &save)) {
+    struct recon_data_read got =
+        recon_data_parse(text, set->x, set->y, DATA_POINTS_MAX);
 
-        while (*line == ' ' || *line == '\t' || *line == '\r') {
-            line++;
-        }
-        if (*line == '\0' || *line == '#') {
-            continue;
-        }
-
-        /* A comma is a separator, not a decimal point: this reads numbers the
-         * way strtod does, and strtod's decimal point is a dot. Saying so
-         * matters on a machine set to a language that writes them the other
-         * way round, and this does not pretend to handle that. */
-        char *end = NULL;
-        double x = strtod(line, &end);
-        if (end == line) {
-            set->bad++;
-            continue;
-        }
-        while (*end == ' ' || *end == '\t' || *end == ',') {
-            end++;
-        }
-        char *second = end;
-        double y = strtod(second, &end);
-        if (end == second) {
-            set->bad++;
-            continue;
-        }
-
-        if (set->count >= DATA_POINTS_MAX) {
-            set->over++;
-            continue;
-        }
-        set->x[set->count] = x;
-        set->y[set->count] = y;
-        set->count++;
-    }
+    set->count = got.count;
+    set->bad = got.bad;
+    set->over = got.over;
+    set->comma_decimal = got.comma_decimal;
 
     free(text);
     return true;
@@ -2186,6 +2159,13 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
                 snprintf(said, sizeof(said),
                     "%d points, which is all there is room for. %d more are "
                     "in the file.", set->count, set->over);
+            } else if (set->comma_decimal && set->count > 0) {
+                /* Every line went in, but not the way `strtod` would have
+                 * read them. An interpretation nobody can see is a guess,
+                 * however well founded. */
+                snprintf(said, sizeof(said),
+                    "%d points, read with a comma as the decimal point.",
+                    set->count);
             } else if (set->count > 0) {
                 continue;   /* Nothing to say: every line went in. */
             } else {

@@ -2067,10 +2067,32 @@ What is still missing:
 * **A file picker for the data mode.** The path is typed, like everything else
   in the grapher's fields. `recon_filedlg` exists and Mail uses it; putting it
   here means a button beside three fields that are already tight.
-* **A decimal comma.** The separator between two numbers may be a comma, so
-  the decimal point may not be. That is stated in the reader rather than
-  handled, and handling it means knowing what language the machine is set to,
-  which nothing here does yet.
+
+**The decimal comma is done, and the way round matters.** The bullet that used
+to be here said handling it meant knowing what language the machine is set to.
+That was the wrong question. The machine's language says how *this* person
+writes numbers; the file was written by somebody else, possibly on another
+machine, and it is the file that has to be read. So the file is asked.
+
+A row votes for the comma only if it is two whitespace-separated tokens each
+holding exactly one comma and no dot. Any row with a dot, or using a comma to
+separate, votes against, and **the comma wins only if it has votes and nothing
+contradicts it** -- so a mixed file is read the ordinary way rather than
+guessed at. Rows of plain integers vote for neither, because "3 4" means the
+same thing either way and should not tip the answer.
+
+This mattered more than the other two gaps together. Every other failure in
+that reader announces itself -- a line that is not two numbers is counted and
+shown. This one does not: handed `3,14 2,71`, a dot-only reader returns two
+perfectly valid numbers, 3 and 14, counts no bad lines, and plots a point five
+hundred times too high. **A wrong picture indistinguishable from a right one**,
+which is the exact failure the mode's design was arranged against.
+
+The reader moved to `src/recon_data.c` to be testable at all -- the same reason
+`recon_expr` is not inside the Calculator. `tests/test_data.c` names the wrong
+answer explicitly, so deleting the check fails with "first point came back as
+(3, 14); it should be (3.14, 2.71)" rather than with a number nobody can
+interpret. Confirmed by deleting it.
 
 **Implicit multiplication is done.** `3t`, `2pi`, `2(x+1)`, `(x+1)(x-1)` and
 `3sin(x)` all mean what they look like, and the hint under an empty plane says
