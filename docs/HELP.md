@@ -199,6 +199,16 @@ A program arrives as a **package**: a folder ending in `.rpk` with a
 writes down everything it put in place, so removing it takes back exactly
 that and nothing else.
 
+A package does not have to contain a program. One that only places files -- a
+set of wallpapers, some skins, a few fonts -- is a package too. It may write
+into the folders that hold that kind of thing and nowhere else, so a package
+cannot put a file among the system's settings or its loaded code.
+
+A file that is already there is left alone, and a package that finds one does
+not claim it: removing that package will not take away something that was
+already yours. The same is true of settings a package brings -- they are
+defaults, and one you had already chosen is left as you chose it.
+
 Installing a program is an administrator's decision. A program runs inside
 ReconOS with everything ReconOS can do, which is closer to installing a driver
 than to saving a file.

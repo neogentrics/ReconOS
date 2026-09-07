@@ -34,9 +34,48 @@
  *     description = A place to put things
  *     module      = Notes.rex
  *     icon        = notes.png
+ *     place       = paper.png /System/Wallpapers
+ *     setting     = notes/wrap on
  *
- * `module` and `icon` name files inside the package. Everything else is
- * description.
+ * `module` and `icon` name files inside the package. `place` and `setting` may
+ * each appear as often as needed. Everything else is description.
+ *
+ * --- Placing a file ---
+ *
+ *     place = <file in the package> <where it goes>
+ *
+ * A program is more than code: a wallpaper, a skin, a sound, a document it
+ * ships with. Before this there was nowhere to declare any of it, so a package
+ * could bring exactly one module and exactly one icon.
+ *
+ * **Where it may go is an allow-list, not a check on what is forbidden.** A
+ * package may write into the directories that exist to hold content -- icons,
+ * wallpapers, themes, fonts -- and nowhere else. Not /System/Config, which
+ * holds the accounts file. Not /System/Modules, which is loaded at startup.
+ * Not a user's folder, because a package is installed once by an administrator
+ * and there may be six users.
+ *
+ * Written as an allow-list because the other shape does not work: a list of
+ * forbidden places is a list somebody has to keep complete, and the day it is
+ * missing an entry is the day a package writes there. A list of permitted
+ * places is wrong in the safe direction -- a package that wanted somewhere new
+ * fails to install and somebody reads this comment.
+ *
+ * **A file already there is left alone**, and not recorded. That is the same
+ * rule the icon has always followed and for the same reason: uninstalling a
+ * package must not take away something that belonged to somebody else.
+ *
+ * --- Setting a default ---
+ *
+ *     setting = <key> <value>
+ *
+ * In the system's settings, because a package is installed once for everybody.
+ *
+ * **A default, not an override.** If the key already has a value it is left
+ * alone: an install that changed settings somebody had chosen would be an
+ * install that rearranged their desk. Only the ones it actually wrote go in
+ * the receipt, so removing the package removes exactly those and leaves
+ * anything it found already there.
  */
 
 #ifndef RECON_PACKAGE_H
@@ -44,6 +83,14 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
+/*
+ * Where a package may place a file.
+ *
+ * Directories that exist to hold content, and nothing else. See the note above
+ * about why this is an allow-list.
+ */
+#define RECON_PACKAGE_PLACES_MAX 6
 
 /* What a package folder is called, and what its manifest is called. */
 #define RECON_PACKAGE_EXT ".rpk"

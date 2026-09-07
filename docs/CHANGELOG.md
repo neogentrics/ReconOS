@@ -23,6 +23,44 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A package can ship a file and a setting, and can be nothing but files.** Two
+manifest lines, each repeatable:
+
+    place   = aurora.png /System/Wallpapers
+    setting = notes/wrap on
+
+**Where a package may write is an allow-list, not a check on what is
+forbidden.** Icons, wallpapers, themes, fonts, sounds -- the directories that
+exist to hold content -- and nowhere else. Not `/System/Config`, which holds the
+accounts file. Not `/System/Modules`, which is loaded at startup. Not `/Apps`,
+because a package that could drop a second thing into the directory scanned at
+startup could bring code it did not declare.
+
+The shape matters more than the list: a list of *forbidden* places is one
+somebody has to keep complete, and the day it is missing an entry is the day a
+package writes there. A list of permitted places is wrong in the safe
+direction -- a package that wanted somewhere new fails to install, and somebody
+reads the comment.
+
+**A setting is a default, not an override.** A key that already has a value is
+somebody's choice, and an install that overwrote it would be an install
+rearranging their desk. Only what an install actually wrote goes in the
+receipt, so removal takes back exactly that.
+
+**And a package no longer has to bring code.** It required a `module`, which
+made a package the wrapper for a program and nothing else -- so a wallpaper
+pack or a set of skins had no way to be one, even though placing files is
+exactly what they are for. The rule now is that a package must bring
+*something*: code, or at least one file. A manifest with neither describes
+something that would do nothing on installing and nothing on removal.
+
+Checked against the case that matters, which is two packages naming the same
+file. The second claims nothing, because what it named was already there;
+removing it leaves the first package's file and setting alone; removing the
+first takes back exactly its own; and the wallpaper that shipped with ReconOS
+is untouched throughout. A package that tried to place a file into
+`/System/Config` was refused with the directory named.
+
 **A skin can move the title bar's buttons, and ask for fewer of them.** Two
 metrics: `metric.buttons-left` puts them on the left, and `metric.buttons` is a
 sum -- 1 close, 2 maximize, 4 minimize -- so a skin can have just a close

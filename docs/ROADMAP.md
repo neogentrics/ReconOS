@@ -1998,11 +1998,13 @@ window -- all as of v0.4.0. What is missing is saving the picture: there is no
 way to put a graph in a file or on a page, which is what somebody wants it for
 once they have got it right.
 
-**A package cannot ship a setting or a data file.** The manifest understands
-a module and an icon; anything else a program wants to place has nowhere to
-be declared. And there is no signing, no dependency between packages, and no
-upgrade -- installing over an existing package is refused rather than
-replacing it.
+**A package cannot be signed, depended on, or upgraded.** As of v0.4.0 it can
+ship files and settings as well as code, and can be nothing but files -- so a
+wallpaper pack is a package. What is still missing is everything about
+*trust and time*: nothing signs a package, so installing one is trusting
+whoever handed it over; nothing expresses a dependency between two; and
+installing over an existing package is refused rather than replacing it, so
+there is no upgrade, only remove-then-install with whatever that loses.
 
 **The choices somebody has made about file types are not listed anywhere.** As
 of v0.4.0 an application declares what it opens, and a person can override that
