@@ -142,6 +142,7 @@ add_executable(ReconOS
     src/recon_notepad.c
     src/recon_photos.c
     src/recon_registry.c
+    src/recon_stb.c
     src/recon_keyring.c
     src/recon_crypt.c
     src/recon_users.c
@@ -524,6 +525,35 @@ add_executable(recon_keyring_tests
 
 target_include_directories(recon_keyring_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# What the parsers do with input that is wrong, which every other suite here
+# does not ask. Truncated at every length, one byte changed at every position,
+# and random bytes behind a real header -- all deterministic, because a finding
+# that cannot be reproduced has not been found.
+#
+# It earns most of its keep under scripts/check.sh: the failure it is looking
+# for is usually a read past the end, and the sanitizer is what sees that.
+add_executable(recon_malformed_tests
+    tests/test_malformed.c
+    src/recon_ico.c
+    src/recon_stb.c
+    src/recon_mp4.c
+    src/recon_html.c
+    src/recon_expr.c)
+
+# The ICO decoder is built on stb_image, so this reaches into third_party the
+# same way the image suite does. It still needs no display, which is the
+# property every test target here exists to keep.
+# Borrowed code, and the rule is that borrowed code is owned once it is here --
+# which means not editing somebody else's decoder to satisfy a warning switch
+# this project chose. Turned off for this one file rather than for the build.
+set_source_files_properties(src/recon_stb.c PROPERTIES COMPILE_OPTIONS "-w")
+
+target_include_directories(recon_malformed_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_malformed_tests PRIVATE m)
 
 # AES-GCM comes from mbedTLS, for the reason stated in the keyring's header:
 # the thing that actually protects a password is not written here.

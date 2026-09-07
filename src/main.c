@@ -14,8 +14,9 @@
 
 #define _POSIX_C_SOURCE 200112L
 
-/* stb_image is a single-header library; this TU provides the implementation. */
-#define STB_IMAGE_IMPLEMENTATION
+/* stb_image is a single-header library. Its implementation used to be here and
+ * is now in src/recon_stb.c, so a test target can have a decoder without
+ * linking the compositor. This file only uses it. */
 #include "stb_image.h"
 
 #include <dirent.h>

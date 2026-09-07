@@ -118,6 +118,40 @@ All eighteen suites there were at the time were clean the first time it was
 run, which is worth knowing precisely because it means the next thing it says
 will be worth believing. It has stayed clean since, through nineteen.
 
+### Malformed input
+
+```
+./build/recon_malformed_tests
+```
+
+The twentieth suite, and the only one that asks what a parser does with a file
+that is *wrong*. Every other suite asks whether a decoder gets the right answer
+from a good file. This one matters for anything a person can be sent: a picture
+in an email, a page from a web server, a video off a stick.
+
+Three ways of being wrong, all deterministic -- a finding that cannot be
+reproduced has not been found:
+
+- **truncated** at every length from nothing to the whole file
+- **one byte changed** at every position, to `0x00`, to `0xFF`, and with its
+  top bit flipped
+- **random bytes behind a real header**, from a generator written into the file
+  rather than the library's, so the same seed gives the same bytes everywhere
+
+A truncated file has no right answer, so "wrong answer" is not the failure. The
+failures are a read outside the buffer (which is why this earns most of its
+keep under `check.sh`), a loop that does not end, and **an offset handed back
+that points outside the input** -- which is the same bug one step earlier: the
+decoder has not crashed, it has told its caller exactly where to.
+
+**Break a check before believing this.** The first MP4 fixture here was a
+header and an empty `moov`, and it tested nothing: deleting the bounds check in
+`recon_mp4_sample` on purpose produced five thousand cases and no failures,
+because no fixture ever produced a sample and the check was never reached.
+Reading the test would not have shown that. With a real sample table the same
+deletion is caught and named -- "MP4 with byte 276 set to 0xFF -- a sample
+points outside the file".
+
 ### The static analyzer
 
 ```

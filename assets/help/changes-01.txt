@@ -10,6 +10,41 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+A twentieth test suite, for input that is wrong. Every other suite here
+asks whether a decoder gets the right answer from a good file. This one asks
+what it does with a bad one -- which is the question that matters for anything
+a person can be sent.
+
+The ICO decoder, the MP4 demuxer, the HTML parser and the expression grammar,
+each fed the same three kinds of wrong: truncated at every length, one byte
+changed at every position to three different values, and random bytes behind a
+real header. 5,388 cases, all deterministic, because a finding that cannot be
+reproduced has not been found.
+
+A truncated file has no right answer, so "wrong answer" is not what is being
+looked for. What is: a read outside the buffer, a loop that does not end, and
+an offset handed back that points outside the input -- the same bug one
+step earlier, where the decoder has not crashed but has told the media player
+exactly where to.
+
+Nothing failed. That is worth having, and it is worth less than the thing that
+happened on the way to it.
+
+The first MP4 fixture tested nothing, and reading it would not have shown
+that. It was a header and an empty moov. The bounds check in
+recon_mp4_sample was deleted on purpose to see whether the suite would
+notice; it reported five thousand cases and no failures, because the fixture
+never produced a sample and the check was never reached. The fixture now
+carries a real sample table -- stts, stsc, stsz, stco and four samples
+in an mdat -- and the same deletion is caught and named: "MP4 with byte 276
+set to 0xFF -- a sample points outside the file".
+
+stb_image's implementation moved out of main.c into src/recon_stb.c. A
+single-header library needs exactly one file to define its implementation, and
+that file had been the one with the entry point -- so a test target that wanted
+a decoder had to link the compositor. Every test target in this project exists
+to need no display.
+
 A third sweep, with the static analyzer -- scripts/analyze.sh, after the
 warnings and the sanitizers. It walks paths nothing has ever run, which is
 where the other two cannot look.
