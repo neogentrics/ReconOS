@@ -389,6 +389,22 @@ static struct edit *push_edit(struct recon_notepad *np) {
     }
 
     struct edit *edit = &np->undo[np->undo_count];
+
+    /*
+     * Freed before it is cleared, rather than only cleared.
+     *
+     * Every path that reaches here leaves this slot's text already NULL --
+     * drop_redo frees down to undo_at, and the eviction above frees the oldest
+     * and leaves the top slot aliasing the one below it, which is not an owner.
+     * So the memset on its own is correct, and it is correct for a reason two
+     * functions away that nothing states at this line.
+     *
+     * `free(NULL)` costs nothing and the argument stops being needed. The
+     * static analyzer flagged the shape rather than a path, and the shape is
+     * the thing worth removing: a memset over a struct that owns a pointer is
+     * a leak waiting for somebody to add a fourth way to get here.
+     */
+    edit_free(edit);
     memset(edit, 0, sizeof(*edit));
     np->undo_count++;
     np->undo_at = np->undo_count;

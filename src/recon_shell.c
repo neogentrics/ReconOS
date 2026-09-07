@@ -606,7 +606,11 @@ static void menu_unpin(const char *name) {
 static int menu_apps(bool show_all, const char *filter,
         struct menu_entry *out, int max) {
     struct menu_entry found[MENU_APPS_MAX];
-    int counts[MENU_APPS_MAX];
+    /* Zeroed rather than filled in step with `found`, which it is. The sort
+     * below reads counts[j] for every j it has walked past, and that being
+     * safe depends on two arrays being written at the same index in a loop
+     * fifty lines up -- true, and not visible from the sort. */
+    int counts[MENU_APPS_MAX] = {0};
     int total = 0;
 
     bool searching = (filter != NULL && filter[0] != '\0');

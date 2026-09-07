@@ -118,6 +118,39 @@ All eighteen suites there were at the time were clean the first time it was
 run, which is worth knowing precisely because it means the next thing it says
 will be worth believing. It has stayed clean since, through nineteen.
 
+### The static analyzer
+
+```
+./scripts/analyze.sh
+```
+
+A third question for the tools, and it finds a different class from the other
+two. The warnings look at one statement. The sanitizers look at the paths a
+test actually takes. This walks paths nothing has ever run: the branch where a
+malloc fails, the third way into a function that clears a struct owning a
+pointer.
+
+What it found the first time it was run, none of which any test could have:
+
+- **A memset over a struct that owns a pointer**, in Notepad's undo stack. It
+  was correct, and correct for a reason two functions away that nothing stated
+  at that line. Now it frees first, which costs nothing and stops the argument
+  being needed.
+- **An account slot the code was trusted to find**, on the strength of a count
+  matching the number of used slots -- an invariant kept by hand in five
+  places. It would have been a memset through NULL while creating an account.
+- **Three test allocations that never checked their malloc.** A test binary
+  that segfaults reports nothing at all: not a failure, not which check it died
+  on, just a signal. The sanitized build allocates several times what the
+  ordinary one does, and the sanitized build is the one run before a release.
+
+It is noisier than the other two, because an analyzer that follows every path
+also imagines some. The ones it imagines here are ownership handed to somebody
+else -- a file descriptor given to the Wayland event loop looks like a leak,
+since the loop closes it somewhere the analysis cannot see. Those two are
+listed by file and line in the script rather than silenced with a flag, so the
+list stays short enough to read and anything new in it is new.
+
 ### Warnings
 
 The build runs at `-Wall -Wextra`, and is clean. Keep it that way: the value of

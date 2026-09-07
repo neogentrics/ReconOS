@@ -355,6 +355,23 @@ bool recon_users_create(const char *name, const char *password,
         }
     }
 
+    /*
+     * Checked, although the count above says there must be one.
+     *
+     * `g_count < RECON_USERS_MAX` guarantees a free slot only while g_count
+     * and the number of used slots agree, which is an invariant maintained by
+     * hand in five places. If it ever slips, this was a memset through NULL --
+     * a crash while creating an account, which is a bad moment to have one.
+     *
+     * Saying so rather than crashing costs one branch and turns a fault
+     * nobody could diagnose into a message naming the thing that is wrong.
+     */
+    if (slot == NULL) {
+        set_error("the account list says there is room and has none; "
+            "this is a fault in ReconOS rather than in the name given");
+        return false;
+    }
+
     memset(slot, 0, sizeof(*slot));
     slot->used = true;
     snprintf(slot->info.name, sizeof(slot->info.name), "%s", name);

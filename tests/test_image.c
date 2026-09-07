@@ -27,8 +27,21 @@ static void check(bool ok, const char *what) {
     }
 }
 
+/*
+ * The three makers below check their malloc, which a test arguably need not.
+ *
+ * It matters here for one reason: a test binary that segfaults reports nothing
+ * at all -- not a failure, not which check it was on, just a signal. The
+ * sanitized build of this suite allocates several times what the ordinary one
+ * does, and it is the sanitized build that is run before a release. A suite
+ * that could die silently in the run that matters most is worth two lines.
+ */
 static unsigned char *flat(int w, int h, int r, int g, int b, int a) {
     unsigned char *px = malloc((size_t)w * h * 4);
+    if (px == NULL) {
+        printf("  FAIL  out of memory making a %dx%d picture\n", w, h);
+        exit(1);
+    }
     for (int i = 0; i < w * h; i++) {
         px[i * 4 + 0] = (unsigned char)r;
         px[i * 4 + 1] = (unsigned char)g;
@@ -41,6 +54,10 @@ static unsigned char *flat(int w, int h, int r, int g, int b, int a) {
 /* Dark on the left, light on the right, and nothing else. */
 static unsigned char *ramp(int w, int h) {
     unsigned char *px = malloc((size_t)w * h * 4);
+    if (px == NULL) {
+        printf("  FAIL  out of memory making a %dx%d ramp\n", w, h);
+        exit(1);
+    }
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             unsigned char v = (unsigned char)(w > 1 ? x * 255 / (w - 1) : 0);
@@ -175,6 +192,10 @@ static void test_alpha_comes_along(void) {
     /* Clear on the left, solid on the right. */
     int w = 32, h = 4;
     unsigned char *src = malloc((size_t)w * h * 4);
+    if (src == NULL) {
+        printf("  FAIL  out of memory making the alpha picture\n");
+        exit(1);
+    }
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
             unsigned char *p = src + ((size_t)y * w + x) * 4;

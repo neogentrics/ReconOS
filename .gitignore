@@ -1,5 +1,10 @@
 # Build output
 build/
+# The sanitizers and the static analyzer each want their own tree: both change
+# the compiler flags, and sharing a directory with the ordinary build means
+# every switch between them is a full rebuild.
+build-sanitized/
+build-analyzed/
 out/
 *.o
 *.a

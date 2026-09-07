@@ -23,6 +23,32 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A third sweep, with the static analyzer** -- `scripts/analyze.sh`, after the
+warnings and the sanitizers. It walks paths nothing has ever run, which is
+where the other two cannot look.
+
+Three things worth changing, none of which a test could have found:
+
+* **Notepad cleared a struct that owns a pointer.** Correct on every path that
+  reaches it, and correct for a reason two functions away that nothing stated
+  at that line. It frees first now; `free(NULL)` costs nothing and the
+  argument stops being needed by whoever adds a fourth way to get there.
+* **Creating an account trusted a loop to find a free slot**, because the count
+  said there was one -- an invariant kept by hand in five places. If it ever
+  slipped this was a memset through NULL, while creating an account, which is a
+  bad moment for a crash with nothing to read afterwards. It says what is wrong
+  instead.
+* **Three test allocations never checked their malloc.** A test binary that
+  segfaults reports nothing at all -- not a failure, not which check it died
+  on. The sanitized build allocates several times what the ordinary one does,
+  and it is the sanitized build that runs before a release.
+
+The two findings that are not real -- a file descriptor handed to the Wayland
+event loop, which closes it somewhere the analysis cannot see -- are listed by
+file and line in the script rather than turned off with a flag. A tool whose
+output nobody reads has stopped being a tool, and the way that happens is one
+harmless entry at a time.
+
 **The Apps menu's search box finds help pages, not only programs.**
 
 Type a word and matching pages appear under the matching programs, marked
