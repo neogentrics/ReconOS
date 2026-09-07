@@ -1831,9 +1831,38 @@ static void server_new_keyboard(struct recon_server *server,
     keyboard->server = server;
     keyboard->wlr_keyboard = wlr_keyboard_from_input_device(device);
 
+    /*
+     * A keyboard with no keymap types nothing.
+     *
+     * Both of these can fail -- xkb builds the map by reading files that a
+     * broken installation may not have -- and both used to be passed straight
+     * on. wlr_keyboard_set_keymap with NULL leaves a keyboard attached and
+     * silent, which looks exactly like a keyboard that is unplugged, and there
+     * is nothing anywhere saying otherwise.
+     *
+     * VT-K001 is a STOP because there is no way to carry on and no way to be
+     * told about it: the machine is a screen nobody can type at, and the one
+     * thing left worth doing is putting a code on it that can be looked up.
+     */
     struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (context == NULL) {
+        free(keyboard);
+        recon_error_raise(server, RECON_ERR_K001,
+            "the keyboard library would not start");
+        return;
+    }
+
     struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, NULL,
         XKB_KEYMAP_COMPILE_NO_FLAGS);
+    if (keymap == NULL) {
+        xkb_context_unref(context);
+        free(keyboard);
+        recon_error_raise(server, RECON_ERR_K001,
+            "no keyboard layout could be built; xkb's data files may be "
+            "missing");
+        return;
+    }
+
     wlr_keyboard_set_keymap(keyboard->wlr_keyboard, keymap);
     xkb_keymap_unref(keymap);
     xkb_context_unref(context);
@@ -2537,7 +2566,21 @@ static void server_new_output(struct wl_listener *listener, void *data) {
          * Accounts before the gate, so it knows whether to ask who you are or
          * to set the system up.
          */
-        recon_users_init();
+        /*
+         * A STOP, and the only honest answer.
+         *
+         * Without the account list there is nobody to sign in as. Carrying on
+         * would draw a login screen with no accounts on it, which reads as
+         * "your accounts are gone" -- and a first run reads it as "set the
+         * system up again", which is how somebody ends up with a second
+         * account beside the one that is still there and still has their
+         * files. VT-C001 says the list could not be read, which is a
+         * different thing and a recoverable one.
+         */
+        if (!recon_users_init()) {
+            recon_error_raisef(&server, RECON_ERR_C001, "%s",
+                recon_users_last_error());
+        }
 
         int loaded = recon_modules_load_all();
         if (loaded > 0) {
@@ -2604,7 +2647,17 @@ int main(int argc, char **argv) {
 
     /* Settings come up next, since almost everything after this may want to
      * know what was chosen last time. */
-    recon_registry_init();
+    /*
+     * A FAULT rather than a stop. The registry comes up empty when its file
+     * cannot be read, and an empty registry means every setting is its
+     * default -- a desktop that has forgotten its wallpaper and its skin, and
+     * works. Saying so is the difference between that and a system somebody
+     * thinks has reset itself.
+     */
+    if (!recon_registry_init()) {
+        recon_error_raisef(NULL, RECON_ERR_H001, "%s",
+            recon_registry_last_error());
+    }
 
     /*
      * The firewall before anything that could open a connection.
@@ -2683,9 +2736,20 @@ int main(int argc, char **argv) {
      * is never overwritten. */
     recon_appicon_write_default();
 
+    /*
+     * A FAULT, and worth one: the help is where the explanation of every
+     * other fault lives. A system whose help could not be written out is one
+     * where the next thing to go wrong has nowhere to send anybody, and F1
+     * opens a window with nothing in it.
+     */
     int topics = recon_help_write_defaults();
     if (topics > 0) {
         wlr_log(WLR_INFO, "ReconOS: %d help topics", topics);
+    } else {
+        /* Zero, not a negative: this rewrites every page on every start, so
+         * "none written" is a failure rather than "nothing needed doing". */
+        recon_error_raise(NULL, RECON_ERR_M001,
+            "no help pages could be written to /System/Help");
     }
 
     /*
@@ -2737,9 +2801,27 @@ int main(int argc, char **argv) {
         setenv("WLR_RENDERER", "pixman", 1);
     }
 
+    /*
+     * Nothing after this point can draw, so nothing after this point runs.
+     *
+     * These were used unchecked, and a NULL renderer does not fail here -- it
+     * fails four calls later inside wlroots, in a crash with no code on it.
+     * The renderer is the one thing a compositor cannot do without.
+     */
     server.renderer = wlr_renderer_autocreate(server.backend);
+    if (server.renderer == NULL) {
+        recon_error_raise(NULL, RECON_ERR_D001,
+            "no renderer could be created; try WLR_RENDERER=pixman");
+        return 1;
+    }
     wlr_renderer_init_wl_display(server.renderer, server.wl_display);
+
     server.allocator = wlr_allocator_autocreate(server.backend, server.renderer);
+    if (server.allocator == NULL) {
+        recon_error_raise(NULL, RECON_ERR_D001,
+            "the renderer started and could not allocate buffers");
+        return 1;
+    }
 
     /* Core globals every Wayland client expects to find:
      *   wl_compositor    - lets clients create surfaces

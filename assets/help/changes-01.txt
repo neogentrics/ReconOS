@@ -10,6 +10,35 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Eleven error codes that were documented and unreachable now happen.
+Twenty-four of the forty-two are raised, up from thirteen.
+
+None of them was a matter of finding the failure and adding a line. Every one
+was a place where a failure was already being handled and never said:
+
+* The renderer was used without being checked. A NULL one does not fail
+  where it is created -- it fails four calls later inside wlroots, in a crash
+  with no code on it and nothing to look up. VT-D001, and it stops.
+* A keymap that would not build was passed straight to wlroots. That
+  leaves a keyboard attached and silent, which looks exactly like a keyboard
+  nobody plugged in. VT-K001.
+* A registry that would not save returned false to callers that do not
+  check. The quietest fault in the system: the change appears to take, works
+  all session, and is gone at the next start -- so the setting looks broken
+  rather than the disk. VT-H002.
+* A refused sign-in was recorded nowhere at all. One is somebody
+  mistyping; forty overnight is the only trace this machine would keep of
+  somebody trying. VT-C003, a NOTE, with the name and never the password --
+  and there is a check in the account tests for both halves of that, because
+  the line could otherwise be deleted and every other test would still pass.
+* Also VT-C001 (the account list), VT-C004 (a password change that rolled
+  back, which is invisible precisely because the rollback worked), VT-H001,
+  VT-M001 (the help, which is where the explanation of every other fault
+  lives), VT-D003 (a capture fails a frame after anybody was told it started),
+  VT-E002 (a module built for a different ReconOS -- "interface 3; this is 4"
+  is true and means nothing without the page behind the code), and VT-G003 (a
+  firewall rule that is in force now and will not be after a restart).
+
 A twentieth test suite, for input that is wrong. Every other suite here
 asks whether a decoder gets the right answer from a good file. This one asks
 what it does with a bad one -- which is the question that matters for anything

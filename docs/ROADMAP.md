@@ -2056,14 +2056,29 @@ the file. Looking inside is what the codec registry does for media; there is no
 equivalent for "would this program understand this", and there probably cannot
 be one without asking the program.
 
-**Twenty-nine error codes are raised by nothing.** The catalogue defines
-forty-two and thirteen of them are reachable. Some of the rest are reserved on
-purpose -- a number is never reused, so writing one down before the fault
-exists is the intended way to work -- but a document that describes a code
-somebody can look up, for a fault the system cannot report, is making the same
-promise the help was making about topics that did not exist. The three startup
-ones were wired in v0.4.0; the rest are counted and named in
-`include/recon_errors.def`.
+**Eighteen error codes are raised by nothing.** The catalogue defines
+forty-two and twenty-four of them are reachable, up from thirteen. Some of the
+rest are reserved on purpose -- a number is never reused, so writing one down
+before the fault exists is the intended way to work -- but a document
+describing a code somebody can look up, for a fault the system cannot report,
+is making the same promise the help was making about topics that did not exist.
+
+Wiring one is not a matter of finding the failure and adding a line. Every one
+of the eleven done in v0.4.0 turned out to be a place where the failure was
+being *handled* and not *said*: the renderer used without checking, so a NULL
+one crashed four calls later inside wlroots with no code on it; the keymap
+passed straight to wlroots, so a keyboard that could not be set up looked
+exactly like one that was unplugged; a registry that would not save returning
+false to callers that do not check, so a setting appeared to take and was gone
+at the next start.
+
+What is left is named in `include/recon_errors.def`. Two of them are features
+rather than lines: **A-005**, the last run ended unexpectedly, wants a marker
+written at startup and cleared at a clean shutdown -- which is worth having for
+its own sake, since nothing at present can tell a crash from a power cut.
+**B-001** and **B-002**, a file that could not be read or written, cannot go in
+`recon_fs` at all: recording a fault writes through `recon_fs`, so raising from
+inside it is a loop. They belong to callers, one call site at a time.
 
 **Nothing can listen.** Streams connect outwards, plain or encrypted with the
 far end verified; there is still no way for an application to accept a

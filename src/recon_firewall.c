@@ -13,6 +13,7 @@
 
 #include "ReconOS.h"
 #include "recon_firewall.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 
 static struct recon_fw_rule g_rules[RECON_FIREWALL_RULES_MAX];
@@ -198,6 +199,14 @@ static bool write_rules(void) {
 
     if (!recon_fs_write("/", RECON_FIREWALL_FILE, text, used)) {
         set_error("cannot write '%s'", RECON_FIREWALL_FILE);
+        /*
+         * The rules in memory are the ones now in force, and they are not the
+         * ones that will be in force after a restart. That gap is the fault:
+         * somebody closes a port, sees it closed, restarts, and it is open --
+         * with nothing anywhere having said the change did not stick.
+         */
+        recon_error_raisef(NULL, RECON_ERR_G003, "%s: %s",
+            RECON_FIREWALL_FILE, recon_fs_last_error());
         return false;
     }
     return true;

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_registry.h"
 
@@ -234,6 +235,22 @@ static bool save(enum recon_registry_scope scope) {
     bool ok = recon_fs_write("/", path, text, used);
     if (!ok) {
         set_error("%s", recon_fs_last_error());
+        /*
+         * Raised as well as returned, because almost nothing checks the
+         * return.
+         *
+         * A setting that will not save is the quietest fault in the system:
+         * everything works, the change appears to take, and it is gone at the
+         * next start -- and the person concludes the setting is broken rather
+         * than that the disk is. NULL for the server because this layer has
+         * none and does not need one; the record goes to the log either way.
+         *
+         * Safe from the loop it looks like: recording a fault writes through
+         * recon_fs, not through here. That is also why B-001 and B-002 are
+         * raised by callers of recon_fs rather than by recon_fs itself.
+         */
+        recon_error_raisef(NULL, RECON_ERR_H002, "%s: %s", path,
+            recon_fs_last_error());
     }
     free(text);
     return ok;

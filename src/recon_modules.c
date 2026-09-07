@@ -17,6 +17,7 @@
 
 #include "ReconOS.h"
 #include "recon_appwin.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_modules.h"
 #include "recon_registry.h"
@@ -879,6 +880,14 @@ bool recon_modules_load(const char *reconos_path) {
         set_error("'%s' was built for module interface %u; this is %u",
             descriptor->name != NULL ? descriptor->name : canonical,
             descriptor->abi, (unsigned)RECON_MODULE_ABI);
+        /*
+         * A code, because this one has an answer and the answer is not
+         * obvious: the module is not broken, it is old, and what is needed is
+         * the version of it built for this system. A message saying
+         * "interface 3; this is 4" is true and means nothing to somebody who
+         * did not write it. VT-E002 has the sentence.
+         */
+        recon_error_raisef(NULL, RECON_ERR_E002, "%s", g_error);
         remember_failure(canonical, is_app, g_error);
         dlclose(handle);
         return false;
@@ -887,6 +896,7 @@ bool recon_modules_load(const char *reconos_path) {
     if (descriptor->payload != RECON_PAYLOAD_NATIVE) {
         set_error("'%s' holds a kind of code this version cannot run yet",
             descriptor->name != NULL ? descriptor->name : canonical);
+        recon_error_raisef(NULL, RECON_ERR_E002, "%s", g_error);
         remember_failure(canonical, is_app, g_error);
         dlclose(handle);
         return false;

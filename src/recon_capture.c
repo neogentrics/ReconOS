@@ -15,6 +15,7 @@
 
 #include "recon_capture.h"
 #include "recon_fs.h"
+#include "recon_error.h"
 #include "recon_png.h"
 #include "recon_server.h"
 
@@ -179,6 +180,16 @@ void recon_capture_take(struct wlr_buffer *buffer) {
     g_last_ok = recon_png_write(g_last_path, pixels, width, height, false);
     if (!g_last_ok) {
         set_error("%s", recon_png_last_error());
+        /*
+         * Raised as well as set, because this failure arrives late.
+         *
+         * A capture is asked for and answered immediately -- "capturing" --
+         * and the picture is written a frame later, from here, where there is
+         * nobody left to tell. Somebody who pressed the key and found no file
+         * has no way to learn why unless it is written down now.
+         */
+        recon_error_raisef(NULL, RECON_ERR_D003, "%s: %s", g_last_path,
+            recon_png_last_error());
     }
 
     free(pixels);

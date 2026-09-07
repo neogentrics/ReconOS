@@ -12,6 +12,7 @@
 #include <strings.h>   /* strcasecmp */
 
 #include "recon_crypt.h"
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_users.h"
 
@@ -489,10 +490,24 @@ bool recon_users_set_password(const char *name, const char *password) {
 
     if (!set_password(account, password)) {
         *account = previous;
+        recon_error_raisef(NULL, RECON_ERR_C004,
+            "the password for '%s' was not changed: %s", name, g_error);
         return false;
     }
     if (!save()) {
         *account = previous;
+        /*
+         * The rollback above is why this is worth a code.
+         *
+         * The account in memory has been put back, so nothing is half
+         * changed -- and that is exactly what makes it invisible: the old
+         * password still works, so somebody who has just set a new one
+         * discovers it did not take by being locked out with the new one at
+         * the next sign-in. Recorded here, where it is known.
+         */
+        recon_error_raisef(NULL, RECON_ERR_C004,
+            "the password for '%s' was not saved and has been put back: %s",
+            name, g_error);
         return false;
     }
     return true;
@@ -534,6 +549,20 @@ bool recon_users_check(const char *name, const char *password) {
 bool recon_users_login(const char *name, const char *password) {
     if (!recon_users_check(name, password)) {
         set_error("that name and password do not match an account");
+        /*
+         * A NOTE, not a fault. One refused sign-in is somebody mistyping and
+         * is not worth interrupting anybody over; forty of them overnight is
+         * the only record this system would have of somebody trying, and
+         * without this line there would be no record at all.
+         *
+         * The name is written down. What the *screen* must not say is whether
+         * the account exists -- that is a stranger at the keyboard learning
+         * something. The log is read by the person who owns the machine, and
+         * "who was somebody trying to sign in as" is the question it exists
+         * to answer.
+         */
+        recon_error_raisef(NULL, RECON_ERR_C003, "as '%s'",
+            name != NULL ? name : "");
         return false;
     }
 

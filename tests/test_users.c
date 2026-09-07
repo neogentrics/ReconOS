@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "recon_fs.h"
+#include "recon_error.h"
 #include "recon_users.h"
 
 static int g_failures;
@@ -116,6 +117,29 @@ static void test_signing_in(void) {
 
     check(!recon_users_login("Joshua", "wrong"), "a wrong password is refused");
     check(recon_users_current() == NULL, "and nobody is signed in after it");
+
+    /*
+     * And it is written down.
+     *
+     * A refused sign-in is the one thing this system records that nobody is
+     * meant to see happen: one is somebody mistyping, and forty overnight is
+     * the only trace there would be of somebody trying. The code being raised
+     * is a line in recon_users_login that nothing else exercises, so without
+     * this the wiring could be deleted and every test here would still pass.
+     */
+    size_t log_size = 0;
+    char *log = recon_fs_read("/", RECON_ERROR_LOG, &log_size);
+    check(log != NULL, "the error log exists after it");
+    if (log != NULL) {
+        check(strstr(log, "C003") != NULL || strstr(log, "C-003") != NULL,
+            "and VT-C003 is in it");
+        check(strstr(log, "Joshua") != NULL, "naming who it was tried as");
+        /* Never the password. The log is read by the machine's owner, and the
+         * name is the question it answers; the password is not. */
+        check(strstr(log, "wrong") == NULL,
+            "AND NOT THE PASSWORD THAT WAS TYPED");
+        free(log);
+    }
 
     check(recon_users_login("Joshua", "a better one"), "the right one works");
     check(recon_users_current() != NULL &&

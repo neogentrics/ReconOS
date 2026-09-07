@@ -286,7 +286,10 @@ target_include_directories(recon_fs_tests PRIVATE
 add_executable(recon_registry_tests
     tests/test_registry.c
     src/recon_registry.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_registry_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -305,7 +308,10 @@ add_executable(recon_theme_tests
     # with that -- neither needs a compositor, which is the property these
     # test targets are actually protecting.
     src/recon_users.c
-    src/recon_crypt.c)
+    src/recon_crypt.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_theme_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -318,7 +324,10 @@ add_executable(recon_fonts_tests
     tests/test_fonts.c
     src/recon_fonts.c
     src/recon_registry.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_fonts_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -483,7 +492,10 @@ add_executable(recon_access_tests
     src/recon_registry.c
     src/recon_fs.c
     src/recon_users.c
-    src/recon_crypt.c)
+    src/recon_crypt.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_access_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -506,7 +518,10 @@ add_executable(recon_users_tests
     tests/test_users.c
     src/recon_users.c
     src/recon_crypt.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_users_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -521,7 +536,10 @@ add_executable(recon_keyring_tests
     src/recon_keyring.c
     src/recon_users.c
     src/recon_crypt.c
-    src/recon_fs.c)
+    src/recon_fs.c
+    # Settings and accounts record a
+    # fault when one will not save, so the code table comes along.
+    src/recon_error.c)
 
 target_include_directories(recon_keyring_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
