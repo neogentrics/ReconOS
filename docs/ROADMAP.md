@@ -2064,9 +2064,32 @@ What is still missing:
 * **A parameter range somebody can set** for the parametric mode. Two more
   fields above an already crowded form, which is why the fixed range above is
   stated rather than quietly chosen.
-* **A file picker for the data mode.** The path is typed, like everything else
-  in the grapher's fields. `recon_filedlg` exists and Mail uses it; putting it
-  here means a button beside three fields that are already tight.
+
+**The file picker is done, and it cost the field width rather than a row.**
+The objection was that a button beside three already-tight fields would crowd
+the form. It would -- if it were a fourth row, which would come off the plane's
+height, and the plane is what the mode is for. Taking the width from the path
+field instead costs nothing that matters: a path is long, but it scrolls inside
+the field, and it is not usually read there once it has been chosen.
+
+The first attempt assumed the space the parametric mode uses for its second
+field was going spare in data mode. It is not -- an unpaired field takes the
+whole row -- so the button was drawn off the right-hand edge and clipped, which
+looks exactly like the feature not being there. **A photograph said so; the
+code did not.** That is the third time on this feature that a picture settled
+in one step something reasoning had got wrong.
+
+Two things fell out of it that were worth more than the button:
+
+* **`RECON_FILEDLG_HIT_BASE` was sitting on top of the Calculator's hit ids.**
+  It was 1500, with a note saying that was four hundred and ninety more than
+  any application used; the Calculator's ids start at exactly 1500 and run to
+  2007. Harmless only because the Calculator had no dialog. It is 3000 now, and
+  `RECON_FILEDLG_IDS_BELOW` makes the next application to grow past it find out
+  at compile time -- confirmed by putting the old value back and watching the
+  build fail.
+* **BG-136**, below: every file dialog in the system was putting a hole through
+  the window behind it.
 
 **The decimal comma is done, and the way round matters.** The bullet that used
 to be here said handling it meant knowing what language the machine is set to.

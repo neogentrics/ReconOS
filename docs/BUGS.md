@@ -2575,6 +2575,41 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-136 — Every file dialog put a hole through the window behind it
+
+- **Found in** v0.4.0. **Found by** photographing a file picker newly added to
+  the Calculator, and seeing the What's New window through the middle of it.
+  The first guess was that the new code had broken the Calculator's drawing.
+  Notepad's Open dialog, which has worked for versions, does exactly the same
+  thing -- so the bug was older than the feature that revealed it.
+- **What it was** `recon_filedlg_draw` dims the window behind it, and the
+  `dim` colour is a translucent black: `RGBA(00,00,00,99)` in the default
+  skin, about 60% opaque. It laid it down with `recon_fill_rect`, which
+  **writes** the colour rather than blending it. So instead of a dimmed form
+  the content area got a 60%-opaque black *pixel* -- a hole. The compositor
+  then blended the window over the desktop through it, and the wallpaper and
+  whatever windows were behind showed through the middle of an opaque
+  application.
+- **Every caller had it**: Notepad, Mail, and the Calculator's new picker. It
+  had never been reported because a dimmed form and a hole to the desktop look
+  similar enough in a screenshot of a plain wallpaper, and the harness only
+  ever photographed one window at a time.
+- **Why `recon_fill_rect` is right to write.** A Glass window frame is drawn
+  with an alpha below 255 *on purpose*, so that the compositor blends the
+  window over the wallpaper -- that is the whole skin. Making `fill_rect`
+  blend would have made the frame opaque and the skin pointless. The two are
+  different operations: making a window see-through, and veiling something
+  inside it.
+- **Fixed in** v0.4.0. A new `recon_blend_rect` does source-over into the
+  panel, and the dialog uses it. Full compositing rather than a straight mix,
+  because the destination is not always opaque -- a dialog over a Glass window
+  has to end up with the two alphas combined rather than the overlay's. Fully
+  opaque colours are handed to `recon_fill_rect`, which is both faster and what
+  a reader expects.
+- **Confirmed by picture, twice**: the Calculator's picker and Notepad's Open
+  dialog, before and after. Reasoning about the drawing code produced a wrong
+  first answer; the photograph produced the right one immediately.
+
 ### BG-135 — A setting with a leading space lost it at the next start
 
 - **Found in** v0.4.0. **Found by** writing a round-trip test for the registry

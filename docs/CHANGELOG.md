@@ -23,6 +23,41 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Every file dialog was putting a hole through the window behind it.** The
+dialog dims what is behind so it reads as a question, and `dim` is a
+translucent black -- but it was laid down with `recon_fill_rect`, which writes
+the colour rather than blending it. So the content area got a 60%-opaque black
+*pixel* instead of a dimmed form, and the compositor blended the window over
+the desktop through it: the wallpaper and whatever windows were behind showed
+through the middle of an opaque application.
+
+Notepad and Mail had it too, for as long as they have had dialogs. It surfaced
+because a picker was added to the Calculator and the first photograph showed
+What's New through the middle of it -- and the first guess, that the new code
+had broken the Calculator's drawing, was wrong. Notepad did the same thing.
+
+`recon_fill_rect` is right to write: a Glass window frame is drawn translucent
+*on purpose*, so the compositor blends the window over the wallpaper, and
+making fills blend would have made the frame opaque and the skin pointless.
+Making a window see-through and veiling something inside it are different
+operations, so there is now a `recon_blend_rect` for the second. BG-136.
+
+**A data file can be chosen instead of typed.** A Choose button on each of the
+three rows in the grapher's data mode. It costs the path field some width
+rather than costing the form a row -- a fourth row would come off the plane's
+height, and the plane is what the mode is for.
+
+Two things came out of building it. The first attempt drew the button off the
+right-hand edge, on the assumption that the space parametric mode uses for its
+second field was spare in data mode; an unpaired field takes the whole row, and
+a photograph said so in one step. And `RECON_FILEDLG_HIT_BASE` turned out to be
+sitting exactly on top of the Calculator's own hit ids -- 1500, with a comment
+claiming that was four hundred and ninety more than any application used, while
+the Calculator ran to 2007. Harmless only because it had no dialog to put up.
+The base is 3000 now and `RECON_FILEDLG_IDS_BELOW` asserts it, so the next
+application to grow past it fails to compile rather than behaving strangely.
+Confirmed by putting the old value back and watching the build fail.
+
 **A file that writes 3,14 is no longer read as the point (3, 14).** The
 grapher's data mode used `strtod`, whose decimal point is a dot, always. Handed
 a file written where the convention is a comma that is not a refusal and not a

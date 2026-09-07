@@ -14,6 +14,7 @@
 #include "recon_icons.h"
 #include "recon_calc.h"
 #include "recon_data.h"
+#include "recon_filedlg.h"
 #include "recon_expr.h"
 #include "recon_calc_modes.h"
 #include "recon_clock.h"
@@ -450,6 +451,24 @@ struct recon_calc {
      * pressed the button, which is what they meant.
      */
     bool want_save;
+
+    /*
+     * Choosing a data file rather than typing its path.
+     *
+     * Drawn inside this window, like every other file dialog in the system,
+     * and it takes all input while it is up.
+     */
+    struct recon_filedlg picker;
+
+    /*
+     * Which of the three path fields the picker is filling.
+     *
+     * Held rather than derived, because by the time a path comes back the
+     * click that started it is long gone -- and filling the focused field
+     * instead would mean a click on the third row's button writing into the
+     * first row whenever the caret happened to be there.
+     */
+    int picking_for;
 
     /*
      * The window, kept so that panning can ask for a redraw.
@@ -936,6 +955,21 @@ static void equals(struct recon_calc *calc) {
 #define HIT_GRAPH_PARAM (RECON_APPWIN_HIT_USER + 909)
 #define HIT_GRAPH_DATA (RECON_APPWIN_HIT_USER + 907 + 100)
 #define HIT_GRAPH_FIELD_BASE (RECON_APPWIN_HIT_USER + 910)
+/* One per data-mode path field, in the space the y field uses in parametric
+ * mode -- which is empty in data mode, so the button costs no room. */
+#define HIT_GRAPH_PICK_BASE (RECON_APPWIN_HIT_USER + 920)
+
+/*
+ * The highest id this window can produce.
+ *
+ * Kept as its own name so that adding an id above it is visibly a change to
+ * this line as well, and checked against the file dialog's range: the picker
+ * is drawn inside this window and claims ids of its own. Without the check the
+ * two overlapped, and clicking the file list would have worked the tab bar
+ * behind it.
+ */
+#define HIT_CALC_TOP HIT_GRAPH_DATA
+RECON_FILEDLG_IDS_BELOW(HIT_CALC_TOP);
 
 /* One of `n` values converted from `from` to `to` within a category. */
 static double convert(const struct calc_category *cat, int from, int to,
@@ -1747,8 +1781,26 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
      * attached.
      */
     bool paired = (calc->graph_kind == GRAPH_PARAM);
+
+    /*
+     * Data mode ends each row with a button that opens a file dialog, and the
+     * field has to be told about it.
+     *
+     * The first version of this drew the button after the field without
+     * narrowing it, on the assumption that the space the paired modes use for
+     * their second field was going spare. It is not: an unpaired field takes
+     * the whole row. The button was drawn off the right-hand edge and clipped,
+     * which looked exactly like the feature not being there -- and a
+     * photograph of the mode is what said so, not the code.
+     */
+    const char *CHOOSE = "Choose";
+    bool choosing = (calc->graph_kind == GRAPH_DATA);
+    int choose_w = choosing ? recon_text_width(calc->font, CHOOSE) + 16 : 0;
+
     int room = w - label_w - 16;
-    int field_w = paired ? (room - label_w - 8) / 2 : room;
+    int field_w = paired
+        ? (room - label_w - 8) / 2
+        : room - (choosing ? choose_w + 8 : 0);
 
     for (int i = 0; i < GRAPH_CURVES; i++) {
         recon_fill_rect(panel, x, y + 2, 10, line - 2, curve_color(i));
@@ -1762,6 +1814,22 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
         recon_hit_add(panel, at, y - 2, field_w, line + 6,
             HIT_GRAPH_FIELD_BASE + (uint32_t)i);
         at += field_w + 8;
+
+        /*
+         * The button costs the field some width rather than costing the form a
+         * row -- which is the objection the roadmap raised against putting a
+         * picker here, and the answer to it. A path is long, but it scrolls
+         * inside the field; a fourth row would come off the plane's height,
+         * and the plane is the thing the mode is for.
+         */
+        if (choosing) {
+            recon_fill_rect(panel, at, y - 2, choose_w, line + 6, COLOR_KEY);
+            recon_draw_bevel(panel, at, y - 2, choose_w, line + 6, false);
+            recon_draw_text(panel, calc->font, at + 8, y + ascent, choose_w,
+                CHOOSE, COLOR_KEY_TEXT);
+            recon_hit_add(panel, at, y - 2, choose_w, line + 6,
+                HIT_GRAPH_PICK_BASE + (uint32_t)i);
+        }
 
         if (paired) {
             recon_draw_text(panel, calc->font, at, y + ascent, label_w, "y =",
@@ -2221,6 +2289,16 @@ static void calc_draw(void *user, struct recon_panel *panel,
     }
     if (calc->mode == CALC_GRAPH) {
         draw_graph_mode(calc, panel, dx, cy, dw, y + h - PAD_PADDING);
+
+        /*
+         * Over the whole content area rather than beside the plane: while it
+         * is up it is the only thing that can be used, and covering what is
+         * behind it is what makes that obvious rather than something to find
+         * out by clicking.
+         */
+        if (recon_filedlg_is_open(&calc->picker)) {
+            recon_filedlg_draw(&calc->picker, panel, calc->font, x, y, w, h);
+        }
         return;
     }
 
@@ -2505,6 +2583,28 @@ static void date_step(struct recon_calc *calc, int days) {
     *d = t.day;
 }
 
+/*
+ * Put the chosen path in the field it was chosen for.
+ *
+ * Into the field rather than straight into the reader, because the field is
+ * where a path lives in this mode -- somebody can then see it, edit it, and
+ * keep it, and it is written to the settings with the other two. A picker that
+ * loaded a file without showing which one would leave the mode with a plot and
+ * no way to say where it came from.
+ */
+static void data_file_chosen(struct recon_calc *calc) {
+    const char *path = recon_filedlg_path(&calc->picker);
+    if (path == NULL || *path == '\0') {
+        return;
+    }
+    if (calc->picking_for < 0 || calc->picking_for >= GRAPH_CURVES) {
+        return;
+    }
+
+    recon_edit_begin(&calc->formula[calc->picking_for], path, false);
+    remember_graph(calc);
+}
+
 static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed) {
     struct recon_calc *calc = user;
     (void)cx;
@@ -2520,6 +2620,21 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
      */
     if (!pressed && calc->panning) {
         calc->panning = false;
+        return true;
+    }
+
+    /*
+     * The picker takes every click while it is up, including the ones that
+     * miss it -- the graph behind is not usable until it is answered. Before
+     * the refusal below because its own ids are above this window's, which is
+     * what RECON_FILEDLG_IDS_BELOW exists to keep true.
+     */
+    if (pressed && recon_filedlg_is_open(&calc->picker)) {
+        if (recon_filedlg_click(&calc->picker, hit_id) ==
+                RECON_FILEDLG_ACCEPTED) {
+            data_file_chosen(calc);
+        }
+        recon_appwin_refresh(calc->win);
         return true;
     }
 
@@ -2548,6 +2663,18 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
         }
         calc->formula_focused = i;
         recon_edit_focus(graph_field(calc, i));
+        return true;
+    }
+
+    if (hit_id >= HIT_GRAPH_PICK_BASE &&
+            hit_id < HIT_GRAPH_PICK_BASE + GRAPH_CURVES) {
+        calc->picking_for = (int)(hit_id - HIT_GRAPH_PICK_BASE);
+
+        /* Starting where the field points, so a second choice opens beside
+         * the first rather than back at the top every time. */
+        const char *from = calc->formula[calc->picking_for].text;
+        recon_filedlg_open(&calc->picker, RECON_FILEDLG_OPEN,
+            "Choose a data file", from[0] != '\0' ? from : NULL, NULL);
         return true;
     }
 
@@ -2700,6 +2827,20 @@ static bool calc_click(void *user, uint32_t hit_id, int cx, int cy, bool pressed
  */
 static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_calc *calc = user;
+
+    /*
+     * The picker first, and it takes everything -- including the keys it does
+     * not use. Typing into the expression behind a dialog that is waiting for
+     * an answer is how a filename ends up halfway through somebody's formula.
+     */
+    if (recon_filedlg_is_open(&calc->picker)) {
+        if (recon_filedlg_key(&calc->picker, sym, modifiers) ==
+                RECON_FILEDLG_ACCEPTED) {
+            data_file_chosen(calc);
+        }
+        recon_appwin_refresh(calc->win);
+        return true;
+    }
 
     /*
      * Graph mode types an expression rather than arithmetic, so every key goes

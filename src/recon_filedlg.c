@@ -249,9 +249,18 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
 
     int ascent = recon_font_ascent(font);
 
-    /* Dim what is behind, so it reads as a question rather than as another
-     * part of the window. */
-    recon_fill_rect(panel, x, y, w, h, COLOR_DIM);
+    /*
+     * Dim what is behind, so it reads as a question rather than as another
+     * part of the window.
+     *
+     * Blended, not filled. `dim` is a translucent black -- 0x99 of 255 in the
+     * default skin -- and writing it put a 60%-opaque black pixel where the
+     * form had been, which is not a dimmed form: it is a **hole**. The
+     * compositor then blended the window over the desktop through it, so the
+     * wallpaper and whatever windows were behind showed through the middle of
+     * an opaque application. Every caller of this dialog had it. See BG-136.
+     */
+    recon_blend_rect(panel, x, y, w, h, COLOR_DIM);
 
     int dx, dy, dw, dh;
     dialog_rect(x, y, w, h, &dx, &dy, &dw, &dh);

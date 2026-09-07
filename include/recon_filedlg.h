@@ -27,10 +27,31 @@ struct recon_font;
 
 /*
  * Hit ids the dialog claims while it is open. An application must keep its own
- * ids below this; there is room for five hundred, which is four hundred and
- * ninety more than any of them use.
+ * ids below this.
+ *
+ * It was 1500 -- five hundred above RECON_APPWIN_HIT_USER -- with a note
+ * saying that was four hundred and ninety more than any application used. That
+ * stopped being true. The Calculator's ids start at exactly 1500 and run to
+ * 2007, so the two ranges have been sitting on top of each other; it has been
+ * harmless only because the Calculator had no dialog to put up. Adding one
+ * would have made clicking the file list operate the tab bar behind it.
+ *
+ * Now 3000, which clears every application in the tree (the highest id in use
+ * is 2280) with room to grow, and the check below means the next application
+ * to grow past it finds out at compile time rather than by behaving strangely.
  */
-#define RECON_FILEDLG_HIT_BASE (1000 + 500)
+#define RECON_FILEDLG_HIT_BASE (1000 + 2000)
+
+/*
+ * Assert that an application's highest hit id stays out of the dialog's range.
+ *
+ * The constraint above is real and was quietly broken for however long the
+ * Calculator has had a tab bar. A sentence in a header cannot enforce itself;
+ * this can. Use it once, with the highest id the application can produce.
+ */
+#define RECON_FILEDLG_IDS_BELOW(highest) \
+    _Static_assert((highest) < RECON_FILEDLG_HIT_BASE, \
+        "this application's hit ids reach into the file dialog's range")
 
 #define RECON_FILEDLG_ENTRIES_MAX 256
 

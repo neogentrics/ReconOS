@@ -247,6 +247,24 @@ struct wlr_scene_node *recon_panel_node(struct recon_panel *panel);
 /* --- Drawing --- */
 
 void recon_fill(struct recon_panel *panel, recon_color color);
+/*
+ * Lay a colour over what is already there, honouring its alpha.
+ *
+ * `recon_fill_rect` writes the colour, which is right and is what nearly every
+ * caller wants -- including the ones passing a translucent colour on purpose.
+ * A Glass window frame is drawn with an alpha below 255 precisely so the
+ * *compositor* blends the window over the wallpaper behind it; blending that
+ * into the panel instead would make the frame opaque and the skin pointless.
+ *
+ * This is the other operation: blend into the panel, against what this window
+ * has already drawn. The difference matters wherever a translucent colour is
+ * meant to veil something in the same window rather than to make the window
+ * see-through -- a dialog dimming the form behind it being the case that found
+ * it. See BG-136.
+ */
+void recon_blend_rect(struct recon_panel *panel, int x, int y, int w, int h,
+    recon_color color);
+
 void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
     recon_color color);
 

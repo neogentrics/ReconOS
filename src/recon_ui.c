@@ -912,6 +912,63 @@ void recon_fill_rect(struct recon_panel *panel, int x, int y, int w, int h,
 }
 
 /*
+ * Source-over, in place.
+ *
+ * The destination is usually opaque and the arithmetic then reduces to a
+ * straight mix, but it is not always: a Glass window's own frame is
+ * translucent, and a dialog dimming a form drawn on one has to end up with an
+ * alpha that is the two combined rather than the overlay's. Doing it properly
+ * is a dozen lines and costs nothing outside the loop.
+ */
+void recon_blend_rect(struct recon_panel *panel, int x, int y, int w, int h,
+        recon_color color) {
+    unsigned sa = (color >> 24) & 0xFFu;
+
+    /* Nothing to lay on, and the fully opaque case is a fill -- which is
+     * faster and, more usefully, is exactly what a reader would expect. */
+    if (sa == 0u) {
+        return;
+    }
+    if (sa == 0xFFu) {
+        recon_fill_rect(panel, x, y, w, h, color);
+        return;
+    }
+
+    if (panel == NULL || !clip_rect(panel, &x, &y, &w, &h)) {
+        return;
+    }
+
+    unsigned sr = (color >> 16) & 0xFFu;
+    unsigned sg = (color >> 8) & 0xFFu;
+    unsigned sb = color & 0xFFu;
+
+    for (int row = y; row < y + h; row++) {
+        uint32_t *p = panel->pixels + (size_t)row * panel->width + x;
+        for (int col = 0; col < w; col++) {
+            uint32_t d = p[col];
+            unsigned da = (d >> 24) & 0xFFu;
+            unsigned dr = (d >> 16) & 0xFFu;
+            unsigned dg = (d >> 8) & 0xFFu;
+            unsigned db = d & 0xFFu;
+
+            /* How much of the destination survives. */
+            unsigned kept = da * (255u - sa) / 255u;
+            unsigned oa = sa + kept;
+            if (oa == 0u) {
+                p[col] = 0u;
+                continue;
+            }
+
+            unsigned orr = (sr * sa + dr * kept) / oa;
+            unsigned og = (sg * sa + dg * kept) / oa;
+            unsigned ob = (sb * sa + db * kept) / oa;
+
+            p[col] = (oa << 24) | (orr << 16) | (og << 8) | ob;
+        }
+    }
+}
+
+/*
  * One channel of the ramp, rounded rather than truncated.
  *
  * Truncating loses most of a step on a short gradient: a title bar is under
