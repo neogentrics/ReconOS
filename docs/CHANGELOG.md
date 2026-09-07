@@ -23,6 +23,45 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The sweeps run without being remembered.** `.github/workflows/sweeps.yml`
+builds and runs every suite sanitized, then again the way `scripts/package.sh`
+builds, and runs the analyzer as a job of its own. The second pass is the
+BG-134 lesson: a containment check passed the sanitizers, the analyzer and
+every suite, then aborted on the first path it resolved in an optimised build,
+because every build this project makes for itself is Debug and the one that
+ships is not.
+
+**What made it possible was fixing a claim this file has made for a year.**
+Every suite was written to need no window -- that is stated all over
+`CMakeLists.txt` -- but it was true of the *code* and not of the *build*:
+`pkg_check_modules(WLR REQUIRED wlroots)` ran before anything else, so
+configuring at all wanted wlroots 0.17.1 and no other machine could run a
+single suite. `-DRECONOS_TESTS_ONLY=ON` configures the twenty-five against
+stock libraries. wlroots is needed only by the compositor; two suites want
+wayland-server for an event loop, which every distribution has.
+
+**And ctest was running eleven of them.** The other fourteen -- the
+malformed-input sweep, the firewall, the keyring, the error catalogue among
+them -- were built and never registered. "100% tests passed, 0 tests failed out
+of 11" was true, and meant less than half. All twenty-five are registered now.
+That is the exact shape of green this project keeps writing tests against,
+sitting in its own build file.
+
+Rehearsed rather than pushed and watched: the machine this is written on is
+ubuntu-24.04 with mbedTLS 2.28, the same as the runner image, so both
+configurations were built and run before the commit. 25/25 sanitized in 45
+seconds, 25/25 optimised in four.
+
+**What the optimised pass reports.** 330 warnings from twelve distinct sites --
+ten in `recon_fs.c`, one each in `recon_users.c` and `recon_theme.c`, every one
+`-Wformat-truncation`, none of them visible to any build this project makes for
+itself because GCC needs the optimiser's value ranges to see them. `snprintf`
+truncates rather than overflows, so none is a memory fault; but a path silently
+cut is the thing this system refuses everywhere else, so they are counted in
+the run summary and left as work. Counted rather than gated, because failing on
+twelve pre-existing warnings would have made it red on its first run, and that
+is how somebody learns to ignore a red build.
+
 **The Terminal answers questions.** `help password` used to say "No command
 named 'password'" -- true, useless, and said by a system with three pages about
 passwords that had just declined to mention them. It now names what the help

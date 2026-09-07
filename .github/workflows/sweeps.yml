@@ -41,7 +41,7 @@ jobs:
     name: Suites, sanitized and then as a release is built
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install what the suites need
         run: |
@@ -95,7 +95,7 @@ jobs:
     name: Static analyzer
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install what the suites need
         run: |

@@ -2011,6 +2011,31 @@ search worse at the thing it was already good at. Four pages at most, because
 the menu is a fixed height and a word like "file" is in most of the document --
 the rest is what opening Help is for.
 
+**Nothing ran the sweeps automatically. Something does now.** The three --
+`check.sh` sanitized and optimised, `analyze.sh`, and the suites -- run on every
+push and every pull request.
+
+Two things had to be fixed first, and both were older and more interesting than
+the workflow.
+
+The suites could not be built anywhere but here. Every one of them was written
+to need no window and this document says so repeatedly, but the *build* asked
+for wlroots before it asked for anything else, so a machine without wlroots
+0.17.1 could not configure, let alone run one. `-DRECONOS_TESTS_ONLY=ON` builds
+the twenty-five against stock libraries.
+
+And `ctest` knew about eleven of them. Fourteen were built and never registered,
+including the malformed-input sweep, the firewall, the keyring and the error
+catalogue -- so `100% tests passed, 0 tests failed out of 11` was true and
+covered less than half. All twenty-five are registered now.
+
+**Twelve places where an optimised build says a path may be cut.** Ten in
+`recon_fs.c`, one each in `recon_users.c` and `recon_theme.c`, all
+`-Wformat-truncation`, and none visible to any build this project makes for
+itself. Safe in the memory sense -- `snprintf` truncates rather than overflows
+-- but a path silently cut is what this system refuses everywhere else, and
+that is why they are named here rather than filed as noise.
+
 **The Terminal answers questions now.** `help <word>` looked for a command with
 that name and said "No command named 'password'" when there was not one --
 true, useless, and said by a system that has three pages about passwords and
