@@ -417,10 +417,21 @@ static void pop3_line(struct recon_mail_session *s, char *line) {
             s->asking--;
             changed(s);
         } else {
-            header_is(line, "From", message->from, sizeof(message->from)) ||
-            header_is(line, "Subject", message->subject,
-                sizeof(message->subject)) ||
-            header_is(line, "Date", message->date, sizeof(message->date));
+            /*
+             * A line is one header, so the first that matches is the answer.
+             *
+             * Written as `a() || b() || c();` before, which does the same
+             * thing and reads as an expression whose value was forgotten --
+             * which is exactly what a real mistake looks like, and the
+             * compiler cannot tell the two apart.
+             */
+            if (!header_is(line, "From", message->from,
+                    sizeof(message->from)) &&
+                    !header_is(line, "Subject", message->subject,
+                        sizeof(message->subject))) {
+                header_is(line, "Date", message->date,
+                    sizeof(message->date));
+            }
             return;
         }
 
@@ -614,10 +625,21 @@ static void imap_line(struct recon_mail_session *s, char *line) {
 
         struct recon_mail_message *message = current(s);
         if (message != NULL && line[0] != ')' && line[0] != '\0') {
-            header_is(line, "From", message->from, sizeof(message->from)) ||
-            header_is(line, "Subject", message->subject,
-                sizeof(message->subject)) ||
-            header_is(line, "Date", message->date, sizeof(message->date));
+            /*
+             * A line is one header, so the first that matches is the answer.
+             *
+             * Written as `a() || b() || c();` before, which does the same
+             * thing and reads as an expression whose value was forgotten --
+             * which is exactly what a real mistake looks like, and the
+             * compiler cannot tell the two apart.
+             */
+            if (!header_is(line, "From", message->from,
+                    sizeof(message->from)) &&
+                    !header_is(line, "Subject", message->subject,
+                        sizeof(message->subject))) {
+                header_is(line, "Date", message->date,
+                    sizeof(message->date));
+            }
         }
         return;
     }

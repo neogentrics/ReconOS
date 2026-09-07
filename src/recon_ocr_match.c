@@ -127,7 +127,22 @@ struct sizeset {
     struct candidate items[CANDIDATES];
 
     bool twins_built;
-    unsigned char twins[CANDIDATES][(CANDIDATES + 7) / 8];
+    /*
+     * Which glyphs have a twin, and not which twin.
+     *
+     * There was a bitset here recording every confusable *pair*, alongside a
+     * reader for it, and nothing ever asked the pairwise question -- only
+     * has_twin below was consulted, and it is set under exactly the same
+     * condition. So the table was built at O(n^2) mask comparisons and read by
+     * nothing.
+     *
+     * Removed rather than kept, because a table that exists looks used. The
+     * finer question -- "which letter is this one confusable with?" -- is a
+     * real one and would let a match be rejected in favour of a specific
+     * alternative rather than merely distrusted; when something wants to ask
+     * it, build_twins is where the answer already gets computed and thrown
+     * away.
+     */
 
     /* Whether this candidate has any twin at all. The pairwise table says
      * which; this says whether to bother asking, and is what the refusal
@@ -617,20 +632,11 @@ static void build_twins(struct sizeset *set) {
                 }
             }
             if (best >= TWINS) {
-                set->twins[i][j / 8] |= (unsigned char)(1u << (j % 8));
-                set->twins[j][i / 8] |= (unsigned char)(1u << (i % 8));
                 set->has_twin[i] = true;
                 set->has_twin[j] = true;
             }
         }
     }
-}
-
-static bool are_twins(const struct sizeset *set, int i, int j) {
-    if (i < 0 || j < 0) {
-        return false;
-    }
-    return (set->twins[i][j / 8] & (1u << (j % 8))) != 0;
 }
 
 /* --- Copying a mark out of the page --- */

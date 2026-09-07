@@ -197,16 +197,6 @@ static int column_ink(const unsigned char *ink, int width,
     return seen;
 }
 
-static bool row_has_ink(const unsigned char *ink, int width,
-        const struct recon_ocr_region *at, int y) {
-    return row_ink(ink, width, at, y) > 0;
-}
-
-static bool column_has_ink(const unsigned char *ink, int width,
-        const struct recon_ocr_region *at, int x) {
-    return column_ink(ink, width, at, x) > 0;
-}
-
 /*
  * A block big enough that a full-span line in it means a frame rather than a
  * letter.

@@ -2553,6 +2553,16 @@ static void explorer_context_action(void *user, uint32_t id) {
         break;
     }
 
+    /*
+     * Handled above, before this switch, because they are a base with an
+     * index added rather than single values. Named here so the switch stays
+     * exhaustive -- one that has stopped covering its enum stops being able to
+     * tell anybody about the next value somebody adds.
+     */
+    case EXCTX_OPEN_WITH_DEFAULT:
+    case EXCTX_OPEN_WITH_BASE:
+        break;
+
     case EXCTX_OPEN:        do_open_selected(ex); break;
     case EXCTX_RENAME:      do_begin_rename(ex); break;
     case EXCTX_DELETE:      do_delete(ex); break;

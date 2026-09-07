@@ -1338,8 +1338,17 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
         return;
     }
 
+    /*
+     * WLR_BUTTON_RELEASED, not WL_POINTER_BUTTON_STATE_RELEASED.
+     *
+     * `event->state` is wlroots' own enum. The two happen to have the same
+     * values today, which is why comparing across them worked -- and is
+     * exactly why it is worth not doing: nothing makes that stay true across
+     * a wlroots release, and the day it stopped being true every click in the
+     * system would be read as the wrong half of a press.
+     */
     if (dispatch_button(server, event->button,
-            event->state != WL_POINTER_BUTTON_STATE_RELEASED)) {
+            event->state != WLR_BUTTON_RELEASED)) {
         return;
     }
 
@@ -1634,31 +1643,6 @@ void recon_spawn(struct recon_server *server, const char *command) {
         /* Only reached if exec failed. */
         fprintf(stderr, "ReconOS: failed to exec '%s'\n", term);
         _exit(127);
-    }
-}
-
-/* Focus the window after the currently focused one, wrapping around. */
-static void cycle_focus(struct recon_server *server) {
-    if (wl_list_length(&server->toplevels) < 2) {
-        return;
-    }
-
-    /* Walk forward to the next window that is actually on screen. */
-    struct recon_toplevel *current =
-        wl_container_of(server->toplevels.next, current, link);
-    struct wl_list *node = current->link.next;
-
-    while (node != &current->link) {
-        if (node == &server->toplevels) {
-            node = node->next; /* skip the list head */
-            continue;
-        }
-        struct recon_toplevel *candidate = wl_container_of(node, candidate, link);
-        if (!candidate->minimized) {
-            recon_focus_toplevel(candidate);
-            return;
-        }
-        node = node->next;
     }
 }
 

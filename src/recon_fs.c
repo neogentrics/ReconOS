@@ -1398,10 +1398,6 @@ static bool ensure_trash_in(enum recon_volume volume) {
     return true;
 }
 
-static bool ensure_trash(void) {
-    return ensure_trash_in(RECON_VOLUME_USER);
-}
-
 bool recon_fs_is_trash(const char *cwd, const char *path) {
     char canonical[RECON_PATH_MAX];
     char host[RECON_PATH_MAX];

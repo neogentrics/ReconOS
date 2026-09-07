@@ -23,6 +23,44 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The compiler was never asked what it thought.** There were no warning flags
+in `CMakeLists.txt` at all -- not through v0.1, not through v0.4 -- so the whole
+project had been building at gcc's default level, which says almost nothing.
+Switching on `-Wall -Wextra` for the first time turned up four real things in a
+few minutes:
+
+- **Two mail header chains written as `a() || b() || c();`** -- an expression
+  statement whose value is discarded. It works, and it is exactly the shape a
+  real mistake takes, and the compiler cannot tell the two apart. Said as an
+  `if` now.
+- **A click compared across two different enums.** `event->state` is wlroots'
+  `enum wlr_button_state` and it was being tested against Wayland's
+  `WL_POINTER_BUTTON_STATE_RELEASED`. They share values today and are under no
+  obligation to tomorrow -- the day they stopped, every click in the system
+  would be read as the wrong half of a press.
+- **Two switches over an enum that had quietly stopped covering it**, so they
+  had stopped being able to warn about the next value anybody added. Both now
+  name the values handled elsewhere, so the checking continues.
+- **Six functions nothing called.** One was `cycle_focus`, the old Alt+Tab,
+  left behind when `recon_shell_cycle_windows` replaced it -- dead code that
+  looks like a working feature is the kind that costs somebody an hour. The
+  others were thin wrappers and an orphaned declaration. One of them,
+  `are_twins`, went with a table nothing read: the OCR built a bitset of every
+  confusable *pair* at O(n^2) mask comparisons and only ever consulted the
+  derived "has any twin at all". The finer question is a real one and is named
+  in the code where the answer is still being computed and thrown away.
+
+None of those was going to be found by reading. The build is clean at
+`-Wall -Wextra` now, with `-Wunused-parameter` deliberately off -- a callback
+signature is fixed by whoever calls it, so a handler ignoring an argument is
+the normal case, and twenty-two of those would bury the next real one.
+
+`third_party` is included as a system directory, which is what makes the rest
+readable: `stb_truetype.h` alone contributed ninety-odd "defined but not used"
+warnings, because a header-only library is mostly functions a program does not
+call. The six real ones were hidden in that ninety, which is the whole argument
+for the distinction.
+
 **A file type can be chosen, not only inherited.** Right-clicking a file offers
 "Open with" for every application that opens files, with the one that would
 open it marked. Choosing one remembers the choice for that extension and opens

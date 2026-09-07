@@ -87,9 +87,6 @@ static void out(struct recon_cmd_session *s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 static void out_err(struct recon_cmd_session *s, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
-static void out_note(struct recon_cmd_session *s, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
-
 static void out(struct recon_cmd_session *s, const char *fmt, ...) {
     if (s->output_used >= sizeof(s->output) - 1) {
         return;
@@ -144,14 +141,6 @@ static void out_err(struct recon_cmd_session *s, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     out_marked(s, RECON_CMD_LINE_ERROR, fmt, args);
-    va_end(args);
-}
-
-/* Worth reading before the rest: a heading, a warning, a caveat. */
-static void out_note(struct recon_cmd_session *s, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    out_marked(s, RECON_CMD_LINE_NOTICE, fmt, args);
     va_end(args);
 }
 

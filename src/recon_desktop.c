@@ -409,9 +409,22 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
             if (is_shortcut && read_shortcut(item->name, item->target,
                     sizeof(item->target))) {
                 item->kind = ITEM_SHORTCUT;
-                /* Shown without the extension, the way a shortcut should be. */
-                snprintf(item->label, sizeof(item->label), "%.*s",
-                    (int)(length - 4), item->name);
+                /*
+                 * Shown without the extension, the way a shortcut should be.
+                 *
+                 * Copied by hand rather than with snprintf, because `label`
+                 * and `name` are two members of one struct and the compiler
+                 * cannot see that they do not overlap -- it warns about a
+                 * source and destination "inside the same object", which is
+                 * true and harmless. memcpy says what this is, and the length
+                 * is bounded by both arrays rather than by one.
+                 */
+                size_t shown = length - 4;
+                if (shown >= sizeof(item->label)) {
+                    shown = sizeof(item->label) - 1;
+                }
+                memcpy(item->label, item->name, shown);
+                item->label[shown] = '\0';
             } else {
                 item->kind = ITEM_FILE;
             }

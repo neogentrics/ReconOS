@@ -30,6 +30,28 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
+### Warnings
+
+The build runs at `-Wall -Wextra`, and is clean. Keep it that way: the value of
+a warning list is entirely in whether anybody reads it, and a list with twelve
+known-harmless entries in it is a list nobody reads.
+
+`-Wunused-parameter` is off on purpose. A callback's signature is fixed by
+whoever calls it, so a handler that ignores an argument is the normal case and
+not a smell.
+
+Borrowed headers in `third_party/` are included as **system** directories, so
+the compiler does not warn about them. That is not politeness -- `stb_truetype.h`
+on its own produces about ninety "defined but not used" warnings, because a
+header-only library is mostly functions any one program does not call, and the
+six real dead functions in ReconOS's own code were invisible inside that.
+
+Two warnings needed the code changed rather than explained, and both are the
+same shape: `snprintf` with a source and a destination the compiler can see are
+inside one object, even though they are different members or different rows.
+`memcpy` and `memmove` say what is meant and are checkable; `snprintf` there was
+only ever a habit.
+
 ### Building from a copy, and the trap in it
 
 Working on one machine and building on another -- editing on Windows and

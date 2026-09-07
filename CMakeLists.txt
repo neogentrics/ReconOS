@@ -13,6 +13,29 @@ set(CMAKE_C_EXTENSIONS ON)
 # wlroots is pre-1.0 and requires callers to acknowledge its unstable API.
 add_compile_definitions(WLR_USE_UNSTABLE)
 
+#
+# --- Warnings ---
+#
+# There were none of these for the whole of v0.1 through v0.4, which means the
+# build had been running at the compiler's default level -- and the first time
+# they were switched on, four real things fell out of it in a few minutes:
+#
+#   * two mail header chains written as `a() || b() || c();`, an expression
+#     whose value is discarded, which is exactly the shape a real mistake takes
+#   * a click compared across two different enums that happen to share their
+#     values today and are under no obligation to tomorrow
+#   * two switches over an enum that had quietly stopped covering it, so they
+#     had stopped being able to warn about the next value added
+#   * six functions nothing called, one of them the old Alt+Tab left behind
+#     after it was replaced
+#
+# None of those was going to be found by reading. -Wunused-parameter is left
+# off deliberately: a callback signature is fixed by whoever calls it, so a
+# handler that ignores an argument is the normal case and not a smell, and
+# twenty-two of those would bury the next real one.
+#
+add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WLR REQUIRED wlroots)
 pkg_check_modules(WAYLAND REQUIRED wayland-server)
@@ -173,7 +196,9 @@ target_include_directories(ReconOS PRIVATE
     ${XKB_INCLUDE_DIRS}
     ${PIXMAN_INCLUDE_DIRS}
     "${CMAKE_CURRENT_BINARY_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_include_directories(ReconOS SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # Modules are loaded with dlopen and call back into ReconOS directly, so the
@@ -358,7 +383,8 @@ add_executable(recon_ocr_match_tests
     src/recon_ocr.c)
 
 target_include_directories(recon_ocr_match_tests PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(recon_ocr_match_tests SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # stb_truetype calls floor, ceil, sqrt, pow, fmod, cos and fabs.
@@ -389,8 +415,9 @@ add_executable(recon_png_tests
 
 target_include_directories(recon_png_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
     ${ZLIB_INCLUDE_DIRS})
+target_include_directories(recon_png_tests SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 target_link_libraries(recon_png_tests PRIVATE ${ZLIB_LIBRARIES} m)
 

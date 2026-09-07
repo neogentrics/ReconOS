@@ -2119,9 +2119,13 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   it: `apps <name>` opens a window while the login screen is up, and `state`
   then lists that window as *open* and *focused*. It is neither — nothing can
   reach it.
-- **Not fixed.** The behaviour is right and only the reporting is misleading,
-  so this is recorded rather than changed for now: `state` should say the login
-  screen has the input, the way `session` already does.
+- **Fixed in** v0.4.0, in the reporting rather than the behaviour: the
+  behaviour is right, and only what the system said about it was misleading.
+  `state` now opens with a line saying who has the input, and marks the focused
+  window "not reachable" while the login screen holds it. It was recorded as
+  "not fixed" first and fixed an hour later in the same session; this line
+  replaces that one, because a bug record that says something is open when it
+  is closed is the same kind of lie the bug itself was.
 - **What it cost** three rounds of measuring a window that could not be clicked,
   and one wrong conclusion — that the mode tabs did not work — that was a
   property of the harness and not of the Calculator. `scripts/look.sh` now signs

@@ -4,8 +4,18 @@
  * Internal to ReconOS -- a module author reads recon_module.h instead.
  *
  * Modules are found in two places and behave differently for it:
- *   /System/Modules/*.rts   loaded at startup, part of the system
- *   /Apps/*.rex             loaded at startup, offered to the user
+ *
+ *   in /System/Modules, named .rts   loaded at startup, part of the system
+ *   in /Apps, named .rex             loaded at startup, offered to the user
+ *
+ * Written out in words rather than as globs, because a glob for those files
+ * puts a slash directly before a star -- which is the sequence that opens a
+ * comment, inside one. The compiler is right to mention it, and had been
+ * mentioning it twenty-four times a build in a warning list nobody read.
+ *
+ * The first attempt at this note quoted the glob it was explaining and warned
+ * about itself, which is worth leaving recorded: the fix for this class is to
+ * stop writing the sequence, not to write it somewhere that feels safer.
  *
  * Both are loaded with dlopen. ReconOS is linked so its own symbols are
  * visible to what it loads, which is what lets a module call the same

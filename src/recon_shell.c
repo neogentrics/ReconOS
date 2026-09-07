@@ -548,7 +548,17 @@ static void menu_unpin(const char *name) {
             continue;
         }
         if (keep != i) {
-            snprintf(names[keep], RECON_NAME_MAX, "%s", names[i]);
+            /*
+             * memmove, not snprintf.
+             *
+             * `keep` is always less than `i` here, so the two rows are
+             * different rows -- but they are rows of one array, and the
+             * compiler can only see that a source and a destination are
+             * inside the same object. memmove is the primitive that means
+             * "these might overlap and that is fine", which is exactly the
+             * claim being made.
+             */
+            memmove(names[keep], names[i], RECON_NAME_MAX);
         }
         keep++;
     }
@@ -5044,6 +5054,12 @@ static void context_activate(struct recon_shell *shell, uint32_t id) {
     }
 
     switch (shell->context_kind) {
+    /* Answered above, with its own early return, because the clock's menu is
+     * one choice with several faces rather than a list of actions. Named so
+     * the switch stays exhaustive and keeps checking itself. */
+    case RECON_CONTEXT_CLOCK:
+        break;
+
     case RECON_CONTEXT_TASKBAR_WINDOW: {
         if (shell->context_button < 0 || shell->context_button >= shell->button_count) {
             return;
