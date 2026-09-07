@@ -205,6 +205,16 @@ enum action {
     ACTION_SKIN_SET,
     ACTION_SKIN_CANCEL,
     ACTION_SKIN_FLAT,
+    /*
+     * Take a measurement out of the file, so it follows the default again.
+     *
+     * Its own action rather than sharing ACTION_SKIN_FLAT's, even though it
+     * takes the same place on screen. One button whose meaning depends on
+     * which row is chosen is fine when its *label* changes with it; one
+     * handler doing two unrelated things because the ids were shared is how
+     * the wrong one gets called from somewhere else later.
+     */
+    ACTION_SKIN_DEFAULT,
     /* Passwords */
     ACTION_FORGET_SECRET,
 
@@ -1450,6 +1460,34 @@ static bool colour_parse(const char *text, recon_color *out) {
  * entirely on what somebody is trying to change, and a shortened list is a
  * guess about that made by whoever wrote the page.
  */
+/*
+ * The editor's list: every colour, then every measurement.
+ *
+ * One list rather than two pages, because they are the same kind of thing --
+ * a line in a skin file -- and because the alternative is a tab bar over
+ * fourteen rows. The measurements sit after the colours rather than before
+ * them because there are seventy-odd colours and ten measurements, and the
+ * thing somebody opens this to change is nearly always a colour.
+ */
+#define SKIN_ROW_COUNT (RECON_THEME_ROLE_COUNT + RECON_METRIC_COUNT)
+
+static bool skin_row_is_metric(int row) {
+    return row >= RECON_THEME_ROLE_COUNT;
+}
+
+static enum recon_theme_metric skin_row_metric(int row) {
+    return (enum recon_theme_metric)(row - RECON_THEME_ROLE_COUNT);
+}
+
+/* The name the skin file uses, for either kind. Shown raw, like the colours
+ * already are: this page is editing a file and says so, and the file's own
+ * word for a thing is the one worth learning. */
+static const char *skin_row_name(int row) {
+    return skin_row_is_metric(row)
+        ? recon_theme_metric_name(skin_row_metric(row))
+        : recon_theme_role_name((enum recon_theme_role)row);
+}
+
 static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
@@ -1463,7 +1501,7 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
 
     y = draw_heading(cp, p, x, y, w, title,
         "Colours are RRGGBB, or AARRGGBB where transparency matters. "
-        "Saving is immediate.");
+        "Measurements are at the bottom of the list. Saving is immediate.");
 
     /* Room for the field and the buttons under the list, always, so choosing
      * a row near the bottom does not push the Save button off the page. */
@@ -1472,15 +1510,15 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
     if (rows < 1) {
         rows = 1;
     }
-    if (rows > RECON_THEME_ROLE_COUNT) {
-        rows = RECON_THEME_ROLE_COUNT;
+    if (rows > SKIN_ROW_COUNT) {
+        rows = SKIN_ROW_COUNT;
     }
 
     if (cp->skin_row < 0) {
         cp->skin_row = 0;
     }
-    if (cp->skin_row >= RECON_THEME_ROLE_COUNT) {
-        cp->skin_row = RECON_THEME_ROLE_COUNT - 1;
+    if (cp->skin_row >= SKIN_ROW_COUNT) {
+        cp->skin_row = SKIN_ROW_COUNT - 1;
     }
     /* Keep the chosen row in sight, so the arrow keys and a click agree about
      * where the list is. */
@@ -1489,8 +1527,8 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
     } else if (cp->skin_row >= cp->skin_scroll + rows) {
         cp->skin_scroll = cp->skin_row - rows + 1;
     }
-    if (cp->skin_scroll > RECON_THEME_ROLE_COUNT - rows) {
-        cp->skin_scroll = RECON_THEME_ROLE_COUNT - rows;
+    if (cp->skin_scroll > SKIN_ROW_COUNT - rows) {
+        cp->skin_scroll = SKIN_ROW_COUNT - rows;
     }
     if (cp->skin_scroll < 0) {
         cp->skin_scroll = 0;
@@ -1506,7 +1544,7 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
 
     for (int i = 0; i < rows; i++) {
         int role = cp->skin_scroll + i;
-        if (role >= RECON_THEME_ROLE_COUNT) {
+        if (role >= SKIN_ROW_COUNT) {
             break;
         }
 
@@ -1517,6 +1555,55 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
             recon_fill_role(p, x, ry, w, ROW_HEIGHT, RECON_THEME_SELECTION);
         } else if (i % 2 == 1) {
             recon_fill_rect(p, x, ry, w, ROW_HEIGHT, COLOR_ROW_ALT);
+        }
+
+        recon_color ink = chosen ? THEME(SELECTION_TEXT) : COLOR_TEXT;
+        recon_color faint = chosen ? THEME(SELECTION_TEXT) : COLOR_DIM;
+        int text_x = x + 6 + swatch + 10;
+
+        if (skin_row_is_metric(role)) {
+            enum recon_theme_metric metric = skin_row_metric(role);
+
+            /*
+             * No swatch. The column is left empty rather than filled with
+             * something standing in for one, because a measurement has no
+             * colour and drawing a grey square in the same place would read as
+             * a colour somebody had chosen badly.
+             */
+            char said[64];
+            recon_theme_metric_text(metric, recon_theme_metric(metric),
+                said, sizeof(said));
+
+            /*
+             * A wider value column than the colours get, and it starts
+             * further left.
+             *
+             * A colour is eight characters at most. "close maximize minimize"
+             * is twenty-three, and the first version gave it the colours'
+             * column and let it run under the word "default" -- which a
+             * photograph showed and the code did not. Measurement names are
+             * short enough to spare the room.
+             */
+            recon_draw_text(p, cp->font, text_x,
+                ry + (ROW_HEIGHT + ascent) / 2 - 2,
+                w - (text_x - x) - 340, skin_row_name(role), ink);
+
+            recon_draw_text(p, cp->font, x + w - 330,
+                ry + (ROW_HEIGHT + ascent) / 2 - 2, 256, said, faint);
+
+            /*
+             * Said when the skin is silent about it, because "24" and "24
+             * because nobody said otherwise" behave differently: the second
+             * follows the default if the default moves, and there is nothing
+             * in the file to remove.
+             */
+            if (!recon_theme_metric_is_set(metric)) {
+                recon_draw_text(p, cp->font, x + w - 68,
+                    ry + (ROW_HEIGHT + ascent) / 2 - 2, 62, "default", faint);
+            }
+
+            recon_hit_add(p, x, ry, w, ROW_HEIGHT, HIT_ROW_BASE + i);
+            continue;
         }
 
         recon_color c = recon_theme_color((enum recon_theme_role)role);
@@ -1544,13 +1631,9 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         char value[16];
         colour_text(c, value, sizeof(value));
 
-        recon_color ink = chosen ? THEME(SELECTION_TEXT) : COLOR_TEXT;
-        recon_color faint = chosen ? THEME(SELECTION_TEXT) : COLOR_DIM;
-
-        int text_x = x + 6 + swatch + 10;
         recon_draw_text(p, cp->font, text_x,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, w - (text_x - x) - 210,
-            recon_theme_role_name((enum recon_theme_role)role), ink);
+            skin_row_name(role), ink);
 
         recon_draw_text(p, cp->font, x + w - 200,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, 80, value, faint);
@@ -1570,9 +1653,34 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
     y += cp->list_h + PADDING;
 
     if (cp->skin_value_editing) {
-        char label[96];
-        snprintf(label, sizeof(label), "%s. Empty leaves it alone.",
-            recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+        char label[160];
+        if (skin_row_is_metric(cp->skin_row)) {
+            /*
+             * The range, in the label, before anything is typed. set_metric
+             * clamps -- right for a file being read, wrong as the only answer
+             * a person gets, because a number silently moved looks exactly
+             * like a number accepted.
+             */
+            enum recon_theme_metric metric = skin_row_metric(cp->skin_row);
+            int least = 0;
+            int most = 0;
+            recon_theme_metric_range(metric, &least, &most, NULL);
+
+            if (metric == RECON_METRIC_BUTTONS) {
+                snprintf(label, sizeof(label),
+                    "%s: close, maximize, minimize -- any of them, in any "
+                    "order.", skin_row_name(cp->skin_row));
+            } else if (least == 0 && most == 1) {
+                snprintf(label, sizeof(label), "%s: yes or no.",
+                    skin_row_name(cp->skin_row));
+            } else {
+                snprintf(label, sizeof(label), "%s: %d to %d.",
+                    skin_row_name(cp->skin_row), least, most);
+            }
+        } else {
+            snprintf(label, sizeof(label), "%s. Empty leaves it alone.",
+                skin_row_name(cp->skin_row));
+        }
         recon_draw_text(p, cp->font, x, y + ascent, w, label, COLOR_DIM);
         y += line;
 
@@ -1587,21 +1695,43 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
         return;
     }
 
+    bool on_metric = skin_row_is_metric(cp->skin_row);
+
     recon_draw_text(p, cp->font, x, y + ascent, w,
-        "Pick a colour to change it. A skin is a file; this writes to it.",
+        on_metric
+            ? "Pick a measurement to change it. A skin is a file; this "
+              "writes to it."
+            : "Pick a colour to change it. A skin is a file; this writes to "
+              "it.",
         COLOR_DIM);
     y += line + PADDING;
 
-    int bx = draw_button(cp, p, x, y, "Change Colour",
+    /*
+     * The middle button is the one that changes with the row, and its label
+     * changes with it. "Remove Ramp" on a measurement would be a button whose
+     * words mean nothing where it is.
+     */
+    int bx = draw_button(cp, p, x, y,
+        on_metric ? "Change Measurement" : "Change Colour",
         HIT_ACTION_BASE + ACTION_EDIT_SKIN, true);
 
-    /* Flattening is its own button rather than a value you can type, because
-     * "no gradient" is not a colour and there is nothing to type for it. */
-    recon_color from, to;
-    bool ramped = recon_theme_gradient((enum recon_theme_role)cp->skin_row,
-        &from, &to);
-    bx = draw_button(cp, p, bx, y, "Remove Ramp",
-        HIT_ACTION_BASE + ACTION_SKIN_FLAT, ramped);
+    if (on_metric) {
+        /* Only when the file actually says something. On a row already
+         * following the default this would be a button that does nothing,
+         * which is worse than a button that is not there. */
+        bx = draw_button(cp, p, bx, y, "Use Default",
+            HIT_ACTION_BASE + ACTION_SKIN_DEFAULT,
+            recon_theme_metric_is_set(skin_row_metric(cp->skin_row)));
+    } else {
+        /* Flattening is its own button rather than a value you can type,
+         * because "no gradient" is not a colour and there is nothing to type
+         * for it. */
+        recon_color from, to;
+        bool ramped = recon_theme_gradient((enum recon_theme_role)cp->skin_row,
+            &from, &to);
+        bx = draw_button(cp, p, bx, y, "Remove Ramp",
+            HIT_ACTION_BASE + ACTION_SKIN_FLAT, ramped);
+    }
 
     draw_button(cp, p, bx, y, "Done",
         HIT_ACTION_BASE + ACTION_SKIN_DONE, true);
@@ -6707,15 +6837,41 @@ static void do_action(struct control_panel *cp, enum action action) {
         }
 
         if (cp->skin_editing) {
-            /* Inside the editor this button changes the chosen colour. */
+            /* Inside the editor this button changes whatever row is chosen,
+             * and a row is a colour or a measurement. */
             cp->skin_value_editing = true;
+
+            if (skin_row_is_metric(cp->skin_row)) {
+                enum recon_theme_metric metric = skin_row_metric(cp->skin_row);
+
+                char current[64];
+                recon_theme_metric_text(metric, recon_theme_metric(metric),
+                    current, sizeof(current));
+                recon_edit_begin(&cp->skin_value, current, false);
+
+                int least = 0;
+                int most = 0;
+                recon_theme_metric_range(metric, &least, &most, NULL);
+                if (metric == RECON_METRIC_BUTTONS) {
+                    set_status(cp, false,
+                        "%s: close, maximize and minimize, in any order.",
+                        skin_row_name(cp->skin_row));
+                } else if (least == 0 && most == 1) {
+                    set_status(cp, false, "%s: yes or no.",
+                        skin_row_name(cp->skin_row));
+                } else {
+                    set_status(cp, false, "%s: a number from %d to %d.",
+                        skin_row_name(cp->skin_row), least, most);
+                }
+                break;
+            }
 
             char current[16];
             colour_text(recon_theme_color((enum recon_theme_role)cp->skin_row),
                 current, sizeof(current));
             recon_edit_begin(&cp->skin_value, current, false);
             set_status(cp, false, "%s, as RRGGBB or AARRGGBB.",
-                recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+                skin_row_name(cp->skin_row));
             break;
         }
 
@@ -6751,6 +6907,55 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_color colour;
         const char *typed = cp->skin_value.text;
 
+        if (skin_row_is_metric(cp->skin_row)) {
+            enum recon_theme_metric metric = skin_row_metric(cp->skin_row);
+
+            int wanted = 0;
+            if (!recon_theme_metric_parse(metric, typed, &wanted)) {
+                int least = 0;
+                int most = 0;
+                recon_theme_metric_range(metric, &least, &most, NULL);
+
+                if (metric == RECON_METRIC_BUTTONS) {
+                    set_status(cp, true,
+                        "'%s' is not a list of buttons. Any of close, "
+                        "maximize and minimize.", typed);
+                } else if (least == 0 && most == 1) {
+                    set_status(cp, true, "'%s' is not yes or no.", typed);
+                } else {
+                    set_status(cp, true,
+                        "'%s' is not a number from %d to %d.",
+                        typed, least, most);
+                }
+                break;
+            }
+
+            if (!recon_theme_set_metric(cp->skin_name, metric, true, wanted)) {
+                set_status(cp, true, "%s", recon_theme_last_error());
+                break;
+            }
+
+            /*
+             * Read back rather than reported from what was typed.
+             * `recon_theme_set_metric` clamps, and although the parse above
+             * refuses anything out of range, saying what the file now holds
+             * is the only answer that stays true if either range ever moves.
+             */
+            char now[64];
+            recon_theme_metric_text(metric, recon_theme_metric(metric),
+                now, sizeof(now));
+            set_status(cp, false, "%s is %s.", skin_row_name(cp->skin_row),
+                now);
+
+            cp->skin_value_editing = false;
+            recon_edit_end(&cp->skin_value);
+
+            /* The frame is drawn from these numbers, so the window this is
+             * sitting in changes shape as the sentence appears. */
+            recon_shell_restyle(cp->server->shell);
+            break;
+        }
+
         if (!colour_parse(typed, &colour)) {
             set_status(cp, true,
                 "'%s' is not a colour. Six digits, or eight with an alpha.",
@@ -6768,7 +6973,7 @@ static void do_action(struct control_panel *cp, enum action action) {
          * this sentence is quoting -- which is how it came out as "bar is
          * now ." the first time. */
         set_status(cp, false, "%s is now %s.",
-            recon_theme_role_name((enum recon_theme_role)cp->skin_row), typed);
+            skin_row_name(cp->skin_row), typed);
 
         cp->skin_value_editing = false;
         recon_edit_end(&cp->skin_value);
@@ -6776,6 +6981,26 @@ static void do_action(struct control_panel *cp, enum action action) {
         /* Everything on screen is drawn from this palette, so the change is
          * visible before the sentence saying it happened. */
         recon_shell_restyle(cp->server->shell);
+        break;
+    }
+
+    case ACTION_SKIN_DEFAULT: {
+        if (!skin_row_is_metric(cp->skin_row)) {
+            break;
+        }
+        enum recon_theme_metric metric = skin_row_metric(cp->skin_row);
+
+        if (!recon_theme_set_metric(cp->skin_name, metric, false, 0)) {
+            set_status(cp, true, "%s", recon_theme_last_error());
+            break;
+        }
+
+        char now[64];
+        recon_theme_metric_text(metric, recon_theme_metric(metric),
+            now, sizeof(now));
+        recon_shell_restyle(cp->server->shell);
+        set_status(cp, false, "%s is out of the file. It is %s again.",
+            skin_row_name(cp->skin_row), now);
         break;
     }
 
@@ -6787,7 +7012,7 @@ static void do_action(struct control_panel *cp, enum action action) {
         }
         recon_shell_restyle(cp->server->shell);
         set_status(cp, false, "%s is flat now.",
-            recon_theme_role_name((enum recon_theme_role)cp->skin_row));
+            skin_row_name(cp->skin_row));
         break;
 
     case ACTION_SKIN_CANCEL:
@@ -7113,6 +7338,18 @@ static void do_action(struct control_panel *cp, enum action action) {
         cp->skin_editing = false;
         cp->skin_value_editing = false;
         recon_edit_end(&cp->skin_value);
+
+        /*
+         * Back into the colours, because the Appearance page's own colour list
+         * shares this row and only has colours in it. Leaving it on a
+         * measurement is not dangerous -- that list compares the number rather
+         * than indexing with it -- but it shows no row selected at all, which
+         * reads as the selection having been lost.
+         */
+        if (skin_row_is_metric(cp->skin_row)) {
+            cp->skin_row = 0;
+            cp->skin_scroll = 0;
+        }
         set_status(cp, false, "'%s' is saved. It is a file in %s.",
             cp->skin_name, RECON_DIR_THEMES);
         break;
@@ -7573,9 +7810,13 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     }
 
     /*
-     * Walking the roles. Forty-eight of them is more than anybody wants to
-     * click through, and Enter opening the field is what makes changing
-     * several in a row bearable.
+     * Walking the list. Forty-eight colours and ten measurements is more than
+     * anybody wants to click through, and Enter opening the field is what
+     * makes changing several in a row bearable.
+     *
+     * One list, so Down walks off the last colour onto the first measurement
+     * rather than stopping there. A boundary somebody has to know about to
+     * cross is a boundary they will assume is the end.
      */
     if (cp->skin_editing) {
         switch (sym) {
@@ -7585,7 +7826,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             }
             return true;
         case XKB_KEY_Down:
-            if (cp->skin_row < RECON_THEME_ROLE_COUNT - 1) {
+            if (cp->skin_row < SKIN_ROW_COUNT - 1) {
                 cp->skin_row++;
             }
             return true;

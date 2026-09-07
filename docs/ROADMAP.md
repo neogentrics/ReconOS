@@ -1918,10 +1918,42 @@ being able to see rather than worth hiding.
 
 Collected from using it. Nothing here is started.
 
-**The skin editor sets colours and nothing else.** A ramp can be removed but
-not set, a frame measurement cannot be touched at all, and a skin cannot be
-renamed or deleted from the page it is edited on. Those are still done by
-editing the file by hand.
+**The skin editor sets the measurements too.** All ten of them, under the
+colours in the same list, because they are the same kind of thing -- a line in
+a skin file -- and because the alternative was a tab bar over fourteen rows.
+Down walks off the last colour onto the first measurement rather than stopping
+there: a boundary somebody has to know about to cross is one they will assume
+is the end.
+
+Three of the ten are not lengths and one is not a number, and the list says so
+in words rather than in what the file holds. `metric.buttons` is a bit set
+whose default is 7, and a row reading **7** tells nobody which buttons that is;
+it reads `close maximize minimize`, and typing those words back in any order is
+what sets it. `icon-gloss`, `tintable` and `buttons-left` read `yes` or `no`.
+
+**A number out of range is refused rather than clamped.** `set_metric` clamps,
+which is right for a file being read and wrong as the only answer a person
+gets: somebody who types 4000 into the title height and is silently given 48
+has been told their number worked. The field names the range before anything is
+typed -- *metric.title-height: 18 to 48* -- and 4000 comes back as
+*'4000' is not a number from 18 to 48*.
+
+**"Use Default" takes the line out of the file rather than writing the default
+into it.** Those are different: a skin that says nothing follows the default if
+the default ever moves, and a skin that asks for exactly that number does not.
+The list marks which is which, and the button is greyed on a row that is
+already following the default -- a button that does nothing is worse than one
+that is not there.
+
+The parsing and the wording live in `recon_theme`, not in the Control Panel,
+for the reason `recon_expr` is not in the Calculator: how a measurement is
+written is the theme's business, it is the same vocabulary the skin file uses,
+and there it can be tested without a window. Twenty-nine checks in
+`tests/test_theme.c`, and the one that matters is that the range is refused --
+confirmed by making it clamp instead and watching two of them fail.
+
+What is still done by editing the file: a ramp can be removed but not set, and
+a skin cannot be renamed or deleted from the page it is edited on.
 
 **Buttons in applications round off; nothing else does.** `metric.corner` is
 read by the window frame and `metric.button-corner` by every button, and a

@@ -260,6 +260,60 @@ int recon_theme_metric(enum recon_theme_metric metric);
 const char *recon_theme_metric_name(enum recon_theme_metric metric);
 
 /*
+ * Whether the current skin says anything about this, or is taking the default.
+ *
+ * The difference matters to anything offering to change one. A skin that says
+ * nothing about a measurement gets the shape ReconOS has always had, and that
+ * is not the same as a skin that asks for exactly that number: the first
+ * follows the default if the default ever moves, and the second does not.
+ * Showing them as the same thing would make "use the default" look like a
+ * button that does nothing.
+ */
+bool recon_theme_metric_is_set(enum recon_theme_metric metric);
+
+/*
+ * What a skin may say: the range, and the value used when it says nothing.
+ *
+ * Any of the three may be NULL. For telling somebody what will be accepted
+ * *before* they type it -- `recon_theme_set_metric` clamps silently, which is
+ * right for a file being read and wrong as the only answer a person gets.
+ */
+void recon_theme_metric_range(enum recon_theme_metric metric,
+    int *least, int *most, int *fallback);
+
+/*
+ * A measurement written the way somebody would say it, rather than as the
+ * number the file holds.
+ *
+ * Three of these are not lengths and one is not a number at all. `buttons` is
+ * a bit set: 7 is the default and means all three, and a list reading
+ * "7" tells nobody which buttons that is. `icon-gloss`, `tintable` and
+ * `buttons-left` are yes-or-no. Only the six remaining are pixels.
+ *
+ * So: "close maximize minimize", "yes", "24". Here rather than in the Control
+ * Panel because how a measurement is written is this file's business -- it is
+ * the same vocabulary the skin file uses -- and because here it can be tested
+ * without a window.
+ */
+void recon_theme_metric_text(enum recon_theme_metric metric, int value,
+    char *out, size_t size);
+
+/*
+ * The inverse. False when the text is not something this measurement can be.
+ *
+ * Accepts what somebody would type: a number for a length, `yes`/`no` (or
+ * `on`/`off`, `true`/`false`, `1`/`0`) for the three that are really
+ * questions, and a list of button names in any order -- or the number, for
+ * anybody who already knows the bits.
+ *
+ * **Does not clamp.** A number outside the range is refused here rather than
+ * quietly moved, because the caller is a person who can be told; `set_metric`
+ * still clamps, because its caller is a file that cannot.
+ */
+bool recon_theme_metric_parse(enum recon_theme_metric metric,
+    const char *text, int *value);
+
+/*
  * --- Tints ---
  *
  * A tint is a hue the chrome is moved towards, keeping the lightness it had.

@@ -159,6 +159,113 @@ static void test_remembered(void) {
  * title bar taller than the screen, or a border of zero with no edge left to
  * grab, and either way a window that cannot be closed by pointing at it.
  */
+/*
+ * Saying a measurement out loud, and reading one back.
+ *
+ * Three of the ten are questions rather than amounts and one is a bit set, so
+ * "the value" is not always a number somebody would recognise. `buttons` is
+ * the sharp case: the file holds 7, and a row of a Control Panel list reading
+ * "7" tells nobody which buttons that is.
+ *
+ * The half that matters most is what is REFUSED. `set_metric` clamps, which is
+ * right for a file being read and wrong as the only answer a person gets --
+ * somebody who types 4000 should be told the range, not silently given 48 and
+ * left thinking it worked.
+ */
+static void test_saying_a_measurement(void) {
+    printf("saying a measurement, and reading one back\n");
+
+    char said[64];
+
+    recon_theme_metric_text(RECON_METRIC_TITLE_HEIGHT, 24, said, sizeof(said));
+    check(strcmp(said, "24") == 0, "a length is its number");
+
+    recon_theme_metric_text(RECON_METRIC_ICON_GLOSS, 1, said, sizeof(said));
+    check(strcmp(said, "yes") == 0, "a question is yes");
+    recon_theme_metric_text(RECON_METRIC_TINTABLE, 0, said, sizeof(said));
+    check(strcmp(said, "no") == 0, "or no");
+
+    recon_theme_metric_text(RECON_METRIC_BUTTONS, 7, said, sizeof(said));
+    check(strcmp(said, "close maximize minimize") == 0,
+        "AND SEVEN IS THREE BUTTONS BY NAME -- a list reading '7' tells "
+        "nobody which buttons that is");
+
+    recon_theme_metric_text(RECON_METRIC_BUTTONS, RECON_BUTTON_CLOSE,
+        said, sizeof(said));
+    check(strcmp(said, "close") == 0, "and one bit is one word");
+
+    recon_theme_metric_text(RECON_METRIC_BUTTONS,
+        RECON_BUTTON_CLOSE | RECON_BUTTON_MINIMIZE, said, sizeof(said));
+    check(strcmp(said, "close minimize") == 0,
+        "and a gap in the middle does not leave a double space");
+
+    /* --- and back --- */
+
+    int got = -1;
+    check(recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "30", &got) &&
+        got == 30, "a number reads as itself");
+    check(recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "  30  ", &got) &&
+        got == 30, "with spaces around it");
+
+    check(recon_theme_metric_parse(RECON_METRIC_ICON_GLOSS, "yes", &got) &&
+        got == 1, "yes is one");
+    check(recon_theme_metric_parse(RECON_METRIC_ICON_GLOSS, "NO", &got) &&
+        got == 0, "NO in capitals is zero");
+    check(recon_theme_metric_parse(RECON_METRIC_TINTABLE, "1", &got) &&
+        got == 1, "and the number still works, because the file holds one");
+
+    check(recon_theme_metric_parse(RECON_METRIC_BUTTONS,
+        "close maximize minimize", &got) && got == 7,
+        "three names are seven");
+    check(recon_theme_metric_parse(RECON_METRIC_BUTTONS,
+        "minimize close", &got) &&
+        got == (RECON_BUTTON_CLOSE | RECON_BUTTON_MINIMIZE),
+        "in any order");
+    check(recon_theme_metric_parse(RECON_METRIC_BUTTONS, "Close, Maximize",
+        &got) && got == (RECON_BUTTON_CLOSE | RECON_BUTTON_MAXIMIZE),
+        "with commas and capitals");
+    check(recon_theme_metric_parse(RECON_METRIC_BUTTONS, "7", &got) &&
+        got == 7, "and the number, for somebody who has read the file");
+
+    /* --- what it will not take --- */
+
+    check(!recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "4000", &got),
+        "A NUMBER PAST THE RANGE IS REFUSED, NOT CLAMPED -- somebody who "
+        "types it can be told, unlike a file");
+    check(!recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "2", &got),
+        "and one below it");
+    check(!recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "24px", &got),
+        "trailing rubbish is not a number");
+    check(!recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "", &got),
+        "and neither is nothing");
+    check(!recon_theme_metric_parse(RECON_METRIC_ICON_GLOSS, "maybe", &got),
+        "a question takes yes or no, not maybe");
+    check(!recon_theme_metric_parse(RECON_METRIC_BUTTONS, "close sideways",
+        &got), "a button nobody has is refused rather than ignored");
+    check(!recon_theme_metric_parse(RECON_METRIC_BUTTONS, "0", &got),
+        "and no buttons at all is refused, not turned into a close button");
+    check(!recon_theme_metric_parse(RECON_METRIC_TITLE_HEIGHT, "30", NULL),
+        "handed nowhere to put the answer, it declines");
+
+    /* --- the range, and whether the skin said anything --- */
+
+    int least = -1;
+    int most = -1;
+    int fallback = -1;
+    recon_theme_metric_range(RECON_METRIC_TITLE_HEIGHT, &least, &most,
+        &fallback);
+    check(least == 18 && most == 48 && fallback == 24,
+        "the range is askable, so somebody can be told before they type");
+
+    check(recon_theme_set("Classic"), "a skin that keeps the default shape");
+    check(!recon_theme_metric_is_set(RECON_METRIC_TITLE_HEIGHT),
+        "a skin saying nothing about a measurement is not the same as one "
+        "asking for the default");
+    check(recon_theme_set("Beacon"), "a skin that asks for its own shape");
+    check(recon_theme_metric_is_set(RECON_METRIC_TITLE_HEIGHT),
+        "and one that asks says so");
+}
+
 static void test_metrics(void) {
     printf("frame shapes\n");
 
@@ -467,6 +574,7 @@ int main(void) {
     test_remembered();
     test_files();
     test_metrics();
+    test_saying_a_measurement();
     test_glass();
     test_tint();
     test_damaged_file();

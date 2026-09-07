@@ -652,6 +652,208 @@ const char *recon_theme_metric_name(enum recon_theme_metric metric) {
     return METRICS[metric].name;
 }
 
+bool recon_theme_metric_is_set(enum recon_theme_metric metric) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT ||
+            g_current < 0 || g_current >= g_count) {
+        return false;
+    }
+    return g_themes[g_current].has_metric[metric];
+}
+
+void recon_theme_metric_range(enum recon_theme_metric metric,
+        int *least, int *most, int *fallback) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT) {
+        return;
+    }
+    if (least != NULL) {
+        *least = METRICS[metric].least;
+    }
+    if (most != NULL) {
+        *most = METRICS[metric].most;
+    }
+    if (fallback != NULL) {
+        *fallback = METRICS[metric].fallback;
+    }
+}
+
+/*
+ * Which measurements are a question rather than an amount.
+ *
+ * Kept as a list rather than as a flag in METRICS because it is a fact about
+ * how the value reads, not about what the file may hold -- the range already
+ * says 0 to 1, and that is what stops a file saying 3.
+ */
+static bool metric_is_yes_or_no(enum recon_theme_metric metric) {
+    return metric == RECON_METRIC_ICON_GLOSS ||
+        metric == RECON_METRIC_TINTABLE ||
+        metric == RECON_METRIC_BUTTONS_LEFT;
+}
+
+static const struct {
+    int bit;
+    const char *word;
+} BUTTON_WORDS[] = {
+    { RECON_BUTTON_CLOSE,    "close" },
+    { RECON_BUTTON_MAXIMIZE, "maximize" },
+    { RECON_BUTTON_MINIMIZE, "minimize" },
+};
+
+void recon_theme_metric_text(enum recon_theme_metric metric, int value,
+        char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    if (metric == RECON_METRIC_BUTTONS) {
+        size_t used = 0;
+        for (size_t i = 0; i < sizeof(BUTTON_WORDS) / sizeof(BUTTON_WORDS[0]);
+                i++) {
+            if ((value & BUTTON_WORDS[i].bit) == 0) {
+                continue;
+            }
+            int wrote = snprintf(out + used, size - used, "%s%s",
+                used > 0 ? " " : "", BUTTON_WORDS[i].word);
+            if (wrote < 0 || (size_t)wrote >= size - used) {
+                break;
+            }
+            used += (size_t)wrote;
+        }
+        /* Cannot happen while the range floor is one, and said anyway: a row
+         * reading nothing at all looks like a bug rather than an answer. */
+        if (used == 0) {
+            snprintf(out, size, "none");
+        }
+        return;
+    }
+
+    if (metric_is_yes_or_no(metric)) {
+        snprintf(out, size, "%s", value != 0 ? "yes" : "no");
+        return;
+    }
+
+    snprintf(out, size, "%d", value);
+}
+
+/* Whether `word` is `want`, ignoring case, over exactly `length` characters. */
+static bool word_is(const char *word, size_t length, const char *want) {
+    return strlen(want) == length && strncasecmp(word, want, length) == 0;
+}
+
+bool recon_theme_metric_parse(enum recon_theme_metric metric,
+        const char *text, int *value) {
+    if (text == NULL || value == NULL ||
+            metric < 0 || metric >= RECON_METRIC_COUNT) {
+        return false;
+    }
+
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+    if (*text == '\0') {
+        return false;
+    }
+
+    if (metric == RECON_METRIC_BUTTONS) {
+        /*
+         * Words, in any order. The number is accepted too, for anybody who
+         * already knows the bits -- and because that is what the file holds,
+         * so somebody who has read the file should not be told it is wrong.
+         */
+        bool numeric = true;
+        for (const char *c = text; *c != '\0'; c++) {
+            if (*c < '0' || *c > '9') {
+                numeric = false;
+                break;
+            }
+        }
+        if (numeric) {
+            long n = strtol(text, NULL, 10);
+            if (n < METRICS[metric].least || n > METRICS[metric].most) {
+                return false;
+            }
+            *value = (int)n;
+            return true;
+        }
+
+        int bits = 0;
+        const char *at = text;
+        while (*at != '\0') {
+            while (*at == ' ' || *at == '\t' || *at == ',') {
+                at++;
+            }
+            if (*at == '\0') {
+                break;
+            }
+            const char *end = at;
+            while (*end != '\0' && *end != ' ' && *end != '\t' &&
+                    *end != ',') {
+                end++;
+            }
+
+            bool known = false;
+            for (size_t i = 0;
+                    i < sizeof(BUTTON_WORDS) / sizeof(BUTTON_WORDS[0]); i++) {
+                if (word_is(at, (size_t)(end - at), BUTTON_WORDS[i].word)) {
+                    bits |= BUTTON_WORDS[i].bit;
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) {
+                return false;
+            }
+            at = end;
+        }
+
+        /* Zero buttons is below the floor, and is refused here rather than
+         * clamped so that "none" is answered rather than silently turned into
+         * a close button somebody did not ask for. */
+        if (bits < METRICS[metric].least) {
+            return false;
+        }
+        *value = bits;
+        return true;
+    }
+
+    if (metric_is_yes_or_no(metric)) {
+        size_t length = strlen(text);
+        while (length > 0 && (text[length - 1] == ' ' ||
+                text[length - 1] == '\t')) {
+            length--;
+        }
+        if (word_is(text, length, "yes") || word_is(text, length, "on") ||
+                word_is(text, length, "true") || word_is(text, length, "1")) {
+            *value = 1;
+            return true;
+        }
+        if (word_is(text, length, "no") || word_is(text, length, "off") ||
+                word_is(text, length, "false") || word_is(text, length, "0")) {
+            *value = 0;
+            return true;
+        }
+        return false;
+    }
+
+    char *end = NULL;
+    long n = strtol(text, &end, 10);
+    if (end == text) {
+        return false;
+    }
+    while (*end == ' ' || *end == '\t') {
+        end++;
+    }
+    if (*end != '\0') {
+        return false;   /* Trailing rubbish: "24px" is not 24. */
+    }
+    if (n < METRICS[metric].least || n > METRICS[metric].most) {
+        return false;
+    }
+
+    *value = (int)n;
+    return true;
+}
+
 static int metric_from_name(const char *name) {
     for (int i = 0; i < RECON_METRIC_COUNT; i++) {
         if (strcasecmp(METRICS[i].name, name) == 0) {

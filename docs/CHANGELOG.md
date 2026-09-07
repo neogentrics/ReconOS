@@ -23,6 +23,40 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The skin editor sets the four measurements -- all ten of them.** They sit
+under the colours in the same list, because they are the same kind of thing: a
+line in a skin file. Down walks off the last colour onto the first measurement
+rather than stopping there.
+
+Three are questions rather than amounts and one is a bit set, and the list says
+so in words. `metric.buttons` reads `close maximize minimize` rather than `7`,
+and typing those words back in any order sets it -- with the maximize button
+disappearing from every window on the desktop as the sentence appears.
+`icon-gloss`, `tintable` and `buttons-left` read `yes` or `no`.
+
+**A number out of range is refused, not clamped.** `recon_theme_set_metric`
+clamps, which is right for a file being read and wrong as the only answer a
+person gets: 4000 silently becoming 48 tells somebody their number worked. The
+field names the range before anything is typed, and 4000 comes back as
+"'4000' is not a number from 18 to 48".
+
+**"Use Default" takes the line out of the file** rather than writing the
+default into it -- confirmed by reading the file afterwards, where
+`metric.buttons` is absent rather than set to 7. A skin that says nothing
+follows the default if the default moves; one that asks for that number does
+not. The list marks which is which and the button greys itself on a row that is
+already following the default.
+
+The wording and the parsing went into `recon_theme` rather than the Control
+Panel, for the reason `recon_expr` is not in the Calculator: it is the skin
+file's own vocabulary, and there it can be tested without a window. Twenty-nine
+checks, and the one that matters -- that the range is refused rather than moved
+-- confirmed by making it clamp and watching two fail.
+
+Found by photograph rather than by reading: the first version let
+`close maximize minimize` run underneath the word `default`, because it had
+been given the column width a colour needs and a colour is eight characters.
+
 **The sweeps run without being remembered.** `.github/workflows/sweeps.yml`
 builds and runs every suite sanitized, then again the way `scripts/package.sh`
 builds, and runs the analyzer as a job of its own. The second pass is the
