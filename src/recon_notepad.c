@@ -858,6 +858,24 @@ static void do_replace_all(struct recon_notepad *np) {
     }
 }
 
+/*
+ * Which of the two fields has the keyboard, said to the fields themselves.
+ *
+ * `replacement_focused` has always been the answer, and the fields did not
+ * know it: recon_edit_begin sets `active` and it was called on both, so both
+ * drew a caret while only one received keys. That is BG-118 again, in a window
+ * it had not been looked for in -- the first sweep fixed the drawing so that a
+ * caret means "the typing goes here", and this is a window that had two flags
+ * for one fact and only kept one of them up to date.
+ *
+ * Called after every change to `replacement_focused` rather than folded into
+ * one, because there are five of them and a sixth will be added.
+ */
+static void apply_find_focus(struct recon_notepad *np) {
+    np->find.active = !np->replacement_focused;
+    np->replacement.active = np->replacement_focused;
+}
+
 static void open_find(struct recon_notepad *np) {
     np->finding = true;
 
@@ -883,6 +901,7 @@ static void open_find(struct recon_notepad *np) {
     recon_edit_begin(&np->find, initial, false);
     recon_edit_begin(&np->replacement, "", false);
     np->replacement_focused = false;
+    apply_find_focus(np);
     np->message[0] = '\0';
 }
 
@@ -899,6 +918,7 @@ static void open_replace(struct recon_notepad *np) {
      * type the replacement, not retype the search.
      */
     np->replacement_focused = was_open && np->find.text[0] != '\0';
+    apply_find_focus(np);
 }
 
 static void close_find(struct recon_notepad *np) {
@@ -2002,10 +2022,12 @@ static bool notepad_click(void *user, uint32_t hit_id, int cx, int cy,
      * other. */
     if (hit_id == HIT_FIND) {
         np->replacement_focused = false;
+        apply_find_focus(np);
         return true;
     }
     if (hit_id == HIT_REPLACEMENT) {
         np->replacement_focused = true;
+        apply_find_focus(np);
         return true;
     }
     if (hit_id == HIT_REPLACE_ONE) {
@@ -2154,6 +2176,7 @@ static bool notepad_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
          * any kind teaches. */
         if (np->replacing && sym == XKB_KEY_Tab) {
             np->replacement_focused = !np->replacement_focused;
+            apply_find_focus(np);
             return true;
         }
 

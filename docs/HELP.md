@@ -51,14 +51,23 @@ given a second one.
 
 ## Desktops
 
-There are four. The numbers at the right of the taskbar say which you are on,
-and a dot under a number means that desktop has windows on it.
+Four of them, or one. The numbers at the right of the taskbar say which you are
+on, and a dot under a number means that desktop has windows on it.
 
 **Alt+1** to **Alt+4** switches. Hold **Shift** as well and the window you are
 using comes with you.
 
 A window on another desktop is not on this taskbar. That is deliberate: it is
 how four desktops stay four separate places rather than one crowded one.
+
+**Right click the taskbar** to turn the four down to one, or back. It is
+remembered for your account, so it is your choice and not the machine's — and
+somebody who does not want four desktops should not have four numbers taking up
+room on their taskbar.
+
+Turning them off does not lose anything. Every window on the other three comes
+to the one that is left, and slides in from where it was so you can see what
+arrived rather than finding windows you did not put there.
 
 ## Files
 

@@ -4955,6 +4955,31 @@ static void panel_draw(void *user, struct recon_panel *p,
 
 /* --- Doing things --- */
 
+/*
+ * Which of a form's two fields has the keyboard, said to the fields.
+ *
+ * `password_focused` has always been the answer and the fields did not know
+ * it, so both drew a caret while only one received keys -- the Add Account
+ * form showed two, and the Registry's key-and-value form showed two. Same as
+ * Notepad's find bar, and same as BG-118 before that: a window with two flags
+ * for one fact, keeping one of them up to date.
+ *
+ * Called after every change to the flag rather than folded into one place,
+ * because there are three of them.
+ */
+static void apply_field_focus(struct control_panel *cp) {
+    cp->name.active = !cp->password_focused;
+    cp->password.active = cp->password_focused;
+}
+
+/* The registry's key-and-value form. The same idea a second time, and worth
+ * two functions rather than one: the two forms are never open together and
+ * folding them would mean each one setting `active` on the other's fields. */
+static void apply_registry_focus(struct control_panel *cp) {
+    cp->reg_key.active = cp->reg_key_focused;
+    cp->reg_value.active = !cp->reg_key_focused;
+}
+
 static void begin_editing(struct control_panel *cp, bool password_only) {
     cp->editing = true;
     cp->editing_password_only = password_only;
@@ -4963,6 +4988,17 @@ static void begin_editing(struct control_panel *cp, bool password_only) {
     recon_edit_begin(&cp->name, "", false);
     recon_edit_begin(&cp->password, "", false);
     cp->password.masked = true;
+
+    /*
+     * After the two begins, not before.
+     *
+     * recon_edit_begin sets `active` -- that is how a window with one field
+     * gets a caret without asking -- so calling this first and starting the
+     * fields second put the caret back on both. The order is the whole fix and
+     * it is invisible from either line on its own, which is why it is written
+     * down here.
+     */
+    apply_field_focus(cp);
 
     if (password_only) {
         struct recon_user user;
@@ -5637,6 +5673,8 @@ static void do_action(struct control_panel *cp, enum action action) {
         cp->reg_key_focused = true;
         recon_edit_begin(&cp->reg_key, "", false);
         recon_edit_begin(&cp->reg_value, "", false);
+        /* After the begins, which set `active` on whatever they start. */
+        apply_registry_focus(cp);
         set_status(cp, false, "A key, then what it should say.");
         break;
 
@@ -7043,10 +7081,12 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
          * so a click lands on the one that was drawn there. */
         if (hit_id == HIT_FIELD_BASE + 2) {
             cp->reg_key_focused = true;
+            apply_registry_focus(cp);
             return true;
         }
         if (hit_id == HIT_FIELD_BASE + 3) {
             cp->reg_key_focused = false;
+            apply_registry_focus(cp);
             return true;
         }
         /* A custom firewall rule: its name, then its port. */
@@ -7069,6 +7109,7 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
             return true;
         }
         cp->password_focused = (hit_id > HIT_FIELD_BASE);
+        apply_field_focus(cp);
         return true;
     }
     if (hit_id >= HIT_ACTION_BASE) {
@@ -7265,6 +7306,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
             (cp->registry_editing || cp->registry_adding)) {
         if (cp->registry_adding && sym == XKB_KEY_Tab) {
             cp->reg_key_focused = !cp->reg_key_focused;
+            apply_registry_focus(cp);
             return true;
         }
 
@@ -7317,6 +7359,7 @@ static bool panel_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     if (cp->editing) {
         if (sym == XKB_KEY_Tab && !cp->editing_password_only) {
             cp->password_focused = !cp->password_focused;
+            apply_field_focus(cp);
             return true;
         }
 

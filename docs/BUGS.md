@@ -2231,3 +2231,30 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   was chosen and the window went on showing the one before it -- which looked
   exactly like the topic not being found". Twice now, in two files, with the
   same symptom and the same cause.
+
+### BG-122 — Two more forms drew a caret in both their fields
+
+- **Found in** v0.4.0. **Found by** auditing the help against the system —
+  photographing Notepad's Replace bar to check the sentence *"Ctrl+H is the
+  same bar with a second field"*, which is true, and noticing both fields had a
+  caret in the picture taken to prove it.
+- **What it was** BG-118 again, in three windows the first sweep did not reach.
+  Each has **two flags for one fact**: a `..._focused` boolean that decides
+  where keys go, and `recon_edit.active` that decides where the caret is drawn.
+  Only the first was kept up to date.
+  - Notepad's **Find and Replace** bar.
+  - The Control Panel's **Add Account** form — a name and a password.
+  - The Control Panel's **Registry → Add** form — a key and a value.
+- **Fixed in** v0.4.0. One small function per form sets both `active` flags
+  from the one that was already the answer, called wherever that flag changes.
+- **And the order matters, which cost a round.** The first attempt at the
+  account form called it *before* `recon_edit_begin` on the two fields —
+  and `recon_edit_begin` sets `active`, which is how a window with a single
+  field gets a caret without asking. So the caret went back on both, the
+  photograph looked identical to the one before the fix, and the code read
+  correctly from either line on its own.
+- **Why the first sweep missed these**: BG-118 was fixed by making the *drawing*
+  ask, which was right and sufficient for every window with one field — most of
+  them. A window with two fields needed the second half, which is somebody
+  telling the fields which one it is, and there was no way to find those except
+  by looking at each form.

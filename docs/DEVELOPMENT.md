@@ -30,6 +30,22 @@ Two Hyper-V quirks to expect:
   faster than the console accepts them, dropping and scrambling characters. Type
   by hand in that console, or work over SSH instead.
 
+### Checking the help against the system
+
+The help is what somebody reads, so a sentence in it that is not true is worse
+than a missing feature. Most of its claims are checkable from outside: a
+shortcut either does the thing or it does not, a command either exists or it
+does not, a menu either has five entries or it has four.
+
+`scripts/look.sh` is how. Drive the desktop, capture, and read the answer —
+`state` lists the Start menu's entries with their coordinates, `help` lists
+every command, and a photograph settles anything about what is drawn.
+
+It is worth doing after anything that changes behaviour somebody was told
+about, and it has paid twice: once finding that F1 opened the wrong page for
+five applications, and once finding a caret bug in the picture taken to prove a
+different sentence true.
+
 ### The sanitizers
 
 ```bash

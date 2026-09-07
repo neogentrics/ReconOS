@@ -10,6 +10,35 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+The help was audited against the system. Everything it claims that can be
+checked from outside was checked by driving the desktop and looking: the five
+power buttons are named as the help names them, Alt+Tab moves the focus,
+Ctrl+Alt+Del opens the security box, Print Screen writes into Pictures, all
+thirteen Terminal commands it lists exist, Alt+1..4 switches desktops and
+Shift+Alt+N brings the window along, and every one of Notepad's eight editing
+shortcuts does what the Writing page says — Ctrl+Z really does undo a word at a
+time, and Ctrl+H really is the same bar with a second field.
+
+Two things came out of it:
+
+The Desktops page said "There are four." It has been possible to turn them
+down to one from the taskbar since v0.3, and the page did not mention it — nor
+that turning them off brings every window on the other three to the one that is
+left, sliding in from where it was. Written down now.
+
+BG-122, found in the photograph taken to prove a *different* sentence true.
+Notepad's Replace bar drew a caret in both its fields, and so did the Control
+Panel's Add Account form and its Registry key-and-value form. Each has two
+flags for one fact — a ..._focused boolean deciding where keys go, and
+recon_edit.active deciding where the caret is drawn — and only the first was
+kept up to date. BG-118 fixed the drawing, which was enough for every window
+with one field and could not be enough for one with two.
+
+The order caught me: the first attempt set the focus *before* starting the two
+fields, and recon_edit_begin sets active — which is how a single-field
+window gets a caret without asking. The photograph after the fix looked
+identical to the one before it, and each line read correctly on its own.
+
 A package can ship a file and a setting, and can be nothing but files. Two
 manifest lines, each repeatable:
 
