@@ -1,27 +1,20 @@
-Some programs offer to keep a password for you. Mail does, on the screen where
-it asks for one: tick Remember this password and it is kept once the
-connection has worked.
+A package is a folder with a package.txt in it, usually named ending in
+.rpk. Right-click it in File Explorer and choose Install Program.
 
-Kept is not the same as written down. It is encrypted with a key made from
-your account password, and that key exists only while you are signed in --
-it is never written anywhere. Signing out, locking the screen, or shutting
-down makes every kept password unreadable until you sign in again.
+A newer version of something already installed asks first. It says which
+version is installed and which is being offered, and replaces it only if you
+say so. The installed version is kept until the new one has been put in place
+*and* has started working -- if anything goes wrong it is put back, and you are
+left with what you had rather than with nothing.
 
-An account with no password has no keyring. There would be nothing to make
-a key from, so nothing offers to keep anything, and the tick box is not shown
-rather than shown and ignored.
+Only a newer version. The same version is refused -- to reinstall something,
+remove it first -- and so is an older one, because going back is a decision
+worth making deliberately rather than by pressing a button labelled "upgrade".
 
-Control Panel -> Passwords lists what is being kept, by name and by which
-program asked. It does not show the passwords themselves and there is no way
-to make it: nothing in ReconOS will print one back to you. Choose one and
-press Forget and it is gone; whatever kept it will ask again next time.
+From the Terminal: install <folder> puts one in, upgrade <folder> replaces
+one with a newer build, uninstall <name> takes it out, and packages lists
+what is installed. A name with a space in it goes in quotes.
 
-From the Terminal, keyring lists them, keyring forget <name> removes one,
-and keyring keep <name> <secret> adds one. There is no command that prints a
-secret, for the same reason.
-
-What this protects against, and what it does not. It protects a disk or a
-backup that somebody else has: without your password, what is stored is
-unreadable. It does not protect against somebody using your account while you
-are signed in -- at that point the key is in memory and the programs running
-are yours. Lock the screen when you walk away; that puts the key back.
+Settings a package wrote are left alone by an upgrade. It only ever wrote
+settings that had no value, so those are the ones you may since have changed,
+and an upgrade is not an occasion to reset a preference.

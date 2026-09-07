@@ -131,6 +131,44 @@ bool recon_package_read(const char *path, struct recon_package_info *out);
 bool recon_package_install(const char *path);
 
 /*
+ * Replace an installed package with a newer build of itself.
+ *
+ * Its own verb rather than making `install` quietly replace things. Somebody
+ * running an install twice by accident should get "that is already installed",
+ * not a program silently swapped underneath them -- and an upgrade is a
+ * decision worth having to make on purpose, because it is the only operation
+ * here that removes something in order to succeed.
+ *
+ * --- The version rule ---
+ *
+ * Strictly newer, and refused otherwise. The same version is not an upgrade
+ * and reinstalling to fix a broken install is what `uninstall` then `install`
+ * is for; an older one is a downgrade, which is a different decision with
+ * different consequences and should not arrive by way of a button labelled
+ * "upgrade". A package whose version cannot be read is refused too: without
+ * two numbers there is nothing to compare and "probably newer" is not a
+ * property to move somebody's files on.
+ *
+ * --- What happens to the old one ---
+ *
+ * **It is moved aside, not deleted.** Every file the old receipt names is
+ * renamed with a suffix, the new package is installed over the gap, and only
+ * once that has worked -- including the module loading -- are the old files
+ * removed. Anything that fails puts them back.
+ *
+ * The obvious implementation is uninstall-then-install, and it is wrong in a
+ * specific way: an upgrade that fails halfway has removed a program that
+ * worked and put nothing in its place. Somebody who was trying to *get a
+ * newer version* now has no version, which is worse than what they started
+ * with and worse than being refused.
+ *
+ * Settings the old install wrote are left alone. It wrote them only where
+ * there was no value, so they are the ones somebody may since have changed,
+ * and an upgrade is not an occasion to reset a preference.
+ */
+bool recon_package_upgrade(const char *path);
+
+/*
  * Remove an installed package and everything its receipt names.
  *
  * A file the receipt names but which is not there any more is not an error:

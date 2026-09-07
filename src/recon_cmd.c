@@ -2944,6 +2944,17 @@ static void cmd_install(struct recon_cmd_session *s, int argc, char **argv) {
         struct recon_package_info info;
         if (!recon_package_install(canonical)) {
             out_err(s, "%s\n", recon_package_last_error());
+            /*
+             * Refused because it is already there is the one refusal with an
+             * answer, so it gets one. Somebody holding a newer build and
+             * being told "already installed" has been told a true thing and
+             * not a useful one.
+             */
+            if (recon_package_read(canonical, &info) &&
+                    recon_package_installed(info.name)) {
+                out(s, "To replace it with a newer build: upgrade %s\n",
+                    argv[1]);
+            }
             return;
         }
         if (recon_package_read(canonical, &info)) {
@@ -3137,6 +3148,45 @@ static void cmd_keyring(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "keyring forget <name>\n");
 }
 
+/*
+ * Replacing an installed package with a newer build of itself.
+ *
+ * Its own verb rather than an install that quietly replaces things: an upgrade
+ * is the only operation here that has to remove something in order to succeed,
+ * and that is worth having to ask for.
+ */
+static void cmd_upgrade(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: upgrade <path to a package folder>\n");
+        out(s, "Replaces an installed package with a newer version of "
+            "itself.\n");
+        return;
+    }
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(s->cwd, argv[1], host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        out_err(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+
+    struct recon_package_info info;
+    bool named = recon_package_read(canonical, &info);
+
+    if (!recon_package_upgrade(canonical)) {
+        out_err(s, "%s\n", recon_package_last_error());
+        return;
+    }
+
+    if (named) {
+        out(s, "Upgraded %s to %s.\n", info.name, info.version);
+    } else {
+        out(s, "Upgraded.\n");
+    }
+    recon_shell_restyle(s->server->shell);
+}
+
 static void cmd_shutdown(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
     out(s, "Shutting down ReconOS.\n");
@@ -3171,6 +3221,7 @@ static const struct command COMMANDS[] = {
     { "apps",     "apps [number]",         "List or open built-in applications", cmd_apps },
     { "modules",  "modules [load|unload]", "List, load or unload modules",      cmd_modules },
     { "install",  "install <path>",        "Put a program into the system",      cmd_install },
+    { "upgrade",  "upgrade <path>",        "Replace a package with a newer one",  cmd_upgrade },
     { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
     { "packages", "packages",              "What is installed as a package",     cmd_packages },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },

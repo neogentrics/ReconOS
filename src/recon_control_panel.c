@@ -30,6 +30,7 @@
 #include "recon_explorer.h"
 #include "recon_modules.h"
 #include "recon_package.h"
+#include "recon_version.h"
 #include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_props.h"
@@ -618,6 +619,10 @@ enum question {
     QUESTION_CUSTOMIZE_SKIN,
     QUESTION_NEW_SKIN,
     QUESTION_CLEAN_UP,
+    /* Installing something already installed, when what is offered is newer.
+     * The path being installed is in cp->name, which is why this one does not
+     * use question_target like the others. */
+    QUESTION_UPGRADE,
 };
 
 struct control_panel {
@@ -5337,6 +5342,23 @@ static void answered(void *user, int choice) {
         return;
     }
 
+    if (asked == QUESTION_UPGRADE) {
+        struct recon_package_info info;
+        bool named = recon_package_read(cp->name.text, &info);
+
+        if (!recon_package_upgrade(cp->name.text)) {
+            set_status(cp, true, "%s", recon_package_last_error());
+        } else {
+            cp->installing = false;
+            recon_edit_end(&cp->name);
+            recon_shell_restyle(cp->server->shell);
+            set_status(cp, false, named ? "Upgraded %s to %s." : "Upgraded.",
+                info.name, info.version);
+        }
+        recon_appwin_refresh(cp->win);
+        return;
+    }
+
     if (asked == QUESTION_CUSTOMIZE_SKIN) {
         do_action(cp, ACTION_BEGIN_NAMING_SKIN);
         recon_appwin_refresh(cp->win);
@@ -5734,6 +5756,46 @@ static void do_action(struct control_panel *cp, enum action action) {
         if (is_package) {
             struct recon_package_info info;
             bool named = recon_package_read(cp->name.text, &info);
+
+            /*
+             * Already installed, and what is being offered is newer: ask
+             * rather than refuse.
+             *
+             * Refusing is right for the terminal, where the answer is to type
+             * a different verb. Here there is no verb to type -- somebody has
+             * pointed a file dialog at a folder and pressed a button -- and
+             * "that is already installed" is a dead end with the thing they
+             * wanted one confirmation away.
+             */
+            if (named && recon_package_installed(info.name)) {
+                struct recon_package_info current;
+                bool have = false;
+                int count = recon_package_count();
+                for (int i = 0; i < count && !have; i++) {
+                    struct recon_package_info held;
+                    if (recon_package_at(i, &held) &&
+                            strcmp(held.name, info.name) == 0) {
+                        current = held;
+                        have = true;
+                    }
+                }
+
+                bool bad = false;
+                if (have && recon_version_compare_text(info.version,
+                        current.version, &bad) > 0 && !bad) {
+                    cp->question = QUESTION_UPGRADE;
+                    char message[320];
+                    snprintf(message, sizeof(message),
+                        "%s %s is installed. Replace it with %s?\n"
+                        "The installed version is kept until the new one is "
+                        "working, and put back if it is not.",
+                        info.name, current.version, info.version);
+                    const char *buttons[2] = { "Replace", "Cancel" };
+                    recon_appwin_ask(cp->win, "Upgrade", message, buttons, 2,
+                        answered);
+                    break;
+                }
+            }
 
             if (!recon_package_install(cp->name.text)) {
                 set_status(cp, true, "%s", recon_package_last_error());

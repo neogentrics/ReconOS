@@ -15,7 +15,9 @@
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_package.h"
+#include "recon_error.h"
 #include "recon_registry.h"
+#include "recon_version.h"
 #include "recon_users.h"
 
 #define RECEIPT_EXT ".txt"
@@ -677,6 +679,211 @@ bool recon_package_install(const char *path) {
     }
 
     return true;
+}
+
+/* The suffix an upgrade parks the old files under. Long and unlikely on
+ * purpose: it briefly shares a directory with whatever somebody has installed,
+ * and a collision here would delete the wrong file. */
+#define ASIDE_SUFFIX ".replaced-by-upgrade"
+
+/*
+ * Move a file out of the way, or back again.
+ *
+ * Nothing is created or destroyed either way, so a failure leaves the file
+ * where it was, which is what makes the caller's rollback able to be a loop
+ * with no bookkeeping in it.
+ */
+static bool move_aside(const char *file, bool back) {
+    char aside[RECON_PATH_MAX];
+    int written = snprintf(aside, sizeof(aside), "%s" ASIDE_SUFFIX, file);
+    if (written < 0 || (size_t)written >= sizeof(aside)) {
+        return false;
+    }
+    return back ? recon_fs_rename("/", aside, file)
+                : recon_fs_rename("/", file, aside);
+}
+
+bool recon_package_upgrade(const char *path) {
+    if (!recon_users_may_administer()) {
+        set_error("only an administrator can upgrade a program");
+        return false;
+    }
+
+    /* What is being offered. Read before anything is touched, so a package
+     * that is not one is refused without the installed version noticing. */
+    struct recon_package_info incoming;
+    if (!recon_package_read(path, &incoming)) {
+        return false;
+    }
+
+    struct recon_package_info current;
+    bool found = false;
+    int installed = recon_package_count();
+    for (int i = 0; i < installed && !found; i++) {
+        struct recon_package_info info;
+        if (recon_package_at(i, &info) &&
+                strcmp(info.name, incoming.name) == 0) {
+            current = info;
+            found = true;
+        }
+    }
+
+    if (!found) {
+        set_error("'%s' is not installed, so there is nothing to upgrade",
+            incoming.name);
+        return false;
+    }
+
+    /*
+     * Strictly newer.
+     *
+     * `bad` comes back true when either side is not a version at all, and
+     * that is a refusal rather than a guess: an upgrade removes a working
+     * program, and doing that on the strength of an unreadable number is
+     * exactly the kind of decision this system is written not to make.
+     */
+    bool bad = false;
+    int order = recon_version_compare_text(incoming.version, current.version,
+        &bad);
+    if (bad) {
+        set_error("'%s' or '%s' is not a version this can compare",
+            incoming.version, current.version);
+        return false;
+    }
+    if (order == 0) {
+        set_error("'%s' %s is already installed; to reinstall it, remove it "
+            "first", incoming.name, current.version);
+        return false;
+    }
+    if (order < 0) {
+        set_error("'%s' %s is older than the installed %s; removing it and "
+            "installing this is the way to go back on purpose",
+            incoming.name, incoming.version, current.version);
+        return false;
+    }
+
+    /* What the installed one put where. Read now, because the receipt is
+     * about to be replaced. */
+    char old_files[PLACED_MAX][RECON_PATH_MAX];
+    int old_count = 0;
+    if (!read_receipt(incoming.name, NULL, old_files, &old_count, NULL, NULL)) {
+        return false;
+    }
+
+    /*
+     * Unloaded before its file moves, for the reason the uninstall gives: a
+     * module whose file has gone while it is still loaded is a program whose
+     * code is in memory and whose home is not.
+     */
+    for (int i = 0; i < old_count; i++) {
+        if (strstr(old_files[i], RECON_DIR_APPS) != old_files[i]) {
+            continue;
+        }
+        const char *leaf = strrchr(old_files[i], '/');
+        leaf = (leaf != NULL) ? leaf + 1 : old_files[i];
+
+        char module_name[RECON_NAME_MAX];
+        recon_text_copy(module_name, sizeof(module_name), leaf);
+        char *dot = strrchr(module_name, '.');
+        if (dot != NULL) {
+            *dot = '\0';
+        }
+        recon_modules_unload(module_name);
+    }
+
+    /* Aside, one at a time, remembering how far it got. */
+    int moved = 0;
+    bool ok = true;
+    for (int i = 0; i < old_count && ok; i++) {
+        if (!recon_fs_exists("/", old_files[i])) {
+            /* Already gone by somebody's hand. Counted as moved so the
+             * rollback below does not try to bring back what was not there,
+             * and not an error for the same reason uninstall forgives it. */
+            moved++;
+            continue;
+        }
+        if (move_aside(old_files[i], false)) {
+            moved++;
+        } else {
+            set_error("'%s' could not be moved out of the way: %s",
+                old_files[i], recon_fs_last_error());
+            ok = false;
+        }
+    }
+
+    /* The receipt goes too, so the install below does not see the old one and
+     * refuse. Kept in memory, which is what the rollback puts back. */
+    char receipt[RECON_PATH_MAX];
+    receipt_path(incoming.name, receipt, sizeof(receipt));
+    if (ok && !move_aside(receipt, false)) {
+        set_error("the receipt for '%s' could not be moved out of the way",
+            incoming.name);
+        ok = false;
+    }
+
+    if (ok) {
+        ok = recon_package_install(path);
+    }
+
+    if (ok) {
+        /*
+         * It worked, so the old files go for good.
+         *
+         * Last, and only now. Up to this line every failure could put things
+         * back; after it, the upgrade has happened.
+         */
+        for (int i = 0; i < old_count; i++) {
+            char aside[RECON_PATH_MAX];
+            if (snprintf(aside, sizeof(aside), "%s" ASIDE_SUFFIX,
+                    old_files[i]) > 0 && recon_fs_exists("/", aside)) {
+                recon_fs_remove("/", aside);
+            }
+        }
+        char old_receipt[RECON_PATH_MAX];
+        if (snprintf(old_receipt, sizeof(old_receipt), "%s" ASIDE_SUFFIX,
+                receipt) > 0 && recon_fs_exists("/", old_receipt)) {
+            recon_fs_remove("/", old_receipt);
+        }
+        recon_icons_forget();
+        return true;
+    }
+
+    /*
+     * It did not, so the old one comes back.
+     *
+     * The reason this is worth the trouble: the obvious way to write an
+     * upgrade is uninstall then install, and an upgrade that fails halfway
+     * that way has removed a program that worked and put nothing in its
+     * place. Somebody trying to get a newer version ends up with no version.
+     */
+    char why[256];
+    snprintf(why, sizeof(why), "%s", g_error);
+
+    /* Whatever the failed install managed to place, out of the way first --
+     * otherwise the old files have nowhere to come back to. */
+    recon_package_uninstall(incoming.name);
+
+    move_aside(receipt, true);
+    for (int i = 0; i < moved && i < old_count; i++) {
+        move_aside(old_files[i], true);
+    }
+
+    /* Loaded again, so the program that was working before this started is
+     * working after it. */
+    for (int i = 0; i < old_count; i++) {
+        if (strstr(old_files[i], RECON_DIR_APPS) == old_files[i]) {
+            recon_modules_load(old_files[i]);
+        }
+    }
+    recon_icons_forget();
+
+    recon_error_raisef(NULL, RECON_ERR_E004,
+        "upgrading '%s' from %s to %s failed and the installed version has "
+        "been put back: %s", incoming.name, current.version, incoming.version,
+        why);
+    set_error("'%s' was not upgraded and %s is still installed: %s",
+        incoming.name, current.version, why);
+    return false;
 }
 
 bool recon_package_verify(const char *name, int *placed, int *missing,

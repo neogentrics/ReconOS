@@ -23,6 +23,7 @@
 #include "recon_fonts.h"
 #include "recon_modules.h"
 #include "recon_package.h"
+#include "recon_version.h"
 #include "recon_fs.h"
 #include "recon_props.h"
 #include "recon_server.h"
@@ -206,6 +207,10 @@ enum pending_question {
     QUESTION_PURGE,      /* delete permanently */
     QUESTION_EMPTY_BIN,
     QUESTION_OPEN_WITH,  /* a program that does not claim this kind of file */
+    /* Installing a package already installed, when what is offered is newer.
+     * question_target holds the path rather than a name, because that is what
+     * recon_package_upgrade takes. */
+    QUESTION_UPGRADE,
 };
 
 struct recon_explorer {
@@ -238,7 +243,16 @@ struct recon_explorer {
      * click cannot delete something they have since moved on from.
      */
     enum pending_question question;
-    char question_target[RECON_NAME_MAX];
+    /*
+     * A path's worth, not a name's.
+     *
+     * Every question here but one is about a file in the folder being looked
+     * at, so a name was enough. The upgrade question is about a package
+     * somewhere on the disk, and recon_package_upgrade takes the path -- a
+     * name-sized buffer would have cut a long one and upgraded from a folder
+     * that does not exist, or worse, one that does.
+     */
+    char question_target[RECON_PATH_MAX];
     /* The second half of a question about two things -- which file, and which
      * program. Only QUESTION_OPEN_WITH needs it, and a field is cheaper than
      * a second question mechanism. */
@@ -669,9 +683,21 @@ static void open_with_now(struct recon_explorer *ex, const char *file,
 static void explorer_answer(void *user, int choice) {
     struct recon_explorer *ex = user;
 
+    /*
+     * Copied before cancel_delete, which clears it.
+     *
+     * A path's worth rather than a name's, because the upgrade question
+     * carries a path -- and every handler below must read THIS and not
+     * ex->question_target, which is empty by the next line. Two of them did
+     * read the field, and the compiler found it: a name-sized buffer taking a
+     * path-sized field is a truncation warning, and following the warning is
+     * what showed that the field was gone by then anyway.
+     */
     enum pending_question asked = ex->question;
-    char name[RECON_NAME_MAX];
+    char name[RECON_PATH_MAX];
     snprintf(name, sizeof(name), "%s", ex->question_target);
+    char other[RECON_NAME_MAX];
+    snprintf(other, sizeof(other), "%s", ex->question_other);
     cancel_delete(ex);
 
     /* Button 0 goes ahead; anything else, including Escape, declines. */
@@ -712,9 +738,23 @@ static void explorer_answer(void *user, int choice) {
         break;
 
     case QUESTION_OPEN_WITH:
-        recon_props_set_opener(ex->question_target, ex->question_other);
-        open_with_now(ex, ex->question_target, ex->question_other);
+        recon_props_set_opener(name, other);
+        open_with_now(ex, name, other);
         break;
+
+    case QUESTION_UPGRADE: {
+        struct recon_package_info info;
+        bool named = recon_package_read(name, &info);
+
+        if (!recon_package_upgrade(name)) {
+            set_status(ex, true, "%s", recon_package_last_error());
+        } else if (named) {
+            set_status(ex, false, "%s is now %s.", info.name, info.version);
+        } else {
+            set_status(ex, false, "Upgraded.");
+        }
+        break;
+    }
 
     case QUESTION_NONE:
         break;
@@ -2616,6 +2656,44 @@ static void explorer_context_action(void *user, uint32_t id) {
             strcasecmp(path + length - kind, RECON_PACKAGE_EXT) == 0;
 
         if (package) {
+            /*
+             * Already installed, and newer: ask rather than refuse.
+             *
+             * Refusing is the right answer in the Terminal, where somebody can
+             * type a different verb. Here there is no verb to type -- a
+             * right-click and a menu entry -- and "that is already installed"
+             * is a dead end with the thing they wanted one confirmation away.
+             */
+            struct recon_package_info incoming;
+            if (recon_package_read(path, &incoming) &&
+                    recon_package_installed(incoming.name)) {
+                struct recon_package_info current;
+                bool have = false;
+                int count = recon_package_count();
+                for (int i = 0; i < count && !have; i++) {
+                    struct recon_package_info held;
+                    if (recon_package_at(i, &held) &&
+                            strcmp(held.name, incoming.name) == 0) {
+                        current = held;
+                        have = true;
+                    }
+                }
+
+                bool bad = false;
+                if (have && recon_version_compare_text(incoming.version,
+                        current.version, &bad) > 0 && !bad) {
+                    char message[512];
+                    snprintf(message, sizeof(message),
+                        "%s %s is installed. Replace it with %s?\n"
+                        "The installed version is kept until the new one is "
+                        "working, and put back if it is not.",
+                        incoming.name, current.version, incoming.version);
+                    ask_about(ex, QUESTION_UPGRADE, path, "Upgrade", message,
+                        "Replace");
+                    break;
+                }
+            }
+
             if (!recon_package_install(path)) {
                 set_status(ex, true, "%s", recon_package_last_error());
                 break;
@@ -2665,7 +2743,8 @@ static void explorer_describe(void *user, char *out, size_t size) {
         ex->question == QUESTION_TRASH ? "asking: move to bin" :
         ex->question == QUESTION_PURGE ? "asking: delete permanently" :
         ex->question == QUESTION_EMPTY_BIN ? "asking: empty bin" :
-        ex->question == QUESTION_OPEN_WITH ? "asking: open with" : "idle";
+        ex->question == QUESTION_OPEN_WITH ? "asking: open with" :
+        ex->question == QUESTION_UPGRADE ? "asking: upgrade" : "idle";
 
     const char *selected = "(none)";
     if (ex->selected >= 0 && ex->selected < ex->entry_count) {

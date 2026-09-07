@@ -23,6 +23,42 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A package can be upgraded.** Installing over an existing one used to be
+refused outright, so the only way to a newer version was remove-then-install
+with whatever that loses.
+
+Its own verb -- `upgrade` in the Terminal, and a question in File Explorer when
+you install something already installed. Not an install that quietly replaces
+things: this is the only operation here that has to remove something in order
+to succeed, and that is worth asking for on purpose.
+
+**Strictly newer, and the old one is kept until the new one works.** Every file
+the installed version placed is moved aside, the new package is installed over
+the gap, and the old files are deleted only once the install has succeeded and
+the module has loaded. Anything that fails puts them back, reloads what was
+there, and says so with VT-E004.
+
+The obvious implementation is uninstall-then-install, and it is wrong in a way
+worth naming: an upgrade that fails halfway that way has removed a program that
+worked and put nothing in its place. Somebody who was trying to get a newer
+version now has no version -- which is worse than what they started with, and
+worse than being refused.
+
+The same version is refused (remove it first, if reinstalling is what you
+want), and so is an older one, because a downgrade is a different decision and
+should not arrive through a button labelled "upgrade". A version that cannot be
+read is refused too: this removes a working program, and "probably newer" is
+not a property to do that on.
+
+Settings the old install wrote are left alone. It only wrote them where there
+was no value, so they are the ones somebody may since have changed.
+
+**Two of File Explorer's dialogs were reading a field that had already been
+cleared** (BG-129), including one written the same night and tested -- on the
+desktop's copy of the same menu, which keeps its answer differently. The
+feature worked on one of the two menus that are supposed to be the same menu.
+Found by a truncation warning about something else.
+
 **ReconOS can be asked to stop** (BG-128). Nothing handled SIGTERM, SIGINT or
 SIGHUP, so every ordinary way of stopping a program -- a service manager, a
 logout script, a terminal closing, `kill` with no arguments -- ended the

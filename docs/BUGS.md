@@ -2418,3 +2418,28 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   `kill -KILL` -- which nothing can catch -- leaves the marker, and the next
   start writes `VT-A005  The last run ended unexpectedly` naming the time and
   version of the run that died.
+
+### BG-129 — Two of File Explorer's dialogs read a field that had been cleared
+
+- **Found in** v0.4.0. **Found by** a `-Wformat-truncation` warning, which was
+  about something else entirely: `question_target` had just been grown from a
+  name to a path, and `explorer_answer` copies it into a name-sized local.
+  Following that warning to see whether the local mattered is what showed that
+  the field it copies *from* is emptied on the next line.
+- **What it was** `explorer_answer` copies `question_target` into a local and
+  then calls `cancel_delete`, which sets `question_target[0] = '\0'`. Two
+  handlers -- the Open With warning and the new upgrade offer -- read
+  `ex->question_target` directly rather than the copy, so both received an
+  empty string.
+- **What it did.** "Open Anyway" on File Explorer's Open With warning set the
+  opener for a file called "", which is no file, and opened nothing. The
+  desktop's identical menu was fine, because the shell keeps its answer
+  differently -- so the feature worked when tested and did not work in the
+  other half nobody photographed.
+- **Both were written the same night as the bug.** Which is the point worth
+  keeping: the desktop path was driven end to end with the look harness and
+  passed, and that was taken as the feature working. It was the feature
+  working *on one of the two menus that are supposed to be the same menu*.
+- **Fixed in** v0.4.0. Both read the copy. The copy is path-sized, and the
+  comment above it says what it is for, since the reason cannot be seen from
+  either handler.

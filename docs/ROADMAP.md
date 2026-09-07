@@ -2026,13 +2026,27 @@ polar one, a plot of data from a file rather than of an expression. Each is a
 different thing to type in rather than a different way to draw, so each wants
 its own mode.
 
-**A package cannot be signed, depended on, or upgraded.** As of v0.4.0 it can
-ship files and settings as well as code, and can be nothing but files -- so a
-wallpaper pack is a package. What is still missing is everything about
-*trust and time*: nothing signs a package, so installing one is trusting
-whoever handed it over; nothing expresses a dependency between two; and
-installing over an existing package is refused rather than replacing it, so
-there is no upgrade, only remove-then-install with whatever that loses.
+**A package cannot be signed or depended on.** As of v0.4.0 it can ship files
+and settings as well as code, can be nothing but files -- so a wallpaper pack
+is a package -- and **can be upgraded**.
+
+The upgrade is its own verb rather than an install that quietly replaces
+things: it is the only operation here that has to remove something in order to
+succeed, and that is worth asking for on purpose. Strictly newer, refused
+otherwise, and the installed files are *moved aside* rather than deleted --
+kept until the new version has installed and its module has loaded, and put
+back if anything fails. The obvious implementation, uninstall then install, is
+wrong in a specific way: an upgrade that fails halfway that way has removed a
+program that worked and put nothing in its place, so somebody who wanted a
+newer version ends up with no version.
+
+What is still missing is everything about *trust*, and one thing about time.
+Nothing signs a package, so installing one is trusting whoever handed it over,
+and that is the largest hole left in this area by a distance. Nothing expresses
+a dependency between two packages. And there is no test suite for any of it:
+`recon_package` reaches `recon_modules`, which reaches the window system, so a
+headless target for it means separating loading a module from having somewhere
+to put its window -- worth doing, and a different piece of work.
 
 **A file type can still be given to a program that does not open it, and now
 it says so first.** As of v0.4.0 an application declares what it opens, a

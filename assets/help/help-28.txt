@@ -1,8 +1,28 @@
-Several Control Panel pages are there and say plainly that they are not
-built: Power, Update, Troubleshoot and Recovery, and part of Storage. Nearly
-all of it needs a kernel of ReconOS's own, which is the next phase of the
-project — a program running on Linux cannot suspend a machine, partition a
-disk, or reinstall itself.
+ReconOS names its faults so you can look one up. A code reads like this:
 
-They are shown rather than hidden on purpose. A gap nobody can see is a gap
-nobody remembers.
+
+VT-A001
+
+
+VT is the system. The letter says which part of it — A is startup, B is
+storage, C is accounts, and so on. The number says which fault.
+
+errors VT-A001 in the Terminal says what a code means. errors on
+its own lists every code there is, and errors log is what has actually
+happened on this machine.
+
+There are three kinds:
+
+- STOP — the system cannot continue. It shows a screen with the code on it
+  and writes the code and the time into /System/Logs. The next start says
+  what happened.
+- fault — something failed and the rest carried on. Reported where it
+  happened.
+- note — written down, and nothing broke.
+
+If the last run stopped, the first screen after the startup screen says so
+once, with the code. The machine in front of you is working; the message is
+about the run before it.
+
+The full list is also in docs/ERRORS.md in the repository, for when you have
+a code and not a working machine.

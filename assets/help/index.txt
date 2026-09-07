@@ -13,19 +13,20 @@ help-12.txt	Pictures
 help-13.txt	Sound and video
 help-14.txt	The web viewer
 help-15.txt	Choosing what opens a file
-help-16.txt	Passwords
-help-17.txt	Mail
-help-18.txt	What is running
-help-19.txt	The Calculator
-help-20.txt	Dates
-help-21.txt	What opens a file
-help-22.txt	Pictures of the screen
-help-23.txt	Help and updates
-help-24.txt	Text and letters
-help-25.txt	The firewall
-help-26.txt	Reaching this machine from elsewhere
-help-27.txt	When something goes wrong
-help-28.txt	What is not built yet
+help-16.txt	Installing and upgrading a program
+help-17.txt	Passwords
+help-18.txt	Mail
+help-19.txt	What is running
+help-20.txt	The Calculator
+help-21.txt	Dates
+help-22.txt	What opens a file
+help-23.txt	Pictures of the screen
+help-24.txt	Help and updates
+help-25.txt	Text and letters
+help-26.txt	The firewall
+help-27.txt	Reaching this machine from elsewhere
+help-28.txt	When something goes wrong
+help-29.txt	What is not built yet
 changes-01.txt	v0.4.0
 changes-02.txt	v0.3.0
 changes-03.txt	v0.2.17

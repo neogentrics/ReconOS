@@ -316,6 +316,29 @@ somewhere that is not the usual program. The dialog says which program, which
 file, and that the choice applies to every file of that kind -- because the
 surprise is not the file that opens as nonsense, it is the next one.
 
+## Installing and upgrading a program
+
+A package is a folder with a `package.txt` in it, usually named ending in
+`.rpk`. Right-click it in File Explorer and choose **Install Program**.
+
+**A newer version of something already installed asks first.** It says which
+version is installed and which is being offered, and replaces it only if you
+say so. The installed version is kept until the new one has been put in place
+*and* has started working -- if anything goes wrong it is put back, and you are
+left with what you had rather than with nothing.
+
+Only a newer version. The same version is refused -- to reinstall something,
+remove it first -- and so is an older one, because going back is a decision
+worth making deliberately rather than by pressing a button labelled "upgrade".
+
+From the Terminal: `install <folder>` puts one in, `upgrade <folder>` replaces
+one with a newer build, `uninstall <name>` takes it out, and `packages` lists
+what is installed. A name with a space in it goes in quotes.
+
+**Settings a package wrote are left alone by an upgrade.** It only ever wrote
+settings that had no value, so those are the ones you may since have changed,
+and an upgrade is not an occasion to reset a preference.
+
 ## Passwords
 
 Some programs offer to keep a password for you. Mail does, on the screen where
