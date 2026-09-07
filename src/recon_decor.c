@@ -134,6 +134,27 @@ static void draw_buttons(struct recon_decor *decor,
             decor->focused ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE));
         recon_hit_add(p, bx, by, button, button, (uint32_t)ids[i]);
 
+        /*
+         * A picture where the skin supplied one, exactly as the built-in
+         * frame does. Both, because a client window that looked *nearly* like
+         * a ReconOS window would be worse than one that plainly does not --
+         * and a skin whose close button is a dot everywhere except on client
+         * windows is precisely that.
+         */
+        const char *picture = NULL;
+        switch (ids[i]) {
+        case HIT_CLOSE:    picture = RECON_ICON_WINDOW_CLOSE; break;
+        case HIT_MAXIMIZE: picture = decor->maximized
+                                ? RECON_ICON_WINDOW_RESTORE
+                                : RECON_ICON_WINDOW_MAXIMIZE; break;
+        case HIT_MINIMIZE: picture = RECON_ICON_WINDOW_MINIMIZE; break;
+        default: break;
+        }
+        if (picture != NULL &&
+                recon_icon_draw(p, picture, bx + 2, by + 2, button - 4)) {
+            continue;
+        }
+
         switch (ids[i]) {
         case HIT_MINIMIZE:
             recon_fill_rect(p, bx + 4, by + button - 6, button - 8, 2,

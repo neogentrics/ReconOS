@@ -51,6 +51,11 @@ its file:
 Close is always there. A skin that leaves it out gets it back, because a
 window nobody can close is not something a skin is allowed to make.
 
+A skin can also replace what is drawn *inside* the buttons. Put a picture named
+window-close, window-maximize, window-restore or window-minimize in
+/System/Icons and it is used instead of the shape. Supply one and the others
+keep theirs.
+
 Some colours are a *ramp* from one to another, shown as two halves of the
 swatch and a second value. Remove Ramp makes one flat.
 

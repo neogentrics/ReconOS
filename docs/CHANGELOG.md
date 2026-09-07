@@ -23,6 +23,24 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A skin can replace the window buttons' glyphs with pictures.** Put a file at
+`window-close`, `window-maximize`, `window-restore` or `window-minimize` in
+`/System/Icons` and it is drawn instead of the shape.
+
+There is none by default and none is written, so almost every system draws the
+rectangles it always has -- which is right: these have to be there before a
+font has loaded and before any file has been read, and a title bar that could
+fail to have a close button on it is not a title bar.
+
+The file has to exist before it is used, so a skin that supplies one of the
+three gets the drawn version of the other two. It cannot produce a missing
+button, only a differently drawn one. Both frames use it -- the built-in and
+the client's -- because a skin whose close button is a dot everywhere except on
+client windows is exactly the near-miss `recon_decor`'s own header warns
+against.
+
+Now that a package can place files, a skin that changes them is a package.
+
 **Control Panel → Programs → File Types** lists the kinds of file somebody has
 chosen a program for, and "Use the usual program again" undoes one. An
 association set months ago was visible only by right-clicking a file of that

@@ -38,6 +38,29 @@
 #define RECON_ICON_FILE_ARCHIVE "file-archive"
 #define RECON_ICON_APP "application"
 #define RECON_ICON_TERMINAL "terminal"
+
+/*
+ * The three glyphs on a window's title bar.
+ *
+ * Drawn as rectangles in C -- a cross, an outlined box, a bar -- because they
+ * have to be there before a font has loaded and before any file has been read.
+ * A skin that wants different ones can put a picture at any of these names and
+ * it is used instead; there is no picture for them by default, and none is
+ * written, so the rectangles are what almost every system draws.
+ *
+ * The same rule as every other lookup here: the file has to exist before it is
+ * used, so a skin that supplies one of the three and not the others gets the
+ * one it supplied and the drawn version of the rest. It cannot produce a
+ * missing button, only a differently drawn one.
+ *
+ * "restore" is the maximize button when the window is already maximized. It is
+ * a separate name because it is a separate meaning, and a skin that drew both
+ * the same would be a skin that cannot say which state the window is in.
+ */
+#define RECON_ICON_WINDOW_CLOSE "window-close"
+#define RECON_ICON_WINDOW_MAXIMIZE "window-maximize"
+#define RECON_ICON_WINDOW_RESTORE "window-restore"
+#define RECON_ICON_WINDOW_MINIMIZE "window-minimize"
 #define RECON_ICON_NOTEPAD "notepad"
 #define RECON_ICON_CALCULATOR "calculator"
 #define RECON_ICON_EXPLORER "explorer"

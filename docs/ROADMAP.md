@@ -2033,11 +2033,14 @@ connection. Accepting means deciding what may reach this machine, which is a
 larger question than deciding what it may reach, and it should not be answered
 by accident while building the outgoing half.
 
-**A skin cannot change the shape of the buttons' glyphs.** As of v0.4.0 it can
-move them to either side and ask for fewer of them, and close is always there
-and always outermost. What is still fixed is what is drawn inside each one: the
-cross, the box and the bar are rectangles in C, so a skin that wanted a dot or
-a different maximize glyph has nowhere to say so.
+**A skin cannot change the frame's arrangement, only its measurements.** As of
+v0.4.0 it can move the buttons to either side, ask for fewer of them, and
+replace their glyphs with pictures; close is always there and always outermost.
+What is still fixed is the *shape* of a title bar: an icon then a title then
+buttons, in one row, of one height. A skin that wanted the title centred, or
+two rows, or the icon on the right, has nowhere to say so -- that wants a
+layout description rather than more numbers, and none of the four intended
+looks has needed one yet.
 
 **No recovery, no advanced startup, no reinstall.** All three need a kernel
 and a bootloader, and all three have a Control Panel page saying so.

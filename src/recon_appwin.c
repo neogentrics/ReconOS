@@ -198,6 +198,32 @@ static void draw_buttons(struct recon_appwin *win,
             break;
         }
 
+        /*
+         * A picture, where the skin supplied one.
+         *
+         * There is none by default and none is written, so almost every system
+         * draws the rectangles below -- which is right: these have to be there
+         * before a font has loaded and before any file has been read. A skin
+         * that wants a different shape can put a file at the name and it is
+         * used, and the file has to exist before it is used, so a skin
+         * supplying one of the three gets the drawn version of the other two.
+         *
+         * Inset by two, so a square picture sits inside the button's bevel
+         * rather than on it.
+         */
+        static const char *const GLYPHS[] = {
+            [HIT_CLOSE] = RECON_ICON_WINDOW_CLOSE,
+            [HIT_MAXIMIZE] = RECON_ICON_WINDOW_MAXIMIZE,
+            [HIT_MINIMIZE] = RECON_ICON_WINDOW_MINIMIZE,
+        };
+        const char *picture = (id == HIT_MAXIMIZE && win->maximized)
+            ? RECON_ICON_WINDOW_RESTORE : GLYPHS[id];
+        if (recon_icon_draw(p, picture, bx + 2, by + 2, BUTTON_SIZE - 4)) {
+            /* Drawn, so the shapes below are not. The corners still round
+             * afterwards, which is why this does not `continue`. */
+            goto rounded;
+        }
+
         switch (id) {
         case HIT_MINIMIZE:
             /* A bar along the bottom. */
@@ -225,6 +251,7 @@ static void draw_buttons(struct recon_appwin *win,
             break;
         }
 
+    rounded:
         /*
          * The corners last, so the glyph and the bevel are rounded off with
          * the button rather than sticking out of it.
