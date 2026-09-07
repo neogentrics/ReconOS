@@ -14,9 +14,10 @@
  *     address, through INT 15h AH=87h                               [done]
  *   - the signature check, because **a BIOS path that skips it is the
  *     off-switch the UEFI path deliberately does not have**         [done]
- *   - A20, a GDT, page tables and the switch to long mode           [next]
- *   - the ReconBoot handoff, identical to the one the UEFI loader builds, so
- *     that the kernel cannot tell which loader started it
+ *   - A20, a GDT, page tables and the switch to long mode           [done]
+ *   - the ReconBoot handoff, identical to the one the UEFI loader
+ *     builds, so that the kernel cannot tell which loader started
+ *     it                                                            [done]
  *
  * The kernel lives on the EFI partition as a file, and is read from there
  * rather than from raw blocks the installer reserved. Raw blocks would remove
@@ -36,9 +37,14 @@
  * exactly the divergence this project keeps finding in itself. */
 #define KERNEL_NAME "kernel-x86_64.elf"
 
-/* Where the kernel goes. The same address the UEFI loader places it at,
- * because the kernel is linked for it and neither loader gets a say. */
-#define KERNEL_LOAD 0x100000
+/* Where the kernel goes is not a constant here, and the definition that used to
+ * say 0x100000 has been removed rather than left to be believed. **The ELF
+ * says** where each of its segments belongs, and place_kernel() puts them
+ * there; a loader that writes them to an address of its own choosing works
+ * exactly until the linker script changes.
+ *
+ * The file is read to KERNEL_STAGE first because it has to be hashed before
+ * anything acts on it, and what the CPU runs is not the file. */
 
 /* The UEFI loader's SHA-256 and RSA, compiled for real mode and used unchanged.
  *
@@ -52,6 +58,7 @@
  * on its protocol declarations is warned about and ignored in the makefile. */
 #include "efi.h"
 #include "crypto.h"
+#include "reconboot.h"
 
 #if __has_include("signing_key.h")
 #include "signing_key.h"
@@ -697,6 +704,11 @@ static u32 read_file(u8 drive, u32 cluster, u32 size, u32 dest,
 	return done;
 }
 
+#ifdef RECONOS_KEY_PRESENT
+
+/* Built only when there is a key to check against: this and the buffer below
+ * exist to serve the verifier, and a keyless build has no verifier. */
+
 /* A small file, into a buffer down here. The signature is 256 bytes and has to
  * be read where it can be looked at, rather than pushed above the megabyte with
  * the kernel. */
@@ -731,6 +743,10 @@ static u32 read_small(u8 drive, u32 cluster, u32 size, u8 *out, u32 max)
 	return done;
 }
 
+static u8 sig_buf[256];
+
+#endif /* RECONOS_KEY_PRESENT */
+
 /* Reads back what was written, which is the only way to know it arrived.
  *
  * A copy that silently did nothing leaves whatever was at the destination
@@ -760,7 +776,6 @@ static int check_landed(u32 dest)
 
 #define SIGNATURE_NAME KERNEL_NAME ".sig"
 
-static u8 sig_buf[256];
 static struct sha256_ctx hash;
 
 static int verify(struct sha256_ctx *ctx, u32 dir, u8 drive)
@@ -805,7 +820,383 @@ static int verify(struct sha256_ctx *ctx, u32 dir, u8 drive)
 #endif
 }
 
+/* --- page tables -----------------------------------------------------------
+ *
+ * Four gigabytes, identity mapped with 2MB pages: one PML4, one PDPT, and four
+ * page directories. Enough to reach the kernel, its handoff, and any
+ * memory-mapped device below 4GB, and the kernel replaces all of it with its
+ * own map at checkpoint 5 the moment it is running.
+ *
+ * They are built at 0x70000 -- above stage 2 and its data, below the 640KB
+ * line, and in memory the handoff marks as the loader's so the kernel does not
+ * hand it out before it has finished with it.
+ */
+
+/* Eight megabytes: above the kernel's image, and nowhere near anything else
+ * this loader touches. **Not below the first megabyte**, which was the first
+ * attempt and does not work: a pointer in stage 2 is an offset into the 64KB
+ * real mode can address, so writing tables at 0x70000 through `*(u32 *)addr`
+ * writes somewhere else entirely. The symptom was a page fault on the first
+ * instruction after paging came on, with CR2 equal to that instruction's own
+ * address -- the identity map simply was not there.
+ *
+ * The rule was already written at the top of this file. Following it needs the
+ * tables built down here and moved up, the same way the kernel is. */
+#define PT_BASE 0x00800000UL
+#define PT_PRESENT 0x001
+#define PT_WRITE   0x002
+#define PT_HUGE    0x080
+
+/* One table at a time, assembled in a buffer that is reachable and then block
+ * moved to where the CPU will walk it. cluster_buf is reused: the kernel has
+ * been read by the time this runs, and a second 4KB of bss would put stage 2
+ * within a few hundred bytes of the limit the linker script enforces. */
+static void put64(u8 *buf, u32 index, u64 value)
+{
+	u32 *p = (u32 *)(buf + index * 8);
+
+	p[0] = (u32)value;
+	p[1] = (u32)(value >> 32);
+}
+
+static void clear4k(u8 *buf)
+{
+	u32 i;
+
+	for (i = 0; i < 1024; i++)
+		((u32 *)buf)[i] = 0;
+}
+
+static u32 build_page_tables(void)
+{
+	u32 i, t;
+
+	/* The top level: one entry, covering the first 512GB of address space,
+	 * of which the four below describe the first four gigabytes. */
+	clear4k(cluster_buf);
+	put64(cluster_buf, 0, (u64)(PT_BASE + 0x1000) | PT_PRESENT | PT_WRITE);
+	if (!copy_phys(PT_BASE, (u32)cluster_buf, 4096))
+		return 0;
+
+	clear4k(cluster_buf);
+	for (i = 0; i < 4; i++)
+		put64(cluster_buf, i,
+		      (u64)(PT_BASE + 0x2000 + i * 0x1000) | PT_PRESENT |
+		      PT_WRITE);
+	if (!copy_phys(PT_BASE + 0x1000, (u32)cluster_buf, 4096))
+		return 0;
+
+	/* Four directories of 512 entries, each entry a 2MB page: four
+	 * gigabytes, identity mapped. The kernel replaces all of it with its
+	 * own map as soon as it is running. */
+	for (t = 0; t < 4; t++) {
+		clear4k(cluster_buf);
+		for (i = 0; i < 512; i++)
+			put64(cluster_buf, i,
+			      ((u64)(t * 512 + i) << 21) | PT_PRESENT |
+			      PT_WRITE | PT_HUGE);
+
+		if (!copy_phys(PT_BASE + 0x2000 + t * 0x1000,
+			       (u32)cluster_buf, 4096))
+			return 0;
+	}
+
+	return PT_BASE;
+}
+
+/* --- placing the kernel ----------------------------------------------------
+ *
+ * The file was read to a staging address as it came off the disk, because it
+ * had to be hashed before anything acted on it. What the CPU runs is not that
+ * file: an ELF says where each of its pieces belongs, and the pieces are not
+ * laid out in the file the way they are laid out in memory.
+ *
+ * So the program headers are read back down, and each loadable segment is
+ * copied from the staging copy to the address the ELF names -- and the part of
+ * a segment that is longer in memory than in the file is zeroed, because that
+ * is the kernel's bss and it will read it before it writes it.
+ */
+
+#define KERNEL_STAGE 0x01000000UL	/* 16MB, clear of the kernel's own space */
+
+struct elf64_header {
+	u8  ident[16];
+	u16 type;
+	u16 machine;
+	u32 version;
+	u64 entry;
+	u64 phoff;
+	u64 shoff;
+	u32 flags;
+	u16 ehsize;
+	u16 phentsize;
+	u16 phnum;
+	u16 shentsize;
+	u16 shnum;
+	u16 shstrndx;
+} __attribute__((packed));
+
+struct elf64_phdr {
+	u32 type;
+	u32 flags;
+	u64 offset;
+	u64 vaddr;
+	u64 paddr;
+	u64 filesz;
+	u64 memsz;
+	u64 align;
+} __attribute__((packed));
+
+#define PT_LOAD 1
+
+static u8 hdr_buf[1024];
+
+/* Copies between two physical addresses in 32KB pieces, since one BIOS block
+ * move carries at most 64KB and the count is in words. */
+static int copy_range(u32 dest, u32 src, u32 bytes)
+{
+	while (bytes) {
+		u16 chunk = bytes > 32768 ? 32768 : (u16)bytes;
+
+		if (!copy_phys(dest, src, chunk))
+			return 0;
+		dest += chunk;
+		src += chunk;
+		bytes -= chunk;
+	}
+	return 1;
+}
+
+static int zero_range(u32 dest, u32 bytes)
+{
+	u32 i;
+
+	for (i = 0; i < sizeof(sector); i++)
+		sector[i] = 0;
+
+	while (bytes) {
+		u16 chunk = bytes > sizeof(sector) ? sizeof(sector)
+						   : (u16)bytes;
+
+		if (!copy_phys(dest, (u32)sector, chunk))
+			return 0;
+		dest += chunk;
+		bytes -= chunk;
+	}
+	return 1;
+}
+
+static int place_kernel(u64 *entry_out)
+{
+	struct elf64_header *eh = (struct elf64_header *)hdr_buf;
+	u32 phoff, phnum, phentsize, i;
+
+	if (!copy_phys((u32)hdr_buf, KERNEL_STAGE, sizeof(hdr_buf)))
+		return 0;
+
+	if (eh->ident[0] != 0x7F || eh->ident[1] != 'E' ||
+	    eh->ident[2] != 'L' || eh->ident[3] != 'F')
+		return 0;
+
+	phoff     = (u32)eh->phoff;
+	phnum     = eh->phnum;
+	phentsize = eh->phentsize;
+
+	if (!phnum || phentsize < sizeof(struct elf64_phdr) ||
+	    (u32)phnum * phentsize > sizeof(hdr_buf))
+		return 0;
+
+	*entry_out = eh->entry;
+
+	/* The program header table, read separately: it is not necessarily
+	 * inside the first kilobyte the header came from. */
+	if (!copy_phys((u32)hdr_buf, KERNEL_STAGE + phoff,
+		       (u16)((u32)phnum * phentsize)))
+		return 0;
+
+	for (i = 0; i < phnum; i++) {
+		struct elf64_phdr *ph =
+			(struct elf64_phdr *)(hdr_buf + i * phentsize);
+
+		if (ph->type != PT_LOAD || !ph->memsz)
+			continue;
+
+		if (ph->filesz &&
+		    !copy_range((u32)ph->paddr, KERNEL_STAGE + (u32)ph->offset,
+				(u32)ph->filesz))
+			return 0;
+
+		if (ph->memsz > ph->filesz &&
+		    !zero_range((u32)ph->paddr + (u32)ph->filesz,
+				(u32)(ph->memsz - ph->filesz)))
+			return 0;
+	}
+
+	return 1;
+}
+
+/* --- the kernel's own entry point ------------------------------------------
+ *
+ * An ELF has one entry point and it is already spoken for by the 32-bit
+ * trampoline that Multiboot2 and PVH arrive at. The kernel carries a small
+ * header in a known section saying where a loader that has already reached long
+ * mode should jump instead, and it is found by scanning for its magic -- the
+ * same way the UEFI loader finds it.
+ */
+static int find_kernel_entry(u32 lowest, u32 highest, u64 *entry_out)
+{
+	/* Each read overlaps the last by the size of a header, so one straddling
+	 * the seam between two reads is still whole in one of them. */
+	const u32 step = sizeof(hdr_buf) - 32;
+	u32 p = lowest;
+
+	while (p + 24 <= highest) {
+		u32 n = highest - p;
+		u32 off;
+
+		if (n > sizeof(hdr_buf))
+			n = sizeof(hdr_buf);
+
+		if (!copy_phys((u32)hdr_buf, p, (u16)n))
+			return 0;
+
+		for (off = 0; off + 24 <= n; off += 8) {
+			u32 lo  = *(u32 *)&hdr_buf[off];
+			u32 hi  = *(u32 *)&hdr_buf[off + 4];
+			u32 ver = *(u32 *)&hdr_buf[off + 8];
+
+			/* "RCNBOOT\0" little-endian, then version 1. */
+			if (lo == 0x424E4352 && hi == 0x00544F4F && ver == 1) {
+				*entry_out = *(u64 *)&hdr_buf[off + 16];
+				return 1;
+			}
+		}
+
+		if (n < sizeof(hdr_buf))
+			break;
+		p += step;
+	}
+
+	return 0;
+}
+
+/* --- the handoff -----------------------------------------------------------
+ *
+ * The same structure the UEFI loader fills in, at a fixed address below the
+ * first megabyte where the kernel can read it before it has a map of its own.
+ *
+ * The memory map is translated from E820's numbering into ReconBoot's, rather
+ * than passed through: they agree on 1 and 2 and disagree on everything else,
+ * and a map that is subtly wrong is the worst kind of wrong there is at this
+ * point in a boot.
+ */
+
+/* Below the 64KB real mode addresses, because stage 2 writes this structure
+ * through ordinary pointers -- the same rule the page tables above had to be
+ * moved to obey, in the other direction. 0x4000 is clear of the interrupt
+ * vector table and the BIOS data area at the bottom, and of the stack, stage 1
+ * and stage 2 above.
+ *
+ * The kernel reads it after paging is on, where 0x4000 is mapped like
+ * everything else in the first four gigabytes. */
+#define HANDOFF_ADDR  0x00004000UL
+#define REGIONS_ADDR  0x00004800UL
+
+static u32 e820_to_reconboot(u32 type)
+{
+	switch (type) {
+	case 1:  return RECONBOOT_MEM_USABLE;
+	case 2:  return RECONBOOT_MEM_RESERVED;
+	case 3:  return RECONBOOT_MEM_ACPI_RECLAIM;
+	case 4:  return RECONBOOT_MEM_ACPI_NVS;
+	case 5:  return RECONBOOT_MEM_BAD;
+	/* A type this loader has never heard of is reserved, not usable.
+	 * Guessing the other way hands the kernel memory somebody else owns. */
+	default: return RECONBOOT_MEM_RESERVED;
+	}
+}
+
+static void put_str(u8 *dst, const char *src, u32 max)
+{
+	u32 i = 0;
+
+	while (src[i] && i + 1 < max) {
+		dst[i] = (u8)src[i];
+		i++;
+	}
+	while (i < max)
+		dst[i++] = 0;
+}
+
+/* The structure is filled in through reconboot.h's own declaration rather than
+ * by writing at computed offsets. An offset worked out by hand is a number that
+ * goes wrong silently the first time somebody adds a field, and this structure
+ * is explicitly designed to grow. */
+static u32 build_handoff(void)
+{
+	struct reconboot *h = (struct reconboot *)HANDOFF_ADDR;
+	struct reconboot_region *r = (struct reconboot_region *)REGIONS_ADDR;
+	u32 i, n = 0;
+
+	for (i = 0; i < sizeof(*h); i++)
+		((u8 *)h)[i] = 0;
+
+	for (i = 0; i < e820_count; i++) {
+		r[n].base     = e820[i].base;
+		r[n].size     = e820[i].length;
+		r[n].kind     = e820_to_reconboot(e820[i].type);
+		r[n].reserved = 0;
+		n++;
+	}
+
+	/* The loader's own working memory, told to the kernel rather than left
+	 * for it to walk into. Two ranges, because they are nowhere near each
+	 * other: everything real mode can address, and the page tables.
+	 *
+	 * **The page tables are still live when the kernel starts** -- it is
+	 * running on them until it builds its own, so handing that memory out
+	 * as usable would be handing out the map underneath its own feet. */
+	r[n].base     = 0x00000000ULL;
+	r[n].size     = 0x00010000ULL;	/* IVT, BDA, stack, stage 1, stage 2 */
+	r[n].kind     = RECONBOOT_MEM_BOOTLOADER;
+	r[n].reserved = 0;
+	n++;
+
+	r[n].base     = PT_BASE;
+	r[n].size     = 0x00006000ULL;
+	r[n].kind     = RECONBOOT_MEM_BOOTLOADER;
+	r[n].reserved = 0;
+	n++;
+
+	h->magic        = RECONBOOT_MAGIC;
+	h->version      = RECONBOOT_VERSION;
+	h->size         = sizeof(*h);
+	h->firmware     = RECONBOOT_FIRMWARE_BIOS;
+	h->region_count = n;
+	h->regions      = REGIONS_ADDR;
+
+	/* No framebuffer. VBE could provide one and does not yet, and a
+	 * framebuffer this loader has not set up is one the kernel must not be
+	 * told about: NONE is the honest answer, and the kernel already handles
+	 * it because AAVMF gives none either. */
+	h->framebuffer.format = RECONBOOT_PIXEL_NONE;
+
+	/* No RSDP and no device tree from here yet. Finding ACPI means scanning
+	 * the EBDA and the region below 1MB for "RSD PTR ", which is its own
+	 * piece of work; zero says the firmware did not publish one, which is
+	 * true of everything this loader has looked at. */
+
+	put_str((u8 *)h->loader, "reconboot-bios", sizeof(h->loader));
+	put_str((u8 *)h->cmdline, "", sizeof(h->cmdline));
+
+	return HANDOFF_ADDR;
+}
+
 /* --- what there is to say so far ------------------------------------------ */
+
+/* In longmode.S: the one part of stage 2 that cannot be C, because between
+ * its first and last instruction the machine is not running the language. */
+void enter_long_mode(u32 entry_lo, u32 entry_hi, u32 handoff, u32 pml4);
 
 static u64 esp_lba;
 
@@ -842,7 +1233,8 @@ void stage2_main(u32 boot_drive)
 	}
 
 	{
-		u32 dir, file, size = 0, got;
+		u32 dir, file, size = 0, got, handoff, pml4;
+		u64 entry = 0, elf_entry = 0;
 
 		dir = dir_find((u8)boot_drive, root_cluster, "reconos", 0);
 		if (!dir) {
@@ -861,7 +1253,7 @@ void stage2_main(u32 boot_drive)
 		print(" bytes\n");
 
 		sha256_init(&hash);
-		got = read_file((u8)boot_drive, file, size, KERNEL_LOAD,
+		got = read_file((u8)boot_drive, file, size, KERNEL_STAGE,
 				&hash);
 		if (got != size) {
 			print("kernel: only ");
@@ -874,17 +1266,58 @@ void stage2_main(u32 boot_drive)
 		 * whatever was at the destination -- and on a machine just
 		 * powered on that is zeroes, which is what a failed read looks
 		 * like from here too. */
-		if (!check_landed(KERNEL_LOAD)) {
+		if (!check_landed(KERNEL_STAGE)) {
 			print("kernel: what landed at 1 MB is not an ELF\n");
 			goto done;
 		}
 
 		print("kernel: ");
 		print_dec(got);
-		print(" bytes at 0x100000, and it is an ELF\n");
+		print(" bytes staged, and it is an ELF\n");
 
+		/* Before anything is placed where it will run. A signature
+		 * checked after the kernel is in position is a signature
+		 * checked after the damage. */
 		if (!verify(&hash, dir, (u8)boot_drive))
 			goto done;
+
+		if (!place_kernel(&elf_entry)) {
+			print("kernel: its program headers do not make sense\n");
+			goto done;
+		}
+
+		/* The ELF's own entry point is the 32-bit trampoline, which is
+		 * for the loaders that hand over before long mode. This loader
+		 * arrives in long mode, so it jumps where the kernel's own
+		 * header says instead -- the same header reconboot scans for.
+		 */
+		if (!find_kernel_entry(KERNEL_STAGE,
+				       KERNEL_STAGE + 0x10000, &entry)) {
+			print("kernel: no ReconBoot header, so there is nowhere "
+			      "to jump that is not the 32-bit trampoline\n");
+			goto done;
+		}
+
+		handoff = build_handoff();
+		pml4 = build_page_tables();
+
+		if (!pml4) {
+			print("page tables: the block move refused them\n");
+			goto done;
+		}
+
+		print("handing over: entry 0x");
+		print_hex8((u8)(entry >> 24));
+		print_hex8((u8)(entry >> 16));
+		print_hex8((u8)(entry >> 8));
+		print_hex8((u8)entry);
+		print("\n\n");
+
+		enter_long_mode((u32)entry, (u32)(entry >> 32), handoff, pml4);
+
+		/* enter_long_mode does not return. Reaching here is a fault in
+		 * it, and saying so beats a blank screen. */
+		print("reconboot: the switch to long mode returned\n");
 	}
 
 done:

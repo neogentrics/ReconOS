@@ -66,9 +66,14 @@ $(BUILD)/%.o: ../src/%.c
 
 $(BUILD)/stage2_c.o: CFLAGS16 += -Wno-ignored-attributes -I../include -I../src
 
-$(BUILD)/stage2.elf: $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o $(CRYPTO_OBJS) stage2.ld
+$(BUILD)/longmode.o: longmode.S
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD)/stage2.elf: $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o \
+                     $(BUILD)/longmode.o $(CRYPTO_OBJS) stage2.ld
 	$(LD) -T stage2.ld -o $@ $(BUILD)/stage2_entry.o $(BUILD)/stage2_c.o \
-		$(CRYPTO_OBJS)
+		$(BUILD)/longmode.o $(CRYPTO_OBJS)
 
 -include $(BUILD)/stage2_c.d $(CRYPTO_OBJS:.o=.d)
 

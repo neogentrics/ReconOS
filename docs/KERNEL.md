@@ -2030,9 +2030,85 @@ The byte in the tampered case is changed at offset 40000, well past the ELF
 header, so that the loader's own *"is this an ELF"* check cannot be what catches
 it.
 
+### And the kernel starts
+
+```
+Booting from Hard Disk...
+ReconOS
+stage2 ok, drive 0x80
+e820: 7 regions, 255 MB usable
+esp: block 4096
+kernel: kernel-x86_64.elf, 709000 bytes
+signature: good
+handing over: entry 0x001000ef
+
+ReconOS kernel 0.0.11
+  architecture : x86_64
+
+Boot
+  firmware     : BIOS
+  protocol     : ReconBoot
+  loader       : reconboot-bios
+  framebuffer  : none
+```
+
+`firmware : BIOS` beside `protocol : ReconBoot` is the checkpoint. The BIOS path
+joined the set of loaders the kernel cannot tell apart, rather than becoming a
+second shape of *"how the machine was started"*.
+
+That needed one correction in the kernel: `reconboot_parse()` wrote
+`BOOT_FIRMWARE_UEFI` outright whenever it saw a ReconBoot handoff — true while
+only one loader produced one, false the moment there were two. A machine with no
+UEFI anywhere in it would have reported *"firmware : UEFI"*, confidently, in the
+one place somebody looks to find out what booted them. It reads the field now,
+and an unrecognised value is reported as unknown rather than guessed at.
+
+#### The order of the mode switch, and why it is that order
+
+`boot/bios/longmode.S` — the only assembly beyond the entry stub, because
+between its first and last instruction the machine is not running the language.
+
+1. **A20**, or every address above 1 MB wraps into the first megabyte and the
+   kernel at `0x100000` *is* the interrupt vector table. Tried three ways — the
+   BIOS call, port 0x92, then the keyboard controller — and **each attempt is
+   tested rather than trusted**, because all three report success on machines
+   where they did nothing.
+2. **Page tables**, built while addressing is still simple.
+3. **A null-limit IDT**, because the real-mode vector table stops meaning
+   anything the instant protection is on. An interrupt taken in the gap would
+   dispatch through whatever the firmware left at zero; a null limit makes it a
+   fault instead of a jump into arbitrary memory.
+4. **EFER.LME, then CR0 protection and paging in one write.** On x86_64 you do
+   not enter 32-bit protected mode and then long mode — long mode is enabled
+   first and becomes active when paging comes on, and the far jump that reloads
+   CS takes the CPU the rest of the way.
+
+#### The bug, which was a rule this file states and the code broke
+
+Stage 2's pointers are offsets into the 64 KB real mode can address. That is
+written at the top of `stage2.c` — and the page tables went at `0x70000` and the
+handoff at `0x60000`, both written through ordinary C pointers.
+
+The symptom was a page fault on the **first instruction after paging came on**,
+with `CR2` equal to that instruction's own address: the identity map was not
+there. `qemu -d int,cpu_reset` gave that in one command; a read-back of two
+table entries said which half had landed (`pml4[0]` correct, `pd[0]` zero).
+Neither was reasoning.
+
+Both moved, in opposite directions for the same reason: the page tables to 8 MB,
+built a table at a time in a low buffer and block-moved up the way the kernel
+is, and the handoff down to `0x4000` where stage 2 can actually write it.
+
+The loader reports **two** bootloader regions as a result, because they are
+nowhere near each other — and the second matters: *the page tables are still
+live when the kernel starts.* Handing that memory out as usable would be handing
+the kernel the map it is running on.
+
 ### What is still to build here
 
-A20, the GDT, page tables, long mode, and the ReconBoot handoff.
+The installer does not yet write this path: a BIOS Boot Partition, stage 1 into
+the protective MBR, stage 2 into the partition, and the LBA patched into stage 1.
+Until then the harness builds those disks and the loader is proven on them.
 
 ### What will be checked, and what would make the checkpoint a lie
 

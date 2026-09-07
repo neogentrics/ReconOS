@@ -262,12 +262,44 @@ if command -v sgdisk >/dev/null 2>&1 && command -v mkfs.vfat >/dev/null 2>&1; th
 		# a copy that silently did nothing leaves zeroes, and on a
 		# machine just powered on so does a failed read.
 		say "and puts it above the first megabyte"
-		if echo "$gpt" | grep -q 'bytes at 0x100000, and it is an ELF'; then
-			echo "$(echo "$gpt" | sed -n 's/^kernel: \([0-9]*\) bytes at.*/\1/p') bytes across, ELF header intact"
+		if echo "$gpt" | grep -q 'and it is an ELF'; then
+			echo "$(echo "$gpt" | sed -n 's/^kernel: \([0-9]*\) bytes .*ELF.*/\1/p' | head -1) bytes across, ELF header intact"
 			pass=$((pass + 1))
 		else
 			echo "FAILED"
 			echo "$gpt" | grep -a 'kernel:' | sed 's/^/      /'
+			fail=$((fail + 1))
+		fi
+
+		# --- and the whole point of the checkpoint ---------------------
+		#
+		# Everything above is the loader talking about itself. This is
+		# the kernel talking, which is the only evidence that the switch
+		# to long mode and the handoff were right rather than merely
+		# uncrashing.
+		say "the kernel starts, on a machine with no UEFI"
+		if echo "$gpt" | grep -q 'ReconOS kernel'; then
+			echo "$(echo "$gpt" | grep -oaE 'ReconOS kernel [0-9.]+' | head -1)"
+			pass=$((pass + 1))
+		else
+			echo "FAILED -- it never reached the kernel"
+			echo "$gpt" | sed -n '/handing over/,$p' | head -8 | sed 's/^/      /'
+			fail=$((fail + 1))
+		fi
+
+		# The pairing is the design rule: the BIOS path had to join the
+		# set of loaders the kernel cannot tell apart, rather than
+		# become a second shape of "how the machine was started". The
+		# kernel used to write UEFI in whenever it saw a ReconBoot
+		# handoff, because only one loader produced one.
+		say "and knows it was a BIOS that started it"
+		if echo "$gpt" | grep -qE 'firmware +: BIOS' &&
+		   echo "$gpt" | grep -qE 'protocol +: ReconBoot'; then
+			echo "BIOS, over ReconBoot"
+			pass=$((pass + 1))
+		else
+			echo "FAILED"
+			echo "$gpt" | sed -n '/^Boot$/,+5p' | sed 's/^/      /'
 			fail=$((fail + 1))
 		fi
 	fi

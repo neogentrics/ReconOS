@@ -46,7 +46,23 @@ bool reconboot_parse(paddr_t handoff)
 	if (bi->version != RECONBOOT_VERSION)
 		return false;
 
-	boot_info_reset("ReconBoot", BOOT_FIRMWARE_UEFI);
+	/* Read, not assumed.
+	 *
+	 * This said BOOT_FIRMWARE_UEFI outright, which was true while only one
+	 * loader produced this structure and false the moment a second did. A
+	 * machine with no UEFI anywhere in it would have reported
+	 * "firmware : UEFI" -- and reported it confidently, in the one place
+	 * somebody looks to find out what booted them.
+	 *
+	 * An unrecognised value is reported as unknown rather than guessed at.
+	 * A loader from the future may name a firmware this kernel has never
+	 * heard of, and "unknown" is the honest answer to that. */
+	boot_info_reset("ReconBoot",
+			bi->firmware == RECONBOOT_FIRMWARE_UEFI
+				? BOOT_FIRMWARE_UEFI
+			: bi->firmware == RECONBOOT_FIRMWARE_BIOS
+				? BOOT_FIRMWARE_BIOS
+				: BOOT_FIRMWARE_UNKNOWN);
 
 	kstrlcpy(loader_name, bi->loader, sizeof(loader_name));
 	boot_info()->loader = loader_name;
