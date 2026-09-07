@@ -1,18 +1,8 @@
-Six modes, chosen along the top.
+Watchtower lists the windows that are open and the memory the system is
+using, and can close a window that has stopped answering. Ctrl+Alt+Del
+opens it.
 
-- Standard is arithmetic.
-- Scientific adds trigonometry, logarithms, powers and factorials.
-- Programmer works in hexadecimal, decimal, octal and binary at once, with
-  the bitwise operations, in whole numbers rather than decimals -- a number
-  shown as a bit pattern has to be exact about every one of those bits.
-- Date is how far apart two dates are.
-- Convert changes units.
-- Graph draws up to three expressions in *x* at once, each in its own
-  colour with a swatch beside its field. Drag the picture to move about in it
-  and use the wheel to zoom in on whatever is under the pointer. Zoom in, Zoom
-  out and Reset are also buttons, and Reset puts back the place as well as the
-  size. Save writes the picture into your Pictures folder, named for the
-  moment you took it. What is typed here is remembered, so closing the window
-  does not lose it.
-
-Every key has a keyboard equivalent, including the number pad.
+It is not a process list. ReconOS asks the machine underneath to create every
+process it runs, so what a process is belongs to that machine and not to this
+one -- and a list that showed some of them and called itself complete would be
+worse than one that does not pretend.

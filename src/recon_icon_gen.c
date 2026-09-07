@@ -59,6 +59,8 @@ typedef uint32_t color;
 #define C_BLUE RGB(0x28, 0x48, 0x98)
 #define C_BLUE_LIGHT RGB(0x58, 0x80, 0xD0)
 #define C_KEY RGB(0xE0, 0xE0, 0xE0)
+/* A key that has to read against a grey panel, which C_KEY does not. */
+#define C_BRASS RGB(0xE8, 0xC0, 0x50)
 
 /* --- The gloss --- */
 
@@ -729,6 +731,43 @@ static void draw_avatar_key(color *px) {
     fill_rect(px, 17, 25, 4, 2, RGB(0xE8, 0xD0, 0x80));
 }
 
+/*
+ * A key on a ring, for the page that lists kept passwords.
+ *
+ * A key rather than a padlock: a padlock says "locked", which is a state, and
+ * this page is about the things being held rather than about whether they are
+ * reachable right now. The ring is what makes it a keyring and not one key --
+ * the page lists however many there are.
+ */
+static void draw_keyring(color *px) {
+    /* The ring the keys hang from, drawn as a disc with the middle taken out
+     * rather than as a circle of plotted points -- the same trick every other
+     * ring in this file uses, and it antialiases the same way (not at all,
+     * deliberately: these are read at 16 pixels). */
+    fill_disc(px, 11, 13, 8, C_OUTLINE);
+    fill_disc(px, 11, 13, 6, C_METAL);
+    fill_disc(px, 11, 13, 4, 0);
+
+    /*
+     * The key: a bow, a shaft, and two teeth on one side. Two rather than one
+     * because a single tooth reads as an arrow at this size.
+     *
+     * Brass on a dark outline rather than the near-white C_KEY, which is what
+     * this was first drawn in -- and which vanished into the Control Panel's
+     * grey. Every icon on that page is dark-edged; one that is not looks
+     * disabled.
+     */
+    fill_disc(px, 21, 12, 6, C_OUTLINE);
+    fill_disc(px, 21, 12, 4, C_BRASS);
+    fill_disc(px, 21, 12, 2, 0);
+    fill_rect(px, 19, 15, 5, 13, C_OUTLINE);
+    fill_rect(px, 20, 16, 3, 11, C_BRASS);
+    fill_rect(px, 23, 19, 5, 3, C_OUTLINE);
+    fill_rect(px, 23, 19, 4, 2, C_BRASS);
+    fill_rect(px, 23, 24, 5, 3, C_OUTLINE);
+    fill_rect(px, 23, 24, 4, 2, C_BRASS);
+}
+
 static const struct generated_icon ICONS[] = {
     { "folder", draw_folder },
     { "file", draw_file },
@@ -758,6 +797,7 @@ static const struct generated_icon ICONS[] = {
     { "trash-full", draw_trash_full },
     { "shutdown", draw_shutdown },
     { "system", draw_system },
+    { "keyring", draw_keyring },
 
     /* The account pictures. Named with a prefix so the set can be listed by
      * looking for it, which is how the picker finds them without a second

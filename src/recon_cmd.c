@@ -29,6 +29,7 @@
 #include "recon_procinfo.h"
 #include "recon_registry.h"
 #include "recon_session.h"
+#include "recon_keyring.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
 #include "recon_access.h"
@@ -3077,6 +3078,65 @@ static void cmd_exit(struct recon_cmd_session *s, int argc, char **argv) {
     s->should_exit = true;
 }
 
+/*
+ * The keyring, from the Terminal.
+ *
+ * List, keep and forget. **There is deliberately no way to read one back.**
+ *
+ * The rest of this command set can do anything the person at the keyboard can
+ * do, so `keep` gives away nothing new -- somebody who can reach this socket
+ * can already drive the window that would type the password in. Printing a
+ * secret is different in kind: no window shows one, so a command that did
+ * would be the only way in the whole system to get a password out in plain
+ * text, and it would exist for the convenience of whoever found the socket.
+ *
+ * `keep` takes the secret on the command line, which puts it in the Terminal's
+ * history. That is said out loud below rather than quietly tolerated.
+ */
+static void cmd_keyring(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2 || strcasecmp(argv[1], "list") == 0) {
+        if (!recon_keyring_unlocked()) {
+            out(s, "The keyring is locked. It opens at sign-in, and an "
+                "account with no password has none.\n");
+            return;
+        }
+
+        int count = recon_keyring_count();
+        for (int i = 0; i < count; i++) {
+            char name[RECON_KEYRING_NAME_MAX];
+            if (recon_keyring_name_at(i, name, sizeof(name))) {
+                out(s, "  %s\n", name);
+            }
+        }
+        out(s, "\n  %d secret%s. There is no command that prints one.\n",
+            count, count == 1 ? "" : "s");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "keep") == 0 && argc >= 4) {
+        if (recon_keyring_put(argv[2], argv[3])) {
+            out(s, "Kept as '%s'.\n", argv[2]);
+            out(s, "It was typed here, so it is in this session's history.\n");
+        } else {
+            out(s, "%s\n", recon_keyring_last_error());
+        }
+        return;
+    }
+
+    if (strcasecmp(argv[1], "forget") == 0 && argc >= 3) {
+        if (recon_keyring_forget(argv[2])) {
+            out(s, "Forgotten. Whatever kept it will ask again.\n");
+        } else {
+            out(s, "%s\n", recon_keyring_last_error());
+        }
+        return;
+    }
+
+    out(s, "keyring [list]\n");
+    out(s, "keyring keep <name> <secret>\n");
+    out(s, "keyring forget <name>\n");
+}
+
 static void cmd_shutdown(struct recon_cmd_session *s, int argc, char **argv) {
     (void)argc; (void)argv;
     out(s, "Shutting down ReconOS.\n");
@@ -3120,6 +3180,9 @@ static const struct command COMMANDS[] = {
     { "wallpaper","wallpaper [name]",      "What is behind everything",          cmd_wallpaper },
     { "session",  "session",               "What the login screen shows",       cmd_session },
     { "users",    "users [action] ...",    "List or change accounts",           cmd_users },
+    { "keyring",  "keyring [list|keep|forget] ...",
+                                        "Secrets kept for the signed-in account",
+                                                                          cmd_keyring },
     { "access",   "access [setting] [n]",  "Reading settings: spacing, font",   cmd_access },
     { "mem",      "mem",                   "Show memory in use",                cmd_mem },
     { "net",      "net [action] ...",      "The network, and whether it answers", cmd_net },

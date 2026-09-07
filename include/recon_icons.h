@@ -93,6 +93,8 @@
 #define RECON_ICON_WEB "web"
 #define RECON_ICON_PLAYER "player"
 #define RECON_ICON_SHUTDOWN "shutdown"
+/* The page that lists kept passwords. */
+#define RECON_ICON_KEYRING "keyring"
 /* The Recon Towers mark. Copied in from the assets rather than drawn: it is
  * artwork, not a generated glyph. */
 #define RECON_ICON_LOGO "recon-towers"

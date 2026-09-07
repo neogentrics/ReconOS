@@ -28,6 +28,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_keyring.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
 
@@ -1882,6 +1883,17 @@ static bool finish_account(struct recon_session *session) {
         return false;
     }
 
+    /*
+     * The keyring opens here, while the password is still in hand.
+     *
+     * It is the only moment it can: the key is derived from the password and
+     * the password is about to be erased, deliberately, two lines down. A
+     * failure is not worth stopping setup over -- an account with no keyring
+     * is an account whose Mail window asks every time, which is exactly where
+     * this was before.
+     */
+    recon_keyring_unlock(name, session->password.text);
+
     /* The passwords go out of memory now rather than sitting in a panel
      * struct for the rest of the session. */
     recon_edit_end(&session->password);
@@ -2037,6 +2049,16 @@ static void advance(struct recon_session *session) {
             recon_session_refresh(session);
             return;
         }
+
+        /*
+         * Before the password is erased, and only ever here.
+         *
+         * Every other way into a signed-in session goes through this line,
+         * which is what makes the rule hold: there is no path that reaches a
+         * desktop with the keyring left open from somebody else, because
+         * signing out locked it and only a password reopens it.
+         */
+        recon_keyring_unlock(user.name, session->password.text);
 
         recon_edit_end(&session->password);
         session->locked_to[0] = '\0';
@@ -2425,6 +2447,9 @@ void recon_session_lock(struct recon_session *session) {
     }
 
     recon_users_logout();
+    /* The key goes with the session. Everything kept stays on the disk and
+     * becomes unreadable, which is the whole of what the keyring promises. */
+    recon_keyring_lock();
     recon_edit_begin(&session->password, "", false);
     session->password.masked = true;
     session->account = 0;
@@ -2451,6 +2476,16 @@ void recon_session_lock_screen(struct recon_session *session) {
      * and all -- the shell only clears those when the person changes.
      */
     const char *who = recon_users_current();
+
+    /*
+     * The account stays signed in; the key does not.
+     *
+     * That is the one thing a lock screen is for. Leaving the key in memory
+     * would mean a locked machine still held every password in a form that
+     * could be read, and the lock would be a drawing of a lock. Unlocking goes
+     * back through the login screen, which derives it again.
+     */
+    recon_keyring_lock();
 
     recon_edit_begin(&session->password, "", false);
     session->password.masked = true;

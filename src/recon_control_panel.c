@@ -9,6 +9,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,7 @@
 #include "recon_theme.h"
 #include "recon_tls.h"
 #include "recon_ui.h"
+#include "recon_keyring.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
 
@@ -202,12 +204,25 @@ enum action {
     ACTION_SKIN_SET,
     ACTION_SKIN_CANCEL,
     ACTION_SKIN_FLAT,
+    /* Passwords */
+    ACTION_FORGET_SECRET,
+
     /* Update */
     ACTION_SHOW_CHANGES,
 };
 
 enum page {
     PAGE_ACCOUNTS,
+    /*
+     * Beside Accounts because that is what it belongs to: the keyring is
+     * unlocked by an account's password and holds that account's secrets.
+     *
+     * Its own page rather than a section of Accounts because a stored password
+     * needs somewhere it can be *seen*. Anything that can write a secret and
+     * offers no way to list or remove what it wrote is asking to be trusted
+     * without being checkable, and this one is meant to be checkable.
+     */
+    PAGE_PASSWORDS,
     PAGE_APPEARANCE,
     PAGE_CLOCK,
     PAGE_DISPLAY,
@@ -249,6 +264,7 @@ static const struct {
     const char *summary;
 } PAGES[PAGE_COUNT] = {
     { "Accounts", RECON_ICON_APP, "Who may sign in" },
+    { "Passwords", RECON_ICON_KEYRING, "What has been kept" },
     { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
     { "Date and Time", RECON_ICON_CLOCK, "The clock and its zone" },
     { "Display Settings", RECON_ICON_NOTEPAD, "Text, size, resolution" },
@@ -1258,6 +1274,113 @@ static void draw_accounts(struct control_panel *cp, struct recon_panel *p,
         HIT_ACTION_BASE + ACTION_REMOVE_USER, admin && have);
 }
 
+/* --- The passwords that have been kept --- */
+
+/*
+ * What the keyring is holding, and a way to stop it holding one.
+ *
+ * Names only. There is no call in recon_keyring.h that hands out every secret
+ * at once, and this page is the reason there is not: a list of names answers
+ * "what does this machine know about me", and a list of values answers "what
+ * is every password this person uses", which is a question a Control Panel
+ * page has no business being able to ask.
+ */
+static void draw_passwords(struct control_panel *cp, struct recon_panel *p,
+        int x, int y, int w, int h) {
+    int ascent = recon_font_ascent(cp->font);
+    int line = recon_font_line_height(cp->font);
+
+    y = draw_heading(cp, p, x, y, w, "Passwords",
+        "Secrets programs have asked to keep for you.");
+
+    /*
+     * Locked is a state worth drawing rather than an empty list.
+     *
+     * An empty list and a locked keyring look the same and mean opposite
+     * things -- nothing kept, versus everything kept and none of it readable.
+     * Showing the same screen for both would be the page lying about the one
+     * fact it exists to report.
+     */
+    if (!recon_keyring_unlocked()) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "The keyring is locked.", COLOR_TEXT);
+        y += line + 4;
+        recon_draw_paragraph(p, cp->font, x, y, w,
+            "It opens when you sign in with a password, and there is nothing "
+            "to show until it does. An account with no password has no "
+            "keyring at all -- there would be nothing to lock it with.",
+            COLOR_DIM);
+        return;
+    }
+
+    int count = recon_keyring_count();
+
+    /*
+     * Nothing kept means no list, rather than a list with nothing in it.
+     *
+     * An empty white rectangle taking most of the window says "something
+     * should be here and is missing". A sentence saying nothing has been kept
+     * says what is true, and takes the room it needs.
+     */
+    if (count == 0) {
+        recon_draw_paragraph(p, cp->font, x, y, w,
+            "Nothing has been kept. A program that can keep a password offers "
+            "to when it asks for one -- Mail does, on its sign-in screen.",
+            COLOR_DIM);
+        return;
+    }
+    int rows = (h - (y - 0) - BUTTON_HEIGHT - PADDING * 2) / ROW_HEIGHT;
+    if (rows < 1) {
+        rows = 1;
+    }
+
+    cp->list_x = x;
+    cp->list_y = y;
+    cp->list_w = w;
+    cp->list_h = rows * ROW_HEIGHT;
+
+    recon_fill_rect(p, x, y, w, cp->list_h, COLOR_PANEL);
+
+    for (int i = 0; i < count && i < rows; i++) {
+        char name[RECON_KEYRING_NAME_MAX];
+        if (!recon_keyring_name_at(i, name, sizeof(name))) {
+            break;
+        }
+
+        /*
+         * The part before the first slash is the program that asked. Said
+         * plainly, because "mail/someone@example.com" is a key and "Kept by
+         * Mail" is an answer.
+         */
+        char detail[160];
+        const char *slash = strchr(name, '/');
+        if (slash != NULL && slash != name) {
+            int len = (int)(slash - name);
+            /* Capitalised, because it is being read as the program's name and
+             * not as the key it came from. "Kept by mail" reads like a typo;
+             * "Kept by Mail" reads like an answer. */
+            snprintf(detail, sizeof(detail), "Kept by %c%.*s",
+                (char)toupper((unsigned char)name[0]), len - 1, name + 1);
+        } else {
+            snprintf(detail, sizeof(detail), "Kept by a program");
+        }
+
+        draw_row_at(cp, p, x, y + i * ROW_HEIGHT, w, ROW_HEIGHT, i,
+            slash != NULL ? slash + 1 : name, detail, i == cp->selected);
+    }
+
+    y += cp->list_h + PADDING;
+
+    y += recon_draw_paragraph(p, cp->font, x, y, w,
+        "Each is encrypted with a key made from your password, held only "
+        "while you are signed in. Signing out makes all of them unreadable.",
+        COLOR_DIM);
+    y += PADDING;
+
+    draw_button(cp, p, x, y, "Forget",
+        HIT_ACTION_BASE + ACTION_FORGET_SECRET, cp->selected < count);
+}
+
 /* --- Writing a skin --- */
 
 /* A colour as a person types it: six digits, or eight when the alpha matters. */
@@ -1489,6 +1612,7 @@ static void draw_skin_editor(struct control_panel *cp, struct recon_panel *p,
 static const char *help_topic_for(enum page page) {
     switch (page) {
     case PAGE_ACCOUNTS:   return "Accounts";
+    case PAGE_PASSWORDS:  return "Accounts";
     case PAGE_APPEARANCE: return "How it looks";
     case PAGE_CLEANUP:    return "Storage";
     case PAGE_CLOCK:      return "How it looks";
@@ -2503,23 +2627,18 @@ static void draw_clock_page(struct control_panel *cp, struct recon_panel *p,
      * absence nobody has explained.
      */
     /*
-     * Two short lines rather than one long one, because recon_draw_text clips
-     * and does not wrap. The first version of this ran off the end of the
-     * window as "Its own co..." -- an explanation cut off before it explains
-     * anything, which is worse than the absence it was written to explain.
+     * Wrapped rather than split by hand into two lines that fit.
      *
-     * A shared wrapper is what this actually wants. There is one in the Help
-     * viewer and it is tied to that viewer's own page structure, so using it
-     * here means lifting it out first -- worth doing, and not worth doing at
-     * the same time as this.
+     * It was two lines, because recon_draw_text clips and the first version of
+     * this ran off the end of the window as "Its own co..." -- an explanation
+     * cut off before it explains anything, which is worse than the absence it
+     * was written to explain. The note there asked for a shared wrapper;
+     * recon_draw_paragraph is it, and this is the first thing to use it.
      */
-    recon_draw_text(p, cp->font, x, y + ascent, w,
+    y += recon_draw_paragraph(p, cp->font, x, y, w,
         "Nothing here sets the clock: ReconOS reads the host machine's and "
-        "will not move it.", COLOR_DIM);
-    y += line;
-    recon_draw_text(p, cp->font, x, y + ascent, w,
-        "Its own comes with its own kernel.", COLOR_DIM);
-    y += line + PADDING;
+        "will not move it. Its own comes with its own kernel.", COLOR_DIM);
+    y += PADDING;
 
     int bx = draw_button(cp, p, x, y, recon_registry_get_bool(RECON_REG_USER,
             RECON_CLOCK_24H_KEY, true) ? "Show am and pm" : "Show a 24-hour clock",
@@ -4978,6 +5097,7 @@ static void draw_page(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     switch (cp->page) {
     case PAGE_ACCOUNTS:   draw_accounts(cp, p, x, y, w, h); break;
+    case PAGE_PASSWORDS:  draw_passwords(cp, p, x, y, w, h); break;
     case PAGE_POWER:      draw_power(cp, p, x, y, w, h); break;
     case PAGE_APPEARANCE: draw_appearance(cp, p, x, y, w, h); break;
     case PAGE_CLOCK:      draw_clock_page(cp, p, x, y, w, h); break;
@@ -5397,6 +5517,28 @@ static void do_action(struct control_panel *cp, enum action action) {
         const char *buttons[3] = { "Keep Files", "Delete Files", "Cancel" };
         recon_appwin_ask(cp->win, "Remove Account", message, buttons, 3,
             answered);
+        break;
+    }
+
+    case ACTION_FORGET_SECRET: {
+        char name[RECON_KEYRING_NAME_MAX];
+        if (!recon_keyring_name_at(cp->selected, name, sizeof(name))) {
+            break;
+        }
+        /*
+         * No confirmation. Forgetting a stored password costs one retype and
+         * cannot destroy anything -- the account it belongs to is untouched --
+         * and a dialog in front of every safe action teaches people to click
+         * through the ones in front of unsafe ones.
+         */
+        if (recon_keyring_forget(name)) {
+            set_status(cp, false, "Forgotten. %s will ask for it again.", name);
+            if (cp->selected > 0 && cp->selected >= recon_keyring_count()) {
+                cp->selected = recon_keyring_count() - 1;
+            }
+        } else {
+            set_status(cp, true, "%s", recon_keyring_last_error());
+        }
         break;
     }
 

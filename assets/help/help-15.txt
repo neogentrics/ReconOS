@@ -1,8 +1,19 @@
-Watchtower lists the windows that are open and the memory the system is
-using, and can close a window that has stopped answering. Ctrl+Alt+Del
-opens it.
+Mail reads over IMAP or POP3 and sends over SMTP. Both halves of an account
+are on one form, because they are one account to the person filling it in; the
+sending half may be left blank if you only want to read.
 
-It is not a process list. ReconOS asks the machine underneath to create every
-process it runs, so what a process is belongs to that machine and not to this
-one -- and a list that showed some of them and called itself complete would be
-worse than one that does not pretend.
+The connection is always encrypted and the far end is always checked. There
+is no unencrypted option and no setting that produces one. On port 587 the
+upgrade to encryption is required to succeed: a server that does not offer it,
+or something in the middle that removes the offer, ends the session rather than
+carrying on in the open.
+
+Writing a letter takes To, Cc and Bcc, each a list separated by
+commas. Everyone named in all three receives it; only To and Cc appear in the
+letter itself, which is what a blind copy means. Attach a file adds up to
+eight files, twelve megabytes together. Files are read when you press Send, so
+what goes is the file as it is then.
+
+The password is not saved. It is used for the connection and forgotten when
+the window closes. Somewhere safe to keep it needs a key that exists only while
+somebody is signed in, and that does not exist yet.

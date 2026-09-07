@@ -284,6 +284,36 @@ sometimes everything and sometimes very little.
 Every address is checked before it is fetched, and **Control Panel → Firewall**
 decides whether it may go out at all.
 
+## Passwords
+
+Some programs offer to keep a password for you. Mail does, on the screen where
+it asks for one: tick **Remember this password** and it is kept once the
+connection has worked.
+
+Kept is not the same as written down. It is encrypted with a key made from
+your account password, and that key exists only while you are signed in --
+it is never written anywhere. Signing out, locking the screen, or shutting
+down makes every kept password unreadable until you sign in again.
+
+**An account with no password has no keyring.** There would be nothing to make
+a key from, so nothing offers to keep anything, and the tick box is not shown
+rather than shown and ignored.
+
+**Control Panel -> Passwords** lists what is being kept, by name and by which
+program asked. It does not show the passwords themselves and there is no way
+to make it: nothing in ReconOS will print one back to you. Choose one and
+press **Forget** and it is gone; whatever kept it will ask again next time.
+
+From the Terminal, `keyring` lists them, `keyring forget <name>` removes one,
+and `keyring keep <name> <secret>` adds one. There is no command that prints a
+secret, for the same reason.
+
+**What this protects against, and what it does not.** It protects a disk or a
+backup that somebody else has: without your password, what is stored is
+unreadable. It does not protect against somebody using your account while you
+are signed in -- at that point the key is in memory and the programs running
+are yours. Lock the screen when you walk away; that puts the key back.
+
 ## Mail
 
 **Mail** reads over IMAP or POP3 and sends over SMTP. Both halves of an account

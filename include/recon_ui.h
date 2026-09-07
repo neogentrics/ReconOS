@@ -356,6 +356,30 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
     int x, int y, int max_width, const char *text, recon_color color);
 
 /*
+ * Draw text across as many lines as it needs, and say how tall it came out.
+ *
+ * The counterpart to recon_draw_text, which clips: a label that has to fit one
+ * line wants that, and a sentence explaining something wants this. Getting the
+ * two mixed up is why the Control Panel had an explanation reading "Its own
+ * co..." -- an explanation cut off before it explains anything, which is worse
+ * than the absence it was written to explain.
+ *
+ * `y` is the TOP of the first line rather than its baseline, unlike
+ * recon_draw_text. A wrapped block is positioned by where it starts and
+ * measured by how tall it is, and a caller that had to add an ascent to get in
+ * and read a return value to get out would be doing arithmetic in two
+ * different coordinate systems.
+ *
+ * Breaks at spaces. A single word longer than the width is drawn on its own
+ * line and clipped by recon_draw_text rather than broken mid-word, because a
+ * word split across two lines is unreadable in a way a clipped one is not.
+ *
+ * Returns the height drawn, so the caller can carry on below it.
+ */
+int recon_draw_paragraph(struct recon_panel *panel, struct recon_font *font,
+    int x, int y, int max_width, const char *text, recon_color color);
+
+/*
  * Draw RGBA pixels into a rectangle, scaling to fit and blending by alpha.
  *
  * Shrinking averages the source pixels that fall inside each destination

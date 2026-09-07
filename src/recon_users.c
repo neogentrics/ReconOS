@@ -15,7 +15,9 @@
 #include "recon_fs.h"
 #include "recon_users.h"
 
-#define SALT_SIZE 16
+/* The same number the header publishes; stated in both places because the
+ * compiler cannot check that a #define matches another one. */
+#define SALT_SIZE RECON_USERS_SALT_SIZE
 #define HASH_SIZE RECON_SHA256_SIZE
 
 struct account {
@@ -234,6 +236,28 @@ void recon_users_finish(void) {
 
 int recon_users_count(void) {
     return g_count;
+}
+
+bool recon_users_salt(const char *name, uint8_t out[RECON_USERS_SALT_SIZE]) {
+    struct account *account = find(name);
+    if (account == NULL || out == NULL) {
+        return false;
+    }
+
+    /*
+     * No password means no salt worth having.
+     *
+     * A passwordless account has nothing to derive a key from, and deriving
+     * one from the empty string would give every passwordless account on every
+     * machine in the world the same key -- which is not a weak key, it is a
+     * published one. The caller has to be told there is nothing here.
+     */
+    if (!account->info.has_password) {
+        return false;
+    }
+
+    memcpy(out, account->salt, RECON_USERS_SALT_SIZE);
+    return true;
 }
 
 bool recon_users_at(int index, struct recon_user *out) {

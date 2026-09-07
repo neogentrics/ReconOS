@@ -83,6 +83,7 @@
 #include "recon_themewl.h"
 #include "recon_session.h"
 #include "recon_shell.h"
+#include "recon_keyring.h"
 #include "recon_users.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
@@ -2931,6 +2932,15 @@ int main(int argc, char **argv) {
      */
     recon_installed_apps_close_windows();
     recon_shell_destroy(server.shell);
+    /*
+     * The key is erased rather than left for the process to take with it.
+     *
+     * Exiting frees the memory but does not scrub it, and a core dump or a
+     * swapped-out page written at the wrong moment would carry the key out of
+     * a machine that had been shut down properly. One call is cheap insurance
+     * against that, and it is the same call sign-out makes.
+     */
+    recon_keyring_lock();
     recon_users_finish();
     recon_net_finish();
     recon_theme_finish();

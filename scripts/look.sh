@@ -25,6 +25,14 @@
 #
 # The harness signs in to a COPY of the filesystem with the account password
 # removed, so it never needs one and never touches the real tree.
+#
+# Some things cannot be photographed that way. The keyring derives its key
+# from an account password, so an account without one has no keyring, and
+# every screen that offers to keep a secret correctly hides the offer --
+# which means the harness could not photograph the offer at all.
+# `--password X` sets a known password on every account in the copy instead
+# of clearing it, and types it at the login screen. The real tree is still
+# never touched: the password being set is the harness's, not anybody's.
 
 set -e
 
@@ -33,18 +41,23 @@ REAL_ROOT="${RECONOS_ROOT:-$HOME/.reconos}"
 LOOK_ROOT="$HOME/.reconos-look"
 OUT_DIR="./shots"
 PAUSE=0.6
+PASSWORD=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT_DIR="$2"; shift 2 ;;
         --pause) PAUSE="$2"; shift 2 ;;
         --fresh) rm -rf "$LOOK_ROOT"; shift ;;
+        # Implies --fresh: this rewrites the accounts file, and a copy
+        # made under the other rule would keep what it was made with.
+        --password) PASSWORD="$2"; rm -rf "$LOOK_ROOT"; shift 2 ;;
         *) break ;;
     esac
 done
 
 if [ $# -eq 0 ]; then
-    echo "Usage: $0 [--out DIR] [--pause SECONDS] [--fresh] <command>..." >&2
+    echo "Usage: $0 [--out DIR] [--pause SECONDS] [--fresh]" \
+        "[--password PASS] <command>..." >&2
     echo "Example: $0 'apps Calculator' 'capture calc.png'" >&2
     exit 2
 fi
@@ -68,9 +81,32 @@ if [ ! -d "$LOOK_ROOT" ]; then
         exit 1
     fi
     cp -a "$REAL_ROOT" "$LOOK_ROOT"
-    # name:role:iterations:salt:hash -- iterations of 0 means no password.
-    sed -i -E 's/^([^#][^:]*):([^:]*):[0-9]+:[^:]*:.*$/\1:\2:0::/' \
-        "$LOOK_ROOT/System/Config/users"
+    if [ -n "$PASSWORD" ]; then
+        # Every account gets the same known password. PBKDF2-HMAC-SHA256
+        # over a fresh 16-byte salt, 120000 rounds -- the same parameters
+        # recon_users uses, restated here because this file is being
+        # written from outside it. A mismatch shows up as a harness that
+        # cannot sign in, which is loud enough.
+        RECONOS_LOOK_PASSWORD="$PASSWORD" python3 - "$LOOK_ROOT/System/Config/users" <<'PYEOF'
+import hashlib, os, sys
+path = sys.argv[1]
+password = os.environ["RECONOS_LOOK_PASSWORD"].encode()
+out = []
+for line in open(path, encoding="utf-8").read().splitlines():
+    if not line or line.startswith("#") or line.count(":") < 4:
+        out.append(line)
+        continue
+    name, role, _i, _s, _h = line.split(":", 4)
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password, salt, 120000, 32)
+    out.append("%s:%s:120000:%s:%s" % (name, role, salt.hex(), digest.hex()))
+open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
+PYEOF
+    else
+        # name:role:iterations:salt:hash -- 0 iterations means no password.
+        sed -i -E 's/^([^#][^:]*):([^:]*):[0-9]+:[^:]*:.*$/\1:\2:0::/' \
+            "$LOOK_ROOT/System/Config/users"
+    fi
 fi
 rm -f "$LOOK_ROOT"/*.png
 
@@ -111,6 +147,12 @@ done
 # Pick the account, then Sign In. One click highlights and the second acts,
 # system-wide, so the account needs the double click and the button does not.
 say "ui dclick 640 353" >/dev/null; sleep 1.0
+if [ -n "$PASSWORD" ]; then
+    # The caret is already in the password field after choosing the
+    # account, so this types into it rather than clicking it first --
+    # one fewer coordinate to be wrong about when the screen changes.
+    say "ui type $PASSWORD" >/dev/null; sleep 0.4
+fi
 say "ui click 640 505" >/dev/null; sleep 1.5
 
 STAGE=$(say session | head -1)

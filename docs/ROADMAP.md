@@ -930,9 +930,13 @@ rule rather than an omission: a young mail client with a bug that alters
 somebody's mailbox is one nobody uses twice, and there is no undo on the far
 end.
 
-The password is asked for and not stored, and the window says so where the
-password is typed. The keyring that would change that is written down below
-under what is missing.
+The password can be kept, and the window says which it is doing where the
+password is typed -- "not saved... forgotten when the window closes" when the
+box is not ticked, and what keeping it actually means when it is. It is stored
+only after a connection has succeeded, so a password that has not been proved
+right is never written; changing the server or the username forgets the old
+one, because a secret whose name nothing looks up any more cannot be removed
+from anywhere.
 
 ### Applets that update on their own
 
@@ -1926,14 +1930,23 @@ list, a text field and a menu are all still square whatever the skin says.
 **No paint program.** Nothing in ReconOS draws a picture; the icons and
 avatars it ships are drawn by code rather than by anybody.
 
-**No password keyring.** The Mail window asks for a password every time it
-connects and holds it only while the window is open, because there is nowhere
-safe to put it: the registry means anything that can read a file can read it,
-and obfuscation is worse than plain because it looks like protection. Doing it
-properly needs a key that exists only while somebody is signed in, derived
-from the account password at sign-in and held in memory. That is a subsystem
-rather than a field, and it is the thing standing between this and a mail
-client somebody would use daily.
+**The keyring holds passwords, and is not the whole answer.** As of v0.4.0
+Mail can keep a password: AES-256-GCM under a key derived from the account
+password at sign-in and held only in memory, with the entry's name
+authenticated so a ciphertext cannot be moved between entries. Control Panel
+-> Passwords lists what is kept and forgets one.
+
+What it does not do is stated in `include/recon_keyring.h` and is worth
+repeating here, because it is a limit rather than an omission: **it does not
+protect against somebody who is signed in.** While the session is unlocked the
+key is in this process's memory, and every module is loaded into this process,
+so any module can ask for any secret. There are no separate address spaces to
+hide a key in. It protects a stolen disk and a stolen backup. Fixing the rest
+is the kernel's job, not this file's.
+
+Also still missing: nothing asks before handing a secret over -- a keyring on
+a system with real process separation would name the program asking, and this
+one has no program to name.
 
 **Mail sends** — as of v0.4.0. What is still missing is named below.
 

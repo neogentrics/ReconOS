@@ -19,6 +19,7 @@
 #include "recon_filedlg.h"
 #include "recon_fs.h"
 #include "recon_icons.h"
+#include "recon_keyring.h"
 #include "recon_mail.h"
 #include "recon_smtp.h"
 #include "recon_mailwin.h"
@@ -112,6 +113,7 @@ enum mail_screen {
 #define HIT_SEND (RECON_APPWIN_HIT_USER + 17)
 #define HIT_DISCARD (RECON_APPWIN_HIT_USER + 18)
 #define HIT_ATTACH (RECON_APPWIN_HIT_USER + 20)
+#define HIT_REMEMBER (RECON_APPWIN_HIT_USER + 21)
 #define HIT_COMPOSE_BASE (RECON_APPWIN_HIT_USER + 300)
 /* One per attached file, so the X beside each is its own thing. Above the
  * compose fields and below the row ladder, which is checked last. */
@@ -130,13 +132,21 @@ struct recon_mailwin {
     int focused;
 
     /*
-     * The password, held here and nowhere else.
+     * The password.
      *
-     * Not written to the registry, not written to a file. It lives for as long
-     * as this window does and goes when it does. See the long note in
-     * recon_mail.h about why that is the honest answer for now.
+     * It lives for as long as this window does, and goes when it does --
+     * unless the person ticks the box, in which case it also goes to the
+     * keyring, which is the one place in ReconOS a secret may be written. Not
+     * the registry: anything that can read a file can read that.
+     *
+     * `remember` is what the box says. `was_remembered` is what was true when
+     * the screen opened, and the two differing is what turns the box from a
+     * setting into an instruction -- untick it and the stored one is forgotten
+     * rather than merely not written again.
      */
     struct recon_edit password;
+    bool remember;
+    bool was_remembered;
 
     struct recon_mail_session *session;
     int selected;
@@ -183,6 +193,77 @@ static void set_message(struct recon_mailwin *m, bool error, const char *fmt,
     m->message_is_error = error;
 }
 
+/*
+ * What this account's password is called in the keyring.
+ *
+ * The account rather than the window: somebody with two mail accounts has two
+ * passwords, and a single "mail/password" would have them overwriting each
+ * other with no sign that anything had happened. Host and user together are
+ * what identifies an account everywhere else in this file, so they are what
+ * identifies it here.
+ */
+static void secret_name(const struct recon_mailwin *m, char *out, size_t size) {
+    snprintf(out, size, "mail/%s@%s", m->account.user, m->account.host);
+}
+
+/*
+ * Fill the password in from the keyring, if it is in there.
+ *
+ * Called when the password screen opens. A locked keyring, a missing entry and
+ * an entry that does not authenticate all land in the same place -- an empty
+ * box and an unticked tick -- because from this screen they are the same
+ * situation: nobody here knows the password, so somebody has to type it.
+ */
+static void recall_password(struct recon_mailwin *m) {
+    m->remember = false;
+    m->was_remembered = false;
+
+    char name[RECON_KEYRING_NAME_MAX];
+    secret_name(m, name, sizeof(name));
+
+    char secret[RECON_KEYRING_SECRET_MAX];
+    if (!recon_keyring_get(name, secret, sizeof(secret))) {
+        return;
+    }
+
+    recon_edit_begin(&m->password, secret, false);
+    m->password.masked = true;
+    m->remember = true;
+    m->was_remembered = true;
+
+    /* Out of this frame as soon as it has been copied. It is still in the edit
+     * field, which is where it has to be, but there is no reason for a second
+     * copy to sit on the stack until something else happens to overwrite it. */
+    memset(secret, 0, sizeof(secret));
+}
+
+/*
+ * Act on the box, once the password is known to be right.
+ *
+ * Deliberately not when the box is clicked. A password that has not connected
+ * yet is a password that might be wrong, and storing it then would mean the
+ * next window opens with a wrong password already filled in -- which looks
+ * exactly like the keyring having corrupted it.
+ */
+static void remember_password(struct recon_mailwin *m) {
+    char name[RECON_KEYRING_NAME_MAX];
+    secret_name(m, name, sizeof(name));
+
+    if (m->remember) {
+        if (recon_keyring_put(name, m->password.text)) {
+            m->was_remembered = true;
+        }
+        return;
+    }
+
+    /* Unticked. If there was one, it goes -- the box is an instruction about
+     * what should be stored, not a note about what happens next time. */
+    if (m->was_remembered) {
+        recon_keyring_forget(name);
+        m->was_remembered = false;
+    }
+}
+
 /* --- The session --- */
 
 static void on_changed(void *user) {
@@ -192,6 +273,12 @@ static void on_changed(void *user) {
 
 static void on_finished(void *user, bool ok, const char *error) {
     struct recon_mailwin *m = user;
+
+    if (ok) {
+        /* The server accepted it, so it is worth keeping. This is the only
+         * place in Mail that writes a password anywhere. */
+        remember_password(m);
+    }
 
     if (!ok) {
         set_message(m, true, "%s", error);
@@ -553,6 +640,23 @@ static void save_form(struct recon_mailwin *m) {
         return;
     }
 
+    /*
+     * A stored password belongs to the account it was stored for.
+     *
+     * Changing the server or the username makes a different account, and the
+     * old one's password would sit in the keyring under a name nothing looks
+     * up any more -- unreachable, and so undeletable from here. Forgotten
+     * before the account is overwritten, which is the only moment both names
+     * are still known.
+     */
+    if (strcmp(m->account.host, host) != 0 ||
+            strcmp(m->account.user, who) != 0) {
+        char old_name[RECON_KEYRING_NAME_MAX];
+        secret_name(m, old_name, sizeof(old_name));
+        recon_keyring_forget(old_name);
+        m->was_remembered = false;
+    }
+
     /* Both lengths are checked above, so this cannot truncate. memcpy rather
      * than snprintf because the compiler can see that this one is safe and
      * cannot see that the other one had been made safe. */
@@ -613,6 +717,7 @@ static void save_form(struct recon_mailwin *m) {
     m->screen = SCREEN_PASSWORD;
     recon_edit_begin(&m->password, "", false);
     m->password.masked = true;
+    recall_password(m);
     m->message[0] = '\0';
     m->message_is_error = false;
 }
@@ -783,13 +888,45 @@ static void draw_password(struct recon_mailwin *m, struct recon_panel *p,
     y += BUTTON_HEIGHT + PADDING;
 
     /*
-     * Said plainly rather than buried. Somebody typing a password into a new
-     * program is entitled to know what happens to it, and "nothing" is a
-     * better answer than most programs can give.
+     * The box, and then a sentence saying what ticking it does.
+     *
+     * Only offered when the keyring is open, which it is whenever somebody is
+     * signed in with a password. An account with no password has no keyring --
+     * there would be nothing to derive a key from -- and offering a tick that
+     * silently did nothing would be worse than not offering it.
      */
-    recon_draw_text(p, m->font, x, y + ascent, w,
-        "The password is not saved. It is used for this connection and "
-        "forgotten when the window closes.", COLOR_DIM);
+    bool can_keep = recon_keyring_unlocked();
+    if (can_keep) {
+        int box = line - 2;
+        int by = y + (line - box) / 2;
+        recon_fill_rect(p, x, by, box, box, COLOR_PANEL);
+        recon_stroke_rect(p, x, by, box, box, COLOR_SEPARATOR);
+        if (m->remember) {
+            recon_fill_rect(p, x + 3, by + 3, box - 6, box - 6, COLOR_TEXT);
+        }
+        recon_draw_text(p, m->font, x + box + 8, y + ascent, w - box - 8,
+            "Remember this password", COLOR_TEXT);
+        recon_hit_add(p, x, by, box + 8 + 180, box, HIT_REMEMBER);
+        y += line + 4;
+    }
+
+    /*
+     * Said plainly rather than buried. Somebody typing a password into a new
+     * program is entitled to know what happens to it, and this program can
+     * give a better answer than most.
+     */
+    const char *note;
+    if (!can_keep) {
+        note = "The password is not saved. It is used for this connection and "
+            "forgotten when the window closes.";
+    } else if (m->remember) {
+        note = "It will be kept encrypted, and can only be read while you are "
+            "signed in. Signing out makes it unreadable.";
+    } else {
+        note = "The password is not saved. It is used for this connection and "
+            "forgotten when the window closes.";
+    }
+    recon_draw_text(p, m->font, x, y + ascent, w, note, COLOR_DIM);
 }
 
 /* --- Writing one --- */
@@ -1343,7 +1480,16 @@ static bool mailwin_click(void *user, uint32_t hit, int cx, int cy,
         m->screen = SCREEN_SETUP;
         load_form(m);
         m->message[0] = '\0';
-    m->message_is_error = false;
+        m->message_is_error = false;
+        return true;
+    case HIT_REMEMBER:
+        /*
+         * The box changes now; what it means happens at the next successful
+         * connection. Unticking it and closing the window leaves the stored
+         * password where it was -- an instruction nobody confirmed should not
+         * take effect on the way out of a window.
+         */
+        m->remember = !m->remember;
         return true;
     case HIT_REFRESH:
         connect_now(m);
@@ -1586,6 +1732,9 @@ struct recon_appwin *recon_mailwin_create(struct recon_server *server,
         m->screen = SCREEN_PASSWORD;
         recon_edit_begin(&m->password, "", false);
         m->password.masked = true;
+        /* Filled in already if it was kept and the keyring is open, which
+         * turns opening Mail from a password prompt into a Connect button. */
+        recall_password(m);
     } else {
         /* A sensible starting point rather than an empty form: IMAP on its
          * usual port is what almost everybody wants, and a form that is

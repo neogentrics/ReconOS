@@ -41,6 +41,30 @@
  */
 #define RECON_USERS_ITERATIONS 120000
 
+/* How many bytes of salt an account carries. */
+#define RECON_USERS_SALT_SIZE 16
+
+/*
+ * An account's salt.
+ *
+ * For deriving a *second* key from the same password without that key being
+ * the one already stored -- which is what the keyring does. It hashes this
+ * with a tag of its own first, so the two derivations are independent: PBKDF2
+ * under two different salts gives two unrelated results, and the value in the
+ * accounts file says nothing about the other one.
+ *
+ * Handing out the salt is safe and is the point of a salt: it is not secret,
+ * it exists so that two people with the same password do not get the same
+ * hash, and it has been sitting in the accounts file in plain hex since the
+ * file existed.
+ *
+ * False when there is no such account, or it has no password -- in which case
+ * there is nothing to derive from and the caller has to say so rather than
+ * deriving from an empty string, which would give every passwordless account
+ * on every machine the same key.
+ */
+bool recon_users_salt(const char *name, uint8_t out[RECON_USERS_SALT_SIZE]);
+
 enum recon_user_role {
     /* Can use the system and their own files, and nothing else. */
     RECON_ROLE_LIMITED,

@@ -23,6 +23,61 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Passwords can be kept, and there is a page that shows what is kept.**
+
+Mail's sign-in screen now offers "Remember this password". Ticking it and
+connecting successfully puts the password in a keyring; opening Mail after that
+fills the field in and leaves a Connect button.
+
+What is behind the tick box is the point. The password is encrypted with
+AES-256-GCM under a key derived from your account password with PBKDF2 at
+sign-in. **That key is never written anywhere.** Signing out, locking the
+screen and shutting down all erase it, and everything kept becomes unreadable
+until somebody signs in again. A copy of the disk is a copy of ciphertext.
+
+Three details that are not decoration:
+
+* **The keyring's salt is not the login salt.** The accounts file already
+  stores PBKDF2(password, login_salt) so a password can be checked; deriving
+  the key with the same salt would make that stored value *be* the key, and
+  anybody who could read the accounts file could read every secret without
+  knowing the password. The keyring hashes a tag of its own with the login salt
+  first, so the two derivations are independent.
+* **A fresh random nonce for every write.** GCM with a repeated nonce under one
+  key is not weakened, it is broken. There is a test whose whole job is to
+  write the same secret twice and check the two files differ.
+* **The entry's name is authenticated.** A ciphertext cannot be moved from one
+  name to another, so somebody who could write the file could not slide the
+  mail password onto a name a different program reads.
+
+**Control Panel -> Passwords** lists what is kept -- names and which program
+asked, never values -- and forgets one. `keyring` does the same from the
+Terminal. There is no call, no command and no page that prints a secret back,
+which is deliberate: no window shows one, so anything that did would be the
+only way in the system to get a password out in plain text.
+
+**What it does not do, said plainly.** It does not protect against somebody who
+is signed in. The key is in this process's memory while the session is
+unlocked, and every module is loaded into this process, so any module can ask
+for any secret. There are no separate address spaces to hide a key in without a
+kernel. It protects a stolen disk and a stolen backup, and `recon_keyring.h`
+says so rather than implying more.
+
+**Text that has to explain something now wraps instead of being cut off.**
+`recon_draw_paragraph` draws across as many lines as it needs and returns its
+height. `recon_draw_text` clips with an ellipsis, which is right for a window
+title in a taskbar button and wrong for a sentence -- the Date and Time page
+had an explanation reading "Its own co...", and a note beside it asking for
+exactly this. Two pages use it so far; the rest can move as they are touched.
+
+**The look harness can sign in with a real password.** `scripts/look.sh
+--password X` sets a known password on every account in its throwaway copy of
+the filesystem and types it at the login screen, instead of clearing the
+password as it always has. Without it none of the above could be photographed:
+an account with no password has no keyring, so every screen that offers to keep
+a secret correctly hides the offer, and the harness could only ever see the
+version where nothing is there.
+
 **A skin can replace the window buttons' glyphs with pictures.** Put a file at
 `window-close`, `window-maximize`, `window-restore` or `window-minimize` in
 `/System/Icons` and it is drawn instead of the shape.

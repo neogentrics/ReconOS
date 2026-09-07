@@ -142,6 +142,7 @@ add_executable(ReconOS
     src/recon_notepad.c
     src/recon_photos.c
     src/recon_registry.c
+    src/recon_keyring.c
     src/recon_crypt.c
     src/recon_users.c
     src/recon_service.c
@@ -508,6 +509,26 @@ add_executable(recon_users_tests
 
 target_include_directories(recon_users_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# The keyring. The checks that matter here are the refusals: a locked keyring
+# hands out nothing, an edited file does not decrypt to *something*, and a
+# ciphertext moved to another name does not become that name's secret. A test
+# that only proved a secret comes back would pass against a version storing
+# everything in plain text.
+add_executable(recon_keyring_tests
+    tests/test_keyring.c
+    src/recon_keyring.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_fs.c)
+
+target_include_directories(recon_keyring_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# AES-GCM comes from mbedTLS, for the reason stated in the keyring's header:
+# the thing that actually protects a password is not written here.
+target_link_libraries(recon_keyring_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 # Networking reports rather than computes, which is exactly the kind of code
 # that goes wrong quietly: a wrong answer looks like a true fact about a

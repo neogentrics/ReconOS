@@ -68,6 +68,7 @@ written down as it was hit rather than guessed at in advance.
 | **Draws** | its own windows, menus, icons and text — nothing is a toolkit widget |
 | **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for encryption in both directions |
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
+| **Secrets** | A keyring: AES-256-GCM under a key derived from the account password at sign-in and never written down. Signing out makes everything kept unreadable. Nothing prints a secret back |
 | **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Tests** | 18 suites, 1034 checks, no display needed |
@@ -516,9 +517,10 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   size, and a clipboard shared with the rest of the system. Closing with
   unsaved work asks where to put it rather than throwing it away
 - **Mail** — IMAP and POP3, both over TLS with the server's certificate
-  checked. Nothing is ever deleted on the server, and the password is not
-  stored — it is asked for and forgotten when the window closes, and the
-  window says so
+  checked. Nothing is ever deleted on the server. The password can be kept, in
+  the keyring, and only after a connection has proved it right; leave the box
+  unticked and it is forgotten when the window closes. Either way the window
+  says which
 - **Media Player** — a playlist, transport, a draggable position bar and its
   own volume. Plays WAV, MP3, and MP4 with picture and sound together. The
   sound device is the clock and the picture follows it, so a late frame is

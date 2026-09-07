@@ -1350,6 +1350,81 @@ static void draw_glyph(struct recon_panel *panel, struct recon_glyph *glyph,
     }
 }
 
+/*
+ * One line at a time, greedily: take words until the next one would not fit.
+ *
+ * Greedy rather than balanced. Balancing lines looks better in a book and
+ * needs the whole paragraph measured before anything is drawn; this is for
+ * sentences under a heading, where the cost of getting it wrong is a slightly
+ * short last line.
+ */
+int recon_draw_paragraph(struct recon_panel *panel, struct recon_font *font,
+        int x, int y, int max_width, const char *text, recon_color color) {
+    if (panel == NULL || font == NULL || text == NULL || max_width <= 0) {
+        return 0;
+    }
+
+    int ascent = recon_font_ascent(font);
+    int line_height = recon_font_line_height(font);
+    int drawn = 0;
+
+    char line[512];
+    size_t used = 0;
+
+    const char *word = text;
+    while (*word != '\0') {
+        /* One word, and the run of spaces after it. */
+        const char *end = word;
+        while (*end != '\0' && *end != ' ' && *end != '\n') {
+            end++;
+        }
+        size_t length = (size_t)(end - word);
+
+        /* Longer than the buffer is longer than any line could hold, so it
+         * goes out on its own and recon_draw_text clips it. Silently dropping
+         * it would lose text; this loses only the tail of one word. */
+        if (length >= sizeof(line)) {
+            length = sizeof(line) - 1;
+        }
+
+        char candidate[512];
+        size_t at = 0;
+        if (used > 0) {
+            memcpy(candidate, line, used);
+            at = used;
+            candidate[at++] = ' ';
+        }
+        memcpy(candidate + at, word, length);
+        candidate[at + length] = '\0';
+
+        if (used > 0 && recon_text_width(font, candidate) > max_width) {
+            /* It did not fit, so the line so far goes out and this word
+             * starts the next one. */
+            recon_draw_text(panel, font, x, y + drawn + ascent, max_width,
+                line, color);
+            drawn += line_height;
+            memcpy(line, word, length);
+            line[length] = '\0';
+            used = length;
+        } else {
+            memcpy(line, candidate, at + length + 1);
+            used = at + length;
+        }
+
+        word = end;
+        while (*word == ' ' || *word == '\n') {
+            word++;
+        }
+    }
+
+    if (used > 0) {
+        recon_draw_text(panel, font, x, y + drawn + ascent, max_width, line,
+            color);
+        drawn += line_height;
+    }
+    return drawn;
+}
+
 void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
         int x, int y, int max_width, const char *text, recon_color color) {
     if (panel == NULL || font == NULL || text == NULL) {

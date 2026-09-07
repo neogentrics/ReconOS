@@ -11,18 +11,19 @@ help-10.txt	The Terminal
 help-11.txt	Pictures
 help-12.txt	Sound and video
 help-13.txt	The web viewer
-help-14.txt	Mail
-help-15.txt	What is running
-help-16.txt	The Calculator
-help-17.txt	Dates
-help-18.txt	What opens a file
-help-19.txt	Pictures of the screen
-help-20.txt	Help and updates
-help-21.txt	Text and letters
-help-22.txt	The firewall
-help-23.txt	Reaching this machine from elsewhere
-help-24.txt	When something goes wrong
-help-25.txt	What is not built yet
+help-14.txt	Passwords
+help-15.txt	Mail
+help-16.txt	What is running
+help-17.txt	The Calculator
+help-18.txt	Dates
+help-19.txt	What opens a file
+help-20.txt	Pictures of the screen
+help-21.txt	Help and updates
+help-22.txt	Text and letters
+help-23.txt	The firewall
+help-24.txt	Reaching this machine from elsewhere
+help-25.txt	When something goes wrong
+help-26.txt	What is not built yet
 changes-01.txt	v0.4.0
 changes-02.txt	v0.3.0
 changes-03.txt	v0.2.17
