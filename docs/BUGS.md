@@ -2383,3 +2383,38 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   looked complete, which is the same fault BG-123 through BG-125 were about.
   The last line now ends in "..." when there was more, so a dialog that is
   short and a dialog that is missing its point look different.
+
+### BG-128 — ReconOS could not be asked to stop, only killed
+
+- **Found in** v0.4.0. **Found by** adding the marker file that tells a crash
+  from a power cut, and then finding it left behind after every ordinary run
+  of the look harness. The harness stops ReconOS the way everything stops a
+  program: `kill`, which is SIGTERM.
+- **What it was** Nothing handled SIGTERM, SIGINT or SIGHUP. The default for
+  all three is to end the process immediately, so **every ordinary stop skipped
+  every line of the teardown.** A service manager stopping ReconOS, a logout
+  script, a terminal closing, `kill` with no arguments, and the test harness
+  all did the same thing a crash does.
+- **What was skipped.** `recon_control_destroy`, so the control socket stayed
+  in the filesystem for the next run to trip over. `recon_shell_destroy` and
+  every other destructor. `recon_keyring_lock`, so the key derived from
+  somebody's password was left in memory that is freed and not scrubbed --
+  which is the exact case the lock at shutdown was added for. And, once it
+  existed, the marker: so the next start reported a crash for a stop that was
+  perfectly deliberate.
+- **Why nothing had noticed.** Every one of those is invisible from outside.
+  The process ends either way, the exit status is the same to a shell that is
+  not looking, and a socket left behind is unlinked by the next start before
+  it binds. The bug had no symptom until something was added that could see it.
+- **Fixed in** v0.4.0. `wl_event_loop_add_signal` for all three, calling
+  `recon_quit` -- the same function Alt+Q calls, deliberately, so there is one
+  way out rather than two and the rarely-run one cannot rot. Through the event
+  loop rather than `signal()`, because a signal handler may call almost nothing
+  and `wl_display_terminate` is not on that list; Wayland catches it and
+  delivers it between two iterations of the loop, where there is no
+  restriction.
+- **Measured.** `kill -TERM` now logs "asked to stop (signal 15)" then
+  "shutting down", exits 0, and leaves the logs directory empty.
+  `kill -KILL` -- which nothing can catch -- leaves the marker, and the next
+  start writes `VT-A005  The last run ended unexpectedly` naming the time and
+  version of the run that died.

@@ -243,6 +243,88 @@ void recon_error_raisef(struct recon_server *server,
 
 /* --- What happened last time --- */
 
+bool recon_error_begin_run(void) {
+    /*
+     * Read first, then written, and in that order for the obvious reason: the
+     * write is what makes the read say yes next time.
+     */
+    size_t length = 0;
+    char *previous = recon_fs_read("/", RECON_ERROR_RUNNING, &length);
+    bool ended_badly = (previous != NULL);
+
+    char was[256] = "";
+    if (previous != NULL) {
+        snprintf(was, sizeof(was), "%s", previous);
+        /* One line, and it may not have one. */
+        char *nl = strchr(was, '\n');
+        if (nl != NULL) {
+            *nl = '\0';
+        }
+        free(previous);
+    }
+
+    char when[32];
+    stamp(when, sizeof(when));
+
+    char text[256];
+    int written = snprintf(text, sizeof(text),
+        "started %s, ReconOS " RECONOS_VERSION "\n", when);
+    if (written > 0) {
+        recon_fs_mkdir("/", RECON_DIR_LOGS);
+        recon_fs_write("/", RECON_ERROR_RUNNING, text, (size_t)written);
+    }
+
+    if (!ended_badly) {
+        return false;
+    }
+
+    /*
+     * Only when nothing else already explained it.
+     *
+     * A caught crash writes its own record naming the actual fault, and that
+     * is a better answer than "something happened" -- reporting both would put
+     * two screens in front of somebody for one event, and the vaguer one
+     * second. So this defers: it says what it knows only when nothing else
+     * knows more.
+     *
+     * Read without taking, because the screen that shows it is the one that
+     * takes it, several seconds from now.
+     */
+    size_t stop_length = 0;
+    char *stop = recon_fs_read("/", RECON_ERROR_LAST, &stop_length);
+    if (stop != NULL) {
+        free(stop);
+        return false;
+    }
+
+    /* 448, because `was` is 256 of it and the sentence around it is 96. The
+     * compiler worked that out before anything ran; 320 was a guess. */
+    char detail[448];
+    snprintf(detail, sizeof(detail), "the run that %s did not shut down; "
+        "nothing was caught, so it was a power cut, a kill, or a lock-up",
+        was[0] != '\0' ? was : "was running");
+
+    recon_error_raise(NULL, RECON_ERR_A005, detail);
+
+    /*
+     * And into the last-stop file as well, which raising does not do for a
+     * fault -- only a STOP writes there, because only a STOP has ended the
+     * system.
+     *
+     * This one is written by hand because it is the one fault that is *about*
+     * the last run rather than about this one, and the screen that reports the
+     * last run reads that file. Making A-005 a STOP instead would be wrong in
+     * the other direction: nothing is stopping, the machine is starting up
+     * perfectly well, and it has one thing to say about yesterday.
+     */
+    write_last_stop(recon_error_at(RECON_ERR_A005), detail);
+    return true;
+}
+
+void recon_error_end_run(void) {
+    recon_fs_remove("/", RECON_ERROR_RUNNING);
+}
+
 bool recon_error_take_last(char *code_out, size_t size, char *detail_out,
         size_t detail_size) {
     if (code_out != NULL && size > 0) {

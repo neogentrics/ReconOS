@@ -1420,6 +1420,23 @@ void recon_quit(struct recon_server *server) {
     wl_display_terminate(server->wl_display);
 }
 
+/*
+ * Somebody outside asked this to finish.
+ *
+ * Exactly what Alt+Q does, on purpose: a stop that took a different path
+ * would be a second teardown to keep in step with the first, and the one that
+ * runs less often is the one that rots.
+ *
+ * Returning zero says the signal is handled and the loop should carry on --
+ * which it does, for one more iteration, until wl_display_terminate stops it.
+ */
+static int on_asked_to_stop(int signal_number, void *data) {
+    struct recon_server *server = data;
+    wlr_log(WLR_INFO, "ReconOS: asked to stop (signal %d)", signal_number);
+    recon_quit(server);
+    return 0;
+}
+
 void recon_restart(struct recon_server *server) {
     wlr_log(WLR_INFO, "ReconOS: restarting");
     server->restarting = true;
@@ -2578,7 +2595,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
          * different thing and a recoverable one.
          */
         if (!recon_users_init()) {
-            recon_error_raisef(&server, RECON_ERR_C001, "%s",
+            recon_error_raisef(server, RECON_ERR_C001, "%s",
                 recon_users_last_error());
         }
 
@@ -2644,6 +2661,18 @@ int main(int argc, char **argv) {
      * which is a start that works.
      */
     recon_error_catch_crashes();
+
+    /*
+     * And the half the handler cannot catch.
+     *
+     * A signal handler covers a crash the process survives long enough to
+     * notice. It covers nothing about a power cut, a kill -9, or a machine
+     * that locked up hard -- and until this line the answer to all three was
+     * to start up cheerfully as though last night had gone fine. The marker
+     * written here is removed at a clean shutdown, so finding it is the whole
+     * of how this system knows.
+     */
+    recon_error_begin_run();
 
     /* Settings come up next, since almost everything after this may want to
      * know what was chosen last time. */
@@ -2999,6 +3028,38 @@ int main(int argc, char **argv) {
      */
     register_services(&server);
 
+    /*
+     * Being asked to stop, which until now was not something that could
+     * happen.
+     *
+     * SIGTERM is how everything asks a program to finish: a service manager,
+     * a logout script, `kill` with no arguments, a test harness tidying up.
+     * None of them was handled, so all of them killed the process outright --
+     * skipping every teardown below, leaving the control socket in the
+     * filesystem, leaving the keyring's key unscrubbed in memory that is
+     * merely freed, and leaving the marker that makes the next start report
+     * a crash. Every ordinary stop looked like a crash, because from the
+     * inside it was one.
+     *
+     * Through the event loop rather than through signal(): a handler may call
+     * almost nothing, and wl_display_terminate is not on the list. Wayland
+     * catches the signal itself and delivers it here between two iterations
+     * of the loop, where there is no restriction at all -- so this can do the
+     * same thing Alt+Q does, which is the point. One way out, not two.
+     */
+    wl_event_loop_add_signal(wl_display_get_event_loop(server.wl_display),
+        SIGTERM, on_asked_to_stop, &server);
+    wl_event_loop_add_signal(wl_display_get_event_loop(server.wl_display),
+        SIGINT, on_asked_to_stop, &server);
+    /*
+     * SIGHUP too, which arrives when the terminal that started ReconOS goes
+     * away. Its traditional meaning elsewhere is "reload your settings"; there
+     * is nothing here that would mean, and being hung up on is a reason to
+     * finish rather than to carry on with no terminal.
+     */
+    wl_event_loop_add_signal(wl_display_get_event_loop(server.wl_display),
+        SIGHUP, on_asked_to_stop, &server);
+
     wlr_log(WLR_INFO, "ReconOS running on WAYLAND_DISPLAY=%s", server.socket_name);
     printf(RECONOS_NAME " v" RECONOS_VERSION " - Alt+Enter for a terminal, "
         "Ctrl+Alt+Del for the task manager, Alt+Q to quit.\n");
@@ -3030,6 +3091,15 @@ int main(int argc, char **argv) {
     /* Last of the drawing resources, once nothing is left that could draw. */
     recon_font_system_finish();
     recon_registry_finish();
+    /*
+     * The last thing before the filesystem goes, because it is a file.
+     *
+     * Everything above this line is the system taking itself apart properly,
+     * and reaching here is the definition of having done so. A run that
+     * crashes, is killed, or loses power never gets here and leaves its marker
+     * behind for the next start to find.
+     */
+    recon_error_end_run();
     recon_fs_finish();
     wl_display_destroy_clients(server.wl_display);
     wl_display_destroy(server.wl_display);

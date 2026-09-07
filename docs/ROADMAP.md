@@ -2072,13 +2072,19 @@ exactly like one that was unplugged; a registry that would not save returning
 false to callers that do not check, so a setting appeared to take and was gone
 at the next start.
 
-What is left is named in `include/recon_errors.def`. Two of them are features
-rather than lines: **A-005**, the last run ended unexpectedly, wants a marker
-written at startup and cleared at a clean shutdown -- which is worth having for
-its own sake, since nothing at present can tell a crash from a power cut.
-**B-001** and **B-002**, a file that could not be read or written, cannot go in
-`recon_fs` at all: recording a fault writes through `recon_fs`, so raising from
-inside it is a loop. They belong to callers, one call site at a time.
+What is left is named in `include/recon_errors.def`. One of them cannot be done the
+obvious way at all: **B-001** and **B-002**, a file that could not be read or
+written, cannot go inside `recon_fs`, because recording a fault writes through
+`recon_fs` and raising from within it is a loop. They belong to callers, one
+call site at a time.
+
+**A-005 is done**, and it was the one that was a feature rather than a line: a
+marker written at startup and removed at a clean shutdown, so finding it means
+the last run never reached its own end. The crash handler already covered the
+faults that can be caught; this covers the ones that cannot -- a power cut, a
+`kill -9`, a machine that locked up hard. Doing it immediately found BG-128,
+because nothing handled SIGTERM either and every ordinary stop looked, from the
+inside, exactly like a crash.
 
 **Nothing can listen.** Streams connect outwards, plain or encrypted with the
 far end verified; there is still no way for an application to accept a

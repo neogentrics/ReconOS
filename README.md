@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.0-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.0)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-20_suites,_1145_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-127-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-128-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---

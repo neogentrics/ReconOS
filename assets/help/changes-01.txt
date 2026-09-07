@@ -10,6 +10,29 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+ReconOS can be asked to stop (BG-128). Nothing handled SIGTERM, SIGINT or
+SIGHUP, so every ordinary way of stopping a program -- a service manager, a
+logout script, a terminal closing, kill with no arguments -- ended the
+process outright and skipped every line of the teardown. The control socket
+stayed in the filesystem. The keyring's key, derived from somebody's password,
+was left in freed and unscrubbed memory, which is the exact case the lock at
+shutdown exists for. From the inside, every deliberate stop was a crash.
+
+It had no symptom until something was added that could see it, which is the
+part worth writing down.
+
+And what was added is that ReconOS can now tell a crash from a power cut
+(VT-A005). A marker is written at startup and removed at a clean shutdown, so
+finding one means the last run never reached its own end. The crash handler
+already covered the faults that can be caught; this covers the ones that
+cannot. kill -9 now produces, on the next start, "The last run ended
+unexpectedly", naming the time and version of the run that died -- and the
+login screen shows it, once, the same way it shows a caught crash.
+
+Where the two overlap, the specific one wins: a caught crash names the actual
+fault, and reporting both would put two screens in front of somebody for one
+event with the vaguer one second.
+
 Eleven error codes that were documented and unreachable now happen.
 Twenty-four of the forty-two are raised, up from thirteen.
 

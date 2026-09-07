@@ -136,7 +136,23 @@ rm -f "$SOCKET"
 cd "$REPO_DIR"
 ./build/ReconOS >/tmp/reconos-look.log 2>&1 &
 PID=$!
-trap 'kill $PID 2>/dev/null || true' EXIT
+# Asked to stop and waited for, rather than killed and abandoned.
+#
+# It used to kill and exit immediately, which was fine while nothing happened
+# at shutdown and stopped being fine the moment something did: ReconOS now
+# writes a marker at startup and removes it at a clean stop, so a harness that
+# does not wait leaves one behind and the next run reports a crash that was the
+# harness. Two seconds is generous for a headless teardown; after that it is
+# not stopping and gets killed anyway.
+stop_reconos() {
+    kill -TERM "$PID" 2>/dev/null || return 0
+    for _ in $(seq 1 20); do
+        kill -0 "$PID" 2>/dev/null || return 0
+        sleep 0.1
+    done
+    kill -KILL "$PID" 2>/dev/null || true
+}
+trap stop_reconos EXIT
 
 for _ in $(seq 1 100); do
     [ -S "$SOCKET" ] && break

@@ -166,6 +166,43 @@ bool recon_error_take_last(char *code_out, size_t size, char *detail_out,
     size_t detail_size);
 
 /*
+ * A file that exists only while ReconOS is running.
+ *
+ * The whole of how this system tells a crash from a power cut.
+ */
+#define RECON_ERROR_RUNNING "/System/Logs/running.txt"
+
+/*
+ * Say that a run has begun, and report on the one before it.
+ *
+ * Written at startup and removed at a clean shutdown, so finding it at
+ * startup means the last run ended without reaching its own end. Something
+ * killed the process, or the machine lost power, or it locked up hard enough
+ * that the crash handler never ran either.
+ *
+ * The crash handler covers the faults that can be caught -- a segmentation
+ * fault leaves a record naming itself, which is a better answer than this one
+ * and takes precedence. What is left over is everything nothing could catch,
+ * and until now the system's answer to it was to start up cheerfully as though
+ * nothing had happened. VT-A005 is the difference between that and "the last
+ * run ended unexpectedly", which is the sentence somebody needs before they
+ * decide whether the machine is fine.
+ *
+ * Call once at startup, after the filesystem is up and before anything that
+ * could fail. Returns true when the last run ended badly, having already
+ * raised the code.
+ */
+bool recon_error_begin_run(void);
+
+/*
+ * Say that this run ended properly. Removes the marker.
+ *
+ * Anything that does not reach this -- a crash, a kill, a power cut -- leaves
+ * the marker behind, which is exactly the point.
+ */
+void recon_error_end_run(void);
+
+/*
  * Install handlers for the signals that mean a crash.
  *
  * A crash cannot be drawn reliably -- the process is already in a state where
