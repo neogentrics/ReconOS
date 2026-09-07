@@ -23,6 +23,46 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**"Open with" looks inside the file now.** `recon_sniff` reads a file's first
+bytes and says what format it is in -- PNG, JPEG, GIF, BMP, ICO, WAV, MP3, MP4,
+zip, gzip, PDF, a program, a web page, or plain text. Evidence rather than a
+guess: a file beginning with the eight bytes PNG defines is a PNG.
+
+It does not change what `recon_props_claims` decides. Only a program knows what
+it will open and nothing here asks it, so the declared extension list still
+decides. What changed is what the warning says, and that was the more useful
+half. It used to read "Photos does not say it opens files like 'notes.txt'. It
+will probably show something that is not readable." For a PNG somebody had
+named notes.txt, every word of that was wrong. It now says the file is really a
+PNG image, which Photos does open, and that it is the name that is wrong rather
+than the choice -- worked out by asking the extension machinery a different
+question: not whether the program opens files *called* .txt, but whether it
+opens files that really *are* a PNG.
+
+The intermediate version was worse than either end and is worth recording:
+bolting the new sentence onto the old one produced a warning that contradicted
+itself in consecutive lines. There is one sentence now, decided in one place,
+and File Explorer and the desktop share it -- they had been carrying the same
+two sentences written twice, with only one copy improved.
+
+Text and unrecognised formats produce nothing at all, deliberately. A warning
+that grows a line every time is one people stop reading, and text has no
+signature to find in the first place.
+
+**And two things the suite caught that reasoning had not.** A sentence
+beginning "BM" was read as a bitmap, because "BM" is the whole of that format's
+signature and two ordinary letters are not a signature -- it needs the reserved
+bytes and the DIB header size to corroborate it. And six bytes of 0xFF passed
+as plain text, because the check allowed any byte above 127 on the grounds that
+other alphabets are full of them. Right instinct, too generous: high bytes are
+now allowed as valid UTF-8 *sequences*, which keeps every real alphabet and
+rejects the runs of high bytes that ordinary binary is made of. 0xFF is not a
+legal UTF-8 byte at all.
+
+`recon_fs_read_head` came out of it too -- the first bytes of a file, rather
+than `recon_fs_read` pulling an entire film into memory to look at eight of
+them.
+
 **How far the parameter runs is somebody's to set.** Two fields on the
 grapher's button row in parametric mode, holding expressions rather than
 numbers -- `2pi`, `-pi/2` and `3` all work, and the defaults are written

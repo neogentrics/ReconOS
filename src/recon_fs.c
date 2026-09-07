@@ -876,6 +876,33 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     return data;
 }
 
+size_t recon_fs_read_head(const char *cwd, const char *path, void *into,
+        size_t max) {
+    if (into == NULL || max == 0) {
+        return 0;
+    }
+
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(cwd, path, host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        return 0;
+    }
+    if (!readable(cwd, path)) {
+        return 0;
+    }
+
+    FILE *f = fopen(host, "rb");
+    if (f == NULL) {
+        set_error("cannot read '%s': %s", canonical, strerror(errno));
+        return 0;
+    }
+
+    size_t read = fread(into, 1, max, f);
+    fclose(f);
+    return read;
+}
+
 static bool write_file(const char *cwd, const char *path, const char *data,
         size_t size, const char *mode) {
     if (!permitted(cwd, path)) {

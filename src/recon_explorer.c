@@ -2553,13 +2553,21 @@ static void explorer_context_action(void *user, uint32_t id) {
              * looks like a broken picture rather than a choice.
              */
             if (!recon_props_claims(names[which], file)) {
-                char message[512];
+                /*
+                 * The whole first half comes from recon_props, because what to
+                 * say depends on what the file turns out to be and that is not
+                 * a question a file manager should be answering twice.
+                 */
+                char why[512];
+                recon_props_open_with_warning(ex->cwd, file, names[which],
+                    why, sizeof(why));
+
+                char message[720];
                 snprintf(message, sizeof(message),
-                    "%s does not say it opens files like '%s'. It will "
-                    "probably show something that is not readable.\n"
+                    "%s\n"
                     "This becomes the program for every file of this kind. "
                     "'Use the usual program', on the same menu, undoes it.",
-                    names[which], file);
+                    why);
 
                 snprintf(ex->question_other, sizeof(ex->question_other), "%s",
                     names[which]);

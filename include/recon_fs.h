@@ -192,6 +192,20 @@ bool recon_fs_usage(const char *cwd, const char *path,
 /* Read a whole file. Caller frees. Returns NULL if it cannot be read. */
 char *recon_fs_read(const char *cwd, const char *path, size_t *size_out);
 
+/*
+ * The first `max` bytes of a file, into a buffer the caller owns.
+ *
+ * Returns how many were read, or 0. For the questions that only need the
+ * front: what format a file is in is decided by its first few bytes, and
+ * `recon_fs_read` would pull an entire film into memory to answer that.
+ *
+ * Does not terminate the buffer and makes no claim about what is in it -- a
+ * file's first bytes are bytes, and treating them as a string is how a NUL in
+ * the middle of a PNG turns into a truncated read nobody notices.
+ */
+size_t recon_fs_read_head(const char *cwd, const char *path, void *into,
+    size_t max);
+
 bool recon_fs_write(const char *cwd, const char *path, const char *data, size_t size);
 
 /*

@@ -14,6 +14,7 @@
 #include "recon_modules.h"
 #include "recon_registry.h"
 #include "recon_fs.h"
+#include "recon_sniff.h"
 #include "recon_props.h"
 
 void recon_props_size(size_t bytes, char *out, size_t size) {
@@ -218,6 +219,79 @@ const char *recon_props_chosen_opener(const char *name) {
      * is a surprise nobody needs.
      */
     return recon_installed_app_resolve(chosen);
+}
+
+void recon_props_open_with_warning(const char *cwd, const char *name,
+        const char *application, char *out, size_t size) {
+    if (out == NULL || size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (name == NULL || application == NULL) {
+        return;
+    }
+
+    /*
+     * The whole first half of the warning, decided here rather than assembled
+     * by the caller.
+     *
+     * It was two sentences: the caller said the program would probably show
+     * something unreadable, and this added what the file actually is. Against
+     * a PNG named notes.txt that produced "It will probably show something
+     * that is not readable. But the file is really a PNG image, which Photos
+     * does open." -- a warning arguing with itself in consecutive lines, which
+     * is how somebody learns that the warnings are noise.
+     *
+     * So there is one sentence, and the sniff decides which.
+     */
+    uint8_t head[RECON_SNIFF_BYTES];
+    size_t got = recon_fs_read_head(cwd, name, head, sizeof(head));
+    enum recon_format kind = (got > 0)
+        ? recon_sniff(head, got) : RECON_FORMAT_UNKNOWN;
+
+    /*
+     * Whether the program opens what this file *really is*, as opposed to what
+     * it is called. A different question from the one recon_props_claims was
+     * asked, put to the same machinery.
+     */
+    bool opens_the_contents = false;
+    if (kind != RECON_FORMAT_UNKNOWN && kind != RECON_FORMAT_TEXT &&
+            !recon_sniff_agrees_with_name(kind, name)) {
+        const char *real = recon_sniff_extension(kind);
+        if (real != NULL) {
+            char as_if[64];
+            snprintf(as_if, sizeof(as_if), "file%s", real);
+            opens_the_contents = recon_props_claims(application, as_if);
+        }
+    }
+
+    if (opens_the_contents) {
+        snprintf(out, size,
+            "%s does not say it opens files like '%s' -- but the file is "
+            "really %s, which %s does open. It is the name that is wrong, "
+            "not the choice.",
+            application, name, recon_sniff_name(kind), application);
+        return;
+    }
+
+    /* Everything else gets the plain warning, with what the bytes say only
+     * when that adds something an extension has not already said. */
+    char actually[128];
+    actually[0] = '\0';
+    if (kind != RECON_FORMAT_UNKNOWN && kind != RECON_FORMAT_TEXT) {
+        if (recon_sniff_agrees_with_name(kind, name)) {
+            snprintf(actually, sizeof(actually), " The file is %s.",
+                recon_sniff_name(kind));
+        } else {
+            snprintf(actually, sizeof(actually),
+                " Despite its name, the file is %s.", recon_sniff_name(kind));
+        }
+    }
+
+    snprintf(out, size,
+        "%s does not say it opens files like '%s'. It will probably show "
+        "something that is not readable.%s",
+        application, name, actually);
 }
 
 bool recon_props_claims(const char *application, const char *name) {

@@ -4995,7 +4995,13 @@ static void ask_desktop(struct recon_shell *shell, int question, const char *nam
     snprintf(shell->desktop_question_target,
         sizeof(shell->desktop_question_target), "%s", name != NULL ? name : "");
 
-    char message[512];
+    /*
+     * Large enough for the longest question plus the sentence appended after
+     * it. The Open With one now carries an explanation built by recon_props,
+     * itself up to 512 bytes, and -Wformat-truncation said so rather than
+     * leaving a warning that stops mid-word for somebody to find.
+     */
+    char message[768];
     const char *title;
     const char *go_ahead;
 
@@ -5023,12 +5029,20 @@ static void ask_desktop(struct recon_shell *shell, int question, const char *nam
          * this menu after the choice has been made, so somebody who has not
          * made it yet has never seen it.
          */
+        /*
+         * The first half comes from recon_props, which reads the file's first
+         * bytes and decides what to say. Shared with File Explorer's copy of
+         * this warning, because they were the same two sentences written twice
+         * and only one of them had been improved.
+         */
+        char why[512];
+        recon_props_open_with_warning(recon_fs_user_dir("Desktop"), name,
+            shell->desktop_question_other, why, sizeof(why));
+
         snprintf(message, sizeof(message),
-            "%s does not say it opens files like '%s'. It will probably show "
-            "something that is not readable.\n"
+            "%s\n"
             "This becomes the program for every file of this kind. "
-            "'Use the usual program', on the same menu, undoes it.",
-            shell->desktop_question_other, name);
+            "'Use the usual program', on the same menu, undoes it.", why);
     } else if (question == DESKTOP_ASK_PURGE) {
         title = "Delete Permanently";
         go_ahead = "Delete";

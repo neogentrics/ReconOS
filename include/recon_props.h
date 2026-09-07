@@ -135,6 +135,22 @@ int recon_props_openers(const char **names, int max);
  */
 bool recon_props_claims(const char *application, const char *name);
 
+/*
+ * A sentence about what a file actually is, from its first bytes, or an empty
+ * string when there is nothing worth saying.
+ *
+ * `recon_props_claims` decides by extension, which is right -- only a program
+ * knows what it will open, and nothing here can ask it. This does not change
+ * that decision; it improves what the warning *says*, and adds the one thing
+ * an extension cannot tell anybody: that the name and the contents disagree.
+ *
+ * Empty far more often than not, and deliberately. Plain text, an unrecognised
+ * format, and a file whose name matches its contents all produce nothing,
+ * because a warning that appears every time is one people stop reading.
+ */
+void recon_props_open_with_warning(const char *cwd, const char *name,
+    const char *application, char *out, size_t size);
+
 bool recon_props_set_opener(const char *name, const char *application);
 bool recon_props_clear_opener(const char *name);
 

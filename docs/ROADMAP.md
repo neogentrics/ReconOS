@@ -2188,12 +2188,43 @@ want. The dialog names both ends, says the choice applies to every file of that
 kind rather than this one, and says where to undo it, because the entry that
 undoes it only appears once the choice has been made.
 
-What is still missing is a check with any depth to it. `recon_props_claims`
-compares extensions, so an application that claims `.png` and cannot read a
-particular one is not distinguished from one that can, and nothing looks inside
-the file. Looking inside is what the codec registry does for media; there is no
-equivalent for "would this program understand this", and there probably cannot
-be one without asking the program.
+**Something looks inside the file now**, and the honest split turned out to be
+sharper than this paragraph expected.
+
+`recon_sniff` reads a file's first bytes and says what format it is in. That is
+evidence rather than a guess: a file beginning with the eight bytes PNG defines
+is a PNG. What it still cannot say -- and this part of the old note was right --
+is whether a *particular program* will open it. Only the program knows, and
+nothing here asks it. So `recon_props_claims` still decides by the declared
+extension list; the sniff changed what the warning **says**, not what it
+decides.
+
+That turned out to be the more useful half. The warning used to read "Photos
+does not say it opens files like 'notes.txt'. It will probably show something
+that is not readable." For a PNG that somebody had named `notes.txt`, every
+word of that was wrong. It now reads:
+
+> Photos does not say it opens files like 'notes.txt' -- but the file is really
+> a PNG image, which Photos does open. It is the name that is wrong, not the
+> choice.
+
+Which it works out by asking the extension machinery a *different* question:
+not whether the program opens files called `.txt`, but whether it opens files
+that really are a PNG.
+
+The intermediate version is worth recording, because it was worse than either
+end. Bolting "But the file is really a PNG image" onto the existing sentence
+produced a warning that argued with itself in consecutive lines -- and a
+warning that contradicts itself teaches somebody that the warnings are noise.
+One sentence, decided in one place, shared by File Explorer and the desktop,
+which had been carrying the same two sentences written twice with only one of
+them improved.
+
+**What the sniff deliberately will not do** is say anything about plain text or
+about a format it does not recognise. Both produce nothing at all, because a
+warning that grows a line every time is one people stop reading; and text has
+no signature to find -- CSV, Markdown and a shopping list are all text, and no
+amount of looking separates them. That is a real limit, not a gap to fill.
 
 **Nine error codes are raised by nothing.** The catalogue defines forty-three
 and thirty-four of them are reachable, up from thirteen.

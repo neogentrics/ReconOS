@@ -119,6 +119,7 @@ add_executable(ReconOS
     src/recon_image.c
     src/recon_expr.c
     src/recon_data.c
+    src/recon_sniff.c
     src/recon_themewl.c
     src/recon_fonts.c
     src/recon_wallpaper.c
@@ -479,6 +480,18 @@ target_include_directories(recon_expr_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(recon_expr_tests PRIVATE m)
+
+# What a file actually is, from its first bytes. Two properties carry this
+# suite: that no two signatures can both match -- "BM" is two ordinary letters
+# and an ftyp box sits four bytes in, so the table's order is correctness
+# rather than tidiness -- and that the disagreement test does not fire on
+# ordinary files, because a warning everybody dismisses is worse than none.
+add_executable(recon_sniff_tests
+    tests/test_sniff.c
+    src/recon_sniff.c)
+
+target_include_directories(recon_sniff_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Reading two columns of numbers out of a file. Worth a suite of its own for
 # one reason: every way this can fail announces itself except one. A file
