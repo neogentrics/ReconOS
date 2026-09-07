@@ -170,6 +170,125 @@ static void test_known_dates(void) {
     set_offset(0);
 }
 
+/*
+ * Every day from 1970 to 2100, turned into a number and back again.
+ *
+ * The eight dates above are the ones somebody thinks to check, and they are
+ * well chosen -- 2000 is a leap year, 2100 is not, and both are there. What
+ * they cannot cover is the arithmetic *between* them: a month length wrong by
+ * a day in one month of one year is invisible to a list of examples and
+ * obvious to a walk.
+ *
+ * Forty-seven thousand days, which takes no measurable time, and the property
+ * is exactly what a date routine is for: a day that goes in comes back as
+ * itself.
+ *
+ * The second half is the harder one. It is easy to write a pair of functions
+ * that agree with each other and are both wrong -- so this also counts the
+ * days as it goes and checks that every month has the length it should, and
+ * that the weekday advances by exactly one each day and never skips.
+ */
+static void test_every_day_goes_there_and_back(void) {
+    printf("every day from 1970 to 2100, there and back\n");
+
+    set_offset(0);
+
+    static const int LENGTHS[] =
+        { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+    int wrong_round_trip = 0;
+    int wrong_length = 0;
+    int wrong_weekday = 0;
+    int days = 0;
+
+    char first_bad[128] = "";
+    int last_weekday = -1;
+
+    for (int year = 1970; year <= 2100; year++) {
+        bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+
+        for (int month = 1; month <= 12; month++) {
+            int length = LENGTHS[month - 1] + ((month == 2 && leap) ? 1 : 0);
+
+            for (int day = 1; day <= length; day++) {
+                int64_t epoch = recon_clock_epoch_of(year, month, day);
+
+                struct recon_clock_time t;
+                recon_clock_break_up(epoch, &t);
+
+                if (t.year != year || t.month != month || t.day != day) {
+                    if (wrong_round_trip == 0) {
+                        snprintf(first_bad, sizeof(first_bad),
+                            "%04d-%02d-%02d came back as %04d-%02d-%02d",
+                            year, month, day, t.year, t.month, t.day);
+                    }
+                    wrong_round_trip++;
+                }
+
+                /* Midnight, since only a date went in. */
+                if (t.hour != 0 || t.minute != 0 || t.second != 0) {
+                    wrong_round_trip++;
+                }
+
+                /*
+                 * One day later than the last, every time. This is what
+                 * catches a month with the wrong number of days even when the
+                 * round trip agrees with itself: a February of thirty days
+                 * would round-trip perfectly and put the weekday out by two
+                 * for the rest of time.
+                 */
+                if (last_weekday >= 0 &&
+                        t.weekday != (last_weekday + 1) % 7) {
+                    if (wrong_weekday == 0) {
+                        snprintf(first_bad, sizeof(first_bad),
+                            "%04d-%02d-%02d is weekday %d after %d",
+                            year, month, day, t.weekday, last_weekday);
+                    }
+                    wrong_weekday++;
+                }
+                last_weekday = t.weekday;
+                days++;
+            }
+
+            /*
+             * And the day after the last day of a month is the first of the
+             * next, which is the same fact from the other side.
+             */
+            struct recon_clock_time over;
+            recon_clock_break_up(
+                recon_clock_epoch_of(year, month, length) + 86400, &over);
+            int next_month = (month == 12) ? 1 : month + 1;
+            int next_year = (month == 12) ? year + 1 : year;
+            if (over.day != 1 || over.month != next_month ||
+                    over.year != next_year) {
+                wrong_length++;
+            }
+        }
+    }
+
+    printf("        %d days\n", days);
+    if (first_bad[0] != '\0') {
+        printf("        first: %s\n", first_bad);
+    }
+
+    /*
+     * 131 years of 365 days plus 32 leap days. 2100 is divisible by four and
+     * is not one of the 32, which is the whole reason a count is written down
+     * here rather than trusted: getting this number by running the loop and
+     * copying what it said would make the check agree with whatever the code
+     * does.
+     */
+    check(days == 131 * 365 + 32,
+        "the walk covers every day from 1970 to the end of 2100");
+    check(wrong_round_trip == 0,
+        "EVERY DAY COMES BACK AS ITSELF, at midnight");
+    check(wrong_length == 0,
+        "and the day after the end of every month is the first of the next");
+    check(wrong_weekday == 0,
+        "AND THE WEEKDAY ADVANCES BY ONE AND NEVER SKIPS -- which catches a "
+        "month of the wrong length that the round trip agrees with");
+}
+
 static void test_the_short_form(void) {
     printf("the short form reads the way a clock reads\n");
 
@@ -400,6 +519,7 @@ int main(void) {
     test_zones_shift_the_clock();
     test_the_date_is_sane();
     test_known_dates();
+    test_every_day_goes_there_and_back();
     test_the_short_form();
     test_midnight_and_noon();
     test_the_zone_list();

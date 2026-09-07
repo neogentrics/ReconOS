@@ -10,6 +10,24 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+Every day from 1970 to 2100, turned into a number and back again. 47,847
+of them, which takes no measurable time. The eight dates the clock suite
+already checked are well chosen -- 2000 is a leap year, 2100 is not, and both
+are there -- but a list of examples cannot cover the arithmetic *between* them:
+a month length wrong by a day in one month of one year is invisible to it and
+obvious to a walk.
+
+Nothing was wrong, and the walk was then shown to be capable of saying so: the
+century rule was removed from recon_clock_epoch_of on purpose, and it named
+the date -- "2000-03-01 is weekday 3 after 5". The eight examples did not
+fire, because they only test one direction, and the break was in the other.
+Two functions can agree with each other and both be wrong; two functions that
+disagree cannot hide it from a round trip.
+
+The walk also counts, so a month of the wrong length that the round trip agrees
+with still shows up: the weekday has to advance by exactly one, every day,
+forty-seven thousand times.
+
 A setting with a leading space lost it at the next start (BG-135). The
 registry is key = value lines and the reader trims what comes after the =
 -- which takes the format's own space, and any the value began with. The
