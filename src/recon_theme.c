@@ -2639,6 +2639,38 @@ recon_color recon_theme_color_of(int index, enum recon_theme_role role) {
     return RECON_RGB(0xFF, 0x00, 0xFF);
 }
 
+int recon_theme_metric_of(int index, enum recon_theme_metric metric) {
+    if (metric < 0 || metric >= RECON_METRIC_COUNT) {
+        return 0;
+    }
+
+    int value = METRICS[metric].fallback;
+
+    int seen = 0;
+    for (int i = 0; i < THEMES_MAX; i++) {
+        if (!g_themes[i].used) {
+            continue;
+        }
+        if (seen == index) {
+            if (g_themes[i].has_metric[metric]) {
+                value = g_themes[i].metrics[metric];
+            }
+            break;
+        }
+        seen++;
+    }
+
+    /* Clamped the same way recon_theme_metric clamps, so a skin file with a
+     * silly number in it shows the same shape in the list as it would draw. */
+    if (value < METRICS[metric].least) {
+        value = METRICS[metric].least;
+    }
+    if (value > METRICS[metric].most) {
+        value = METRICS[metric].most;
+    }
+    return value;
+}
+
 bool recon_theme_gradient_of(int index, enum recon_theme_role role,
         recon_color *from, recon_color *to) {
     if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {

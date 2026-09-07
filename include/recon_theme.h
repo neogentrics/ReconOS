@@ -491,6 +491,18 @@ bool recon_theme_at(int index, struct recon_theme_info *out);
  */
 recon_color recon_theme_color_of(int index, enum recon_theme_role role);
 
+/*
+ * A metric from a skin that is not the one in use.
+ *
+ * The colour twin above exists because a list of skins painted in the current
+ * skin's colours says nothing about any of the others. Shape is now half of
+ * what a skin is -- how round its buttons are, how thick its border, how tall
+ * its title bar -- so a list that shows only colour has the same problem in
+ * the other half. Out of range gives the default, which is what an unlisted
+ * skin would draw with anyway.
+ */
+int recon_theme_metric_of(int index, enum recon_theme_metric metric);
+
 /* The same for a gradient, so a skin shown in a list shows its ramps too. A
  * preview drawn flat makes every skin with a gradient look like a skin
  * without one. */

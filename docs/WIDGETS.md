@@ -144,6 +144,15 @@ loud — 95 was square, and a soft edge drawn in a colour between the two a
 high-contrast skin promises is the opposite of what somebody who turned that on
 asked for.
 
+**The skin list shows shape, not only colour.** Each row in Appearance draws a
+sample of that skin's own button, in that skin's numbers -- so two skins that
+share a palette and differ entirely in whether their buttons round can be told
+apart without putting either one on. Drawn rather than described: a row saying
+"rounded corners" in words would be a second description of the skin that could
+disagree with it, and this one cannot, because it is the same arithmetic the
+skin will use on every button in the system. `recon_theme_metric_of` is the
+metric twin of `recon_theme_color_of`, added for it.
+
 ---
 
 ## What this layer will not do

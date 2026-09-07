@@ -2007,11 +2007,43 @@ static void draw_appearance_themes(struct control_panel *cp,
             snprintf(name, sizeof(name), "%s", info.name);
         }
 
+        /*
+         * --- A sample of the skin's own button, at the right of the row ---
+         *
+         * Shape is half of what a skin is now, and this list showed only
+         * colour. Two skins can share a palette and differ entirely in
+         * whether their buttons are round, how thick their border is and how
+         * tall their title bar sits -- and until this was here, the only way
+         * to find out was to put the skin on and look.
+         *
+         * Drawn rather than described, and drawn *in that skin's numbers*
+         * rather than the current one's: a row saying "rounded corners" in
+         * words would be a second description of the skin that could
+         * disagree with the skin. This one cannot, because it is the same
+         * arithmetic the skin will use on every button in the system.
+         */
+        int sample_r = recon_theme_metric_of(i, RECON_METRIC_BUTTON_CORNER);
+        int sample_h = ROW_HEIGHT - 10;
+        int sample_w = sample_h * 2;
+        int sample_x = x + w - 12 - sample_w;
+        int sample_y = ry + 5;
+
+        recon_color face = recon_theme_color_of(i, RECON_THEME_BUTTON);
+        recon_color behind = picked ? row_bg
+            : (i % 2 == 1 ? COLOR_ROW_ALT : COLOR_BG);
+
+        recon_fill_rect(p, sample_x, sample_y, sample_w, sample_h, face);
+        recon_draw_bevel(p, sample_x, sample_y, sample_w, sample_h, false);
+        if (sample_r > 0) {
+            recon_round_rect(p, sample_x, sample_y, sample_w, sample_h,
+                sample_r, behind);
+        }
+
         recon_draw_text(p, cp->font, x + 14,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2, name, ink);
         recon_draw_text(p, cp->font, x + w / 2,
-            ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2 - 10, info.description,
-            faint);
+            ry + (ROW_HEIGHT + ascent) / 2 - 2,
+            sample_x - (x + w / 2) - 10, info.description, faint);
 
         /* The row's number on screen, not its number in the list: the
          * click handler adds the scroll back on. */
