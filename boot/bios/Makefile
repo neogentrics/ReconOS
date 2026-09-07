@@ -71,8 +71,18 @@ $(BUILD)/stage1.o: stage1.S
 $(BUILD)/stage1.elf: $(BUILD)/stage1.o stage1.ld
 	$(LD) -T stage1.ld -o $@ $<
 
-$(BUILD)/stage1.bin: $(BUILD)/stage1.elf
+# stage1.bin depends on stage 2, which looks wrong and is not: stage 1 carries
+# the number of sectors to read, and that number is a fact about stage 2's size.
+#
+# The patch belonged to the mbr.img rule first, and that was wrong in a way that
+# passed here and failed in the verification rig: `make` alone builds
+# stage1.bin and stage2.bin but not mbr.img, so the harness -- which assembles
+# its own disks from stage1.bin -- used an unpatched one. A build step that only
+# runs when some *other* target is asked for is a build step that is sometimes
+# absent, which is BG-133 wearing different clothes.
+$(BUILD)/stage1.bin: $(BUILD)/stage1.elf $(BUILD)/stage2.bin
 	$(OBJCOPY) -O binary $< $@
+	sh patch-stage1.sh $(BUILD)/stage1.elf $@ $(BUILD)/stage2.bin
 	@size=$$(stat -c%s $@); \
 	if [ "$$size" -ne 440 ]; then \
 		echo "stage1.bin is $$size bytes, and the partition table starts at 440" >&2; \
@@ -89,7 +99,7 @@ mbr: $(BUILD)/mbr.img
 
 $(BUILD)/mbr.img: $(BUILD)/stage1.bin
 	dd if=/dev/zero of=$@ bs=512 count=1 status=none
-	dd if=$< of=$@ conv=notrunc status=none
+	dd if=$(BUILD)/stage1.bin of=$@ conv=notrunc status=none
 	printf '\125\252' | dd of=$@ bs=1 seek=510 conv=notrunc status=none
 	@sig=$$(od -An -tx1 -j510 -N2 $@ | tr -d ' '); \
 	if [ "$$sig" != "55aa" ]; then \

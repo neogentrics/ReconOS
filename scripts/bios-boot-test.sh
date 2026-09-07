@@ -79,6 +79,29 @@ boot_with() {
 		-no-reboot -drive "file=$2,format=raw,if=ide" 2>&1 | tr -d '\r'
 }
 
+# --- before booting anything, is stage 1 going to read all of stage 2? ------
+#
+# Checked directly rather than inferred from a boot failure. When stage 2
+# outgrew the four sectors stage 1 used to read (BG-138), the symptom was a
+# machine that printed "ReconOS" and stopped -- and the magic check passed,
+# because the first four bytes had arrived. This asks the question the magic
+# number cannot: did all of it arrive?
+
+say "stage 1 reads the whole of stage 2"
+s2_size=$(stat -c%s boot/bios/build/stage2.bin)
+s2_sectors=$(( (s2_size + 511) / 512 ))
+count_off=$(( $(nm boot/bios/build/stage1.elf |
+	awk '$3 == "stage2_count" { print "0x" $1 }') - 0x7C00 ))
+count=$(od -An -tu2 -j "$count_off" -N2 boot/bios/build/stage1.bin | tr -d ' ')
+
+if [ "$count" = "$s2_sectors" ]; then
+	echo "$count sectors, $s2_size bytes"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- reads $count sectors, stage 2 needs $s2_sectors"
+	fail=$((fail + 1))
+fi
+
 # --- the machine boots what we wrote ---------------------------------------
 
 make_disk "$W/good.img"
@@ -143,6 +166,97 @@ if [ -n "$small" ] && [ -n "$large" ] &&
 else
 	echo "FAILED -- ${small:-none} MB at 128M, ${large:-none} MB at 512M"
 	fail=$((fail + 1))
+fi
+
+# --- a disk laid out the way an install will lay one out --------------------
+#
+# GPT, a BIOS Boot Partition at LBA 2048 holding stage 2, and an EFI System
+# Partition after it. Built with sgdisk, which shares no code with this and is
+# what actually partitions the disks this will meet.
+#
+# Our 440 bytes go into the protective MBR's boot code area, which is exactly
+# what that space is for: the protective partition entry at offset 446 is left
+# untouched, so a tool that reads this disk still sees a GPT disk that is
+# entirely claimed.
+
+if command -v sgdisk >/dev/null 2>&1 && command -v mkfs.vfat >/dev/null 2>&1; then
+	dd if=/dev/zero of="$W/gpt.img" bs=1M count=64 status=none
+	sgdisk -n 1:2048:+1M -t 1:ef02 "$W/gpt.img" >/dev/null 2>&1
+	sgdisk -n 2:0:+32M   -t 2:ef00 "$W/gpt.img" >/dev/null 2>&1
+
+	esp_start=$(sgdisk -i 2 "$W/gpt.img" 2>/dev/null |
+		sed -n 's/^First sector: \([0-9]*\).*/\1/p')
+
+	dd if=/dev/zero of="$W/esp.part" bs=1M count=32 status=none
+	mkfs.vfat -F 32 -n RECONOS "$W/esp.part" >/dev/null 2>&1
+
+	# The real kernel, under the real name, put there by mtools -- which
+	# shares no code with the reader that has to find it again. The name
+	# needs a long-name entry, and finding it by its 8.3 alias instead is
+	# what BG-130 was about.
+	make -C kernel ARCH=x86_64 >/dev/null 2>&1 || true
+	KELF=kernel/build/x86_64/reconos-kernel.elf
+	if [ -f "$KELF" ] && command -v mcopy >/dev/null 2>&1; then
+		mmd   -i "$W/esp.part" ::/reconos >/dev/null 2>&1
+		mcopy -i "$W/esp.part" "$KELF" ::/reconos/kernel-x86_64.elf
+		kernel_size=$(stat -c%s "$KELF")
+	else
+		kernel_size=
+	fi
+
+	dd if="$W/esp.part" of="$W/gpt.img" bs=512 seek="$esp_start" \
+		conv=notrunc status=none
+
+	dd if=boot/bios/build/stage1.bin of="$W/gpt.img" bs=1 count=440 \
+		conv=notrunc status=none
+	dd if=boot/bios/build/stage2.bin of="$W/gpt.img" bs=512 seek=2048 \
+		conv=notrunc status=none
+
+	gpt=$(boot "$W/gpt.img")
+
+	say "finds the EFI partition in a real GPT"
+	found=$(echo "$gpt" | sed -n 's/^esp: block \([0-9]*\).*/\1/p')
+	if [ -n "$found" ] && [ "$found" = "$esp_start" ]; then
+		echo "block $found, which is where sgdisk put it"
+		pass=$((pass + 1))
+	else
+		echo "FAILED -- said '${found:-nothing}', sgdisk says $esp_start"
+		echo "$gpt" | grep -a 'esp:' | sed 's/^/      /'
+		fail=$((fail + 1))
+	fi
+
+	# The protective MBR is what stops another tool deciding this disk is
+	# unpartitioned and free to take. Writing our boot code into the same
+	# sector must not disturb it.
+	say "and the protective MBR still says the disk is taken"
+	if sgdisk -p "$W/gpt.img" 2>/dev/null | grep -q 'EF02'; then
+		echo "sgdisk still reads the table"
+		pass=$((pass + 1))
+	else
+		echo "FAILED -- our 440 bytes damaged the partition table"
+		fail=$((fail + 1))
+	fi
+
+	# The size is the assertion, not the finding.
+	#
+	# A reader that walked into the wrong directory entry would still report
+	# *a* cluster and *a* size; matching the byte count mtools wrote means
+	# it found this file and not a neighbour.
+	if [ -n "$kernel_size" ]; then
+		say "finds the kernel by its long name"
+		got=$(echo "$gpt" | sed -n 's/^kernel: [^,]*, \([0-9]*\) bytes.*/\1/p')
+		if [ "$got" = "$kernel_size" ]; then
+			echo "$got bytes, as mtools wrote it"
+			pass=$((pass + 1))
+		else
+			echo "FAILED -- said '${got:-nothing}', file is $kernel_size"
+			echo "$gpt" | grep -a -E 'esp:|kernel:' | sed 's/^/      /'
+			fail=$((fail + 1))
+		fi
+	fi
+else
+	say "finds the EFI partition in a real GPT"
+	echo "skipped, sgdisk or mkfs.vfat is missing"
 fi
 
 # --- and now the two faults ------------------------------------------------

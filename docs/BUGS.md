@@ -348,6 +348,65 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-138 — Stage 2 outgrew the number of sectors stage 1 reads, and the magic check passed anyway
+
+- **Found:** 7 September 2026, by the BIOS harness, on the commit that added a
+  FAT32 reader.
+- **Cost:** nothing shipped. It is here for the shape of it.
+
+`stage1.S` carried the number of sectors to read as a literal: four, which was
+2048 bytes, which was true when it was written. Adding the FAT32 reader took
+stage 2 to **2797 bytes**, and stage 1 went on reading 2048 of them.
+
+**The check that should have caught this is the one that passed.** Stage 2
+begins with a magic number precisely so that stage 1 never jumps into a sector
+it has not identified — and the magic is in the *first four bytes*, which had
+loaded perfectly. So stage 1 confirmed the image was ours and jumped into a copy
+whose second half was whatever the disk had at those blocks beforehand.
+
+Nothing was reported. The machine printed `ReconOS` and stopped.
+
+A magic number answers *"is this the thing I meant to load?"*. It cannot answer
+*"did all of it arrive?"*, and the two questions look like one until a file
+grows.
+
+- **Fixed in** kernel 0.0.11. `boot/bios/patch-stage1.sh` computes the sector
+  count from stage 2's actual size and writes it into stage 1 at build time,
+  finding the offset from the **symbol table** rather than by counting bytes in
+  a hex dump — an offset worked out by hand goes wrong silently the first time
+  the source is edited. It reads the value back afterwards, because a patch that
+  quietly did nothing would leave exactly the stale constant this exists to
+  prevent, and it refuses more than 127 sectors, which is as much as a single
+  BIOS extended read can be relied on to fetch.
+
+  **The failure mode is removed rather than detected.** A build-time check that
+  the literal still matched would have been an improvement; computing it means
+  there is no literal to be wrong.
+
+- **And the fix was wrong once, in the same shape as the bug.** The patch was
+  first attached to the `mbr.img` rule. `make` alone builds `stage1.bin` and
+  `stage2.bin` and *not* `mbr.img`, and the harness assembles its own disks out
+  of `stage1.bin` — so the harness used an unpatched stage 1 and failed exactly
+  as before. It passed locally, because a `make disk` run by hand had patched
+  the file in place, and it failed in the verification rig, which starts from a
+  clean copy. **A build step that runs only when some other target is asked for
+  is a build step that is sometimes absent** — BG-133 wearing different clothes,
+  two days later. The patch now belongs to `stage1.bin`'s own rule, so the only
+  stage 1 that can exist is a patched one.
+
+  The harness also asks the question directly now, before booting anything: it
+  reads the count out of `stage1.bin` at the symbol's offset and compares it
+  with stage 2's size on disk. That is the question the magic number cannot
+  answer, asked where the answer is cheap.
+
+- **The shape.** A constant that was true when written, consumed later by code
+  that had no way to know it had stopped being true — the same family as
+  BG-126 (a transaction's capacity written down as one number when it is three)
+  and BG-119 (a value correct when computed, used after it had gone stale).
+  What is new here is the *check that gave cover*: the magic test made the hop
+  look verified, so the one visible symptom had an explanation that was already
+  known to be handled.
+
 ### BG-137 — The BIOS harness read a mirror of the screen and called it serial output
 
 [#294](https://github.com/neogentrics/ReconOS/issues/294)
