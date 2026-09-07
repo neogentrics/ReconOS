@@ -21,6 +21,18 @@ two thirds of the way round, which keeps the skin's character and keeps the
 *lightness* -- the half of a colour that decides whether it can be seen at all.
 Three fixed colours would be legible on some skins and invisible on others.
 
+The wheel zooms about the pointer, and the expressions are remembered.
+Zooming about the middle instead means finding a feature, dragging it to the
+centre, zooming, and finding it has moved again -- the arithmetic that keeps
+the value under the pointer where it is is one line, and it is the difference
+between a grapher somebody explores with and one they fight. The wheel and the
+buttons use the same factor, so one notch out undoes one notch in exactly.
+
+The three expressions are written to the user's settings as they are typed
+rather than when the window closes -- a window that saves on close loses
+everything if it is never closed politely, and the whole point of keeping these
+is that somebody spent a minute getting one right.
+
 And the view can be dragged. It was always centred on the origin, which
 makes a grapher that can only look at one place: every interesting part of
 log(x) is to the right of it, and zooming in on something near x=10 moves it

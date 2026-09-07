@@ -17,6 +17,7 @@
 #include "recon_calc_modes.h"
 #include "recon_clock.h"
 #include "recon_module.h"
+#include "recon_registry.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 
@@ -181,6 +182,27 @@ static const struct calc_layout LAYOUTS[CALC_MODE_COUNT] = {
  */
 #define GRAPH_CURVES 3
 
+/*
+ * Where the three expressions are kept between sessions.
+ *
+ * In the user's own settings rather than a file, because they are a setting:
+ * three short strings that belong to whoever typed them. Closing the window
+ * lost them, which made the mode something to be re-typed into rather than
+ * something to come back to -- and an expression somebody spent a minute
+ * getting right is exactly the thing worth keeping.
+ */
+#define GRAPH_KEY_PREFIX "calculator/graph-"
+
+/*
+ * How much one notch of the wheel changes the view.
+ *
+ * The same factor as the Zoom in and Zoom out buttons, so the two agree and
+ * one notch out undoes one notch in exactly. A wheel that zoomed by a
+ * different amount from the buttons would make the two ways of doing it
+ * disagree about where you are.
+ */
+#define GRAPH_ZOOM_STEP 1.25
+
 struct recon_calc {
     struct recon_font *font;
 
@@ -267,6 +289,20 @@ struct recon_calc {
     double per_unit;
 
     /*
+     * Where the pointer is, in units rather than pixels.
+     *
+     * Kept by the motion handler because the wheel has no coordinates of its
+     * own -- a scroll callback is given a direction and nothing else -- and
+     * zooming about the middle instead of about the pointer is the difference
+     * between a grapher somebody explores with and one they fight.
+     */
+    double pointer_x, pointer_y;
+
+    /* The middle of the plane, in content coordinates, so motion can turn a
+     * pixel into a value without re-deriving the layout. */
+    int plane_mid_x, plane_mid_y;
+
+    /*
      * The window, kept so that panning can ask for a redraw.
      *
      * A click is redrawn by the shell because the shell knows a click may have
@@ -281,6 +317,27 @@ struct recon_calc {
     struct recon_appwin *win;
 
 };
+
+/* Where one curve's expression is written down. */
+static void graph_key(int i, char *out, size_t size) {
+    snprintf(out, size, "%s%d", GRAPH_KEY_PREFIX, i);
+}
+
+/*
+ * Kept as each is typed rather than when the window closes.
+ *
+ * A window that saves on close loses everything if it is never closed
+ * politely, and the whole point of remembering these is that somebody spent a
+ * minute getting one right. Three short registry writes per keystroke is
+ * nothing.
+ */
+static void remember_graph(struct recon_calc *calc) {
+    for (int i = 0; i < GRAPH_CURVES; i++) {
+        char key[64];
+        graph_key(i, key, sizeof(key));
+        recon_registry_set(RECON_REG_USER, key, calc->formula[i].text);
+    }
+}
 
 /* --- Arithmetic --- */
 
@@ -1127,6 +1184,8 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
     double per_unit_y = per_unit_x;
     calc->span_y = (h / 2.0) / per_unit_y;
     calc->per_unit = per_unit_x;
+    calc->plane_mid_x = mid_x;
+    calc->plane_mid_y = mid_y;
 
     /*
      * The plane takes drags, and is registered before the curves are drawn
@@ -1785,6 +1844,7 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         case RECON_EDIT_CHANGED:
         case RECON_EDIT_COMMIT:
         case RECON_EDIT_CANCEL:
+            remember_graph(calc);
             return true;
         case RECON_EDIT_IGNORED:
             return false;
@@ -1876,7 +1936,15 @@ static bool calc_key_press(void *user, xkb_keysym_t sym, uint32_t modifiers) {
  */
 static void calc_motion(void *user, uint32_t hit_id, int cx, int cy) {
     struct recon_calc *calc = user;
-    (void)hit_id;
+
+    /* Remembered whether or not anything is being dragged, because the wheel
+     * needs it and the wheel arrives with no coordinates. */
+    if (hit_id == HIT_GRAPH_PLANE && calc->per_unit > 0.0) {
+        calc->pointer_x = calc->centre_x +
+            (cx - calc->plane_mid_x) / calc->per_unit;
+        calc->pointer_y = calc->centre_y -
+            (cy - calc->plane_mid_y) / calc->per_unit;
+    }
 
     if (!calc->panning || calc->per_unit <= 0.0) {
         return;
@@ -1895,6 +1963,61 @@ static void calc_motion(void *user, uint32_t hit_id, int cx, int cy) {
 static const char *calc_cursor(void *user, uint32_t hit_id) {
     (void)user;
     return (hit_id == HIT_GRAPH_PLANE) ? "grab" : NULL;
+}
+
+/*
+ * The wheel zooms, about the point under the pointer.
+ *
+ * About the pointer rather than about the middle, because that is what makes
+ * zooming a way of looking closer at *something*: zooming about the middle
+ * means finding a feature, dragging it to the centre, zooming, and finding it
+ * has moved again. The arithmetic is one line -- keep the value under the
+ * pointer where it is -- and it is the difference between a grapher somebody
+ * explores with and one they fight.
+ */
+static void calc_scroll(void *user, double delta) {
+    struct recon_calc *calc = user;
+
+    if (calc->mode != CALC_GRAPH || calc->per_unit <= 0.0) {
+        return;
+    }
+
+    /*
+     * Wheel away from you zooms in.
+     *
+     * `delta > 0` is a scroll DOWN -- that is what it means everywhere else in
+     * this system, where a positive delta moves a list further down. So the
+     * test reads inverted and is not: down is out, up is in, which is what a
+     * map does and what everybody expects. Written the obvious way round first
+     * and the zoom went the wrong way, which is why the direction is stated
+     * here rather than left to be inferred from the sign.
+     */
+    double before = calc->span_x;
+    if (delta < 0) {
+        calc->span_x /= GRAPH_ZOOM_STEP;
+    } else {
+        calc->span_x *= GRAPH_ZOOM_STEP;
+    }
+
+    /*
+     * A floor and a ceiling, because both ends stop meaning anything. Zoomed
+     * in past this the arithmetic runs out of precision and the curve goes
+     * jagged; zoomed out past it every function is a horizontal line.
+     */
+    if (calc->span_x < 1e-6) {
+        calc->span_x = 1e-6;
+    }
+    if (calc->span_x > 1e9) {
+        calc->span_x = 1e9;
+    }
+
+    /* Keep the value under the pointer where it is. `pointer_x` and
+     * `pointer_y` are in units, worked out by the motion handler. */
+    double scale = calc->span_x / before;
+    calc->centre_x = calc->pointer_x + (calc->centre_x - calc->pointer_x) * scale;
+    calc->centre_y = calc->pointer_y + (calc->centre_y - calc->pointer_y) * scale;
+
+    recon_appwin_refresh(calc->win);
 }
 
 static void calc_destroy(void *user) {
@@ -1942,6 +2065,7 @@ static const struct recon_appwin_impl CALC_IMPL = {
     .key = calc_key_press,
     .motion = calc_motion,
     .cursor = calc_cursor,
+    .scroll = calc_scroll,
     .destroy = calc_destroy,
 };
 
@@ -1961,15 +2085,33 @@ struct recon_appwin *recon_calc_create(struct recon_server *server,
      */
     calc->span_x = GRAPH_SPAN;
     calc->span_y = GRAPH_SPAN;
+    /*
+     * What was typed last time, or an example.
+     *
+     * The example only when there is nothing remembered at all -- somebody who
+     * deliberately cleared all three fields and closed the window should not
+     * be handed sin(x) back on the way in, which would look like the clearing
+     * not having worked.
+     */
+    bool remembered = false;
     for (int i = 0; i < GRAPH_CURVES; i++) {
-        recon_edit_begin(&calc->formula[i], "", false);
+        char key[64];
+        graph_key(i, key, sizeof(key));
+        const char *kept = recon_registry_get(RECON_REG_USER, key, "");
+
+        recon_edit_begin(&calc->formula[i], kept, false);
         calc->formula[i].active = false;
+        if (kept[0] != '\0') {
+            remembered = true;
+        }
     }
-    /* One example, in the first field, so the mode shows what it does the
-     * moment it is opened rather than an empty plane and an instruction. */
-    recon_edit_begin(&calc->formula[0], "sin(x)", false);
+
+    if (!remembered &&
+            !recon_registry_has(RECON_REG_USER, GRAPH_KEY_PREFIX "0")) {
+        recon_edit_begin(&calc->formula[0], "sin(x)", false);
+        calc->formula[0].active = false;
+    }
     calc->formula_focused = 0;
-    calc->formula[0].active = false;
     calc->unit_to = 1;
 
     /* Both dates start at today, so the difference starts at zero and moves

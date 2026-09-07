@@ -1990,11 +1990,11 @@ seven missing pages are written and a topic that does not exist is complained
 about rather than passed over. What is still missing is finding a word *within*
 a page, and any way to search the help without opening it first.
 
-**The grapher cannot be saved or zoomed by the wheel.** Three curves at once
-and a plane that can be dragged, as of v0.4.0. What is missing is scrolling to
-zoom -- the wheel does nothing over the plane -- and any way to keep an
-expression: closing the window loses what was typed, and there is nowhere for a
-graph to be written down as a picture or as a file.
+**A graph cannot be written down.** Three curves, a plane that can be dragged,
+a wheel that zooms about the pointer, and expressions that survive closing the
+window -- all as of v0.4.0. What is missing is saving the picture: there is no
+way to put a graph in a file or on a page, which is what somebody wants it for
+once they have got it right.
 
 **A package cannot ship a setting or a data file.** The manifest understands
 a module and an icon; anything else a program wants to place has nowhere to

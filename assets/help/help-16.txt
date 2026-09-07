@@ -8,8 +8,10 @@ Six modes, chosen along the top.
 - Date is how far apart two dates are.
 - Convert changes units.
 - Graph draws up to three expressions in *x* at once, each in its own
-  colour with a swatch beside its field. Drag the picture to move about in it;
-  Zoom in, Zoom out and Reset do the rest, and Reset puts back the place as
-  well as the size.
+  colour with a swatch beside its field. Drag the picture to move about in it
+  and use the wheel to zoom in on whatever is under the pointer. Zoom in, Zoom
+  out and Reset are also buttons, and Reset puts back the place as well as the
+  size. What is typed here is remembered, so closing the window does not lose
+  it.
 
 Every key has a keyboard equivalent, including the number pad.
