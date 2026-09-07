@@ -1038,6 +1038,27 @@ static bool drag_decoration(struct recon_server *server) {
     return false;
 }
 
+/*
+ * Offer the pointer to every client decoration, so its title bar can
+ * highlight.
+ *
+ * Every one of them, not just the one under the pointer: a frame needs to
+ * hear that the pointer has *left* as much as that it has arrived, and a
+ * loop that stopped at the first hit would leave the last frame the pointer
+ * crossed lit up behind it.
+ *
+ * Unlike drag_decoration this does not claim the motion. A highlight is
+ * something that happens on the way past; whatever the pointer is actually
+ * over still gets its turn.
+ */
+static void hover_decorations(struct recon_server *server) {
+    struct recon_toplevel *toplevel;
+    wl_list_for_each(toplevel, &server->toplevels, link) {
+        recon_decor_motion(toplevel->decor, server->cursor->x,
+            server->cursor->y);
+    }
+}
+
 static void process_cursor_motion(struct recon_server *server, uint32_t time) {
     if (server->cursor_mode == RECON_CURSOR_MOVE) {
         process_move(server);
@@ -1052,6 +1073,8 @@ static void process_cursor_motion(struct recon_server *server, uint32_t time) {
         wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
         return;
     }
+
+    hover_decorations(server);
 
     /*
      * On the edge of a window ReconOS frames. Said with the cursor before the
@@ -1250,6 +1273,7 @@ void recon_inject_pointer(struct recon_server *server, int x, int y) {
     } else if (server->cursor_mode == RECON_CURSOR_RESIZE) {
         process_resize(server);
     } else if (!drag_decoration(server)) {
+        hover_decorations(server);
         recon_shell_handle_motion(server->shell, server->cursor->x,
             server->cursor->y);
     }

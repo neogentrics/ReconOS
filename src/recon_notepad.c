@@ -28,6 +28,7 @@
 #include "recon_notepad.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define PADDING 6
 #define MENUBAR_HEIGHT 22
@@ -1926,15 +1927,14 @@ static void notepad_draw(void *user, struct recon_panel *panel,
                     break;
                 }
 
-                recon_fill_role(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
-                    RECON_THEME_BUTTON);
-                recon_draw_button_edge(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
-                    false, COLOR_MENUBAR);
-                recon_draw_text(panel, np->font, bx + 8,
-                    fy + (FIND_HEIGHT + ascent) / 2 - 2, bw - 12,
-                    BUTTONS[i].label, THEME(BUTTON_TEXT));
-                recon_hit_add(panel, bx, fy + 2, bw, FIND_HEIGHT - 4,
-                    BUTTONS[i].id);
+                struct recon_widget_button button = {
+                    .x = bx, .y = fy + 2, .w = bw, .h = FIND_HEIGHT - 4,
+                    .id = BUTTONS[i].id,
+                    .label = BUTTONS[i].label,
+                    .font = np->font,
+                    .behind = COLOR_MENUBAR,
+                };
+                recon_widget_button(panel, &button);
 
                 bx += bw + 6;
             }

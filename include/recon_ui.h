@@ -596,7 +596,46 @@ bool recon_panel_contains(const struct recon_panel *panel, double lx, double ly)
 bool recon_hit_region(const struct recon_panel *panel, size_t index,
     int *x, int *y, int *w, int *h, uint32_t *id);
 
-/* The id of the topmost region containing the point, or RECON_HIT_NONE. */
+/*
+ * Mark the region added last as unable to answer a click.
+ *
+ * Written straight after its recon_hit_add, the same way recon_hit_tip is,
+ * and for the same reason: being unavailable is part of registering a
+ * control, not a second thing to remember about it somewhere else. It keeps
+ * its tooltip, so pointing at it can still say why.
+ *
+ * Callers should reach this through recon_widget's `disabled`, which sets it.
+ */
+bool recon_hit_inert(struct recon_panel *panel);
+
+/*
+ * The id of the topmost region containing the point, or RECON_HIT_NONE.
+ *
+ * Two of them, because "what is under the pointer" and "what would answer a
+ * click" stopped being the same question when controls learnt to be
+ * disabled. recon_hit_test answers the first -- it is what a tooltip wants,
+ * and what a cursor shape wants. recon_hit_test_active answers the second,
+ * and is what every click path should be asking.
+ */
 uint32_t recon_hit_test(struct recon_panel *panel, int x, int y);
+uint32_t recon_hit_test_active(struct recon_panel *panel, int x, int y);
+
+/*
+ * Which region the pointer is over, and which one it went down on.
+ *
+ * Storage only. What the two mean -- when something counts as hot, what a
+ * held button looks like -- is recon_widget's, and callers should be asking
+ * it rather than these. They live here because the panel is where a panel's
+ * state lives, and because a second place to keep it would be a second place
+ * for it to be stale.
+ *
+ * Deliberately untouched by recon_hit_clear. A panel redraws from scratch
+ * many times a second while the pointer sits still, and hover that had to be
+ * re-established after every repaint would flicker off and on again.
+ */
+void recon_panel_set_hot(struct recon_panel *panel, uint32_t id);
+uint32_t recon_panel_hot(const struct recon_panel *panel);
+void recon_panel_set_held(struct recon_panel *panel, uint32_t id);
+uint32_t recon_panel_held(const struct recon_panel *panel);
 
 #endif

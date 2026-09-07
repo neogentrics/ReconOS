@@ -37,6 +37,7 @@
 #include "recon_player.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_video.h"
 #include "recon_users.h"
 
@@ -739,12 +740,19 @@ static void draw_button(struct recon_player *p, struct recon_panel *panel,
         int x, int y, enum transport which, uint32_t hit, bool on) {
     (void)p;
 
-    recon_fill_rect(panel, x, y, BUTTON, BUTTON, COLOR_BAR);
-    recon_draw_button_edge(panel, x, y, BUTTON, BUTTON, false, COLOR_BG);
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = BUTTON, .h = BUTTON,
+        .id = hit,
+        .behind = COLOR_BG,
+        .disabled = !on,
+    };
+    enum recon_widget_state state = recon_widget_button(panel, &button);
 
+    /* The symbol after the button, and sunk with it. */
+    int nudge = state == RECON_WIDGET_ACTIVE ? 1 : 0;
     int size = BUTTON / 2;
-    draw_symbol(panel, which, x + (BUTTON - size) / 2, y + (BUTTON - size) / 2,
-        size, on ? COLOR_TEXT : COLOR_DIM);
+    draw_symbol(panel, which, x + (BUTTON - size) / 2 + nudge,
+        y + (BUTTON - size) / 2 + nudge, size, on ? COLOR_TEXT : COLOR_DIM);
 
     if (on) {
         recon_hit_add(panel, x, y, BUTTON, BUTTON, hit);

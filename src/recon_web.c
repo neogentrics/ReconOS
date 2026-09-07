@@ -29,6 +29,7 @@
 #include "recon_icons.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_web.h"
 
 #define COLOR_BG THEME(SURFACE)
@@ -564,16 +565,22 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
             : (i == 1) ? can_forward
             : w->have_url;
 
-        recon_draw_button_edge(p, bx, by, BUTTON_WIDTH, FIELD_HEIGHT, false,
-            COLOR_BAR);
-        int gw = recon_text_width(w->font, BUTTONS[i].glyph);
-        recon_draw_text(p, w->font, bx + (BUTTON_WIDTH - gw) / 2,
-            by + (FIELD_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH,
-            BUTTONS[i].glyph, on ? COLOR_TEXT : COLOR_DIM);
-        if (on) {
-            recon_hit_add(p, bx, by, BUTTON_WIDTH, FIELD_HEIGHT,
-                BUTTONS[i].hit);
-        }
+        /*
+         * Registered whether or not it can be pressed. Back with nowhere to
+         * go used to register nothing, so the click fell through to the
+         * toolbar behind it -- and the arrow was the one thing on the bar
+         * that stayed dead under the pointer without saying why.
+         */
+        struct recon_widget_button button = {
+            .x = bx, .y = by, .w = BUTTON_WIDTH, .h = FIELD_HEIGHT,
+            .id = BUTTONS[i].hit,
+            .label = BUTTONS[i].glyph,
+            .font = w->font,
+            .behind = COLOR_BAR,
+            .text = on ? COLOR_TEXT : COLOR_DIM,
+            .disabled = !on,
+        };
+        recon_widget_button(p, &button);
         bx += BUTTON_WIDTH + 4;
     }
 

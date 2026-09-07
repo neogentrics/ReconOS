@@ -23,6 +23,64 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A widget layer, and it is the answer to why nothing reacted to the
+pointer.** Every application in ReconOS drew its own buttons -- a fill, a
+bevel, a label, a hit region and a tooltip, five or six lines at a time,
+around two hundred times across this repository. Writing that out is not the
+problem; what it means is. A behaviour that has to be written two hundred
+times is a behaviour that gets written zero times, and so nothing anywhere
+highlighted under the pointer, nothing sank when pressed, and the close button
+on every window did not go red on approach the way close buttons have on every
+desktop for twenty years.
+
+`recon_widget` is the place those answers now live. An application says *this
+is a button, here, called that, and pressing it means this*, and is told
+nothing about bevels, corner radii, hover tints or hit regions. A control is in
+one of four states -- normal, hot, active, disabled -- and the panel knows
+which without the application being asked.
+
+It carries its own version, separate from the module ABI, because the two ask
+different questions: `RECON_MODULE_ABI` asks whether a module can be loaded at
+all and refuses a mismatch, while `RECON_WIDGET_VERSION` asks whether its
+controls will match the rest of the screen and reports one. A module a version
+behind still draws working buttons; a module that will not load draws nothing.
+`docs/WIDGETS.md` records what each version means.
+
+Adopted across the system in the same release: window frames for built-in and
+client windows alike, the taskbar and its Apps button and pager, the start
+menu and the five buttons that lock and restart the machine, the login screen,
+the question dialog, the security box, the file dialog, File Explorer,
+Watchtower, Photos, Notepad, the Calendar, Mail, the Player, the browser, Help,
+the Control Panel and the Calculator -- which, being a module, is also the
+first thing to be checked against the version it was built for.
+
+**Held and hovered is what counts as pressed.** Press a button, think better of
+it, slide off it, let go -- and nothing happens, which is what every desktop
+does and this one could not. The caption buttons act on the release now rather
+than the press, which is also why they never appeared to do anything before:
+the window was closed or minimized before the frame showing the button sunk had
+been drawn.
+
+**Close goes red under the pointer**, and so does anything else that throws
+something away: End Task in Watchtower, Delete in the File Explorer, Remove on
+a mail attachment. Under the pointer and not at rest -- a close button that is
+red all the time is a close button somebody stops seeing.
+
+**A disabled control stops answering clicks, in one place.** It keeps its
+region and its tooltip, so pointing at it can still say why it is unavailable,
+and it no longer lets the click fall through to whatever is behind it. Saying
+`disabled` is now the whole of saying it: several applications had been
+remembering a second guard in their own click handler, and one of them had
+forgotten.
+
+**Rounding is the default.** `metric.corner` went from 0 to 5 and
+`metric.button-corner` from 0 to 4, and the ceiling on the button radius from 8
+to 12. Zero was chosen when Beacon and Glass were the only skins that rounded
+anything, which left nine of the eleven built-in skins drawing square buttons
+not because anything had decided they should but because nobody had written a
+number for them. Classic, Reading and Contrast now say zero out loud, each for
+a reason that is written down next to it.
+
 **Glass's six colours are reachable from the Control Panel.** They have existed
 since v0.4.0 with no way to reach them but the Terminal --
 `recon_tint_available` was written for "a page that should not offer a choice

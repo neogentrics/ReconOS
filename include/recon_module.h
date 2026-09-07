@@ -52,6 +52,8 @@
 #ifndef RECON_MODULE_H
 #define RECON_MODULE_H
 
+#include "recon_widget.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -75,6 +77,11 @@ struct recon_appwin;
  * precisely for this and was standing open because nobody had turned the
  * number.
  *
+ * 4 (v0.4.0): `struct recon_module_descriptor` gained `widget_version`, which
+ *     the RECON_MODULE macro fills in. A module now records which generation
+ *     of the look it draws against -- see recon_widget.h. The struct grew, so
+ *     this is an ABI change even though nothing a module *does* changed.
+ *
  * 3 (v0.3.0): `struct recon_app_registration` gained `version`, so an applet
  * can be updated on its own. Bumped here rather than in a later panic: a
  * module built against 2 has a four-field registration struct, and reading a
@@ -86,7 +93,7 @@ struct recon_appwin;
  * adding a field at the end, and including structs declared in other headers
  * that this interface exposes.
  */
-#define RECON_MODULE_ABI 3
+#define RECON_MODULE_ABI 4
 
 /* The symbol a module must export. Looked up by name after loading. */
 #define RECON_MODULE_SYMBOL "recon_module_descriptor"
@@ -229,6 +236,26 @@ void recon_command_print(void *session, const char *fmt, ...)
  */
 struct recon_module_descriptor {
     uint32_t abi;
+
+    /*
+     * Which generation of the widget layer this was built against.
+     *
+     * Not the same question as `abi`, and this is the whole reason it is a
+     * second number. `abi` asks whether the module can be loaded at all: it
+     * changes when a struct changes shape, and getting it wrong is a crash,
+     * so a mismatch is refused. This asks whether the module's controls will
+     * look like everything else on the screen: it changes when the appearance
+     * or behaviour of a button changes, and getting it wrong is a window that
+     * looks foreign, so a mismatch is *reported* and loaded anyway.
+     *
+     * Refusing here would be worse than the drift. A module a version behind
+     * still draws working buttons; a module that will not load draws nothing.
+     *
+     * Filled in by the RECON_MODULE macro, so a module author cannot state it
+     * wrongly -- it is whatever the headers they compiled against said.
+     */
+    uint32_t widget_version;
+
     enum recon_module_payload payload;
 
     const char *name;
@@ -249,6 +276,7 @@ struct recon_module_descriptor {
     __attribute__((visibility("default")))                         \
     const struct recon_module_descriptor recon_module_descriptor = { \
         .abi = RECON_MODULE_ABI,                                   \
+        .widget_version = RECON_WIDGET_VERSION,                    \
         .payload = RECON_PAYLOAD_NATIVE,                           \
         __VA_ARGS__                                                \
     }

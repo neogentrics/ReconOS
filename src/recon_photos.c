@@ -29,6 +29,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
@@ -874,121 +875,75 @@ static void photos_draw(void *user, struct recon_panel *panel,
 
     int baseline = by + (BAR_HEIGHT + ascent) / 2 - 2;
 
-    int bx = x + PADDING;
-    int button_w = 30;
-    bool many = ph->count > 1;
-
-    recon_fill_rect(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 11, baseline, button_w, "<",
-        many ? COLOR_TEXT : COLOR_DIM);
-    if (many) {
-        recon_hit_add(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, HIT_PREVIOUS);
-        recon_hit_tip(panel, "The one before");
-    }
-    bx += button_w + 4;
-
-    recon_fill_rect(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 11, baseline, button_w, ">",
-        many ? COLOR_TEXT : COLOR_DIM);
-    if (many) {
-        recon_hit_add(panel, bx, by + 4, button_w, BAR_HEIGHT - 9, HIT_NEXT);
-        recon_hit_tip(panel, "The next one");
-    }
-    bx += button_w + 10;
-
+    /*
+     * The bar, as a list of what the buttons are rather than as drawing.
+     *
+     * Every one of these used to be five lines -- a fill, an edge, a label, a
+     * hit region and a tooltip -- and the five had drifted: two of them
+     * clipped their label at the button width measured from an indented
+     * start, so a long label ran over its neighbour, and the two arrows
+     * registered no region at all when there was nowhere to step to, which
+     * made them vanish under the pointer rather than explain themselves.
+     *
+     * None of that is decided here any more. This says what the buttons are;
+     * recon_widget decides what a button is.
+     */
     const char *how = ph->fit ? "Actual Size" : "Fit to Window";
-    int how_w = recon_text_width(ph->font, how) + 16;
-    recon_fill_rect(panel, bx, by + 4, how_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, how_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 8, baseline, how_w, how, COLOR_TEXT);
-    recon_hit_add(panel, bx, by + 4, how_w, BAR_HEIGHT - 9, HIT_FIT);
-    bx += how_w + 12;
-
-    /*
-     * Registered even when it cannot be pressed, and dimmed.
-     *
-     * A button that vanishes when it is unavailable is a button somebody has to
-     * discover twice; one that is there and explains itself costs three lines.
-     */
-    const char *read_label = "Read Text";
-    int read_w = recon_text_width(ph->font, read_label) + 16;
-    bool can_read = ph->pixels != NULL && ph->reading_at < 0 && !ph->holding;
-
-    recon_fill_rect(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 8, baseline, read_w, read_label,
-        can_read ? COLOR_TEXT : COLOR_DIM);
-    recon_hit_add(panel, bx, by + 4, read_w, BAR_HEIGHT - 9, HIT_READ);
-    recon_hit_tip(panel, ph->pixels == NULL ? "Nothing open to read"
-        : can_read ? "Read the text in this picture into a file in Documents"
-                   : "Still reading");
-    bx += read_w + 12;
-
-    /*
-     * Offered for a PNG too. Somebody stepping through a folder should not have
-     * to work out which of these came out of a camera before they know whether
-     * the button applies, and a PNG saved as a PNG is a copy rather than a
-     * mistake.
-     */
     const char *png_label = "Save as PNG";
-    int png_w = recon_text_width(ph->font, png_label) + 16;
 
-    recon_fill_rect(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 8, baseline, png_w, png_label,
-        ph->pixels != NULL ? COLOR_TEXT : COLOR_DIM);
-    recon_hit_add(panel, bx, by + 4, png_w, BAR_HEIGHT - 9, HIT_CONVERT);
-    recon_hit_tip(panel, ph->pixels == NULL ? "Nothing open to convert"
-        : "Write this picture out as a PNG, next to the original");
-    bx += png_w + 12;
-
-    /*
-     * Halving and doubling rather than a box to type a size into.
-     *
-     * A dialog taking two numbers has to explain what happens when they do not
-     * match the picture's shape, and the honest answer -- the shape is kept and
-     * one of them is ignored -- means the second box was never real. These two
-     * cannot be given a shape that is wrong, and repeated presses reach any
-     * size somebody actually wants within a factor of two.
-     */
-    const char *half_label = "Half";
-    int half_w = recon_text_width(ph->font, half_label) + 16;
+    bool many = ph->count > 1;
+    bool can_read = ph->pixels != NULL && ph->reading_at < 0 && !ph->holding;
     bool can_shrink = ph->pixels != NULL &&
         ph->width / 2 >= RESIZE_MIN && ph->height / 2 >= RESIZE_MIN;
-
-    recon_fill_rect(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 8, baseline, half_w, half_label,
-        can_shrink ? COLOR_TEXT : COLOR_DIM);
-    recon_hit_add(panel, bx, by + 4, half_w, BAR_HEIGHT - 9, HIT_SMALLER);
-    recon_hit_tip(panel, can_shrink
-        ? "Make the picture half this size, on screen only"
-        : "Already as small as this goes");
-    bx += half_w + 6;
-
-    const char *double_label = "Double";
-    int double_w = recon_text_width(ph->font, double_label) + 16;
     bool can_grow = ph->pixels != NULL &&
         ph->width * 2 <= RESIZE_MAX && ph->height * 2 <= RESIZE_MAX;
 
-    recon_fill_rect(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, COLOR_BG);
-    recon_draw_button_edge(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, false,
-        COLOR_BAR);
-    recon_draw_text(panel, ph->font, bx + 8, baseline, double_w, double_label,
-        can_grow ? COLOR_TEXT : COLOR_DIM);
-    recon_hit_add(panel, bx, by + 4, double_w, BAR_HEIGHT - 9, HIT_BIGGER);
-    recon_hit_tip(panel, can_grow
-        ? "Make the picture twice this size, on screen only"
-        : "Already as large as this goes");
-    bx += double_w + 12;
+    const struct {
+        const char *label;
+        uint32_t id;
+        int width;      /* Zero measures the label. */
+        int gap;        /* To the next one. */
+        bool enabled;
+        const char *tip;
+    } BUTTONS[] = {
+        { "<", HIT_PREVIOUS, 30, 4, many,
+          many ? "The one before" : "This is the only one here" },
+        { ">", HIT_NEXT, 30, 10, many,
+          many ? "The next one" : "This is the only one here" },
+        { how, HIT_FIT, 0, 12, true, NULL },
+        { "Read Text", HIT_READ, 0, 12, can_read,
+          ph->pixels == NULL ? "Nothing open to read"
+          : can_read ? "Read the text in this picture into a file in Documents"
+                     : "Still reading" },
+        { png_label, HIT_CONVERT, 0, 12, ph->pixels != NULL,
+          ph->pixels == NULL ? "Nothing open to convert"
+              : "Write this picture out as a PNG, next to the original" },
+        { "Half", HIT_SMALLER, 0, 6, can_shrink,
+          can_shrink ? "Make the picture half this size, on screen only"
+                     : "Already as small as this goes" },
+        { "Double", HIT_BIGGER, 0, 12, can_grow,
+          can_grow ? "Make the picture twice this size, on screen only"
+                   : "Already as large as this goes" },
+    };
+
+    int bx = x + PADDING;
+    for (size_t i = 0; i < sizeof(BUTTONS) / sizeof(BUTTONS[0]); i++) {
+        int bw = BUTTONS[i].width > 0 ? BUTTONS[i].width
+            : recon_text_width(ph->font, BUTTONS[i].label) + 16;
+
+        struct recon_widget_button button = {
+            .x = bx, .y = by + 4, .w = bw, .h = BAR_HEIGHT - 9,
+            .id = BUTTONS[i].id,
+            .label = BUTTONS[i].label,
+            .font = ph->font,
+            .tip = BUTTONS[i].tip,
+            .behind = COLOR_BAR,
+            .disabled = !BUTTONS[i].enabled,
+        };
+        recon_widget_button(panel, &button);
+
+        bx += bw + BUTTONS[i].gap;
+    }
 
     if (ph->message[0] != '\0') {
         recon_draw_text(panel, ph->font, bx, baseline, x + w - bx - PADDING,

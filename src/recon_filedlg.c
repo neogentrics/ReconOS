@@ -11,6 +11,7 @@
 #include "recon_filedlg.h"
 #include "recon_icons.h"
 #include "recon_theme.h"
+#include "recon_widget.h"
 
 #define DIALOG_MARGIN 18
 /* An upper bound, so a big window does not get a dialog the size of a big
@@ -372,23 +373,31 @@ void recon_filedlg_draw(struct recon_filedlg *dialog, struct recon_panel *panel,
     const char *accept_label =
         dialog->mode == RECON_FILEDLG_SAVE ? "Save" : "Open";
 
-    recon_fill_rect(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_button_edge(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT,
-        false, COLOR_BG);
-    recon_draw_text(panel, font,
-        accept_x + (BUTTON_WIDTH - recon_text_width(font, accept_label)) / 2,
-        by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, accept_label,
-        COLOR_BUTTON_TEXT);
-    recon_hit_add(panel, accept_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, HIT_ACCEPT);
+    /*
+     * Open (or Save) carries the accent, because it is what Return does.
+     *
+     * Both used to be the same grey, so a dialog whose whole job is to offer
+     * a choice offered two identical-looking answers -- and the one Return
+     * would pick was not among the things you could see.
+     */
+    struct recon_widget_button accept = {
+        .x = accept_x, .y = by, .w = BUTTON_WIDTH, .h = BUTTON_HEIGHT,
+        .id = HIT_ACCEPT,
+        .label = accept_label,
+        .font = font,
+        .behind = COLOR_BG,
+        .look = RECON_WIDGET_ACCENT,
+    };
+    recon_widget_button(panel, &accept);
 
-    recon_fill_rect(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_button_edge(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT,
-        false, COLOR_BG);
-    recon_draw_text(panel, font,
-        cancel_x + (BUTTON_WIDTH - recon_text_width(font, "Cancel")) / 2,
-        by + (BUTTON_HEIGHT + ascent) / 2 - 2, BUTTON_WIDTH, "Cancel",
-        COLOR_BUTTON_TEXT);
-    recon_hit_add(panel, cancel_x, by, BUTTON_WIDTH, BUTTON_HEIGHT, HIT_CANCEL);
+    struct recon_widget_button cancel = {
+        .x = cancel_x, .y = by, .w = BUTTON_WIDTH, .h = BUTTON_HEIGHT,
+        .id = HIT_CANCEL,
+        .label = "Cancel",
+        .font = font,
+        .behind = COLOR_BG,
+    };
+    recon_widget_button(panel, &cancel);
 
     if (dialog->message[0] != '\0') {
         recon_draw_text(panel, font, dx + PADDING,

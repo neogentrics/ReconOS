@@ -40,6 +40,7 @@
 #include "recon_theme.h"
 #include "recon_tls.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_keyring.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
@@ -1097,21 +1098,23 @@ static int clamp_scroll(int *scroll, int visible, int total) {
 
 static int draw_button(struct control_panel *cp, struct recon_panel *p,
         int x, int y, const char *label, uint32_t id, bool enabled) {
-    int ascent = recon_font_ascent(cp->font);
     int width = recon_text_width(cp->font, label) + 22;
 
-    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT,
-        enabled ? COLOR_BUTTON : COLOR_BG);
-    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
-        COLOR_BG);
-    recon_draw_text(p, cp->font, x + 11, y + (BUTTON_HEIGHT + ascent) / 2 - 2,
-        width - 16, label, enabled ? COLOR_TEXT : COLOR_DIM);
-
-    /* A disabled button is drawn but not registered, so it cannot be pressed
-     * and cannot report a failure the user could not have avoided. */
-    if (enabled) {
-        recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
-    }
+    /*
+     * A disabled button is drawn, registered and inert -- it cannot be
+     * pressed and cannot report a failure the user could not have avoided,
+     * and the click does not fall through to the page behind it either.
+     */
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = width, .h = BUTTON_HEIGHT,
+        .id = id,
+        .label = label,
+        .font = cp->font,
+        .behind = COLOR_BG,
+        .text = enabled ? COLOR_TEXT : COLOR_DIM,
+        .disabled = !enabled,
+    };
+    recon_widget_button(p, &button);
     return x + width + 6;
 }
 

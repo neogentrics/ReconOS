@@ -32,6 +32,7 @@
 #include "recon_registry.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_wallpaper.h"
 
 #define MENUBAR_HEIGHT 20
@@ -1010,15 +1011,28 @@ static void do_open_selected(struct recon_explorer *ex) {
 
 static int draw_button(struct recon_explorer *ex, struct recon_panel *p,
         int x, int y, const char *label, uint32_t id, bool warning) {
-    int ascent = recon_font_ascent(ex->font);
     int width = recon_text_width(ex->font, label) + 22;
 
-    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
-        COLOR_BG);
-    recon_draw_text(p, ex->font, x + 11, y + (BUTTON_HEIGHT + ascent) / 2 - 2,
-        width - 16, label, warning ? COLOR_WARNING : COLOR_BUTTON_TEXT);
-    recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
+    /*
+     * `warning` picks a look rather than a colour.
+     *
+     * It used to mean "draw the label in the warning colour", which is a
+     * thing to do rather than a thing to be -- and it left the button that
+     * deletes a file looking exactly like the button beside it right up until
+     * somebody read the word on it. Said as a look, the same flag now also
+     * makes it go warning-coloured under the pointer, the way the close
+     * button on every window does, and every future thing that should happen
+     * to a dangerous button happens to this one without it being told.
+     */
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = width, .h = BUTTON_HEIGHT,
+        .id = id,
+        .label = label,
+        .font = ex->font,
+        .behind = COLOR_BG,
+        .look = warning ? RECON_WIDGET_DANGER : RECON_WIDGET_PLAIN,
+    };
+    recon_widget_button(p, &button);
 
     return x + width + BUTTON_GAP;
 }
@@ -1180,16 +1194,35 @@ static int draw_tool(struct recon_explorer *ex, struct recon_panel *p,
     const int width = 28;
     (void)ex;
 
-    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BUTTON);
-    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false,
-        COLOR_BG);
+    /*
+     * Registered whether or not it can be pressed, and marked inert when it
+     * cannot.
+     *
+     * It used to register nothing when disabled, which meant a click on Back
+     * with nowhere to go fell through to the toolbar behind it -- and, once
+     * hover existed, that a greyed-out arrow was the one thing on the bar
+     * that stayed dead under the pointer for a reason nobody could see. A
+     * disabled control is still a control: it is there, it explains itself,
+     * and it does not answer.
+     */
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = width, .h = BUTTON_HEIGHT,
+        .id = id,
+        .font = ex->font,
+        .behind = COLOR_BG,
+        .disabled = !enabled,
+    };
+    enum recon_widget_state state = recon_widget_button(p, &button);
 
-    draw_glyph(p, glyph, x + width / 2, y + BUTTON_HEIGHT / 2,
+    /*
+     * The glyph after the button, and nudged with it while it is held, so the
+     * arrow sinks into the button rather than floating over it.
+     */
+    int nudge = state == RECON_WIDGET_ACTIVE ? 1 : 0;
+    draw_glyph(p, glyph, x + width / 2 + nudge,
+        y + BUTTON_HEIGHT / 2 + nudge,
         enabled ? COLOR_TEXT : THEME(MENU_TEXT_DISABLED));
 
-    if (enabled) {
-        recon_hit_add(p, x, y, width, BUTTON_HEIGHT, id);
-    }
     return x + width + 2;
 }
 

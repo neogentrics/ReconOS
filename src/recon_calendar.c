@@ -22,6 +22,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_PANEL THEME(SURFACE_ALT)
@@ -422,37 +423,38 @@ static void calendar_draw(void *user, struct recon_panel *panel,
 
     int bx = x + PADDING;
     int bw = 28;
-    recon_fill_rect(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, COLOR_BG);
-    recon_draw_button_edge(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, false,
-        COLOR_BAR);
-    recon_draw_text(panel, cw->font, bx + 11, y + 6 + ascent + 3, bw, "<",
-        COLOR_TEXT);
-    recon_hit_add(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, HIT_PREVIOUS);
-    recon_hit_tip(panel, "The month before");
+    const struct { const char *label; uint32_t id; const char *tip; } STEP[] = {
+        { "<", HIT_PREVIOUS, "The month before" },
+        { ">", HIT_NEXT,     "The month after" },
+    };
+    for (int i = 0; i < 2; i++) {
+        struct recon_widget_button step = {
+            .x = bx, .y = y + 6, .w = bw, .h = HEADER_HEIGHT - 12,
+            .id = STEP[i].id,
+            .label = STEP[i].label,
+            .font = cw->font,
+            .tip = STEP[i].tip,
+            .behind = COLOR_BAR,
+        };
+        recon_widget_button(panel, &step);
+        bx += bw + 4;
+    }
 
-    bx += bw + 4;
-    recon_fill_rect(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, COLOR_BG);
-    recon_draw_button_edge(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, false,
-        COLOR_BAR);
-    recon_draw_text(panel, cw->font, bx + 11, y + 6 + ascent + 3, bw, ">",
-        COLOR_TEXT);
-    recon_hit_add(panel, bx, y + 6, bw, HEADER_HEIGHT - 12, HIT_NEXT);
-    recon_hit_tip(panel, "The month after");
-
-    bx += bw + 10;
+    bx += 6;
     recon_draw_text(panel, cw->font, bx, y + 6 + ascent + 3, 200, title,
         COLOR_TEXT);
 
     int today_w = recon_text_width(cw->font, "Today") + 20;
-    int today_x = x + w - SIDE_WIDTH - PADDING - today_w;
-    recon_fill_rect(panel, today_x, y + 6, today_w, HEADER_HEIGHT - 12,
-        COLOR_BG);
-    recon_draw_button_edge(panel, today_x, y + 6, today_w, HEADER_HEIGHT - 12,
-        false, COLOR_BAR);
-    recon_draw_text(panel, cw->font, today_x + 10, y + 6 + ascent + 3,
-        today_w, "Today", COLOR_TEXT);
-    recon_hit_add(panel, today_x, y + 6, today_w, HEADER_HEIGHT - 12,
-        HIT_TODAY);
+    struct recon_widget_button today = {
+        .x = x + w - SIDE_WIDTH - PADDING - today_w, .y = y + 6,
+        .w = today_w, .h = HEADER_HEIGHT - 12,
+        .id = HIT_TODAY,
+        .label = "Today",
+        .font = cw->font,
+        .tip = "Back to this month",
+        .behind = COLOR_BAR,
+    };
+    recon_widget_button(panel, &today);
 
     /* --- The grid --- */
 
@@ -605,12 +607,14 @@ static void calendar_draw(void *user, struct recon_panel *panel,
             "Start with a time -- 0930 -- or don't.", COLOR_DIM);
     } else {
         int add_w = recon_text_width(cw->font, "Write Something Down") + 20;
-        recon_fill_rect(panel, sx, sy, add_w, line + 10, COLOR_BG);
-        recon_draw_button_edge(panel, sx, sy, add_w, line + 10, false,
-            COLOR_BAR);
-        recon_draw_text(panel, cw->font, sx + 10, sy + ascent + 5, add_w,
-            "Write Something Down", COLOR_TEXT);
-        recon_hit_add(panel, sx, sy, add_w, line + 10, HIT_ADD);
+        struct recon_widget_button add = {
+            .x = sx, .y = sy, .w = add_w, .h = line + 10,
+            .id = HIT_ADD,
+            .label = "Write Something Down",
+            .font = cw->font,
+            .behind = COLOR_BAR,
+        };
+        recon_widget_button(panel, &add);
     }
 
     /* --- The bar --- */

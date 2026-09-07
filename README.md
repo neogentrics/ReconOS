@@ -132,6 +132,7 @@ about it. Every entry is also a
 - [Controls](#controls) — every keyboard shortcut
 - [Building](#building) · [Running](#running) · [Configuration](#configuration)
 - [Bugs](#bugs) — how faults are recorded
+- [The widget layer](docs/WIDGETS.md) — one place that owns what a control looks like
 - [Where this is going](#where-this-is-going)
 
 ---

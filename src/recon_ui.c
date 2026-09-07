@@ -592,6 +592,18 @@ struct recon_hit_region {
     int x, y, w, h;
     uint32_t id;
 
+    /*
+     * Drawn, and explains itself, and cannot be pressed.
+     *
+     * A disabled control still has a region so that pointing at it can say
+     * why it is unavailable. What it must not do is answer a click, and
+     * before this the only way to arrange that was for every application to
+     * remember its own guard next to its own switch statement -- which is
+     * the arrangement that had "Half" shrinking a picture that was already
+     * at its floor in one place and refusing in another.
+     */
+    bool inert;
+
     /* What this thing is, for the tooltip. Empty for most regions: a control
      * whose label already says it needs nothing said twice. */
     char tip[80];
@@ -606,7 +618,37 @@ struct recon_panel {
 
     struct recon_hit_region hits[MAX_HIT_REGIONS];
     size_t hit_count;
+
+    /*
+     * Which region the pointer is over, and which it went down on.
+     *
+     * Not cleared with the hit list. The regions are rebuilt on every repaint
+     * and these are not: they describe the pointer, which does not stop being
+     * where it is because the window redrew.
+     */
+    uint32_t hot;
+    uint32_t held;
 };
+
+void recon_panel_set_hot(struct recon_panel *panel, uint32_t id) {
+    if (panel != NULL) {
+        panel->hot = id;
+    }
+}
+
+uint32_t recon_panel_hot(const struct recon_panel *panel) {
+    return panel != NULL ? panel->hot : RECON_HIT_NONE;
+}
+
+void recon_panel_set_held(struct recon_panel *panel, uint32_t id) {
+    if (panel != NULL) {
+        panel->held = id;
+    }
+}
+
+uint32_t recon_panel_held(const struct recon_panel *panel) {
+    return panel != NULL ? panel->held : RECON_HIT_NONE;
+}
 
 bool recon_panel_read(struct recon_panel *panel, int x, int y, int w, int h,
         uint32_t *out) {
@@ -1675,6 +1717,14 @@ bool recon_hit_tip(struct recon_panel *panel, const char *text) {
     return true;
 }
 
+bool recon_hit_inert(struct recon_panel *panel) {
+    if (panel == NULL || panel->hit_count == 0) {
+        return false;
+    }
+    panel->hits[panel->hit_count - 1].inert = true;
+    return true;
+}
+
 bool recon_hit_tip_at(struct recon_panel *panel, int x, int y,
         char *out, size_t size) {
     if (out == NULL || size == 0) {
@@ -1754,7 +1804,8 @@ bool recon_hit_region(const struct recon_panel *panel, size_t index,
     return true;
 }
 
-uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
+static uint32_t hit_test(struct recon_panel *panel, int x, int y,
+        bool skip_inert) {
     if (panel == NULL) {
         return RECON_HIT_NONE;
     }
@@ -1762,10 +1813,28 @@ uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
     for (size_t i = panel->hit_count; i > 0; i--) {
         const struct recon_hit_region *r = &panel->hits[i - 1];
         if (x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h) {
+            /*
+             * An inert region stops the search rather than being stepped
+             * over. A disabled button covers whatever is behind it, and a
+             * click that fell through to the panel underneath would be worse
+             * than one that did nothing: the button is *there*, and it being
+             * unavailable is not the same as it being absent.
+             */
+            if (skip_inert && r->inert) {
+                return RECON_HIT_NONE;
+            }
             return r->id;
         }
     }
     return RECON_HIT_NONE;
+}
+
+uint32_t recon_hit_test(struct recon_panel *panel, int x, int y) {
+    return hit_test(panel, x, y, false);
+}
+
+uint32_t recon_hit_test_active(struct recon_panel *panel, int x, int y) {
+    return hit_test(panel, x, y, true);
 }
 
 /* --- Double clicks --- */

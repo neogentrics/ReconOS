@@ -28,6 +28,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_keyring.h"
 #include "recon_users.h"
 #include "recon_wallpaper.h"
@@ -701,29 +702,28 @@ static void card_rect(struct recon_session *session, int *x, int *y,
 static void draw_button(struct recon_session *session, struct recon_panel *p,
         int x, int y, int w, const char *label, uint32_t id, bool primary,
         bool enabled) {
-    int ascent = recon_font_ascent(session->font);
-
-    recon_color fill = primary ? THEME(ACCENT) : THEME(BUTTON);
-    if (!enabled) {
-        fill = THEME(BUTTON);
-    } else if (id == (uint32_t)session->hover) {
-        fill = primary ? THEME(ACCENT) : THEME(BUTTON_ACTIVE);
-    }
-
-    recon_fill_rect(p, x, y, w, BUTTON_HEIGHT, fill);
-    recon_draw_button_edge(p, x, y, w, BUTTON_HEIGHT, false,
-        THEME(DIALOG));
-
-    recon_color ink = !enabled ? THEME(MENU_TEXT_DISABLED)
-        : (primary ? THEME(ACCENT_TEXT) : THEME(MENU_TEXT));
-
-    int text_w = recon_text_width(session->font, label);
-    recon_draw_text(p, session->font, x + (w - text_w) / 2,
-        y + (BUTTON_HEIGHT + ascent) / 2 - 2, w, label, ink);
-
-    if (enabled) {
-        recon_hit_add(p, x, y, w, BUTTON_HEIGHT, id);
-    }
+    /*
+     * The hover shade is no longer chosen here.
+     *
+     * It was BUTTON_ACTIVE -- the colour a *pressed* button is -- which meant
+     * this screen said "pressed" for pointing and had nothing left to say for
+     * pressing. recon_widget derives both from the skin's selection colour,
+     * so the two are different amounts of the same idea, and they are the
+     * same two amounts everywhere else in the system.
+     */
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = w, .h = BUTTON_HEIGHT,
+        .id = id,
+        .label = label,
+        .font = session->font,
+        .behind = THEME(DIALOG),
+        .look = primary ? RECON_WIDGET_ACCENT : RECON_WIDGET_PLAIN,
+        .text = enabled
+            ? (primary ? THEME(ACCENT_TEXT) : THEME(MENU_TEXT))
+            : RECON_WIDGET_SKIN,
+        .disabled = !enabled,
+    };
+    recon_widget_button(p, &button);
 }
 
 /* A labelled text field. Returns the y to carry on from. */
@@ -858,18 +858,18 @@ static void draw_power_glyph(struct recon_panel *p, int cx, int cy,
 
 static void draw_power_button(struct recon_session *session,
         struct recon_panel *p, int x, int y, bool restart, uint32_t id) {
-    bool hovered = (id == (uint32_t)session->hover);
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = POWER_BUTTON, .h = POWER_BUTTON,
+        .id = id,
+        .behind = THEME(DIALOG),
+        .tip = restart ? "Restart" : "Shut down",
+    };
+    enum recon_widget_state state = recon_widget_button(p, &button);
 
-    if (hovered) {
-        recon_fill_rect(p, x, y, POWER_BUTTON, POWER_BUTTON, THEME(BUTTON_ACTIVE));
-    }
-    recon_draw_button_edge(p, x, y, POWER_BUTTON, POWER_BUTTON, false,
-        THEME(DIALOG));
-
-    draw_power_glyph(p, x + POWER_BUTTON / 2, y + POWER_BUTTON / 2, restart,
-        THEME(MENU_TEXT));
-
-    recon_hit_add(p, x, y, POWER_BUTTON, POWER_BUTTON, id);
+    /* The glyph after the button, and sunk with it. */
+    int nudge = state == RECON_WIDGET_ACTIVE ? 1 : 0;
+    draw_power_glyph(p, x + POWER_BUTTON / 2 + nudge,
+        y + POWER_BUTTON / 2 + nudge, restart, THEME(MENU_TEXT));
 }
 
 /*
@@ -2552,8 +2552,18 @@ bool recon_session_handle_motion(struct recon_session *session,
         return false;
     }
 
+    /*
+     * Told twice, on purpose, and the second one is the one that will last.
+     *
+     * `session->hover` is this file's own tracking, still read by the rows
+     * that draw themselves. The panel's is recon_widget's, and it is what
+     * makes a button here highlight by exactly as much as a button anywhere
+     * else. When the last hand-drawn row on this screen goes through the
+     * widget layer, the first of these two goes with it.
+     */
     int hover = (int)hit_at(session, lx, ly);
-    if (hover != session->hover) {
+    bool moved = recon_widget_hover(session->panel, (uint32_t)hover);
+    if (hover != session->hover || moved) {
         session->hover = hover;
         recon_session_refresh(session);
     }
@@ -2562,6 +2572,23 @@ bool recon_session_handle_motion(struct recon_session *session,
 
 bool recon_session_handle_click(struct recon_session *session,
         double lx, double ly, bool pressed) {
+    /*
+     * Recorded before anything is decided, so a button on this screen can
+     * draw itself sunk while it is held -- which is the whole of what "the
+     * button does not move when I click it" was describing.
+     *
+     * Set even when the click turns out to land on nothing: a press on the
+     * card's background still has to clear whatever was held before it.
+     */
+    if (recon_session_active(session)) {
+        bool changed = pressed
+            ? recon_widget_press(session->panel, hit_at(session, lx, ly))
+            : recon_widget_release(session->panel);
+        if (changed) {
+            recon_session_refresh(session);
+        }
+    }
+
     if (!recon_session_active(session)) {
         return false;
     }

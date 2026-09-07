@@ -194,6 +194,8 @@ add_executable(ReconOS
     src/recon_props.c
     src/recon_theme.c
     src/recon_titlebar.c
+    src/recon_widget.c
+    src/recon_widget_state.c
     src/recon_procinfo.c
     src/recon_shell.c
     src/recon_taskmgr.c
@@ -651,6 +653,32 @@ add_executable(recon_firewall_tests
 target_include_directories(recon_firewall_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# What state a control is in, and what colour that makes it.
+#
+# The widget layer is the answer to "why does nothing in this system react to
+# the pointer", and most of that answer is pixels. This is the part that is not:
+# four rules about three numbers, one of which -- held, but the pointer slid
+# off -- looks correct in the code and is the difference between a close button
+# somebody can change their mind about and one they cannot.
+add_executable(recon_widget_tests
+    tests/test_widget.c
+    src/recon_widget_state.c
+    src/recon_theme.c
+    src/recon_titlebar.c
+    src/recon_color.c
+    # A skin is read through the registry and installing one asks who is
+    # signed in, which is the same tail every other theme-touching suite
+    # carries. None of it needs a compositor, which is the property these
+    # targets exist to protect.
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_registry.c
+    src/recon_error.c
+    src/recon_fs.c)
+
+target_include_directories(recon_widget_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 # Where the things on a title bar go -- the other file coverage found at zero.
 # Small, and it holds the rule this project states most loudly: close is always
 # there and always outermost. That had been proved by photographing one skin;
@@ -756,6 +784,7 @@ add_test(NAME keyring COMMAND recon_keyring_tests)
 add_test(NAME malformed-input COMMAND recon_malformed_tests)
 add_test(NAME firewall COMMAND recon_firewall_tests)
 add_test(NAME title-bars COMMAND recon_titlebar_tests)
+add_test(NAME widgets COMMAND recon_widget_tests)
 add_test(NAME error-catalogue COMMAND recon_error_tests)
 
 # --- A Wayland client, for testing what ReconOS does with somebody else's

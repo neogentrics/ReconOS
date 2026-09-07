@@ -21,6 +21,7 @@
 #include "recon_theme.h"
 #include "recon_titlebar.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 /* --- Frame metrics --- */
 
@@ -184,11 +185,12 @@ static void restore_geometry(struct recon_appwin *win);
  */
 static void draw_buttons(struct recon_appwin *win,
         const struct recon_titlebar_layout *bar) {
-    struct recon_panel *p = win->panel;
-
     static const uint32_t IDS[RECON_TITLEBAR_BUTTON_COUNT] = {
         HIT_CLOSE, HIT_MAXIMIZE, HIT_MINIMIZE,
     };
+
+    recon_color behind = win->focused
+        ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE);
 
     for (int i = 0; i < RECON_TITLEBAR_BUTTON_COUNT; i++) {
         /* A width of zero is how the layout says the skin left this one out.
@@ -198,97 +200,29 @@ static void draw_buttons(struct recon_appwin *win,
             continue;
         }
 
-        int bx = bar->button[i].x;
-        int by = bar->button[i].y;
-        uint32_t id = IDS[i];
+        enum recon_widget_caption glyph;
+        const char *tip;
 
-        recon_fill_rect(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, COLOR_BUTTON);
-        recon_draw_bevel(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, false);
-        recon_hit_add(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, id);
-
-        /* Three glyphs and no words. The middle one changes meaning with the
-         * window's state, so it says which meaning it has now. */
-        switch (id) {
+        /* The middle one changes meaning with the window's state, so it says
+         * which meaning it has now -- in its picture and in its tooltip. */
+        switch (IDS[i]) {
         case HIT_CLOSE:
-            recon_hit_tip(p, "Close");
+            glyph = RECON_WIDGET_CAPTION_CLOSE;
+            tip = "Close";
             break;
         case HIT_MAXIMIZE:
-            recon_hit_tip(p, win->maximized ? "Restore" : "Maximize");
-            break;
-        case HIT_MINIMIZE:
-            recon_hit_tip(p, "Minimize");
-            break;
-        default:
-            break;
-        }
-
-        /*
-         * A picture, where the skin supplied one.
-         *
-         * There is none by default and none is written, so almost every system
-         * draws the rectangles below -- which is right: these have to be there
-         * before a font has loaded and before any file has been read. A skin
-         * that wants a different shape can put a file at the name and it is
-         * used, and the file has to exist before it is used, so a skin
-         * supplying one of the three gets the drawn version of the other two.
-         *
-         * Inset by two, so a square picture sits inside the button's bevel
-         * rather than on it.
-         */
-        static const char *const GLYPHS[] = {
-            [HIT_CLOSE] = RECON_ICON_WINDOW_CLOSE,
-            [HIT_MAXIMIZE] = RECON_ICON_WINDOW_MAXIMIZE,
-            [HIT_MINIMIZE] = RECON_ICON_WINDOW_MINIMIZE,
-        };
-        const char *picture = (id == HIT_MAXIMIZE && win->maximized)
-            ? RECON_ICON_WINDOW_RESTORE : GLYPHS[id];
-        if (recon_icon_draw(p, picture, bx + 2, by + 2, BUTTON_SIZE - 4)) {
-            /* Drawn, so the shapes below are not. The corners still round
-             * afterwards, which is why this does not `continue`. */
-            goto rounded;
-        }
-
-        switch (id) {
-        case HIT_MINIMIZE:
-            /* A bar along the bottom. */
-            recon_fill_rect(p, bx + 4, by + BUTTON_SIZE - 6, 8, 2, COLOR_GLYPH);
-            break;
-        case HIT_MAXIMIZE:
-            /* An outlined box, doubled when already maximized to suggest
-             * restoring to a smaller size. */
-            if (win->maximized) {
-                recon_stroke_rect(p, bx + 3, by + 5, 8, 7, COLOR_GLYPH);
-                recon_stroke_rect(p, bx + 5, by + 3, 8, 7, COLOR_GLYPH);
-            } else {
-                recon_stroke_rect(p, bx + 3, by + 3, 10, 10, COLOR_GLYPH);
-                recon_fill_rect(p, bx + 3, by + 3, 10, 2, COLOR_GLYPH);
-            }
-            break;
-        case HIT_CLOSE:
-            /* A cross, drawn as two diagonals a pixel at a time. */
-            for (int k = 0; k < 8; k++) {
-                recon_fill_rect(p, bx + 4 + k, by + 4 + k, 2, 1, COLOR_GLYPH);
-                recon_fill_rect(p, bx + 4 + k, by + 11 - k, 2, 1, COLOR_GLYPH);
-            }
+            glyph = win->maximized ? RECON_WIDGET_CAPTION_RESTORE
+                                   : RECON_WIDGET_CAPTION_MAXIMIZE;
+            tip = win->maximized ? "Restore" : "Maximize";
             break;
         default:
+            glyph = RECON_WIDGET_CAPTION_MINIMIZE;
+            tip = "Minimize";
             break;
         }
 
-    rounded:
-        /*
-         * The corners last, so the glyph and the bevel are rounded off with
-         * the button rather than sticking out of it.
-         *
-         * Filled back to the title bar's colour, not cleared: this is a
-         * button drawn on top of a bar that is already painted, and a hole
-         * here would show the wallpaper through the middle of the frame.
-         */
-        int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
-        if (radius > 0) {
-            recon_round_rect(p, bx, by, BUTTON_SIZE, BUTTON_SIZE, radius,
-                win->focused ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE));
-        }
+        recon_widget_caption_button(win->panel, bar->button[i].x,
+            bar->button[i].y, BUTTON_SIZE, IDS[i], glyph, behind, tip);
     }
 }
 
@@ -1393,6 +1327,37 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
                 win->impl->click(win->user, 0, px - BORDER, py - TITLE_HEIGHT, false);
             }
         }
+
+        /*
+         * A caption button fires here, and only if the pointer is still on
+         * the one it went down on.
+         *
+         * `held` is read before it is cleared, and cleared before the action
+         * runs: closing a window frees the panel the held id lives on, so
+         * anything that touched it afterwards would be reading freed memory.
+         */
+        uint32_t held = recon_widget_held_id(win->panel);
+        recon_widget_release(win->panel);
+
+        if (held == HIT_CLOSE || held == HIT_MINIMIZE
+                || held == HIT_MAXIMIZE) {
+            int px, py;
+            bool still_on = to_local(win, lx, ly, &px, &py)
+                && recon_hit_test_active(win->panel, px, py) == held;
+
+            if (still_on) {
+                switch (held) {
+                case HIT_CLOSE:    recon_appwin_hide(win); break;
+                case HIT_MINIMIZE: recon_appwin_minimize(win); break;
+                default:
+                    recon_appwin_set_maximized(win, !win->maximized);
+                    break;
+                }
+                return true;
+            }
+        }
+        recon_appwin_refresh(win);
+
         return was_dragging || recon_appwin_contains_point(win, lx, ly);
     }
 
@@ -1419,17 +1384,33 @@ bool recon_appwin_handle_click(struct recon_appwin *win, double lx, double ly,
         }
     }
 
-    uint32_t hit = recon_hit_test(win->panel, px, py);
+    uint32_t hit = recon_hit_test_active(win->panel, px, py);
+
+    /*
+     * Every press is recorded, so whatever is under it can draw itself sunk.
+     *
+     * Set before the switch below rather than inside it, because a button in
+     * an application shows a press for the same reason a close button does,
+     * and a rule that held for the frame's own three controls and not for the
+     * other two hundred would be exactly the inconsistency recon_widget
+     * exists to end.
+     */
+    recon_widget_press(win->panel, hit);
 
     switch (hit) {
+    /*
+     * The three act when the button comes back up, not when it goes down.
+     *
+     * Acting on the press is why they never appeared to do anything: the
+     * window was closed or minimized before the frame that would have shown
+     * the button sunk was ever drawn. Waiting for the release also buys the
+     * behaviour every desktop has and this one did not -- press, think
+     * better of it, slide off the button, let go, and nothing happens.
+     */
     case HIT_CLOSE:
-        recon_appwin_hide(win);
-        return true;
     case HIT_MINIMIZE:
-        recon_appwin_minimize(win);
-        return true;
     case HIT_MAXIMIZE:
-        recon_appwin_set_maximized(win, !win->maximized);
+        recon_appwin_refresh(win);
         return true;
     case HIT_TITLEBAR:
         /* A maximized window has nowhere to be dragged to. */
@@ -1501,6 +1482,26 @@ void recon_appwin_handle_motion(struct recon_appwin *win, double lx, double ly) 
             ? recon_hit_test(win->panel, px, py) : RECON_HIT_NONE;
 
         win->impl->motion(win->user, hit, px - BORDER, py - TITLE_HEIGHT);
+
+        /*
+         * And tell the frame itself, which is what makes anything drawn
+         * through recon_widget highlight under the pointer.
+         *
+         * Repainting only when the answer changes is not an optimisation --
+         * motion arrives at the rate the mouse reports, and repainting every
+         * window on every one of those would be a window that redraws several
+         * hundred times a second to show the same picture.
+         */
+        /*
+         * Hover asks what would answer a click, not what is merely there. A
+         * disabled control is under the pointer and is not hot; lighting it
+         * up would be the system offering something it will then refuse.
+         */
+        uint32_t live = recon_appwin_contains_point(win, lx, ly)
+            ? recon_hit_test_active(win->panel, px, py) : RECON_HIT_NONE;
+        if (recon_widget_hover(win->panel, live)) {
+            recon_appwin_refresh(win);
+        }
     }
 
     if (!win->dragging) {

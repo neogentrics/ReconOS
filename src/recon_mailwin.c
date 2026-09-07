@@ -27,6 +27,7 @@
 #include "recon_server.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_PANEL THEME(SURFACE_ALT)
@@ -749,19 +750,17 @@ static void toggle_protocol(struct recon_mailwin *m) {
 static int draw_button(struct recon_mailwin *m, struct recon_panel *p, int x,
         int y, const char *label, uint32_t hit, bool enabled) {
     int width = recon_text_width(m->font, label) + 28;
-    int ascent = recon_font_ascent(m->font);
 
-    recon_fill_rect(p, x, y, width, BUTTON_HEIGHT, COLOR_BAR);
-    recon_draw_button_edge(p, x, y, width, BUTTON_HEIGHT, false, COLOR_BG);
-
-    int tw = recon_text_width(m->font, label);
-    recon_draw_text(p, m->font, x + (width - tw) / 2,
-        y + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8, label,
-        enabled ? COLOR_TEXT : COLOR_DIM);
-
-    if (enabled) {
-        recon_hit_add(p, x, y, width, BUTTON_HEIGHT, hit);
-    }
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = width, .h = BUTTON_HEIGHT,
+        .id = hit,
+        .label = label,
+        .font = m->font,
+        .behind = COLOR_BG,
+        .text = enabled ? COLOR_TEXT : COLOR_DIM,
+        .disabled = !enabled,
+    };
+    recon_widget_button(p, &button);
     return x + width + 6;
 }
 
@@ -996,13 +995,20 @@ static void draw_compose(struct recon_mailwin *m, struct recon_panel *p,
         recon_draw_text(p, m->font, x + 4, y + ascent, remove_w > 0
             ? remove_x - x - 12 : w, shown, COLOR_TEXT);
 
-        recon_fill_rect(p, remove_x, y - 1, remove_w, line + 2, COLOR_PANEL);
-        recon_draw_button_edge(p, remove_x, y - 1, remove_w, line + 2, false,
-            COLOR_BG);
-        recon_draw_text(p, m->font, remove_x + 8, y + ascent, remove_w - 8,
-            "Remove", COLOR_TEXT);
-        recon_hit_add(p, remove_x, y - 1, remove_w, line + 2,
-            HIT_ATTACHED_BASE + (uint32_t)i);
+        /*
+          * Removing an attachment is a small loss and still a loss, so it
+          * takes the danger look: warning-coloured under the pointer, the
+          * same signal every other button that throws something away gives.
+          */
+        struct recon_widget_button remove = {
+            .x = remove_x, .y = y - 1, .w = remove_w, .h = line + 2,
+            .id = HIT_ATTACHED_BASE + (uint32_t)i,
+            .label = "Remove",
+            .font = m->font,
+            .behind = COLOR_BG,
+            .look = RECON_WIDGET_DANGER,
+        };
+        recon_widget_button(p, &remove);
 
         y += line + 4;
     }

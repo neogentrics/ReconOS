@@ -55,6 +55,7 @@
 #include "recon_theme.h"
 #include "recon_themewl.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 /* --- Look --- */
 
@@ -1410,40 +1411,47 @@ static void draw_dialog(struct recon_shell *shell) {
         (shell->dialog_button_count - 1) * DIALOG_BUTTON_GAP;
 
     for (int i = 0; i < shell->dialog_button_count; i++) {
-        bool hovered = (i == shell->dialog_hover);
+        /*
+         * The hover shade comes from recon_widget now, and `hovered` only
+         * decides the label below.
+         *
+         * It used to be COLOR_BUTTON_ACTIVE -- the colour a pressed button
+         * is -- which left a dialog saying "pressed" for pointing and with
+         * nothing to say for pressing. Somebody answering a question that
+         * cannot be undone is the last person who should be guessing whether
+         * their click landed.
+         */
+        struct recon_widget_button choice = {
+            .x = bx, .y = by, .w = DIALOG_BUTTON_WIDTH,
+            .h = DIALOG_BUTTON_HEIGHT,
+            .id = HIT_DIALOG_BASE + (uint32_t)i,
+            .label = shell->dialog_buttons[i],
+            .font = shell->font,
+            .behind = COLOR_BAR,
+        };
+        enum recon_widget_state state = recon_widget_button(p, &choice);
 
-        recon_color face = hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON;
-
-        recon_fill_rect(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
-            face);
-        recon_draw_button_edge(p, bx, by, DIALOG_BUTTON_WIDTH,
-            DIALOG_BUTTON_HEIGHT, false, COLOR_BAR);
-
-        /* The default is outlined, so Enter's meaning is visible. */
+        /*
+         * The default is outlined, so Enter's meaning is visible.
+         *
+         * Drawn over the finished button rather than under it, and rounded
+         * back to whatever colour that button came out -- which now depends
+         * on the pointer, so the ring has to ask rather than assume. Left
+         * square inside a rounded button it read as a second, sharper button
+         * drawn on top of the first, which is the wrong thing to say about
+         * the answer Enter gives.
+         */
         if (i == shell->dialog_default) {
             recon_stroke_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
                 DIALOG_BUTTON_HEIGHT - 4, COLOR_ACCENT);
 
-            /*
-             * The ring follows the button. Left square inside a rounded
-             * button it read as a second, sharper button drawn on top of the
-             * first -- which is what it looked like, and the wrong thing to
-             * say about the answer Enter gives.
-             */
             int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER) - 2;
             if (radius > 0) {
                 recon_round_rect(p, bx + 2, by + 2, DIALOG_BUTTON_WIDTH - 4,
-                    DIALOG_BUTTON_HEIGHT - 4, radius, face);
+                    DIALOG_BUTTON_HEIGHT - 4, radius,
+                    recon_widget_surface(COLOR_BUTTON, state));
             }
         }
-
-        int text_w = recon_text_width(shell->font, shell->dialog_buttons[i]);
-        recon_draw_text(p, shell->font, bx + (DIALOG_BUTTON_WIDTH - text_w) / 2,
-            by + (DIALOG_BUTTON_HEIGHT + ascent) / 2 - 2, DIALOG_BUTTON_WIDTH,
-            shell->dialog_buttons[i], COLOR_MENU_TEXT);
-
-        recon_hit_add(p, bx, by, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT,
-            HIT_DIALOG_BASE + i);
 
         bx += DIALOG_BUTTON_WIDTH + DIALOG_BUTTON_GAP;
     }
@@ -2367,9 +2375,11 @@ static void begin_slide(struct recon_shell *shell) {
  * it was not, it was dimmed for every unfocused one, which is a different
  * statement that happened to describe the same pixels most of the time.
  */
+static void draw_taskbar(struct recon_shell *shell);
+
 static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
-        int x, int w, int baseline, const char *title, const char *icon,
-        bool active, bool minimized) {
+        int x, int w, int baseline, uint32_t id, const char *title,
+        const char *icon, bool active, bool minimized) {
     /*
      * The fill still says focused and nothing else.
      *
@@ -2390,7 +2400,18 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
     enum recon_theme_role fill = active
         ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON;
 
-    recon_fill_role(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, fill);
+    /*
+     * And it lifts under the pointer, which it did not before.
+     *
+     * Through recon_widget_surface rather than a shade chosen here, so a
+     * taskbar button highlights by exactly as much as a button inside a
+     * window does. Two hover treatments that were meant to match and were
+     * arrived at separately are two hover treatments that stop matching the
+     * first time either is adjusted.
+     */
+    recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
+        recon_widget_surface(recon_theme_color(fill),
+            recon_widget_state_of(bar, id, false)));
 
     /* The icon comes first, so a bar of buttons can be read at a glance
      * without depending on the titles fitting. */
@@ -2556,8 +2577,12 @@ static void draw_pager(struct recon_shell *shell, struct recon_panel *bar,
         int bx = x + i * (DESKTOP_BUTTON + 2);
         bool current = (i == shell->current_desktop);
 
-        recon_fill_role(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON, BUTTON_HEIGHT,
-            current ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
+        recon_fill_rect(bar, bx, TASKBAR_PADDING, DESKTOP_BUTTON,
+            BUTTON_HEIGHT,
+            recon_widget_surface(recon_theme_color(current
+                    ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON),
+                recon_widget_state_of(bar, HIT_DESKTOP_BASE + (uint32_t)i,
+                    false)));
 
         /*
          * The button edge rather than a bare bevel, so these round with the
@@ -2627,18 +2652,29 @@ static void draw_taskbar(struct recon_shell *shell) {
 
     recon_hit_clear(bar);
 
-    /* Apps button. */
-    recon_fill_role(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-        APPS_BUTTON_WIDTH, BUTTON_HEIGHT,
-        shell->menu_open ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON);
-    recon_draw_bevel(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open);
+    /*
+     * Apps button.
+     *
+     * Registered before it is drawn, which is the opposite of the order
+     * everything else here uses and is deliberate: the fill has to know
+     * whether the pointer is on it, and it cannot know that from a region
+     * added afterwards. The tooltip goes with the region, so it moves too.
+     *
+     * The help is in the list because the box searches it now. A tip that
+     * names three of the four things a box finds is a tip that teaches
+     * somebody not to type the fourth.
+     */
+    recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
+    recon_hit_tip(bar, "Programs, places, settings and help");
 
-    int apps_radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
-    if (apps_radius > 0) {
-        recon_round_rect(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-            APPS_BUTTON_WIDTH, BUTTON_HEIGHT, apps_radius, THEME(BAR));
-    }
+    recon_fill_rect(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+        APPS_BUTTON_WIDTH, BUTTON_HEIGHT,
+        recon_widget_surface(recon_theme_color(shell->menu_open
+                ? RECON_THEME_BUTTON_ACTIVE : RECON_THEME_BUTTON),
+            recon_widget_state_of(bar, HIT_APPS_BUTTON, false)));
+    recon_draw_button_edge(bar, TASKBAR_PADDING, TASKBAR_PADDING,
+        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, shell->menu_open, THEME(BAR));
 
     /* A mark so the button reads as the system menu rather than a window. */
     int mark_size = BUTTON_HEIGHT - 10;
@@ -2657,12 +2693,6 @@ static void draw_taskbar(struct recon_shell *shell) {
          * button in the high-contrast skin.
          */
         shell->menu_open ? COLOR_TEXT : COLOR_BUTTON_TEXT);
-    recon_hit_add(bar, TASKBAR_PADDING, TASKBAR_PADDING,
-        APPS_BUTTON_WIDTH, BUTTON_HEIGHT, HIT_APPS_BUTTON);
-    /* The help is in the list because the box searches it now. A tip that
-     * names three of the four things a box finds is a tip that teaches
-     * somebody not to type the fourth. */
-    recon_hit_tip(bar, "Programs, places, settings and help");
 
     /* One button per window, client or built-in, sharing the remaining
      * width. Both kinds appear here, because from the user's side there is no
@@ -2746,6 +2776,7 @@ static void draw_taskbar(struct recon_shell *shell) {
 
         bool active = recon_appwin_is_focused(win);
         draw_task_button(shell, bar, x, button_width, baseline,
+            HIT_TASK_BASE + shell->button_count,
             recon_appwin_title(win), recon_appwin_icon(win),
             active, recon_appwin_is_minimized(win));
 
@@ -2784,6 +2815,7 @@ static void draw_taskbar(struct recon_shell *shell) {
          * reading, which is the thing an icon exists to save.
          */
         draw_task_button(shell, bar, x, button_width, baseline,
+            HIT_TASK_BASE + shell->button_count,
             recon_toplevel_title(toplevel),
             recon_appicon_for(recon_toplevel_app_id(toplevel)),
             recon_toplevel_is_focused(toplevel),
@@ -3245,17 +3277,37 @@ static void draw_menu(struct recon_shell *shell) {
         int bx = start_x + i * (size + gap);
         bool hovered = (shell->menu_hover == HIT_POWER_BASE + i);
 
-        if (hovered) {
-            recon_fill_role(menu, bx, by, size, size,
-                RECON_THEME_MENU_HILITE);
-        }
+        /*
+         * These are buttons, and until now they were five glyphs with a
+         * square of highlight behind them.
+         *
+         * The square was the giveaway: everything else on the desktop had
+         * learnt to round with the skin, and the row that restarts and shuts
+         * down the machine -- which is the row somebody looks at hardest
+         * before pressing -- was still drawing 1995's rectangle. Through
+         * recon_widget they round, they bevel, and they sink when held, the
+         * same as the Apps button four hundred pixels to the left.
+         *
+         * `fill` is named rather than taken from the skin's button role: this
+         * strip sits on the menu's own surface, not on a toolbar, and a
+         * button-coloured square here would read as five holes in the menu.
+         * The highlight colour stays the menu's, so the row still belongs to
+         * the menu it is in.
+         */
+        struct recon_widget_button power = {
+            .x = bx, .y = by, .w = size, .h = size,
+            .id = HIT_POWER_BASE + i,
+            .behind = COLOR_MENU,
+            .fill = hovered ? COLOR_MENU_HILITE : COLOR_MENU,
+            .tip = MENU_POWER[i].label,
+        };
+        enum recon_widget_state pstate = recon_widget_button(menu, &power);
 
+        int nudge = pstate == RECON_WIDGET_ACTIVE ? 1 : 0;
         draw_power_glyph(menu, MENU_POWER[i].action,
-            bx + size / 2, by + size / 2,
+            bx + size / 2 + nudge, by + size / 2 + nudge,
             hovered ? COLOR_MENU_HILITE_TEXT : COLOR_MENU_TEXT,
             hovered ? COLOR_MENU_HILITE : COLOR_MENU);
-
-        recon_hit_add(menu, bx, by, size, size, HIT_POWER_BASE + i);
 
         /*
          * The name of whatever the pointer is over, just above the footer
@@ -3270,6 +3322,22 @@ static void draw_menu(struct recon_shell *shell) {
                 MENU_LEFT_WIDTH, MENU_POWER[i].label, COLOR_MENU_TEXT);
         }
     }
+
+    /*
+     * The top corners, last, so nothing drawn afterwards puts the square
+     * back.
+     *
+     * Only the top two. The menu stands on the taskbar, and rounding the
+     * bottom corners would open a notch of wallpaper between the menu and the
+     * bar it grows out of -- which reads as a gap rather than as a shape, the
+     * same reason a window rounds only its top.
+     *
+     * Cleared rather than filled: what is behind a menu is the desktop, so
+     * there is a right answer for what shows through, and it is whatever is
+     * there.
+     */
+    recon_round_top_corners(menu, recon_theme_metric(RECON_METRIC_CORNER),
+        THEME(MENU_BORDER));
 
     finish_reading_chrome(menu);
 }
@@ -3435,14 +3503,16 @@ static void draw_security(struct recon_shell *shell) {
         int bw = width - SEC_PADDING * 2;
         bool hovered = (i == shell->security_hover);
 
-        recon_fill_rect(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT,
-            hovered ? COLOR_BUTTON_ACTIVE : COLOR_BUTTON);
-        recon_draw_button_edge(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT,
-            false, COLOR_MENU);
-        recon_draw_text(p, shell->font, SEC_PADDING + 12,
-            y + (SEC_BUTTON_HEIGHT + ascent) / 2 - 2, bw - 24,
-            SEC_ITEMS[i], COLOR_MENU_TEXT);
-        recon_hit_add(p, SEC_PADDING, y, bw, SEC_BUTTON_HEIGHT, HIT_SEC_BASE + i);
+        (void)hovered;
+        struct recon_widget_button action = {
+            .x = SEC_PADDING, .y = y, .w = bw, .h = SEC_BUTTON_HEIGHT,
+            .id = HIT_SEC_BASE + i,
+            .label = SEC_ITEMS[i],
+            .font = shell->font,
+            .behind = COLOR_MENU,
+            .text = COLOR_MENU_TEXT,
+        };
+        recon_widget_button(p, &action);
         y += SEC_BUTTON_HEIGHT + SEC_PADDING;
     }
 
@@ -6010,7 +6080,11 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
                 hover = (int)(hit - HIT_DIALOG_BASE);
             }
         }
-        if (hover != shell->dialog_hover) {
+        uint32_t raw = point_in_panel(shell->dialog, lx, ly, &px, &py)
+            ? recon_hit_test_active(shell->dialog, px, py) : RECON_HIT_NONE;
+        bool moved = recon_widget_hover(shell->dialog, raw);
+
+        if (hover != shell->dialog_hover || moved) {
             shell->dialog_hover = hover;
             draw_dialog(shell);
             recon_damage_all(shell->server);
@@ -6061,6 +6135,29 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
         }
     }
 
+    /*
+     * The taskbar, which had none of this.
+     *
+     * Everything above tracks hover for a menu, by hand, with its own integer
+     * and its own redraw -- four near-copies of the same idea, which is what
+     * comes of every panel answering the question itself. The bar was the one
+     * that never got a copy written for it, so the Apps button and every
+     * window button on it sat inert under the pointer.
+     *
+     * This one goes through recon_widget instead, so what it highlights and
+     * how are the same answers the rest of the system gives.
+     */
+    if (shell->taskbar != NULL) {
+        uint32_t over = RECON_HIT_NONE;
+        if (point_in_panel(shell->taskbar, lx, ly, &px, &py)) {
+            over = recon_hit_test_active(shell->taskbar, px, py);
+        }
+        if (recon_widget_hover(shell->taskbar, over)) {
+            draw_taskbar(shell);
+            recon_damage_all(shell->server);
+        }
+    }
+
     if (context != shell->context_hover) {
         shell->context_hover = context;
         if (shell->context_open) {
@@ -6075,6 +6172,15 @@ static void update_hover(struct recon_shell *shell, double lx, double ly) {
             recon_damage_all(shell->server);
         }
     }
+    if (shell->security != NULL) {
+        uint32_t raw = point_in_panel(shell->security, lx, ly, &px, &py)
+            ? recon_hit_test_active(shell->security, px, py) : RECON_HIT_NONE;
+        if (recon_widget_hover(shell->security, raw) && shell->security_open) {
+            draw_security(shell);
+            recon_damage_all(shell->server);
+        }
+    }
+
     if (security != shell->security_hover) {
         shell->security_hover = security;
         if (shell->security_open) {
@@ -6254,6 +6360,51 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
     }
 
     int px, py;
+
+    /*
+     * Record the press on whichever of the shell's own panels it landed on.
+     *
+     * One place rather than four, and before any of the branches below decide
+     * what the click *means*: what a button looks like while it is held is
+     * not a different question per panel, and answering it separately inside
+     * each branch is how the taskbar ended up with three states and the
+     * dialog with one.
+     *
+     * A release clears whatever was held, wherever it was held, which is what
+     * makes letting go somewhere else put the button back rather than leaving
+     * it sunk until the next repaint happened to notice.
+     */
+    {
+        struct recon_panel *const PANELS[] = {
+            shell->taskbar, shell->dialog, shell->security, shell->menu,
+            shell->context, shell->programs,
+        };
+        bool changed = false;
+        for (size_t i = 0; i < sizeof(PANELS) / sizeof(PANELS[0]); i++) {
+            if (PANELS[i] == NULL) {
+                continue;
+            }
+            uint32_t id = RECON_HIT_NONE;
+            if (pressed && point_in_panel(PANELS[i], lx, ly, &px, &py)) {
+                id = recon_hit_test_active(PANELS[i], px, py);
+            }
+            changed |= pressed ? recon_widget_press(PANELS[i], id)
+                               : recon_widget_release(PANELS[i]);
+        }
+        if (changed) {
+            draw_taskbar(shell);
+            if (shell->dialog_open) {
+                draw_dialog(shell);
+            }
+            if (shell->security_open) {
+                draw_security(shell);
+            }
+            if (shell->menu_open) {
+                draw_menu(shell);
+            }
+            recon_damage_all(shell->server);
+        }
+    }
 
     /*
      * A question takes every click until it is answered, including the ones

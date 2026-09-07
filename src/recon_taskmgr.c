@@ -32,6 +32,7 @@
 #include "recon_taskmgr.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 #include "recon_users.h"
 
 /* --- Layout, relative to the content area --- */
@@ -448,25 +449,26 @@ static void draw_menubar(struct recon_taskmgr *tm, struct recon_panel *p,
 
 static void draw_tabs(struct recon_taskmgr *tm, struct recon_panel *p,
         int x, int y, int w) {
-    int ascent = recon_font_ascent(tm->font);
-
     recon_fill_rect(p, x, y, w, TAB_HEIGHT, COLOR_FRAME);
 
     for (int i = 0; i < TAB_COUNT; i++) {
         int tx = x + PADDING + i * (TAB_WIDTH + 2);
         bool active = (tm->tab == (enum tab)i);
 
-        /* The active tab is drawn a shade lighter and without a bottom edge,
+        /* The chosen tab is drawn a shade lighter, in the list's own colour,
          * so it reads as continuous with the list below it. */
-        recon_fill_rect(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2,
-            active ? COLOR_LIST_BG : COLOR_BUTTON);
-        recon_draw_bevel(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2, false);
-
-        int label_w = recon_text_width(tm->font, TAB_LABELS[i]);
-        recon_draw_text(p, tm->font, tx + (TAB_WIDTH - label_w) / 2,
-            y + 2 + (TAB_HEIGHT - 2 + ascent) / 2 - 2, TAB_WIDTH - 8,
-            TAB_LABELS[i], COLOR_TEXT);
-        recon_hit_add(p, tx, y + 2, TAB_WIDTH, TAB_HEIGHT - 2, HIT_TAB_BASE + i);
+        struct recon_widget_button tab = {
+            .x = tx, .y = y + 2, .w = TAB_WIDTH, .h = TAB_HEIGHT - 2,
+            .id = HIT_TAB_BASE + i,
+            .label = TAB_LABELS[i],
+            .font = tm->font,
+            .behind = COLOR_FRAME,
+            .fill = active ? COLOR_LIST_BG : COLOR_BUTTON,
+            .text = COLOR_TEXT,
+            .look = RECON_WIDGET_TAB,
+            .checked = active,
+        };
+        recon_widget_button(p, &tab);
     }
 }
 
@@ -914,15 +916,26 @@ static void draw_footer(struct recon_taskmgr *tm, struct recon_panel *p,
         }
         bx -= width;
 
-        recon_fill_rect(p, bx, by, width, BUTTON_HEIGHT, COLOR_BUTTON);
-        recon_draw_button_edge(p, bx, by, width, BUTTON_HEIGHT, false,
-            COLOR_FRAME);
-
-        int label_w = recon_text_width(tm->font, buttons[i].label);
-        recon_draw_text(p, tm->font, bx + (width - label_w) / 2,
-            by + (BUTTON_HEIGHT + ascent) / 2 - 2, width - 8,
-            buttons[i].label, COLOR_BUTTON_TEXT);
-        recon_hit_add(p, bx, by, width, BUTTON_HEIGHT, buttons[i].id);
+        /*
+         * End Task is a danger button, and now says so.
+         *
+         * It sits beside Run New Task, the same size and the same grey, and
+         * the only thing separating "start something" from "kill something"
+         * was reading two words. Under the pointer it is the skin's warning
+         * colour, which is the same signal the close button on every window
+         * gives -- learnt once, and true everywhere.
+         */
+        struct recon_widget_button button = {
+            .x = bx, .y = by, .w = width, .h = BUTTON_HEIGHT,
+            .id = buttons[i].id,
+            .label = buttons[i].label,
+            .font = tm->font,
+            .behind = COLOR_FRAME,
+            .look = (buttons[i].id == HIT_END_TASK
+                    || buttons[i].id == HIT_SVC_STOP)
+                ? RECON_WIDGET_DANGER : RECON_WIDGET_PLAIN,
+        };
+        recon_widget_button(p, &button);
 
         bx -= 6;
     }

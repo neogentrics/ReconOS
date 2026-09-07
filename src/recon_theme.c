@@ -622,9 +622,32 @@ static const struct {
 } METRICS[] = {
     { "metric.title-height", 24, 18, 48 },
     { "metric.border",        3,  1,  12 },
-    { "metric.corner",        0,  0,  16 },
+    /*
+     * Rounded by default, both of them, and this used to be zero.
+     *
+     * Zero was chosen when Beacon and Glass were the only skins that rounded
+     * anything, so "square unless a skin asks" was the same as "square unless
+     * you are looking at one of the two skins built to round". It stopped
+     * being the same thing the moment every button in the system started
+     * asking the metric: nine of the eleven built-in skins were left drawing
+     * square buttons not because anything had decided they should, but
+     * because nobody had written a number for them.
+     *
+     * A default is a decision. This is the decision.
+     *
+     * The three skins that should stay square now say so out loud -- Classic
+     * because 95 was square, Reading and Contrast because a soft edge drawn
+     * in a colour between the two the skin promises is the opposite of what
+     * somebody who turned those on asked for.
+     *
+     * The ceiling on the button radius went from 8 to 12 at the same time.
+     * Eight was the most anything needed while buttons were 16 pixels; a
+     * toolbar button is taller than that, and the ceiling was stopping a
+     * skin asking for a pill.
+     */
+    { "metric.corner",        5,  0,  16 },
     { "metric.button-size",  16, 10,  32 },
-    { "metric.button-corner", 0,  0,   8 },
+    { "metric.button-corner", 4,  0,  12 },
     { "metric.chrome-opacity", 255, 140, 255 },
     { "metric.icon-gloss",       0,   0,   1 },
     { "metric.tintable",         0,   0,   1 },
@@ -1155,6 +1178,10 @@ static const struct metric_spec SHAPE_GLASS[] = {
 static const struct metric_spec SHAPE_READING[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_BUTTON_SIZE,  20 },
+    /* Square, said rather than inherited. The default rounds now, and a skin
+     * that wants the old answer has to ask for it. */
+    { RECON_METRIC_CORNER,        0 },
+    { RECON_METRIC_BUTTON_CORNER, 0 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -1167,16 +1194,35 @@ static const struct metric_spec SHAPE_CONTRAST[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_BORDER,        4 },
     { RECON_METRIC_BUTTON_SIZE,  20 },
+    { RECON_METRIC_CORNER,        0 },
+    { RECON_METRIC_BUTTON_CORNER, 0 },
     { RECON_METRIC_COUNT, 0 },
 };
 
 /*
- * Classic, Recon, Midnight and the three colour-vision skins keep the
- * default shape. Classic because 95 was square and this is that decade;
- * Recon because it is the native look and the default *is* its shape; and
- * the dichromat skins because they differ from each other only in palette,
- * and giving them different frames would make them three looks rather than
- * three answers to the same question.
+ * Classic is square, and now says so.
+ *
+ * It kept the default shape back when the default was square, which made it
+ * look like a considered choice and was in fact an absence. The decade this
+ * skin is named for had no rounded anything; that is the reason, and a reason
+ * belongs somewhere it can be read.
+ */
+static const struct metric_spec SHAPE_CLASSIC[] = {
+    { RECON_METRIC_CORNER,        0 },
+    { RECON_METRIC_BUTTON_CORNER, 0 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Recon, Midnight and the three colour-vision skins keep the default shape --
+ * Recon because it is the native look and the default *is* its shape, and the
+ * dichromat skins because they differ from each other only in palette, and
+ * giving them different frames would make them three looks rather than three
+ * answers to the same question.
+ *
+ * Classic used to be in that list and no longer is. Nothing about it changed:
+ * the default did, and a skin that agrees with a default by accident is one
+ * that changes its mind when the default does.
  */
 
 /*
@@ -1215,7 +1261,7 @@ static const struct {
     { "Recon", "The native look: grey chrome, navy titles, oxblood accent",
       THEME_RECON, "Night Sky.png", GRAD_RECON, NULL },
     { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC,
-      "Daybreak.png", NULL, NULL },
+      "Daybreak.png", NULL, SHAPE_CLASSIC },
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
       "Daybreak.png", GRAD_AQUA, SHAPE_AQUA },
     { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL, NULL },

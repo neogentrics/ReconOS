@@ -25,6 +25,7 @@
 #include "recon_users.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define DISPLAY_HEIGHT 44
 /* Room either side of a tab's name, and between one tab and the next. */
@@ -1056,9 +1057,6 @@ static double convert(const struct calc_category *cat, int from, int to,
  */
 static int draw_tabs(struct recon_calc *calc, struct recon_panel *panel,
         int x, int y, int w) {
-    int ascent = recon_font_ascent(calc->font);
-    int line = recon_font_line_height(calc->font);
-
     int tx = x;
     int ty = y;
 
@@ -1073,22 +1071,28 @@ static int draw_tabs(struct recon_calc *calc, struct recon_panel *panel,
 
         bool on = calc->mode == (enum calc_mode)i;
 
-        recon_fill_rect(panel, tx, ty, tab_w, TAB_HEIGHT,
-            on ? COLOR_KEY_ACCENT : COLOR_KEY);
         /*
-         * The button edge rather than a bare bevel, so these round with the
-         * skin like every other button in the system -- and so they read as
-         * six separate things rather than one strip with lines in it.
+         * One of a strip, and the strip is six separate buttons rather than
+         * one bar with lines in it -- which is what makes the chosen one read
+         * as chosen rather than as the bit the highlight happens to be over.
+         *
+         * The colours are named here because the calculator's keypad has its
+         * own accent and the tabs match the keypad, not the skin's ordinary
+         * button. Everything else about them -- the edge, the corner, the
+         * highlight, the press -- comes from recon_widget.
          */
-        recon_draw_button_edge(panel, tx, ty, tab_w, TAB_HEIGHT, on,
-            COLOR_BG);
-
-        recon_draw_text(panel, calc->font, tx + TAB_PADDING,
-            ty + (TAB_HEIGHT - line) / 2 + ascent, tab_w - TAB_PADDING,
-            CALC_MODE_NAMES[i], on ? COLOR_ACCENT_TEXT : COLOR_KEY_TEXT);
-
-        recon_hit_add(panel, tx, ty, tab_w, TAB_HEIGHT,
-            HIT_TAB_BASE + (uint32_t)i);
+        struct recon_widget_button tab = {
+            .x = tx, .y = ty, .w = tab_w, .h = TAB_HEIGHT,
+            .id = HIT_TAB_BASE + (uint32_t)i,
+            .label = CALC_MODE_NAMES[i],
+            .font = calc->font,
+            .behind = COLOR_BG,
+            .fill = on ? COLOR_KEY_ACCENT : COLOR_KEY,
+            .text = on ? COLOR_ACCENT_TEXT : COLOR_KEY_TEXT,
+            .look = RECON_WIDGET_TAB,
+            .checked = on,
+        };
+        recon_widget_button(panel, &tab);
 
         tx += tab_w + TAB_GAP;
     }
@@ -2411,8 +2415,6 @@ static void draw_graph_mode(struct recon_calc *calc, struct recon_panel *panel,
 static void calc_draw(void *user, struct recon_panel *panel,
         int x, int y, int w, int h) {
     struct recon_calc *calc = user;
-    int ascent = recon_font_ascent(calc->font);
-    int line = recon_font_line_height(calc->font);
 
     recon_fill_rect(panel, x, y, w, h, COLOR_BG);
 
@@ -2502,50 +2504,32 @@ static void calc_draw(void *user, struct recon_panel *panel,
                 fill = COLOR_KEY_OP;
             }
 
-            recon_fill_rect(panel, kx, ky, key_w, key_h, fill);
             /*
-             * The button edge, not a bare bevel.
+             * One call, and everything a button is comes with it: the fill,
+             * the bevel, the skin's corner radius, the highlight under the
+             * pointer, the sunk edge while it is held, the label centred and
+             * clipped at its own edge, and the hit region.
              *
-             * These are buttons, so they round with the skin like every other
-             * button in the system. Drawn with a flat bevel they were forty
-             * rectangles sharing an edge -- which is what "they just kind of
-             * exist" describes: nothing said where one key stopped and the
-             * next began except a four-pixel gap.
-             */
-            recon_draw_button_edge(panel, kx, ky, key_w, key_h, false,
-                COLOR_BG);
-
-            /*
-             * Centred, and clipped at the button's own right edge.
+             * What was here instead was five of those written out by hand and
+             * the sixth -- reacting to the pointer -- missing, because a
+             * behaviour nobody wrote here is a behaviour this keypad does not
+             * have. Forty keys, and not one of them acknowledged being
+             * pointed at.
              *
-             * The width passed used to be the key's full width measured from
-             * the centred start, which runs past the button by however far the
-             * label was indented -- so a label too wide for its key spilled
-             * over the one beside it instead of being cut at the edge.
+             * The hit id encodes the position, so drawing and input cannot
+             * drift out of step.
              */
-            int label_w = recon_text_width(calc->font, key->label);
-            int label_x = kx + (key_w - label_w) / 2;
-            if (label_x < kx + 2) {
-                label_x = kx + 2;
-            }
-            /*
-             * The baseline centred by the line's own height.
-             *
-             * It was (key_h + ascent) / 2 - 2, which centres correctly only
-             * when the descent happens to be four pixels. Every other font
-             * size sat the label low in its key by half the difference, and
-             * "the text is messed up" is what that looks like when the keys
-             * beside each other are tall enough to notice.
-             */
-            recon_draw_text(panel, calc->font, label_x,
-                ky + (key_h - line) / 2 + ascent,
-                kx + key_w - 2 - label_x, key->label, text);
-
-            /* Hit ids encode the position, so drawing and input cannot drift
-             * out of step. */
-            recon_hit_add(panel, kx, ky, key_w, key_h,
-                RECON_APPWIN_HIT_USER +
-                (uint32_t)(row * layout->cols + col));
+            struct recon_widget_button button = {
+                .x = kx, .y = ky, .w = key_w, .h = key_h,
+                .id = RECON_APPWIN_HIT_USER
+                    + (uint32_t)(row * layout->cols + col),
+                .label = key->label,
+                .font = calc->font,
+                .behind = COLOR_BG,
+                .fill = fill,
+                .text = text,
+            };
+            recon_widget_button(panel, &button);
         }
     }
 }

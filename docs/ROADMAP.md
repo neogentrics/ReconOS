@@ -143,6 +143,22 @@ the word.
 
 ### Asked for, and done
 
+**A framework for how everything looks and behaves** — v0.4.0. Asked for in
+those words, with the .NET Framework named as the comparison: one versioned
+layer where this sort of thing is fixed once instead of in every application.
+The immediate complaint was that nothing anywhere reacted to the pointer and
+that buttons were square, and the reason for both turned out to be the same:
+every application drew its own buttons, five or six lines at a time, around two
+hundred times over. A behaviour that has to be written two hundred times gets
+written zero times.
+
+`recon_widget` is that layer. It carries its own version, separate from the
+module ABI, because "can this be loaded" and "will its controls match the
+screen" are different questions with different right answers on a mismatch —
+the first is refused, the second reported. `docs/WIDGETS.md` records what each
+version means. Adopted across the whole system in the same release, the login
+screen and the start menu and the client-window frames included.
+
 **Reading text out of a picture** — v0.4.0. The prediction on this page turned
 out to be right about the shape: because ReconOS draws its own text, it can draw
 the shapes it is trying to recognise, and clean rendered text became a matching

@@ -21,6 +21,7 @@
 #include "recon_shell.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 #define TOPICS_MAX 64
 #define TITLE_MAX 48
@@ -1496,18 +1497,17 @@ bool recon_help_notice_due(void) {
 /* Draw one button and return where the next one to its left would start. */
 static int notice_button(struct recon_notice *notice, struct recon_panel *p,
         int right, int y, const char *label, uint32_t id) {
-    int ascent = recon_font_ascent(notice->font);
     int width = recon_text_width(notice->font, label) + 26;
     int x = right - width;
 
-    recon_fill_role(p, x, y, width, NOTICE_BUTTON_HEIGHT, RECON_THEME_BUTTON);
-    recon_draw_button_edge(p, x, y, width, NOTICE_BUTTON_HEIGHT, false,
-        COLOR_BG);
-
-    recon_draw_text(p, notice->font, x + 13,
-        y + (NOTICE_BUTTON_HEIGHT + ascent) / 2 - 2, width - 20, label,
-        THEME(BUTTON_TEXT));
-    recon_hit_add(p, x, y, width, NOTICE_BUTTON_HEIGHT, id);
+    struct recon_widget_button button = {
+        .x = x, .y = y, .w = width, .h = NOTICE_BUTTON_HEIGHT,
+        .id = id,
+        .label = label,
+        .font = notice->font,
+        .behind = COLOR_BG,
+    };
+    recon_widget_button(p, &button);
 
     return x - 8;
 }

@@ -893,6 +893,28 @@ bool recon_modules_load(const char *reconos_path) {
         return false;
     }
 
+    /*
+     * Reported, and loaded anyway.
+     *
+     * A module built against an older widget layer still draws working
+     * buttons -- they may be the wrong shape, or miss a behaviour the newer
+     * one has, and that is a thing worth saying out loud and not a thing
+     * worth refusing over. Refusing would trade a module whose corners are
+     * square for no module at all, which is the worse of the two by a wide
+     * margin.
+     *
+     * Said once at load, into the log, rather than raised: nobody can act on
+     * it in the moment, and a dialog about a corner radius while an
+     * application is opening is an interruption charging for nothing.
+     */
+    if (descriptor->widget_version != RECON_WIDGET_VERSION) {
+        wlr_log(WLR_INFO, "ReconOS: '%s' draws against widget version %u; "
+            "this system is %u -- its controls may not match the rest of "
+            "the screen",
+            descriptor->name != NULL ? descriptor->name : canonical,
+            descriptor->widget_version, (unsigned)RECON_WIDGET_VERSION);
+    }
+
     if (descriptor->payload != RECON_PAYLOAD_NATIVE) {
         set_error("'%s' holds a kind of code this version cannot run yet",
             descriptor->name != NULL ? descriptor->name : canonical);

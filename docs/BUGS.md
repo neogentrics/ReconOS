@@ -2575,6 +2575,46 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-138 — Nothing in the system reacted to being pointed at or pressed
+
+- **Found in** v0.4.0. **Found by** the author, looking at the three buttons in
+  the corner of a window: "there's no animation to them. When I click on them,
+  it just does the action. The buttons don't move. They don't show a click.
+  They don't even highlight. And in most operating systems, when you highlight
+  the x, it's supposed to highlight red."
+- **What it was** not a bug in any one place. There was no *concept* of a
+  control being under the pointer. Every application drew its own buttons --
+  a fill, a bevel, a label, a hit region, a tooltip, five or six lines at a
+  time, around two hundred times across the repository -- and hover was
+  simply not one of the five lines anybody wrote.
+- Four surfaces had grown their own private answer to it: the start menu, the
+  context menu, the security box and the login screen each kept an integer of
+  their own and compared it by hand. Each picked its own hover colour, and
+  three of the four picked `BUTTON_ACTIVE` -- the colour a *pressed* button
+  is -- which left them saying "pressed" for pointing and with nothing left to
+  say for pressing. The taskbar never got a copy written for it at all.
+- **The caption buttons had a second fault on top.** They acted on the press
+  rather than the release, so even if they had drawn themselves sunk, the
+  window was closed or minimized before that frame reached the screen. It also
+  meant there was no way to change your mind: pressing Close and sliding off
+  it closed the window anyway.
+- **Fixed in** v0.4.0, by building the thing that was missing rather than by
+  adding hover in two hundred places. `recon_widget` owns what a control looks
+  like and how it behaves; the panel keeps a hot id and a held id; every
+  application says what its buttons *are* and is told nothing about bevels or
+  radii. Close goes warning-coloured under the pointer, buttons sink when held,
+  disabled controls stop answering clicks, and the caption buttons act on the
+  release over the control they went down on.
+- **The related absence**: `metric.button-corner` defaulted to zero, so nine of
+  the eleven built-in skins drew square buttons -- not because anything had
+  decided they should, but because rounding had been added for the two skins
+  that asked for it and never given a default. Same shape of fault as the
+  hover: the capability existed and nothing reached it.
+- **Why it survived so long**: every individual button looked deliberate. A
+  square, inert button is what a plainer system would draw, so nothing about
+  any one of them said "unfinished" -- only all of them together did, and only
+  to somebody using the desktop rather than reading it.
+
 ### BG-137 — Every rounded corner came out square, and every glass surface opaque
 
 - **Found in** v0.4.0. **Found by** the author looking at the screen and saying

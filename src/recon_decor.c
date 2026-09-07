@@ -20,6 +20,7 @@
 #include "recon_theme.h"
 #include "recon_titlebar.h"
 #include "recon_ui.h"
+#include "recon_widget.h"
 
 /*
  * The same numbers a built-in window's frame uses, read from the skin the same
@@ -111,14 +112,16 @@ static void window_box(struct recon_decor *decor, int *x, int *y, int *w,
 
 /* --- Drawing --- */
 
+static void draw(struct recon_decor *decor);
+
 static void draw_buttons(struct recon_decor *decor,
         const struct recon_titlebar_layout *bar) {
-    struct recon_panel *p = decor->panel;
-    int button = BUTTON_SIZE;
-
-    const enum hit ids[RECON_TITLEBAR_BUTTON_COUNT] = {
+    static const enum hit IDS[RECON_TITLEBAR_BUTTON_COUNT] = {
         HIT_CLOSE, HIT_MAXIMIZE, HIT_MINIMIZE,
     };
+
+    recon_color behind = decor->focused
+        ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE);
 
     for (int i = 0; i < RECON_TITLEBAR_BUTTON_COUNT; i++) {
         /* Left out by the skin. */
@@ -126,62 +129,28 @@ static void draw_buttons(struct recon_decor *decor,
             continue;
         }
 
-        int bx = bar->button[i].x;
-        int by = bar->button[i].y;
+        enum recon_widget_caption glyph;
+        const char *tip;
 
-        recon_fill_rect(p, bx, by, button, button, COLOR_BUTTON);
-        recon_draw_button_edge(p, bx, by, button, button, false,
-            decor->focused ? THEME(TITLE_ACTIVE) : THEME(TITLE_INACTIVE));
-        recon_hit_add(p, bx, by, button, button, (uint32_t)ids[i]);
-
-        /*
-         * A picture where the skin supplied one, exactly as the built-in
-         * frame does. Both, because a client window that looked *nearly* like
-         * a ReconOS window would be worse than one that plainly does not --
-         * and a skin whose close button is a dot everywhere except on client
-         * windows is precisely that.
-         */
-        const char *picture = NULL;
-        switch (ids[i]) {
-        case HIT_CLOSE:    picture = RECON_ICON_WINDOW_CLOSE; break;
-        case HIT_MAXIMIZE: picture = decor->maximized
-                                ? RECON_ICON_WINDOW_RESTORE
-                                : RECON_ICON_WINDOW_MAXIMIZE; break;
-        case HIT_MINIMIZE: picture = RECON_ICON_WINDOW_MINIMIZE; break;
-        default: break;
-        }
-        if (picture != NULL &&
-                recon_icon_draw(p, picture, bx + 2, by + 2, button - 4)) {
-            continue;
-        }
-
-        switch (ids[i]) {
-        case HIT_MINIMIZE:
-            recon_fill_rect(p, bx + 4, by + button - 6, button - 8, 2,
-                COLOR_GLYPH);
+        switch (IDS[i]) {
+        case HIT_CLOSE:
+            glyph = RECON_WIDGET_CAPTION_CLOSE;
+            tip = "Close";
             break;
         case HIT_MAXIMIZE:
-            if (decor->maximized) {
-                recon_stroke_rect(p, bx + 3, by + 5, button - 8, button - 9,
-                    COLOR_GLYPH);
-                recon_stroke_rect(p, bx + 5, by + 3, button - 8, button - 9,
-                    COLOR_GLYPH);
-            } else {
-                recon_stroke_rect(p, bx + 3, by + 3, button - 6, button - 6,
-                    COLOR_GLYPH);
-                recon_fill_rect(p, bx + 3, by + 3, button - 6, 2, COLOR_GLYPH);
-            }
-            break;
-        case HIT_CLOSE:
-            for (int k = 0; k < button - 8; k++) {
-                recon_fill_rect(p, bx + 4 + k, by + 4 + k, 2, 1, COLOR_GLYPH);
-                recon_fill_rect(p, bx + 4 + k, by + button - 5 - k, 2, 1,
-                    COLOR_GLYPH);
-            }
+            glyph = decor->maximized ? RECON_WIDGET_CAPTION_RESTORE
+                                     : RECON_WIDGET_CAPTION_MAXIMIZE;
+            tip = decor->maximized ? "Restore" : "Maximize";
             break;
         default:
+            glyph = RECON_WIDGET_CAPTION_MINIMIZE;
+            tip = "Minimize";
             break;
         }
+
+        recon_widget_caption_button(decor->panel, bar->button[i].x,
+            bar->button[i].y, BUTTON_SIZE, (uint32_t)IDS[i], glyph, behind,
+            tip);
     }
 }
 
@@ -329,6 +298,41 @@ bool recon_decor_click(struct recon_decor *decor, double lx, double ly,
     if (!pressed) {
         bool was = decor->dragging;
         decor->dragging = false;
+
+        /*
+         * The button acts here, and only if the pointer is still on the one
+         * it went down on -- the same rule the built-in frame follows, so a
+         * press begun on Close and slid off it is cancelled on both kinds of
+         * window rather than on one of them.
+         *
+         * `held` is read before it is cleared and the redraw happens before
+         * the action, because closing the toplevel takes the panel that held
+         * id lives on with it.
+         */
+        uint32_t held = recon_widget_held_id(decor->panel);
+        recon_widget_release(decor->panel);
+
+        int rx, ry;
+        bool on = point_in(decor, lx, ly, &rx, &ry)
+            && recon_hit_test_active(decor->panel, rx, ry) == held;
+        draw(decor);
+
+        if (on) {
+            switch ((enum hit)held) {
+            case HIT_CLOSE:
+                recon_toplevel_close(decor->toplevel);
+                return true;
+            case HIT_MAXIMIZE:
+                recon_toplevel_toggle_maximized(decor->toplevel);
+                recon_decor_update(decor);
+                return true;
+            case HIT_MINIMIZE:
+                recon_toplevel_minimize(decor->toplevel);
+                return true;
+            default:
+                break;
+            }
+        }
         return was;
     }
 
@@ -341,16 +345,17 @@ bool recon_decor_click(struct recon_decor *decor, double lx, double ly,
      * way clicking the window itself does. */
     recon_focus_toplevel(decor->toplevel);
 
-    switch ((enum hit)recon_hit_test(decor->panel, px, py)) {
+    uint32_t hit = recon_hit_test_active(decor->panel, px, py);
+    if (recon_widget_press(decor->panel, hit)) {
+        draw(decor);
+    }
+
+    switch ((enum hit)hit) {
+    /* The three wait for the release. Acting on the press meant the window
+     * was gone before the frame showing the button sunk was ever drawn. */
     case HIT_CLOSE:
-        recon_toplevel_close(decor->toplevel);
-        return true;
     case HIT_MAXIMIZE:
-        recon_toplevel_toggle_maximized(decor->toplevel);
-        recon_decor_update(decor);
-        return true;
     case HIT_MINIMIZE:
-        recon_toplevel_minimize(decor->toplevel);
         return true;
     case HIT_TITLEBAR:
         decor->dragging = true;
@@ -366,7 +371,27 @@ bool recon_decor_click(struct recon_decor *decor, double lx, double ly,
 }
 
 void recon_decor_motion(struct recon_decor *decor, double lx, double ly) {
-    if (decor == NULL || !decor->dragging) {
+    if (decor == NULL) {
+        return;
+    }
+
+    /*
+     * Highlight first, and whether or not this frame is being dragged.
+     *
+     * The early return below used to be the first thing in the function, so a
+     * frame that was not being dragged never saw the pointer at all -- which
+     * was fine while nothing on it reacted, and is why nothing on it reacted.
+     */
+    if (!decor->dragging && decor->panel != NULL) {
+        int px, py;
+        uint32_t over = point_in(decor, lx, ly, &px, &py)
+            ? recon_hit_test_active(decor->panel, px, py) : RECON_HIT_NONE;
+        if (recon_widget_hover(decor->panel, over)) {
+            draw(decor);
+        }
+    }
+
+    if (!decor->dragging) {
         return;
     }
 
