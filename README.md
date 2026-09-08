@@ -69,9 +69,10 @@ written down as it was hit rather than guessed at in advance.
 | **Depends on** | wlroots (temporarily), stb for image and font decoding, mbedTLS for encryption in both directions |
 | **Applications** | File Explorer, Notepad, Terminal, Watchtower, Mail, Web, Media Player, Photos, Calendar, Calculator, Control Panel, Help |
 | **Secrets** | A keyring: AES-256-GCM under a key derived from the account password at sign-in and never written down. Signing out makes everything kept unreadable. Nothing prints a secret back |
-| **Skins** | eleven, including one see-through in six colours, three for colour vision and one for reading |
+| **Skins** | thirteen, in four groups: the standard set, three for colour vision, two for reading, and your own. Glass comes in six colours, Metallic in eight metals, Beacon in blue or olive |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
-| **Tests** | 23 suites, 1306 checks and 5,388 malformed inputs, no display needed |
+| **Finds things** | the Start menu's box searches programs, settings, the account's folders, the files in them, and the help — ordered by how sure the answer is |
+| **Tests** | 26 suites and 5,388 malformed inputs, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -163,7 +164,7 @@ shot before it is left in the frame.
 </tr>
 <tr>
 <td><b>The Control Panel</b> is sixteen icons. Each opens in a window of its own, named for the item and stepped clear of whatever opened it, so two settings can be worked on side by side.</td>
-<td><b>Appearance.</b> Eleven skins, including three for colour vision and one for reading. A skin sets forty-eight semantic roles, the shape of a window frame, and a wallpaper. Any can be copied and changed; none can be deleted.</td>
+<td><b>Appearance.</b> Thirteen skins under four tabs -- the standard set, colour blindness, easier to read, and your own -- so choosing a look is choosing between looks. A skin sets forty-eight semantic roles, the shape of a window frame, and a wallpaper. Any can be copied and changed; none can be deleted.</td>
 </tr>
 <tr>
 <td><a href="docs/images/photos.png"><img src="docs/images/thumbs/photos.png" alt="Photos, with Read Text and Save as PNG"></a></td>
@@ -171,7 +172,7 @@ shot before it is left in the frame.
 </tr>
 <tr>
 <td><b>Photos</b>, and the two newest things it can do. <b>Read Text</b> pulls the writing out of a picture into a text file. <b>Save as PNG</b> converts any of the seven formats it opens into a lossless one, beside the original.</td>
-<td><b>Three states on one bar.</b> Focused, open behind, and put away -- the put-away one has its contents washed back towards its own button. Every pair differs by at least two things, on all eleven skins.</td>
+<td><b>Three states on one bar.</b> Focused, open behind, and put away -- the put-away one has its contents washed back towards its own button. Every pair differs by at least two things, on every skin that ships.</td>
 </tr>
 <tr>
 <td><a href="docs/images/clock.png"><img src="docs/images/thumbs/clock.png" alt="The clock's menu"></a></td>
