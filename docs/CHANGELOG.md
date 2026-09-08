@@ -9,6 +9,78 @@ way for the two to disagree.
 
 ---
 
+## v0.4.8 — the browser gets the rest of a browser
+
+Asked for as "redesign the entire layout of the browser -- it doesn't have a
+lot of buttons and features". It had three: back, forward and reload, with an
+address bar. Everything below is what a window with one page in it turns into
+when it can hold several.
+
+**Tabs.** The structural change, and the one everything else sits on. A window
+was a page: one document, one history, one set of fetches. It is now a window
+that *owns* pages, and the split is exactly at the toolbar -- the tab owns the
+document and the work, the window owns the chrome around it.
+
+The part worth writing down is that **every fetch is handed the tab, not the
+window**. A page finishing in a background tab lands in its own tab instead of
+overwriting whatever is in front of you, and the same rule stops a background
+page rewriting the address bar or the window's title. Twelve to a window, each
+one heap-allocated -- an image table and a history is a quarter of a megabyte,
+and twelve of those inside the window struct would be three megabytes of
+window whether or not anybody opened a second tab.
+
+Closing the last tab empties it rather than closing the window. A browser that
+vanishes when you close a tab is a browser people lose work in.
+
+**A toolbar with the controls a browser has.** Home, and a stop that is the
+same button as reload -- one question, "is this page still coming?", whose
+answer is never both, where two buttons would leave one of them always dead.
+
+**A padlock that says only what it knows.** Closed for TLS, open for plain
+HTTP, and absent before anything has loaded. It is deliberately not a claim
+about the site: "the connection was encrypted" is the only thing this can
+actually know, and dressing that up as "this page is safe" would be a lie told
+by the browser rather than by the site. Drawn rather than typed, because the
+system font has the arrows, the star, the house and the triple bar this
+toolbar uses and does not have U+1F512 -- and a security indicator that is
+sometimes invisible is worse than none, since its absence is what says "not
+secure".
+
+**Bookmarks**, kept in `/Users/Shared/Web/bookmarks.txt` as `url<tab>label` --
+a tab because a title has spaces in it and an address does not, so the split
+needs no quoting and no escape rules to get wrong. The star adds and removes:
+one control answering one question, where a separate remove would be a second
+control that is only ever right when the first is wrong. The bar turns itself
+on when the first bookmark is kept, because a bookmark you cannot see is one
+you will not believe was saved.
+
+**Find on page**, with the matches marked *behind* the words rather than by
+recolouring them -- a page already uses colour to mean things, and a match
+that recolours a word competes with whatever the page was saying. The current
+match takes the accent and the others a wash of it, so "which one am I on"
+reads without counting. The count comes out of the same pass that draws the
+page: counting separately means walking the document again with a second idea
+of what a word is, and the two disagree the moment one is changed.
+
+**Zoom**, per tab, 50% to 250%. It multiplies whatever the kind and the
+stylesheet settled on rather than replacing it, so a heading at 150% is half
+again as big as *that heading*. The percentage appears in the status bar only
+when it is not 100%, and clicking it puts it back -- a number that is always
+there is a number that never means anything.
+
+**A menu**, and the keys: Ctrl+T, Ctrl+W, Ctrl+F, Ctrl+D, Ctrl+L, Ctrl+R,
+Ctrl+plus, Ctrl+minus, Ctrl+0, F3, Escape. The shortcuts are read before any
+field sees the key -- letting the address bar have Ctrl+T first would type a
+"t" instead of opening a tab. Entries that cannot do anything are drawn and
+greyed rather than hidden: a menu whose entries come and go is one nobody can
+learn the shape of, and "why is this grey" has an answer where "where did it
+go" does not.
+
+The tab strip and the menu rows both go through `recon_widget` -- the tab look
+and the menu highlight already existed there, which is what that layer is for.
+
+---
+
 ## v0.4.7
 
 **A page is drawn in its own colours (BG-164).** Every site came out in the

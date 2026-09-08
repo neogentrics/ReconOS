@@ -206,6 +206,18 @@ twenty-five years of somebody solving line boxes, floats and table widths, and
 reading how they did it is cheaper than deriving it -- which is the next thing
 this viewer actually needs.
 
+**A browser with the controls a browser has** — v0.4.8. Asked for as
+"redesign the entire layout of the browser -- it doesn't have a lot of buttons
+and features". It had three buttons. It now has tabs, home, a stop that is the
+same button as reload, a padlock that reports how the page travelled,
+bookmarks that survive a restart, find on page with the matches marked, zoom
+per tab, a menu, and eleven keyboard shortcuts.
+
+The structural half is that a window used to *be* a page and now *owns* pages.
+Every fetch is handed the tab that started it, so a page finishing in the
+background lands in its own tab rather than over the one being read -- and
+cannot rewrite the address bar or the window title either.
+
 **A page drawn in its own colours** — v0.4.7. Asked for as "still has a ways
 to go before I can call this a browser", with a screenshot of a near-black
 site rendered white. The cause was not one thing: `background-color` was parsed

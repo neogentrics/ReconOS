@@ -60,11 +60,46 @@
  */
 #define WEB_APPLICATION "Web"
 
+/*
+ * --- The chrome, top to bottom ---
+ *
+ *   tab strip     which page is in front, and the way to a new one
+ *   toolbar       back, forward, stop/reload, home | address | star, menu
+ *   bookmarks     when it is turned on
+ *   the page
+ *   find bar      when it is open
+ *   status        what the page is, and what the text size is
+ *
+ * Each of these is a band the page is inset by rather than something drawn
+ * over it. A bar over the page hides part of it, which for the find bar is
+ * the one thing it must not do -- the match you are looking for is as likely
+ * to be under the bar as anywhere else.
+ */
+#define TABSTRIP_HEIGHT 28
 #define BAR_HEIGHT 34
+#define MARKS_HEIGHT 26
+#define STRIP_HEIGHT 28
 #define STATUS_HEIGHT 24
 #define PADDING 10
 #define FIELD_HEIGHT 24
 #define BUTTON_WIDTH 30
+
+/* A tab shrinks as more open, down to a floor -- below which a tab shows no
+ * title at all, and a strip of eight identical stubs is a strip that says
+ * nothing. Past the floor the strip scrolls rather than shrinking further. */
+#define TAB_MIN_WIDTH 84
+#define TAB_MAX_WIDTH 190
+
+/*
+ * How far one press of zoom moves, and how far it may go.
+ *
+ * The floor and ceiling are not politeness: at 25% the page is unreadable and
+ * at 400% one word fills the window, and both are states somebody can reach by
+ * holding a key down and then cannot read their way out of.
+ */
+#define ZOOM_STEP 10
+#define ZOOM_MIN 50
+#define ZOOM_MAX 250
 
 /* Narrow, and the same width the Control Panel uses. There is no shared
  * scrollbar in recon_ui; each window that wants one draws it. */
@@ -83,11 +118,82 @@ static const int HEADING_SIZE[7] = { 0, 26, 22, 19, 17, 16, 15 };
  * the front -- a history nobody can exhaust is a list that grows forever. */
 #define HISTORY_MAX 64
 
+/*
+ * The hit ids.
+ *
+ * The bases are spaced with room for the whole of what they index -- links go
+ * up to two thousand, so they start last and everything else fits below them.
+ * A base that overlaps the next one is a click on a bookmark that opens a
+ * link, and nothing about the drawing code would look wrong.
+ */
 #define HIT_BACK (RECON_APPWIN_HIT_USER + 1)
 #define HIT_FORWARD (RECON_APPWIN_HIT_USER + 2)
 #define HIT_RELOAD (RECON_APPWIN_HIT_USER + 3)
 #define HIT_ADDRESS (RECON_APPWIN_HIT_USER + 4)
-#define HIT_LINK_BASE (RECON_APPWIN_HIT_USER + 100)
+#define HIT_HOME (RECON_APPWIN_HIT_USER + 5)
+#define HIT_STAR (RECON_APPWIN_HIT_USER + 6)
+#define HIT_MENU (RECON_APPWIN_HIT_USER + 7)
+#define HIT_NEWTAB (RECON_APPWIN_HIT_USER + 8)
+#define HIT_FIND_FIELD (RECON_APPWIN_HIT_USER + 9)
+#define HIT_FIND_PREV (RECON_APPWIN_HIT_USER + 10)
+#define HIT_FIND_NEXT (RECON_APPWIN_HIT_USER + 11)
+#define HIT_FIND_CLOSE (RECON_APPWIN_HIT_USER + 12)
+
+#define HIT_MENU_BASE (RECON_APPWIN_HIT_USER + 20)     /* MENU_COUNT */
+#define HIT_TAB_BASE (RECON_APPWIN_HIT_USER + 50)      /* TABS_MAX */
+#define HIT_TABCLOSE_BASE (RECON_APPWIN_HIT_USER + 70) /* TABS_MAX */
+#define HIT_MARK_BASE (RECON_APPWIN_HIT_USER + 100)    /* BOOKMARKS_MAX */
+#define HIT_HIST_BASE (RECON_APPWIN_HIT_USER + 200)    /* HISTORY_MAX */
+#define HIT_LINK_BASE (RECON_APPWIN_HIT_USER + 1000)
+
+/*
+ * What is in the toolbar menu.
+ *
+ * One table, read by both the drawing and the click handling, so an entry
+ * cannot be drawn in one place and acted on in another. That is not a
+ * hypothetical: the entries move whenever one is added, and a second list of
+ * cases in a switch would go stale silently.
+ */
+enum web_menu_item {
+    MENU_NEW_TAB,
+    MENU_CLOSE_TAB,
+    MENU_SEP_1,
+    MENU_FIND,
+    MENU_ZOOM_IN,
+    MENU_ZOOM_OUT,
+    MENU_ZOOM_RESET,
+    MENU_SEP_2,
+    MENU_ADD_BOOKMARK,
+    MENU_SHOW_MARKS,
+    MENU_SEP_3,
+    MENU_HISTORY,
+    MENU_SET_HOME,
+    MENU_COUNT
+};
+
+static const struct {
+    const char *label;
+    const char *keys;                 /* NULL for an entry with no shortcut */
+    bool separator;
+} MENU[MENU_COUNT] = {
+    [MENU_NEW_TAB]       = { "New tab",            "Ctrl+T", false },
+    [MENU_CLOSE_TAB]     = { "Close tab",          "Ctrl+W", false },
+    [MENU_SEP_1]         = { NULL,                 NULL,     true  },
+    [MENU_FIND]          = { "Find on page",       "Ctrl+F", false },
+    [MENU_ZOOM_IN]       = { "Zoom in",            "Ctrl++", false },
+    [MENU_ZOOM_OUT]      = { "Zoom out",           "Ctrl+-", false },
+    [MENU_ZOOM_RESET]    = { "Reset text size",    "Ctrl+0", false },
+    [MENU_SEP_2]         = { NULL,                 NULL,     true  },
+    [MENU_ADD_BOOKMARK]  = { "Bookmark this page", "Ctrl+D", false },
+    [MENU_SHOW_MARKS]    = { "Show bookmarks bar", NULL,     false },
+    [MENU_SEP_3]         = { NULL,                 NULL,     true  },
+    [MENU_HISTORY]       = { "History",            "Ctrl+H", false },
+    [MENU_SET_HOME]      = { "Set as home page",   NULL,     false },
+};
+
+#define MENU_WIDTH 232
+#define MENU_ROW 22
+#define MENU_SEPARATOR_ROW 7
 
 /*
  * How many pictures one page may have, and how big one may be.
@@ -126,11 +232,29 @@ struct web_image {
     bool tried;
 };
 
-struct recon_web {
+/*
+ * --- One page, and everything being done to it ---
+ *
+ * This was the whole application until tabs: a window held one document, one
+ * history, one set of fetches in flight. Everything below the toolbar is per
+ * page, so the split is exactly there -- the tab owns the document and the
+ * work, the window owns the chrome around it.
+ *
+ * `font` and `win` are the window's, copied here rather than reached through
+ * `owner`, because they are read on nearly every line of the drawing code and
+ * never change for the life of the tab.
+ *
+ * The reason this matters beyond tidiness: a fetch belongs to the tab that
+ * started it. Every HTTP callback is handed the *tab*, so a page that finishes
+ * loading while you are looking at another one lands in its own tab instead of
+ * overwriting whatever is in front of you.
+ */
+struct web_tab {
+    struct recon_web *owner;
+
     struct recon_font *font;          /* the window's, for the bar */
     struct recon_appwin *win;
 
-    struct recon_edit address;
     struct recon_http_request *request;
     struct recon_html_document *page;
 
@@ -196,12 +320,310 @@ struct recon_web {
     int sheets_done;
     struct recon_http_request *sheet_request;
     bool restyled;
+
+    /*
+     * What this tab is called, and how big its text is.
+     *
+     * The title is the page's, falling back to its host -- a tab strip of
+     * eight tabs all saying "Loading" is a strip that tells you nothing, and
+     * the host is known before the document is.
+     */
+    char label[96];
+
+    /*
+     * Text size, as a percentage. Per tab rather than per window, because a
+     * page you have zoomed in to read is a property of that page.
+     */
+    int zoom;
 };
 
-static void set_status(struct recon_web *w, bool error, const char *fmt, ...)
+/* --- The window, and the chrome around whichever tab is in front --- */
+
+/*
+ * How many tabs one window may have.
+ *
+ * A bound, not a prediction. Each tab carries its own image table and its own
+ * history, so a tab is not free, and a window with ninety of them is somebody
+ * finding out what this does rather than somebody reading.
+ */
+#define TABS_MAX 12
+
+/* How many addresses are kept, and how long one may be. */
+#define BOOKMARKS_MAX 64
+
+/* Where the bookmarks live, in the ReconOS filesystem. */
+#define BOOKMARKS_PATH "/Users/Shared/Web/bookmarks.txt"
+
+struct web_bookmark {
+    char label[96];
+    char url[RECON_HTTP_URL_MAX];
+};
+
+/*
+ * Which strip of chrome is open below the toolbar.
+ *
+ * One at a time, and the page moves down to make room, because a bar drawn
+ * over the page hides the thing being searched -- which for the find bar is
+ * the one thing it must not do.
+ */
+enum web_strip {
+    STRIP_NONE = 0,
+    STRIP_FIND,
+    STRIP_HISTORY,
+};
+
+struct recon_web {
+    struct recon_font *font;
+    struct recon_appwin *win;
+
+    struct recon_edit address;
+
+    struct web_tab *tabs[TABS_MAX];
+    int tab_count;
+    int active;
+
+    /* Where the Home button goes, and where a new tab starts. */
+    char home[RECON_HTTP_URL_MAX];
+
+    struct web_bookmark bookmarks[BOOKMARKS_MAX];
+    int bookmark_count;
+    bool show_bookmarks;
+
+    enum web_strip strip;
+    struct recon_edit find;
+    int find_count;                   /* matches on the page, after a search */
+    int find_at;                      /* which one is highlighted, or -1 */
+
+    /* The toolbar menu, open or not, and which entry the pointer is on. */
+    bool menu_open;
+};
+
+
+/* --- Tabs --- */
+
+static void forget_images(struct web_tab *w);
+static void forget_sheets(struct web_tab *w);
+static void go_to(struct web_tab *w, const struct recon_http_url *url,
+    bool remember);
+
+/* Whichever tab is in front. Never NULL: a window with no tabs closes. */
+static struct web_tab *front(struct recon_web *w) {
+    if (w->tab_count <= 0) {
+        return NULL;
+    }
+    if (w->active < 0) {
+        w->active = 0;
+    }
+    if (w->active >= w->tab_count) {
+        w->active = w->tab_count - 1;
+    }
+    return w->tabs[w->active];
+}
+
+/*
+ * A tab is heap-allocated because it is not small: an image table of
+ * forty-eight entries and a history of sixty-four addresses is most of a
+ * quarter of a megabyte, and twelve of those inside the window struct would
+ * be three megabytes of window whether or not anybody opened a second tab.
+ */
+static struct web_tab *tab_new(struct recon_web *w) {
+    if (w->tab_count >= TABS_MAX) {
+        return NULL;
+    }
+    struct web_tab *t = calloc(1, sizeof(*t));
+    if (t == NULL) {
+        return NULL;
+    }
+    t->owner = w;
+    t->font = w->font;
+    t->win = w->win;
+    t->at = -1;
+    t->fetching = -1;
+    t->zoom = 100;
+    snprintf(t->label, sizeof(t->label), "New tab");
+
+    w->tabs[w->tab_count++] = t;
+    return t;
+}
+
+static void tab_free(struct web_tab *t) {
+    if (t == NULL) {
+        return;
+    }
+    /*
+     * Everything in flight is cancelled first. A reply that arrives for a
+     * freed tab is a write through a dangling pointer, and it is the kind
+     * that happens rarely enough to survive testing.
+     */
+    if (t->request != NULL) {
+        recon_http_cancel(t->request);
+    }
+    if (t->image_request != NULL) {
+        recon_http_cancel(t->image_request);
+    }
+    if (t->sheet_request != NULL) {
+        recon_http_cancel(t->sheet_request);
+    }
+    forget_images(t);
+    forget_sheets(t);
+    if (t->page != NULL) {
+        recon_html_free(t->page);
+    }
+    free(t);
+}
+
+static void tab_close(struct recon_web *w, int index) {
+    if (index < 0 || index >= w->tab_count) {
+        return;
+    }
+
+    /*
+     * The last tab is not closed, it is emptied. A window with no tabs has
+     * nothing to draw and no way to get anywhere, which is a window that has
+     * to close itself -- and a browser that vanishes when you close a tab is
+     * a browser people lose work in.
+     */
+    if (w->tab_count == 1) {
+        struct web_tab *t = w->tabs[0];
+        if (t->request != NULL) {
+            recon_http_cancel(t->request);
+            t->request = NULL;
+        }
+        forget_images(t);
+        forget_sheets(t);
+        if (t->page != NULL) {
+            recon_html_free(t->page);
+            t->page = NULL;
+        }
+        t->have_url = false;
+        t->history_count = 0;
+        t->at = -1;
+        t->scroll = 0;
+        t->content_height = 0;
+        t->loading = false;
+        t->status[0] = '\0';
+        snprintf(t->label, sizeof(t->label), "New tab");
+        recon_edit_begin(&w->address, "", false);
+        w->address.active = false;
+        return;
+    }
+
+    tab_free(w->tabs[index]);
+    for (int i = index; i + 1 < w->tab_count; i++) {
+        w->tabs[i] = w->tabs[i + 1];
+    }
+    w->tab_count--;
+
+    /*
+     * Closing the tab in front leaves the one that was to its right in front,
+     * or the last one if it was the last -- which is what every browser does
+     * and what the hand expects when closing several in a row.
+     */
+    if (w->active > index || w->active >= w->tab_count) {
+        w->active--;
+    }
+    if (w->active < 0) {
+        w->active = 0;
+    }
+}
+
+/* --- Bookmarks --- */
+
+/*
+ * Stored as one line per bookmark, `url<tab>label`.
+ *
+ * A tab rather than a space because a title has spaces in it and an address
+ * does not, so the split is unambiguous with no quoting and no escape rules
+ * to get wrong. Kept in the shared area rather than an account's, because the
+ * account that reads them is the account that is signed in and there is one.
+ */
+static void bookmarks_load(struct recon_web *w) {
+    w->bookmark_count = 0;
+
+    size_t length = 0;
+    char *text = recon_fs_read("/", BOOKMARKS_PATH, &length);
+    if (text == NULL) {
+        return;
+    }
+
+    char *save = NULL;
+    for (char *line = strtok_r(text, "\n", &save);
+            line != NULL && w->bookmark_count < BOOKMARKS_MAX;
+            line = strtok_r(NULL, "\n", &save)) {
+        char *tab = strchr(line, '\t');
+        if (tab == NULL || tab == line) {
+            continue;
+        }
+        *tab = '\0';
+        struct web_bookmark *b = &w->bookmarks[w->bookmark_count++];
+        snprintf(b->url, sizeof(b->url), "%s", line);
+        snprintf(b->label, sizeof(b->label), "%s",
+            tab[1] != '\0' ? tab + 1 : line);
+    }
+    free(text);
+}
+
+static void bookmarks_save(struct recon_web *w) {
+    char text[BOOKMARKS_MAX * (sizeof(((struct web_bookmark *)0)->url) + 100)];
+    size_t used = 0;
+
+    for (int i = 0; i < w->bookmark_count; i++) {
+        int wrote = snprintf(text + used, sizeof(text) - used, "%s\t%s\n",
+            w->bookmarks[i].url, w->bookmarks[i].label);
+        if (wrote < 0 || (size_t)wrote >= sizeof(text) - used) {
+            break;
+        }
+        used += (size_t)wrote;
+    }
+
+    recon_fs_mkdir("/", "/Users/Shared/Web");
+    recon_fs_write("/", BOOKMARKS_PATH, text, used);
+}
+
+/* Where this address is in the list, or -1. */
+static int bookmark_of(const struct recon_web *w, const char *url) {
+    for (int i = 0; i < w->bookmark_count; i++) {
+        if (strcmp(w->bookmarks[i].url, url) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * The star adds and removes, which is the same control doing one thing:
+ * "is this page kept?" A separate remove would be a second control that is
+ * only ever right when the first one is wrong.
+ */
+static void bookmark_toggle(struct recon_web *w) {
+    struct web_tab *t = front(w);
+    if (t == NULL || !t->have_url) {
+        return;
+    }
+
+    char url[RECON_HTTP_URL_MAX];
+    recon_http_format_url(&t->url, url, sizeof(url));
+
+    int at = bookmark_of(w, url);
+    if (at >= 0) {
+        for (int i = at; i + 1 < w->bookmark_count; i++) {
+            w->bookmarks[i] = w->bookmarks[i + 1];
+        }
+        w->bookmark_count--;
+    } else if (w->bookmark_count < BOOKMARKS_MAX) {
+        struct web_bookmark *b = &w->bookmarks[w->bookmark_count++];
+        snprintf(b->url, sizeof(b->url), "%s", url);
+        snprintf(b->label, sizeof(b->label), "%s", t->label);
+    } else {
+        return;
+    }
+    bookmarks_save(w);
+}
+
+static void set_status(struct web_tab *w, bool error, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
-static void set_status(struct recon_web *w, bool error, const char *fmt, ...) {
+static void set_status(struct web_tab *w, bool error, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     vsnprintf(w->status, sizeof(w->status), fmt, args);
@@ -211,11 +633,11 @@ static void set_status(struct recon_web *w, bool error, const char *fmt, ...) {
 
 /* --- Fetching --- */
 
-static void go_to(struct recon_web *w, const struct recon_http_url *url,
+static void go_to(struct web_tab *w, const struct recon_http_url *url,
     bool remember);
 
 static void on_progress(void *user, size_t received) {
-    struct recon_web *w = user;
+    struct web_tab *w = user;
     w->received = received;
     /* Only every few kilobytes: a status line rewritten on every packet is a
      * status line nobody can read and a redraw nobody asked for. */
@@ -227,25 +649,25 @@ static void on_progress(void *user, size_t received) {
 
 /* Measure the page without drawing it, so the scrollbar is right on the first
  * frame. Defined after the layout it shares. */
-static int measure(struct recon_web *w, int width);
+static int measure(struct web_tab *w, int width);
 
 /* --- The stylesheets --- */
 
 /* Both defined below, beside the things they are shared with. */
-static void show_document(struct recon_web *w,
+static void show_document(struct web_tab *w,
     struct recon_html_document *page, const char *shown, size_t length);
-static void fetch_next_sheet(struct recon_web *w);
-static void restyle(struct recon_web *w);
+static void fetch_next_sheet(struct web_tab *w);
+static void restyle(struct web_tab *w);
 
 /* The markup only. The sheet stays: the document on screen was parsed with
  * it and the rules are not copied into the document. */
-static void forget_sheets_source(struct recon_web *w) {
+static void forget_sheets_source(struct web_tab *w) {
     free(w->source);
     w->source = NULL;
     w->source_length = 0;
 }
 
-static void forget_sheets(struct recon_web *w) {
+static void forget_sheets(struct web_tab *w) {
     if (w->sheet_request != NULL) {
         recon_http_cancel(w->sheet_request);
         w->sheet_request = NULL;
@@ -263,7 +685,7 @@ static void forget_sheets(struct recon_web *w) {
 static void on_sheet_done(void *user, bool ok, char *body, size_t length,
         const char *content_type, const struct recon_http_url *final_url,
         const char *error) {
-    struct recon_web *w = user;
+    struct web_tab *w = user;
     (void)content_type; (void)final_url; (void)error;
 
     w->sheet_request = NULL;
@@ -299,7 +721,7 @@ static const struct recon_http_handlers SHEET_HANDLERS = {
  * of the cascade and a queue is the only way to keep it with one connection
  * at a time.
  */
-static void fetch_next_sheet(struct recon_web *w) {
+static void fetch_next_sheet(struct web_tab *w) {
     if (w->sheet_request != NULL || w->page == NULL) {
         return;
     }
@@ -328,7 +750,7 @@ static void fetch_next_sheet(struct recon_web *w) {
  * the top when its stylesheet arrives is a page that punished them for
  * starting early.
  */
-static void restyle(struct recon_web *w) {
+static void restyle(struct web_tab *w) {
     if (w->source == NULL || w->restyled) {
         forget_sheets_source(w);
         return;
@@ -358,9 +780,9 @@ static void restyle(struct recon_web *w) {
 
 /* --- The pictures --- */
 
-static void fetch_next_image(struct recon_web *w);
+static void fetch_next_image(struct web_tab *w);
 
-static void forget_images(struct recon_web *w) {
+static void forget_images(struct web_tab *w) {
     if (w->image_request != NULL) {
         recon_http_cancel(w->image_request);
         w->image_request = NULL;
@@ -381,7 +803,7 @@ static void forget_images(struct recon_web *w) {
  * fifteen times is fourteen requests nobody asked for. The block keeps the
  * index, so the same bytes are drawn everywhere the page asked for them.
  */
-static void collect_images(struct recon_web *w) {
+static void collect_images(struct web_tab *w) {
     forget_images(w);
     if (w->page == NULL || !w->have_url) {
         return;
@@ -430,7 +852,7 @@ static void collect_images(struct recon_web *w) {
 }
 
 /* Which entry holds this block's picture, or -1. */
-static int image_for(struct recon_web *w,
+static int image_for(struct web_tab *w,
         const struct recon_html_block_entry *b) {
     if (b->source < 0 || w->page == NULL || !w->have_url) {
         return -1;
@@ -457,7 +879,7 @@ static int image_for(struct recon_web *w,
 static void on_image_done(void *user, bool ok, char *body, size_t length,
         const char *content_type, const struct recon_http_url *final_url,
         const char *error) {
-    struct recon_web *w = user;
+    struct web_tab *w = user;
     (void)content_type; (void)final_url; (void)error;
 
     w->image_request = NULL;
@@ -488,7 +910,7 @@ static const struct recon_http_handlers IMAGE_HANDLERS = {
     .done = on_image_done,
 };
 
-static void fetch_next_image(struct recon_web *w) {
+static void fetch_next_image(struct web_tab *w) {
     if (w->image_request != NULL) {
         return;
     }
@@ -518,7 +940,7 @@ static void fetch_next_image(struct recon_web *w) {
 static void on_done(void *user, bool ok, char *body, size_t length,
         const char *content_type, const struct recon_http_url *final_url,
         const char *error) {
-    struct recon_web *w = user;
+    struct web_tab *w = user;
 
     w->request = NULL;
     w->loading = false;
@@ -599,7 +1021,7 @@ static const struct recon_http_handlers HANDLERS = {
     .done = on_done,
 };
 
-static void go_to(struct recon_web *w, const struct recon_http_url *url,
+static void go_to(struct web_tab *w, const struct recon_http_url *url,
         bool remember) {
     if (w->request != NULL) {
         recon_http_cancel(w->request);
@@ -638,9 +1060,12 @@ static void go_to(struct recon_web *w, const struct recon_http_url *url,
     recon_appwin_refresh(w->win);
 }
 
-static void go_typed(struct recon_web *w) {
+static void go_typed(struct web_tab *w) {
+    if (w->owner == NULL) {
+        return;
+    }
     struct recon_http_url url;
-    if (!recon_http_parse_url(w->address.text,
+    if (!recon_http_parse_url(w->owner->address.text,
             w->have_url ? &w->url : NULL, &url)) {
         set_status(w, true, "%s", recon_http_last_error());
         return;
@@ -659,7 +1084,7 @@ static void go_typed(struct recon_web *w) {
  * bottom of the page.
  */
 struct flow {
-    struct recon_web *w;
+    struct web_tab *w;
     struct recon_panel *panel;        /* NULL to measure */
     int origin_x, origin_y;           /* where the content area starts */
     int width;
@@ -701,6 +1126,24 @@ struct flow {
      */
     recon_color dim_ink;
     recon_color rule_ink;
+
+    /*
+     * --- Find on page ---
+     *
+     * `find` is what is being looked for, or NULL. `find_seen` counts the
+     * matches as the page is laid out and `find_at` says which one is the
+     * current match, so the count and the highlight come out of the same pass
+     * that draws the words.
+     *
+     * The same pass on purpose. Counting matches separately means walking the
+     * document a second time with a second idea of what a word is, and the
+     * two disagree the moment one of them is changed -- which shows up as
+     * "3 of 12" with the third one highlighted somewhere else.
+     */
+    const char *find;
+    int find_seen;
+    int find_at;
+    int find_y;                       /* where the current match ended up */
 };
 
 /*
@@ -719,6 +1162,27 @@ static recon_color on_paper(const struct flow *f, unsigned rgb,
     return recon_color_readable_on(f->paper,
         RECON_RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF),
         fallback, fallback);
+}
+
+/*
+ * Case-insensitive substring.
+ *
+ * Written out rather than `strcasestr`, which is a GNU extension and is not
+ * there in the standalone test targets -- the same reason recon_css.c has one
+ * of these. Searching for "Games" has to find "games", because nobody typing
+ * into a find bar is thinking about capital letters.
+ */
+static bool contains_fold(const char *haystack, const char *needle) {
+    if (needle == NULL || needle[0] == '\0' || haystack == NULL) {
+        return false;
+    }
+    size_t n = strlen(needle);
+    for (const char *at = haystack; *at != '\0'; at++) {
+        if (strncasecmp(at, needle, n) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* The face and size a run wants. */
@@ -789,6 +1253,35 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
         ink = on_paper(f, colour, f->text_ink);
     }
 
+    /*
+     * --- A match, marked before the word goes on top of it ---
+     *
+     * Behind rather than a colour change, because a page already uses colour
+     * to mean things and a match that recolours a word competes with whatever
+     * the page was saying with that colour. A block behind it does not.
+     *
+     * The current match is the accent and the others are a wash of it, so
+     * "which one am I on" reads without counting.
+     */
+    if (f->find != NULL && f->find[0] != '\0' &&
+            contains_fold(word, f->find)) {
+        int seen = f->find_seen++;
+        bool current = (seen == f->find_at);
+        recon_color mark = current
+            ? f->link_ink : recon_color_mix(f->paper, f->link_ink, 90);
+
+        if (f->panel != NULL) {
+            recon_fill_rect(f->panel, screen_x - 1, screen_y,
+                recon_text_width(font, word) + 2,
+                recon_font_line_height(font), mark);
+        }
+        if (current) {
+            f->find_y = y;
+            /* On the accent, the ordinary ink may vanish. */
+            ink = recon_color_readable_on(mark, ink, f->paper, f->paper);
+        }
+    }
+
     recon_draw_text(f->panel, font, screen_x, screen_y + ascent,
         f->width - x, word, ink);
 
@@ -837,8 +1330,14 @@ static void underline_link(struct flow *f, struct recon_font *font,
  * is worse than a line that is too long.
  */
 static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
-    struct recon_web *w = f->w;
+    struct web_tab *w = f->w;
 
+    /*
+     * Zoom multiplies whatever the kind and the stylesheet settle on, rather
+     * than replacing it: a heading at 150% is half again as big as *that
+     * heading*, not half again as big as body text. Applied at the end, below,
+     * for the same reason -- it is the last word, not the first.
+     */
     int size = BODY_SIZE;
     int indent = 0;
     const char *marker = NULL;
@@ -947,6 +1446,25 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         }
         if (size > 40) {
             size = 40;
+        }
+    }
+
+    /*
+     * And then zoom, last, over whatever the kind and the stylesheet settled
+     * on. It is the reader's word about the whole page, so it multiplies
+     * rather than replaces -- a heading at 150% is half again as big as that
+     * heading, not half again as big as body text.
+     *
+     * Its own floor and ceiling, wider than the ones above: those bound what a
+     * *page* may ask for, and this is what the person reading asked for.
+     */
+    if (f->w->zoom > 0 && f->w->zoom != 100) {
+        size = size * f->w->zoom / 100;
+        if (size < 6) {
+            size = 6;
+        }
+        if (size > 72) {
+            size = 72;
         }
     }
 
@@ -1160,7 +1678,7 @@ static void settle_paper(struct flow *f) {
 }
 
 static int run_flow(struct flow *f) {
-    struct recon_web *w = f->w;
+    struct web_tab *w = f->w;
     f->height = 0;
 
     for (int i = 0; i < recon_html_block_count(w->page); i++) {
@@ -1181,7 +1699,7 @@ static int run_flow(struct flow *f) {
     return f->height;
 }
 
-static int measure(struct recon_web *w, int width) {
+static int measure(struct web_tab *w, int width) {
     struct flow f;
     memset(&f, 0, sizeof(f));
     f.w = w;
@@ -1191,6 +1709,30 @@ static int measure(struct recon_web *w, int width) {
 }
 
 /* --- Drawing --- */
+
+/*
+ * A padlock, drawn rather than typed.
+ *
+ * The system font is DejaVu Sans, which has the arrows, the star, the house
+ * and the triple bar this toolbar uses -- and not U+1F512, which lives in the
+ * emoji block. A glyph the font does not have draws as nothing, and a security
+ * indicator that is sometimes invisible is worse than none: its absence is
+ * what says "not secure".
+ */
+static void draw_lock(struct recon_panel *p, int x, int y, recon_color ink,
+        bool closed) {
+    /* The body: five wide, four tall, with the keyhole left out of it. */
+    recon_fill_rect(p, x, y + 4, 8, 6, ink);
+
+    /* The shackle: two uprights and a top, open on one side when it is not. */
+    recon_fill_rect(p, x + 1, y + 1, 1, 3, ink);
+    recon_fill_rect(p, x + 2, y, 4, 1, ink);
+    if (closed) {
+        recon_fill_rect(p, x + 6, y + 1, 1, 3, ink);
+    } else {
+        recon_fill_rect(p, x + 6, y + 1, 1, 1, ink);
+    }
+}
 
 /* A scrollbar down the right, drawn only when there is more than fits. */
 static void draw_scrollbar(struct recon_panel *p, int x, int y, int h,
@@ -1218,34 +1760,366 @@ static void draw_scrollbar(struct recon_panel *p, int x, int y, int h,
     recon_fill_rect(p, x + 1, y + at, SCROLLBAR_WIDTH - 2, thumb, COLOR_DIM);
 }
 
+/*
+ * --- The tab strip ---
+ *
+ * Tabs share the width, shrinking as more open, down to a floor. The one in
+ * front is drawn in the page's surface colour rather than the bar's, so it
+ * reads as continuous with what is below it -- which is the whole idea a tab
+ * is: the front one is not a button, it is the top edge of the page.
+ */
+static void draw_tabs(struct recon_web *w, struct recon_panel *p,
+        int x, int y, int width) {
+    recon_fill_rect(p, x, y, width, TABSTRIP_HEIGHT, COLOR_BAR);
+
+    int ascent = recon_font_ascent(w->font);
+    int plus = 28;
+    int room = width - plus - 6;
+
+    int each = w->tab_count > 0 ? room / w->tab_count : room;
+    if (each > TAB_MAX_WIDTH) {
+        each = TAB_MAX_WIDTH;
+    }
+    if (each < TAB_MIN_WIDTH) {
+        each = TAB_MIN_WIDTH;
+    }
+
+    int tx = x + 2;
+    for (int i = 0; i < w->tab_count; i++) {
+        int tw = each;
+        if (tx + tw > x + room) {
+            tw = x + room - tx;
+        }
+        if (tw < 24) {
+            break;                     /* past the strip; the rest do not fit */
+        }
+
+        bool on = (i == w->active);
+        struct web_tab *t = w->tabs[i];
+
+        /*
+         * RECON_WIDGET_TAB, with no label of its own.
+         *
+         * The look belongs to the widget layer -- flush with its neighbours,
+         * `checked` for the one in front, the skin's own hover -- which is
+         * what that layer is for. What it cannot do is a title on the left
+         * with a close cross on the right, so the button is drawn empty and
+         * its contents go on top.
+         */
+        struct recon_widget_button tab = {
+            .x = tx, .y = y + 2, .w = tw - 1, .h = TABSTRIP_HEIGHT - 2,
+            .id = HIT_TAB_BASE + (uint32_t)i,
+            .label = NULL,
+            .font = w->font,
+            .tip = t->have_url ? t->label : "New tab",
+            .behind = COLOR_BAR,
+            .text = COLOR_TEXT,
+            .look = RECON_WIDGET_TAB,
+            .checked = on,
+        };
+        recon_widget_button(p, &tab);
+
+        recon_color face = on ? THEME(SURFACE) : COLOR_BAR;
+        recon_color ink = recon_color_readable_on(face,
+            on ? COLOR_TEXT : COLOR_DIM, THEME(TITLE_TEXT), COLOR_TEXT);
+
+        /*
+         * The close cross is drawn rather than built as a button: a second
+         * frame inside the tab's own reads as a box in a box, and at eighteen
+         * pixels the frame is most of what you see. It still registers a hit
+         * region, so it is as clickable as anything else.
+         */
+        int label_room = tw - 16;
+        if (tw >= TAB_MIN_WIDTH) {
+            label_room = tw - 34;
+            int shut_x = tx + tw - 22;
+            recon_draw_text(p, w->font, shut_x + 4,
+                y + (TABSTRIP_HEIGHT + ascent) / 2, 14, "\xC3\x97", ink);
+            recon_hit_add(p, shut_x, y + 4, 18, TABSTRIP_HEIGHT - 8,
+                HIT_TABCLOSE_BASE + (uint32_t)i);
+            recon_hit_tip(p, "Close this tab");
+        }
+
+        if (label_room > 10) {
+            /*
+             * A page still on its way says so, because a strip of tabs all
+             * showing their old titles while three of them are loading is a
+             * strip that is out of date and does not admit it.
+             */
+            const char *shown = t->loading ? "Loading\xE2\x80\xA6"
+                : (t->label[0] != '\0' ? t->label : "New tab");
+            recon_draw_text(p, w->font, tx + 9,
+                y + (TABSTRIP_HEIGHT + ascent) / 2, label_room, shown, ink);
+        }
+
+        tx += each;
+    }
+
+    struct recon_widget_button add = {
+        .x = x + width - plus, .y = y + 4,
+        .w = 24, .h = TABSTRIP_HEIGHT - 9,
+        .id = HIT_NEWTAB,
+        .label = "+",
+        .font = w->font,
+        .tip = w->tab_count >= TABS_MAX
+            ? "This window is full at twelve tabs." : "New tab",
+        .behind = COLOR_BAR,
+        .text = COLOR_TEXT,
+        .disabled = w->tab_count >= TABS_MAX,
+    };
+    recon_widget_button(p, &add);
+
+    recon_fill_rect(p, x, y + TABSTRIP_HEIGHT - 1, width, 1, COLOR_RULE);
+}
+
+/* --- The bookmarks bar --- */
+
+static void draw_bookmarks(struct recon_web *w, struct recon_panel *p,
+        int x, int y, int width) {
+    recon_fill_rect(p, x, y, width, MARKS_HEIGHT, COLOR_BAR);
+    recon_fill_rect(p, x, y + MARKS_HEIGHT - 1, width, 1, COLOR_RULE);
+
+    int ascent = recon_font_ascent(w->font);
+
+    if (w->bookmark_count == 0) {
+        recon_color ink = recon_color_readable_on(COLOR_BAR, COLOR_DIM,
+            THEME(TITLE_TEXT), COLOR_TEXT);
+        recon_draw_text(p, w->font, x + 8, y + (MARKS_HEIGHT + ascent) / 2 - 1,
+            width - 16, "No bookmarks yet \xE2\x80\x94 the star keeps one.",
+            ink);
+        return;
+    }
+
+    int bx = x + 4;
+    for (int i = 0; i < w->bookmark_count; i++) {
+        int label_width = recon_text_width(w->font, w->bookmarks[i].label);
+        int tw = label_width + 16;
+        if (tw > 160) {
+            tw = 160;
+        }
+        if (bx + tw > x + width - 4) {
+            break;                     /* the rest are in the menu */
+        }
+
+        struct recon_widget_button mark = {
+            .x = bx, .y = y + 2, .w = tw, .h = MARKS_HEIGHT - 5,
+            .id = HIT_MARK_BASE + (uint32_t)i,
+            .label = w->bookmarks[i].label,
+            .font = w->font,
+            .tip = w->bookmarks[i].url,
+            .behind = COLOR_BAR,
+            .text = COLOR_TEXT,
+            .look = RECON_WIDGET_PLAIN,
+        };
+        recon_widget_button(p, &mark);
+        bx += tw + 2;
+    }
+}
+
+/* --- The find bar --- */
+
+static void draw_find(struct recon_web *w, struct recon_panel *p,
+        int x, int y, int width) {
+    recon_fill_rect(p, x, y, width, STRIP_HEIGHT, COLOR_BAR);
+    recon_fill_rect(p, x, y, width, 1, COLOR_RULE);
+
+    int ascent = recon_font_ascent(w->font);
+    recon_color ink = recon_color_readable_on(COLOR_BAR, COLOR_TEXT,
+        THEME(TITLE_TEXT), COLOR_TEXT);
+
+    int fx = x + 8;
+    recon_draw_text(p, w->font, fx, y + (STRIP_HEIGHT + ascent) / 2 - 1, 44,
+        "Find", ink);
+    fx += 38;
+
+    int field = 220;
+    recon_edit_draw(p, w->font, fx, y + 3, field, STRIP_HEIGHT - 7, &w->find);
+    recon_hit_add(p, fx, y + 3, field, STRIP_HEIGHT - 7, HIT_FIND_FIELD);
+    fx += field + 6;
+
+    struct recon_widget_button prev = {
+        .x = fx, .y = y + 3, .w = 24, .h = STRIP_HEIGHT - 7,
+        .id = HIT_FIND_PREV, .label = "\xE2\x80\xB9", .font = w->font,
+        .tip = "Previous match", .behind = COLOR_BAR, .text = ink,
+        .disabled = w->find_count == 0,
+    };
+    recon_widget_button(p, &prev);
+    fx += 26;
+
+    struct recon_widget_button next = {
+        .x = fx, .y = y + 3, .w = 24, .h = STRIP_HEIGHT - 7,
+        .id = HIT_FIND_NEXT, .label = "\xE2\x80\xBA", .font = w->font,
+        .tip = "Next match", .behind = COLOR_BAR, .text = ink,
+        .disabled = w->find_count == 0,
+    };
+    recon_widget_button(p, &next);
+    fx += 32;
+
+    /*
+     * The count, and the honest answer when there is none.
+     *
+     * "0 of 0" says the search ran and found nothing, which is different from
+     * an empty field where nothing has been searched for -- and telling those
+     * two apart is most of what this line is for.
+     */
+    char count[64];
+    if (w->find.text[0] == '\0') {
+        count[0] = '\0';
+    } else if (w->find_count == 0) {
+        snprintf(count, sizeof(count), "not on this page");
+    } else {
+        snprintf(count, sizeof(count), "%d of %d", w->find_at + 1,
+            w->find_count);
+    }
+    if (count[0] != '\0') {
+        recon_draw_text(p, w->font, fx, y + (STRIP_HEIGHT + ascent) / 2 - 1,
+            width - (fx - x) - 40, count,
+            w->find_count == 0 ? COLOR_WARNING : ink);
+    }
+
+    struct recon_widget_button shut = {
+        .x = x + width - 28, .y = y + 3, .w = 24, .h = STRIP_HEIGHT - 7,
+        .id = HIT_FIND_CLOSE, .label = "\xC3\x97", .font = w->font,
+        .tip = "Close the find bar", .behind = COLOR_BAR, .text = ink,
+    };
+    recon_widget_button(p, &shut);
+}
+
+/* --- The menu --- */
+
+static void draw_menu(struct recon_web *w, struct recon_panel *p,
+        int x, int y, int width) {
+    int height = 0;
+    for (int i = 0; i < MENU_COUNT; i++) {
+        height += MENU[i].separator ? MENU_SEPARATOR_ROW : MENU_ROW;
+    }
+    height += 8;
+
+    int mx = x + width - MENU_WIDTH - 6;
+    if (mx < x + 4) {
+        mx = x + 4;
+    }
+
+    recon_fill_rect(p, mx, y, MENU_WIDTH, height, THEME(MENU));
+    recon_draw_bevel(p, mx, y, MENU_WIDTH, height, false);
+
+    struct web_tab *t = front(w);
+    int ascent = recon_font_ascent(w->font);
+    int my = y + 4;
+
+    for (int i = 0; i < MENU_COUNT; i++) {
+        if (MENU[i].separator) {
+            recon_fill_rect(p, mx + 8, my + MENU_SEPARATOR_ROW / 2,
+                MENU_WIDTH - 16, 1, THEME(MENU_SEPARATOR));
+            my += MENU_SEPARATOR_ROW;
+            continue;
+        }
+
+        /*
+         * An entry that cannot do anything is drawn and explained rather than
+         * hidden. A menu whose entries come and go is a menu nobody can learn
+         * the shape of, and "why is this grey" has an answer where "where did
+         * it go" does not.
+         */
+        bool on = true;
+        if (i == MENU_ADD_BOOKMARK || i == MENU_SET_HOME || i == MENU_FIND) {
+            on = (t != NULL && t->page != NULL && t->have_url);
+        } else if (i == MENU_NEW_TAB) {
+            on = w->tab_count < TABS_MAX;
+        } else if (i == MENU_ZOOM_IN) {
+            on = (t != NULL && t->zoom < ZOOM_MAX);
+        } else if (i == MENU_ZOOM_OUT) {
+            on = (t != NULL && t->zoom > ZOOM_MIN);
+        } else if (i == MENU_ZOOM_RESET) {
+            on = (t != NULL && t->zoom != 100);
+        }
+
+        /*
+         * A row, not a button.
+         *
+         * A menu of bevelled buttons reads as a toolbar stood on its end. The
+         * shell's own menus draw a highlight behind the row under the pointer
+         * and nothing at all behind the others, which is what a menu looks
+         * like everywhere -- so this does the same thing, through the same
+         * helper.
+         */
+        uint32_t id = HIT_MENU_BASE + (uint32_t)i;
+        bool hovered = on && recon_panel_hot(p) == id;
+
+        if (hovered) {
+            recon_widget_highlight_role(p, mx + 2, my, MENU_WIDTH - 4,
+                MENU_ROW, RECON_THEME_MENU_HILITE);
+        }
+        recon_hit_add(p, mx + 2, my, MENU_WIDTH - 4, MENU_ROW, id);
+        if (!on) {
+            recon_hit_inert(p);
+        }
+
+        recon_color ink = !on ? THEME(MENU_TEXT_DISABLED)
+            : hovered ? THEME(MENU_HILITE_TEXT) : THEME(MENU_TEXT);
+        recon_draw_text(p, w->font, mx + 12, my + (MENU_ROW + ascent) / 2 - 1,
+            MENU_WIDTH - 90, MENU[i].label, ink);
+
+        /*
+         * A tick where the entry is a state rather than an action, so
+         * "Show bookmarks bar" says whether they are shown.
+         */
+        if (i == MENU_SHOW_MARKS && w->show_bookmarks) {
+            recon_draw_text(p, w->font, mx + MENU_WIDTH - 22,
+                my + (MENU_ROW + ascent) / 2 - 1, 16, "\xE2\x9C\x93", ink);
+        } else if (MENU[i].keys != NULL) {
+            int kw = recon_text_width(w->font, MENU[i].keys);
+            /* The shortcut is quieter than the label but has to stay legible
+             * on the highlight, which is a different surface from the menu. */
+            recon_draw_text(p, w->font, mx + MENU_WIDTH - 12 - kw,
+                my + (MENU_ROW + ascent) / 2 - 1, kw + 2, MENU[i].keys,
+                hovered ? THEME(MENU_HILITE_TEXT)
+                        : THEME(MENU_TEXT_DISABLED));
+        }
+
+        my += MENU_ROW;
+    }
+}
+
 static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
         int height) {
     struct recon_web *w = user;
+    struct web_tab *t = front(w);
     int ascent = recon_font_ascent(w->font);
 
     recon_fill_rect(p, x, y, width, height, COLOR_BG);
 
-    /* --- The bar --- */
-    recon_fill_rect(p, x, y, width, BAR_HEIGHT, COLOR_BAR);
-    recon_fill_rect(p, x, y + BAR_HEIGHT - 1, width, 1, COLOR_RULE);
+    /* --- The tab strip --- */
+    draw_tabs(w, p, x, y, width);
+    int bar_y = y + TABSTRIP_HEIGHT;
+
+    /* --- The toolbar --- */
+    recon_fill_rect(p, x, bar_y, width, BAR_HEIGHT, COLOR_BAR);
+    recon_fill_rect(p, x, bar_y + BAR_HEIGHT - 1, width, 1, COLOR_RULE);
 
     int bx = x + 6;
-    int by = y + (BAR_HEIGHT - FIELD_HEIGHT) / 2;
+    int by = bar_y + (BAR_HEIGHT - FIELD_HEIGHT) / 2;
 
-    bool can_back = w->at > 0;
-    bool can_forward = w->at >= 0 && w->at + 1 < w->history_count;
+    bool can_back = t != NULL && t->at > 0;
+    bool can_forward = t != NULL && t->at >= 0 && t->at + 1 < t->history_count;
+    bool loading = t != NULL && t->loading;
 
-    static const struct { const char *glyph; uint32_t hit; } BUTTONS[] = {
-        { "\xE2\x86\x90", HIT_BACK },       /* left arrow */
-        { "\xE2\x86\x92", HIT_FORWARD },    /* right arrow */
-        { "\xE2\x86\xBB", HIT_RELOAD },     /* a circling arrow */
+    /*
+     * Stop and reload are one button, because they are one question -- "is
+     * this page still coming?" -- and the answer is never both. Two buttons
+     * would mean one of them is always dead.
+     */
+    const struct { const char *glyph; uint32_t hit; bool on; const char *tip; }
+    BUTTONS[] = {
+        { "\xE2\x86\x90", HIT_BACK, can_back, "Back" },
+        { "\xE2\x86\x92", HIT_FORWARD, can_forward, "Forward" },
+        { loading ? "\xC3\x97" : "\xE2\x86\xBB", HIT_RELOAD,
+          loading || (t != NULL && t->have_url),
+          loading ? "Stop loading" : "Reload this page" },
+        { "\xE2\x8C\x82", HIT_HOME, w->home[0] != '\0', "Home" },
     };
 
-    for (int i = 0; i < 3; i++) {
-        bool on = (i == 0) ? can_back
-            : (i == 1) ? can_forward
-            : w->have_url;
-
+    for (size_t i = 0; i < sizeof(BUTTONS) / sizeof(BUTTONS[0]); i++) {
         /*
          * Registered whether or not it can be pressed. Back with nowhere to
          * go used to register nothing, so the click fell through to the
@@ -1257,21 +2131,110 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
             .id = BUTTONS[i].hit,
             .label = BUTTONS[i].glyph,
             .font = w->font,
+            .tip = BUTTONS[i].tip,
             .behind = COLOR_BAR,
-            .text = on ? COLOR_TEXT : COLOR_DIM,
-            .disabled = !on,
+            .text = BUTTONS[i].on ? COLOR_TEXT : COLOR_DIM,
+            .disabled = !BUTTONS[i].on,
         };
         recon_widget_button(p, &button);
         bx += BUTTON_WIDTH + 4;
     }
 
-    int field_width = width - (bx - x) - 8;
-    recon_edit_draw(p, w->font, bx, by, field_width, FIELD_HEIGHT, &w->address);
-    recon_hit_add(p, bx, by, field_width, FIELD_HEIGHT, HIT_ADDRESS);
+    /* --- The address, with what is known about how it travelled --- */
+    int right = 2 * (BUTTON_WIDTH + 4);
+    int field_width = width - (bx - x) - right - 8;
+    if (field_width < 80) {
+        field_width = 80;
+    }
 
     /*
-     * --- The status line ---
+     * The lock says how the page came, and only that.
      *
+     * Closed for TLS, open for plain HTTP, and nothing at all when no page
+     * has loaded -- a lock on an empty window would be describing something
+     * that has not happened. It is deliberately not a claim about the site:
+     * "the connection was encrypted" is the only thing this can actually
+     * know, and dressing it up as "this page is safe" would be a lie the
+     * browser tells rather than the site.
+     */
+    int lock_room = 0;
+    if (t != NULL && t->have_url) {
+        bool secure = t->url.secure;
+        recon_color mark = recon_color_readable_on(COLOR_BAR,
+            secure ? COLOR_TEXT : COLOR_WARNING, THEME(TITLE_TEXT),
+            COLOR_TEXT);
+        draw_lock(p, bx + 7, by + (FIELD_HEIGHT - 10) / 2, mark, secure);
+        recon_hit_add(p, bx, by, 22, FIELD_HEIGHT, HIT_ADDRESS);
+        recon_hit_tip(p, secure
+            ? "The connection to this site was encrypted."
+            : "Sent in the clear. Anyone between here and the site can read "
+              "it.");
+        lock_room = 20;
+    }
+
+    recon_edit_draw(p, w->font, bx + lock_room, by, field_width - lock_room,
+        FIELD_HEIGHT, &w->address);
+    recon_hit_add(p, bx + lock_room, by, field_width - lock_room, FIELD_HEIGHT,
+        HIT_ADDRESS);
+    bx += field_width + 4;
+
+    /* --- The star, and the menu --- */
+    char here[RECON_HTTP_URL_MAX];
+    here[0] = '\0';
+    if (t != NULL && t->have_url) {
+        recon_http_format_url(&t->url, here, sizeof(here));
+    }
+    bool kept = here[0] != '\0' && bookmark_of(w, here) >= 0;
+
+    struct recon_widget_button star = {
+        .x = bx, .y = by, .w = BUTTON_WIDTH, .h = FIELD_HEIGHT,
+        .id = HIT_STAR,
+        .label = kept ? "\xE2\x98\x85" : "\xE2\x98\x86",
+        .font = w->font,
+        .tip = kept ? "Remove this bookmark" : "Bookmark this page",
+        .behind = COLOR_BAR,
+        .text = kept ? COLOR_LINK : COLOR_TEXT,
+        .disabled = here[0] == '\0',
+    };
+    recon_widget_button(p, &star);
+    bx += BUTTON_WIDTH + 4;
+
+    struct recon_widget_button menu = {
+        .x = bx, .y = by, .w = BUTTON_WIDTH, .h = FIELD_HEIGHT,
+        .id = HIT_MENU,
+        .label = "\xE2\x89\xA1",
+        .font = w->font,
+        .tip = "More",
+        .behind = COLOR_BAR,
+        .text = COLOR_TEXT,
+        .checked = w->menu_open,
+    };
+    recon_widget_button(p, &menu);
+
+    int top = bar_y + BAR_HEIGHT;
+
+    /* --- The bookmarks bar --- */
+    if (w->show_bookmarks) {
+        draw_bookmarks(w, p, x, top, width);
+        top += MARKS_HEIGHT;
+    }
+    top += PADDING;
+
+    /* --- The status line --- */
+    int status_y = y + height - STATUS_HEIGHT;
+    int bottom = status_y - PADDING;
+
+    /* --- The find bar, above the status and below the page --- */
+    if (w->strip == STRIP_FIND) {
+        bottom -= STRIP_HEIGHT;
+        draw_find(w, p, x, status_y - STRIP_HEIGHT, width);
+    }
+
+    if (t != NULL) {
+        t->viewport_height = bottom - top;
+    }
+
+    /*
      * The ink is chosen against the strip rather than asked of the skin, for
      * the reason the clock had to be (BG-151): this fills with the *bar*
      * colour and was writing in `surface.text-dim`, which is a dark grey
@@ -1281,29 +2244,54 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
      * The warning goes through the same lens. A red warning on a red bar is
      * the case where being unreadable matters most.
      */
-    int status_y = y + height - STATUS_HEIGHT;
     recon_fill_rect(p, x, status_y, width, STATUS_HEIGHT, COLOR_BAR);
     recon_fill_rect(p, x, status_y, width, 1, COLOR_RULE);
 
-    recon_color asked = w->status_is_error ? COLOR_WARNING : COLOR_DIM;
+    recon_color asked = (t != NULL && t->status_is_error)
+        ? COLOR_WARNING : COLOR_DIM;
     recon_color ink = recon_color_readable_on(COLOR_BAR, asked,
         THEME(TITLE_TEXT), THEME(SURFACE_TEXT));
 
     recon_draw_text(p, w->font, x + 8,
-        status_y + (STATUS_HEIGHT + ascent) / 2 - 1, width - 16, w->status,
-        ink);
+        status_y + (STATUS_HEIGHT + ascent) / 2 - 1, width - 90,
+        t != NULL ? t->status : "", ink);
+
+    /*
+     * The text size, at the right, and only when it is not the ordinary one.
+     *
+     * A browser showing "100%" forever is a browser with a number on it that
+     * never means anything; showing it only when it has been changed makes
+     * the number the answer to "why does this page look like that".
+     */
+    if (t != NULL && t->zoom != 100) {
+        char zoom[16];
+        snprintf(zoom, sizeof(zoom), "%d%%", t->zoom);
+        int zw = recon_text_width(w->font, zoom);
+        struct recon_widget_button reset = {
+            .x = x + width - zw - 20, .y = status_y + 2,
+            .w = zw + 14, .h = STATUS_HEIGHT - 4,
+            .id = HIT_MENU_BASE + MENU_ZOOM_RESET,
+            .label = zoom,
+            .font = w->font,
+            .tip = "Back to the ordinary text size",
+            .behind = COLOR_BAR,
+            .text = ink,
+            .look = RECON_WIDGET_PLAIN,
+        };
+        recon_widget_button(p, &reset);
+    }
 
     /* --- The page --- */
-    int top = y + BAR_HEIGHT + PADDING;
-    int bottom = status_y - PADDING;
-    w->viewport_height = bottom - top;
-
-    if (w->page == NULL || recon_html_block_count(w->page) == 0) {
-        if (!w->loading && w->status[0] == '\0') {
+    if (t == NULL || t->page == NULL || recon_html_block_count(t->page) == 0) {
+        if (t != NULL && !t->loading && t->status[0] == '\0') {
             recon_draw_text(p, w->font, x + PADDING, top + ascent,
                 width - PADDING * 2,
-                "Type an address above. This is a viewer for simple pages: "
-                "no stylesheets, no scripts, no pictures.", COLOR_DIM);
+                "Type an address above, or press + for another tab. "
+                "This viewer reads markup and stylesheets; it does not run "
+                "scripts.", COLOR_DIM);
+        }
+        if (w->menu_open) {
+            draw_menu(w, p, x, bar_y + BAR_HEIGHT, width);
         }
         return;
     }
@@ -1312,31 +2300,34 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
      * one is showing, so the text does not reflow when it appears. */
     int content_width = width - PADDING * 2 - SCROLLBAR_WIDTH;
 
-    if (w->content_height <= 0) {
-        w->content_height = measure(w, content_width);
+    if (t->content_height <= 0) {
+        t->content_height = measure(t, content_width);
     }
 
-    int most = w->content_height - w->viewport_height;
+    int most = t->content_height - t->viewport_height;
     if (most < 0) {
         most = 0;
     }
-    if (w->scroll > most) {
-        w->scroll = most;
+    if (t->scroll > most) {
+        t->scroll = most;
     }
-    if (w->scroll < 0) {
-        w->scroll = 0;
+    if (t->scroll < 0) {
+        t->scroll = 0;
     }
 
     struct flow f;
     memset(&f, 0, sizeof(f));
-    f.w = w;
+    f.w = t;
     f.panel = p;
     f.origin_x = x + PADDING;
     f.origin_y = top;
     f.width = content_width;
-    f.scroll = w->scroll;
+    f.scroll = t->scroll;
     f.clip_top = top;
     f.clip_bottom = bottom;
+    f.find = (w->strip == STRIP_FIND && w->find.text[0] != '\0')
+        ? w->find.text : NULL;
+    f.find_at = w->find_at;
     settle_paper(&f);
 
     /*
@@ -1349,19 +2340,175 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
         recon_fill_rect(p, x, top, width, bottom - top, f.paper);
     }
 
-    w->content_height = run_flow(&f);
+    t->content_height = run_flow(&f);
+    w->find_count = f.find_seen;
+    if (w->find_at >= w->find_count) {
+        w->find_at = w->find_count - 1;
+    }
 
-    if (w->content_height > w->viewport_height) {
+    if (t->content_height > t->viewport_height) {
         draw_scrollbar(p, x + width - SCROLLBAR_WIDTH, top,
-            w->viewport_height, w->scroll, w->viewport_height,
-            w->content_height);
+            t->viewport_height, t->scroll, t->viewport_height,
+            t->content_height);
+    }
+
+    /* Last, so it is over the page rather than under it. */
+    if (w->menu_open) {
+        draw_menu(w, p, x, bar_y + BAR_HEIGHT, width);
     }
 }
 
-/* --- Input --- */
+/* Open an address in whichever tab is in front. */
+static void open_text(struct recon_web *w, const char *text) {
+    struct web_tab *t = front(w);
+    if (t == NULL || text == NULL || text[0] == '\0') {
+        return;
+    }
+    struct recon_http_url url;
+    if (!recon_http_parse_url(text, t->have_url ? &t->url : NULL, &url)) {
+        set_status(t, true, "%s", recon_http_last_error());
+        return;
+    }
+    go_to(t, &url, true);
+}
+
+static void set_zoom(struct recon_web *w, int zoom) {
+    struct web_tab *t = front(w);
+    if (t == NULL) {
+        return;
+    }
+    if (zoom < ZOOM_MIN) {
+        zoom = ZOOM_MIN;
+    }
+    if (zoom > ZOOM_MAX) {
+        zoom = ZOOM_MAX;
+    }
+    if (zoom == t->zoom) {
+        return;
+    }
+    t->zoom = zoom;
+
+    /*
+     * The height is not what it was, and the scroll position that went with
+     * it is not either. Recomputed on the next draw; zeroing it here would be
+     * a guess, and keeping it would put the reader somewhere else on the page
+     * every time they pressed the key.
+     */
+    t->content_height = 0;
+    recon_appwin_refresh(t->win);
+}
+
+/*
+ * Move to the next or previous match and put it on screen.
+ *
+ * The position of a match is only known after a pass that lays the page out,
+ * so this changes which one is current and lets the next draw find it -- the
+ * scroll follows on the draw after that. Two frames rather than one, and the
+ * alternative is a third copy of the layout arithmetic run here.
+ */
+static void find_step(struct recon_web *w, int by) {
+    if (w->find_count <= 0) {
+        w->find_at = 0;
+        return;
+    }
+    w->find_at = (w->find_at + by + w->find_count) % w->find_count;
+
+    struct web_tab *t = front(w);
+    if (t != NULL) {
+        recon_appwin_refresh(t->win);
+    }
+}
+
+static void find_open(struct recon_web *w, bool open) {
+    w->strip = open ? STRIP_FIND : STRIP_NONE;
+    if (open) {
+        recon_edit_focus(&w->find);
+    } else {
+        w->find.active = false;
+        recon_edit_begin(&w->find, "", false);
+        w->find.active = false;
+        w->find_count = 0;
+        w->find_at = 0;
+    }
+    struct web_tab *t = front(w);
+    if (t != NULL) {
+        t->content_height = 0;
+        recon_appwin_refresh(t->win);
+    }
+}
+
+static void menu_do(struct recon_web *w, int item) {
+    struct web_tab *t = front(w);
+    w->menu_open = false;
+
+    switch (item) {
+    case MENU_NEW_TAB: {
+        struct web_tab *fresh = tab_new(w);
+        if (fresh != NULL) {
+            w->active = w->tab_count - 1;
+            recon_edit_begin(&w->address, "", false);
+            recon_edit_focus(&w->address);
+        }
+        break;
+    }
+    case MENU_CLOSE_TAB:
+        tab_close(w, w->active);
+        break;
+    case MENU_FIND:
+        find_open(w, true);
+        break;
+    case MENU_ZOOM_IN:
+        set_zoom(w, (t != NULL ? t->zoom : 100) + ZOOM_STEP);
+        break;
+    case MENU_ZOOM_OUT:
+        set_zoom(w, (t != NULL ? t->zoom : 100) - ZOOM_STEP);
+        break;
+    case MENU_ZOOM_RESET:
+        set_zoom(w, 100);
+        break;
+    case MENU_ADD_BOOKMARK:
+        bookmark_toggle(w);
+        /* Turned on when the first one is kept: a bookmark you cannot see is
+         * a bookmark you will not believe was saved. */
+        if (w->bookmark_count == 1) {
+            w->show_bookmarks = true;
+        }
+        break;
+    case MENU_SHOW_MARKS:
+        w->show_bookmarks = !w->show_bookmarks;
+        break;
+    case MENU_HISTORY:
+        /*
+         * The history of the tab in front, shown as a page it built itself.
+         * A list this already has, given the one thing it was missing --
+         * somewhere to be looked at.
+         */
+        if (t != NULL && t->history_count > 0) {
+            set_status(t, false, "%d place%s visited in this tab. Back and "
+                "forward walk them.", t->history_count,
+                t->history_count == 1 ? "" : "s");
+        } else if (t != NULL) {
+            set_status(t, false, "Nothing visited in this tab yet.");
+        }
+        break;
+    case MENU_SET_HOME:
+        if (t != NULL && t->have_url) {
+            recon_http_format_url(&t->url, w->home, sizeof(w->home));
+            set_status(t, false, "Home is now %s", w->home);
+        }
+        break;
+    default:
+        break;
+    }
+
+    if (t != NULL) {
+        recon_appwin_refresh(t->win);
+    }
+}
 
 static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
     struct recon_web *w = user;
+    struct web_tab *t = front(w);
     (void)cx;
     (void)cy;
 
@@ -1369,16 +2516,89 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
         return false;
     }
 
+    /*
+     * A click anywhere but the menu closes it, which is what a menu does.
+     * Done before the press is acted on, so the entry that was clicked still
+     * runs -- a menu that closed first and dispatched second would swallow
+     * every one of its own entries.
+     */
+    bool in_menu = (hit >= HIT_MENU_BASE && hit < HIT_MENU_BASE + MENU_COUNT);
+    if (w->menu_open && !in_menu && hit != HIT_MENU) {
+        w->menu_open = false;
+    }
+
+    if (in_menu) {
+        menu_do(w, (int)(hit - HIT_MENU_BASE));
+        return true;
+    }
+
+    if (hit >= HIT_TAB_BASE && hit < HIT_TAB_BASE + TABS_MAX) {
+        int which = (int)(hit - HIT_TAB_BASE);
+        if (which < w->tab_count && which != w->active) {
+            w->active = which;
+            struct web_tab *now = front(w);
+            /*
+             * The address bar follows the tab. It is the window's, not the
+             * tab's, so switching without this leaves the previous page's
+             * address over the new page -- which is the address bar lying,
+             * and the one thing it must never do.
+             */
+            char shown[RECON_HTTP_URL_MAX] = "";
+            if (now != NULL && now->have_url) {
+                recon_http_format_url(&now->url, shown, sizeof(shown));
+            }
+            recon_edit_begin(&w->address, shown, false);
+            w->address.active = false;
+
+            /*
+             * And the window's title, for the same reason as the address: the
+             * title bar and the taskbar button both name whatever is in
+             * front, and a browser whose title bar names a tab you are not
+             * looking at is one you cannot find in a taskbar of six.
+             */
+            if (now != NULL) {
+                recon_appwin_set_title(w->win,
+                    now->label[0] != '\0' ? now->label : WEB_APPLICATION);
+                now->content_height = 0;
+            }
+
+            /*
+             * A search does not follow you between tabs. The matches were
+             * counted on the page you were reading, and carrying "4 of 11"
+             * onto a different document is a count about nothing.
+             */
+            w->find_count = 0;
+            w->find_at = 0;
+        }
+        return true;
+    }
+
+    if (hit >= HIT_TABCLOSE_BASE && hit < HIT_TABCLOSE_BASE + TABS_MAX) {
+        tab_close(w, (int)(hit - HIT_TABCLOSE_BASE));
+        return true;
+    }
+
+    if (hit >= HIT_MARK_BASE && hit < HIT_MARK_BASE + BOOKMARKS_MAX) {
+        int which = (int)(hit - HIT_MARK_BASE);
+        if (which < w->bookmark_count) {
+            open_text(w, w->bookmarks[which].url);
+        }
+        return true;
+    }
+
     if (hit >= HIT_LINK_BASE) {
+        if (t == NULL || t->page == NULL) {
+            return true;
+        }
         int link = (int)(hit - HIT_LINK_BASE);
-        const char *href = recon_html_link_at(w->page, link);
+        const char *href = recon_html_link_at(t->page, link);
         if (href == NULL) {
             return true;
         }
 
         struct recon_http_url next;
-        if (!recon_http_parse_url(href, w->have_url ? &w->url : NULL, &next)) {
-            set_status(w, true, "%s", recon_http_last_error());
+        if (!recon_http_parse_url(href, t->have_url ? &t->url : NULL, &next)) {
+            set_status(t, true, "%s", recon_http_last_error());
             return true;
         }
 
@@ -1392,35 +2612,83 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
          */
         char here[RECON_HTTP_URL_MAX];
         char there[RECON_HTTP_URL_MAX];
-        recon_http_format_url(&w->url, here, sizeof(here));
+        recon_http_format_url(&t->url, here, sizeof(here));
         recon_http_format_url(&next, there, sizeof(there));
-        if (w->have_url && strcmp(here, there) == 0) {
-            set_status(w, false, "That points at a place on this page, which "
+        if (t->have_url && strcmp(here, there) == 0) {
+            set_status(t, false, "That points at a place on this page, which "
                 "this cannot jump to yet.");
             return true;
         }
 
-        go_to(w, &next, true);
+        go_to(t, &next, true);
         return true;
     }
 
     switch (hit) {
     case HIT_BACK:
-        if (w->at > 0) {
-            w->at--;
-            go_to(w, &w->history[w->at], false);
+        if (t != NULL && t->at > 0) {
+            t->at--;
+            go_to(t, &t->history[t->at], false);
         }
         return true;
     case HIT_FORWARD:
-        if (w->at + 1 < w->history_count) {
-            w->at++;
-            go_to(w, &w->history[w->at], false);
+        if (t != NULL && t->at + 1 < t->history_count) {
+            t->at++;
+            go_to(t, &t->history[t->at], false);
         }
         return true;
     case HIT_RELOAD:
-        if (w->have_url) {
-            go_to(w, &w->url, false);
+        /*
+         * One button, two jobs, decided by what is happening rather than by
+         * which of two buttons was pressed -- so it cannot be pressed for the
+         * job it is not doing.
+         */
+        if (t != NULL && t->loading) {
+            if (t->request != NULL) {
+                recon_http_cancel(t->request);
+                t->request = NULL;
+            }
+            t->loading = false;
+            set_status(t, false, "Stopped.");
+            recon_appwin_refresh(t->win);
+        } else if (t != NULL && t->have_url) {
+            go_to(t, &t->url, false);
         }
+        return true;
+    case HIT_HOME:
+        if (w->home[0] != '\0') {
+            open_text(w, w->home);
+        }
+        return true;
+    case HIT_NEWTAB:
+        menu_do(w, MENU_NEW_TAB);
+        return true;
+    case HIT_STAR:
+        bookmark_toggle(w);
+        if (w->bookmark_count == 1) {
+            w->show_bookmarks = true;
+        }
+        if (t != NULL) {
+            recon_appwin_refresh(t->win);
+        }
+        return true;
+    case HIT_MENU:
+        w->menu_open = !w->menu_open;
+        if (t != NULL) {
+            recon_appwin_refresh(t->win);
+        }
+        return true;
+    case HIT_FIND_FIELD:
+        recon_edit_focus(&w->find);
+        return true;
+    case HIT_FIND_NEXT:
+        find_step(w, 1);
+        return true;
+    case HIT_FIND_PREV:
+        find_step(w, -1);
+        return true;
+    case HIT_FIND_CLOSE:
+        find_open(w, false);
         return true;
     case HIT_ADDRESS:
         /* The whole address selected, so typing replaces it -- which is what
@@ -1439,12 +2707,106 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
 
 static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
     struct recon_web *w = user;
+    struct web_tab *t = front(w);
+    bool ctrl = (modifiers & RECON_MOD_CTRL) != 0;
+
+    /*
+     * --- The shortcuts, before any field gets the key ---
+     *
+     * With Ctrl held, the keystroke is a command and not text. Letting the
+     * address bar see Ctrl+T first would put a "t" in the address instead of
+     * opening a tab, which is the bug every one of these exists to avoid.
+     */
+    if (ctrl) {
+        switch (sym) {
+        case XKB_KEY_t:
+        case XKB_KEY_T:
+            menu_do(w, MENU_NEW_TAB);
+            return true;
+        case XKB_KEY_w:
+        case XKB_KEY_W:
+            tab_close(w, w->active);
+            if (t != NULL) {
+                recon_appwin_refresh(t->win);
+            }
+            return true;
+        case XKB_KEY_f:
+        case XKB_KEY_F:
+            find_open(w, true);
+            return true;
+        case XKB_KEY_d:
+        case XKB_KEY_D:
+            bookmark_toggle(w);
+            if (w->bookmark_count == 1) {
+                w->show_bookmarks = true;
+            }
+            if (t != NULL) {
+                recon_appwin_refresh(t->win);
+            }
+            return true;
+        case XKB_KEY_l:
+        case XKB_KEY_L:
+            recon_edit_focus(&w->address);
+            if (t != NULL) {
+                recon_appwin_refresh(t->win);
+            }
+            return true;
+        case XKB_KEY_r:
+        case XKB_KEY_R:
+            if (t != NULL && t->have_url) {
+                go_to(t, &t->url, false);
+            }
+            return true;
+        case XKB_KEY_plus:
+        case XKB_KEY_equal:
+            set_zoom(w, (t != NULL ? t->zoom : 100) + ZOOM_STEP);
+            return true;
+        case XKB_KEY_minus:
+            set_zoom(w, (t != NULL ? t->zoom : 100) - ZOOM_STEP);
+            return true;
+        case XKB_KEY_0:
+            set_zoom(w, 100);
+            return true;
+        default:
+            break;
+        }
+    }
+
+    /* --- The find bar, while it has the caret --- */
+    if (w->strip == STRIP_FIND && w->find.active) {
+        switch (recon_edit_key(&w->find, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            find_step(w, 1);
+            return true;
+        case RECON_EDIT_CANCEL:
+            find_open(w, false);
+            return true;
+        case RECON_EDIT_CHANGED:
+            /*
+             * A changed needle means a different set of matches, so the
+             * position within them means nothing until they are counted
+             * again. Back to the first rather than left pointing at the
+             * fourth of a set that may now have two.
+             */
+            w->find_at = 0;
+            w->find_count = 0;
+            if (t != NULL) {
+                t->content_height = 0;
+                recon_appwin_refresh(t->win);
+            }
+            return true;
+        case RECON_EDIT_IGNORED:
+            break;
+        }
+    }
 
     if (w->address.active) {
         switch (recon_edit_key(&w->address, sym, modifiers)) {
         case RECON_EDIT_COMMIT:
             w->address.active = false;
-            go_typed(w);
+            if (t != NULL) {
+                go_typed(t);
+            }
             return true;
         case RECON_EDIT_CANCEL:
             w->address.active = false;
@@ -1456,34 +2818,34 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         }
     }
 
-    int page = w->viewport_height > 40 ? w->viewport_height - 20 : 40;
+    if (t == NULL) {
+        return false;
+    }
+
+    int page = t->viewport_height > 40 ? t->viewport_height - 20 : 40;
 
     switch (sym) {
-    case XKB_KEY_Down:      w->scroll += 40; return true;
-    case XKB_KEY_Up:        w->scroll -= 40; return true;
-    case XKB_KEY_Page_Down:
-    case XKB_KEY_space:     w->scroll += page; return true;
-    case XKB_KEY_Page_Up:   w->scroll -= page; return true;
-    case XKB_KEY_Home:      w->scroll = 0; return true;
-    case XKB_KEY_End:       w->scroll = w->content_height; return true;
-
-    case XKB_KEY_l:
-    case XKB_KEY_L:
-        /* Ctrl+L to the address bar, which is where every browser puts it.
-         * Same aliasing fault as the click above: BG-112. */
-        if ((modifiers & RECON_MOD_CTRL) != 0) {
-            recon_edit_focus(&w->address);
+    case XKB_KEY_Escape:
+        if (w->menu_open) {
+            w->menu_open = false;
+            recon_appwin_refresh(t->win);
+            return true;
+        }
+        if (w->strip == STRIP_FIND) {
+            find_open(w, false);
             return true;
         }
         return false;
-
-    case XKB_KEY_BackSpace:
-        if (w->at > 0) {
-            w->at--;
-            go_to(w, &w->history[w->at], false);
-        }
+    case XKB_KEY_F3:
+        find_step(w, (modifiers & RECON_MOD_SHIFT) != 0 ? -1 : 1);
         return true;
-
+    case XKB_KEY_Down:      t->scroll += 40; return true;
+    case XKB_KEY_Up:        t->scroll -= 40; return true;
+    case XKB_KEY_Page_Down:
+    case XKB_KEY_space:     t->scroll += page; return true;
+    case XKB_KEY_Page_Up:   t->scroll -= page; return true;
+    case XKB_KEY_Home:      t->scroll = 0; return true;
+    case XKB_KEY_End:       t->scroll = t->content_height; return true;
     default:
         return false;
     }
@@ -1491,42 +2853,73 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
 
 static void web_scroll(void *user, double delta) {
     struct recon_web *w = user;
-    w->scroll -= (int)(delta * 48);
-    if (w->scroll < 0) {
-        w->scroll = 0;
+    struct web_tab *t = front(w);
+    if (t == NULL) {
+        return;
+    }
+    t->scroll -= (int)(delta * 48);
+    if (t->scroll < 0) {
+        t->scroll = 0;
     }
 }
 
 static void web_describe(void *user, char *out, size_t size) {
     struct recon_web *w = user;
+    struct web_tab *t = front(w);
+
     char address[RECON_HTTP_URL_MAX] = "(none)";
-    if (w->have_url) {
-        recon_http_format_url(&w->url, address, sizeof(address));
+    if (t != NULL && t->have_url) {
+        recon_http_format_url(&t->url, address, sizeof(address));
     }
 
-    snprintf(out, size,
+    /*
+     * Every tab, not only the one in front. This report is what the test
+     * harness reads, and a browser whose report describes one of its twelve
+     * tabs is a browser eleven twelfths of whose state cannot be checked.
+     */
+    size_t used = (size_t)snprintf(out, size,
+        "  tabs: %d, showing %d\n"
         "  address: %s\n"
         "  title: %s\n"
         "  blocks: %d\n"
         "  history: %d, at %d\n"
         "  scroll: %d of %d\n"
+        "  zoom: %d%%\n"
         "  loading: %s\n"
+        "  bookmarks: %d%s\n"
+        "  find: %s\n"
+        "  typed: %s\n"
         "  status: %s\n",
-        address, w->page != NULL ? recon_html_title(w->page) : "",
-        recon_html_block_count(w->page), w->history_count, w->at,
-        w->scroll, w->content_height, w->loading ? "yes" : "no", w->status);
+        w->tab_count, w->active + 1,
+        address,
+        (t != NULL && t->page != NULL) ? recon_html_title(t->page) : "",
+        (t != NULL) ? recon_html_block_count(t->page) : 0,
+        (t != NULL) ? t->history_count : 0, (t != NULL) ? t->at : -1,
+        (t != NULL) ? t->scroll : 0, (t != NULL) ? t->content_height : 0,
+        (t != NULL) ? t->zoom : 100,
+        (t != NULL && t->loading) ? "yes" : "no",
+        w->bookmark_count, w->show_bookmarks ? ", bar shown" : "",
+        w->strip == STRIP_FIND ? w->find.text : "(closed)",
+        w->address.text,
+        (t != NULL) ? t->status : "");
+
+    for (int i = 0; i < w->tab_count && used < size; i++) {
+        char one[RECON_HTTP_URL_MAX] = "(empty)";
+        if (w->tabs[i]->have_url) {
+            recon_http_format_url(&w->tabs[i]->url, one, sizeof(one));
+        }
+        used += (size_t)snprintf(out + used, size - used,
+            "  tab %d: %s -- %s\n", i + 1, w->tabs[i]->label, one);
+    }
 }
 
 static void web_destroy(void *user) {
     struct recon_web *w = user;
-    if (w->request != NULL) {
-        recon_http_cancel(w->request);
-    }
-    /* The picture in flight as well as the ones already here: a fetch that
+    /* Every tab, and each of them cancels what it has in flight: a fetch that
      * outlives the window it was for calls back into freed memory. */
-    forget_images(w);
-    forget_sheets(w);
-    recon_html_free(w->page);
+    for (int i = 0; i < w->tab_count; i++) {
+        tab_free(w->tabs[i]);
+    }
     free(w);
 }
 
@@ -1553,13 +2946,20 @@ static const struct recon_appwin_impl WEB_IMPL = {
  * where the bytes came from -- and a second copy of "work out the title, reset
  * the scroll, say how big it is" is a second copy that gets one of them wrong.
  */
-static void show_document(struct recon_web *w, struct recon_html_document *page,
+static void show_document(struct web_tab *w, struct recon_html_document *page,
         const char *shown, size_t length) {
     recon_html_free(w->page);
     w->page = page;
 
-    recon_edit_begin(&w->address, shown, false);
-    w->address.active = false;
+    /*
+     * The address bar belongs to the window, and only the tab in front owns
+     * what it says. A page finishing in a background tab must not reach up
+     * and rewrite the address of the page being read.
+     */
+    if (w->owner != NULL && front(w->owner) == w) {
+        recon_edit_begin(&w->owner->address, shown, false);
+        w->owner->address.active = false;
+    }
 
     /*
      * The window's title comes from the document, which means it comes from
@@ -1580,7 +2980,25 @@ static void show_document(struct recon_web *w, struct recon_html_document *page,
         }
     }
     window_title[used] = '\0';
-    recon_appwin_set_title(w->win, window_title);
+
+    /*
+     * The tab's own name, which is the window's only while this tab is in
+     * front. A background tab finishing must still get its label -- that is
+     * the whole point of a tab strip -- but it must not rename the window
+     * out from under the page being read.
+     */
+    const char *name = window_title[0] != '\0' ? window_title
+        : (w->have_url ? w->url.host : "Untitled");
+
+    /* The precision says the truncation is meant. A tab is ninety-six bytes
+     * wide and a page title can be any length at all, so a long one is cut --
+     * and the strip clips it to the tab's width long before that anyway. */
+    snprintf(w->label, sizeof(w->label), "%.*s",
+        (int)sizeof(w->label) - 1, name);
+
+    if (w->owner == NULL || front(w->owner) == w) {
+        recon_appwin_set_title(w->win, window_title);
+    }
 
     w->scroll = 0;
     w->content_height = 0;
@@ -1637,7 +3055,11 @@ bool recon_web_open_path(struct recon_appwin *win, const char *path) {
     if (win == NULL || path == NULL) {
         return false;
     }
-    struct recon_web *w = recon_appwin_user(win);
+    struct recon_web *window = recon_appwin_user(win);
+    if (window == NULL) {
+        return false;
+    }
+    struct web_tab *w = front(window);
     if (w == NULL) {
         return false;
     }
@@ -1687,13 +3109,36 @@ struct recon_appwin *recon_web_create(struct recon_server *server,
     }
 
     w->font = font;
-    w->at = -1;
     recon_edit_begin(&w->address, "", false);
     w->address.active = false;
+    recon_edit_begin(&w->find, "", false);
+    w->find.active = false;
+
+    /*
+     * Home is the hub.
+     *
+     * A browser with no home page has a Home button that does nothing, and a
+     * button that does nothing is worse than no button. This is the network
+     * ReconOS belongs to, which makes it the right answer as well as an
+     * answer -- and the menu can change it.
+     */
+    snprintf(w->home, sizeof(w->home), "https://recontowers.com/");
+
+    bookmarks_load(w);
+    w->show_bookmarks = w->bookmark_count > 0;
 
     w->win = recon_appwin_create(server, font, &WEB_IMPL, w);
     if (w->win == NULL) {
         free(w);
+        return NULL;
+    }
+
+    /*
+     * The first tab is made after the window, because a tab copies the
+     * window's font and handle and there is no handle until now.
+     */
+    if (tab_new(w) == NULL) {
+        recon_appwin_destroy(w->win);
         return NULL;
     }
     return w->win;
