@@ -48,7 +48,9 @@ static bool parse(const char *text, const struct recon_http_url *base,
 static void check_url(const struct recon_http_url *u, bool secure,
         const char *host, const char *path, const char *fragment,
         const char *what) {
-    char said[512];
+    /* Room for every field at its own maximum. A diagnostic that truncates
+     * is a diagnostic that hides the difference it was printed to show. */
+    char said[RECON_HTTP_URL_MAX * 2 + 512];
     snprintf(said, sizeof(said), "%s://%s%s#%s",
         u->secure ? "https" : "http", u->host, u->path, u->fragment);
 

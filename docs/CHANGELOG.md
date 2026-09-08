@@ -9,6 +9,43 @@ way for the two to disagree.
 
 ---
 
+## v0.4.14 — the configuration that ships, built for the first time
+
+Every build ReconOS makes for itself is Debug with no `-O`. `scripts/check.sh`
+says so at the top and calls it out as a risk, and `scripts/package.sh` builds
+Release -- so **the thing that ships is the one configuration nothing looks
+at**. BG-170 came out of exactly that gap, so the rest of it got the same
+treatment.
+
+An optimised build turns on warnings a debug build cannot produce, because
+`-Wformat-truncation` needs the optimiser's value-range analysis to see how
+long a string can get. Twenty-two of them fell out, and three were real:
+
+**A null reaching `%s` on the sign-in path.** `recon_users_login` looks the
+account up a second time and did not check the result. It cannot be missing --
+`recon_users_check` returns false when the lookup fails, and nothing changes
+the account list in between -- but that is an invariant spread across two
+functions and stated nowhere. It is checked now, because the day `check` grows
+a cache or matches names by a different rule, this becomes a null dereference
+found by somebody failing to sign in.
+
+**Nine paths in the Recycle Bin built with `snprintf`, which truncates.** A
+truncated path is not a shortened name for the same file, it is the name of a
+different one -- and these are then removed, restored or written to. None is a
+memory fault; the fault would be a restore that puts a file somewhere else, or
+a purge that removes the wrong note, and neither would ever be traced back to a
+path one byte too long. They go through one helper that refuses.
+
+**And three more path builds elsewhere** -- a theme file, a track the player
+opens, and a path handed to the module loader -- moved to `recon_fs_join`,
+which was already the right answer and already refuses.
+
+Seventeen truncation warnings remain, all of them in code building a string to
+*display* rather than to open. Left rather than silenced, because a warning
+that has been argued with in a comment is worth more than one suppressed.
+
+---
+
 ## v0.4.13 — a package says who made it
 
 Installing was trusting whoever handed the folder over. A package brings a

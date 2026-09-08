@@ -1059,8 +1059,14 @@ static int load_directory(const char *directory, const char *extension) {
             continue;
         }
 
+        /* recon_fs_join, which refuses rather than cutting. This path is
+         * handed to the module loader, and a truncated one either fails to
+         * open or opens something else -- the second being the reason it is
+         * worth refusing rather than trying. */
         char path[RECON_PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s", directory, entries[i].name);
+        if (!recon_fs_join(path, sizeof(path), directory, entries[i].name)) {
+            continue;
+        }
 
         /*
          * One failing does not stop the rest. A broken file in /Apps should

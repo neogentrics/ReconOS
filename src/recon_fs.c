@@ -1538,10 +1538,42 @@ static const char *volume_trash_base(enum recon_volume volume) {
     }
 }
 
+/*
+ * Join a folder, a name and an optional suffix, refusing rather than cutting.
+ *
+ * Every path built in the Recycle Bin has this shape, and every one of them
+ * was built with snprintf -- which truncates. A truncated path is not a
+ * shortened name for the same file, it is the name of a different one, and
+ * these paths are then removed, restored or written to. The optimised build is
+ * where this showed: with the value ranges the optimiser works out, gcc can
+ * see a name long enough to overflow the buffer, and said so nine times.
+ *
+ * Nothing here is a memory fault -- snprintf is safe. The fault would be a
+ * restore that puts a file somewhere else, or a purge that removes the wrong
+ * note, and neither would ever be traced back to a path that was one byte too
+ * long.
+ */
+static bool trash_join(char *out, size_t size, const char *dir,
+        const char *name, const char *suffix) {
+    int n = snprintf(out, size, "%s/%s%s", dir, name,
+        suffix != NULL ? suffix : "");
+    if (n < 0 || (size_t)n >= size) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 static const char *trash_subdir_in(enum recon_volume volume,
         const char *which) {
-    snprintf(g_trash_path, sizeof(g_trash_path), "%s/%s",
-        volume_trash_base(volume), which);
+    if (!trash_join(g_trash_path, sizeof(g_trash_path),
+            volume_trash_base(volume), which, NULL)) {
+        /* Nothing can be done in the Recycle Bin without this, and returning
+         * a half-built path would have everything below act on it. Empty is
+         * a path that resolves to nothing, which every caller already
+         * handles. */
+        g_trash_path[0] = '\0';
+    }
     return g_trash_path;
 }
 
@@ -1565,8 +1597,10 @@ static bool ensure_trash_in(enum recon_volume volume) {
     const char *dirs[] = { TRASH_ROOT, TRASH_FILES, TRASH_INFO };
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
         char reconos[RECON_PATH_MAX];
-        snprintf(reconos, sizeof(reconos), "%s/%s",
-            volume_trash_base(volume), dirs[i]);
+        if (!trash_join(reconos, sizeof(reconos),
+                volume_trash_base(volume), dirs[i], NULL)) {
+            continue;
+        }
         snprintf(host, sizeof(host), "%s%s", g_host_root, reconos);
         if (!make_tree(host)) {
             return false;
@@ -1583,7 +1617,10 @@ bool recon_fs_is_trash(const char *cwd, const char *path) {
     }
 
     char root[RECON_PATH_MAX];
-    snprintf(root, sizeof(root), "%s/%s", recon_fs_user_dir(NULL), TRASH_ROOT);
+    if (!trash_join(root, sizeof(root), recon_fs_user_dir(NULL),
+            TRASH_ROOT, NULL)) {
+        return false;
+    }
 
     size_t len = strlen(root);
     if (strncmp(canonical, root, len) != 0) {
@@ -1665,8 +1702,13 @@ bool recon_fs_trash(const char *cwd, const char *path) {
      * can still be purged and can be put somewhere sensible by hand.
      */
     char info[RECON_PATH_MAX];
-    snprintf(info, sizeof(info), "%s/%s.origin",
-        trash_subdir_in(volume, TRASH_INFO), name);
+    if (!trash_join(info, sizeof(info),
+            trash_subdir_in(volume, TRASH_INFO), name, ".origin")) {
+        /* The file is in the bin; only its note could not be named. Said
+         * about rather than half-written -- see the note above on what a
+         * file without a note can still do. */
+        return true;
+    }
 
     char body[RECON_PATH_MAX + 2];
     int length = snprintf(body, sizeof(body), "%s\n", canonical);
@@ -1681,7 +1723,10 @@ bool recon_fs_trash_origin(const char *name, char *out, size_t size) {
     }
 
     char info[RECON_PATH_MAX];
-    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
+    if (!trash_join(info, sizeof(info), trash_subdir(TRASH_INFO), name,
+            ".origin")) {
+        return false;
+    }
 
     size_t length = 0;
     char *data = recon_fs_read("/", info, &length);
@@ -1711,7 +1756,10 @@ bool recon_fs_trash_restore(const char *name) {
     }
 
     char source[RECON_PATH_MAX];
-    snprintf(source, sizeof(source), "%s/%s", trash_subdir(TRASH_FILES), name);
+    if (!trash_join(source, sizeof(source), trash_subdir(TRASH_FILES), name,
+            NULL)) {
+        return false;
+    }
 
     if (recon_fs_exists("/", origin)) {
         set_error("something is already at '%s'", origin);
@@ -1740,8 +1788,10 @@ bool recon_fs_trash_restore(const char *name) {
     }
 
     char info[RECON_PATH_MAX];
-    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
-    recon_fs_remove("/", info);
+    if (trash_join(info, sizeof(info), trash_subdir(TRASH_INFO), name,
+            ".origin")) {
+        recon_fs_remove("/", info);
+    }
     return true;
 }
 
@@ -1752,7 +1802,10 @@ bool recon_fs_trash_purge(const char *name) {
     }
 
     char target[RECON_PATH_MAX];
-    snprintf(target, sizeof(target), "%s/%s", trash_subdir(TRASH_FILES), name);
+    if (!trash_join(target, sizeof(target), trash_subdir(TRASH_FILES), name,
+            NULL)) {
+        return false;
+    }
 
     struct recon_dirent info_entry;
     bool is_dir = recon_fs_stat("/", target, &info_entry) &&
@@ -1765,8 +1818,10 @@ bool recon_fs_trash_purge(const char *name) {
     }
 
     char info[RECON_PATH_MAX];
-    snprintf(info, sizeof(info), "%s/%s.origin", trash_subdir(TRASH_INFO), name);
-    recon_fs_remove("/", info);
+    if (trash_join(info, sizeof(info), trash_subdir(TRASH_INFO), name,
+            ".origin")) {
+        recon_fs_remove("/", info);
+    }
     return true;
 }
 
@@ -1843,9 +1898,11 @@ bool recon_fs_trash_empty_in(enum recon_volume volume) {
         }
 
         char info[RECON_PATH_MAX];
-        snprintf(info, sizeof(info), "%s/%s.origin",
-            trash_subdir_in(volume, TRASH_INFO), entries[i].name);
-        recon_fs_remove("/", info);
+        if (trash_join(info, sizeof(info),
+                trash_subdir_in(volume, TRASH_INFO), entries[i].name,
+                ".origin")) {
+            recon_fs_remove("/", info);
+        }
     }
     return ok;
 }

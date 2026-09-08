@@ -2569,8 +2569,22 @@ void recon_theme_init(void) {
             continue;
         }
 
+        /*
+         * `recon_fs_join`, not snprintf.
+         *
+         * They differ in what they do when the result will not fit: snprintf
+         * truncates, and a truncated path is not a shortened name for the
+         * same file, it is the name of a different one. This one is then
+         * opened. The join refuses instead, which is the rule everywhere else
+         * here and is what the optimised build was pointing at -- it can see
+         * a name long enough to overflow the buffer and snprintf cannot say
+         * so.
+         */
         char path[RECON_PATH_MAX];
-        snprintf(path, sizeof(path), "%s/%s", RECON_DIR_THEMES, entries[i].name);
+        if (!recon_fs_join(path, sizeof(path), RECON_DIR_THEMES,
+                entries[i].name)) {
+            continue;
+        }
 
         char fallback[48];
         snprintf(fallback, sizeof(fallback), "%.*s",

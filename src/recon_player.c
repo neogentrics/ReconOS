@@ -585,8 +585,15 @@ static void add_folder(struct recon_player *p, const char *folder) {
 
         struct track *track = &p->tracks[p->count++];
         snprintf(track->name, sizeof(track->name), "%s", entries[i].name);
-        snprintf(track->path, sizeof(track->path), "%s/%s", folder,
-            entries[i].name);
+        /* recon_fs_join, which refuses rather than cutting. A truncated
+         * path is the name of a different file, and this one is opened and
+         * played. Found by the optimised build, where the value ranges make
+         * the overflow visible. */
+        if (!recon_fs_join(track->path, sizeof(track->path), folder,
+                entries[i].name)) {
+            p->count--;
+            continue;
+        }
     }
 }
 

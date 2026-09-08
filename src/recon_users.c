@@ -566,7 +566,25 @@ bool recon_users_login(const char *name, const char *password) {
         return false;
     }
 
+    /*
+     * Looked up again, and checked -- even though it cannot be missing.
+     *
+     * `recon_users_check` returns false when `find` gives NULL, so getting
+     * here means it already succeeded on this name, and nothing changes
+     * `g_accounts` in between. The compiler cannot see that, and says so in an
+     * optimised build: "'%s' directive argument is null".
+     *
+     * It is checked anyway, because the reason it is safe is an invariant
+     * spread across two functions and stated nowhere. The day `check` grows a
+     * cache, or matches names by a different rule than `find` does, this line
+     * becomes a null dereference on the sign-in path -- and it would be found
+     * by somebody failing to sign in rather than by anybody reading.
+     */
     struct account *account = find(name);
+    if (account == NULL) {
+        set_error("that account went away while signing in");
+        return false;
+    }
     snprintf(g_current, sizeof(g_current), "%s", account->info.name);
 
     /* The filesystem follows: from here on, "the user's folder" means this
