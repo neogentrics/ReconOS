@@ -1037,9 +1037,43 @@ static void test_where_a_tag_ends(void) {
     }
 
     /*
-     * And a quote that is never closed must not eat the page. That is the
-     * difference between a malformed tag losing its own line and one losing
-     * everything after it.
+     * An attribute value may span lines, and this is the case that matters
+     * most because it is the one that broke.
+     *
+     * The first version of this fix ended a quote at a newline, reasoning
+     * that a newline inside quotes usually means an unclosed one. An SVG
+     * colour-matrix filter -- five lines of numbers in a `values` attribute
+     * -- proved otherwise within the hour: the closing quote then looked like
+     * an opening one, the tag ran on for three and a half thousand
+     * characters, and that was far enough to swallow the `<details>` after
+     * it, whose contents then appeared in full because the runaway attributes
+     * happened to contain the word "open".
+     */
+    const char *multiline =
+        "<p>one</p>"
+        "<svg><feColorMatrix type=\"matrix\" values=\"\n"
+        "  0.567 0.433 0     0 0\n"
+        "  0.558 0.442 0     0 0\n"
+        "  0     0.242 0.758 0 0\n"
+        "  0     0     0     1 0\"/></svg>"
+        "<details><summary>Settings</summary><p>hidden body</p></details>"
+        "<p>two</p>";
+    d = recon_html_parse(multiline, strlen(multiline));
+    if (d != NULL) {
+        check(page_says(d, "one") && page_says(d, "two"),
+            "a value spanning lines does not swallow what follows it");
+        check(page_says(d, "Settings"),
+            "and the details after it still shows its summary");
+        check(!page_says(d, "hidden body"),
+            "and is still closed, rather than looking open because the "
+            "runaway attributes contained the word");
+        check(!page_says(d, "0.567"), "and none of the matrix is rendered");
+        recon_html_free(d);
+    }
+
+    /*
+     * And a quote that is never closed falls back rather than eating the
+     * page: wrong about one tag instead of about the whole document.
      */
     const char *unclosed =
         "<p>kept</p><div title=\"never closed>\n<p>also kept</p>";

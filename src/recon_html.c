@@ -226,10 +226,23 @@ static bool breaks_line(const char *tag, size_t length) {
  * ordinary text and must not open anything: `alt="it's fine"` has one
  * apostrophe and no quoting problem.
  *
- * An unclosed quote is not treated as running to the end of the document.
- * That is the difference between a malformed tag losing its own line and a
- * malformed tag losing the rest of the page, and a page whose last tag is
- * `<a href="` is a page somebody should still be able to read.
+ * An unclosed quote falls back rather than eating the document. A page whose
+ * last tag is `<a href="` should still be readable, and the answer a scanner
+ * that did not track quotes would have given -- the first `>` -- is a better
+ * one than "everything from here on is inside a tag".
+ *
+ * **A value may span lines.** The first version of this ended a quote at a
+ * newline, on the reasoning that a newline inside quotes is usually an
+ * unclosed quote. That is wrong and it broke real pages within the hour:
+ * gaming.recontowers.com carries an SVG colour-matrix filter whose `values`
+ * attribute is a matrix written over five lines. Ending the quote at the
+ * first newline made the *closing* quote look like an opening one, and the
+ * tag ran on for three and a half thousand characters -- far enough to
+ * swallow the `<details>` after it, whose contents then appeared in full
+ * because the runaway attributes happened to contain the word "open".
+ *
+ * Which is worth keeping as a note: the guard against one bad tag eating the
+ * page caused exactly that, on the second page it was pointed at.
  */
 static const char *tag_end(const char *html, size_t from, size_t length) {
     char quote = '\0';
@@ -238,15 +251,6 @@ static const char *tag_end(const char *html, size_t from, size_t length) {
 
         if (quote != '\0') {
             if (c == quote) {
-                quote = '\0';
-            } else if (c == '\n') {
-                /*
-                 * A newline inside a quote is almost always a quote that was
-                 * never closed rather than a value spanning lines. Ending the
-                 * quote here is what keeps one bad tag from swallowing the
-                 * document -- and an attribute genuinely containing a newline
-                 * loses that attribute, which is the smaller loss.
-                 */
                 quote = '\0';
             }
             continue;
@@ -258,7 +262,13 @@ static const char *tag_end(const char *html, size_t from, size_t length) {
             return html + i;
         }
     }
-    return NULL;
+
+    /*
+     * Nothing closed it, so a quote somewhere was never closed. Fall back to
+     * where a scanner that ignored quotes would have stopped: wrong, but
+     * wrong about one tag instead of about the whole document.
+     */
+    return memchr(html + from, '>', length - from);
 }
 
 static bool is_void_element(const char *tag, size_t length) {

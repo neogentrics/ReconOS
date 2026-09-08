@@ -2599,11 +2599,23 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   construction and this parser builds no tree, so it was only ever run for the
   invariants -- and "the page says something it should not" is not an
   invariant, it is a fact about a particular page. It took loading real ones.
-- **Fixed in** v0.4.19. `tag_end` tracks the quote character, handles both
-  kinds, treats a quote of the other kind inside a value as ordinary text --
-  `alt="it's fine"` is one apostrophe and no quoting problem -- and ends an
-  unclosed quote at the newline, so a malformed tag loses its own line rather
-  than the rest of the page.
+- **Fixed in** v0.4.19. `tag_end` tracks the quote character and handles both
+  kinds. A quote of the other kind inside a value is ordinary text --
+  `alt="it's fine"` is one apostrophe and no quoting problem.
+- **And the first fix was wrong, which is worth recording.** It ended a quote
+  at a newline, on the reasoning that a newline inside quotes usually means an
+  unclosed one and that this would stop a malformed tag eating the page. That
+  guard caused exactly what it was written to prevent, on the second page it
+  was pointed at: gaming.recontowers.com carries an SVG colour-matrix filter
+  whose `values` attribute is a matrix written over five lines, so the closing
+  quote looked like an opening one and the tag ran on for three and a half
+  thousand characters -- far enough to swallow the `<details>` after it, whose
+  contents then appeared in full because the runaway attributes happened to
+  contain the word "open". Caught by looking at the user's own site rather
+  than at the block counts, which had gone *up* and could have read as the fix
+  working. An unclosed quote now falls back to the first `>`, which is where a
+  scanner that ignored quotes would have stopped: wrong about one tag instead
+  of about the whole document.
 
 ### BG-170 — Two secrets were erased with `memset`, which the compiler deletes
 
