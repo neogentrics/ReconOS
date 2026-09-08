@@ -23,6 +23,18 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A silhouette on the desktop gets the ring the label already had.** A desktop
+icon sits on a photograph nobody chose for it, which is the problem the label
+solved a while ago -- a halo of the shadow colour, drawn only when it earns its
+place against the wallpaper actually behind it. A *silhouette* has that problem
+worse than the label does, being one flat colour with no internal contrast to
+fall back on: the bin drawn in Glass's near-black label colour vanished on a
+dark wallpaper. The measurement that decides it is now asked once and answered
+for both, because two separate decisions about the same square inch of
+wallpaper eventually disagree, and the way that shows is a label with a halo
+above an icon without one. A picture with colours of its own gets no ring -- it
+carries its own contrast, and eight offset copies of a folder would be a smear.
+
 **The login screen is a window like any other.** Its card rounds to the skin's
 window corner, carries the skin's glass where the skin asks for it, and its
 account tiles highlight rounded like every other selection. It was the first

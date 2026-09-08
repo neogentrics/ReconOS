@@ -482,27 +482,31 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
  * go together, because every skin pairs a light colour with a dark one: if the
  * ring has vanished into the wallpaper then the ink is the one that has not.
  */
-static void draw_label(struct recon_desktop *desktop, struct recon_panel *p,
-        int lx, int ly, const char *label) {
-    static const int RING[][2] = {
-        { -1, -1 }, { 0, -1 }, { 1, -1 },
-        { -1,  0 },            { 1,  0 },
-        { -1,  1 }, { 0,  1 }, { 1,  1 },
-    };
+static const int RING[][2] = {
+    { -1, -1 }, { 0, -1 }, { 1, -1 },
+    { -1,  0 },            { 1,  0 },
+    { -1,  1 }, { 0,  1 }, { 1,  1 },
+};
 
+/*
+ * Does a ring earn its place against the wallpaper here?
+ *
+ * The whole of the reasoning is above. Pulled out so the icon can ask the same
+ * question as the label and get the same answer -- two separate decisions about
+ * the same square inch of wallpaper would eventually disagree, and the way that
+ * shows is a label with a halo above an icon without one.
+ */
+static bool ring_earns_it(struct recon_desktop *desktop, int lx, int ly,
+        recon_color ring) {
     /*
      * Far enough apart to be doing something. Below this the ring is close
      * enough to the wallpaper that it adds no separation, and every pixel of it
-     * lands on the glyph's antialiased edge instead.
+     * lands on the drawing's antialiased edge instead.
      */
     const int RING_EARNS_IT = 60;
 
-    recon_color ink = COLOR_LABEL;
-    recon_color ring = recon_color_fade(COLOR_LABEL_SHADOW,
-        (uint8_t)((COLOR_LABEL_SHADOW >> 24) & 0xFF));
-
-    /* Asked at the middle of the label rather than at its corner: the corner of
-     * a label in the corner of the screen is off the edge of the grid. */
+    /* Asked at the middle rather than at the corner: the corner of a label in
+     * the corner of the screen is off the edge of the grid. */
     int behind = recon_background_luminance_at(desktop->server,
         lx + ICON_WIDTH / 4, ly);
 
@@ -510,8 +514,20 @@ static void draw_label(struct recon_desktop *desktop, struct recon_panel *p,
     if (apart < 0) {
         apart = -apart;
     }
+    return apart >= RING_EARNS_IT;
+}
 
-    if (apart >= RING_EARNS_IT) {
+static recon_color ring_colour(void) {
+    return recon_color_fade(COLOR_LABEL_SHADOW,
+        (uint8_t)((COLOR_LABEL_SHADOW >> 24) & 0xFF));
+}
+
+static void draw_label(struct recon_desktop *desktop, struct recon_panel *p,
+        int lx, int ly, const char *label) {
+    recon_color ink = COLOR_LABEL;
+    recon_color ring = ring_colour();
+
+    if (ring_earns_it(desktop, lx, ly, ring)) {
         for (size_t i = 0; i < sizeof(RING) / sizeof(RING[0]); i++) {
             recon_draw_text(p, desktop->font, lx + RING[i][0], ly + RING[i][1],
                 ICON_WIDTH - 4, label, ring);
@@ -519,6 +535,42 @@ static void draw_label(struct recon_desktop *desktop, struct recon_panel *p,
     }
 
     recon_draw_text(p, desktop->font, lx, ly, ICON_WIDTH - 4, label, ink);
+}
+
+/*
+ * An icon on the desktop, with the same ring the label gets.
+ *
+ * A desktop icon sits on a photograph nobody chose for it, which is exactly
+ * the problem the label already solved -- and a *silhouette* icon has the
+ * problem worse than the label does, because it is one flat colour with no
+ * internal contrast to fall back on. The bin drawn in Glass's near-black
+ * label colour was invisible on a dark wallpaper and a black blob on a pale
+ * one; the label an inch below it was legible on both, and the only
+ * difference was the ring.
+ *
+ * A picture with colours of its own is drawn as it is and gets no ring: it
+ * carries its own contrast, and eight offset copies of a folder would be a
+ * smear rather than a halo.
+ */
+static bool draw_desktop_icon(struct recon_desktop *desktop,
+        struct recon_panel *p, const char *icon, int cx, int cy) {
+    if (icon == NULL || icon[0] == '\0') {
+        return false;
+    }
+
+    if (!recon_icon_is_mask(icon)) {
+        return recon_icon_draw(p, icon, cx, cy, ICON_IMAGE);
+    }
+
+    recon_color ring = ring_colour();
+    if (ring_earns_it(desktop, cx, cy, ring)) {
+        for (size_t i = 0; i < sizeof(RING) / sizeof(RING[0]); i++) {
+            recon_icon_draw_in(p, icon, cx + RING[i][0], cy + RING[i][1],
+                ICON_IMAGE, ring);
+        }
+    }
+
+    return recon_icon_draw_in(p, icon, cx, cy, ICON_IMAGE, COLOR_LABEL);
 }
 
 static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
@@ -534,8 +586,7 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     if (item->kind == ITEM_SHORTCUT && item->target[0] != '\0') {
         const char *icon = recon_shell_icon_for_app(desktop->server->shell,
             item->target);
-        if (icon != NULL && recon_icon_draw_in(p, icon, cx, cy, ICON_IMAGE,
-            THEME(DESKTOP_LABEL))) {
+        if (draw_desktop_icon(desktop, p, icon, cx, cy)) {
             return;
         }
     }
@@ -545,8 +596,7 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     if (item->kind == ITEM_TRASH) {
         const char *icon = recon_fs_trash_count() > 0
             ? RECON_ICON_TRASH_FULL : RECON_ICON_TRASH;
-        if (recon_icon_draw_in(p, icon, cx, cy, ICON_IMAGE,
-            THEME(DESKTOP_LABEL))) {
+        if (draw_desktop_icon(desktop, p, icon, cx, cy)) {
             return;
         }
     }
@@ -563,8 +613,7 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         item->kind == ITEM_SHORTCUT ? RECON_ICON_APP :
         item->kind == ITEM_TRASH ? RECON_ICON_TRASH :
         recon_props_icon(item->name);
-    if (recon_icon_draw_in(p, generic, cx, cy, ICON_IMAGE,
-            THEME(DESKTOP_LABEL))) {
+    if (draw_desktop_icon(desktop, p, generic, cx, cy)) {
         return;
     }
 
