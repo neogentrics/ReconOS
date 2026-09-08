@@ -232,10 +232,20 @@ static void recall_password(struct recon_mailwin *m) {
     m->remember = true;
     m->was_remembered = true;
 
-    /* Out of this frame as soon as it has been copied. It is still in the edit
+    /*
+     * Out of this frame as soon as it has been copied. It is still in the edit
      * field, which is where it has to be, but there is no reason for a second
-     * copy to sit on the stack until something else happens to overwrite it. */
-    memset(secret, 0, sizeof(secret));
+     * copy to sit on the stack until something else happens to overwrite it.
+     *
+     * `recon_secure_erase`, not `memset`. Nothing reads this buffer after the
+     * clear, so the store is dead and the compiler is entitled to delete it --
+     * and does. Measured: at -O2 this function compiles to the two calls and a
+     * return, with no zeroing at all, while the volatile loop in
+     * recon_secure_erase survives. It only looked correct because ReconOS is
+     * built with CMAKE_BUILD_TYPE=Debug and no -O, which is a security
+     * property holding by accident of build flags.
+     */
+    recon_secure_erase(secret, sizeof(secret));
 }
 
 /*

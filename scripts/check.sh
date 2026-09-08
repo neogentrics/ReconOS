@@ -127,4 +127,46 @@ echo "$release_ran suites built the way a release is"
 if [ "$release_found" = "1" ]; then
     exit 1
 fi
+
+# --- And a class of bug no sanitizer can see ---
+#
+# `memset` on a secret that nothing reads afterwards is a dead store, and an
+# optimising compiler deletes it. Measured, not assumed: at -O2 a function that
+# fetches a password, copies it out and memsets its buffer compiles to the two
+# calls and a return, with no zeroing at all -- while the volatile loop in
+# recon_secure_erase survives untouched.
+#
+# The sanitizers cannot find this. There is no invalid access, no leak and no
+# undefined behaviour: the program is correct, it simply does not do the thing
+# the line was written to do. It passed every suite, both sanitizers and the
+# analyzer for as long as it existed, and it would have shipped -- package.sh
+# builds Release.
+#
+# So it is checked here, in the source, which is the only place the difference
+# between "memset" and "recon_secure_erase" is visible.
+echo
+echo "Checking that secrets are erased with something the compiler keeps"
+
+erase_found=0
+while IFS= read -r hit; do
+    # The name of the thing being cleared, not the whole line.
+    case "$hit" in
+        *recon_secure_erase*) continue ;;
+    esac
+    echo "== $hit"
+    erase_found=1
+done < <(grep -rn 'memset(' "$REPO_DIR/src" \
+    | grep -iE 'secret|password|passphrase|private_key|plaintext' \
+    | grep -v 'recon_secure_erase')
+
+if [ "$erase_found" = "1" ]; then
+    echo
+    echo "Those clear a secret with memset. Nothing reads the buffer"
+    echo "afterwards, so the compiler is entitled to delete the store and"
+    echo "does. Use recon_secure_erase, which writes through a volatile"
+    echo "pointer and survives -O2."
+    exit 1
+fi
+echo "secrets are erased with recon_secure_erase"
+
 echo "clean"

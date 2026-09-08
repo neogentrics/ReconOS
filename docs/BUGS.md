@@ -2575,6 +2575,37 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-170 — Two secrets were erased with `memset`, which the compiler deletes
+
+- **Found in** v0.4.12. **Found by** the keyring review Joshua asked for --
+  reading outward from `recon_keyring.c` to what its callers do with what they
+  are handed.
+- **What it was** two places cleared a secret with `memset` and nothing read
+  the buffer afterwards, which makes the store dead and lets the compiler
+  remove it. It does.
+  - `recall_password` in `recon_mailwin.c` -- the **decrypted mail password**,
+    on the stack.
+  - `recon_tls.c` -- the machine's **TLS private key**, cleared immediately
+    before `free`. `free` does not read what it is handed and the compiler
+    knows it, so a clear-then-free is the textbook case.
+- **Measured rather than argued.** A function that fetches a password, copies
+  it out and memsets its buffer compiles at -O2 to the two calls and a return,
+  with **no zeroing at all**; the same function using `recon_secure_erase`
+  keeps the volatile loop. That function exists in this project for exactly
+  this reason, and its header says so.
+- **Why nothing caught it.** Every build ReconOS makes for itself is Debug
+  with no `-O`, where nothing is eliminated, so the disassembly looked
+  correct. `scripts/package.sh` builds Release -- **so the thing that ships is
+  the configuration where the erase disappears.** The sanitizers cannot see it
+  either: there is no invalid access, no leak and no undefined behaviour. The
+  program is correct; it simply does not do what the line was written to do.
+  This is the same shape as the `memset` found by objdump earlier in this
+  project's history and recorded in the method notes: **a security property
+  holding by accident of build flags.**
+- **Fixed in** v0.4.12, and `scripts/check.sh` now fails on any `memset` of
+  something named like a secret -- the only place the difference between the
+  two calls is visible, since no test and no sanitizer can see it.
+
 ### BG-169 — Typing an address went to a path on the site you were reading
 
 - **Found in** v0.4.11. **Found by** the History page, on its first look: the

@@ -290,8 +290,15 @@ static bool load(void) {
 
     rc = mbedtls_pk_parse_key(&g_tls.key, (const unsigned char *)key, size,
         NULL, 0);
-    /* It was a private key. */
-    memset(key, 0, size);
+    /*
+     * It was a private key.
+     *
+     * `recon_secure_erase`, not `memset`: a clear immediately before `free`
+     * is the textbook dead store. `free` does not read what it is handed, the
+     * compiler knows that, and an optimising build removes the zeroing and
+     * hands the allocator a block still holding the machine's private key.
+     */
+    recon_secure_erase(key, size);
     free(key);
     if (rc != 0) {
         fail(rc, "reading the key");
