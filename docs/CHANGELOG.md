@@ -9,6 +9,49 @@ way for the two to disagree.
 
 ---
 
+## v0.4.10 — a link to a place on a page goes there
+
+"That points at a place on this page, which this cannot jump to yet" was the
+viewer's answer to every `#anchor` on the web, including the one link whose
+entire purpose is to be followed: "Skip to content", which exists for people
+who cannot use a mouse.
+
+Three pieces. **An address keeps what follows the hash** -- out of the path,
+because that is not part of what is asked of the server, and out of the
+formatted address, because two addresses differing only after the hash are the
+same document and comparing them with the fragment in would fetch the page
+again for every anchor on it. **A document records its named places**: every
+`id`, and the block it lands on, which is the finest thing a viewer can scroll
+to. **And the viewer arrives**, on the draw after the click, because where a
+block *is* is only known during the pass that lays the page out.
+
+A link naming a place the page does not have says so, rather than doing
+nothing -- a link that appears dead is indistinguishable from one this has
+failed to handle. A bare `#`, which pages use for links only script gives
+meaning to, goes to the top, which is what a browser does.
+
+**And the bug that was in the way (BG-168).** `href="#main"` parsed to an empty
+fragment, because the fragment is pulled out by searching for a hash in the
+*path* -- and the path that branch writes is the base's, whose own hash was
+stripped when the base was parsed. Every link within a page named no place at
+all, and the viewer correctly did what that means: went to the top of the page
+you were already at the top of.
+
+**There was no suite for reading an address, and there could not easily have
+been one.** The parser sat in `recon_http.c` beside the fetching, so testing it
+meant linking sockets, TLS, the registry and a Wayland event loop. An address
+parser that cannot be tested without a socket is one nobody tests. It is
+`src/recon_url.c` now -- 250 lines that open nothing -- and `tests/test_url.c`
+covers it: full addresses, fragments, resolution against the page a link was
+written on, and the fact that two places on one page format as the same
+address.
+
+Find on page also **goes to the match** now rather than marking one that may be
+off screen, a third of the way down the window and only when it is not already
+visible.
+
+---
+
 ## v0.4.9 — a corpus nobody here wrote
 
 Joshua added a checkout of mozilla-central alongside the Netscape one, for

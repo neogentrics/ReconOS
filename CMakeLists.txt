@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.9
+    VERSION 0.4.10
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -215,6 +215,7 @@ add_executable(ReconOS
     src/recon_css.c
     src/recon_web.c
     src/recon_http.c
+    src/recon_url.c
     src/recon_mail.c
     src/recon_smtp.c
     src/recon_smtp_message.c
@@ -645,6 +646,27 @@ target_include_directories(recon_html_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_test(NAME html COMMAND recon_html_tests)
+
+# Reading an address.
+#
+# There was no suite for this at all, which is how the fragment bug got in:
+# `<a href="#main">` parsed to an empty fragment, because the code that pulls
+# the fragment out searches the path -- and the path that branch writes is the
+# base's, whose hash was stripped long before. Every link within a page
+# resolved to "no named place".
+#
+# One file, and it opens nothing. That is the point of having split it out of
+# recon_http.c: the parser used to be untestable without sockets, TLS, the
+# registry and a Wayland event loop, so it went untested.
+add_executable(recon_url_tests
+    tests/test_url.c
+    src/recon_url.c)
+
+target_include_directories(recon_url_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_test(NAME url COMMAND recon_url_tests)
 
 # The same parser against markup nobody here wrote.
 #

@@ -2575,6 +2575,30 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-168 — Every link to a place on the same page went to the top
+
+- **Found in** v0.4.10, while building the jump those links needed. **Found by**
+  clicking "Skip to content" on gaming.recontowers.com and arriving at the top
+  of the page it was already at the top of.
+- **What it was** `recon_http_parse_url` pulls the fragment out by searching
+  for a hash in `out->path`. For a relative link that branch works, because the
+  hash is still in the text it copied. For a link that is *only* a fragment --
+  `href="#main"` -- the branch copies **the base's** path, whose own hash was
+  stripped when the base was parsed. So the search found nothing, every such
+  link parsed to an empty fragment, and the viewer did the correct thing for a
+  link that names no place: went to the top.
+- The fault is that the fragment was being taken from the wrong place. It is
+  in the *text*, and only sometimes also in the path.
+- **Why there was nothing to catch it.** There was no suite for reading an
+  address at all, and there could not easily be one: the parser lived in
+  `recon_http.c` beside the fetching, so testing it meant linking sockets,
+  TLS, the registry and a Wayland event loop. **An address parser that cannot
+  be tested without a socket is an address parser nobody tests.**
+- **Fixed in** v0.4.10. The fragment is taken from the text in that branch.
+  The parsing moved to `src/recon_url.c`, which opens nothing and links
+  nothing, and `tests/test_url.c` covers it -- including the case above, which
+  fails on exactly two claims when the bug is put back.
+
 ### BG-167 — Every `<hr>` claimed to be a picture at the page's first link
 
 - **Found in** v0.4.9. **Found by** the html5lib corpus, on its first run, from

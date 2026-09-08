@@ -237,6 +237,17 @@ const struct recon_html_block_entry *recon_html_block_at(
  * exactly the kind of thing that is wrong by one and reads whatever follows
  * the array.
  */
+/*
+ * Which block a named place is in, or -1.
+ *
+ * `name` is what followed the "#" in a link, without it. This is what makes
+ * "#install" go somewhere: an id is not a thing to draw, it is a place to
+ * arrive at, and a block is the finest thing a viewer can scroll to.
+ */
+int recon_html_anchor_block(const struct recon_html_document *document,
+    const char *name);
+int recon_html_anchor_count(const struct recon_html_document *document);
+
 int recon_html_run_count(const struct recon_html_document *document);
 int recon_html_link_count(const struct recon_html_document *document);
 

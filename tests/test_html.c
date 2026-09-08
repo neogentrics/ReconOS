@@ -759,6 +759,77 @@ static void test_the_paper_a_page_paints_for_itself(void) {
     recon_css_free(sheet);
 }
 
+static void test_the_named_places_on_a_page(void) {
+    printf("an id is a place a link can arrive at\n");
+
+    /*
+     * "#install" is how half the web links within itself, and a viewer that
+     * cannot find the place reports a dead link on a page where nothing is
+     * wrong. Measured on gaming.recontowers.com, whose first link is
+     * `<a href="#main">Skip to content</a>` -- the one link on the page whose
+     * entire purpose is to be followed by somebody who cannot use a mouse.
+     */
+    const char *html =
+        "<p>before</p>"
+        "<main id=\"main\"><h1>The heading</h1></main>"
+        "<div id=\"notes\"><p>notes</p></div>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(recon_html_anchor_count(d) == 2, "both ids are recorded");
+
+    int main_at = recon_html_anchor_block(d, "main");
+    int notes_at = recon_html_anchor_block(d, "notes");
+    check(main_at >= 0, "the first is findable");
+    check(notes_at >= 0, "and so is the second");
+    check(main_at < notes_at, "and they are in the order they appear");
+
+    /*
+     * The block an id names is the one its content lands in, so arriving
+     * there puts the heading at the top rather than the paragraph above it.
+     */
+    if (main_at >= 0) {
+        char text[128];
+        block_text(d, main_at, text, sizeof(text));
+        check(strstr(text, "The heading") != NULL,
+            "and it lands on the block its content is in");
+    }
+
+    check(recon_html_anchor_block(d, "nothing") < 0,
+        "a name the page does not have is not found");
+    check(recon_html_anchor_block(d, "Main") < 0,
+        "and the match is case-sensitive, as the specification says");
+    check(recon_html_anchor_block(d, "") < 0, "an empty name finds nothing");
+    check(recon_html_anchor_block(NULL, "main") < 0, "so does no document");
+
+    recon_html_free(d);
+}
+
+static void test_an_id_inside_something_hidden(void) {
+    printf("a place inside something hidden is not a place\n");
+
+    /*
+     * Following a link into a closed `<details>` would scroll to a block that
+     * was never made, which lands somewhere arbitrary. The id is not recorded
+     * at all, so the link reports honestly that the page has no such place.
+     */
+    const char *html =
+        "<p>visible</p>"
+        "<template><div id=\"inside\">held</div></template>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    if (d == NULL) {
+        return;
+    }
+    check(recon_html_anchor_block(d, "inside") < 0,
+        "an id inside a template names nothing");
+    recon_html_free(d);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -797,6 +868,8 @@ int main(void) {
     test_a_span_a_stylesheet_made_a_block();
     test_a_block_inside_a_heading_is_still_the_heading();
     test_the_paper_a_page_paints_for_itself();
+    test_the_named_places_on_a_page();
+    test_an_id_inside_something_hidden();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

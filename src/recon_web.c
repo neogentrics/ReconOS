@@ -331,6 +331,16 @@ struct web_tab {
     char label[96];
 
     /*
+     * A block this has been asked to scroll to, or -1.
+     *
+     * Where a block *is* is only known during the pass that lays the page
+     * out, so following "#install" cannot scroll when the link is clicked --
+     * it records which block, and the next draw finds it. The same two-step
+     * as find, and for the same reason.
+     */
+    int jump_to;
+
+    /*
      * Text size, as a percentage. Per tab rather than per window, because a
      * page you have zoomed in to read is a property of that page.
      */
@@ -453,6 +463,7 @@ static struct web_tab *tab_new(struct recon_web *w) {
     t->at = -1;
     t->fetching = -1;
     t->zoom = 100;
+    t->jump_to = -1;
     snprintf(t->label, sizeof(t->label), "New tab");
 
     w->tabs[w->tab_count++] = t;
@@ -1157,6 +1168,11 @@ struct flow {
     int find_seen;
     int find_at;
     int find_y;                       /* where the current match ended up */
+
+    /* The block being looked for, and where it turned out to be. */
+    int jump_to;
+    int jump_y;
+    bool jump_found;
 };
 
 /*
@@ -1726,6 +1742,15 @@ static int run_flow(struct flow *f) {
         const struct recon_html_block_entry *b = recon_html_block_at(w->page, i);
         if (b == NULL) {
             continue;
+        }
+
+        /*
+         * Where this block starts, before it is flowed -- which is the answer
+         * to "where is #install", and is only knowable here.
+         */
+        if (i == f->jump_to) {
+            f->jump_y = f->height;
+            f->jump_found = true;
         }
 
         /*
@@ -2369,6 +2394,7 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     f.find = (w->strip == STRIP_FIND && w->find.text[0] != '\0')
         ? w->find.text : NULL;
     f.find_at = w->find_at;
+    f.jump_to = t->jump_to;
     settle_paper(&f);
 
     /*
@@ -2401,6 +2427,32 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
      * edge has no context above it, and the sentence it is in usually starts
      * before it.
      */
+    /*
+     * --- Arrive at the named place ---
+     *
+     * Before the find jump, and clearing itself either way: an anchor that
+     * names a block which no longer exists -- the page was restyled, or the
+     * link was to a place on a page that has since been replaced -- must not
+     * leave the tab trying again on every frame.
+     */
+    if (t->jump_to >= 0) {
+        if (f.jump_found) {
+            int limit = t->content_height - t->viewport_height;
+            int want = f.jump_y;
+            if (want > limit) {
+                want = limit;
+            }
+            if (want < 0) {
+                want = 0;
+            }
+            if (want != t->scroll) {
+                t->scroll = want;
+                recon_appwin_refresh(t->win);
+            }
+        }
+        t->jump_to = -1;
+    }
+
     if (w->find_follow && f.find_seen > 0) {
         w->find_follow = false;
 
@@ -2681,20 +2733,42 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
         }
 
         /*
-         * A link to the page already showing.
+         * Is this the page already showing?
          *
-         * Almost always a fragment -- "#notes" -- and there is no anchor
-         * navigation here, so following it would fetch the same document again,
-         * throw away the scroll position, and add a history entry that goes
-         * nowhere. Saying so is more use than doing that.
+         * Compared as formatted addresses, which deliberately leave the
+         * fragment out -- two addresses differing only after the hash are the
+         * same document, and comparing with the fragment in would make every
+         * anchor look like a different page and fetch it again.
          */
         char here[RECON_HTTP_URL_MAX];
         char there[RECON_HTTP_URL_MAX];
         recon_http_format_url(&t->url, here, sizeof(here));
         recon_http_format_url(&next, there, sizeof(there));
+
+        /*
+         * If it names a place, go there. If it names nothing -- a bare "#",
+         * which pages use for a link that only script gives meaning to -- go
+         * to the top, which is what a browser does. And if it names a place
+         * this page does not have, say so rather than silently doing nothing,
+         * because a link that appears dead is indistinguishable from one this
+         * has failed to handle.
+         */
         if (t->have_url && strcmp(here, there) == 0) {
-            set_status(t, false, "That points at a place on this page, which "
-                "this cannot jump to yet.");
+            if (next.fragment[0] == '\0') {
+                t->scroll = 0;
+                recon_appwin_refresh(t->win);
+                return true;
+            }
+
+            int block = recon_html_anchor_block(t->page, next.fragment);
+            if (block >= 0) {
+                t->jump_to = block;
+                recon_appwin_refresh(t->win);
+            } else {
+                set_status(t, false,
+                    "This page has no place called \"%.40s\".",
+                    next.fragment);
+            }
             return true;
         }
 
@@ -2960,7 +3034,7 @@ static void web_describe(void *user, char *out, size_t size) {
         "  tabs: %d, showing %d\n"
         "  address: %s\n"
         "  title: %s\n"
-        "  blocks: %d\n"
+        "  blocks: %d, %d named places\n"
         "  history: %d, at %d\n"
         "  scroll: %d of %d\n"
         "  zoom: %d%%\n"
@@ -2973,6 +3047,7 @@ static void web_describe(void *user, char *out, size_t size) {
         address,
         (t != NULL && t->page != NULL) ? recon_html_title(t->page) : "",
         (t != NULL) ? recon_html_block_count(t->page) : 0,
+        (t != NULL) ? recon_html_anchor_count(t->page) : 0,
         (t != NULL) ? t->history_count : 0, (t != NULL) ? t->at : -1,
         (t != NULL) ? t->scroll : 0, (t != NULL) ? t->content_height : 0,
         (t != NULL) ? t->zoom : 100,
@@ -3082,6 +3157,16 @@ static void show_document(struct web_tab *w, struct recon_html_document *page,
 
     w->scroll = 0;
     w->content_height = 0;
+
+    /*
+     * A link into the middle of another page -- "somewhere.html#install" --
+     * is a fetch and then a jump, and the jump can only happen once the
+     * document is here. Asked for now that it is.
+     */
+    w->jump_to = -1;
+    if (w->have_url && w->url.fragment[0] != '\0') {
+        w->jump_to = recon_html_anchor_block(w->page, w->url.fragment);
+    }
 
     /*
      * The pictures are asked for after the words are on screen, one at a

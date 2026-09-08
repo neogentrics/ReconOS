@@ -60,6 +60,19 @@ struct recon_http_url {
     char host[256];
     int port;
     char path[RECON_HTTP_URL_MAX];     /* always begins with "/" */
+
+    /*
+     * What was written after the "#", without it. Empty when there was none.
+     *
+     * Kept out of `path` because it is not part of what is asked of the
+     * server -- sending it would be asking for a document that does not
+     * exist. And kept out of `recon_http_format_url` for a related reason:
+     * two addresses differing only in their fragment are the same document,
+     * and the viewer decides "is this the page I am already showing" by
+     * comparing formatted addresses. Putting the fragment in would make every
+     * anchor on a page look like a different page and fetch it again.
+     */
+    char fragment[128];
 };
 
 /*

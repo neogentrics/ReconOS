@@ -33,6 +33,16 @@
 #define RUNS_MAX 20000
 #define BLOCKS_MAX 4000
 #define LINKS_MAX 2000
+
+/*
+ * How many named places one page may have.
+ *
+ * A bound, not a prediction. Every element on a large page can carry an id --
+ * Wikipedia's articles put one on every heading and every reference -- and
+ * past this the rest are dropped, which loses the ability to jump to them and
+ * nothing else.
+ */
+#define ANCHORS_MAX 512
 #define NEST_MAX 32
 
 struct recon_html_document {
@@ -66,6 +76,24 @@ struct recon_html_document {
      */
     unsigned background;
     bool has_background;
+
+    /*
+     * The named places on the page -- every `id`, and the block it lands on.
+     *
+     * This is what a link to "#install" needs, and it is the whole of what
+     * it needs: an id is not a thing to be drawn, it is a place to arrive at.
+     * Recorded against the block that was open when the id went past, because
+     * a block is the finest thing this can scroll to.
+     *
+     * An id on an element that produces no block of its own -- a `<span>`, a
+     * wrapping `<div>` -- names the block that contains it, which is where
+     * somebody following that link wanted to be anyway.
+     */
+    struct {
+        char name[64];
+        int block;
+    } anchors[ANCHORS_MAX];
+    int anchor_count;
 
     /*
      * The stylesheets the page asked for, unresolved. Kept so a viewer can
@@ -975,6 +1003,36 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 }
 
                 /*
+                 * A named place, for a link that points at it.
+                 *
+                 * Taken from the tag rather than from the stack, because the
+                 * id belongs to this element and not to what it inherits --
+                 * an id is the one attribute that must not cascade.
+                 */
+                char id_value[64];
+                if (b.hidden_at < 0 &&
+                        attribute(attrs, attrs_length, "id",
+                            id_value, sizeof(id_value)) &&
+                        id_value[0] != '\0' &&
+                        b.d->anchor_count < ANCHORS_MAX) {
+                    /*
+                     * The block this will land in is the *next* one closed,
+                     * so the index is where the count is now. A block already
+                     * open still counts: text after the id goes into it, and
+                     * arriving at the top of that block is right either way.
+                     */
+                    int at_block = b.d->block_count;
+                    if (at_block >= BLOCKS_MAX) {
+                        at_block = BLOCKS_MAX - 1;
+                    }
+                    snprintf(b.d->anchors[b.d->anchor_count].name,
+                        sizeof(b.d->anchors[b.d->anchor_count].name),
+                        "%s", id_value);
+                    b.d->anchors[b.d->anchor_count].block = at_block;
+                    b.d->anchor_count++;
+                }
+
+                /*
                  * The page's own paper, from the two elements that set it.
                  * Last one wins: a sheet that puts a colour on `html` and
                  * another on `body` means the second, which is what a
@@ -1676,6 +1734,29 @@ const struct recon_html_block_entry *recon_html_block_at(
         return NULL;
     }
     return &document->blocks[index];
+}
+
+int recon_html_anchor_block(const struct recon_html_document *document,
+        const char *name) {
+    if (document == NULL || name == NULL || name[0] == '\0') {
+        return -1;
+    }
+    for (int i = 0; i < document->anchor_count; i++) {
+        /*
+         * Case-sensitive, which is what the specification says and what
+         * matters: `#Install` and `#install` are different places, and a page
+         * that has both is a page a case-insensitive match sends to the wrong
+         * one half the time.
+         */
+        if (strcmp(document->anchors[i].name, name) == 0) {
+            return document->anchors[i].block;
+        }
+    }
+    return -1;
+}
+
+int recon_html_anchor_count(const struct recon_html_document *document) {
+    return document != NULL ? document->anchor_count : 0;
 }
 
 int recon_html_run_count(const struct recon_html_document *document) {
