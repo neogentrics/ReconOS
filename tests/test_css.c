@@ -332,6 +332,132 @@ static void test_nothing_is_refused(void) {
     }
 }
 
+static void test_a_palette_and_the_names_that_read_it(void) {
+    printf("custom properties, and var() that reads them\n");
+
+    /*
+     * How every stylesheet written since about 2018 states its colours.
+     * Measured on gaming.recontowers.com: 157 custom properties, 378 uses of
+     * var(), and one literal colour in the whole sheet -- so a reader without
+     * this found no colours at all and drew the site in the skin's black on
+     * the skin's white.
+     */
+    const char *text =
+        ":root { --ink: #123456; --paper: #08090c; --same: var(--ink) }"
+        "body { background: var(--paper); color: var(--ink) }"
+        "p { color: var(--missing, #ff0000) }"
+        "em { color: var(--nothing) }"
+        "b { color: var(--same) }";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    check(recon_css_add(sheet, text, strlen(text)), "it parses");
+
+    struct recon_css_element body[] = { { "body", NULL, NULL } };
+    struct recon_css_style style;
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, body, 1, &style);
+    check(style.has_background && style.background == 0x08090c,
+        "a background written as var() is the palette's colour");
+    check(style.has_colour && style.colour == 0x123456,
+        "and so is the text colour");
+
+    struct recon_css_element para[] = { { "p", NULL, NULL } };
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, para, 1, &style);
+    check(style.has_colour && style.colour == 0xff0000,
+        "a name that is not in the palette takes its fallback");
+
+    struct recon_css_element emph[] = { { "em", NULL, NULL } };
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, emph, 1, &style);
+    check(!style.has_colour,
+        "and with no fallback the property is left unset, not invented");
+
+    struct recon_css_element bold[] = { { "b", NULL, NULL } };
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, bold, 1, &style);
+    check(style.has_colour && style.colour == 0x123456,
+        "a palette entry written with var() resolves too");
+
+    recon_css_free(sheet);
+}
+
+static void test_the_palette_may_be_written_after_it_is_used(void) {
+    printf("a var() above the :root that defines it still resolves\n");
+
+    /*
+     * Which is why the sheet is walked twice. One pass would make the answer
+     * depend on the order somebody happened to write the file in -- and the
+     * order is not the author's choice once a bundler has concatenated four
+     * files.
+     */
+    const char *text =
+        "body { color: var(--late) }"
+        ":root { --late: #00ff00 }";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    recon_css_add(sheet, text, strlen(text));
+
+    struct recon_css_element body[] = { { "body", NULL, NULL } };
+    struct recon_css_style style;
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, body, 1, &style);
+    check(style.has_colour && style.colour == 0x00ff00,
+        "the palette is read before the rules that use it");
+
+    recon_css_free(sheet);
+}
+
+static void test_only_the_page_contributes_to_the_palette(void) {
+    printf("a custom property on a component is not the page's\n");
+
+    /*
+     * `:root`, `html` and `body`, exactly. A scoped palette is a real thing
+     * and this does not model it; what it must not do is let one component's
+     * override become the whole page's, which would put a button's colour
+     * behind the text of every paragraph.
+     */
+    const char *text =
+        ":root { --shade: #101010 }"
+        ".button { --shade: #ffcc00 }"
+        "p { color: var(--shade) }";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    recon_css_add(sheet, text, strlen(text));
+
+    struct recon_css_element para[] = { { "p", NULL, NULL } };
+    struct recon_css_style style;
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, para, 1, &style);
+    check(style.has_colour && style.colour == 0x101010,
+        "the page's value wins over a component's");
+
+    recon_css_free(sheet);
+}
+
+static void test_a_custom_property_is_not_a_property(void) {
+    printf("--display does not set display\n");
+
+    /*
+     * A name beginning with two dashes is recorded, never applied. Applying
+     * it would mean `--display: none` on a palette hid the element that
+     * declared the palette, which is the whole page.
+     */
+    const char *text = ":root { --display: none; --color: #ff0000 }";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    recon_css_add(sheet, text, strlen(text));
+
+    struct recon_css_element html[] = { { "html", NULL, NULL } };
+    struct recon_css_style style;
+    memset(&style, 0, sizeof(style));
+    recon_css_match(sheet, html, 1, &style);
+    check(style.display == 0, "--display is not display");
+    check(!style.has_colour, "and --color is not color");
+
+    recon_css_free(sheet);
+}
+
 int main(void) {
     printf("ReconOS CSS tests\n\n");
 
@@ -344,6 +470,11 @@ int main(void) {
     test_order_and_specificity();
     test_at_rules_and_comments();
     test_nothing_is_refused();
+
+    test_a_palette_and_the_names_that_read_it();
+    test_the_palette_may_be_written_after_it_is_used();
+    test_only_the_page_contributes_to_the_palette();
+    test_a_custom_property_is_not_a_property();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

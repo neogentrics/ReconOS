@@ -28,6 +28,15 @@
  * model can honour it anyway.
  */
 #define RULES_MAX 2048
+
+/*
+ * How many custom properties one sheet's palette may hold.
+ *
+ * A bound, not a prediction: gaming.recontowers.com defines 157 on `:root`
+ * alone. Past this the rest are dropped and the values that used them fall
+ * back, which is a page with some of its colours rather than none.
+ */
+#define CUSTOMS_MAX 512
 #define PARTS_MAX 4
 #define NAME_MAX_LEN 64
 
@@ -52,11 +61,152 @@ struct rule {
     struct recon_css_style style;
 };
 
+/*
+ * One custom property -- `--rt-bg: #08090c`.
+ *
+ * These are how every stylesheet written since about 2018 states its palette,
+ * and a reader without them reads a modern sheet and finds almost no colours
+ * at all: gaming.recontowers.com declares 157 of them and then says
+ * `background: var(--rt-bg)` and `color: var(--rt-ink)` everywhere, so the
+ * page came out in the skin's black on the skin's white with none of its own
+ * design.
+ */
+struct custom {
+    char name[64];
+    char value[192];
+};
+
 struct recon_css_sheet {
     struct rule rules[RULES_MAX];
     int count;
     int next_index;
+
+    /*
+     * The palette, taken from `:root`, `html` and `body` only.
+     *
+     * Custom properties inherit and can be set on any element, so a complete
+     * reading needs one table per element rather than one per sheet. This
+     * takes the page-wide set, which is what the great majority of them are
+     * -- 91 of the 157 on that page -- and leaves component-scoped overrides
+     * reading the page-wide value. That is a value from the same palette,
+     * which is wrong in shade and never wrong in contrast; a missing one is
+     * wrong in both.
+     */
+    struct custom customs[CUSTOMS_MAX];
+    int custom_count;
 };
+
+static const char *custom_value(const struct recon_css_sheet *sheet,
+        const char *name, size_t length) {
+    if (sheet == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < sheet->custom_count; i++) {
+        if (strlen(sheet->customs[i].name) == length &&
+                strncmp(sheet->customs[i].name, name, length) == 0) {
+            return sheet->customs[i].value;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Rewrite every `var(--name)` and `var(--name, fallback)` in a value.
+ *
+ * `depth` stops `--a: var(--b)` where `--b: var(--a)`. A name that is not in
+ * the palette becomes its fallback, and with no fallback becomes nothing --
+ * which is what a browser does, and which leaves the property unset rather
+ * than set to something invented.
+ */
+static void resolve_vars(const struct recon_css_sheet *sheet, const char *in,
+        char *out, size_t size, int depth) {
+    size_t at = 0;
+    if (size == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (in == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; in[i] != '\0' && at + 1 < size; ) {
+        if (depth > 0 && strncasecmp(in + i, "var(", 4) == 0) {
+            /* To the matching bracket, so a fallback that is itself a
+             * function -- var(--a, rgb(0,0,0)) -- is not cut in half. */
+            size_t j = i + 4;
+            int nested = 1;
+            while (in[j] != '\0' && nested > 0) {
+                if (in[j] == '(') {
+                    nested++;
+                } else if (in[j] == ')') {
+                    nested--;
+                    if (nested == 0) {
+                        break;
+                    }
+                }
+                j++;
+            }
+            if (in[j] != ')') {
+                break;                         /* unclosed; take no more */
+            }
+
+            /* Split the arguments at the first comma at this level. */
+            size_t name_start = i + 4;
+            size_t comma = 0;
+            int level = 0;
+            for (size_t k = name_start; k < j; k++) {
+                if (in[k] == '(') {
+                    level++;
+                } else if (in[k] == ')') {
+                    level--;
+                } else if (in[k] == ',' && level == 0) {
+                    comma = k;
+                    break;
+                }
+            }
+            size_t name_end = comma > 0 ? comma : j;
+            while (name_end > name_start &&
+                    isspace((unsigned char)in[name_end - 1])) {
+                name_end--;
+            }
+            while (name_start < name_end &&
+                    isspace((unsigned char)in[name_start])) {
+                name_start++;
+            }
+
+            const char *found =
+                custom_value(sheet, in + name_start, name_end - name_start);
+
+            char piece[192];
+            if (found != NULL) {
+                /* A palette entry may itself be written with var(). */
+                resolve_vars(sheet, found, piece, sizeof(piece), depth - 1);
+            } else if (comma > 0) {
+                size_t f = comma + 1;
+                while (f < j && isspace((unsigned char)in[f])) {
+                    f++;
+                }
+                char raw[192];
+                size_t take = (j - f) < sizeof(raw) - 1 ? (j - f)
+                                                        : sizeof(raw) - 1;
+                memcpy(raw, in + f, take);
+                raw[take] = '\0';
+                resolve_vars(sheet, raw, piece, sizeof(piece), depth - 1);
+            } else {
+                piece[0] = '\0';
+            }
+
+            for (size_t k = 0; piece[k] != '\0' && at + 1 < size; k++) {
+                out[at++] = piece[k];
+            }
+            i = j + 1;
+            continue;
+        }
+
+        out[at++] = in[i++];
+    }
+    out[at] = '\0';
+}
 
 /* --- Small helpers --- */
 
@@ -374,8 +524,58 @@ static void apply_declaration(struct recon_css_style *style,
  *
  * The braces are the caller's business; this reads what is between them.
  */
+/*
+ * Record a custom property, replacing one of the same name.
+ *
+ * Later wins, which is what the cascade does when specificity ties -- and
+ * every rule this collects from is `:root`, `html` or `body`, so ties are the
+ * usual case rather than the exception.
+ */
+static void set_custom(struct recon_css_sheet *sheet, const char *name,
+        const char *value) {
+    for (int i = 0; i < sheet->custom_count; i++) {
+        if (strcmp(sheet->customs[i].name, name) == 0) {
+            snprintf(sheet->customs[i].value,
+                sizeof(sheet->customs[i].value), "%s", value);
+            return;
+        }
+    }
+    if (sheet->custom_count >= CUSTOMS_MAX) {
+        return;
+    }
+    struct custom *c = &sheet->customs[sheet->custom_count++];
+    snprintf(c->name, sizeof(c->name), "%s", name);
+    snprintf(c->value, sizeof(c->value), "%s", value);
+}
+
+/*
+ * Is this selector the page itself?
+ *
+ * `:root`, `html` and `body` -- and only those three exactly, so `.dark :root`
+ * and `body.landing` do not contribute. A page-wide palette is the thing being
+ * collected; a scoped one is a different question this does not answer.
+ */
+static bool is_page_selector(const char *text, size_t length) {
+    while (length > 0 && isspace((unsigned char)*text)) {
+        text++;
+        length--;
+    }
+    while (length > 0 && isspace((unsigned char)text[length - 1])) {
+        length--;
+    }
+    static const char *const PAGE[] = { ":root", "html", "body" };
+    for (size_t i = 0; i < sizeof(PAGE) / sizeof(PAGE[0]); i++) {
+        size_t n = strlen(PAGE[i]);
+        if (n == length && strncasecmp(text, PAGE[i], n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void read_declarations(const char *text, size_t length,
-        struct recon_css_style *out) {
+        struct recon_css_style *out, const struct recon_css_sheet *sheet,
+        struct recon_css_sheet *palette) {
     size_t i = 0;
     while (i < length) {
         while (i < length && (isspace((unsigned char)text[i]) ||
@@ -434,13 +634,32 @@ static void read_declarations(const char *text, size_t length,
         }
 
         char name[64];
-        char value[160];
+        char value[192];
         if (name_end > name_start && value_end > value_start) {
             copy_name(name, sizeof(name), text + name_start,
                 name_end - name_start);
             copy_name(value, sizeof(value), text + value_start,
                 value_end - value_start);
-            apply_declaration(out, name, value);
+
+            /*
+             * A custom property is recorded, not applied. `--rt-bg` is not a
+             * property this draws anything with; it is a name other
+             * declarations refer to.
+             */
+            if (name[0] == '-' && name[1] == '-') {
+                if (palette != NULL) {
+                    set_custom(palette, name, value);
+                }
+                continue;
+            }
+
+            if (strstr(value, "var(") != NULL) {
+                char resolved[192];
+                resolve_vars(sheet, value, resolved, sizeof(resolved), 4);
+                apply_declaration(out, name, resolved);
+            } else {
+                apply_declaration(out, name, value);
+            }
         }
     }
 }
@@ -450,7 +669,7 @@ void recon_css_inline(const char *declarations, size_t length,
     if (declarations == NULL || out == NULL) {
         return;
     }
-    read_declarations(declarations, length, out);
+    read_declarations(declarations, length, out, NULL, NULL);
 }
 
 /* --- Selectors --- */
@@ -576,12 +795,23 @@ static size_t skip_comment(const char *text, size_t length, size_t i) {
     return i;
 }
 
-bool recon_css_add(struct recon_css_sheet *sheet, const char *text,
-        size_t length) {
-    if (sheet == NULL || text == NULL) {
-        return false;
-    }
-
+/*
+ * One walk over a stylesheet, in one of two modes.
+ *
+ * Collecting takes the palette and adds no rules; the second pass adds the
+ * rules and resolves `var()` against what the first found. Two passes rather
+ * than one because a sheet may say `background: var(--bg)` above the `:root`
+ * that defines `--bg`, and a single pass would read the first as unset and
+ * the answer would depend on the order somebody happened to write the file
+ * in. The alternative -- keeping every value unresolved and resolving at
+ * match time -- means storing the text of every declaration, which is the
+ * whole sheet a second time.
+ *
+ * Both passes skip `@media` whole, exactly as before, so a dark-mode block
+ * does not quietly become the page's palette.
+ */
+static void walk(struct recon_css_sheet *sheet, const char *text,
+        size_t length, bool collecting) {
     size_t i = 0;
     while (i < length) {
         size_t was = i;
@@ -643,9 +873,35 @@ bool recon_css_add(struct recon_css_sheet *sheet, const char *text,
             i++;
         }
 
+        if (collecting) {
+            /*
+             * A selector list may put the palette on more than one of the
+             * three, `html, body { --bg: ... }`, so each part is asked.
+             */
+            bool page = false;
+            size_t from = selector_start;
+            for (size_t j = selector_start; j <= selector_end; j++) {
+                if (j != selector_end && text[j] != ',') {
+                    continue;
+                }
+                if (is_page_selector(text + from, j - from)) {
+                    page = true;
+                }
+                from = j + 1;
+            }
+            if (page) {
+                struct recon_css_style ignored;
+                memset(&ignored, 0, sizeof(ignored));
+                read_declarations(text + body_start, body_end - body_start,
+                    &ignored, sheet, sheet);
+            }
+            continue;
+        }
+
         struct recon_css_style style;
         memset(&style, 0, sizeof(style));
-        read_declarations(text + body_start, body_end - body_start, &style);
+        read_declarations(text + body_start, body_end - body_start, &style,
+            sheet, NULL);
 
         /*
          * A selector list, `a, b, c`, is that many rules with one body. Split
@@ -670,6 +926,15 @@ bool recon_css_add(struct recon_css_sheet *sheet, const char *text,
             part_start = j + 1;
         }
     }
+}
+
+bool recon_css_add(struct recon_css_sheet *sheet, const char *text,
+        size_t length) {
+    if (sheet == NULL || text == NULL) {
+        return false;
+    }
+    walk(sheet, text, length, true);
+    walk(sheet, text, length, false);
     return true;
 }
 

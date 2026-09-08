@@ -197,6 +197,17 @@ void recon_html_free(struct recon_html_document *document);
 /* Everything between <title> and </title>, or "" for a page with none. */
 const char *recon_html_title(const struct recon_html_document *document);
 
+/*
+ * What the page paints behind everything, if it said so.
+ *
+ * False when it did not, which is most pages of the old web and no page of
+ * the new one. A viewer that gets false should keep its own paper rather than
+ * assume white: the paper belongs to whoever is reading, until the page has
+ * an opinion.
+ */
+bool recon_html_page_background(const struct recon_html_document *document,
+    unsigned *colour_out);
+
 int recon_html_block_count(const struct recon_html_document *document);
 
 /*

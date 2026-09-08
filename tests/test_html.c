@@ -705,6 +705,60 @@ static void test_a_block_inside_a_heading_is_still_the_heading(void) {
     }
 }
 
+static void test_the_paper_a_page_paints_for_itself(void) {
+    printf("a page that sets its own background says so\n");
+
+    /*
+     * The one part of "what this page looks like" that can be honoured
+     * without any layout at all -- and most of the difference between a site
+     * and a transcript of one. Measured on gaming.recontowers.com, which is
+     * near-black and came out white.
+     */
+    unsigned colour = 0;
+
+    /* Nothing said: the paper belongs to whoever is reading. */
+    const char *plain = "<p>hello</p>";
+    struct recon_html_document *d = recon_html_parse(plain, strlen(plain));
+    check(d != NULL && !recon_html_page_background(d, &colour),
+        "a page with no opinion has none");
+    recon_html_free(d);
+
+    /* Said on body. */
+    const char *dark =
+        "<style>body { background: #08090c }</style><p>hello</p>";
+    struct recon_css_sheet *sheet = recon_css_new();
+    d = recon_html_parse_styled(dark, strlen(dark), sheet);
+    check(d != NULL && recon_html_page_background(d, &colour),
+        "a page that paints its own is heard");
+    check(colour == 0x08090c, "in the colour it asked for");
+    recon_html_free(d);
+    recon_css_free(sheet);
+
+    /* And through a custom property, which is how a page really writes it. */
+    const char *via_var =
+        "<style>:root { --bg: #112233 } body { background: var(--bg) }</style>"
+        "<p>hello</p>";
+    sheet = recon_css_new();
+    d = recon_html_parse_styled(via_var, strlen(via_var), sheet);
+    check(d != NULL && recon_html_page_background(d, &colour) &&
+        colour == 0x112233, "including when it is written as var()");
+    recon_html_free(d);
+    recon_css_free(sheet);
+
+    /*
+     * A background on a `<div>` is a box, and there are no boxes here. Taking
+     * it as the page's would paint one card's colour behind the whole site.
+     */
+    const char *inner =
+        "<style>div { background: #ff0000 }</style><div><p>hi</p></div>";
+    sheet = recon_css_new();
+    d = recon_html_parse_styled(inner, strlen(inner), sheet);
+    check(d != NULL && !recon_html_page_background(d, &colour),
+        "a background on something inside the page is not the page's");
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -742,6 +796,7 @@ int main(void) {
     test_a_closed_details_shows_its_summary();
     test_a_span_a_stylesheet_made_a_block();
     test_a_block_inside_a_heading_is_still_the_heading();
+    test_the_paper_a_page_paints_for_itself();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

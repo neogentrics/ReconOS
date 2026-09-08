@@ -9,6 +9,42 @@ way for the two to disagree.
 
 ---
 
+## v0.4.7
+
+**A page is drawn in its own colours (BG-164).** Every site came out in the
+skin's black on the skin's white, whatever it had asked for, because
+`background-color` was parsed and then dropped -- and because the value could
+not have been read anyway. Pages do not write colours as colours any more:
+gaming.recontowers.com's stylesheet has 157 custom properties, 378 uses of
+`var()`, and one literal colour in 62 KB. So a reader without `var()` reads a
+modern stylesheet and finds nothing.
+
+Custom properties are now collected from `:root`, `html` and `body` in a first
+pass over each sheet, and `var(--name)` and `var(--name, fallback)` resolve
+against them in a second. Two passes, because a sheet may use a name above the
+`:root` that defines it -- which is not rare once a bundler has concatenated
+four files, and is not the author's choice when it happens.
+
+**And every colour on the page is checked against the page's paper, not the
+skin's.** That check has not been weakened and still has no way to be turned
+off. It was asking the wrong question: a page colour was tested against the
+skin's surface even on a page painting its own, which failed in both
+directions -- a light heading rejected for being unreadable on white, then
+replaced with a near-black that went on near-black paper. Text, links, list
+markers, horizontal rules and the quotation bar all now ask about the surface
+that is actually underneath them.
+
+The address bar and the status bar stay the skin's whatever the page says. A
+page that could repaint them could dress itself up as the browser.
+
+**A background on a page with no `<body>` tag is found anyway (BG-165).** Both
+`<html>` and `<body>` are optional in HTML. The paper was taken as the element
+went past, so documents that omit it had their stylesheet read correctly and
+nothing to apply it to. Found by a test, not by a site -- the page being
+looked at writes its `<body>`, so the feature looked finished.
+
+---
+
 ## v0.4.6
 
 **A `<br>` ends the line, not the heading (BG-162).** `<br>` ended the open

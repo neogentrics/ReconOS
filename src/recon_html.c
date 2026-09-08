@@ -56,6 +56,18 @@ struct recon_html_document {
     bool saw_script;
 
     /*
+     * What the page paints behind everything, if it said.
+     *
+     * Taken from `html` or `body`, because that is where a page says it -- and
+     * only from those two, because a background on a `<div>` is a box this has
+     * no boxes to put it in. One colour for the whole page is the part of
+     * "what this page looks like" that can be honoured without layout, and it
+     * is most of the difference between a site and a transcript of a site.
+     */
+    unsigned background;
+    bool has_background;
+
+    /*
      * The stylesheets the page asked for, unresolved. Kept so a viewer can
      * fetch them and parse again -- this does not know where the page came
      * from, so it cannot resolve them and does not try.
@@ -945,6 +957,19 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     recon_css_match(b.sheet, seen, at + 1, &style);
                 }
 
+                /*
+                 * The page's own paper, from the two elements that set it.
+                 * Last one wins: a sheet that puts a colour on `html` and
+                 * another on `body` means the second, which is what a
+                 * browser paints.
+                 */
+                if (style.has_background &&
+                        (named(tag, name_length, "body") ||
+                         named(tag, name_length, "html"))) {
+                    b.d->background = style.background;
+                    b.d->has_background = true;
+                }
+
                 char inline_style[512];
                 if (attribute(attrs, attrs_length, "style", inline_style,
                         sizeof(inline_style))) {
@@ -1487,6 +1512,33 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
     }
 
     close_block(&b);
+
+    /*
+     * The page's paper, if no `<body>` tag went past to carry it.
+     *
+     * `<html>` and `<body>` are both optional in HTML and plenty of documents
+     * leave them out -- a browser synthesises them, and a reader that waits
+     * for the tag reads the stylesheet correctly and then finds nothing to
+     * apply it to. Asking the sheet what a body would get is the same
+     * question the loop above asks, put to a page that never wrote one down.
+     *
+     * Only as a fallback: a real `<body>` has already answered, and its answer
+     * includes its `style` attribute, which this cannot see.
+     */
+    if (sheet != NULL && !d->has_background) {
+        struct recon_css_element page[] = {
+            { "html", NULL, NULL },
+            { "body", NULL, NULL },
+        };
+        struct recon_css_style style;
+        memset(&style, 0, sizeof(style));
+        recon_css_match(sheet, page, 2, &style);
+        if (style.has_background) {
+            d->background = style.background;
+            d->has_background = true;
+        }
+    }
+
     return d;
 }
 
@@ -1584,6 +1636,17 @@ const char *recon_html_title(const struct recon_html_document *document) {
 
 bool recon_html_was_truncated(const struct recon_html_document *document) {
     return document != NULL && document->truncated;
+}
+
+bool recon_html_page_background(const struct recon_html_document *document,
+        unsigned *colour_out) {
+    if (document == NULL || !document->has_background) {
+        return false;
+    }
+    if (colour_out != NULL) {
+        *colour_out = document->background;
+    }
+    return true;
 }
 
 int recon_html_block_count(const struct recon_html_document *document) {

@@ -666,7 +666,60 @@ struct flow {
     int scroll;
     int height;                       /* filled in as it goes */
     int clip_top, clip_bottom;        /* rows outside this are not drawn */
+
+    /*
+     * The paper under this page, and whether the page chose it.
+     *
+     * Both, because they answer different questions. `paper` is what every
+     * colour on the page has to be readable against, and there is always one.
+     * `page_chose` says whether it came from the page or from the skin, which
+     * is what decides whether the *skin's* colours may be used unchanged: on
+     * the skin's own paper they are, by construction, and on somebody else's
+     * they are just another colour that has to be checked.
+     */
+    recon_color paper;
+    bool page_chose;
+
+    /*
+     * The ink for ordinary text and the ink for links, both already checked
+     * against the paper above.
+     *
+     * Worked out once when the flow is set up rather than per word: they do
+     * not vary within a page, and doing it per word meant the same three
+     * comparisons several thousand times for one answer.
+     */
+    recon_color text_ink;
+    recon_color link_ink;
+
+    /*
+     * The quieter ink, for list markers, and the colour of a rule.
+     *
+     * Here for the same reason as the two above: they are drawn on the page's
+     * paper, so they are the page's problem, not the skin's. A dim grey that
+     * reads on the skin's surface is invisible on a page's near-black one, and
+     * a horizontal rule nobody can see is a horizontal rule that is not there.
+     */
+    recon_color dim_ink;
+    recon_color rule_ink;
 };
+
+/*
+ * What a page said, if it can be read on the paper under it; the fallback if
+ * not.
+ *
+ * The check is not optional and has no way to be turned off. What changed is
+ * only which paper it asks about -- it used to ask about the skin's surface
+ * even on a page painting its own, which is the wrong question and gave the
+ * wrong answer in both directions: a light grey heading on a page's near-black
+ * paper was rejected for being unreadable on white, and the near-black body
+ * text it was replaced with then went on the near-black paper.
+ */
+static recon_color on_paper(const struct flow *f, unsigned rgb,
+        recon_color fallback) {
+    return recon_color_readable_on(f->paper,
+        RECON_RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF),
+        fallback, fallback);
+}
 
 /* The face and size a run wants. */
 static struct recon_font *font_for(unsigned style, int size) {
@@ -731,12 +784,9 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
      * colour here that carries a *meaning* -- "this goes somewhere" -- and a
      * meaning whose colour changes per page is one nobody can learn.
      */
-    recon_color ink = is_link ? COLOR_LINK : COLOR_TEXT;
+    recon_color ink = is_link ? f->link_ink : f->text_ink;
     if (!is_link && has_colour) {
-        ink = recon_color_readable_on(THEME(SURFACE),
-            RECON_RGB((colour >> 16) & 0xFF, (colour >> 8) & 0xFF,
-                colour & 0xFF),
-            COLOR_TEXT, COLOR_TEXT);
+        ink = on_paper(f, colour, f->text_ink);
     }
 
     recon_draw_text(f->panel, font, screen_x, screen_y + ascent,
@@ -773,7 +823,7 @@ static void underline_link(struct flow *f, struct recon_font *font,
      * is invisible to a reader who cannot see that difference, which is the
      * same reason the accessibility skins exist. */
     recon_fill_rect(f->panel, screen_x, screen_y + ascent + 2,
-        to_x - from_x, 1, COLOR_LINK);
+        to_x - from_x, 1, f->link_ink);
     recon_hit_add(f->panel, screen_x, screen_y, to_x - from_x,
         recon_font_line_height(font), HIT_LINK_BASE + link);
 }
@@ -810,7 +860,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             int screen_y = f->height - f->scroll + f->origin_y;
             if (screen_y >= f->clip_top && screen_y <= f->clip_bottom) {
                 recon_fill_rect(f->panel, f->origin_x, screen_y, f->width, 1,
-                    COLOR_RULE);
+                    f->rule_ink);
             }
         }
         f->height += 7;
@@ -919,7 +969,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             recon_draw_text(f->panel, measure_font,
                 f->origin_x + indent - 14,
                 screen_y + recon_font_ascent(measure_font), 12, marker,
-                COLOR_DIM);
+                f->dim_ink);
         }
     }
 
@@ -928,7 +978,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
          * everywhere and does not need a colour to read as one. */
         int screen_y = f->height - f->scroll + f->origin_y;
         recon_fill_rect(f->panel, f->origin_x + 4, screen_y, 2, line_height,
-            COLOR_RULE);
+            f->rule_ink);
     }
 
     int x = indent;
@@ -1052,6 +1102,61 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     /* A gap after a block, so paragraphs are paragraphs. Smaller after a
      * list item, because a list is one thing. */
     f->height += (b->kind == RECON_HTML_LIST_ITEM) ? 3 : 8;
+}
+
+/*
+ * Settle the paper and the inks for one page.
+ *
+ * The skin's, unless the page painted its own -- and then everything the skin
+ * would have contributed has to be checked against the page's paper instead,
+ * because the skin's colours are chosen to read on the skin's surface and that
+ * surface is no longer what is underneath.
+ *
+ * The link accent is checked like everything else. It is the one colour that
+ * carries a meaning -- "this goes somewhere" -- so it is kept wherever it can
+ * be, and a meaning nobody can see is not one either.
+ */
+static void settle_paper(struct flow *f) {
+    unsigned rgb = 0;
+    f->page_chose = f->w->page != NULL &&
+        recon_html_page_background(f->w->page, &rgb);
+
+    if (!f->page_chose) {
+        f->paper = COLOR_BG;
+        f->text_ink = COLOR_TEXT;
+        f->link_ink = COLOR_LINK;
+        f->dim_ink = COLOR_DIM;
+        f->rule_ink = COLOR_RULE;
+        return;
+    }
+
+    f->paper = RECON_RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+
+    /*
+     * The skin's own ink, if it reads here; otherwise the near-black or
+     * near-white this paper takes.
+     *
+     * Not pure black and pure white: at full contrast the text buzzes against
+     * a saturated ground, which is why no skin in this system uses either.
+     * `recon_color_readable_on` is given both so it can pick the direction it
+     * needs, which is the argument pair it exists to take.
+     */
+    recon_color dark = RECON_RGB(0x14, 0x14, 0x16);
+    recon_color light = RECON_RGB(0xEC, 0xEC, 0xF0);
+    recon_color plain =
+        recon_color_readable_on(f->paper, COLOR_TEXT, light, dark);
+
+    f->text_ink = plain;
+    f->link_ink = recon_color_readable_on(f->paper, COLOR_LINK, plain, plain);
+
+    /*
+     * Quieter than the text but still on the paper. Mixed towards the paper
+     * rather than picked, because "quieter" is a distance from the ink and
+     * not a colour of its own -- and mixing keeps it on whichever side of the
+     * paper the ink ended up on, which picking would not.
+     */
+    f->dim_ink = recon_color_mix(plain, f->paper, 96);
+    f->rule_ink = recon_color_mix(plain, f->paper, 176);
 }
 
 static int run_flow(struct flow *f) {
@@ -1232,6 +1337,17 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     f.scroll = w->scroll;
     f.clip_top = top;
     f.clip_bottom = bottom;
+    settle_paper(&f);
+
+    /*
+     * The paper goes down before anything on it, over the content area only.
+     * The bars above and below belong to the skin whatever the page says --
+     * the address bar is part of ReconOS, not part of the site, and a page
+     * that could repaint it could dress itself up as the browser.
+     */
+    if (f.page_chose) {
+        recon_fill_rect(p, x, top, width, bottom - top, f.paper);
+    }
 
     w->content_height = run_flow(&f);
 

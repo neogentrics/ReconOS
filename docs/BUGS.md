@@ -2575,6 +2575,58 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-165 — A background on a page with no `<body>` tag was never found
+
+- **Found in** v0.4.7. **Found by** the test written for BG-164, whose markup
+  was `<style>...</style><p>hello</p>` -- no `<body>`, because nobody writes
+  one in a test.
+- **What it was** the paper was taken as the `<body>` element went past. Both
+  `<html>` and `<body>` are optional in HTML and plenty of real documents omit
+  them, so on those pages the stylesheet was read correctly and then there was
+  nothing to apply it to.
+- Worth keeping as a bug rather than folding into BG-164, because the test
+  found it and the site did not. gaming.recontowers.com writes its `<body>`,
+  so the feature looked finished; the case that does not exist on the one page
+  being looked at is exactly the case a test is for.
+- **Fixed in** v0.4.7. When no `<body>` went past, the sheet is asked what one
+  would have got -- the same question, put to a page that never wrote it down.
+  A real `<body>` still answers first, because its answer includes its `style`
+  attribute and a synthetic query cannot see one.
+
+### BG-164 — Every site was drawn in the skin's black on the skin's white
+
+- **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, a
+  near-black site, and getting a white page.
+- **What it was** two faults that looked like one.
+
+  `background-color` was parsed by the CSS engine and then dropped: nothing
+  recorded it and nothing drew it. And underneath that, the engine could not
+  read the value anyway -- the page says `background: var(--rt-bg)`, and
+  custom properties were not implemented at all. Measured on that sheet: 157
+  custom properties, 378 uses of `var()`, and one literal colour in 62 KB. So
+  a reader without `var()` reads a modern stylesheet and finds no colours.
+- **The check that was asking the wrong question.** Page colours were tested
+  for readability against **the skin's** surface, which was right while the
+  page had no surface of its own. On a page painting its own it gave the wrong
+  answer in both directions: a light heading was rejected for being
+  unreadable on white, and the near-black body text it fell back to then went
+  on near-black paper.
+- **Fixed in** v0.4.7. Custom properties are collected from `:root`, `html`
+  and `body` in a first pass over each sheet, and `var(--name)` and
+  `var(--name, fallback)` resolve against them in a second -- two passes so a
+  sheet that uses a name above the `:root` that defines it still works, which
+  is not rare once a bundler has concatenated four files. The page's
+  background reaches the viewer, which paints the content area with it and
+  then checks every colour on the page -- text, links, list markers, rules,
+  the quote bar -- against **that** paper. The check was not weakened and has
+  no way to be turned off; it was pointed at the right surface.
+- **What it still does not do.** Custom properties inherit and may be set on
+  any element; this takes the page-wide set only, so a component's override
+  reads the page-wide value -- a colour from the same palette, wrong in shade
+  and never wrong in contrast. `color-mix()`, gradients and `rgb(var(--x) / a)`
+  are not colours this can read, and the properties written that way are left
+  unset rather than guessed at.
+
 ### BG-163 — An image drew straight over the status bar
 
 - **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, whose
