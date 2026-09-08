@@ -351,7 +351,7 @@ char *recon_asset_read(const char *name, size_t *size_out) {
  * seen by every skin that has no opinion, which is what somebody replacing an
  * icon meant anyway.
  */
-#define SKIN_ICONS_GENERATION 2
+#define SKIN_ICONS_GENERATION 3
 
 static bool skin_icons_are_current(const char *skin) {
     char stamp[RECON_PATH_MAX];

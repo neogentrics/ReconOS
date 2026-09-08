@@ -35,8 +35,9 @@ MAP = {
     20: ('accounts',      'two people'),
     22: ('file-sound',    'a waveform'),
     23: ('notepad',       'a ruled pad'),
-    24: ('taskmanager',   'a list with coloured markers'),
+    24: ('file-data',     'a list with coloured markers: rows of values, which is what a data file is'),
     27: ('help',          'an open book'),
+    28: ('taskmanager',   'a rising chart -- Watchtower graphs what the machine is doing, and shares this name'),
     31: ('calculator',    'a calculator'),
     32: ('file-web',      'a compass'),
     36: ('file-video',    'a video camera'),
@@ -54,6 +55,10 @@ MAP = {
 #
 #   apps        nothing in the pack is a grid of squares, and the Apps button
 #               is drawn at sixteen pixels where a tile would be a blob.
+#   application these two are drawn instead, as Glass-set masks -- see
+#   file-font   scripts/draw-glass-gaps.py. Nothing in this pack means "some
+#               program", and a page with a letter on it is a picture the
+#               pack does not have either.
 #   keyring     nothing is a key. Glass has a password book, which is better
 #               than a shield -- the shield went to the firewall, where a
 #               shield is the convention.

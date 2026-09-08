@@ -11,6 +11,27 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**The two names no icon pack answered are drawn, in the Glass set's own
+terms.** `application` is what a program without an icon of its own gets, and
+it was the one thing left on a themed desktop still wearing the drawn blue
+window -- a coloured picture sitting in a row of silhouettes that take the
+skin's ink. `file-font` was left out on the rule that a wrong picture on a file
+type is worse than a plain sheet, which is true and does not apply to a page
+with a letter on it.
+
+Both are ours: ninety-six pixels square, pure white, the drawing entirely in
+the alpha channel, falling from 212 at the top to 130 at the bottom. That ramp
+is what gives the set its lit-from-above look, and is why a new icon that is
+merely also white does not belong to it.
+
+**Two more of the Colored Glass tiles found homes.** The rising chart is the
+Task Manager's -- Watchtower graphs what the machine is doing and shares that
+name -- and the list of coloured markers moved to `file-data`, which is rows of
+values and is what a data file is. That leaves seventeen unused, and they are
+unused for one reason: they are pictures of things ReconOS has no page for. A
+wallet, a weather forecast, a map. The mapping in
+`scripts/install-colored-glass.py` says which, and what each one actually is.
+
 **Why this is 0.4.5 and not 0.4.1.** Eighty-seven commits landed on top of the
 v0.4.0 tag without the number moving, which is exactly what the entry below
 this one was written to complain about -- it says a release numbered 0.3.1 for
