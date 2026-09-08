@@ -22,6 +22,15 @@ web subfolder the browser dropped things into, -liquid-glass in some names
 and not others, and -2/-3 suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+A stage with no name says so. session over the control socket reported
+(null) after a run that was killed rather than stopped. Two stages had been
+added to the enum and not to the table of names -- the same fault the comment
+above that table already describes, and the fix written for it cannot prevent:
+designated initialisers stop a name landing on the wrong stage and do nothing
+about a stage with no name. Both named, the table is sized by the enum, and an
+unfilled slot now prints stage N, unnamed instead of (null). A hole cannot
+be caught at compile time; it can be made to name itself.
+
 The account's picture in the Start menu is a button. It goes to the page
 about accounts, which was four clicks away through the Control Panel's front
 page. The picture, not the row it sits in -- and with nothing added to announce

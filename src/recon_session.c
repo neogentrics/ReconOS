@@ -2940,20 +2940,48 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
      * Designated initialisers, so a stage added in the middle of the enum
      * cannot silently shift every name one along. Two were added and this
      * table was not, which is how "login" started reporting itself as null.
+     *
+     * It happened again, and designated initialisers are why it could: they
+     * stop a name landing on the wrong stage and do nothing at all about a
+     * stage with no name. STAGE_STOPPED and STAGE_LAST_STOP were added, this
+     * table was not, and the "last run did not finish" card reported itself
+     * as `(null)` -- which reads as a broken session rather than as a missing
+     * line in a table.
+     *
+     * Sized by the last stage rather than by what is written here, so there
+     * is always a slot for every stage and a slot nobody filled can say so.
+     * A hole cannot be caught at compile time; it can be made to name itself.
      */
-    static const char *const STAGE_NAMES[] = {
-        [STAGE_BOOTING]  = "booting",
-        [STAGE_UPDATING] = "updating",
-        [STAGE_WELCOME]  = "welcome",
-        [STAGE_ACCOUNT]  = "account",
-        [STAGE_MACHINE]  = "machine",
-        [STAGE_HELP]     = "help",
-        [STAGE_READING]  = "reading",
-        [STAGE_LOOK]     = "look",
-        [STAGE_FINISHED] = "finished",
-        [STAGE_LOGIN]    = "login",
-        [STAGE_DONE]     = "done",
+    static const char *const STAGE_NAMES[STAGE_DONE + 1] = {
+        [STAGE_BOOTING]   = "booting",
+        [STAGE_UPDATING]  = "updating",
+        [STAGE_WELCOME]   = "welcome",
+        [STAGE_ACCOUNT]   = "account",
+        [STAGE_MACHINE]   = "machine",
+        [STAGE_HELP]      = "help",
+        [STAGE_READING]   = "reading",
+        [STAGE_LOOK]      = "look",
+        [STAGE_FINISHED]  = "finished",
+        [STAGE_STOPPED]   = "stopped",
+        [STAGE_LAST_STOP] = "the last run did not finish",
+        [STAGE_LOGIN]     = "login",
+        [STAGE_DONE]      = "done",
     };
+
+    const char *name = (session->stage >= 0 && session->stage <= STAGE_DONE)
+        ? STAGE_NAMES[session->stage] : NULL;
+
+    /*
+     * Named as the omission it is. "(null)" is what somebody debugging a
+     * session reads as "the session is broken"; this reads as "somebody added
+     * a stage and not a name", which is the truth and is one line to fix.
+     */
+    char unnamed[40];
+    if (name == NULL) {
+        snprintf(unnamed, sizeof(unnamed), "stage %d, unnamed",
+            (int)session->stage);
+        name = unnamed;
+    }
 
     snprintf(out, size,
         "session: %s%s\n"
@@ -2961,7 +2989,7 @@ void recon_session_describe(struct recon_session *session, char *out, size_t siz
         "  selected: %d\n"
         "  signed in: %s\n"
         "  message: %s\n",
-        STAGE_NAMES[session->stage],
+        name,
         session->locked_to[0] != '\0' ? " (locked)"
             : (session->picking_account ? " (choosing an account)" : ""),
         recon_users_count(),

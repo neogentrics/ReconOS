@@ -2575,6 +2575,26 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-157 — The "last run did not finish" card reported itself as `(null)`
+
+- **Found in** v0.4.0. **Found by** running `session` over the control socket
+  after a session had been killed rather than stopped: `session: (null)`, while
+  `state` correctly reported that the login screen had the input.
+- **What it was** the same fault as the one the comment above that table
+  already describes, and the fix written for it does not prevent. Designated
+  initialisers stop a name landing on the *wrong* stage; they do nothing at all
+  about a stage with no name. `STAGE_STOPPED` and `STAGE_LAST_STOP` were added
+  to the enum and not to `STAGE_NAMES`, so both read back as a null pointer --
+  and printing one through `%s` says `(null)`, which somebody debugging a
+  session reads as "the session is broken".
+- **Fixed in** v0.4.0. Both named. The table is sized by the last stage rather
+  than by what is written in it, so there is always a slot, and a slot nobody
+  filled prints `stage N, unnamed` -- which reads as "somebody added a stage
+  and not a name", is the truth, and is one line to fix. A hole cannot be
+  caught at compile time; it can be made to name itself.
+- Confirmed on the stage that was broken: killed a session, started another,
+  and it now says "the last run did not finish".
+
 ### BG-156 — A picture icon on a coloured title bar was dark on dark
 
 - **Found in** v0.4.0. **Found by** the author: "the icons in the top left
