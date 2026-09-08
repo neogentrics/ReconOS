@@ -2588,8 +2588,14 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   letter spacing.
 - **Fixed in** v0.4.5. The wrapping loop tracks where a link began on the line
   it is on and draws one rule when it ends -- at the end of the link, at a
-  wrap, or at the end of the run. A link that wraps gets one rule per line,
+  wrap, or at the end of the block. A link that wraps gets one rule per line,
   which is what it should get.
+- **And then once more, one level up.** The first fix closed the rule at every
+  *run* boundary, and one link is often several runs: `<a>Free software
+  <em>can</em> be commercial</a>` is three, so the emphasised word had a hole
+  either side of it. The same fault at the next size, which is worth recording
+  as the same bug rather than a new one -- "draw this per piece" was wrong
+  about words and wrong again about runs, for one reason.
 
 ### BG-160 — The window's title was every `<title>` in the page, not the page's
 

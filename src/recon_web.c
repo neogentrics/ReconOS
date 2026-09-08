@@ -934,6 +934,18 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     int y = f->height;
     bool anything_on_line = false;
 
+    /*
+     * Where the link being drawn began on this line, and in which face.
+     *
+     * Outside the run loop, because one link is often several runs: `<a>Free
+     * software <em>can</em> be commercial</a>` is three, and a rule that
+     * closed at every run boundary put a hole either side of the emphasised
+     * word -- which is the same fault as BG-161 one level up.
+     */
+    int link_from = -1;
+    int link_last = -1;
+    struct recon_font *link_font = NULL;
+
     for (int i = 0; i < b->run_count; i++) {
         const struct recon_html_run *run =
             recon_html_run_at(w->page, b->first_run + i);
@@ -972,14 +984,6 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             continue;
         }
 
-        /*
-         * Where the link being drawn began on this line, so its rule can be
-         * drawn once when it ends -- at the end of the link, at a wrap, or at
-         * the end of the block.
-         */
-        int link_from = -1;
-        int link_last = -1;
-
         size_t at = 0;
         while (at < run->length) {
             /* One word, and the space after it if there is one. */
@@ -1017,6 +1021,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                 if (is_link && link_from < 0) {
                     link_from = x;
                     link_last = run->link;
+                    link_font = font;
                 }
 
                 put_word(f, font, x, y, run->text + at, word_length,
@@ -1034,14 +1039,11 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             }
         }
 
-        /*
-         * A link that runs to the end of its run. Closed here rather than at
-         * the end of the block, because the next run may be a different link
-         * or none, and either way the rule under this one stops here.
-         */
-        if (link_from >= 0) {
-            underline_link(f, font, link_from, x, y, link_last);
-        }
+    }
+
+    /* A link that reached the end of the block. */
+    if (link_from >= 0 && link_font != NULL) {
+        underline_link(f, link_font, link_from, x, y, link_last);
     }
 
     f->height = y + line_height;
