@@ -58,7 +58,38 @@ AREA = {
     84: 'kernel', 85: 'kernel', 86: 'kernel',
     87: 'display', 88: 'programs', 89: 'display', 90: 'build', 91: 'display', 92: 'kernel', 93: 'kernel',
     94: 'kernel', 95: 'kernel', 96: 'applications',
+    97: 'applications', 98: 'applications', 99: 'applications',
+    100: 'display', 101: 'build', 102: 'build',
+    103: 'kernel', 104: 'kernel', 105: 'kernel',
+    106: 'display', 107: 'display', 108: 'skins',
+    109: 'settings', 110: 'settings', 111: 'settings',
+    112: 'input', 113: 'network', 114: 'programs',
+    115: 'input', 116: 'applications', 117: 'input',
+    118: 'input', 119: 'applications', 120: 'help',
+    121: 'applications', 122: 'input', 123: 'help',
+    124: 'applications', 125: 'storage', 126: 'display',
+    127: 'display', 128: 'startup', 129: 'applications',
+    130: 'display', 131: 'firewall', 132: 'applications',
+    133: 'storage', 134: 'build', 135: 'settings',
+    136: 'display', 137: 'display', 138: 'input',
+    139: 'display', 140: 'display', 141: 'skins',
+    142: 'display', 143: 'display', 144: 'skins',
+    145: 'display', 146: 'display', 147: 'display',
+    148: 'display',
 }
+
+
+def is_fixed(body):
+    """
+    Does the register say this one is fixed?
+
+    Two phrasings, because the register uses two: "Fixed in <version>" where
+    the version is the point, "Fixed by <what was done>" where the change is.
+    This asked for the first only, so every entry written the second way was
+    filed as an open bug -- nine of them, on a public tracker, saying the
+    player's clock and three kernel faults were still broken.
+    """
+    return '**Fixed in**' in body or '**Fixed by**' in body
 
 
 def gh(args):
@@ -77,7 +108,7 @@ def gh(args):
 
 def existing_titles():
     out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
-              '--limit', '500', '--json', 'title,number,state'])
+              '--limit', '500', '--json', 'title,number,state,labels'])
     if out.returncode != 0:
         raise SystemExit(f'gh issue list failed: {out.stderr.strip()}')
 
@@ -141,10 +172,43 @@ def main():
 
     for e in entries:
         if e['title'] in have:
-            print(f"  {e['id']}  exists as #{have[e['title']]['number']}")
+            row = have[e['title']]
+            '''
+            An entry that already has an issue is left alone -- except when
+            the register says it is fixed and the issue is open, which is the
+            two drifting apart, and this file exists to stop that. Closing to
+            match is the contract: the register is the source.
+            '''
+            note = []
+            if is_fixed(e['body']) and row['state'] == 'OPEN':
+                note.append('close')
+                if not dry:
+                    gh(['issue', 'close', str(row['number']), '--repo', REPO,
+                        '--reason', 'completed'])
+
+            '''
+            Labels too, for the same reason and one of its own: an area is
+            assigned by hand in AREA below, so an entry filed before its line
+            was added carries only "bug" forever. Filtering by area then
+            quietly misses it, which is worse than the label being absent --
+            the filter looks like it worked.
+            '''
+            want = set(labels_for(e))
+            has = {label['name'] for label in row.get('labels', [])}
+            if want - has:
+                note.append('label ' + ','.join(sorted(want - has)))
+                if not dry:
+                    gh(['issue', 'edit', str(row['number']), '--repo', REPO,
+                        '--add-label', ','.join(sorted(want - has))])
+
+            if note:
+                print(f"  {e['id']}  #{row['number']}: "
+                      f"{'would ' if dry else ''}{'; '.join(note)}")
+            else:
+                print(f"  {e['id']}  exists as #{row['number']}")
             continue
 
-        closed = '**Fixed in**' in e['body']
+        closed = is_fixed(e['body'])
         labels = labels_for(e)
         body = e['body'] + (
             '\n\n---\n\nFrom the register in '
