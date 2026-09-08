@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ReconOS.h"
@@ -15,7 +16,23 @@
 #include "recon_registry.h"
 #include "recon_ui.h"
 
-#define AVATARS_MAX 32
+/*
+ * How many pictures may be offered, and how much of the folder is read to find
+ * them.
+ *
+ * Both were sized when there were eight pictures in a folder of forty icons,
+ * and both are the shape of limit that fails without saying so -- the picker
+ * simply stops, and the pictures past the cap look like pictures that were
+ * never installed. That is exactly how BG-139 presented.
+ *
+ * The listing bound is the one that matters and is the easier to get wrong:
+ * it is a bound on *the whole icon folder*, not on the pictures in it, so
+ * every ordinary icon added to the system eats into the number of account
+ * pictures that can be found. At two hundred icons and fifty pictures, a
+ * hundred and twenty-eight entries reaches neither.
+ */
+#define AVATARS_MAX 128
+#define AVATAR_SCAN_MAX 512
 #define AVATAR_NAME_MAX 64
 
 /*
@@ -35,13 +52,25 @@ static void scan(void) {
     g_count = 0;
     g_scanned = true;
 
-    struct recon_dirent entries[128];
-    int found = recon_fs_list("/", RECON_DIR_SYSTEM_ICONS, entries, 128);
-    if (found < 0) {
+    /*
+     * On the heap: five hundred directory entries is twenty times what this
+     * function's stack frame should be, and a scan that grows with the icon
+     * folder is one that eventually grows past what a thread has.
+     */
+    struct recon_dirent *entries = malloc(
+        sizeof(*entries) * AVATAR_SCAN_MAX);
+    if (entries == NULL) {
         return;
     }
-    if (found > 128) {
-        found = 128;
+
+    int found = recon_fs_list("/", RECON_DIR_SYSTEM_ICONS, entries,
+        AVATAR_SCAN_MAX);
+    if (found < 0) {
+        free(entries);
+        return;
+    }
+    if (found > AVATAR_SCAN_MAX) {
+        found = AVATAR_SCAN_MAX;
     }
 
     size_t prefix = strlen(RECON_AVATAR_PREFIX);
@@ -80,6 +109,8 @@ static void scan(void) {
             g_count++;
         }
     }
+
+    free(entries);
 }
 
 int recon_avatar_count(void) {

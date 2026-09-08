@@ -11,6 +11,20 @@ written here.
 
 Included directly in the repository under `third_party/`.
 
+### Account pictures — deliberately not here
+
+The author has a folder of Windows XP account pictures and asked for them
+installed. They are installed **into the running filesystem only** and are not
+in this repository, because they are Microsoft's artwork and this repository is
+public. Two of the files are named for it outright.
+
+Nothing in ReconOS depends on them: the avatar layer offers anything in
+`/System/Icons` whose name begins with `avatar-`, so they are files in a folder
+and the system is complete without them.
+
+If open-licensed replacements turn up they can go in `assets/` like everything
+else, and this entry becomes a real one.
+
 ### Glass icon set
 
 - **Author:** Icons8 (icons8.com)

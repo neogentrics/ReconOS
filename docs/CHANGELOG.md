@@ -23,6 +23,35 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The Glass icon set fills nearly every name ReconOS asks by.** 198 pictures,
+36 of them answering a ReconOS name. The Control Panel is one set now rather
+than a mix: Accounts, Passwords, Appearance, Display Settings, Programs,
+Modules, Network, Firewall, Storage, Disk Cleanup, Update, Troubleshoot,
+Recovery and Registry all come from it.
+
+`scripts/install-icon-pack.py` is what puts one in, and it handles what a
+folder of downloads actually looks like -- several sizes of the same picture, a
+`web` subfolder the browser dropped things into, `-liquid-glass` in some names
+and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
+Adding a pack is dropping a folder next to the others and running it.
+
+**Four names are left drawn, on purpose, and the reasons are in the script.**
+`shutdown` because nothing in the pack means *power* and the drawn red symbol
+is instantly recognisable -- meaning beats matching. `application`, `file-video`
+and `file-font` because a wrong picture on a file type is worse than the plain
+sheet. And all four caption buttons, which is a decision about the *set*: the
+pack's maximize and minimize are a glyph inside a box and a caption button is
+already a box, so at twelve pixels both come out a featureless blob, while its
+bare X survives -- and one soft grey icon between two solid drawn ones looks
+worse than three that are merely plain.
+
+**The avatar caps were sized for eight pictures in a folder of forty icons.**
+Thirty-two pictures, and a hundred and twenty-eight entries read from the icon
+folder to find them -- which is a bound on the whole folder rather than on the
+pictures in it, so every ordinary icon added ate into how many account pictures
+could be found. At two hundred icons neither reached. Both raised, and the scan
+moved off the stack.
+
 **On the desktop, a picture beats a silhouette.** A silhouette is the right
 thing on a toolbar -- small, one colour, on chrome whose colour it should
 follow -- and the wrong thing on a wallpaper. A desktop icon is drawn four
