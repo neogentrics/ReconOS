@@ -23,6 +23,30 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The account pictures show the chosen one large.** A grid of thirty-two-pixel
+discs is a grid of coloured dots to anybody who cannot see thirty-two pixels
+clearly, and choosing from it means picking one and finding out afterwards.
+Asked for in those words. It shows what is *chosen* rather than what is under
+the pointer -- a preview that followed the pointer would be blank whenever
+nobody was moving the mouse, which is exactly when they are looking at it --
+with its name beside it, because a picture somebody cannot make out is not
+helped by a larger copy of itself alone.
+
+**The Explorer toolbar asks for icons and keeps its drawings as the fallback.**
+Back, forward, refresh, home, rename, delete and restore take the skin's
+picture where there is one; up and new-folder keep their drawn glyphs, because
+no set seems to carry an up arrow and a new folder wants a folder with
+something *added* to it. Not a switch between two toolbars: an icon that exists
+should be used and one that does not should not leave a hole.
+
+**Accounts and Troubleshoot stopped borrowing.** They showed the generic
+application icon and the terminal's -- the nearest things to hand rather than
+pictures of what those pages are. That works until an icon set arrives with the
+right picture in it and nothing can ask for it, because the name says
+"application" and means "the people who may sign in". The generated set draws
+the same shapes under the new names, so a skin without an icon set looks
+exactly as it did.
+
 **A silhouette on the desktop gets the ring the label already had.** A desktop
 icon sits on a photograph nobody chose for it, which is the problem the label
 solved a while ago -- a halo of the shadow colour, drawn only when it earns its

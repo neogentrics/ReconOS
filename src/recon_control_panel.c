@@ -297,7 +297,7 @@ static const struct {
      */
     const char *summary;
 } PAGES[PAGE_COUNT] = {
-    { "Accounts", RECON_ICON_APP, "Who may sign in" },
+    { "Accounts", RECON_ICON_ACCOUNTS, "Who may sign in" },
     { "Passwords", RECON_ICON_KEYRING, "What has been kept" },
     { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
     { "Date and Time", RECON_ICON_CLOCK, "The clock and its zone" },
@@ -313,7 +313,7 @@ static const struct {
     { "Disk Cleanup", RECON_ICON_TRASH, "Free some of it up" },
     { "Update", RECON_ICON_UPDATE, "What version this is" },
 
-    { "Troubleshoot", RECON_ICON_TERMINAL, "When it goes wrong" },
+    { "Troubleshoot", RECON_ICON_TROUBLESHOOT, "When it goes wrong" },
     { "Recovery", RECON_ICON_RECOVERY, "Back to what worked" },
     { "Registry", RECON_ICON_NOTEPAD, "Every setting, raw" },
 
@@ -1182,6 +1182,15 @@ static void draw_row(struct control_panel *cp, struct recon_panel *p,
 #define AVATAR_TILE 56
 #define AVATAR_FACE 40
 
+/*
+ * How large the preview is.
+ *
+ * Ninety-six, which is what the pictures are drawn at, so the one somebody is
+ * squinting at is shown at its own resolution rather than at a size that has
+ * to invent or discard pixels to be reached.
+ */
+#define AVATAR_PREVIEW 96
+
 static void draw_avatar_picker(struct control_panel *cp, struct recon_panel *p,
         int x, int y, int w, int h) {
     int ascent = recon_font_ascent(cp->font);
@@ -1238,7 +1247,56 @@ static void draw_avatar_picker(struct control_panel *cp, struct recon_panel *p,
     }
 
     int rows = (total + columns - 1) / columns;
-    draw_button(cp, p, x, y + rows * AVATAR_TILE + PADDING, "Done",
+    int below = y + rows * AVATAR_TILE + PADDING;
+
+    /*
+     * --- The chosen one, larger, underneath ---
+     *
+     * A grid of thirty-two-pixel discs is a grid of coloured dots to anybody
+     * who cannot see thirty-two pixels clearly, and choosing from it means
+     * picking one and finding out afterwards. Asked for in those words: "a
+     * user who's hard of seeing or has difficulty seeing can see what image
+     * they're clicking on instead of just picking a random one."
+     *
+     * It shows what is *chosen*, not what is under the pointer. A preview that
+     * followed the pointer would be a preview that is blank whenever somebody
+     * is not moving the mouse -- which is exactly when they are looking at it.
+     * One click chooses and shows; Done keeps it. That is also the system's
+     * own rule, one click to highlight and a second to act.
+     */
+    const char *current = recon_avatar_of(cp->question_target);
+
+    int line = recon_font_line_height(cp->font);
+    int face = AVATAR_PREVIEW;
+    recon_fill_round_rect(p, x, below, face + PADDING * 2, face + PADDING * 2,
+        recon_button_radius(face, face), COLOR_ROW_ALT);
+
+    int fx = x + PADDING;
+    int fy = below + PADDING;
+
+    if (current[0] == '\0') {
+        /* The drawn initial, which is what "none" means -- and it has to be
+         * shown at this size too, or the one choice with no file is the one
+         * choice nobody can preview. */
+        recon_avatar_draw(p, cp->font, cp->question_target, fx, fy, face);
+    } else {
+        recon_icon_draw(p, current, fx, fy, face);
+    }
+
+    /* Its name beside it, because a picture somebody cannot make out is not
+     * helped by a larger copy of itself alone. */
+    int label_x = x + face + PADDING * 3;
+    int label_y = below + face / 2 - line;
+    recon_draw_text(p, cp->font, label_x, label_y + ascent,
+        w - (label_x - x), current[0] == '\0' ? "No picture" : current,
+        COLOR_TEXT);
+    recon_draw_text(p, cp->font, label_x, label_y + line + ascent,
+        w - (label_x - x),
+        current[0] == '\0' ? "The first letter of the name, on a colour"
+                           : "Chosen. Done keeps it.",
+        COLOR_DIM);
+
+    draw_button(cp, p, x, below + face + PADDING * 3, "Done",
         HIT_ACTION_BASE + ACTION_CHOOSE_AVATAR, true);
 }
 

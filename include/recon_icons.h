@@ -74,6 +74,21 @@
  * Panel, the Apps button and half the settings pages were showing -- the same
  * red window meaning four different things.
  */
+/*
+ * Two pages that used to borrow.
+ *
+ * Accounts showed the generic application icon and Troubleshoot showed the
+ * terminal's -- the nearest things to hand rather than pictures of what those
+ * pages are. Borrowing works until an icon set turns up with the right
+ * picture in it and nothing can ask for it, because the name says
+ * "application" and means "the people who may sign in".
+ *
+ * The generated set draws the same shapes it always did under these names, so
+ * a skin without an icon set looks exactly as it did.
+ */
+#define RECON_ICON_ACCOUNTS "accounts"
+#define RECON_ICON_TROUBLESHOOT "troubleshoot"
+
 #define RECON_ICON_CONTROL_PANEL "control-panel"
 #define RECON_ICON_APPS "apps"
 #define RECON_ICON_HELP "help"

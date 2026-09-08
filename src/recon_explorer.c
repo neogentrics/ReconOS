@@ -1059,6 +1059,32 @@ enum glyph {
     GLYPH_RENAME,
     GLYPH_DELETE,
     GLYPH_RESTORE,
+    GLYPH_COUNT,
+};
+
+/*
+ * The icon each of these would rather be, if the skin has one.
+ *
+ * The drawings below stay, and are what a skin without an icon set shows --
+ * which is most of them, and is why they were drawn in the first place. This
+ * is the door for a set that has a better picture: a real back arrow beats a
+ * triangle made of rectangles, and the moment somebody drops one in, the
+ * toolbar takes it without a line changing here.
+ *
+ * NULL for the two nothing has yet: an *up* arrow, which no set seems to
+ * carry because most toolbars stopped having one, and a *new folder*, which
+ * wants a folder with something added to it rather than a folder.
+ */
+static const char *const GLYPH_ICON[GLYPH_COUNT] = {
+    [GLYPH_BACK]       = "back",
+    [GLYPH_FORWARD]    = "forward-arrow",
+    [GLYPH_UP]         = NULL,
+    [GLYPH_REFRESH]    = "refresh",
+    [GLYPH_HOME]       = "home",
+    [GLYPH_NEW_FOLDER] = NULL,
+    [GLYPH_RENAME]     = "edit-pencil",
+    [GLYPH_DELETE]     = "trash-can",
+    [GLYPH_RESTORE]    = "undo",
 };
 
 /*
@@ -1084,6 +1110,9 @@ static void draw_triangle(struct recon_panel *p, int cx, int cy,
 static void draw_glyph(struct recon_panel *p, enum glyph glyph,
         int cx, int cy, recon_color ink) {
     switch (glyph) {
+    case GLYPH_COUNT:
+        return;    /* how many there are, not one of them */
+
     case GLYPH_BACK:
         draw_triangle(p, cx, cy, -1, ink);
         break;
@@ -1215,13 +1244,25 @@ static int draw_tool(struct recon_explorer *ex, struct recon_panel *p,
     enum recon_widget_state state = recon_widget_button(p, &button);
 
     /*
-     * The glyph after the button, and nudged with it while it is held, so the
-     * arrow sinks into the button rather than floating over it.
+     * The picture after the button, and nudged with it while it is held, so it
+     * sinks into the button rather than floating over it.
+     *
+     * The skin's icon where there is one, and the drawn glyph otherwise. Not a
+     * switch between two toolbars: a set that has a back arrow and no up arrow
+     * gives a toolbar with one of each, which is right -- an icon that exists
+     * should be used, and one that does not should not leave a hole.
      */
     int nudge = state == RECON_WIDGET_ACTIVE ? 1 : 0;
-    draw_glyph(p, glyph, x + width / 2 + nudge,
-        y + BUTTON_HEIGHT / 2 + nudge,
-        enabled ? COLOR_TEXT : THEME(MENU_TEXT_DISABLED));
+    recon_color ink = enabled ? COLOR_TEXT : THEME(MENU_TEXT_DISABLED);
+
+    const char *icon = GLYPH_ICON[glyph];
+    int size = BUTTON_HEIGHT - 8;
+    if (icon == NULL ||
+            !recon_icon_draw_in(p, icon, x + (width - size) / 2 + nudge,
+                y + (BUTTON_HEIGHT - size) / 2 + nudge, size, ink)) {
+        draw_glyph(p, glyph, x + width / 2 + nudge,
+            y + BUTTON_HEIGHT / 2 + nudge, ink);
+    }
 
     return x + width + 2;
 }

@@ -1340,6 +1340,16 @@ static const struct generated_icon ICONS[] = {
     { "file-archive", draw_file_archive },
     { "application", draw_application },
     { "terminal", draw_terminal },
+
+    /*
+     * The same two drawings again, under the names the Control Panel now asks
+     * by. Not a rename: "application" and "terminal" are still what an
+     * application and a terminal are called, and these are what two *pages*
+     * are called. A skin's own set can answer one without answering the
+     * other, which is the point of them being separate names at all.
+     */
+    { "accounts", draw_application },
+    { "troubleshoot", draw_terminal },
     { "notepad", draw_notepad },
     { "calculator", draw_calculator },
     { "explorer", draw_explorer },
@@ -1410,8 +1420,10 @@ static const struct generated_icon ICONS[] = {
  *   2  v0.4.0: drawn at 128 and downsampled by whatever shows it; the flame
  *      became a campfire; eighteen more account pictures; gear, leaf,
  *      lighthouse and the beacon redrawn after looking at them
+ *   3  v0.4.0: `accounts` and `troubleshoot`, for two Control Panel pages
+ *      that had been borrowing the application and terminal icons
  */
-#define ICONS_GENERATION 2
+#define ICONS_GENERATION 3
 
 #define ICONS_GENERATION_KEY "icons/generation"
 
