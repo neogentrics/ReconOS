@@ -172,10 +172,21 @@ static bool draw_one(const struct drawn_wallpaper *style) {
  * second one.
  */
 static const char *const BUNDLED[] = {
-    "Aurora.jpg",     /* dark, a ribbon of light -- made for the glass skin */
-    "Spire.jpg",      /* dark, glass towers seen from below */
-    "Meridian.jpg",   /* pale, for the light skins, which had none */
-    "Current.jpg",    /* dark emerald, the quietest of the four */
+    "Aurora.jpg",        /* dark, a ribbon of light -- for the glass skins */
+    "Spire.jpg",         /* dark, glass towers seen from below */
+    "Meridian.jpg",      /* pale, for the light skins, which had none */
+    "Current.jpg",       /* dark emerald, the quietest of the four */
+
+    /*
+     * Supplied by the author, and renamed to the set's own convention: one
+     * noun for what the picture is of. The file arrived as
+     * `Desktop_Background_Constellations.jpg` and two called `DUCKS`, which
+     * says where they came from rather than what they are -- and the picker
+     * shows the name, so the name is the label.
+     */
+    "Constellation.jpg", /* a star field behind frosted panes -- Smoked */
+    "Millpond.jpg",      /* glass over still water, the same idea in daylight */
+    "Meadow.jpg",        /* flat, bright and green, for the reading skins */
     NULL,
 };
 

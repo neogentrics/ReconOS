@@ -174,15 +174,23 @@ Linked at build time, not distributed with ReconOS.
 
 ### Wallpapers
 
-`assets/wallpapers/` holds four images made for ReconOS and borrowed from
+`assets/wallpapers/` holds seven images made for ReconOS and borrowed from
 nowhere: **Aurora** (a ribbon of light), **Spire** (glass towers from below),
-**Meridian** (a pale dawn, for the light skins, which had none) and **Current**
-(deep emerald water).
+**Meridian** (a pale dawn, for the light skins, which had none), **Current**
+(deep emerald water), **Constellation** (a star field behind frosted panes),
+**Millpond** (glass over still water, the same idea in daylight) and **Meadow**
+(flat, bright and green, for the reading skins).
 
 It is worth saying how, because "made for" and "drawn by hand" are different
 claims and only the first one is true: each was produced by an image model from
 a written description. Nobody else has a claim on them, and nobody painted them
 either.
+
+The last three were made by the author rather than for this file, and supplied
+at 13760x7680 -- three hundred megapixels, twenty-two megabytes between them,
+for a picture nothing draws above 1024x576. They are cropped to the shape the
+others are and scaled down to it, which is the whole of the processing: a
+repository is not the place to keep resolution nothing can use.
 
 Every one of those descriptions asked for the same thing -- a quiet, uncluttered
 upper left -- because that is where window chrome lands, and a see-through

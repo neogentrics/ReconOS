@@ -1364,10 +1364,16 @@ static const struct {
     { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL, NULL },
     { "Beacon", "Bright blue chrome and a green accent, early 2000s",
       THEME_BEACON, "Daybreak.png", GRAD_BEACON, SHAPE_BEACON },
+    /*
+     * These two get the pictures that were made for them: frosted panes over
+     * water in daylight, and frosted panes over a star field at night. A
+     * see-through skin makes the wallpaper part of the chrome, so pairing it
+     * is not decoration -- it is the rest of the skin.
+     */
     { "Glass", "See-through chrome and rounded corners, the late 2000s",
-      THEME_GLASS, "Daybreak.png", GRAD_GLASS, SHAPE_GLASS },
+      THEME_GLASS, "Millpond.jpg", GRAD_GLASS, SHAPE_GLASS },
     { "Smoked", "The same glass, dark: see-through chrome on a night desk",
-      THEME_SMOKED, "Aurora.jpg", GRAD_SMOKED, SHAPE_SMOKED },
+      THEME_SMOKED, "Constellation.jpg", GRAD_SMOKED, SHAPE_SMOKED },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
       THEME_DEUTERAN, "Night Sky.png", NULL, NULL },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",

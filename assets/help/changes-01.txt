@@ -22,6 +22,22 @@ web subfolder the browser dropped things into, -liquid-glass in some names
 and not others, and -2/-3 suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+Three wallpapers the author made, and the two skins they were made for.
+Constellation is a star field behind frosted panes, Millpond is the same
+idea in daylight -- glass over still water -- and Meadow is flat, bright and
+green. Glass now opens on Millpond and Smoked on Constellation, because a
+see-through skin makes the wallpaper part of the chrome: pairing them is not
+decoration, it is the rest of the skin.
+
+They arrived at 13760x7680 -- three hundred megapixels, twenty-two megabytes
+between them, for a picture nothing draws above 1024x576. Cropped to the shape
+the others are and scaled down to it. A repository is not the place to keep
+resolution nothing can use.
+
+Renamed, too: the files said Desktop_Background_Constellations and DUCKS,
+which is where they came from rather than what they are, and the picker shows
+the name.
+
 The taskbar is above every window, because it is not a window.
 Everything joined one scene tree, so what sat in front of what was a running
 argument that whoever raised last won -- and focusing a built-in window raised
