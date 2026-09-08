@@ -165,6 +165,7 @@ enum web_menu_item {
     MENU_SEP_2,
     MENU_ADD_BOOKMARK,
     MENU_SHOW_MARKS,
+    MENU_BOOKMARKS,
     MENU_SEP_3,
     MENU_HISTORY,
     MENU_SET_HOME,
@@ -186,6 +187,7 @@ static const struct {
     [MENU_SEP_2]         = { NULL,                 NULL,     true  },
     [MENU_ADD_BOOKMARK]  = { "Bookmark this page", "Ctrl+D", false },
     [MENU_SHOW_MARKS]    = { "Show bookmarks bar", NULL,     false },
+    [MENU_BOOKMARKS]     = { "All bookmarks",      NULL,     false },
     [MENU_SEP_3]         = { NULL,                 NULL,     true  },
     [MENU_HISTORY]       = { "History",            "Ctrl+H", false },
     [MENU_SET_HOME]      = { "Set as home page",   NULL,     false },
@@ -1088,9 +1090,36 @@ static void go_typed(struct web_tab *w) {
     if (w->owner == NULL) {
         return;
     }
+
+    const char *text = w->owner->address.text;
+    while (*text == ' ' || *text == '\t') {
+        text++;
+    }
+
+    /*
+     * --- What somebody typing in the address bar meant ---
+     *
+     * A link on a page is relative to that page. **Text typed into the
+     * address bar is not**, and treating it as though it were is the bug this
+     * comment exists for: on gaming.recontowers.com, typing "example.com" and
+     * pressing Return went to gaming.recontowers.com/example.com. So once you
+     * were on any page at all, you could not reach a different site by typing
+     * its name -- you could only reach paths on the site you were already on.
+     *
+     * The one form that *is* worth resolving is a path: typing "/about" means
+     * the about page of the site being read, and there is nowhere else it
+     * could mean. Anything else -- a bare host, a full address, a name with a
+     * dot in it -- is somewhere to go.
+     *
+     * A fragment gets the base too, so typing "#notes" is the same as
+     * clicking a link to it.
+     */
+    bool relative = (text[0] == '/' || text[0] == '#');
+    const struct recon_http_url *base =
+        (relative && w->have_url) ? &w->url : NULL;
+
     struct recon_http_url url;
-    if (!recon_http_parse_url(w->owner->address.text,
-            w->have_url ? &w->url : NULL, &url)) {
+    if (!recon_http_parse_url(text, base, &url)) {
         set_status(w, true, "%s", recon_http_last_error());
         return;
     }
@@ -2487,6 +2516,163 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     }
 }
 
+
+/* --- Pages this builds for itself --- */
+
+/*
+ * The history and the bookmarks are shown as *pages*.
+ *
+ * Not as a panel, a dialog or a list widget, because a page is a thing this
+ * program already knows how to do completely: lay out, scroll, colour to the
+ * skin, search with the find bar, and -- the part that matters -- make every
+ * entry a link that already works. A list widget would need its own layout,
+ * its own scrolling and its own click handling, all of which exist here and
+ * none of which would be shared.
+ *
+ * The markup is generated and then parsed rather than being turned straight
+ * into blocks, for the same reason: the parser is the one place that decides
+ * what a document is, and a second way in is a second thing to keep in step.
+ */
+
+/* Text into markup, so a page title containing "<" is a title and not a tag. */
+static void escaped(char *out, size_t size, const char *text) {
+    size_t used = 0;
+    out[0] = '\0';
+    for (const unsigned char *c = (const unsigned char *)text;
+            *c != '\0' && used + 8 < size; c++) {
+        const char *as = NULL;
+        switch (*c) {
+        case '<':  as = "&lt;";   break;
+        case '>':  as = "&gt;";   break;
+        case '&':  as = "&amp;";  break;
+        case '"':  as = "&quot;"; break;
+        default: break;
+        }
+        if (as != NULL) {
+            used += (size_t)snprintf(out + used, size - used, "%s", as);
+        } else if (*c >= 0x20 && *c != 0x7F) {
+            out[used++] = (char)*c;
+            out[used] = '\0';
+        }
+    }
+}
+
+/*
+ * Show a document this made up, rather than one that was fetched.
+ *
+ * `have_url` stays false, which is what tells the link handler there is no
+ * base to resolve against -- and there is not: this page came from nowhere.
+ * Every address on it is absolute for exactly that reason.
+ */
+static void show_built(struct web_tab *t, const char *html, const char *name) {
+    if (t->request != NULL) {
+        recon_http_cancel(t->request);
+        t->request = NULL;
+        t->loading = false;
+    }
+
+    forget_images(t);
+    forget_sheets(t);
+    t->sheet = recon_css_new();
+    t->restyled = true;               /* nothing to fetch; do not try */
+
+    t->have_url = false;
+    show_document(t, recon_html_parse_styled(html, strlen(html), t->sheet),
+        name, strlen(html));
+
+    /*
+     * The address bar says what this is rather than where it came from.
+     * Leaving the last page's address there would be the address bar
+     * describing something that is no longer on screen.
+     */
+    if (t->owner != NULL && front(t->owner) == t) {
+        recon_edit_begin(&t->owner->address, name, false);
+        t->owner->address.active = false;
+    }
+    snprintf(t->label, sizeof(t->label), "%s", name);
+}
+
+static void show_history(struct recon_web *w) {
+    struct web_tab *t = front(w);
+    if (t == NULL) {
+        return;
+    }
+
+    /*
+     * Bounded, and the bound is why this is built into a fixed buffer rather
+     * than grown: the history is capped at HISTORY_MAX entries of a known
+     * size, so the largest page this can produce is known in advance.
+     */
+    static char html[HISTORY_MAX * (RECON_HTTP_URL_MAX + 256) + 1024];
+    size_t used = 0;
+
+    used += (size_t)snprintf(html + used, sizeof(html) - used,
+        "<h1>History</h1>"
+        "<p>Where this tab has been, newest first. "
+        "Back and forward walk the same list.</p>");
+
+    if (t->history_count == 0) {
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "<p>Nothing yet.</p>");
+    }
+
+    /* Newest first, which is the order somebody looking for where they just
+     * were wants -- and the opposite of the order back and forward use. */
+    for (int i = t->history_count - 1; i >= 0 && used + 512 < sizeof(html);
+            i--) {
+        char address[RECON_HTTP_URL_MAX];
+        recon_http_format_url(&t->history[i], address, sizeof(address));
+
+        char safe[RECON_HTTP_URL_MAX + 64];
+        escaped(safe, sizeof(safe), address);
+
+        /* The one you are on is marked rather than left as a link to
+         * itself -- following it would reload the page you are reading. */
+        if (i == t->at) {
+            used += (size_t)snprintf(html + used, sizeof(html) - used,
+                "<p><b>%s</b> &mdash; here now</p>", safe);
+        } else {
+            used += (size_t)snprintf(html + used, sizeof(html) - used,
+                "<p><a href=\"%s\">%s</a></p>", safe, safe);
+        }
+    }
+
+    show_built(t, html, "History");
+}
+
+static void show_bookmarks_page(struct recon_web *w) {
+    struct web_tab *t = front(w);
+    if (t == NULL) {
+        return;
+    }
+
+    static char html[BOOKMARKS_MAX * (RECON_HTTP_URL_MAX + 256) + 1024];
+    size_t used = 0;
+
+    used += (size_t)snprintf(html + used, sizeof(html) - used,
+        "<h1>Bookmarks</h1>"
+        "<p>Kept in /Users/Shared/Web/bookmarks.txt. "
+        "The star on the toolbar adds and removes them.</p>");
+
+    if (w->bookmark_count == 0) {
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "<p>None yet.</p>");
+    }
+
+    for (int i = 0; i < w->bookmark_count && used + 512 < sizeof(html); i++) {
+        char safe_url[RECON_HTTP_URL_MAX + 64];
+        char safe_label[256];
+        escaped(safe_url, sizeof(safe_url), w->bookmarks[i].url);
+        escaped(safe_label, sizeof(safe_label), w->bookmarks[i].label);
+
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "<p><a href=\"%s\">%s</a><br>%s</p>",
+            safe_url, safe_label, safe_url);
+    }
+
+    show_built(t, html, "Bookmarks");
+}
+
 /* Open an address in whichever tab is in front. */
 static void open_text(struct recon_web *w, const char *text) {
     struct web_tab *t = front(w);
@@ -2608,18 +2794,10 @@ static void menu_do(struct recon_web *w, int item) {
         w->show_bookmarks = !w->show_bookmarks;
         break;
     case MENU_HISTORY:
-        /*
-         * The history of the tab in front, shown as a page it built itself.
-         * A list this already has, given the one thing it was missing --
-         * somewhere to be looked at.
-         */
-        if (t != NULL && t->history_count > 0) {
-            set_status(t, false, "%d place%s visited in this tab. Back and "
-                "forward walk them.", t->history_count,
-                t->history_count == 1 ? "" : "s");
-        } else if (t != NULL) {
-            set_status(t, false, "Nothing visited in this tab yet.");
-        }
+        show_history(w);
+        break;
+    case MENU_BOOKMARKS:
+        show_bookmarks_page(w);
         break;
     case MENU_SET_HOME:
         if (t != NULL && t->have_url) {

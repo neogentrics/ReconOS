@@ -2575,6 +2575,31 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-169 — Typing an address went to a path on the site you were reading
+
+- **Found in** v0.4.11. **Found by** the History page, on its first look: the
+  list said `https://gaming.recontowers.com/example.com`, which is not
+  anywhere anybody had asked to go.
+- **What it was** `go_typed` resolved what was typed against the page being
+  read, the same way a link on that page is resolved. A link on a page *is*
+  relative to it. **Text typed into an address bar is not.** So once you were
+  on any page at all, you could not reach a different site by typing its name
+  -- only paths on the site you were already on. Typing
+  "news.ycombinator.com" on another site fetched
+  `thatsite.com/news.ycombinator.com` and reported, accurately, that there is
+  no page at that address.
+- **How long it had been there.** Since the address bar existed. It survived
+  because every test of it typed an address into a *fresh* tab, which has no
+  page to be relative to -- so the wrong path was never taken. The same shape
+  as BG-166 and BG-162: a check written against the one case somebody
+  happened to try.
+- **Fixed in** v0.4.11. A path or a fragment -- "/about", "#notes" -- is
+  resolved against the page, because there is nowhere else those could mean.
+  Everything else is somewhere to go.
+- Worth noting where it was found: not by a test and not by reading, but by
+  building a screen that *shows the data*. A list of visited addresses is a
+  thing you look at, and the wrong one is obvious the moment it is on screen.
+
 ### BG-168 — Every link to a place on the same page went to the top
 
 - **Found in** v0.4.10, while building the jump those links needed. **Found by**
