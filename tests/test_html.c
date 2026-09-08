@@ -485,15 +485,29 @@ static void test_the_encoding_is_looked_at_not_believed(void) {
 
     /* Overlong forms and surrogates decode "fine" and are not valid. Reading
      * them as UTF-8 is how one byte sequence means two different things. */
+    /*
+     * The results are freed. `recon_html_to_utf8` hands back a buffer the
+     * caller owns, and three of these were dropped -- thirty bytes, found by
+     * the sanitizer under scripts/check.sh.
+     *
+     * Thirty bytes in a test matter for one reason: a suite that leaks is a
+     * suite that cannot be used to find a leak, because its own noise is
+     * indistinguishable from the signal it exists to show.
+     */
     const char *overlong = "\xC0\xAF";
-    check(recon_html_to_utf8(overlong, 2, NULL, NULL) != NULL,
-        "an overlong form is not treated as UTF-8");
+    char *decoded = recon_html_to_utf8(overlong, 2, NULL, NULL);
+    check(decoded != NULL, "an overlong form is not treated as UTF-8");
+    free(decoded);
+
     const char *surrogate = "\xED\xA0\x80";
-    check(recon_html_to_utf8(surrogate, 3, NULL, NULL) != NULL,
-        "nor is a surrogate");
+    decoded = recon_html_to_utf8(surrogate, 3, NULL, NULL);
+    check(decoded != NULL, "nor is a surrogate");
+    free(decoded);
+
     const char *truncated = "abc\xC3";
-    check(recon_html_to_utf8(truncated, 4, NULL, NULL) != NULL,
-        "nor is a sequence cut off at the end");
+    decoded = recon_html_to_utf8(truncated, 4, NULL, NULL);
+    check(decoded != NULL, "nor is a sequence cut off at the end");
+    free(decoded);
 }
 
 /* Does any block on the page contain this text? */
