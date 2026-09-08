@@ -1,4 +1,7 @@
 #include <recon/kernel/user.h>
+#include <recon/kernel/arch.h>
+#include <recon/kernel/cpu.h>
+#include <recon/kernel/random.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/vm.h>
@@ -95,6 +98,105 @@ static i64 sys_yield(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	return SYS_OK;
 }
 
+/* Random bytes, for a program that has to make a key.
+ *
+ * The length is capped rather than unbounded. Not for safety -- the range check
+ * below is what makes it safe -- but because generating is work, this kernel
+ * cannot yet be interrupted part-way through a system call, and a program
+ * asking for a gigabyte would hold its processor for the whole of it. A cap
+ * that returns a short count is something a caller loops on; there is no
+ * version of that request worth honouring in one go.
+ */
+#define RANDOM_MAX_AT_ONCE 4096
+
+static i64 sys_random(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	if (len == 0)
+		return 0;
+
+	if (len > RANDOM_MAX_AT_ONCE)
+		len = RANDOM_MAX_AT_ONCE;
+
+	if (!user_range_ok(buf, len)) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	/* Asked *before* writing, so that a refusal leaves the caller's buffer
+	 * exactly as it was. A generator that half-fills a buffer and then
+	 * reports failure hands a caller who ignores the return value a key
+	 * made of whatever was already there. */
+	if (!random_ready())
+		return SYS_EAGAIN;
+
+	if (!random_bytes((void *)(uintptr_t)buf, (size_t)len))
+		return SYS_EAGAIN;
+
+	return (i64)len;
+}
+
+/* What this machine is.
+ *
+ * Every number here is one the desktop currently scrapes out of /proc and
+ * parses with sscanf. The kernel has known all of them since checkpoint 3; what
+ * was missing was any way to ask.
+ */
+static i64 sys_machine(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct recon_machine m;
+	struct cpu_caps caps;
+	u64 copy;
+
+	if (!user_range_ok(buf, len)) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	kmemset(&m, 0, sizeof(m));
+	arch_cpu_caps(&caps);
+
+	m.size    = (u32)sizeof(m);
+	m.version = 1;
+
+	/* Both counts, because they answer different questions and a machine
+	 * where they differ is a machine with something wrong with it. One
+	 * number would hide exactly that case. */
+	m.processors_found  = smp_cpu_count();
+	m.processors_online = smp_cpus_online();
+
+	m.memory_bytes      = (u64)pmm_total_pages() * PAGE_SIZE;
+	m.memory_free_bytes = (u64)pmm_free_page_count() * PAGE_SIZE;
+
+	m.entropy_bits = random_entropy_bits();
+	m.page_size    = (u32)PAGE_SIZE;
+
+	kstrlcpy(m.architecture, arch_name(), sizeof(m.architecture));
+	kstrlcpy(m.cpu_vendor, caps.vendor, sizeof(m.cpu_vendor));
+	kstrlcpy(m.cpu_model, caps.brand, sizeof(m.cpu_model));
+
+	/* No more than the caller had room for, and the *full* size returned
+	 * regardless -- so a program built against an older kernel gets a valid
+	 * prefix and can see that it was given one. Writing sizeof(m) into a
+	 * buffer the caller sized for an earlier version is the bug this shape
+	 * exists to prevent, and it is a bug that only appears once there are
+	 * two versions, which is to say after it is too late to notice. */
+	copy = len < sizeof(m) ? len : sizeof(m);
+	kmemcpy((void *)(uintptr_t)buf, &m, (size_t)copy);
+
+	return (i64)sizeof(m);
+}
+
+/* The wall clock, which is a different question from SYS_TIME.
+ *
+ * SYS_TIME is monotonic: it never goes backwards and means nothing outside this
+ * boot. This one is the date, and it can jump. A caller measuring how long
+ * something took must use the first; a caller stamping a file must use this.
+ * Collapsing them into one call is how a duration comes out negative. */
+static i64 sys_walltime(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return (i64)time_wall_ns();
+}
+
 const struct personality personality_recon = {
 	.name = "ReconOS",
 	.table = {
@@ -103,6 +205,9 @@ const struct personality personality_recon = {
 		[SYS_GETPID] = sys_getpid,
 		[SYS_TIME]   = sys_time,
 		[SYS_YIELD]  = sys_yield,
+		[SYS_RANDOM]   = sys_random,
+		[SYS_MACHINE]  = sys_machine,
+		[SYS_WALLTIME] = sys_walltime,
 	},
 };
 
@@ -189,6 +294,62 @@ struct thread *user_thread_create(const char *name, const void *code,
 
 	t->personality = &personality_recon;
 	return t;
+}
+
+/* The three calls the desktop asked for, exercised from ring 3.
+ *
+ * From ring 3 specifically, and not by calling the handlers directly, because
+ * the thing most likely to be wrong is not the handler. It is the boundary: an
+ * argument that arrives in the wrong register, a pointer check that rejects a
+ * legitimate buffer, a structure the two sides disagree about the shape of.
+ * None of those is reachable from a kernel-side call.
+ *
+ * The program reports which step failed through its exit code, so a failure
+ * here names the call rather than saying that something went wrong. */
+bool user_facts_test(void)
+{
+	extern const unsigned char user_test_facts[];
+	extern const u64 user_test_facts_len;
+
+	static const char *const why[] = {
+		"the program ran and did not report",		/* 0 */
+		"SYS_RANDOM did not return the length asked for",
+		"two SYS_RANDOM reads came back identical",
+		"SYS_MACHINE returned no size",
+		"SYS_MACHINE filled in the wrong structure version",
+		"SYS_WALLTIME returned nothing positive",
+	};
+
+	u64 exits_before = exits;
+	struct thread *t;
+	u64 deadline;
+
+	t = user_thread_create("facts", user_test_facts, user_test_facts_len);
+	if (!t) {
+		kputs("  user: could not create the facts thread\n");
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  user: the facts program never exited\n");
+		return false;
+	}
+
+	if (last_exit_code == 77)
+		return true;
+
+	if (last_exit_code >= 0 &&
+	    (u64)last_exit_code < sizeof(why) / sizeof(why[0]))
+		kprintf("  user: %s\n", why[last_exit_code]);
+	else
+		kprintf("  user: the facts program exited with %ld, which is "
+			"not one of its own codes\n", last_exit_code);
+
+	return false;
 }
 
 bool user_self_test(void)

@@ -207,3 +207,94 @@ user_test_bad_end:
 	.global user_test_bad_len
 user_test_bad_len:
 	.quad	user_test_bad_end - user_test_bad
+
+/* A program that asks the kernel the three questions the desktop currently
+ * asks the host's /proc.
+ *
+ * It checks its own answers and reports which one failed through its exit code,
+ * because a program that exits normally after getting nonsense is a test that
+ * passes. Every value it compares against is one the kernel cannot return by
+ * accident: a length that must be exactly what was asked for, two random reads
+ * that must differ, and a structure version that must be one.
+ *
+ * Values are kept in stack slots rather than in registers across a system
+ * call. Which registers survive a syscall is a property of the entry path in
+ * another file, and a test that quietly depends on it is a test that breaks
+ * when that path is optimised.
+ */
+	.global user_test_facts
+user_test_facts:
+	subq	$128, %rsp		/* buffer at 0(%rsp), saved copy at 64 */
+
+	/* random(buf, 16), which must return exactly 16. */
+	movq	%rsp, %rdi
+	movq	$16, %rsi
+	movq	$5, %rax		/* SYS_RANDOM */
+	syscall
+	cmpq	$16, %rax
+	jne	.Lfacts_1
+
+	movq	(%rsp), %rax
+	movq	%rax, 64(%rsp)
+
+	/* Again. Two reads that come back identical mean a generator that is
+	 * not advancing, which every other check here would pass. */
+	movq	%rsp, %rdi
+	movq	$16, %rsi
+	movq	$5, %rax
+	syscall
+	cmpq	$16, %rax
+	jne	.Lfacts_1
+
+	movq	(%rsp), %rax
+	cmpq	64(%rsp), %rax
+	je	.Lfacts_2
+
+	/* machine(buf, 128). The return is the size the kernel would write, so
+	 * it must be positive; the version field at offset 4 must be 1. */
+	movq	%rsp, %rdi
+	movq	$128, %rsi
+	movq	$6, %rax		/* SYS_MACHINE */
+	syscall
+	cmpq	$0, %rax
+	jle	.Lfacts_3
+
+	movl	4(%rsp), %eax
+	cmpl	$1, %eax
+	jne	.Lfacts_4
+
+	/* walltime(), which must be a positive number of nanoseconds. */
+	movq	$7, %rax		/* SYS_WALLTIME */
+	syscall
+	cmpq	$0, %rax
+	jle	.Lfacts_5
+
+	movq	$77, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_1:
+	movq	$1, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_2:
+	movq	$2, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_3:
+	movq	$3, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_4:
+	movq	$4, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_5:
+	movq	$5, %rdi
+.Lfacts_exit:
+	movq	$0, %rax		/* SYS_EXIT */
+	syscall
+.Lfacts_hang:
+	jmp	.Lfacts_hang
+
+	.global user_test_facts_end
+user_test_facts_end:
+
+	.balign 8
+	.global user_test_facts_len
+user_test_facts_len:
+	.quad	user_test_facts_end - user_test_facts

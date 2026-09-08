@@ -144,6 +144,8 @@ void kmain(void)
 		user_self_test() ? "pass" : "FAIL");
 	kprintf("  the boundary holds : %s\n",
 		user_boundary_test() ? "pass" : "FAIL");
+	kprintf("  machine facts      : %s\n",
+		user_facts_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",
 		block_self_test() ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",

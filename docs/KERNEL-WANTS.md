@@ -115,6 +115,20 @@ it will not survive contact with a machine that does not have `/proc`.
 **What would replace it:** the kernel answering these directly — processor,
 core count, memory in use, per-interface byte counts.
 
+**Partly built, 8 September 2026.** `SYS_MACHINE` answers processor vendor and
+model, processors found *and* online, total and free memory, page size, and how
+much entropy the pool holds. The caller passes the size of its own structure and
+gets back the size the kernel would have written, so a program built against one
+kernel version and run on another gets a valid prefix and can see that it got
+one. Growing the structure is allowed; reordering it is not.
+
+Two counts for processors rather than one, because a machine where they differ
+is a machine with something wrong with it, and a single number hides exactly
+that case.
+
+**Per-interface byte counts are not in it**, because there is no network stack
+to count. That half stays open.
+
 ---
 
 ## Randomness
@@ -147,8 +161,11 @@ Three things about it are worth knowing before building on it:
 - **"No hardware generator" and "a hardware generator that did not answer" are
   different lines in the summary**, because they call for different responses.
 
-What is still missing is a *system call*, so this is reachable from the kernel
-and not yet from a program.
+**And `SYS_RANDOM` reaches it from a program**, added the same day. It returns
+`SYS_EAGAIN` rather than `SYS_EINVAL` when the pool is not seeded, and the
+difference is deliberate: a bad argument means the program is wrong and should
+stop, while this means the machine is not ready and the same call may work
+later. A key generator told `EINVAL` would report *itself* broken.
 
 ---
 
@@ -179,3 +196,9 @@ compute it from.
 
 **What would replace it:** a real-time clock the kernel reads, and a monotonic
 clock that does not go backwards.
+
+**Built, 8 September 2026.** Both, and they are two calls rather than one:
+`SYS_TIME` is monotonic and means nothing outside this boot, `SYS_WALLTIME` is
+the date and can jump. A caller timing something must use the first and a caller
+stamping a file must use the second — collapsing them into one call is how a
+duration comes out negative.

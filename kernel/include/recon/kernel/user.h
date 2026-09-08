@@ -39,6 +39,13 @@ enum {
 	SYS_TIME,		/* () -> nanoseconds since boot */
 	SYS_YIELD,		/* () -- give up the rest of this slice */
 
+	/* The three that exist because docs/KERNEL-WANTS.md asks for them: the
+	 * desktop scrapes all of this out of the host's /proc today, parsed
+	 * with sscanf, and it will not survive a machine that has no /proc. */
+	SYS_RANDOM,		/* (buffer, length) -> bytes written */
+	SYS_MACHINE,		/* (buffer, length) -> bytes the kernel would write */
+	SYS_WALLTIME,		/* () -> nanoseconds since 1970 */
+
 	SYS_MAX
 };
 
@@ -48,6 +55,42 @@ enum {
 #define SYS_ENOSYS    (-1)	/* no such call in this personality */
 #define SYS_EFAULT    (-2)	/* the caller passed an address it does not own */
 #define SYS_EINVAL    (-3)
+
+/* Not now, and not never.
+ *
+ * Its own code rather than EINVAL, because the difference decides what a
+ * caller does: a bad argument means the program is wrong and should stop, and
+ * this means the machine has not gathered enough entropy yet and the same call
+ * may work later. A program told EINVAL by a key generator would report itself
+ * broken; a program told this can wait, or explain. */
+#define SYS_EAGAIN    (-4)
+
+/* What the machine is, for a program that cannot read the host's /proc because
+ * there is no host.
+ *
+ * The size is passed *in* by the caller and the number of bytes the kernel
+ * would have written is returned, so that a program built against an older
+ * kernel and one built against a newer one both work: the kernel writes no
+ * more than it was given room for, and the caller can see it was given a short
+ * answer. Growing this structure is therefore allowed; reordering it is not.
+ */
+struct recon_machine {
+	u32 size;		/* what the caller had room for */
+	u32 version;		/* 1 */
+
+	u32 processors_found;	/* what the machine has */
+	u32 processors_online;	/* what this kernel is using -- not the same */
+
+	u64 memory_bytes;
+	u64 memory_free_bytes;
+
+	u32 entropy_bits;	/* zero means keys will be refused */
+	u32 page_size;
+
+	char architecture[16];
+	char cpu_vendor[16];
+	char cpu_model[64];
+};
 
 typedef i64 (*syscall_fn)(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);
 
@@ -81,6 +124,12 @@ struct thread *user_thread_create(const char *name, const void *code,
 				  size_t code_len);
 
 bool user_self_test(void);
+
+/* Runs a ring-3 program that calls SYS_RANDOM, SYS_MACHINE and SYS_WALLTIME and
+ * checks its own answers. Separate from user_self_test because that one is
+ * about whether user mode works at all, and this one is about whether these
+ * particular calls do. */
+bool user_facts_test(void);
 
 /* The other half of the same claim, and the more important half: a user program
  * that reaches where it should not is ended, and the kernel is not. */
