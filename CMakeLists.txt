@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.15
+    VERSION 0.4.16
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -699,6 +699,9 @@ add_executable(recon_malformed_tests
     src/recon_mp4.c
     src/recon_html.c
     src/recon_css.c
+    # Addresses come off somebody else's page too. recon_url.c opens nothing,
+    # which is why it could be added here without dragging in a socket.
+    src/recon_url.c
     src/recon_expr.c)
 
 # The ICO decoder is built on stb_image, so this reaches into third_party the

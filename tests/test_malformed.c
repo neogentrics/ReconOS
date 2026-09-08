@@ -51,7 +51,9 @@
 
 #include "recon_codec.h"
 #include "recon_expr.h"
+#include "recon_css.h"
 #include "recon_html.h"
+#include "recon_http.h"
 #include "recon_ico.h"
 #include "recon_mp4.h"
 
@@ -580,6 +582,155 @@ static size_t make_expr(uint8_t *out, size_t max) {
 
 /* --- Running one parser through all of it --- */
 
+
+/*
+ * --- A stylesheet ---
+ *
+ * Fetched from whatever server the page named, parsed, and then consulted for
+ * every element on that page. It is as much somebody else's file as the
+ * markup is, and it was not in this suite.
+ */
+static bool feed_css(const uint8_t *bytes, size_t length) {
+    struct recon_css_sheet *sheet = recon_css_new();
+    if (sheet == NULL) {
+        return true;
+    }
+
+    recon_css_add(sheet, (const char *)bytes, length);
+
+    bool ok = true;
+    int rules = recon_css_rule_count(sheet);
+    if (rules < 0) {
+        fail("counted a negative number of rules");
+        ok = false;
+    }
+
+    /*
+     * Matched against an element, which is the only thing a sheet is for and
+     * the path where a bad rule would actually be walked. A sheet that parsed
+     * without crashing and then reads outside itself on the first match is a
+     * sheet this would otherwise call fine.
+     */
+    if (ok) {
+        struct recon_css_element stack[3] = {
+            { "html", NULL, NULL },
+            { "body", "main", "wide dark" },
+            { "p", NULL, "lead" },
+        };
+        for (int depth = 1; depth <= 3; depth++) {
+            struct recon_css_style style;
+            memset(&style, 0, sizeof(style));
+            recon_css_match(sheet, stack, depth, &style);
+
+            /* A size is a percentage and is applied by multiplying. One that
+             * came back enormous or negative would be a heading of four
+             * million pixels, or of minus one. */
+            if (style.size_percent < 0 || style.size_percent > 100000) {
+                fail("a font size came back outside anything usable");
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    /* And an inline style, which is the other way in and does not go through
+     * recon_css_add at all. */
+    if (ok) {
+        struct recon_css_style inline_style;
+        memset(&inline_style, 0, sizeof(inline_style));
+        recon_css_inline((const char *)bytes, length, &inline_style);
+    }
+
+    recon_css_free(sheet);
+    return ok;
+}
+
+static size_t make_css(uint8_t *out, size_t max) {
+    static const char SHEET[] =
+        ":root { --ink: #123456; --paper: #08090c }\n"
+        "body { background: var(--paper); color: var(--ink) }\n"
+        "h1, h2 { font-size: 180%; text-align: center }\n"
+        ".lead p, #main .wide { display: block; color: rgb(20, 30, 40) }\n"
+        "@media (min-width: 40em) { p { display: none } }\n"
+        "/* a comment */ em { font-style: italic }\n";
+    size_t length = sizeof(SHEET) - 1;
+    if (length > max) {
+        return 0;
+    }
+    memcpy(out, SHEET, length);
+    return length;
+}
+
+/*
+ * --- An address ---
+ *
+ * Every one a viewer handles came off somebody else's page. This is the
+ * boundary between their bytes and where the machine connects to.
+ */
+static bool feed_url(const uint8_t *bytes, size_t length) {
+    /*
+     * A URL is a string, and the fuzzer hands over bytes -- including NULs,
+     * which is itself worth feeding: a parser that reads past one has been
+     * handed a shorter string than the caller thinks it gave.
+     */
+    char text[2048];
+    size_t take = length < sizeof(text) - 1 ? length : sizeof(text) - 1;
+    memcpy(text, bytes, take);
+    text[take] = '\0';
+
+    struct recon_http_url base;
+    bool have_base = recon_http_parse_url("https://example.com/a/b.html",
+        NULL, &base);
+
+    struct recon_http_url url;
+    for (int with_base = 0; with_base < 2; with_base++) {
+        if (!recon_http_parse_url(text, (with_base && have_base) ? &base : NULL,
+                &url)) {
+            continue;
+        }
+
+        /*
+         * What a caller then does with it: the path is put in a request line
+         * and the host in a Host: header, so both have to be strings and the
+         * path has to start with the slash every caller assumes.
+         */
+        if (strlen(url.host) >= sizeof(url.host)) {
+            fail("a host filled its buffer with no terminator");
+            return false;
+        }
+        if (strlen(url.path) >= sizeof(url.path)) {
+            fail("a path filled its buffer with no terminator");
+            return false;
+        }
+        if (url.path[0] != '/') {
+            fail("a path came back not starting with a slash");
+            return false;
+        }
+        if (url.port < 0 || url.port > 65535) {
+            fail("a port came back outside the range a port has");
+            return false;
+        }
+        if (strchr(url.path, '#') != NULL) {
+            fail("a fragment was left in the path, which is sent to a server");
+            return false;
+        }
+
+        char formatted[RECON_HTTP_URL_MAX * 2];
+        recon_http_format_url(&url, formatted, sizeof(formatted));
+    }
+    return true;
+}
+
+static size_t make_url(uint8_t *out, size_t max) {
+    static const char URL[] = "https://example.com:8080/a/b.html?q=1#notes";
+    size_t length = sizeof(URL) - 1;
+    if (length > max) {
+        return 0;
+    }
+    memcpy(out, URL, length);
+    return length;
+}
+
 static void sweep(const char *name, feeder feed,
         size_t (*make)(uint8_t *, size_t), size_t header_bytes) {
     printf("%s\n", name);
@@ -625,6 +776,8 @@ int main(void) {
     sweep("ICO", feed_ico, make_ico, 6);
     sweep("MP4", feed_mp4, make_mp4, 8);
     sweep("HTML", feed_html, make_html, 0);
+    sweep("CSS", feed_css, make_css, 0);
+    sweep("Addresses", feed_url, make_url, 0);
     sweep("Expressions", feed_expr, make_expr, 0);
 
     printf("\n%d cases, %d failures\n", g_cases, g_failures);

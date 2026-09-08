@@ -9,6 +9,37 @@ way for the two to disagree.
 
 ---
 
+## v0.4.16 — the fuzzer learns about stylesheets and addresses
+
+`test_malformed` swept the ICO, MP4, HTML and expression parsers with
+truncations, single-byte changes and random bytes. It did not sweep the two
+parsers added since -- **CSS and addresses** -- and both take bytes straight
+off a web server.
+
+A stylesheet is as much somebody else's file as the markup is: fetched from
+whatever host the page named, parsed, and then consulted for every element on
+the page. An address is worse in one way -- it is the boundary between their
+bytes and where this machine *connects to*.
+
+The CSS feeder does not stop at parsing. It matches the sheet against a
+three-deep element stack, which is the only thing a sheet is for and the path
+where a bad rule actually gets walked -- a sheet that parses without crashing
+and then reads outside itself on the first match is one a parse-only sweep
+calls fine. It also feeds the same bytes to `recon_css_inline`, which is the
+other way in and does not go through `recon_css_add` at all.
+
+The address feeder checks what a caller then relies on: that the host and path
+are terminated, that the path begins with the slash every caller assumes, that
+the port is a port, and that **no fragment was left in the path** -- the path
+is what goes in a request line, and a `#` in it is a byte sent to a server
+that was never meant to leave the machine.
+
+7,556 cases, no failures, under the address and undefined-behaviour
+sanitizers. Nothing found, which is the ordinary result and is worth having
+run.
+
+---
+
 ## v0.4.15 — text-align, which needed a line before it could be placed
 
 `text-align` had been read, recorded on the block, and then not drawn. The
