@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.8
+    VERSION 0.4.9
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -645,6 +645,29 @@ target_include_directories(recon_html_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_test(NAME html COMMAND recon_html_tests)
+
+# The same parser against markup nobody here wrote.
+#
+# Every other suite in this project was written by whoever wrote the code it
+# tests, which is the failure BG-162 records: the cause was diagnosed by
+# reading the source, a test was written for the markup that diagnosis
+# assumed, it passed, and the page still rendered wrong. These fifteen hundred
+# cases come from the html5lib tree-construction suite, written by people
+# whose purpose was to break HTML parsers.
+#
+# WORKING_DIRECTORY because the corpus is a file the test reads, and ctest
+# runs from the build directory where that path does not resolve.
+add_executable(recon_html_corpus_tests
+    tests/test_html_corpus.c
+    src/recon_html.c
+    src/recon_css.c)
+
+target_include_directories(recon_html_corpus_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME html-corpus COMMAND recon_html_corpus_tests)
+set_tests_properties(html-corpus PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(recon_malformed_tests
     tests/test_malformed.c

@@ -394,6 +394,19 @@ struct recon_web {
     int find_count;                   /* matches on the page, after a search */
     int find_at;                      /* which one is highlighted, or -1 */
 
+    /*
+     * Somebody pressed Next and the page has not been laid out since.
+     *
+     * Where a match *is* only becomes known during the pass that draws it, so
+     * the jump cannot happen when the button is pressed -- it happens on the
+     * draw after, and this is what carries the intent across.
+     *
+     * A flag rather than doing it every frame on purpose. Scrolling to the
+     * current match on every redraw would fight the scroll wheel: you would
+     * push the page down and it would spring back to the match.
+     */
+    bool find_follow;
+
     /* The toolbar menu, open or not, and which entry the pointer is on. */
     bool menu_open;
 };
@@ -1200,6 +1213,37 @@ static struct recon_font *font_for(unsigned style, int size) {
 static void put_word(struct flow *f, struct recon_font *font, int x, int y,
         const char *text, size_t length, unsigned style, int link,
         bool has_colour, unsigned colour) {
+    /*
+     * --- Is this word a match? Asked first, before anything returns ---
+     *
+     * A match is a fact about the *document*, and everything below this is
+     * about the *screen*. Counting after the off-screen return counted only
+     * the matches already visible, so "1 of 2" meant two on this screenful --
+     * and searching for a word further down the page found nothing at all
+     * while the word sat there in the text.
+     *
+     * It is also what makes the jump possible: `find_y` has to be the
+     * position of a match that is *not* on screen, which is precisely the one
+     * the early return had thrown away.
+     */
+    bool matched = false;
+    bool current = false;
+    if (f->find != NULL && f->find[0] != '\0') {
+        char probe[512];
+        size_t take = length < sizeof(probe) - 1 ? length : sizeof(probe) - 1;
+        memcpy(probe, text, take);
+        probe[take] = '\0';
+
+        if (contains_fold(probe, f->find)) {
+            matched = true;
+            current = (f->find_seen == f->find_at);
+            if (current) {
+                f->find_y = y;
+            }
+            f->find_seen++;
+        }
+    }
+
     if (f->panel == NULL) {
         return;
     }
@@ -1254,29 +1298,26 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
     }
 
     /*
-     * --- A match, marked before the word goes on top of it ---
+     * --- The mark, which is only about drawing ---
      *
-     * Behind rather than a colour change, because a page already uses colour
-     * to mean things and a match that recolours a word competes with whatever
-     * the page was saying with that colour. A block behind it does not.
+     * Whether this word matched was settled at the top, where the document is
+     * what is being asked about. This half is the paint: behind the word
+     * rather than a colour change, because a page already uses colour to mean
+     * things and a match that recolours a word competes with whatever the
+     * page was saying with that colour. A block behind it does not.
      *
-     * The current match is the accent and the others are a wash of it, so
+     * The current match takes the accent and the others a wash of it, so
      * "which one am I on" reads without counting.
      */
-    if (f->find != NULL && f->find[0] != '\0' &&
-            contains_fold(word, f->find)) {
-        int seen = f->find_seen++;
-        bool current = (seen == f->find_at);
+    if (matched) {
         recon_color mark = current
             ? f->link_ink : recon_color_mix(f->paper, f->link_ink, 90);
 
-        if (f->panel != NULL) {
-            recon_fill_rect(f->panel, screen_x - 1, screen_y,
-                recon_text_width(font, word) + 2,
-                recon_font_line_height(font), mark);
-        }
+        recon_fill_rect(f->panel, screen_x - 1, screen_y,
+            recon_text_width(font, word) + 2,
+            recon_font_line_height(font), mark);
+
         if (current) {
-            f->find_y = y;
             /* On the accent, the ordinary ink may vanish. */
             ink = recon_color_readable_on(mark, ink, f->paper, f->paper);
         }
@@ -2345,6 +2386,42 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     if (w->find_at >= w->find_count) {
         w->find_at = w->find_count - 1;
     }
+    if (w->find_at < 0) {
+        w->find_at = 0;
+    }
+
+    /*
+     * --- Now that the match has a position, go to it ---
+     *
+     * Only when it is not already on screen. A match three lines down does
+     * not need the page to move, and moving it anyway makes Next feel like it
+     * jumped somewhere when it did not.
+     *
+     * A third of the way down rather than at the very top: a match at the top
+     * edge has no context above it, and the sentence it is in usually starts
+     * before it.
+     */
+    if (w->find_follow && f.find_seen > 0) {
+        w->find_follow = false;
+
+        int line = 24;
+        bool above = f.find_y < t->scroll;
+        bool below = f.find_y + line > t->scroll + t->viewport_height;
+        if (above || below) {
+            int want = f.find_y - t->viewport_height / 3;
+            int limit = t->content_height - t->viewport_height;
+            if (want > limit) {
+                want = limit;
+            }
+            if (want < 0) {
+                want = 0;
+            }
+            if (want != t->scroll) {
+                t->scroll = want;
+                recon_appwin_refresh(t->win);
+            }
+        }
+    }
 
     if (t->content_height > t->viewport_height) {
         draw_scrollbar(p, x + width - SCROLLBAR_WIDTH, top,
@@ -2412,6 +2489,7 @@ static void find_step(struct recon_web *w, int by) {
         return;
     }
     w->find_at = (w->find_at + by + w->find_count) % w->find_count;
+    w->find_follow = true;
 
     struct web_tab *t = front(w);
     if (t != NULL) {
@@ -2790,6 +2868,7 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
              */
             w->find_at = 0;
             w->find_count = 0;
+            w->find_follow = true;
             if (t != NULL) {
                 t->content_height = 0;
                 recon_appwin_refresh(t->win);
@@ -2887,7 +2966,7 @@ static void web_describe(void *user, char *out, size_t size) {
         "  zoom: %d%%\n"
         "  loading: %s\n"
         "  bookmarks: %d%s\n"
-        "  find: %s\n"
+        "  find: %s (%d matches, on %d)\n"
         "  typed: %s\n"
         "  status: %s\n",
         w->tab_count, w->active + 1,
@@ -2900,6 +2979,7 @@ static void web_describe(void *user, char *out, size_t size) {
         (t != NULL && t->loading) ? "yes" : "no",
         w->bookmark_count, w->show_bookmarks ? ", bar shown" : "",
         w->strip == STRIP_FIND ? w->find.text : "(closed)",
+        w->find_count, w->find_at + 1,
         w->address.text,
         (t != NULL) ? t->status : "");
 

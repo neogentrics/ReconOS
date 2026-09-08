@@ -16,3 +16,13 @@ CMakeLists.txt text eol=lf
 *.jpeg binary
 *.png binary
 *.ico binary
+
+# The html5lib corpus is byte-counted, not line-based.
+#
+# Each record is a decimal length, a newline, then exactly that many bytes --
+# and the markup inside deliberately contains CR, LF, CRLF and NUL, because
+# that is what it is testing. Normalising line endings here rewrites the bytes
+# without rewriting the counts, so every record after the first mangled one
+# reads from the wrong offset and the suite fails on a fresh clone in a way
+# that looks like a parser bug.
+tests/data/html5lib-inputs.txt -text

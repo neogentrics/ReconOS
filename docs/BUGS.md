@@ -2575,6 +2575,47 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-167 — Every `<hr>` claimed to be a picture at the page's first link
+
+- **Found in** v0.4.9. **Found by** the html5lib corpus, on its first run, from
+  cases like `<!doctype html><hr><frameset>`.
+- **What it was** `add_rule` is the one place that writes a block without going
+  through `close_block`, and it set four fields of six. The missing one was
+  `source`, the index of the block's picture. The block array is `calloc`ed, so
+  the field was not garbage -- it was **zero**, and zero is not "no picture", it
+  is "the picture at link zero". Every horizontal rule on the web said it was
+  an image whose address was the first link on the page.
+- **Why nothing had noticed.** Every reader of `source` checks the kind first,
+  so the wrong value was never acted on. It sat there being wrong and costing
+  nothing, which is this project's most common shape of fault: a thing that is
+  untrue with nothing arranged to notice. A hand-written test would not have
+  found it either -- you do not write a test asking whether a horizontal rule
+  has a picture.
+- **Fixed in** v0.4.9. The entry is cleared and then filled, rather than the
+  fields this happens to care about being set and the rest left as they were --
+  because the next field added to that struct would have been missed here too.
+
+### BG-166 — Find on page searched the screen, not the page
+
+- **Found in** v0.4.9, shipped in v0.4.8. **Found by** searching
+  gaming.recontowers.com for a word further down than the first screenful and
+  being told it is not on the page.
+- **What it was** the match test was written into `put_word` *below* its two
+  early returns -- the one for the measuring pass, and the one for a word that
+  is off-screen. Whether a word matches is a fact about the document and
+  everything below those returns is about the screen, so the count was of the
+  matches already visible: "1 of 2" meant two on this screenful, and a word
+  below the fold found nothing at all.
+- It also broke the jump, and in a way that hid itself: the position recorded
+  for the current match could only ever be a position already on screen, so
+  "go to the match" had nothing to go to and correctly did nothing.
+- Every test of it had used a word visible in the first screenful, which is
+  the same fault as BG-162 in a different place -- **a check written against
+  the case you happened to look at**.
+- **Fixed in** v0.4.9. The match is settled at the top of the function, before
+  anything is allowed to return; the highlight, which is about drawing, stays
+  where it was.
+
 ### BG-165 — A background on a page with no `<body>` tag was never found
 
 - **Found in** v0.4.7. **Found by** the test written for BG-164, whose markup

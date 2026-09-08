@@ -226,6 +226,20 @@ bool recon_html_was_truncated(const struct recon_html_document *document);
 const struct recon_html_block_entry *recon_html_block_at(
     const struct recon_html_document *document, int index);
 
+/*
+ * How many runs and how many links the document has.
+ *
+ * A caller walking the runs of one block knows where they end, because the
+ * block says. A caller walking the document does not, and had no way to ask:
+ * `recon_html_run_at` returns NULL past the end, so the only way to find the
+ * end was to run off it and be told. That is fine for a loop and useless for
+ * a bounds check, which is what wanted them -- an index into these tables is
+ * exactly the kind of thing that is wrong by one and reads whatever follows
+ * the array.
+ */
+int recon_html_run_count(const struct recon_html_document *document);
+int recon_html_link_count(const struct recon_html_document *document);
+
 const struct recon_html_run *recon_html_run_at(
     const struct recon_html_document *document, int index);
 

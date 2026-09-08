@@ -485,10 +485,27 @@ static void add_rule(struct builder *b) {
         b->d->truncated = true;
     } else {
         struct recon_html_block_entry *block = &b->d->blocks[b->d->block_count++];
+
+        /*
+         * Cleared, then filled -- rather than the fields this happens to care
+         * about being set and the rest left as they were.
+         *
+         * This is the one place that writes a block without going through
+         * `close_block`, and it was missing `source`. The array is calloc'd,
+         * so the field was not garbage, it was **zero** -- which is not "no
+         * picture", it is "the picture at link zero". Every `<hr>` on the web
+         * claimed to be an image whose address was the page's first link.
+         * Nothing read it, because every reader checks the kind first, so it
+         * sat there being wrong and costing nothing until the html5lib corpus
+         * asked the question directly.
+         *
+         * A memset rather than four assignments for the reason it was wrong
+         * in the first place: the next field somebody adds to this struct
+         * would have been missed here too.
+         */
+        memset(block, 0, sizeof(*block));
         block->kind = RECON_HTML_RULE;
-        block->level = 0;
-        block->first_run = 0;
-        block->run_count = 0;
+        block->source = -1;
     }
     open_block(b, RECON_HTML_PARAGRAPH, 0);
 }
@@ -1659,6 +1676,14 @@ const struct recon_html_block_entry *recon_html_block_at(
         return NULL;
     }
     return &document->blocks[index];
+}
+
+int recon_html_run_count(const struct recon_html_document *document) {
+    return document != NULL ? document->run_count : 0;
+}
+
+int recon_html_link_count(const struct recon_html_document *document) {
+    return document != NULL ? document->link_count : 0;
 }
 
 const struct recon_html_run *recon_html_run_at(
