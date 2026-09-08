@@ -189,6 +189,58 @@ check_cpus() {
 	passes=$((passes + 1))
 }
 
+# --- randomness, and both ways a machine can supply it -----------------------
+#
+# Two assertions, and the second is the one that keeps the first honest.
+#
+# That the pool seeds itself is the feature. That it seeds itself *from the
+# hardware generator where there is one, and from timing where there is not*, is
+# what stops the feature being a machine that quietly always uses the weaker
+# source -- and the weaker source is the one nothing downstream can detect.
+#
+# QEMU's default x86_64 processor has no RDRAND and `-cpu max` does, so the two
+# runs exercise genuinely different code. Without the second, the hardware path
+# would be compiled and never executed on any machine in this rig.
+check_random() {
+	local label=$1
+	shift
+	local want=$1
+	shift
+	local log="$WORK/random_$label.log"
+
+	printf '%-46s' "  entropy $label"
+
+	timeout "$TIMEOUT" "$@" >"$log" 2>&1
+
+	local state
+	state=$(tr -d '\r' < "$log" | sed -n 's/^  state *: \(.*\)$/\1/p' | head -1)
+
+	if [ "${state#ready}" = "$state" ]; then
+		echo "FAILED -- the pool never seeded: ${state:-no summary at all}"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("entropy $label")
+		return
+	fi
+
+	if ! tr -d '\r' < "$log" | grep -q "^  hardware *: $want"; then
+		echo "FAILED -- expected hardware '$want'"
+		tr -d '\r' < "$log" | grep -aA3 '^Randomness' | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("entropy $label")
+		return
+	fi
+
+	if ! tr -d '\r' < "$log" | grep -q '^  randomness *: pass'; then
+		echo "FAILED -- the generator's own test did not pass"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("entropy $label")
+		return
+	fi
+
+	echo "$state"
+	passes=$((passes + 1))
+}
+
 # Boots against one partition fixture and compares what the kernel read with
 # what wrote the disk. A different kind of check from the ones above: those
 # count self-tests the kernel ran on itself, and this one holds the kernel's
@@ -442,6 +494,26 @@ fi
 # every wrong reader produces a plausible answer on it.
 
 echo
+
+# --- randomness -------------------------------------------------------------
+
+echo
+echo "randomness"
+
+check_random "from timing alone (x86_64)" "none on this processor" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+check_random "from the processor (x86_64)" "[0-9]* words accepted" \
+	qemu-system-x86_64 -m 512M -cpu max -nographic -no-reboot -kernel "$X64_ELF"
+
+check_random "from timing alone (aarch64)" "none on this processor" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+		-kernel "$ARM_IMG"
+
+check_random "from the processor (aarch64)" "[0-9]* words accepted" \
+	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic \
+		-kernel "$ARM_IMG"
+
 echo "partition tables"
 
 if bash scripts/make-partition-fixtures.sh "$WORK/fixtures" >/dev/null 2>&1; then

@@ -130,6 +130,26 @@ no way to know how good the one underneath it is.
 **What would replace it:** an entropy source the kernel owns, and a way to ask
 how much it has.
 
+**Built, 8 September 2026.** `random_bytes()` runs a ChaCha20 generator over a
+pool seeded from the processor's own generator where there is one -- RDSEED on
+x86_64, RNDRRS on aarch64, both preferred over their weaker siblings because a
+seed wants the noise source and not an expansion of it -- and from timing
+jitter where there is not. `random_entropy_bits()` is the way to ask.
+
+Three things about it are worth knowing before building on it:
+
+- **It refuses rather than returning weak bytes**, and there is no override.
+  A caller that ignores the return value has generated a key from an
+  uninitialised buffer, so the bool is not advisory.
+- **The estimate is deliberately low.** The hardware generator is credited at
+  half its width because nothing can check a sealed box whose output looks
+  identical working or failed; timing is credited one bit per sample.
+- **"No hardware generator" and "a hardware generator that did not answer" are
+  different lines in the summary**, because they call for different responses.
+
+What is still missing is a *system call*, so this is reachable from the kernel
+and not yet from a program.
+
 ---
 
 ## The control socket's proof of identity

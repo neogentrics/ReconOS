@@ -18,6 +18,7 @@
 #include <recon/kernel/install.h>
 #include <recon/kernel/reconfs.h>
 #include <recon/kernel/pmm.h>
+#include <recon/kernel/random.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/fbcon.h>
@@ -86,10 +87,17 @@ void kmain(void)
 	time_init();
 	time_print_summary();
 
+	/* After the clock, because one of its sources is timing jitter and
+	 * there is nothing to measure without one. Before anything that might
+	 * want a key. */
+	random_init();
+
 	/* After the timer, because a processor with no tick cannot be preempted
 	 * and the test for that has to have a clock to wait on. */
 	smp_init();
 	smp_print_summary();
+
+	random_print_summary();
 
 	/* Last, because it is the one thing that needs everything: pages to map,
 	 * page tables that can express "user may reach this", a fault handler to
@@ -140,6 +148,8 @@ void kmain(void)
 		block_self_test() ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
 		crc32_self_test() ? "pass" : "FAIL");
+	kprintf("  randomness         : %s\n",
+		random_self_test() ? "pass" : "FAIL");
 	kprintf("  partitions         : %s\n",
 		partition_self_test() ? "pass" : "FAIL");
 	kprintf("  filesystem layout  : %s\n",
