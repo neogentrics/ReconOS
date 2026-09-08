@@ -616,6 +616,20 @@ target_include_directories(recon_keyring_tests PRIVATE
 #
 # It earns most of its keep under scripts/check.sh: the failure it is looking
 # for is usually a read past the end, and the sanitizer is what sees that.
+# --- Reading CSS ---
+#
+# Everything this reads can hide text, so the suite spends half its checks on
+# selectors that must NOT match: a rule fired too eagerly is worse than one
+# never fired at all.
+add_executable(recon_css_tests
+    tests/test_css.c
+    src/recon_css.c)
+
+target_include_directories(recon_css_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME css COMMAND recon_css_tests)
+
 # --- Reading HTML ---
 #
 # There was no suite for the parser at all, which is how BG-160 got in: a page
