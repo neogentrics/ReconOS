@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.17
+    VERSION 0.4.18
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -190,6 +190,7 @@ add_executable(ReconOS
     src/recon_access.c
     src/recon_help.c
     src/recon_package.c
+    src/recon_manifest.c
     src/recon_clip.c
     src/recon_appicon.c
     src/recon_props.c
@@ -899,17 +900,20 @@ add_test(NAME signatures COMMAND recon_sign_tests)
 # package brings, not just its manifest. A manifest-only signature binds the
 # names of the files and none of their contents, leaving the module free to be
 # swapped, and the module is the only file that can do anything.
+# One file, and it loads nothing.
+#
+# recon_manifest.c reads a manifest and takes digests of what it names;
+# recon_package.c installs. They were one file, and this target needed a stub
+# that aborted on the module loader, the icon cache and the version comparison
+# just to link -- five functions stubbed to make one file testable, which is
+# the shape of a file that wants splitting. recon_http.c had already been split
+# for the same reason, and the fragment bug is what living with it cost.
 add_executable(recon_package_sign_tests
     tests/test_package_sign.c
-    # The install path's dependencies, stubbed to abort. See the file: these
-    # tests take digests and check signatures, and must never install.
-    tests/stubs_package.c
-    src/recon_package.c
+    src/recon_manifest.c
     src/recon_sign.c
     src/recon_crypt.c
     src/recon_fs.c
-    src/recon_registry.c
-    src/recon_users.c
     src/recon_error.c)
 
 target_include_directories(recon_package_sign_tests PRIVATE

@@ -9,6 +9,33 @@ way for the two to disagree.
 
 ---
 
+## v0.4.18 — the package module splits, and the stub file goes
+
+`recon_package.c` was one file doing two jobs. Reading a manifest and taking
+digests of what it names is arithmetic on bytes; installing loads a shared
+object into this process and rebuilds the icon cache.
+
+The consequence was the same one `recon_http.c` had. Testing the first half
+meant linking the second, so the signature suite needed a stub file that
+**aborted on the module loader, the icon cache and the version comparison**
+just to link -- five functions stubbed to make one file testable, which is the
+shape of a file that wants splitting. That was said out loud in the stub file
+when it was written, and this is that debt paid rather than carried.
+
+`src/recon_manifest.c` is 559 lines that load nothing: no module loader, no
+icon cache, no registry, no accounts. `src/recon_package.c` keeps the 802 that
+install, upgrade, verify and remove. `src/recon_manifest.h` is what they share
+-- the manifest's shape, the error buffer both report through, and the
+allow-list question the installer asks.
+
+The signature suite now links five files instead of eight, and the stub file
+is deleted. It is worth being precise about what that buys: not tidiness. A
+suite that can only be built by stubbing out the dangerous half is a suite
+somebody will eventually stop maintaining, and the untested half is where the
+fragment bug spent its life.
+
+---
+
 ## v0.4.17 — tables have columns
 
 A table was one line per row with the cells run together by spaces. You could
