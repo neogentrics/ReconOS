@@ -721,6 +721,31 @@ else
 	FAILED_PATHS+=("recovery")
 fi
 
+# --- the medium, as a stick rather than as a disk ---------------------------
+#
+# Checkpoint 17's ground floor: the one artefact a person handles, booted the
+# way they will boot it. On an emulated xHCI controller specifically -- a stick
+# appears on USB and the firmware reaches it through its own stack, so testing
+# with an IDE drive would exercise a path the medium never takes.
+
+printf '%-46s' "  the install medium boots from a USB stick"
+
+med_out=$(sh scripts/medium-boot-test.sh 2>&1)
+med_rc=$?
+
+if [ "$med_rc" -eq 0 ]; then
+	echo "$(echo "$med_out" | grep -oE '[0-9]+ of [0-9]+: the medium.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$med_rc" -eq 2 ]; then
+	echo "skipped, a disk tool is missing"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$med_out" | sed 's/^/      /' | head -12
+	failures=$((failures + 1))
+	FAILED_PATHS+=("install medium")
+fi
+
 # --- the menu draws where it can, and falls back where it cannot -------------
 #
 # Both halves asserted, because only one of them is the interesting one.
