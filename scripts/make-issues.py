@@ -78,7 +78,8 @@ AREA = {
     148: 'display', 149: 'display', 150: 'display',
     151: 'display', 152: 'skins', 153: 'skins',
     154: 'skins', 155: 'skins', 156: 'display',
-    157: 'startup', 158: 'display',
+    157: 'startup', 158: 'display', 159: 'display',
+    160: 'applications',
 }
 
 
