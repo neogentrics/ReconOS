@@ -143,6 +143,29 @@ the word.
 
 ### Asked for, and done
 
+**A web viewer that shows real pages** — v0.4.5. Asked for as "make sure all
+webpage types are readable", after the observation that the web application was
+incomplete. Measured first: it already reached the internet -- example.com and
+wikipedia.org both loaded over TLS -- so what was missing was not the network
+but what the viewer did with what it got.
+
+Three things arrived. **Pictures**: an `<img>` becomes a block carrying the
+address and the alt text, fetched one at a time after the words are on screen,
+so a page is readable the moment its text is there. **Stylesheets**: a CSS
+subset chosen for readability rather than fidelity, of which `display: none` is
+the one that matters -- most of what makes a real page unreadable here is not
+layout, it is the parts of the page that were never meant to be seen at once.
+**Encodings**: a page that is not UTF-8 is read as Windows-1252, decided by
+looking at the bytes rather than believing the header.
+
+**JavaScript is not coming, and the reason is worth writing down.** An engine
+is a parser, a bytecode VM, a garbage collector and enough DOM to matter --
+years of work -- and *half* of one is worse than none: a page that runs some
+script renders wrong in ways nobody can predict, where a page that runs none
+renders as its markup, consistently. A page that builds itself at run time
+says so and shows nothing, which is an answer. The request behind it was that
+pages be readable, and CSS bought far more of that than a partial engine would.
+
 **A dark glass skin** — v0.4.5. Noticed while looking at the skin list: every
 see-through skin there was a pale one. Glass is a material rather than a
 brightness, so Smoked is the same material dark -- turned over rather than
