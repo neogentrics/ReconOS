@@ -87,6 +87,13 @@
  * a skin without an icon set looks exactly as it did.
  */
 #define RECON_ICON_ACCOUNTS "accounts"
+
+/*
+ * Display Settings, which had been showing the notepad's pencil -- and so had
+ * Registry, so two pages of the Control Panel wore the same picture. Type size
+ * is most of what that page is for, and there is a picture of exactly that.
+ */
+#define RECON_ICON_DISPLAY "display"
 #define RECON_ICON_TROUBLESHOOT "troubleshoot"
 
 #define RECON_ICON_CONTROL_PANEL "control-panel"

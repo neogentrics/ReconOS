@@ -1350,6 +1350,7 @@ static const struct generated_icon ICONS[] = {
      */
     { "accounts", draw_application },
     { "troubleshoot", draw_terminal },
+    { "display", draw_notepad },
     { "notepad", draw_notepad },
     { "calculator", draw_calculator },
     { "explorer", draw_explorer },
@@ -1420,8 +1421,9 @@ static const struct generated_icon ICONS[] = {
  *   2  v0.4.0: drawn at 128 and downsampled by whatever shows it; the flame
  *      became a campfire; eighteen more account pictures; gear, leaf,
  *      lighthouse and the beacon redrawn after looking at them
- *   3  v0.4.0: `accounts` and `troubleshoot`, for two Control Panel pages
- *      that had been borrowing the application and terminal icons
+ *   3  v0.4.0: `accounts`, `troubleshoot` and `display`, for three Control
+ *      Panel pages that had been borrowing -- two of them the same one, which
+ *      is why Display Settings and Registry wore the same picture
  */
 #define ICONS_GENERATION 3
 

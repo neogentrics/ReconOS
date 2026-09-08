@@ -310,6 +310,67 @@ static const recon_color THEME_GLASS[] = {
     RGB(2F,7F,D4), RGB(FF,FF,FF), RGB(C0,39,2B), RGB(2F,7F,D4),
 };
 
+/*
+ * Smoked: dark glass.
+ *
+ * Every see-through skin here was a pale one, which is half of an idea. Glass
+ * is a *material*, not a brightness -- smoked glass is as much glass as clear
+ * glass is, and a dark desktop that wants a translucent title bar had nothing
+ * to choose. Midnight is dark and deliberately flat; this is the other half.
+ *
+ * Built from Glass by turning the palette over rather than by darkening it.
+ * Darkening a light skin gives grey text on grey chrome, because a light
+ * palette's *structure* is which surfaces sit above which, and that structure
+ * inverts along with the lightness. So: the chrome is a cool near-black, the
+ * surfaces a shade above it, the text the pale end, and the accent is the same
+ * blue Glass uses -- an accent is a hue and does not owe the background
+ * anything.
+ *
+ * The desktop label goes the other way from Glass's, and has to. Glass ships a
+ * pale wallpaper and writes dark text with a white halo; this ships a dark one
+ * and writes pale text with a black halo. A label is legible because the pair
+ * disagree, not because either is a particular colour.
+ */
+static const recon_color THEME_SMOKED[] = {
+    /* Window frame, edge, title active/inactive */
+    RGB(1A,1E,26), RGB(3A,44,55), RGB(1E,26,33), RGB(18,1D,25),
+    /* Title text, inactive, window button, its glyph */
+    RGB(DC,E6,F2), RGB(78,86,96), RGB(2A,34,43), RGB(D4,DE,EA),
+
+    /* Bar, its text, dimmed */
+    RGB(1C,22,2C), RGB(DC,E6,F2), RGB(7E,8C,9C),
+    /* Button, active, text */
+    RGB(2A,33,41), RGB(38,44,56), RGB(DC,E6,F2),
+
+    /* Menu, border, text, disabled, hilite, hilite text, separator */
+    RGB(1E,25,30), RGB(3A,44,55), RGB(DC,E6,F2), RGB(6E,7A,88),
+    RGB(2F,7F,D4), RGB(FF,FF,FF), RGB(33,3D,4A),
+
+    /* Dialog, its title, that title's text, dim */
+    RGB(1E,25,30), RGB(1E,26,33), RGB(DC,E6,F2), RGB(6E,7A,88),
+
+    /* Surface, alt, text, dim, header, selection, selection text */
+    RGB(16,1B,23), RGB(1C,22,2B), RGB(DC,E6,F2), RGB(84,92,A2),
+    RGB(24,2C,38), RGB(2F,7F,D4), RGB(FF,FF,FF),
+
+    /* Field, border, text, selection, caret */
+    RGB(11,15,1C), RGB(46,52,64), RGB(E4,EC,F6), RGB(2A,4E,7E),
+    RGB(DC,E6,F2),
+
+    /* Readout, text, accent, input */
+    RGB(0C,10,16), RGB(DC,E8,F2), RGB(46,C8,D2), RGB(FF,FF,FF),
+
+    /*
+     * Pale on dark, with a black halo -- the reverse of Glass's, and for the
+     * reverse reason. This ships a dark wallpaper, and a dark label with a
+     * white halo on a dark ground is a smudge with a rim.
+     */
+    RGB(EC,F2,F8), RGBA(00,00,00,C8), RGBA(2F,7F,D4,90),
+
+    /* Accent, its text, warning, directory */
+    RGB(2F,7F,D4), RGB(FF,FF,FF), RGB(E0,50,44), RGB(6C,B8,F0),
+};
+
 /* Dark and flat, the way a modern Linux desktop tends to look. */
 static const recon_color THEME_MIDNIGHT[] = {
     /* Active and inactive were three units apart -- a flat look taken far
@@ -1106,6 +1167,19 @@ static const struct gradient_spec GRAD_AQUA[] = {
  * evenly lit and a pane of glass least of all. The ramp is what makes it read
  * as a surface rather than as a hole.
  */
+/*
+ * Smoked's ramp, steeper than Glass's and going the same way: lighter at the
+ * top. A dark pane still catches the light from above, and without the ramp a
+ * dark translucent bar is indistinguishable from a hole in the screen.
+ */
+static const struct gradient_spec GRAD_SMOKED[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(2C,38,4A) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(24,2B,36) },
+    { RECON_THEME_BAR,            RGB(2A,34,44) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(2C,38,4A) },
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
 static const struct gradient_spec GRAD_GLASS[] = {
     { RECON_THEME_TITLE_ACTIVE,   RGB(A4,C6,E4) },
     { RECON_THEME_TITLE_INACTIVE, RGB(C4,CE,D8) },
@@ -1177,6 +1251,27 @@ static const struct metric_spec SHAPE_GLASS[] = {
  * to see; a bigger target to close a window with follows from that, and a
  * rounded corner does not.
  */
+/*
+ * The same shape as Glass, because it is the same material. A dark pane of
+ * glass is not a differently-shaped pane.
+ *
+ * Slightly more solid: 200 rather than 210. Dark chrome has less contrast with
+ * a dark wallpaper to begin with, so the same transparency reads as further
+ * gone -- the number that looks identical on the two skins is not the same
+ * number.
+ */
+static const struct metric_spec SHAPE_SMOKED[] = {
+    { RECON_METRIC_TITLE_HEIGHT,  30 },
+    { RECON_METRIC_BORDER,         1 },
+    { RECON_METRIC_CORNER,        12 },
+    { RECON_METRIC_BUTTON_SIZE,   18 },
+    { RECON_METRIC_BUTTON_CORNER, 10 },
+    { RECON_METRIC_CHROME_OPACITY, 200 },
+    { RECON_METRIC_ICON_GLOSS, 1 },
+    { RECON_METRIC_TINTABLE, 1 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
 static const struct metric_spec SHAPE_READING[] = {
     { RECON_METRIC_TITLE_HEIGHT, 30 },
     { RECON_METRIC_BUTTON_SIZE,  20 },
@@ -1271,6 +1366,8 @@ static const struct {
       THEME_BEACON, "Daybreak.png", GRAD_BEACON, SHAPE_BEACON },
     { "Glass", "See-through chrome and rounded corners, the late 2000s",
       THEME_GLASS, "Daybreak.png", GRAD_GLASS, SHAPE_GLASS },
+    { "Smoked", "The same glass, dark: see-through chrome on a night desk",
+      THEME_SMOKED, "Aurora.jpg", GRAD_SMOKED, SHAPE_SMOKED },
     { "Deuteran", "Red-green safe: blue and orange carry meaning",
       THEME_DEUTERAN, "Night Sky.png", NULL, NULL },
     { "Protan", "Red-green safe, avoiding dark reds that read as black",

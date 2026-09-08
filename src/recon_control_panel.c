@@ -301,7 +301,7 @@ static const struct {
     { "Passwords", RECON_ICON_KEYRING, "What has been kept" },
     { "Appearance", RECON_ICON_APPEARANCE, "Skins and wallpaper" },
     { "Date and Time", RECON_ICON_CLOCK, "The clock and its zone" },
-    { "Display Settings", RECON_ICON_NOTEPAD, "Text, size, resolution" },
+    { "Display Settings", RECON_ICON_DISPLAY, "Text, size, resolution" },
 
     { "Programs", RECON_ICON_PROGRAMS, "What is installed" },
     { "Modules", RECON_ICON_MODULES, "Code the system loads" },

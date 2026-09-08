@@ -23,6 +23,27 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**Smoked: the dark glass that was missing.** Every see-through skin was a pale
+one, which is half of an idea -- glass is a *material*, not a brightness, and a
+dark desktop that wanted a translucent title bar had nothing to choose. Midnight
+is dark and deliberately flat; this is the other half.
+
+Built from Glass by turning the palette over rather than by darkening it.
+Darkening a light skin gives grey text on grey chrome, because a palette's
+structure is which surfaces sit above which, and that structure inverts along
+with the lightness. Slightly more solid than Glass at 200 against 210: dark
+chrome has less contrast with a dark wallpaper to start with, so the same
+transparency reads as further gone, and the number that looks identical on the
+two skins is not the same number.
+
+It shares Glass's icons rather than having a set of its own. They are
+silhouettes coloured from the skin wherever they are drawn, so one set of files
+comes out dark on Glass's pale chrome and pale on Smoked's dark chrome.
+
+**Three Control Panel pages stopped borrowing.** Accounts showed the generic
+application icon, Troubleshoot the terminal's, and Display Settings the
+notepad's -- which Registry also showed, so two pages wore the same picture.
+
 **The account pictures show the chosen one large.** A grid of thirty-two-pixel
 discs is a grid of coloured dots to anybody who cannot see thirty-two pixels
 clearly, and choosing from it means picking one and finding out afterwards.

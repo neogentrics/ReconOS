@@ -394,9 +394,24 @@ static void install_asset_icon(const char *asset, const char *icon_name) {
  * folder" would be sixty lines that exist to be forgotten when the
  * sixty-first file arrives.
  */
+/*
+ * A skin's set, taken from another skin's folder of assets.
+ *
+ * For two skins that are the same material at two brightnesses. The icons are
+ * silhouettes and take their colour from wherever they are drawn, so one set
+ * of files serves both -- and copying them under the second skin's name keeps
+ * the lookup rule single: a skin's icons are in a directory called after it,
+ * with no exception for pairs that happen to share.
+ */
+static int install_skin_icons_from(const char *assets, const char *skin);
+
 static int install_skin_icons(const char *skin) {
+    return install_skin_icons_from(skin, skin);
+}
+
+static int install_skin_icons_from(const char *assets, const char *skin) {
     char relative[128];
-    snprintf(relative, sizeof(relative), "icons/%s", skin);
+    snprintf(relative, sizeof(relative), "icons/%s", assets);
 
     char *dir = asset_path(relative);
     if (dir == NULL) {
@@ -421,7 +436,7 @@ static int install_skin_icons(const char *skin) {
         snprintf(name, sizeof(name), "%.*s", (int)(length - 4), entry->d_name);
 
         char asset[RECON_PATH_MAX];
-        snprintf(asset, sizeof(asset), "icons/%s/%s", skin, entry->d_name);
+        snprintf(asset, sizeof(asset), "icons/%s/%s", assets, entry->d_name);
 
         install_asset_icon_for(asset, name, skin);
         installed++;
@@ -2862,6 +2877,18 @@ int main(int argc, char **argv) {
     if (skinned > 0) {
         wlr_log(WLR_INFO, "ReconOS: %d icons for the Glass skin", skinned);
     }
+
+    /*
+     * Smoked takes the same set.
+     *
+     * They are silhouettes, coloured from the skin wherever they are drawn --
+     * so the same files come out dark on Glass's pale chrome and pale on
+     * Smoked's dark chrome without being two sets. Installed under Smoked's
+     * name rather than shared, because the rule is that a skin's icons live in
+     * a directory called after it, and a special case for "these two skins
+     * share" would be a second rule to remember.
+     */
+    install_skin_icons_from("Glass", "Smoked");
 
     /*
      * The help and the change log, rewritten every start rather than only
