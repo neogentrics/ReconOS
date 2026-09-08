@@ -1,0 +1,252 @@
+/*
+ * Tests for reading HTML.
+ *
+ * There was no suite for this at all, which is how BG-160 got in: `<title>` is
+ * not only the document's -- SVG uses it for the accessible name of a drawing
+ * -- and the parser turned collection back on at every one, so wikipedia.org
+ * put "Wikipedia Close" on the title bar. A parser that turns somebody else's
+ * file into what a window draws is exactly the kind of thing that wants tests,
+ * and the check for that fault is the last one here.
+ *
+ * Run with: ./build/recon_html_tests
+ */
+
+#define _POSIX_C_SOURCE 200809L
+
+#include <stdio.h>
+#include <string.h>
+
+#include "recon_html.h"
+
+static int g_failures;
+static int g_checks;
+
+static void check(bool condition, const char *what) {
+    g_checks++;
+    if (!condition) {
+        g_failures++;
+        printf("  FAIL: %s\n", what);
+    }
+}
+
+/* The text of one block, joined, for comparing against what was written. */
+static void block_text(const struct recon_html_document *d, int index,
+        char *out, size_t size) {
+    out[0] = '\0';
+    const struct recon_html_block_entry *b = recon_html_block_at(d, index);
+    if (b == NULL) {
+        return;
+    }
+    size_t used = 0;
+    for (int i = 0; i < b->run_count; i++) {
+        const struct recon_html_run *run = recon_html_run_at(d, b->first_run + i);
+        if (run == NULL) {
+            continue;
+        }
+        size_t take = run->length;
+        if (used + take >= size) {
+            take = size - used - 1;
+        }
+        memcpy(out + used, run->text, take);
+        used += take;
+        out[used] = '\0';
+    }
+}
+
+/* The first block of a given kind, or -1. */
+static int first_of(const struct recon_html_document *d,
+        enum recon_html_block kind) {
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b != NULL && b->kind == kind) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* --- Tests --- */
+
+static void test_the_shape_of_a_page(void) {
+    printf("a page becomes blocks and runs\n");
+
+    const char *html =
+        "<html><head><title>A Page</title></head><body>"
+        "<h1>Heading</h1>"
+        "<p>Some <b>bold</b> words.</p>"
+        "<ul><li>one</li><li>two</li></ul>"
+        "<hr>"
+        "</body></html>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "a page parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(strcmp(recon_html_title(d), "A Page") == 0, "the title is read");
+
+    int at = first_of(d, RECON_HTML_HEADING);
+    check(at >= 0, "there is a heading");
+    if (at >= 0) {
+        char text[128];
+        block_text(d, at, text, sizeof(text));
+        check(strcmp(text, "Heading") == 0, "and it says what was written");
+        check(recon_html_block_at(d, at)->level == 1, "at level one");
+    }
+
+    /*
+     * The bold word is a run of its own inside the paragraph, and the spaces
+     * either side of it survive. That is the whole reason runs exist, and the
+     * failure it guards against reads as "SomeboldWords".
+     */
+    at = first_of(d, RECON_HTML_PARAGRAPH);
+    check(at >= 0, "there is a paragraph");
+    if (at >= 0) {
+        char text[128];
+        block_text(d, at, text, sizeof(text));
+        check(strcmp(text, "Some bold words.") == 0,
+            "the spaces around a styled word survive it");
+    }
+
+    at = first_of(d, RECON_HTML_LIST_ITEM);
+    check(at >= 0, "a list becomes items");
+
+    check(first_of(d, RECON_HTML_RULE) >= 0, "and a rule is a block with no runs");
+
+    recon_html_free(d);
+}
+
+static void test_an_image_keeps_both_halves(void) {
+    printf("an image is a block with an address and its alt text\n");
+
+    const char *html =
+        "<p>before</p>"
+        "<img src=\"/cat.png\" alt=\"A cat\">"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    int at = first_of(d, RECON_HTML_IMAGE);
+    check(at >= 0, "the image is a block of its own");
+    if (at >= 0) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, at);
+        check(b->source >= 0, "carrying where the picture is");
+        check(b->source >= 0 &&
+            strcmp(recon_html_link_at(d, b->source), "/cat.png") == 0,
+            "which is the src, unresolved -- resolving it is the viewer's");
+
+        /*
+         * The alt text is still there. That is what makes this degrade to
+         * exactly what it did before: a picture that never arrives leaves a
+         * block whose runs are the alt text, which is what alt text is for.
+         */
+        char text[128];
+        block_text(d, at, text, sizeof(text));
+        check(strcmp(text, "A cat") == 0, "and the alt text as its runs");
+    }
+
+    /* Splitting a paragraph is the cost of a picture having a height. What
+     * must not happen is either half going missing. */
+    check(recon_html_block_count(d) >= 3,
+        "the paragraphs either side of it survive");
+
+    recon_html_free(d);
+}
+
+static void test_an_image_with_only_one_half(void) {
+    printf("an image with only a source, or only alt text\n");
+
+    const char *only_src = "<img src=\"/x.png\">";
+    struct recon_html_document *d =
+        recon_html_parse(only_src, strlen(only_src));
+    if (d != NULL) {
+        int at = first_of(d, RECON_HTML_IMAGE);
+        check(at >= 0, "a picture with no alt text is still a picture");
+        if (at >= 0) {
+            check(recon_html_block_at(d, at)->source >= 0,
+                "and still knows where it is");
+        }
+        recon_html_free(d);
+    }
+
+    const char *only_alt = "<img alt=\"described\">";
+    d = recon_html_parse(only_alt, strlen(only_alt));
+    if (d != NULL) {
+        int at = first_of(d, RECON_HTML_IMAGE);
+        check(at >= 0, "alt text with no picture is still a block");
+        if (at >= 0) {
+            check(recon_html_block_at(d, at)->source < 0,
+                "with nothing to fetch");
+        }
+        recon_html_free(d);
+    }
+
+    /* Neither: nothing to say and nothing to draw. */
+    const char *neither = "<p>a</p><img><p>b</p>";
+    d = recon_html_parse(neither, strlen(neither));
+    if (d != NULL) {
+        check(first_of(d, RECON_HTML_IMAGE) < 0,
+            "an img with no src and no alt is not a block at all");
+        recon_html_free(d);
+    }
+}
+
+static void test_only_the_first_title_counts(void) {
+    printf("the document's title, and not every title in the page\n");
+
+    /*
+     * BG-160, written down as a page. SVG's `<title>` is the accessible name
+     * of a drawing, and a page may have any number of them -- wikipedia.org
+     * does. Collecting them all put "Wikipedia Close" on the title bar.
+     */
+    const char *html =
+        "<html><head><title>Wikipedia</title></head><body>"
+        "<svg><title>Close</title><path d=\"M0 0\"/></svg>"
+        "<p>text</p></body></html>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+    check(strcmp(recon_html_title(d), "Wikipedia") == 0,
+        "the head's title wins and the drawing's is ignored");
+    recon_html_free(d);
+}
+
+static void test_nothing_is_refused(void) {
+    printf("there is no such thing as HTML this refuses\n");
+
+    const char *nonsense[] = {
+        "", "<", "<<<>>>", "<p", "<p>unclosed",
+        "<img src=", "<img src=\"", "<title>", "</title>",
+        "&", "&amp", "&#;", "&#xZZ;",
+    };
+
+    for (size_t i = 0; i < sizeof(nonsense) / sizeof(nonsense[0]); i++) {
+        struct recon_html_document *d =
+            recon_html_parse(nonsense[i], strlen(nonsense[i]));
+        char what[96];
+        snprintf(what, sizeof(what), "'%s' parses to something", nonsense[i]);
+        check(d != NULL, what);
+        recon_html_free(d);
+    }
+}
+
+int main(void) {
+    printf("ReconOS HTML tests\n\n");
+
+    test_the_shape_of_a_page();
+    test_an_image_keeps_both_halves();
+    test_an_image_with_only_one_half();
+    test_only_the_first_title_counts();
+    test_nothing_is_refused();
+
+    printf("\n%d checks, %d failures\n", g_checks, g_failures);
+    return g_failures == 0 ? 0 : 1;
+}

@@ -541,7 +541,10 @@ static void on_opened(void *user, struct recon_net_stream *stream) {
         "GET %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "User-Agent: ReconOS\r\n"
-        "Accept: text/html, text/plain\r\n"
+        /* Pictures too, now that the viewer draws them. The weight
+         * says what this is for: a server with a choice should send
+         * the page rather than something else. */
+        "Accept: text/html, text/plain, image/*, */*;q=0.5\r\n"
         /*
          * No keep-alive. The body then ends when the connection does, which
          * removes a pool of idle sockets, a timeout policy, and the class of

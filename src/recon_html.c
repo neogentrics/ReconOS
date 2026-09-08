@@ -70,6 +70,9 @@ struct builder {
     int link;
     int list_depth;
 
+    /* For an image block, where the picture is. -1 otherwise. */
+    int source;
+
     /*
      * Whether the last thing appended ended in a space.
      *
@@ -153,6 +156,7 @@ static void open_block(struct builder *b, enum recon_html_block kind,
     b->in_block = true;
     b->kind = kind;
     b->level = level;
+    b->source = -1;
     b->first_run = b->d->run_count;
     b->pending_space = false;
     b->at_block_start = true;
@@ -174,7 +178,8 @@ static void close_block(struct builder *b) {
      * Except in preformatted text, where a blank line is the author's and
      * closing it up rewrites a document that used its gaps.
      */
-    bool keep_empty = (b->kind == RECON_HTML_PRE);
+    bool keep_empty = (b->kind == RECON_HTML_PRE ||
+        (b->kind == RECON_HTML_IMAGE && b->source >= 0));
 
     /*
      * The ceiling, recorded before it is acted on.
@@ -197,6 +202,7 @@ static void close_block(struct builder *b) {
     struct recon_html_block_entry *block = &b->d->blocks[b->d->block_count++];
     block->kind = b->kind;
     block->level = b->level;
+    block->source = b->source;
     block->first_run = b->first_run;
     block->run_count = count;
 }
@@ -627,19 +633,53 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
                 continue;
             }
 
-            /* An image becomes its alt text, which is what alt text is for. */
+            /*
+             * --- An image ---
+             *
+             * A block of its own, carrying where the picture is and the alt
+             * text as its runs. Whether the picture is fetched is the
+             * viewer's decision; if it never arrives, what is left is the alt
+             * text -- which is exactly what this used to draw, and is what alt
+             * text is for.
+             *
+             * Its own block rather than something inline, because a picture
+             * has a height and a line of text does not. That splits a
+             * paragraph an image sits inside, which is what every renderer
+             * without a real layout engine does, and reads as a picture
+             * between two paragraphs rather than one lost inside a line.
+             */
             if (named(tag, name_length, "img")) {
+                char src[2048];
+                bool have_src = attribute(attrs, attrs_length, "src", src,
+                    sizeof(src)) && src[0] != '\0';
+
                 char alt[256];
-                if (attribute(attrs, attrs_length, "alt", alt, sizeof(alt)) &&
-                        alt[0] != '\0') {
-                    flush_space(&b);
-                    unsigned was = b.style;
-                    b.style |= RECON_HTML_ITALIC;
-                    emit(&b, "[", 1);
-                    emit(&b, alt, strlen(alt));
-                    emit(&b, "]", 1);
-                    b.style = was;
-                    b.pending_space = true;
+                bool have_alt = attribute(attrs, attrs_length, "alt", alt,
+                    sizeof(alt)) && alt[0] != '\0';
+
+                if (have_src || have_alt) {
+                    unsigned was_style = b.style;
+                    int was_link = b.link;
+
+                    close_block(&b);
+                    open_block(&b, RECON_HTML_IMAGE, 0);
+
+                    if (have_src && d->link_count < LINKS_MAX) {
+                        snprintf(d->links[d->link_count].href,
+                            sizeof(d->links[d->link_count].href), "%s", src);
+                        b.source = d->link_count++;
+                    }
+
+                    if (have_alt) {
+                        b.style = RECON_HTML_ITALIC;
+                        b.link = -1;
+                        emit(&b, alt, strlen(alt));
+                    }
+
+                    close_block(&b);
+                    b.style = was_style;
+                    b.link = was_link;
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
                 }
                 i = after;
                 continue;

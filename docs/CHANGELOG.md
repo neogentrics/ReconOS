@@ -11,6 +11,33 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**The web viewer shows pictures.** An `<img>` becomes a block carrying the
+address and the alt text; the viewer resolves each address against the page it
+came from, fetches the distinct ones **one at a time after the words are on
+screen**, decodes them and draws them in the flow. A page is readable the moment
+its text is there, and thirty sockets opened at once to decorate it would make
+the words wait for the decoration. Each picture redraws the page as it lands.
+
+**The alt text stays.** A block that keeps it degrades to exactly what this did
+before when the picture does not arrive -- which is what alt text is for, and
+means a failure is a sentence rather than a gap. A failure is also *remembered*:
+without that, a picture the server will not give up is asked for again on every
+redraw, which is a page that never stops loading.
+
+A picture gets its own block rather than sitting inline, because a picture has
+a height and a line of text does not. That splits a paragraph an image sits
+inside, which is what every renderer without a real layout engine does. Never
+enlarged past its own size, shrunk to the column when it is wider: a
+2000-pixel photograph fitted to the width is the photograph, and a 16-pixel
+icon blown up to it is not more of the icon. Bounded at 48 pictures and 8 MB
+each, and `data:` addresses are skipped -- that is a decode, not a fetch, and a
+page may carry megabytes of them.
+
+**And the parser has a suite now**, which it did not have at all. That absence
+is how BG-160 got in. Thirty-five checks over blocks, runs, images with one
+half missing or both, and the title. The title check was confirmed by breaking
+the fix: it reports one failure and names it.
+
 **Two faults in the web viewer, found by pointing it at the internet.** The
 window's title bar read *"Wikipedia Close"* -- `<title>` is not only the
 document's, SVG uses it for the accessible name of a drawing, and the parser

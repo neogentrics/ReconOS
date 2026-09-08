@@ -32,6 +32,13 @@
 #include "recon_widget.h"
 #include "recon_web.h"
 
+/*
+ * The decoder, included here rather than linked, the way every other place in
+ * ReconOS that reads a picture does it. STB_IMAGE_IMPLEMENTATION is defined
+ * exactly once in this program and it is not here.
+ */
+#include "stb_image.h"
+
 #define COLOR_BG THEME(SURFACE)
 #define COLOR_TEXT THEME(SURFACE_TEXT)
 #define COLOR_DIM THEME(SURFACE_TEXT_DIM)
@@ -81,6 +88,32 @@ static const int HEADING_SIZE[7] = { 0, 26, 22, 19, 17, 16, 15 };
 #define HIT_ADDRESS (RECON_APPWIN_HIT_USER + 4)
 #define HIT_LINK_BASE (RECON_APPWIN_HIT_USER + 100)
 
+/*
+ * How many pictures one page may have, and how big one may be.
+ *
+ * Bounds rather than policy. A page that names four hundred images is a page
+ * that would otherwise open four hundred connections, and a "picture" of forty
+ * megabytes is not a picture, it is somebody finding out what this does with
+ * one.
+ */
+#define IMAGES_MAX 48
+#define IMAGE_BYTES_MAX (8 * 1024 * 1024)
+
+/*
+ * A picture on the page.
+ *
+ * `pixels` is RGBA at `width` by `height`, ours to free. `tried` says the
+ * fetch has finished, whether or not it produced anything -- the two together
+ * are three states: not asked for yet, asked for and failed, and here.
+ */
+struct web_image {
+    char url[2048];
+    unsigned char *pixels;
+    int width;
+    int height;
+    bool tried;
+};
+
 struct recon_web {
     struct recon_font *font;          /* the window's, for the bar */
     struct recon_appwin *win;
@@ -109,6 +142,27 @@ struct recon_web {
     bool status_is_error;
     bool loading;
     size_t received;
+
+    /*
+     * --- The pictures ---
+     *
+     * One entry per distinct address on the page, fetched one at a time after
+     * the document itself has arrived and been drawn.
+     *
+     * One at a time, and after: a page is readable the moment its words are
+     * there, and thirty sockets opened at once to decorate it would make the
+     * words wait for the decoration. Each picture redraws the page as it
+     * lands, so the page fills in rather than appearing complete or not at
+     * all.
+     *
+     * A failure is remembered as a failure. Without that, a picture the
+     * server will not give up is asked for again on every redraw, which is a
+     * page that never stops loading.
+     */
+    struct web_image images[IMAGES_MAX];
+    int image_count;
+    int fetching;                          /* which one, or -1 */
+    struct recon_http_request *image_request;
 };
 
 static void set_status(struct recon_web *w, bool error, const char *fmt, ...)
@@ -141,6 +195,165 @@ static void on_progress(void *user, size_t received) {
 /* Measure the page without drawing it, so the scrollbar is right on the first
  * frame. Defined after the layout it shares. */
 static int measure(struct recon_web *w, int width);
+
+/* --- The pictures --- */
+
+static void fetch_next_image(struct recon_web *w);
+
+static void forget_images(struct recon_web *w) {
+    if (w->image_request != NULL) {
+        recon_http_cancel(w->image_request);
+        w->image_request = NULL;
+    }
+    for (int i = 0; i < w->image_count; i++) {
+        free(w->images[i].pixels);
+    }
+    memset(w->images, 0, sizeof(w->images));
+    w->image_count = 0;
+    w->fetching = -1;
+}
+
+/*
+ * Every distinct picture the page names, resolved against the page it was
+ * named in.
+ *
+ * Distinct because a page uses the same icon fifteen times and fetching it
+ * fifteen times is fourteen requests nobody asked for. The block keeps the
+ * index, so the same bytes are drawn everywhere the page asked for them.
+ */
+static void collect_images(struct recon_web *w) {
+    forget_images(w);
+    if (w->page == NULL || !w->have_url) {
+        return;
+    }
+
+    int blocks = recon_html_block_count(w->page);
+    for (int i = 0; i < blocks && w->image_count < IMAGES_MAX; i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(w->page, i);
+        if (b == NULL || b->kind != RECON_HTML_IMAGE || b->source < 0) {
+            continue;
+        }
+
+        const char *href = recon_html_link_at(w->page, b->source);
+        if (href == NULL || href[0] == '\0') {
+            continue;
+        }
+
+        /*
+         * A data: URL is a picture written into the page itself. Not followed
+         * -- it is not a fetch, it is a decode, and a page may carry
+         * megabytes of them.
+         */
+        if (strncasecmp(href, "data:", 5) == 0) {
+            continue;
+        }
+
+        struct recon_http_url resolved;
+        if (!recon_http_parse_url(href, &w->url, &resolved)) {
+            continue;
+        }
+
+        char text[RECON_HTTP_URL_MAX];
+        recon_http_format_url(&resolved, text, sizeof(text));
+
+        bool seen = false;
+        for (int j = 0; j < w->image_count && !seen; j++) {
+            seen = strcmp(w->images[j].url, text) == 0;
+        }
+        if (seen) {
+            continue;
+        }
+        snprintf(w->images[w->image_count].url,
+            sizeof(w->images[w->image_count].url), "%s", text);
+        w->image_count++;
+    }
+}
+
+/* Which entry holds this block's picture, or -1. */
+static int image_for(struct recon_web *w,
+        const struct recon_html_block_entry *b) {
+    if (b->source < 0 || w->page == NULL || !w->have_url) {
+        return -1;
+    }
+    const char *href = recon_html_link_at(w->page, b->source);
+    if (href == NULL) {
+        return -1;
+    }
+    struct recon_http_url resolved;
+    if (!recon_http_parse_url(href, &w->url, &resolved)) {
+        return -1;
+    }
+    char text[RECON_HTTP_URL_MAX];
+    recon_http_format_url(&resolved, text, sizeof(text));
+
+    for (int i = 0; i < w->image_count; i++) {
+        if (strcmp(w->images[i].url, text) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void on_image_done(void *user, bool ok, char *body, size_t length,
+        const char *content_type, const struct recon_http_url *final_url,
+        const char *error) {
+    struct recon_web *w = user;
+    (void)content_type; (void)final_url; (void)error;
+
+    w->image_request = NULL;
+    int at = w->fetching;
+    w->fetching = -1;
+
+    if (at >= 0 && at < w->image_count) {
+        w->images[at].tried = true;
+        if (ok && body != NULL && length > 0 && length <= IMAGE_BYTES_MAX) {
+            int channels = 0;
+            w->images[at].pixels = stbi_load_from_memory(
+                (const unsigned char *)body, (int)length,
+                &w->images[at].width, &w->images[at].height, &channels, 4);
+        }
+    }
+    free(body);
+
+    /*
+     * Redrawn whether or not that one worked: a picture that failed changes
+     * the page too, from a gap waiting for something to its alt text.
+     */
+    recon_appwin_refresh(w->win);
+    fetch_next_image(w);
+}
+
+static const struct recon_http_handlers IMAGE_HANDLERS = {
+    .progress = NULL,
+    .done = on_image_done,
+};
+
+static void fetch_next_image(struct recon_web *w) {
+    if (w->image_request != NULL) {
+        return;
+    }
+    for (int i = 0; i < w->image_count; i++) {
+        if (w->images[i].tried) {
+            continue;
+        }
+        struct recon_http_url url;
+        if (!recon_http_parse_url(w->images[i].url, NULL, &url)) {
+            w->images[i].tried = true;
+            continue;
+        }
+        w->fetching = i;
+        w->image_request = recon_http_get(WEB_APPLICATION, &url,
+            &IMAGE_HANDLERS, w);
+        if (w->image_request == NULL) {
+            /* Refused before it started -- no network permission, or an
+             * address this cannot follow. It has been tried. */
+            w->images[i].tried = true;
+            w->fetching = -1;
+            continue;
+        }
+        return;
+    }
+}
 
 /* Everything that happens once a document has been read, from wherever.
  * Defined below, beside the one other thing that reads one. */
@@ -352,6 +565,47 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             }
         }
         f->height += 7;
+        return;
+    }
+    case RECON_HTML_IMAGE: {
+        /*
+         * A picture that has arrived is drawn; one that has not is left to
+         * fall through to its alt text below, which is what the block has
+         * been carrying all along.
+         *
+         * Never enlarged past its own size, and shrunk to the column when it
+         * is wider: a 2000-pixel photograph blown down to the width is the
+         * photograph, and a 16-pixel icon blown up to it is not more of the
+         * icon.
+         */
+        int at = image_for(f->w, b);
+        if (at < 0 || f->w->images[at].pixels == NULL) {
+            break;
+        }
+
+        int iw = f->w->images[at].width;
+        int ih = f->w->images[at].height;
+        if (iw <= 0 || ih <= 0) {
+            break;
+        }
+        if (iw > f->width) {
+            ih = (int)((long long)ih * f->width / iw);
+            iw = f->width;
+            if (ih < 1) {
+                ih = 1;
+            }
+        }
+
+        f->height += 4;
+        if (f->panel != NULL) {
+            int screen_y = f->height - f->scroll + f->origin_y;
+            if (screen_y + ih >= f->clip_top && screen_y <= f->clip_bottom) {
+                recon_draw_image(f->panel, f->origin_x, screen_y, iw, ih,
+                    f->w->images[at].pixels, f->w->images[at].width,
+                    f->w->images[at].height);
+            }
+        }
+        f->height += ih + 6;
         return;
     }
     case RECON_HTML_PRE:
@@ -830,6 +1084,9 @@ static void web_destroy(void *user) {
     if (w->request != NULL) {
         recon_http_cancel(w->request);
     }
+    /* The picture in flight as well as the ones already here: a fetch that
+     * outlives the window it was for calls back into freed memory. */
+    forget_images(w);
     recon_html_free(w->page);
     free(w);
 }
@@ -888,6 +1145,13 @@ static void show_document(struct recon_web *w, struct recon_html_document *page,
 
     w->scroll = 0;
     w->content_height = 0;
+
+    /*
+     * The pictures are asked for after the words are on screen, one at a
+     * time. A page is readable the moment its text is there.
+     */
+    collect_images(w);
+    fetch_next_image(w);
 
     if (recon_html_needs_scripting(w->page)) {
         set_status(w, true, "That page builds itself with JavaScript, which "

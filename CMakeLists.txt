@@ -616,6 +616,20 @@ target_include_directories(recon_keyring_tests PRIVATE
 #
 # It earns most of its keep under scripts/check.sh: the failure it is looking
 # for is usually a read past the end, and the sanitizer is what sees that.
+# --- Reading HTML ---
+#
+# There was no suite for the parser at all, which is how BG-160 got in: a page
+# with an SVG inside it put "Wikipedia Close" on the title bar. A parser that
+# turns somebody else's file into what a window draws wants tests.
+add_executable(recon_html_tests
+    tests/test_html.c
+    src/recon_html.c)
+
+target_include_directories(recon_html_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME html COMMAND recon_html_tests)
+
 add_executable(recon_malformed_tests
     tests/test_malformed.c
     src/recon_ico.c

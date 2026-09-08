@@ -16,10 +16,15 @@
  * **No JavaScript.** A page that builds itself at run time arrives empty, and
  * says so rather than showing a blank window.
  *
- * **No images, tables or forms.** An image becomes its alt text, which is what
- * alt text is for. A table becomes its cells in order, which is wrong for a
- * spreadsheet and right for the tables that are really layout. A form is shown
- * and cannot be submitted -- a viewer that could submit one could change
+ * **Images are named, not fetched.** An `<img>` becomes a block carrying the
+ * address of the picture and its alt text. Whether the picture is ever asked
+ * for is the viewer's business, not the parser's -- and a block that keeps its
+ * alt text is one that degrades to exactly what it used to be when the picture
+ * does not arrive, which is what alt text is for.
+ *
+ * **No tables or forms.** A table becomes its cells in order, which is wrong
+ * for a spreadsheet and right for the tables that are really layout. A form is
+ * shown and cannot be submitted -- a viewer that could submit one could change
  * something on somebody's server.
  *
  * Saying all that here rather than in a release note, because the gap between
@@ -41,6 +46,12 @@ enum recon_html_block {
     RECON_HTML_PRE,            /* whitespace kept, drawn fixed-width */
     RECON_HTML_QUOTE,
     RECON_HTML_RULE,           /* a horizontal line; no runs */
+    /*
+     * A picture. `source` says where it is; the runs are its alt text, drawn
+     * when the picture is not there -- which is the whole of how this
+     * degrades to what it did before.
+     */
+    RECON_HTML_IMAGE,
 };
 
 /* How a run of text is drawn, as flags because they combine. */
@@ -77,6 +88,17 @@ struct recon_html_block_entry {
     int level;
     int first_run;
     int run_count;
+
+    /*
+     * For an image, where the picture is -- as an index into the same table
+     * the links use, and -1 for every other kind of block.
+     *
+     * The same table because the two are the same thing: an address written
+     * in a page, resolved against the page it was written in. A second table
+     * of strings differing only in which attribute they came from would be a
+     * second set of bounds to get right.
+     */
+    int source;
 };
 
 struct recon_html_document;
