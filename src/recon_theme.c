@@ -718,7 +718,7 @@ static const recon_color THEME_METALLIC[] = {
      * is what the era this borrows from actually did, and it is right for the
      * same reason: the metal is the case, not the paper in it.
      */
-    RGB(E6,E9,EE), RGB(6E,74,7E), RGB(8A,92,9E), RGB(B2,B6,BE),
+    RGB(E6,E9,EE), RGB(64,6A,74), RGB(96,A0,AE), RGB(B8,BC,C4),
     RGB(FF,FF,FF), RGB(F0,F2,F5), RGB(C0,C5,CE), RGB(1A,1D,22),
 
     RGB(A6,AD,B8), RGB(1A,1D,22), RGB(4E,54,5E), RGB(C8,CD,D6),
@@ -1238,13 +1238,22 @@ static const struct gradient_spec GRAD_BEACON[] = {
  * Metal. The steepest ramp any skin here asks for, which is the whole look:
  * a title bar lit from above rather than filled in.
  */
+/*
+ * The shine.
+ *
+ * Steeper than any other skin here by a long way -- roughly sixty levels
+ * across a twenty-eight pixel title bar, where Recon's ramp is ten. That is
+ * the difference between a surface that is lit and a fill that is slightly
+ * uneven, and it is the whole of what "metallic" means with two stops to
+ * spend.
+ */
 static const struct gradient_spec GRAD_METALLIC[] = {
-    { RECON_THEME_TITLE_ACTIVE,   RGB(56,5E,6A) },
-    { RECON_THEME_TITLE_INACTIVE, RGB(8E,92,9A) },
-    { RECON_THEME_BAR,            RGB(80,86,92) },
-    { RECON_THEME_BUTTON,         RGB(A6,AC,B8) },
-    { RECON_THEME_MENU,           RGB(C2,C6,CE) },
-    { RECON_THEME_DIALOG_TITLE,   RGB(56,5E,6A) },
+    { RECON_THEME_TITLE_ACTIVE,   RGB(5A,64,72) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(92,96,A0) },
+    { RECON_THEME_BAR,            RGB(6E,76,82) },
+    { RECON_THEME_BUTTON,         RGB(A2,AA,B6) },
+    { RECON_THEME_MENU,           RGB(CE,D3,DB) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(5A,64,72) },
     { RECON_THEME_ROLE_COUNT, 0 },
 };
 
@@ -2641,8 +2650,8 @@ static const struct {
     { "Gold",     RECON_RGB(0xB8, 0x96, 0x3C) },
     { "Bronze",   RECON_RGB(0xA0, 0x71, 0x3C) },
     { "Copper",   RECON_RGB(0xB0, 0x6B, 0x44) },
-    { "Ruby",     RECON_RGB(0xB0, 0x30, 0x48) },
-    { "Garnet",   RECON_RGB(0x8A, 0x30, 0x50) },
+    { "Ruby",     RECON_RGB(0xA0, 0x18, 0x30) },
+    { "Garnet",   RECON_RGB(0x6E, 0x18, 0x32) },
     { "Onyx",     RECON_RGB(0x4A, 0x4A, 0x52) },
 };
 
@@ -2681,11 +2690,30 @@ static const struct {
      * disagrees.
      */
     int strength;
+
+    /*
+     * Whether the tint carries its own lightness.
+     *
+     * False is a mood: the palette's structure survives, the hue moves, and
+     * a pale surface stays pale. That is what glass wants.
+     *
+     * True is a repaint, and metal needs it. Silver and ruby are not one
+     * colour at two hues -- they are two *lightnesses*, and a tint pinned to
+     * a pale grey's lightness turns ruby into pink. Measured: it did. The
+     * first Metallic was a frosted pastel in every metal, because every metal
+     * was being held at the silver's brightness.
+     *
+     * A skin in this mode also tints far less: only the title bars, the
+     * taskbar and the window edge. Menus, buttons and page bodies stay the
+     * skin's own silver, because they carry dark text and a role that takes
+     * the tint's lightness would take it out from under that text.
+     */
+    bool solid;
 } SKIN_TINTS[] = {
-    { "Beacon",   (const char *const[]){ "Blue", "Olive", NULL }, 255 },
+    { "Beacon",   (const char *const[]){ "Blue", "Olive", NULL }, 255, false },
     { "Metallic", (const char *const[]){ "Silver", "Steel", "Gold", "Bronze",
                                          "Copper", "Ruby", "Garnet", "Onyx",
-                                         NULL }, 205 },
+                                         NULL }, 255, true },
 };
 
 /* The row for the skin on screen, or NULL. */
@@ -2749,6 +2777,78 @@ static int tint_strength(void) {
         return TINT_STRENGTH;
     }
     return SKIN_TINTS[at].strength;
+}
+
+/* Both defined below: the lens has to sit next to the two modes it chooses
+ * between, and one of them is the older one. */
+static recon_color tint_hue(void);
+static bool role_takes_tint(enum recon_theme_role role);
+
+static bool tint_is_solid(void) {
+    int at = skin_tints_row();
+    return at >= 0 && SKIN_TINTS[at].solid;
+}
+
+/*
+ * The roles a solid tint paints: the title bars, the strip along the bottom,
+ * and the line round a window. What somebody would call "the colour of the
+ * machine", and nothing they have to read words on.
+ */
+static bool role_takes_solid_tint(enum recon_theme_role role) {
+    switch (role) {
+    case RECON_THEME_TITLE_ACTIVE:
+    case RECON_THEME_TITLE_INACTIVE:
+    case RECON_THEME_DIALOG_TITLE:
+    case RECON_THEME_WINDOW_EDGE:
+    case RECON_THEME_BAR:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/*
+ * --- The lens ---
+ *
+ * Both the flat colours and the far end of every ramp go through here, so the
+ * two cannot disagree -- a title bar whose top is the tint and whose bottom is
+ * the skin's original grey reads as a gradient bug rather than a missed call.
+ */
+static recon_color tint_lens(enum recon_theme_role role, recon_color colour) {
+    recon_color hue = tint_hue();
+    if (hue == 0) {
+        return colour;
+    }
+
+    if (!tint_is_solid()) {
+        if (!role_takes_tint(role)) {
+            return colour;
+        }
+        return recon_color_tint(colour, hue, (uint8_t)tint_strength());
+    }
+
+    if (!role_takes_solid_tint(role)) {
+        return colour;
+    }
+
+    /*
+     * The metal's own lightness, moved by where this role sits relative to
+     * the skin's taskbar -- which is the reference because it is the largest
+     * unbroken piece of chrome on screen.
+     *
+     * Halved rather than carried whole: a title bar fifty levels under the
+     * bar should still read as the *same* metal, a shade deeper, and at full
+     * offset the ramp ends run out of range and flatten into black.
+     */
+    int pivot = (g_current >= 0 && g_themes[g_current].used)
+        ? recon_color_luminance(g_themes[g_current].colors[RECON_THEME_BAR])
+        : recon_color_luminance(colour);
+    int want = recon_color_luminance(hue) +
+        (recon_color_luminance(colour) - pivot) / 2;
+    if (want < 24) { want = 24; }
+    if (want > 232) { want = 232; }
+
+    return recon_color_tint_to(colour, hue, (uint8_t)tint_strength(), want);
 }
 
 /*
@@ -2912,13 +3012,7 @@ recon_color recon_theme_color(enum recon_theme_role role) {
      * as if somebody had chosen it. Doing it at the point of asking means the
      * palette is always the palette and the tint is always a lens.
      */
-    if (role_takes_tint(role)) {
-        recon_color hue = tint_hue();
-        if (hue != 0) {
-            chosen = recon_color_tint(chosen, hue, (uint8_t)tint_strength());
-        }
-    }
-    return chosen;
+    return tint_lens(role, chosen);
 }
 
 /*
@@ -2948,15 +3042,11 @@ bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
      * fading into an unrelated colour, which reads as a gradient bug rather
      * than as a missed call.
      */
-    recon_color hue = role_takes_tint(role) ? tint_hue() : 0;
-
     if (from != NULL) {
-        *from = recon_color_tint(g_themes[g_current].colors[role], hue,
-            hue != 0 ? (uint8_t)tint_strength() : 0);
+        *from = tint_lens(role, g_themes[g_current].colors[role]);
     }
     if (to != NULL) {
-        *to = recon_color_tint(g_themes[g_current].gradient[role], hue,
-            hue != 0 ? (uint8_t)tint_strength() : 0);
+        *to = tint_lens(role, g_themes[g_current].gradient[role]);
     }
     return true;
 }

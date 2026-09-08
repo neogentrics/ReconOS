@@ -26,14 +26,21 @@ int recon_color_luminance(recon_color color) {
 }
 
 recon_color recon_color_tint(recon_color base, recon_color tint, int strength) {
+    return recon_color_tint_to(base, tint, strength,
+        recon_color_luminance(base));
+}
+
+recon_color recon_color_tint_to(recon_color base, recon_color tint,
+        int strength, int want) {
     if (strength <= 0) {
         return base;
     }
     if (strength > 255) {
         strength = 255;
     }
+    if (want < 0) { want = 0; }
+    if (want > 255) { want = 255; }
 
-    int want = recon_color_luminance(base);
     int have = recon_color_luminance(tint);
 
     int tr = (int)((tint >> 16) & 0xFF);

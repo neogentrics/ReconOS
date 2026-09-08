@@ -114,6 +114,19 @@ recon_color recon_color_readable_on(recon_color surface, recon_color preferred,
  */
 recon_color recon_color_tint(recon_color base, recon_color tint, int strength);
 
+/*
+ * The same, at a lightness the caller chooses rather than the base's.
+ *
+ * A tint that keeps the base's lightness is a *mood*: the palette's structure
+ * survives and the hue moves. That is right for glass and wrong for metal --
+ * silver and ruby are not one colour at two hues, they are two lightnesses,
+ * and pinning ruby to a pale grey's lightness gives pink. A skin whose tint is
+ * the point of it wants the tint's own lightness, offset by where the role
+ * sits relative to the rest of the skin.
+ */
+recon_color recon_color_tint_to(recon_color base, recon_color tint,
+    int strength, int want);
+
 #define RECON_RGB(r, g, b)     ((recon_color)(0xFF000000u | ((r) << 16) | ((g) << 8) | (b)))
 #define RECON_RGBA(r, g, b, a) ((recon_color)(((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
 

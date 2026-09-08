@@ -49,15 +49,36 @@ Glass, where a tint is a mood. Beacon's two are styles -- the machine came in
 blue or it came in olive -- so a 59% move produced neither, and Beacon plus
 Olive came out a slate blue-grey nobody asked for. It goes all the way now.
 
-**Where the metal is, and where it is not.** Metallic's title bar, taskbar and
-buttons are mid-toned and its window body is nearly white, and that split is
-the tint's doing rather than taste: `recon_color_tint` keeps a colour's
-lightness, so a hue on a mid tone comes out as that colour and a hue on
-near-white stays near-white. A first draft had the body mid-toned too, and
-every metal then painted the whole window -- Ruby was a pink page with pink
-chrome, which is a colour scheme and not a metal one. Coloured chrome around a
-pale page is what that era actually did, and for the same reason: the metal is
-the case, not the paper in it.
+**A tint that keeps the base's lightness is a mood. Metal is not a mood.**
+This is the change that made Metallic work, and it took being told twice: "the
+colours don't have too much of a metallic feel -- it looks more like frosted
+glass", and then "more like a solid colour with a shine to it".
+
+Both true, and one cause. `recon_color_tint` moves a colour to the tint's hue
+while keeping its own lightness, which is exactly right for glass -- the
+palette's structure survives and the hue shifts. It is exactly wrong for metal.
+Silver and ruby are not one colour at two hues; they are two *lightnesses*.
+Holding ruby at a pale silver's brightness produces pink, every time, and
+pastel pink on a soft ramp is a frosted pane.
+
+So a skin can now say that its tint carries its own lightness --
+`recon_color_tint_to`, targeting a lightness the caller chooses rather than the
+base's. Metallic asks for the metal's own, offset by half of where the role
+sits relative to the taskbar, so a title bar stays a shade deeper than the
+strip below it and the ramps still have somewhere to go.
+
+**And it paints far less.** In that mode the tint reaches the title bars, the
+taskbar and the window edge, and nothing else. Menus, buttons and page bodies
+stay silver, because they carry dark text and a role taking the metal's
+lightness would take the ground out from under it. Coloured chrome round a pale
+page is what that era actually did, and for the same reason.
+
+**The shine is the ramp.** Roughly sixty levels across a twenty-eight pixel
+title bar, where Recon's is ten -- the difference between a surface that is lit
+and a fill that is slightly uneven, which is the whole of what "metallic" means
+with two stops to spend. Ruby and Garnet were deepened as well: `A01830` and
+`6E1832`, because in this mode the hue's own lightness is what the chrome
+becomes.
 
 **Smoked has pictures where Glass has silhouettes.** Thirty-one of the fifty
 Colored Glass tiles, under the ReconOS name each one answers. Glass and Smoked
