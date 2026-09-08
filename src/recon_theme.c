@@ -16,7 +16,18 @@
 #include "recon_theme.h"
 #include "recon_users.h"
 
-#define THEMES_MAX 16
+/*
+ * Sixteen was thirteen shipped skins and three of somebody's own, which is
+ * not a limit -- it is the number of built-ins plus a rounding error. The
+ * skin tests found it by making two copies and a rename: everything after the
+ * sixteenth was refused, and a rename that cannot allocate looks exactly like
+ * a rename that is broken.
+ *
+ * Thirty-two, which is nineteen of your own. Each is a struct of forty-eight
+ * colours and forty-eight gradients, so the whole table is tens of kilobytes
+ * and the number is bounded by what is sensible rather than by what fits.
+ */
+#define THEMES_MAX 32
 
 struct theme {
     struct recon_theme_info info;
@@ -674,6 +685,64 @@ static const recon_color THEME_READING[] = {
  * black would look like a missing feature rather than a missing colour. Sized
  * by their contents, a short table is a compile error naming the skin.
  */
+/*
+ * --- Metallic: brushed, and not see-through ---
+ *
+ * The other skin the early 2000s shipped, and the one nobody bothers to copy:
+ * flat colour with a ramp across it, so a title bar looks like a piece of
+ * metal caught in the light rather than like a rectangle somebody filled in.
+ *
+ * Deliberately near-neutral. This is the skin whose *point* is the tint --
+ * silver, steel, gold, bronze, copper, ruby, garnet, onyx -- and a base with
+ * a strong hue of its own fights every one of them. The greys carry the
+ * faintest blue so the palette reads as cold metal rather than as unpainted
+ * grey, and that is as far as it goes.
+ *
+ * Opaque, stated in the shape below rather than left to the default: the
+ * whole idea is a surface, and a surface you can see through is a window.
+ */
+static const recon_color THEME_METALLIC[] = {
+    /*
+     * --- Where the metal is, and where it is not ---
+     *
+     * The title bar, the taskbar and the buttons are mid-toned; the window's
+     * own body is nearly white. That split is the whole reason this reads as
+     * a machine rather than as a coloured rectangle, and it is the tint that
+     * makes it necessary: recon_color_tint keeps a colour's lightness, so a
+     * hue laid on a mid tone comes out as that colour and a hue laid on
+     * near-white stays near-white.
+     *
+     * A first draft had the body mid-toned too. Every metal then painted the
+     * entire window -- Ruby was a pink page with pink chrome, which is a
+     * colour scheme and not a metal one. Coloured chrome around a pale page
+     * is what the era this borrows from actually did, and it is right for the
+     * same reason: the metal is the case, not the paper in it.
+     */
+    RGB(E6,E9,EE), RGB(6E,74,7E), RGB(8A,92,9E), RGB(B2,B6,BE),
+    RGB(FF,FF,FF), RGB(F0,F2,F5), RGB(C0,C5,CE), RGB(1A,1D,22),
+
+    RGB(A6,AD,B8), RGB(1A,1D,22), RGB(4E,54,5E), RGB(C8,CD,D6),
+    RGB(A4,AB,B6),
+    RGB(1A,1D,22),
+
+    RGB(E2,E5,EA), RGB(8A,90,98), RGB(1A,1D,22), RGB(8A,90,98),
+    RGB(5A,72,96), RGB(FF,FF,FF), RGB(BE,C2,CA),
+
+    RGB(E6,E9,EE), RGB(8A,92,9E), RGB(FF,FF,FF), RGBA(00,00,00,99),
+
+    RGB(FF,FF,FF), RGB(F2,F4,F7), RGB(1A,1D,22), RGB(4A,50,5A),
+    RGB(D0,D5,DD), RGB(5A,72,96), RGB(FF,FF,FF),
+
+    RGB(FF,FF,FF), RGB(8A,90,98), RGB(1A,1D,22), RGB(C4,D2,E6),
+    RGB(1A,1D,22),
+
+    RGB(14,16,1A), RGB(C8,D0,D8), RGB(7C,C8,7C), RGB(F0,F0,E8),
+
+    RGB(F0,F2,F5), RGBA(00,00,00,C0), RGBA(5A,72,96,A0),
+
+    RGB(4A,64,8C), RGB(F4,F4,F4), RGB(D0,42,1B), RGB(3A,52,7C),
+};
+
 #define CHECK_SKIN(table) _Static_assert(     sizeof(table) / sizeof((table)[0]) == RECON_THEME_ROLE_COUNT,     #table " does not answer every role")
 
 CHECK_SKIN(THEME_RECON);
@@ -686,6 +755,7 @@ CHECK_SKIN(THEME_PROTAN);
 CHECK_SKIN(THEME_TRITAN);
 CHECK_SKIN(THEME_CONTRAST);
 CHECK_SKIN(THEME_READING);
+CHECK_SKIN(THEME_METALLIC);
 
 #undef CHECK_SKIN
 
@@ -1164,6 +1234,20 @@ static const struct gradient_spec GRAD_BEACON[] = {
  * its own thing rather than as a period piece, so this is barely a ramp --
  * enough that chrome is not perfectly flat, not enough to be a style.
  */
+/*
+ * Metal. The steepest ramp any skin here asks for, which is the whole look:
+ * a title bar lit from above rather than filled in.
+ */
+static const struct gradient_spec GRAD_METALLIC[] = {
+    { RECON_THEME_TITLE_ACTIVE,   RGB(56,5E,6A) },
+    { RECON_THEME_TITLE_INACTIVE, RGB(8E,92,9A) },
+    { RECON_THEME_BAR,            RGB(80,86,92) },
+    { RECON_THEME_BUTTON,         RGB(A6,AC,B8) },
+    { RECON_THEME_MENU,           RGB(C2,C6,CE) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(56,5E,6A) },
+    { RECON_THEME_ROLE_COUNT, 0 },
+};
+
 static const struct gradient_spec GRAD_RECON[] = {
     { RECON_THEME_TITLE_ACTIVE,   RGB(26,1A,48) },
     { RECON_THEME_BAR,            RGB(AA,A4,B4) },
@@ -1231,6 +1315,32 @@ static const struct metric_spec SHAPE_BEACON[] = {
      * three once, where the corner was there but had to be looked for --
      * the cost of rounding without the difference it was meant to make. */
     { RECON_METRIC_BUTTON_CORNER, 9 },
+    /*
+     * Two styles, not six. That era shipped this blue and a muted olive, and
+     * the olive is the half people remember choosing -- see SKIN_TINTS, which
+     * is what decides that "tintable" means those two here and every hue on
+     * Glass.
+     */
+    { RECON_METRIC_TINTABLE, 1 },
+    { RECON_METRIC_COUNT, 0 },
+};
+
+/*
+ * Metal, which is a ramp and a hard edge.
+ *
+ * Steeper than any other skin's, because that is the difference between
+ * "brushed" and "a slightly uneven fill" -- and no glass at all, which is
+ * said out loud here rather than inherited, because it is the point of the
+ * skin rather than a default it happens to keep.
+ */
+static const struct metric_spec SHAPE_METALLIC[] = {
+    { RECON_METRIC_TITLE_HEIGHT,  28 },
+    { RECON_METRIC_BORDER,         1 },
+    { RECON_METRIC_CORNER,         4 },
+    { RECON_METRIC_BUTTON_SIZE,   18 },
+    { RECON_METRIC_BUTTON_CORNER,  5 },
+    { RECON_METRIC_CHROME_OPACITY, 255 },
+    { RECON_METRIC_TINTABLE,       1 },
     { RECON_METRIC_COUNT, 0 },
 };
 
@@ -1387,8 +1497,10 @@ static const struct {
     { "Aqua", "Light and quiet, thin edges, blue selection", THEME_AQUA,
       "Daybreak.png", GRAD_AQUA, SHAPE_AQUA },
     { "Midnight", "Dark and flat", THEME_MIDNIGHT, "Deep Field.png", NULL, NULL },
-    { "Beacon", "Bright blue chrome and a green accent, early 2000s",
+    { "Beacon", "Bright blue chrome, or the olive it also came in",
       THEME_BEACON, "Daybreak.png", GRAD_BEACON, SHAPE_BEACON },
+    { "Metallic", "Brushed metal, opaque: silver, gold, ruby, garnet, onyx",
+      THEME_METALLIC, "Meridian.jpg", GRAD_METALLIC, SHAPE_METALLIC },
     /*
      * These two get the pictures that were made for them: frosted panes over
      * water in daylight, and frosted panes over a star field at night. A
@@ -2514,15 +2626,110 @@ static const struct {
     { "Jade",     RECON_RGB(0x3C, 0xA8, 0x84) },
     { "Violet",   RECON_RGB(0x8A, 0x6C, 0xC8) },
     { "Graphite", RECON_RGB(0x78, 0x80, 0x88) },
+
+    /*
+     * Olive, for Beacon's second style. That era shipped its bright blue with
+     * a muted yellow-green alternative, and the green is the half people
+     * remember having chosen -- it is the one that looks like a different
+     * machine rather than the same machine in a different mood.
+     */
+    { "Olive",    RECON_RGB(0x7E, 0x8A, 0x46) },
+
+    /* And the metals, for the skin named after them. */
+    { "Silver",   RECON_RGB(0x9A, 0xA0, 0xA8) },
+    { "Steel",    RECON_RGB(0x6E, 0x7E, 0x92) },
+    { "Gold",     RECON_RGB(0xB8, 0x96, 0x3C) },
+    { "Bronze",   RECON_RGB(0xA0, 0x71, 0x3C) },
+    { "Copper",   RECON_RGB(0xB0, 0x6B, 0x44) },
+    { "Ruby",     RECON_RGB(0xB0, 0x30, 0x48) },
+    { "Garnet",   RECON_RGB(0x8A, 0x30, 0x50) },
+    { "Onyx",     RECON_RGB(0x4A, 0x4A, 0x52) },
 };
+
+/*
+ * --- Which of them a skin offers ---
+ *
+ * Fifteen hues in one row under every tintable skin would be a row where the
+ * two Beacon has a use for are lost among thirteen it does not. A tint is
+ * part of a skin's design rather than a palette bolted to the side of it:
+ * Beacon is the bright-blue-or-olive one, and Metallic is the one where the
+ * choice is which metal.
+ *
+ * Named here rather than written into the skin file, and that is a real
+ * limitation worth stating: a skin copied from Beacon becomes "MyBeacon" and
+ * offers every tint, because the file has nowhere to say otherwise. When a
+ * skin file can carry its own list this table becomes its default rather than
+ * its whole answer.
+ *
+ * A skin that is tintable and not named here offers all of them, which is
+ * what Glass did before this existed and still does.
+ */
+static const struct {
+    const char *skin;
+    const char *const *tints;
+    /*
+     * And how far the chrome moves, because that is not one number either.
+     *
+     * Glass's 150 is right for Glass: the hue is unmistakable and the greys
+     * the skin chose are still recognisably greys. Beacon's two are not
+     * moods, they are *styles* -- the machine came in blue or it came in
+     * olive -- so a 59% move produces neither, and Beacon plus Olive came out
+     * a slate blue-grey that is not a colour anybody asked for. It goes all
+     * the way.
+     *
+     * Zero here means Glass's number, so a skin only says this when it
+     * disagrees.
+     */
+    int strength;
+} SKIN_TINTS[] = {
+    { "Beacon",   (const char *const[]){ "Blue", "Olive", NULL }, 255 },
+    { "Metallic", (const char *const[]){ "Silver", "Steel", "Gold", "Bronze",
+                                         "Copper", "Ruby", "Garnet", "Onyx",
+                                         NULL }, 205 },
+};
+
+/* The row for the skin on screen, or NULL. */
+static int skin_tints_row(void) {
+    const char *now = recon_theme_current();
+    for (size_t i = 0; i < sizeof(SKIN_TINTS) / sizeof(SKIN_TINTS[0]); i++) {
+        if (strcasecmp(SKIN_TINTS[i].skin, now) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* The list for the skin on screen, or NULL meaning "all of them". */
+static const char *const *tints_for_current(void) {
+    int at = skin_tints_row();
+    return at < 0 ? NULL : SKIN_TINTS[at].tints;
+}
+
+/* The whole-table position of a hue by name, or -1. */
+static int tint_index_of(const char *name) {
+    for (size_t i = 0; i < sizeof(TINTS) / sizeof(TINTS[0]); i++) {
+        if (strcasecmp(TINTS[i].name, name) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 #define TINT_COUNT ((int)(sizeof(TINTS) / sizeof(TINTS[0])))
 
 bool recon_tint_colour(int index, recon_color *out) {
-    if (index < 0 || index >= TINT_COUNT || out == NULL) {
+    if (out == NULL) {
         return false;
     }
-    *out = TINTS[index].hue;
+    char name[32];
+    if (!recon_tint_at(index, name, sizeof(name))) {
+        return false;
+    }
+    int at = tint_index_of(name);
+    if (at < 0) {
+        return false;
+    }
+    *out = TINTS[at].hue;
     return true;
 }
 
@@ -2535,6 +2742,14 @@ bool recon_tint_colour(int index, recon_color *out) {
  * looking is better than a slider that makes everybody choose for themselves.
  */
 #define TINT_STRENGTH 150
+
+static int tint_strength(void) {
+    int at = skin_tints_row();
+    if (at < 0 || SKIN_TINTS[at].strength <= 0) {
+        return TINT_STRENGTH;
+    }
+    return SKIN_TINTS[at].strength;
+}
 
 /*
  * Which roles move.
@@ -2568,15 +2783,32 @@ static bool role_takes_tint(enum recon_theme_role role) {
     }
 }
 
+/*
+ * Everything below counts and numbers within the *current skin's* list.
+ *
+ * Safe because nothing stores a tint by number: the account remembers the
+ * name, and the Appearance page draws and reads its swatches in the same
+ * pass. An index is only ever a position in the row somebody is looking at.
+ */
 int recon_tint_count(void) {
-    return TINT_COUNT;
+    const char *const *mine = tints_for_current();
+    if (mine == NULL) {
+        return TINT_COUNT;
+    }
+    int count = 0;
+    while (mine[count] != NULL) {
+        count++;
+    }
+    return count;
 }
 
 bool recon_tint_at(int index, char *name, size_t size) {
-    if (index < 0 || index >= TINT_COUNT || name == NULL || size == 0) {
+    if (index < 0 || index >= recon_tint_count() || name == NULL ||
+            size == 0) {
         return false;
     }
-    snprintf(name, size, "%s", TINTS[index].name);
+    const char *const *mine = tints_for_current();
+    snprintf(name, size, "%s", mine != NULL ? mine[index] : TINTS[index].name);
     return true;
 }
 
@@ -2594,9 +2826,26 @@ const char *recon_tint_current(void) {
     const char *name = recon_registry_get(RECON_REG_USER,
         RECON_THEME_TINT_KEY, "");
 
-    for (int i = 0; i < TINT_COUNT; i++) {
-        if (strcasecmp(TINTS[i].name, name) == 0) {
-            return TINTS[i].name;
+    /*
+     * Only among the ones *this* skin offers.
+     *
+     * The account remembers one tint, not one per skin, so a Rose chosen on
+     * Glass was still remembered on switching to Metallic -- and Rose is in
+     * the table, so it applied. Metallic came out pink, which is not one of
+     * the metals and is not a choice anybody made here.
+     *
+     * A tint from another skin is treated the same way as a name nothing
+     * recognises: no tint. The skin shows as itself until somebody picks
+     * from its own row.
+     */
+    for (int i = 0; i < recon_tint_count(); i++) {
+        char mine[32];
+        if (recon_tint_at(i, mine, sizeof(mine)) &&
+                strcasecmp(mine, name) == 0) {
+            int at = tint_index_of(mine);
+            if (at >= 0) {
+                return TINTS[at].name;
+            }
         }
     }
     /* A name nothing recognises is no tint rather than a guess. A registry is
@@ -2666,7 +2915,7 @@ recon_color recon_theme_color(enum recon_theme_role role) {
     if (role_takes_tint(role)) {
         recon_color hue = tint_hue();
         if (hue != 0) {
-            chosen = recon_color_tint(chosen, hue, TINT_STRENGTH);
+            chosen = recon_color_tint(chosen, hue, (uint8_t)tint_strength());
         }
     }
     return chosen;
@@ -2703,11 +2952,11 @@ bool recon_theme_gradient(enum recon_theme_role role, recon_color *from,
 
     if (from != NULL) {
         *from = recon_color_tint(g_themes[g_current].colors[role], hue,
-            hue != 0 ? TINT_STRENGTH : 0);
+            hue != 0 ? (uint8_t)tint_strength() : 0);
     }
     if (to != NULL) {
         *to = recon_color_tint(g_themes[g_current].gradient[role], hue,
-            hue != 0 ? TINT_STRENGTH : 0);
+            hue != 0 ? (uint8_t)tint_strength() : 0);
     }
     return true;
 }

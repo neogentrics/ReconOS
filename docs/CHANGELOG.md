@@ -35,6 +35,30 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+**Beacon comes in olive, and there is a Metallic skin.** That era shipped its
+bright blue with a muted yellow-green alternative and a brushed-metal one, and
+the green is the half people remember choosing. Beacon offers Blue and Olive.
+Metallic is new: opaque, gradient chrome, and eight metals -- Silver, Steel,
+Gold, Bronze, Copper, Ruby, Garnet, Onyx.
+
+**A tint is part of a skin now, not a palette bolted to the side of one.**
+Fifteen hues in one row under every tintable skin would be a row where the two
+Beacon has a use for are lost among thirteen it does not. And the *strength* is
+per skin as well, which turned out to matter more: Glass's 150 is right for
+Glass, where a tint is a mood. Beacon's two are styles -- the machine came in
+blue or it came in olive -- so a 59% move produced neither, and Beacon plus
+Olive came out a slate blue-grey nobody asked for. It goes all the way now.
+
+**Where the metal is, and where it is not.** Metallic's title bar, taskbar and
+buttons are mid-toned and its window body is nearly white, and that split is
+the tint's doing rather than taste: `recon_color_tint` keeps a colour's
+lightness, so a hue on a mid tone comes out as that colour and a hue on
+near-white stays near-white. A first draft had the body mid-toned too, and
+every metal then painted the whole window -- Ruby was a pink page with pink
+chrome, which is a colour scheme and not a metal one. Coloured chrome around a
+pale page is what that era actually did, and for the same reason: the metal is
+the case, not the paper in it.
+
 **Smoked has pictures where Glass has silhouettes.** Thirty-one of the fifty
 Colored Glass tiles, under the ReconOS name each one answers. Glass and Smoked
 are the same idea light and dark, so they are the pair to show the two ways an

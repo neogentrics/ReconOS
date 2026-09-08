@@ -2575,6 +2575,33 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-154 — Sixteen skins was thirteen shipped ones and a rounding error
+
+- **Found in** v0.4.0. **Found by** the skin tests, the moment Metallic became
+  the thirteenth built-in: ten checks failed at once, all of them about
+  renaming.
+- **What it was** `THEMES_MAX` was 16. Thirteen shipped, and the rename test
+  makes a copy and then another -- so the table filled, `recon_theme_copy`
+  refused, and every check after it failed. A rename that cannot allocate
+  looks exactly like a rename that is broken.
+- **Fixed in** v0.4.0. Thirty-two, which is nineteen of somebody's own. The
+  number now says what a person might reasonably have rather than what the
+  built-ins happen to need.
+
+### BG-153 — A tint chosen on one skin was applied to a skin that never offered it
+
+- **Found in** v0.4.0. **Found by** photographing Metallic and finding it pink.
+- **What it was** the account remembers one tint, not one per skin, and
+  `recon_tint_current` looked the remembered name up in the whole table rather
+  than in the list the current skin offers. A Rose picked on Glass was still
+  remembered on switching to Metallic, and Rose is a real tint, so it applied.
+  Metallic came out pink -- not one of the metals, and not a choice anybody
+  made there.
+- It could not happen while one skin was tintable. It arrived with the second.
+- **Fixed in** v0.4.0. A remembered tint that the current skin does not offer
+  is treated exactly like a name nothing recognises: no tint, and the skin
+  shows as itself until somebody picks from its own row.
+
 ### BG-152 — The skin list rounded its sample buttons by painting the corners out
 
 - **Found in** v0.4.0. **Found by** the author: "if you're gonna round them
