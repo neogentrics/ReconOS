@@ -538,6 +538,24 @@ static void on_done(void *user, bool ok, char *body, size_t length,
         strstr(content_type, "html") != NULL);
 
     /*
+     * Made UTF-8 first, if it is not already.
+     *
+     * Everything downstream -- the parser, the font, the title bar -- assumes
+     * UTF-8, and a page in Windows-1252 read as UTF-8 is a page of dropped
+     * accents. Decided by looking at the bytes rather than by believing the
+     * header, because a page that says Latin-1 and is really UTF-8 is common
+     * enough that trusting the label would break pages that work.
+     */
+    size_t converted_length = 0;
+    char *converted = recon_html_to_utf8(body, length, content_type,
+        &converted_length);
+    if (converted != NULL) {
+        free(body);
+        body = converted;
+        length = converted_length;
+    }
+
+    /*
      * A sheet per page, holding the page's own `<style>` elements as it is
      * parsed and, after they arrive, the ones it linked to.
      */

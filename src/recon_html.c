@@ -534,6 +534,121 @@ struct open_tag {
     int link_before;
 };
 
+/* --- Encodings --- */
+
+/*
+ * The twenty-seven characters Windows-1252 puts where Latin-1 has controls.
+ *
+ * Curly quotes, dashes and an ellipsis, which is what they are actually used
+ * for: a page written in Word and saved as "Latin-1" is full of them, and
+ * read as Latin-1 they are control characters and vanish.
+ */
+static const unsigned CP1252_HIGH[32] = {
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+};
+
+/* Does this decode cleanly as UTF-8? */
+static bool is_utf8(const char *bytes, size_t length) {
+    size_t i = 0;
+    while (i < length) {
+        unsigned char c = (unsigned char)bytes[i];
+        int extra;
+        unsigned lowest;
+
+        if (c < 0x80) {
+            i++;
+            continue;
+        } else if ((c & 0xE0) == 0xC0) {
+            extra = 1;
+            lowest = 0x80;
+        } else if ((c & 0xF0) == 0xE0) {
+            extra = 2;
+            lowest = 0x800;
+        } else if ((c & 0xF8) == 0xF0) {
+            extra = 3;
+            lowest = 0x10000;
+        } else {
+            return false;                  /* a continuation byte on its own */
+        }
+
+        if (i + (size_t)extra >= length) {
+            return false;
+        }
+        unsigned point = c & (0x7Fu >> (extra + 1));
+        for (int k = 1; k <= extra; k++) {
+            unsigned char n = (unsigned char)bytes[i + (size_t)k];
+            if ((n & 0xC0) != 0x80) {
+                return false;
+            }
+            point = (point << 6) | (n & 0x3Fu);
+        }
+
+        /*
+         * Overlong forms and surrogates are refused. Both decode "fine" and
+         * neither is valid, and accepting them is how a byte sequence gets
+         * read as one thing here and another somewhere else.
+         */
+        if (point < lowest || (point >= 0xD800 && point <= 0xDFFF) ||
+                point > 0x10FFFF) {
+            return false;
+        }
+        i += (size_t)extra + 1;
+    }
+    return true;
+}
+
+char *recon_html_to_utf8(const char *bytes, size_t length,
+        const char *declared, size_t *out_length) {
+    if (bytes == NULL) {
+        return NULL;
+    }
+
+    /*
+     * Said to be UTF-8, or said to be nothing. Checked anyway, because a page
+     * that lies about this is a page of replacement characters -- and the
+     * check is a single pass over bytes already in memory.
+     */
+    (void)declared;
+    if (is_utf8(bytes, length)) {
+        return NULL;
+    }
+
+    /* Three bytes per source byte is the worst case: every high byte becomes
+     * a three-byte sequence, and none becomes more. */
+    char *out = malloc(length * 3 + 1);
+    if (out == NULL) {
+        return NULL;
+    }
+
+    size_t used = 0;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)bytes[i];
+        unsigned point;
+        if (c < 0x80) {
+            out[used++] = (char)c;
+            continue;
+        }
+        point = (c >= 0x80 && c <= 0x9F) ? CP1252_HIGH[c - 0x80] : c;
+
+        if (point < 0x800) {
+            out[used++] = (char)(0xC0 | (point >> 6));
+            out[used++] = (char)(0x80 | (point & 0x3F));
+        } else {
+            out[used++] = (char)(0xE0 | (point >> 12));
+            out[used++] = (char)(0x80 | ((point >> 6) & 0x3F));
+            out[used++] = (char)(0x80 | (point & 0x3F));
+        }
+    }
+    out[used] = '\0';
+    if (out_length != NULL) {
+        *out_length = used;
+    }
+    return out;
+}
+
 struct recon_html_document *recon_html_parse(const char *html, size_t length) {
     return recon_html_parse_styled(html, length, NULL);
 }

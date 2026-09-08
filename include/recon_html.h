@@ -142,6 +142,30 @@ struct recon_html_document;
  * parses to a document with no blocks in it, and a viewer showing "there is
  * nothing here" is more use than one showing an error about markup.
  */
+/*
+ * A page's bytes as UTF-8, when they are not already.
+ *
+ * Returns a NUL-terminated copy the caller owns, or NULL when `bytes` is
+ * already usable and should be read as it stands.
+ *
+ * --- How it decides ---
+ *
+ * By looking, not by being told. If the bytes are valid UTF-8 they are UTF-8:
+ * that is not a guess, because the encoding is self-checking -- a sequence of
+ * bytes that decodes cleanly as UTF-8 is essentially never anything else. And
+ * if they are not, they are read as Windows-1252, which is what every browser
+ * does with a page that declares Latin-1 and is what the remaining
+ * single-byte web actually is.
+ *
+ * `declared` -- from the Content-Type header -- is used only to skip the
+ * check when it says UTF-8, which is most of the time. It is deliberately not
+ * trusted the other way: a page that *says* Latin-1 and is really UTF-8 is
+ * common enough that believing the label would break pages that currently
+ * work.
+ */
+char *recon_html_to_utf8(const char *bytes, size_t length,
+    const char *declared, size_t *out_length);
+
 struct recon_html_document *recon_html_parse(const char *html, size_t length);
 
 /*

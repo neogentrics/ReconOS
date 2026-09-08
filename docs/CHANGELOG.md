@@ -11,6 +11,19 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**A page that is not UTF-8 is read as what it is.** Everything downstream --
+the parser, the font, the title bar -- assumes UTF-8, and the single-byte web
+that is left is Windows-1252 in practice, whatever it says. A page in it read
+as UTF-8 loses every accent.
+
+Decided by **looking at the bytes rather than believing the header**. UTF-8 is
+self-checking: a sequence that decodes cleanly essentially never means
+anything else, so valid bytes are UTF-8 whatever the label says, and invalid
+ones are Windows-1252. The other direction would break pages that work today,
+because a page that *says* Latin-1 and is really UTF-8 is common. Overlong
+forms and surrogates are refused as invalid -- both decode "fine" and neither
+is valid, and accepting them is how one byte sequence comes to mean two things.
+
 **A link is underlined once, not once per word.** The rule and the clickable
 region were drawn by the function that draws one *word*, so a headline of eight
 words got eight underlines with seven holes between them -- which reads as

@@ -14,6 +14,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "recon_css.h"
@@ -430,6 +431,71 @@ static void test_the_sheets_a_page_asks_for(void) {
     recon_html_free(d);
 }
 
+static void test_the_encoding_is_looked_at_not_believed(void) {
+    printf("bytes that are not UTF-8 are read as Windows-1252\n");
+
+    /* Already UTF-8: nothing to do, and saying so is how the caller avoids a
+     * copy of every page it ever loads. */
+    const char *plain = "plain ASCII";
+    check(recon_html_to_utf8(plain, strlen(plain), NULL, NULL) == NULL,
+        "ASCII is left alone");
+
+    const char *utf8 = "caf\xC3\xA9";                       /* café */
+    check(recon_html_to_utf8(utf8, strlen(utf8), NULL, NULL) == NULL,
+        "and so is real UTF-8");
+
+    /*
+     * The same word in Latin-1. As UTF-8 it is invalid -- 0xE9 is the start
+     * of a three-byte sequence and there are no continuation bytes after it
+     * -- so it is read as Windows-1252 and comes out as café.
+     */
+    const char *latin1 = "caf\xE9";
+    size_t out_length = 0;
+    char *fixed = recon_html_to_utf8(latin1, strlen(latin1), NULL,
+        &out_length);
+    check(fixed != NULL, "Latin-1 is converted");
+    if (fixed != NULL) {
+        check(strcmp(fixed, "caf\xC3\xA9") == 0,
+            "and comes out as the same word in UTF-8");
+        free(fixed);
+    }
+
+    /*
+     * The bytes Windows-1252 puts where Latin-1 has controls. A page written
+     * in a word processor is full of them, and read as Latin-1 they are
+     * control characters and vanish.
+     */
+    const char *smart = "\x93quoted\x94 \x97 dash";
+    fixed = recon_html_to_utf8(smart, strlen(smart), NULL, &out_length);
+    check(fixed != NULL, "the 0x80-0x9F range is converted too");
+    if (fixed != NULL) {
+        check(strstr(fixed, "\xE2\x80\x9C") != NULL,
+            "a curly open quote becomes U+201C");
+        check(strstr(fixed, "\xE2\x80\x94") != NULL,
+            "and an em dash becomes U+2014");
+        free(fixed);
+    }
+
+    /*
+     * A page that says Latin-1 and is really UTF-8 is common enough that
+     * believing the label would break pages that work today. The bytes win.
+     */
+    fixed = recon_html_to_utf8(utf8, strlen(utf8), "iso-8859-1", NULL);
+    check(fixed == NULL, "a wrong label does not override valid UTF-8");
+
+    /* Overlong forms and surrogates decode "fine" and are not valid. Reading
+     * them as UTF-8 is how one byte sequence means two different things. */
+    const char *overlong = "\xC0\xAF";
+    check(recon_html_to_utf8(overlong, 2, NULL, NULL) != NULL,
+        "an overlong form is not treated as UTF-8");
+    const char *surrogate = "\xED\xA0\x80";
+    check(recon_html_to_utf8(surrogate, 3, NULL, NULL) != NULL,
+        "nor is a surrogate");
+    const char *truncated = "abc\xC3";
+    check(recon_html_to_utf8(truncated, 4, NULL, NULL) != NULL,
+        "nor is a sequence cut off at the end");
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -462,6 +528,7 @@ int main(void) {
     test_an_inline_style();
     test_style_is_inherited();
     test_the_sheets_a_page_asks_for();
+    test_the_encoding_is_looked_at_not_believed();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
