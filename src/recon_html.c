@@ -13,6 +13,7 @@
 /* memmem, for finding the end of a comment. */
 #define _GNU_SOURCE
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,99 @@ struct recon_html_document {
  * first `<br>` would be treated as being inside it -- which for `display:
  * none` on a `<meta>` would hide the rest of the page.
  */
+/*
+ * What a browser does not show, whatever the page's stylesheet says.
+ *
+ * None of this is CSS. It is the behaviour of the elements themselves, and a
+ * reader that only reads stylesheets shows all of it: measured on
+ * recontowers.com, whose accessibility panel is a closed `<details>` and
+ * appeared in full, twenty lines of settings nobody had opened.
+ *
+ *   template   never rendered at all -- it is markup held for scripting.
+ *   dialog     shown only when it has been opened.
+ *   details    shows its `<summary>` and nothing else until opened.
+ *   [hidden]   the attribute that means exactly this, and which pages use
+ *              precisely because it does not need a stylesheet.
+ */
+/* Both defined further down, next to the parsing they belong to. */
+static bool named(const char *tag, size_t length, const char *want);
+
+/*
+ * Is this attribute present at all, with or without a value?
+ *
+ * `attribute` reads a value and so answers no for `<dialog open>` and
+ * `<div hidden>` -- which are the two forms that matter here, because a
+ * boolean attribute means something by being written and nothing by its
+ * value. Asking the wrong question got both backwards: an open dialog was
+ * treated as closed and a hidden div as shown.
+ */
+static bool has_attribute(const char *attrs, size_t length,
+        const char *want) {
+    size_t want_length = strlen(want);
+    if (attrs == NULL || want_length == 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i + want_length <= length; i++) {
+        /* On a boundary, so `data-open` is not `open`. */
+        if (i > 0 && attrs[i - 1] != ' ' && attrs[i - 1] != '\t' &&
+                attrs[i - 1] != '\n' && attrs[i - 1] != '\r') {
+            continue;
+        }
+        if (strncasecmp(attrs + i, want, want_length) != 0) {
+            continue;
+        }
+        /* And ends where a name ends, so `openable` is not `open`. */
+        size_t at = i + want_length;
+        if (at < length && (isalnum((unsigned char)attrs[at]) ||
+                attrs[at] == '-' || attrs[at] == '_')) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool hidden_by_default(const char *tag, size_t length,
+        const char *attrs, size_t attrs_length) {
+    if (has_attribute(attrs, attrs_length, "hidden")) {
+        return true;
+    }
+    if (named(tag, length, "template")) {
+        return true;
+    }
+    if ((named(tag, length, "dialog") || named(tag, length, "details")) &&
+            !has_attribute(attrs, attrs_length, "open")) {
+        return true;
+    }
+    return false;
+}
+
+/*
+ * Tags this already treats as blocks.
+ *
+ * Consulted only to avoid acting twice: an element whose tag is a block and
+ * whose stylesheet says `display: block` is being told what it already knew,
+ * and breaking the line again would leave an empty paragraph between every
+ * two real ones.
+ */
+static bool breaks_line(const char *tag, size_t length) {
+    static const char *const BLOCKS[] = {
+        "p", "div", "section", "article", "header", "footer", "nav", "main",
+        "aside", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl",
+        "dt", "dd", "blockquote", "pre", "table", "tr", "td", "th", "thead",
+        "tbody", "tfoot", "form", "fieldset", "figure", "figcaption", "hr",
+        "body", "html", "br", "address", "details", "summary",
+    };
+    for (size_t i = 0; i < sizeof(BLOCKS) / sizeof(BLOCKS[0]); i++) {
+        size_t n = strlen(BLOCKS[i]);
+        if (n == length && strncasecmp(tag, BLOCKS[i], n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool is_void_element(const char *tag, size_t length) {
     static const char *const VOID[] = {
         "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -114,6 +208,16 @@ struct level {
     unsigned colour;
     int size_percent;
     int align;
+
+    /*
+     * Whether a stylesheet made this element a block when its tag is not one.
+     *
+     * Remembered rather than recomputed at the closing tag, because the sheet
+     * is matched against the open-element stack and by then this element has
+     * been popped off it -- so the close would ask a different question and
+     * get a different answer.
+     */
+    bool made_block;
 };
 
 struct builder {
@@ -133,6 +237,16 @@ struct builder {
      * started it closes -- not when the first close tag comes along.
      */
     int hidden_at;
+
+    /*
+     * A `<summary>` inside a closed `<details>` is the one thing shown out of
+     * something hidden -- it is the line you click to open it. So the hide is
+     * suspended for the length of that element and put back afterwards, and
+     * the depth it was suspended at is how the close knows which one to
+     * restore.
+     */
+    int hidden_was;
+    int summary_at;
 
     /* The block being filled in, if any. */
     bool in_block;
@@ -680,6 +794,8 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
     b.link = -1;
     b.sheet = sheet;
     b.hidden_at = -1;
+    b.hidden_was = -1;
+    b.summary_at = -1;
 
     struct open_tag stack[NEST_MAX];
     int depth = 0;
@@ -746,11 +862,18 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
             bool voidish = is_void_element(tag, name_length) || self_closing;
 
             if (closing && !voidish) {
+                bool was_block = (b.depth > 0) &&
+                    b.stack[b.depth - 1].made_block;
                 if (b.depth > 0) {
                     b.depth--;
                 }
                 if (b.hidden_at >= 0 && b.depth <= b.hidden_at) {
                     b.hidden_at = -1;
+                }
+                /* What follows a block is not joined onto it. */
+                if (was_block && b.hidden_at < 0) {
+                    close_block(&b);
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
                 }
             } else if (!closing) {
                 struct level fresh;
@@ -830,8 +953,36 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     b.stack[at].align = (int)style.align;
                 }
 
-                if (style.display == RECON_CSS_NONE && b.hidden_at < 0) {
+                bool hide = style.display == RECON_CSS_NONE ||
+                    hidden_by_default(tag, name_length, attrs, attrs_length);
+                if (hide && b.hidden_at < 0) {
                     b.hidden_at = voidish ? at + 1 : at;
+                }
+
+                /*
+                 * --- A span a stylesheet turned into a block ---
+                 *
+                 * The difference between a `<span>` and a `<div>` is one
+                 * property, and pages set it constantly: a card built out of
+                 * spans and laid out with `display: flex` is five stacked
+                 * lines in a browser and one run-on sentence in a reader that
+                 * ignores it. Measured on recontowers.com, where an eyebrow,
+                 * a name, a destination, a blurb and a caveat came out as a
+                 * single underlined paragraph.
+                 *
+                 * This still cannot lay anything out. It can tell a line from
+                 * a paragraph, and that is most of the difference.
+                 *
+                 * Only when the tag is not already a block. A `<p>` that says
+                 * `display: block` is saying what it already was, and closing
+                 * the block it just opened would leave an empty one.
+                 */
+                b.stack[at].made_block = false;
+                if (style.display == RECON_CSS_BLOCK && b.hidden_at < 0 &&
+                        !breaks_line(tag, name_length)) {
+                    b.stack[at].made_block = true;
+                    close_block(&b);
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
                 }
 
                 if (voidish) {
@@ -849,6 +1000,32 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 } else if (b.depth < STACK_MAX) {
                     b.depth++;
                 }
+            }
+
+            /*
+             * A `<summary>` is what you click to open the `<details>` it is
+             * in, so it is shown even though its parent is not. Suspended
+             * rather than special-cased further down: everything between here
+             * and its closing tag then behaves exactly as it would anywhere
+             * else.
+             */
+            if (named(tag, name_length, "summary")) {
+                if (!closing && b.hidden_at >= 0 && b.summary_at < 0) {
+                    b.hidden_was = b.hidden_at;
+                    b.hidden_at = -1;
+                    b.summary_at = b.depth;
+                    close_block(&b);
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                } else if (closing && b.summary_at >= 0 &&
+                        b.depth <= b.summary_at) {
+                    b.hidden_at = b.hidden_was;
+                    b.hidden_was = -1;
+                    b.summary_at = -1;
+                    close_block(&b);
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                }
+                i = after;
+                continue;
             }
 
             /*

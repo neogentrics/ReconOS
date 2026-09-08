@@ -71,14 +71,27 @@ struct recon_css_style {
     enum { RECON_CSS_ALIGN_NONE = 0, RECON_CSS_ALIGN_LEFT,
            RECON_CSS_ALIGN_CENTRE, RECON_CSS_ALIGN_RIGHT } align;
 
-    /* 0 unset, 1 shown, 2 gone. Two rather than a bool for the same reason as
-     * everything else here: "not mentioned" and "display: block" are
-     * different answers and only one of them overrides a hide. */
+    /*
+     * What kind of box this is, or 0 for unmentioned.
+     *
+     * More than shown-or-gone, because the difference between a `<span>` and
+     * a `<div>` is one property and modern pages set it constantly: a card
+     * built out of spans and laid out with `display: flex` is five lines in a
+     * browser and one run-on sentence in a reader that ignores it. This
+     * cannot lay anything out, but it can tell a line from a paragraph, and
+     * that is most of the difference.
+     */
     int display;
 };
 
-#define RECON_CSS_SHOWN 1
-#define RECON_CSS_NONE 2
+#define RECON_CSS_NONE 1
+/* Stays in the line it is in: inline, inline-block, inline-flex, contents. */
+#define RECON_CSS_INLINE 2
+/* Starts a line of its own: block, flex, grid, table, list-item, flow-root. */
+#define RECON_CSS_BLOCK 3
+
+/* Kept for callers that only ask "was this hidden". */
+#define RECON_CSS_SHOWN RECON_CSS_INLINE
 
 /*
  * One element, as the matcher needs to see it.

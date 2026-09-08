@@ -220,8 +220,25 @@ bool recon_css_colour(const char *text, unsigned *out) {
 static void apply_declaration(struct recon_css_style *style,
         const char *name, const char *value) {
     if (strcasecmp(name, "display") == 0) {
-        style->display = (strcasecmp(value, "none") == 0)
-            ? RECON_CSS_NONE : RECON_CSS_SHOWN;
+        if (strcasecmp(value, "none") == 0) {
+            style->display = RECON_CSS_NONE;
+        } else if (contains_fold(value, "inline") ||
+                strcasecmp(value, "contents") == 0) {
+            /*
+             * `inline-block` and `inline-flex` count as inline here. They lay
+             * their *contents* out as a box and sit in the line themselves,
+             * and only the second half of that is a thing this can act on.
+             */
+            style->display = RECON_CSS_INLINE;
+        } else {
+            /*
+             * Everything else starts a line: block, flex, grid, table,
+             * list-item, flow-root. Lumped together on purpose -- what they
+             * have in common is the only part of them a reader with no layout
+             * can honour, which is that the thing before them ends.
+             */
+            style->display = RECON_CSS_BLOCK;
+        }
         return;
     }
 

@@ -496,6 +496,133 @@ static void test_the_encoding_is_looked_at_not_believed(void) {
         "nor is a sequence cut off at the end");
 }
 
+/* Does any block on the page contain this text? */
+static bool page_says(const struct recon_html_document *d, const char *want) {
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[256];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, want) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_what_a_browser_hides_without_being_told(void) {
+    printf("the things a browser hides that no stylesheet mentions\n");
+
+    /*
+     * None of this is CSS -- it is the behaviour of the elements themselves,
+     * and a reader that only reads stylesheets shows all of it. Measured on
+     * recontowers.com, whose accessibility panel is a closed <details> and
+     * appeared in full: twenty lines of settings nobody had opened.
+     */
+    const char *html =
+        "<p>visible</p>"
+        "<template><p>a template</p></template>"
+        "<dialog><p>a closed dialog</p></dialog>"
+        "<dialog open><p>an open dialog</p></dialog>"
+        "<div hidden><p>marked hidden</p></div>"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(page_says(d, "visible"), "ordinary text is there");
+    check(page_says(d, "after"), "and the page after it all survives");
+    check(!page_says(d, "a template"), "a template is never rendered");
+    check(!page_says(d, "a closed dialog"), "a closed dialog is not shown");
+    check(page_says(d, "an open dialog"), "an open one is");
+    check(!page_says(d, "marked hidden"), "and the hidden attribute hides");
+
+    recon_html_free(d);
+}
+
+static void test_a_closed_details_shows_its_summary(void) {
+    printf("a closed <details> shows the line you click and nothing else\n");
+
+    const char *html =
+        "<details><summary>Accessibility settings</summary>"
+        "<p>text size</p><p>line spacing</p></details>"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    if (d == NULL) {
+        return;
+    }
+    check(page_says(d, "Accessibility settings"),
+        "the summary is shown even though its parent is not");
+    check(!page_says(d, "text size"), "and the contents are not");
+    check(page_says(d, "after"),
+        "and the hide ends with the details, not with the summary");
+    recon_html_free(d);
+
+    /* Opened, it is an ordinary element again. */
+    const char *open =
+        "<details open><summary>Settings</summary><p>text size</p></details>";
+    d = recon_html_parse(open, strlen(open));
+    if (d != NULL) {
+        check(page_says(d, "text size"), "an open one shows everything");
+        recon_html_free(d);
+    }
+}
+
+static void test_a_span_a_stylesheet_made_a_block(void) {
+    printf("display: block on a span starts a line\n");
+
+    /*
+     * The difference between a <span> and a <div> is one property, and pages
+     * set it constantly. Measured on recontowers.com: a card of five spans
+     * laid out with flex came out as one run-on underlined sentence.
+     */
+    const char *html =
+        "<style>.stack span { display: block }</style>"
+        "<div class=\"stack\"><span>first</span><span>second</span></div>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    /* Two lines, not one: neither block holds both words. */
+    bool joined = false;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "first") != NULL && strstr(text, "second") != NULL) {
+            joined = true;
+        }
+    }
+    check(page_says(d, "first") && page_says(d, "second"),
+        "both spans are there");
+    check(!joined, "and they are not run together into one line");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+
+    /*
+     * The other way round: a <p> told it is a block is being told what it
+     * already was, and acting on it would leave an empty paragraph between
+     * every two real ones.
+     */
+    const char *plain =
+        "<style>p { display: block }</style><p>one</p><p>two</p>";
+    sheet = recon_css_new();
+    d = recon_html_parse_styled(plain, strlen(plain), sheet);
+    if (d != NULL) {
+        check(recon_html_block_count(d) == 2,
+            "a block told it is a block does not gain an empty one");
+        recon_html_free(d);
+    }
+    recon_css_free(sheet);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -529,6 +656,9 @@ int main(void) {
     test_style_is_inherited();
     test_the_sheets_a_page_asks_for();
     test_the_encoding_is_looked_at_not_believed();
+    test_what_a_browser_hides_without_being_told();
+    test_a_closed_details_shows_its_summary();
+    test_a_span_a_stylesheet_made_a_block();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

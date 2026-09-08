@@ -11,6 +11,29 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**A span a stylesheet turned into a block starts a line.** The difference
+between a `<span>` and a `<div>` is one property, and pages set it constantly.
+Measured on recontowers.com: a card of five spans laid out with `display: flex`
+-- an eyebrow, a name, a destination, a blurb, a caveat -- came out as one
+run-on underlined sentence. This still cannot lay anything out; it can tell a
+line from a paragraph, and that is most of the difference.
+
+**And the things a browser hides that no stylesheet mentions.** None of this is
+CSS -- it is the behaviour of the elements themselves, and a reader that only
+reads stylesheets shows all of it. A `<template>` is never rendered, a
+`<dialog>` is shown only when opened, `[hidden]` means exactly what it says,
+and a closed `<details>` shows its `<summary>` and nothing else. The same page
+was showing an accessibility panel in full: twenty lines of settings nobody had
+opened. Fifty-five blocks to thirty-seven, and the page's actual content
+appeared underneath.
+
+**A boolean attribute means something by being written, not by its value.**
+`<dialog open>` and `<div hidden>` have no value, and the attribute reader
+looks for one -- so asking it got both backwards: an open dialog was treated as
+closed and a hidden div as shown. `has_attribute` asks the question that was
+meant, on a name boundary at both ends so `data-open` is not `open` and
+`openable` is not either.
+
 **A page that is not UTF-8 is read as what it is.** Everything downstream --
 the parser, the font, the title bar -- assumes UTF-8, and the single-byte web
 that is left is Windows-1252 in practice, whatever it says. A page in it read
