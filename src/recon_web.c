@@ -849,9 +849,10 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         if (f->panel != NULL) {
             int screen_y = f->height - f->scroll + f->origin_y;
             if (screen_y + ih >= f->clip_top && screen_y <= f->clip_bottom) {
-                recon_draw_image(f->panel, f->origin_x, screen_y, iw, ih,
-                    f->w->images[at].pixels, f->w->images[at].width,
-                    f->w->images[at].height);
+                recon_draw_image_clipped(f->panel, f->origin_x, screen_y,
+                    iw, ih, f->w->images[at].pixels,
+                    f->w->images[at].width, f->w->images[at].height,
+                    f->clip_top, f->clip_bottom);
             }
         }
         f->height += ih + 6;

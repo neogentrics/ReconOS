@@ -574,6 +574,19 @@ int recon_draw_paragraph(struct recon_panel *panel, struct recon_font *font,
 void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
     const unsigned char *rgba, int image_width, int image_height);
 
+/*
+ * The same, kept inside a band of rows.
+ *
+ * For a caller drawing into part of a panel rather than all of it. Text did
+ * not need this: a line is twenty-four pixels tall, so a viewport that stops
+ * at the last line whose top is visible is wrong by less than one line. An
+ * image is three hundred, and one whose top is ten pixels above the last
+ * visible row draws the other two hundred and ninety over whatever is below.
+ */
+void recon_draw_image_clipped(struct recon_panel *panel, int x, int y,
+    int w, int h, const unsigned char *rgba,
+    int image_width, int image_height, int top, int bottom);
+
 /* --- Double clicks --- */
 
 /*

@@ -382,6 +382,19 @@ static void open_block(struct builder *b, enum recon_html_block kind,
     b->at_block_start = true;
 }
 
+/*
+ * End the block being built and start another of the same kind.
+ *
+ * The kind matters. `<h1>Games built to <span>mean something.</span></h1>`
+ * with that span made a block by a stylesheet is two lines of *heading* --
+ * and reopening as a paragraph dropped the second half to body text, which
+ * is a heading that changes size halfway through.
+ *
+ * Declared before close_block because it uses it; defined after, for the same
+ * reason.
+ */
+static void break_line(struct builder *b);
+
 static void close_block(struct builder *b) {
     if (!b->in_block) {
         return;
@@ -427,6 +440,25 @@ static void close_block(struct builder *b) {
     block->align = b->align;
     block->first_run = b->first_run;
     block->run_count = count;
+}
+
+/*
+ * See the declaration above close_block. Split from it so the two halves sit
+ * next to the functions they each belong to.
+ */
+static void break_line(struct builder *b) {
+    enum recon_html_block kind = b->in_block ? b->kind : RECON_HTML_PARAGRAPH;
+    int level = b->in_block ? b->level : 0;
+
+    /* An image block is a picture, not a container: continuing one would make
+     * the text after it part of the picture's alt text. */
+    if (kind == RECON_HTML_IMAGE || kind == RECON_HTML_RULE) {
+        kind = RECON_HTML_PARAGRAPH;
+        level = 0;
+    }
+
+    close_block(b);
+    open_block(b, kind, level);
 }
 
 /* End whatever block is open and start a fresh paragraph. */
@@ -872,8 +904,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 }
                 /* What follows a block is not joined onto it. */
                 if (was_block && b.hidden_at < 0) {
-                    close_block(&b);
-                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                    break_line(&b);
                 }
             } else if (!closing) {
                 struct level fresh;
@@ -981,8 +1012,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 if (style.display == RECON_CSS_BLOCK && b.hidden_at < 0 &&
                         !breaks_line(tag, name_length)) {
                     b.stack[at].made_block = true;
-                    close_block(&b);
-                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                    break_line(&b);
                 }
 
                 if (voidish) {
@@ -1134,8 +1164,17 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 continue;
             }
 
+            /*
+             * A `<br>` ends the line and nothing else.
+             *
+             * It is still the same heading, the same list item, the same
+             * quote -- `break_block` would reopen a paragraph and drop the
+             * second half of `<h1>Games built to<br>mean something.</h1>` to
+             * body size in the middle of one sentence, which is what
+             * gaming.recontowers.com's masthead did.
+             */
             if (named(tag, name_length, "br")) {
-                break_block(&b);
+                break_line(&b);
                 i = after;
                 continue;
             }

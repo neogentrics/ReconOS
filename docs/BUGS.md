@@ -2575,6 +2575,50 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-163 — An image drew straight over the status bar
+
+- **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, whose
+  masthead photograph is the first thing on the page.
+- **What it was** the web viewer decided whether an image was *visible* and
+  then drew all of it. A picture three hundred pixels tall whose top sits ten
+  pixels above the last visible row passed the test and painted the other two
+  hundred and ninety over the status bar below the page.
+- **Why it was never a problem for text.** A line of text is twenty-four
+  pixels tall, so the same test is wrong by less than one line and nobody
+  sees it. The check was written for lines and then handed to something
+  fifteen times taller without being looked at again -- the same shape of
+  fault as BG-161: an answer that was right for one size of thing, reused for
+  another.
+- **Fixed in** v0.4.6. `recon_draw_image_clipped` takes the band of rows it
+  may paint, and `recon_draw_image` is that call with the panel's own height
+  as the band -- one implementation, so the clipped path cannot drift from
+  the plain one. The viewer passes its viewport.
+
+### BG-162 — A `<br>` ended the heading, not just the line
+
+- **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, whose
+  masthead is `<h1>Games built to<br>mean something.</h1>`. The first half
+  rendered at heading size and the second at body size, in the middle of one
+  sentence.
+- **What it was** `<br>` called `break_block`, which ends the open block and
+  opens a **paragraph**. But a `<br>` does not end anything except the line:
+  it is still the same heading, the same list item, the same quote. So every
+  heading, item and blockquote on the web with a line break in it lost its
+  kind at the break.
+- **How long it had been there.** Since `<br>` was first handled. Not new, and
+  not caused by the `display` work in v0.4.5 -- which is what I first wrote
+  here, from reading the code instead of the page. The page's masthead uses a
+  plain `<br>`; the `display: block` reading was a guess, it was wrong, and
+  the fix built on it passed a test while the real page still rendered the
+  fault. **Fetching the markup is what found it.** The test had been written
+  against the markup I assumed rather than the markup that was there, which
+  is a way for a test to pass and prove nothing.
+- **Fixed in** v0.4.6. Two helpers, named for what they do: `break_block`
+  starts a paragraph, `break_line` reopens the block it just closed with the
+  same kind and level. `<br>` takes the second. The test now covers the
+  `<br>` the page actually contains, plus `<p>one<br>two</p>` so the ordinary
+  case cannot regress into headings.
+
 ### BG-161 — A link was underlined once per word, with a hole at every space
 
 - **Found in** v0.4.5. **Found by** loading news.ycombinator.com, where every

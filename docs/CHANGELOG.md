@@ -9,6 +9,28 @@ way for the two to disagree.
 
 ---
 
+## v0.4.6
+
+**A `<br>` ends the line, not the heading (BG-162).** `<br>` ended the open
+block and opened a *paragraph*, so every heading, list item and quote on the
+web with a line break in it lost its kind halfway through. Measured on
+gaming.recontowers.com, whose masthead is `<h1>Games built to<br>mean
+something.</h1>`: the first half came out at heading size and the second at
+body size, in the middle of one sentence. There are now two helpers named for
+what they do -- `break_block` starts a paragraph, `break_line` reopens the
+block it just closed -- and the callers say which they mean.
+
+**An image no longer draws over the status bar (BG-163).** The viewer decided
+whether a picture was *visible* and then drew all of it, so one three hundred
+pixels tall whose top sat ten pixels above the last visible row painted the
+other two hundred and ninety over the bar below. The check was written for
+lines of text, where being wrong by less than one line is invisible, and then
+handed to something fifteen times taller. `recon_draw_image_clipped` takes the
+band of rows it may paint; `recon_draw_image` is that same call with the
+panel's own height as the band, so the two cannot drift apart.
+
+---
+
 ## v0.4.5
 
 **A span a stylesheet turned into a block starts a line.** The difference

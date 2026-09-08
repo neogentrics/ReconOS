@@ -2344,11 +2344,30 @@ void recon_draw_text(struct recon_panel *panel, struct recon_font *font,
     }
 }
 
-void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
-        const unsigned char *rgba, int image_width, int image_height) {
+void recon_draw_image_clipped(struct recon_panel *panel, int x, int y,
+        int w, int h, const unsigned char *rgba,
+        int image_width, int image_height, int top, int bottom) {
     if (panel == NULL || rgba == NULL || w <= 0 || h <= 0 ||
             image_width <= 0 || image_height <= 0) {
         return;
+    }
+
+    /*
+     * The band is a second clip inside the panel's own, for a caller drawing
+     * into part of a panel rather than all of it.
+     *
+     * Text needed no such thing: a line is twenty-four pixels tall, so a
+     * viewport that stops drawing lines whose top is past the bottom is
+     * wrong by less than one line and nobody sees it. An image is three
+     * hundred, and one whose top is ten pixels above the last visible row
+     * drew the other two hundred and ninety straight over the status bar --
+     * which is what the web viewer did, and what this exists for.
+     */
+    if (top < 0) {
+        top = 0;
+    }
+    if (bottom > panel->height - 1) {
+        bottom = panel->height - 1;
     }
 
     /*
@@ -2366,7 +2385,7 @@ void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
 
     for (int row = 0; row < h; row++) {
         int py = y + row;
-        if (py < 0 || py >= panel->height) {
+        if (py < top || py > bottom) {
             continue;
         }
 
@@ -2422,6 +2441,15 @@ void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
                 (unsigned char)(alpha / count));
         }
     }
+}
+
+void recon_draw_image(struct recon_panel *panel, int x, int y, int w, int h,
+        const unsigned char *rgba, int image_width, int image_height) {
+    if (panel == NULL) {
+        return;
+    }
+    recon_draw_image_clipped(panel, x, y, w, h, rgba,
+        image_width, image_height, 0, panel->height - 1);
 }
 
 /* --- Click targets --- */

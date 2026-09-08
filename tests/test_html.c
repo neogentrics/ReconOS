@@ -623,6 +623,88 @@ static void test_a_span_a_stylesheet_made_a_block(void) {
     recon_css_free(sheet);
 }
 
+static void test_a_block_inside_a_heading_is_still_the_heading(void) {
+    printf("a span made a block inside an h1 does not become body text\n");
+
+    /*
+     * The line break has to reopen the block it interrupted, not a fresh
+     * paragraph. Measured on gaming.recontowers.com, whose masthead is
+     * "Games built to<br>mean something." -- the break put the second half in
+     * a paragraph and the page rendered one huge line followed by one small
+     * one, in the middle of a sentence.
+     */
+    const char *html =
+        "<style>h1 span { display: block }</style>"
+        "<h1>Games built to <span>mean something.</span></h1>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    /* Every block that has any of the heading's words is the heading. */
+    int seen = 0;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "Games built") == NULL &&
+                strstr(text, "mean something") == NULL) {
+            continue;
+        }
+        seen++;
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        check(b != NULL && b->kind == RECON_HTML_HEADING,
+            "the half is a heading, not a paragraph");
+        check(b != NULL && b->level == 1, "and it is still an h1");
+    }
+    check(seen == 2, "and the heading did break into two lines");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+
+    /*
+     * And the way the page actually writes it, which is the older and far
+     * commoner path: a plain `<br>`. No stylesheet involved at all, so every
+     * heading, list item and quote with a line break in it was affected --
+     * not just the ones a stylesheet had opinions about.
+     */
+    const char *with_br = "<h1>Games built to<br>mean something.</h1>";
+    d = recon_html_parse(with_br, strlen(with_br));
+    if (d == NULL) {
+        return;
+    }
+    seen = 0;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "Games built") == NULL &&
+                strstr(text, "mean something") == NULL) {
+            continue;
+        }
+        seen++;
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        check(b != NULL && b->kind == RECON_HTML_HEADING,
+            "a <br> ends the line without ending the heading");
+        check(b != NULL && b->level == 1, "and it is still an h1");
+    }
+    check(seen == 2, "and the <br> did break the line");
+    recon_html_free(d);
+
+    /* A `<br>` between paragraphs is still what it always was. */
+    const char *plain = "<p>one<br>two</p>";
+    d = recon_html_parse(plain, strlen(plain));
+    if (d != NULL) {
+        check(recon_html_block_count(d) == 2, "two lines out of one <p>");
+        const struct recon_html_block_entry *b = recon_html_block_at(d, 1);
+        check(b != NULL && b->kind == RECON_HTML_PARAGRAPH,
+            "and both halves are paragraphs");
+        recon_html_free(d);
+    }
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -659,6 +741,7 @@ int main(void) {
     test_what_a_browser_hides_without_being_told();
     test_a_closed_details_shows_its_summary();
     test_a_span_a_stylesheet_made_a_block();
+    test_a_block_inside_a_heading_is_still_the_heading();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
