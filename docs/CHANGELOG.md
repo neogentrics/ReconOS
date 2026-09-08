@@ -35,12 +35,13 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
-**The Start menu's header is a button, and it goes where you would expect.**
-It names an account and shows that account's picture, and the one thing
-somebody wants after looking at it is to change one of those -- which was four
-clicks away through the Control Panel's front page. It lights under the pointer
-like every other row and carries the Accounts mark at its far end, because a
-row that acts and does not react is a row nobody discovers.
+**The account's picture in the Start menu is a button.** It goes to the page
+about accounts, which was four clicks away through the Control Panel's front
+page. The picture, not the row it sits in -- and with nothing added to announce
+it: a picture of the account is already the most obvious thing on screen to
+press to reach the page about accounts, and a second mark at the other end of
+the row explaining that is one more thing to look at. It lights under the
+pointer, which is how a pressable thing says so here.
 
 **The Photos window's controls are along the top.** They were along the bottom,
 which is where a *status* line goes -- and that row is not status, it is the

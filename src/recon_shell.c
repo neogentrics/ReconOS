@@ -3241,44 +3241,36 @@ static void draw_menu(struct recon_shell *shell) {
         RECON_THEME_DIALOG_TITLE);
 
     /*
-     * Lit under the pointer, the same way every other row in this menu is.
-     * A region that acts and does not react is a region nobody discovers.
-     */
-    if (shell->menu_hover == HIT_MENU_ACCOUNT) {
-        recon_widget_highlight(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
-            COLOR_MENU_HILITE);
-    }
-
-    /*
      * The person's own picture, not the system's mark. The mark is already on
      * the Apps button an inch below, so the header was showing it twice and
      * saying nothing about whose menu this is. This is the one place the
      * account is named on the desktop; it should look like them.
+     *
+     * And the picture is the button. Not the row it sits in, and not with a
+     * second mark at the other end saying so -- the picture of the account is
+     * already the most obvious thing on screen to press to reach the page
+     * about accounts, and anything added to explain that is one more thing to
+     * look at.
      */
     const char *who = recon_users_current();
     int face = MENU_HEADER_HEIGHT - 16;
+
+    /* Lit under the pointer, the same way every other pressable thing in this
+     * menu is. A region that acts and does not react is a region nobody
+     * discovers. */
+    if (shell->menu_hover == HIT_MENU_ACCOUNT) {
+        recon_widget_highlight(menu, 10 - 3, 8 - 3, face + 6, face + 6,
+            COLOR_MENU_HILITE);
+    }
+
     recon_avatar_draw(menu, shell->font, who, 10, 8, face);
     int header_x = 10 + face + 12;
 
     recon_draw_text(menu, shell->font, header_x,
-        (MENU_HEADER_HEIGHT + ascent) / 2 - 1,
-        width - header_x - 12 - icon_size - 10,
-        who != NULL ? who : RECONOS_FULL_NAME,
-        shell->menu_hover == HIT_MENU_ACCOUNT
-            ? COLOR_MENU_HILITE_TEXT : COLOR_DIALOG_TITLE_TEXT);
+        (MENU_HEADER_HEIGHT + ascent) / 2 - 1, width - header_x - 12,
+        who != NULL ? who : RECONOS_FULL_NAME, COLOR_DIALOG_TITLE_TEXT);
 
-    /*
-     * The Accounts mark at the far end, which is what says this row goes
-     * somewhere. Without it the header is a label that happens to react, and
-     * a label that reacts is a surprise rather than an offer.
-     */
-    recon_icon_draw_in(menu, RECON_ICON_ACCOUNTS, width - 12 - icon_size,
-        (MENU_HEADER_HEIGHT - icon_size) / 2 + 1, icon_size,
-        shell->menu_hover == HIT_MENU_ACCOUNT
-            ? COLOR_MENU_HILITE_TEXT : COLOR_DIALOG_TITLE_TEXT);
-
-    recon_hit_add(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
-        HIT_MENU_ACCOUNT);
+    recon_hit_add(menu, 10 - 3, 8 - 3, face + 6, face + 6, HIT_MENU_ACCOUNT);
     recon_hit_tip(menu, "Who can use this system");
 
     int body_y = MENU_HEADER_HEIGHT + MENU_PADDING;
