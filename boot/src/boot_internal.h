@@ -10,6 +10,12 @@
 
 #include "efi.h"
 
+/* And the handoff, because the declarations below name its framebuffer. A
+ * header that uses a type should be the one that asks for it: leaving that to
+ * whoever includes this works until a new file includes it in a different
+ * order, which is what happened the first time gfx.c was compiled. */
+#include "reconboot.h"
+
 /* Boot services, captured at entry. A pointer rather than a copy because the
  * firmware's table is the firmware's. */
 extern EFI_BOOT_SERVICES *BS;
@@ -48,7 +54,8 @@ void menu_print(void);
 /* Offers the choice for `seconds`, and returns the index chosen or -1 for
  * "start ReconOS". Bounded, because a loader that waits for a keypress is a
  * machine that does not come back from a power cut. */
-int menu_choose(unsigned seconds);
+int menu_choose(unsigned seconds,
+		const struct reconboot_framebuffer *fb);
 
 /* Starts one, and does not return if it works. */
 BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);
@@ -59,5 +66,25 @@ BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);
  * line, so it is not chain-loaded and menu_boot refuses it. The caller must ask
  * this first. */
 BOOLEAN menu_is_recovery(unsigned index);
+
+/* --- The menu, drawn ------------------------------------------------------
+ *
+ * An attempt, with the text menu behind it. Every reason to say no -- no
+ * framebuffer, a layout we cannot name, a pitch that cannot hold a row, a
+ * screen too small -- means the text menu runs instead, and none of them is an
+ * error. Drawing into a framebuffer we have misread is worse than not drawing:
+ * it writes past the end of every row, and on a device mapping that is somebody
+ * else's registers.
+ *
+ * The fallback is exercised on every aarch64 boot in the matrix, because AAVMF
+ * provides no framebuffer at all. */
+BOOLEAN gfx_available(const struct reconboot_framebuffer *fb);
+void gfx_menu_draw(unsigned count, const char *const *labels,
+		   unsigned selected, unsigned seconds);
+void gfx_report(BOOLEAN used);
+
+/* How many entries the menu will hold. Shared so the graphical renderer can
+ * size a screen against it without a second, drifting number. */
+#define MENU_MAX 8
 
 #endif /* RECONBOOT_INTERNAL_H */

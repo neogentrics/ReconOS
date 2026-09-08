@@ -20,6 +20,7 @@
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
+#include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
 #include <recon/kernel/time.h>
@@ -55,6 +56,14 @@ void kmain(void)
 
 	vm_init();
 	vm_print_summary();
+
+	/* The screen, as soon as there is a direct map to reach it through.
+	 *
+	 * Everything above this line went to the serial port only, which is
+	 * unavoidable -- the framebuffer is not addressable until the map
+	 * exists. Everything below goes to both. */
+	fbcon_init();
+	fbcon_describe();
 
 	heap_init();
 	heap_print_summary();

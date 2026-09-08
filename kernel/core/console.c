@@ -1,5 +1,6 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/arch.h>
+#include <recon/kernel/fbcon.h>
 #include <recon/kernel/kstring.h>
 
 #include <recon/kernel/lock.h>
@@ -30,6 +31,15 @@ void kputc(char c)
 	if (c == '\n')
 		arch_console_putc('\r');
 	arch_console_putc(c);
+
+	/* And the screen, where there is one.
+	 *
+	 * Both surfaces get everything, rather than one being chosen: the rig
+	 * reads the serial port and a person reads the screen, and a message
+	 * that went to only one of them is a message somebody did not get. It
+	 * costs a call that returns immediately on a machine with no
+	 * framebuffer, which is every aarch64 boot in the matrix. */
+	fbcon_putc(c);
 }
 
 /* The whole of the output path, without the lock. Everything that already holds

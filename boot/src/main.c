@@ -858,7 +858,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 			 * that a machine restarting at three in the morning is
 			 * not kept waiting for a person who is not there. */
 			pick = menu_choose(found == 1 && menu_is_recovery(0) ? 2
-									    : 5);
+									    : 5,
+					   &boot_info.framebuffer);
 
 			/* If it starts, this does not return. If it declines,
 			 * we carry on and start ReconOS -- a machine that ends

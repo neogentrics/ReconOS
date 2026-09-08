@@ -32,8 +32,6 @@
 #include "reconboot.h"
 #include "boot_internal.h"
 
-#define MENU_MAX 8
-
 struct menu_entry {
 	CHAR16 path[64];
 	char label[48];
@@ -278,11 +276,13 @@ void menu_print(void)
  *
  * Returns the index chosen, or -1 for "carry on and start ReconOS".
  */
-int menu_choose(unsigned seconds)
+int menu_choose(unsigned seconds,
+		const struct reconboot_framebuffer *fb)
 {
 	EFI_INPUT_KEY key;
 	unsigned left = seconds * 10;		/* tenths */
 	BOOLEAN paused = FALSE;
+	BOOLEAN drawing;
 
 	if (!entry_count)
 		return -1;
@@ -296,6 +296,25 @@ int menu_choose(unsigned seconds)
 	 * machine nobody can talk to should start the system it has. */
 	if (!ST->ConIn)
 		return -1;
+
+	/* Drawn if the firmware gave us a screen we understand, and printed
+	 * either way. **One list of entries, two renderers** -- the decision
+	 * about what to offer, what happens on a keypress and when the clock
+	 * runs out is made once, below, and neither surface gets a say in it.
+	 * A graphical menu that decided things differently from the text one
+	 * would be a second bootloader. */
+	drawing = gfx_available(fb);
+	gfx_report(drawing);
+
+	if (drawing) {
+		const char *labels[MENU_MAX];
+		unsigned i;
+
+		for (i = 0; i < entry_count; i++)
+			labels[i] = entries[i].label;
+
+		gfx_menu_draw(entry_count, labels, 0, seconds);
+	}
 
 	print("\n  ReconOS starts on its own; press a number to choose "
 	      "something else\n");
@@ -336,6 +355,19 @@ int menu_choose(unsigned seconds)
 
 		if (!left--)
 			return -1;
+
+		/* Once a second, not ten times: redrawing the whole screen at
+		 * ten hertz over an uncached framebuffer is a lot of bus
+		 * traffic to show a number that changes once a second. */
+		if (drawing && (left % 10) == 0) {
+			const char *labels[MENU_MAX];
+			unsigned i;
+
+			for (i = 0; i < entry_count; i++)
+				labels[i] = entries[i].label;
+
+			gfx_menu_draw(entry_count, labels, 0, (left / 10) + 1);
+		}
 
 		BS->Stall(100000);		/* a tenth of a second */
 	}

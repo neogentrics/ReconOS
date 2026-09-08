@@ -721,6 +721,51 @@ else
 	FAILED_PATHS+=("recovery")
 fi
 
+# --- the menu draws where it can, and falls back where it cannot -------------
+#
+# Both halves asserted, because only one of them is the interesting one.
+#
+# That the graphical menu draws on a machine with a framebuffer is the feature.
+# That it *does not* on a machine without one is what keeps the feature from
+# being a machine that shows nothing: AAVMF provides no framebuffer at all, so
+# the aarch64 loader must take the text path on every boot, for ever. An
+# unasserted fallback is exactly the branch that rots, and this one is the
+# reason the graphical menu was allowed to exist.
+#
+# Checked by the loader's own report rather than by looking at pixels: it says
+# which surface it used, once, on the serial console, and that is a claim the
+# rig can hold it to.
+
+printf '%-46s' "  the menu draws, and falls back where it cannot"
+
+menu_x64=; menu_arm=
+if [ -f "$OVMF_X64" ] && make -C boot ARCH=x86_64 esp >/dev/null 2>&1; then
+	menu_x64=$(timeout 60 qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-bios "$OVMF_X64" \
+		-drive format=raw,file="$ROOT/boot/build/x86_64/esp.img" 2>&1 |
+		tr -d '\r' | sed -n 's/^  menu  *: \(.*\)/\1/p' | head -1)
+fi
+if [ -f "$OVMF_ARM" ] && make -C boot ARCH=aarch64 esp >/dev/null 2>&1; then
+	menu_arm=$(timeout 60 qemu-system-aarch64 -M virt -cpu cortex-a72 \
+		-m 512M -nographic -no-reboot -bios "$OVMF_ARM" \
+		-drive format=raw,file="$ROOT/boot/build/aarch64/esp.img" 2>&1 |
+		tr -d '\r' | sed -n 's/^  menu  *: \(.*\)/\1/p' | head -1)
+fi
+
+if [ -z "$menu_x64" ] && [ -z "$menu_arm" ]; then
+	echo "skipped, neither firmware is installed"
+	skipped=$((skipped + 1))
+elif [ "${menu_x64%% *}" = "drawn" ] && [ "${menu_arm%% *}" = "text" ]; then
+	echo "drawn on OVMF, text on AAVMF"
+	passes=$((passes + 1))
+else
+	echo "FAILED"
+	echo "      x86_64 (has a framebuffer): ${menu_x64:-nothing}"
+	echo "      aarch64 (has none):         ${menu_arm:-nothing}"
+	failures=$((failures + 1))
+	FAILED_PATHS+=("boot menu surface")
+fi
+
 # Checkpoint 16, on a machine with no UEFI in it at all: SeaBIOS, an IDE disk,
 # and 440 bytes of ours in the first sector. Includes the two deliberate faults
 # -- an unreadable stage 2 and one changed byte of its magic -- because a loader
