@@ -14,7 +14,9 @@
 #include "recon_fs.h"
 #include "recon_icons.h"
 #include "recon_modules.h"
+#include "recon_crypt.h"
 #include "recon_package.h"
+#include "recon_sign.h"
 #include "recon_error.h"
 #include "recon_registry.h"
 #include "recon_version.h"
@@ -484,6 +486,272 @@ static bool read_receipt(const char *name, struct recon_package_info *info,
 
 /* --- Installing --- */
 
+
+/* --- Who made this --- */
+
+/*
+ * What a signature covers.
+ *
+ * Not the manifest. Signing the manifest alone would bind the *names* of the
+ * files and none of their contents, so somebody could keep the signed manifest
+ * and replace the module beside it -- which is the only file that matters and
+ * the whole reason to sign anything here.
+ *
+ * So the signed object is a list of digests: one line per file the package
+ * brings, sorted by name, with the manifest itself first. Changing any byte of
+ * any of them changes a digest and the signature stops verifying.
+ *
+ *     reconos-package-v1
+ *     <sha256 hex>  package.txt
+ *     <sha256 hex>  Notes.rex
+ *     <sha256 hex>  notes.png
+ *
+ * Sorted, because the order a directory hands back its entries is not a
+ * property of the package and two machines must build the same bytes from the
+ * same folder. The version line is there so a later format cannot be verified
+ * as though it were this one.
+ */
+#define DIGEST_LINE_MAX (RECON_SHA256_SIZE * 2 + RECON_NAME_MAX + 8)
+#define DIGESTS_MAX (PLACES_MAX + 4)
+
+/* The name of the file holding the signature, inside the package. */
+#define PACKAGE_SIGNATURE "package.sig"
+
+static bool digest_of(const char *package, const char *name, char *out) {
+    char path[RECON_PATH_MAX];
+    if (!recon_fs_join(path, sizeof(path), package, name)) {
+        return false;
+    }
+
+    size_t size = 0;
+    char *bytes = recon_fs_read("/", path, &size);
+    if (bytes == NULL) {
+        set_error("'%s' is named in the manifest and is not in the package",
+            name);
+        return false;
+    }
+
+    uint8_t digest[RECON_SHA256_SIZE];
+    recon_sha256(bytes, size, digest);
+    free(bytes);
+
+    recon_to_hex(digest, sizeof(digest), out);
+    return true;
+}
+
+/*
+ * Every file the manifest names, once each, in sorted order.
+ *
+ * Once each because a manifest may name the same file twice -- an icon that is
+ * also placed, say -- and a digest list with a repeat in it is a list that
+ * depends on how the manifest was written rather than on what the package
+ * contains.
+ */
+static int collect_names(const struct manifest *m,
+        char names[DIGESTS_MAX][RECON_NAME_MAX]) {
+    int count = 0;
+
+    const char *candidates[DIGESTS_MAX];
+    int candidate_count = 0;
+
+    if (m->module[0] != '\0') {
+        candidates[candidate_count++] = m->module;
+    }
+    if (m->icon[0] != '\0') {
+        candidates[candidate_count++] = m->icon;
+    }
+    for (int i = 0; i < m->place_count && candidate_count < DIGESTS_MAX; i++) {
+        candidates[candidate_count++] = m->places[i].file;
+    }
+
+    for (int i = 0; i < candidate_count; i++) {
+        bool already = false;
+        for (int j = 0; j < count; j++) {
+            if (strcmp(names[j], candidates[i]) == 0) {
+                already = true;
+                break;
+            }
+        }
+        if (!already && count < DIGESTS_MAX) {
+            snprintf(names[count], RECON_NAME_MAX, "%s", candidates[i]);
+            count++;
+        }
+    }
+
+    /*
+     * Sorted, so the bytes do not depend on the order a manifest happened to
+     * list things in. Insertion sort: there are at most nine of these.
+     *
+     * memcpy of whole rows rather than snprintf between them. The rows are
+     * distinct so there is no real overlap, but snprintf with a source and
+     * destination the compiler cannot prove disjoint is undefined behaviour
+     * on its face, and -Wrestrict says so. Moving fixed-size rows is what
+     * this is actually doing.
+     */
+    for (int i = 1; i < count; i++) {
+        char held[RECON_NAME_MAX];
+        memcpy(held, names[i], RECON_NAME_MAX);
+        int j = i - 1;
+        while (j >= 0 && strcmp(names[j], held) > 0) {
+            memcpy(names[j + 1], names[j], RECON_NAME_MAX);
+            j--;
+        }
+        memcpy(names[j + 1], held, RECON_NAME_MAX);
+    }
+    return count;
+}
+
+/*
+ * Build the bytes a signature is over.
+ *
+ * Returns false with the error set when a named file is missing, which is
+ * itself worth refusing on: a package that names a file it does not contain
+ * cannot be signed for, because there is nothing to take a digest of.
+ */
+static bool digest_list(const char *package, const struct manifest *m,
+        char *out, size_t size) {
+    size_t used = 0;
+    int n = snprintf(out, size, "reconos-package-v1\n");
+    if (n < 0 || (size_t)n >= size) {
+        return false;
+    }
+    used = (size_t)n;
+
+    char hex[RECON_SHA256_SIZE * 2 + 1];
+    if (!digest_of(package, RECON_PACKAGE_MANIFEST, hex)) {
+        return false;
+    }
+    n = snprintf(out + used, size - used, "%s  %s\n", hex,
+        RECON_PACKAGE_MANIFEST);
+    if (n < 0 || (size_t)n >= size - used) {
+        return false;
+    }
+    used += (size_t)n;
+
+    char names[DIGESTS_MAX][RECON_NAME_MAX];
+    int count = collect_names(m, names);
+
+    for (int i = 0; i < count; i++) {
+        if (!digest_of(package, names[i], hex)) {
+            return false;
+        }
+        n = snprintf(out + used, size - used, "%s  %s\n", hex, names[i]);
+        if (n < 0 || (size_t)n >= size - used) {
+            set_error("that package names more files than this can sign for");
+            return false;
+        }
+        used += (size_t)n;
+    }
+    return true;
+}
+
+bool recon_package_sign(const char *path) {
+    struct manifest m;
+    if (!read_manifest(path, &m)) {
+        return false;
+    }
+
+    static char listing[DIGESTS_MAX * DIGEST_LINE_MAX + 64];
+    if (!digest_list(path, &m, listing, sizeof(listing))) {
+        return false;
+    }
+
+    char signature[RECON_SIGN_MAX];
+    if (!recon_sign_data(listing, strlen(listing), signature,
+            sizeof(signature))) {
+        set_error("%s", recon_sign_last_error());
+        return false;
+    }
+
+    char sig_path[RECON_PATH_MAX];
+    if (!recon_fs_join(sig_path, sizeof(sig_path), path, PACKAGE_SIGNATURE)) {
+        set_error("there is nowhere to put the signature");
+        return false;
+    }
+
+    char file[RECON_SIGN_MAX + 8];
+    int n = snprintf(file, sizeof(file), "%s\n", signature);
+    if (n < 0 || !recon_fs_write("/", sig_path, file, (size_t)n)) {
+        set_error("%s", recon_fs_last_error());
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Is this package signed by a key this machine trusts?
+ *
+ * `signer` is filled in when it is. The failure messages are deliberately
+ * different for "no signature" and "a signature that does not verify": the
+ * first is a package that was never signed, which is a thing somebody can fix
+ * by signing it, and the second is a package that has been changed since it
+ * was, which is not.
+ */
+bool recon_package_signed_by(const char *path, char *signer,
+        size_t signer_size) {
+    if (signer != NULL && signer_size > 0) {
+        signer[0] = '\0';
+    }
+
+    struct manifest m;
+    if (!read_manifest(path, &m)) {
+        return false;
+    }
+
+    char sig_path[RECON_PATH_MAX];
+    if (!recon_fs_join(sig_path, sizeof(sig_path), path, PACKAGE_SIGNATURE)) {
+        set_error("that package has no signature");
+        return false;
+    }
+
+    size_t sig_size = 0;
+    char *sig = recon_fs_read("/", sig_path, &sig_size);
+    if (sig == NULL) {
+        /*
+         * The message says what to do, because the person reading it has a
+         * package they built and no reason to know signing exists. A refusal
+         * that names the next command is a refusal somebody can act on; one
+         * that does not is a wall.
+         */
+        set_error("that package is not signed -- 'sign %s' signs it with this "
+            "machine's key", path);
+        return false;
+    }
+
+    /*
+     * The line, and only the line.
+     *
+     * Not `trim`, which strips spaces, tabs and carriage returns and
+     * deliberately leaves newlines alone -- it is for manifest values, where a
+     * line has already been split off. Using it here left the trailing newline
+     * on the signature, which made its length odd, which made it fail the hex
+     * check: every package signed correctly and no package verified. Worth the
+     * four lines to cut at the first line ending rather than to reason about
+     * which whitespace somebody else's helper happens to remove.
+     */
+    for (char *c = sig; *c != '\0'; c++) {
+        if (*c == '\n' || *c == '\r') {
+            *c = '\0';
+            break;
+        }
+    }
+    trim(sig);
+
+    static char listing[DIGESTS_MAX * DIGEST_LINE_MAX + 64];
+    if (!digest_list(path, &m, listing, sizeof(listing))) {
+        free(sig);
+        return false;
+    }
+
+    bool ok = recon_sign_verify(listing, strlen(listing), sig,
+        signer, signer_size);
+    if (!ok) {
+        set_error("%s", recon_sign_last_error());
+    }
+    free(sig);
+    return ok;
+}
+
 bool recon_package_install(const char *path) {
     if (path == NULL || *path == '\0') {
         set_error("nothing to install");
@@ -498,6 +766,32 @@ bool recon_package_install(const char *path) {
     if (!recon_fs_stat("/", path, &entry) ||
             entry.kind != RECON_FILE_DIRECTORY) {
         set_error("'%s' is not a package folder", path);
+        return false;
+    }
+
+    /*
+     * --- Who made this ---
+     *
+     * Checked before anything is read out of the manifest and acted on, and
+     * with no way to say "install it anyway".
+     *
+     * A package brings a module; a module is loaded into this process; a
+     * module in this process can do everything ReconOS can do. The allow-list
+     * below bounds where a package may *place a file* and says nothing at all
+     * about what its code does once running -- so the signature is the only
+     * thing standing between a person and somebody else's code running as
+     * them.
+     *
+     * There is no --force. A check that can be turned off is a check that is
+     * off on the day it matters, and the person who would use the flag is
+     * exactly the person being attacked. Somebody who means to install
+     * something unsigned signs it: `packages sign` does that with the
+     * machine's own key, which is one command, and doing it deliberately is
+     * the point.
+     */
+    char signer[RECON_SIGN_NAME_MAX];
+    if (!recon_package_signed_by(path, signer, sizeof(signer))) {
+        recon_error_raisef(NULL, RECON_ERR_E003, "%s", g_error);
         return false;
     }
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.12
+    VERSION 0.4.13
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -183,6 +183,7 @@ add_executable(ReconOS
     src/recon_stb.c
     src/recon_keyring.c
     src/recon_crypt.c
+    src/recon_sign.c
     src/recon_users.c
     src/recon_service.c
     src/recon_session.c
@@ -857,6 +858,66 @@ add_test(NAME png COMMAND recon_png_tests)
 add_test(NAME images COMMAND recon_image_tests)
 add_test(NAME sending-mail COMMAND recon_smtp_tests)
 add_test(NAME keyring COMMAND recon_keyring_tests)
+
+# Signatures: who made a package, and has it changed since.
+#
+# The claims tested are the ones recon_sign.c decides rather than the ones
+# mbedTLS does -- that a changed byte stops verifying, that an untrusted key
+# does not count, that a private key cannot be added to the trust store, and
+# that a key name cannot escape the trust directory.
+#
+# One of them is load-bearing in a way that is easy to miss: signing the same
+# bytes twice must give the same signature. That is RFC 6979 determinism, and
+# it is what stops one repeated per-signature secret from handing over the
+# private key. recon_sign.c has an #error if mbedTLS is built without it; this
+# is what would notice if the #error were removed.
+add_executable(recon_sign_tests
+    tests/test_sign.c
+    src/recon_sign.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_sign_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_sign_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+add_test(NAME signatures COMMAND recon_sign_tests)
+
+# What a package signature covers.
+#
+# There was no suite for packages at all, which meant the install path -- the
+# one that takes somebody else's shared object and loads it into this process
+# -- was the least tested thing in the system.
+#
+# The claim is narrow and is the point: the signature covers every file the
+# package brings, not just its manifest. A manifest-only signature binds the
+# names of the files and none of their contents, leaving the module free to be
+# swapped, and the module is the only file that can do anything.
+add_executable(recon_package_sign_tests
+    tests/test_package_sign.c
+    # The install path's dependencies, stubbed to abort. See the file: these
+    # tests take digests and check signatures, and must never install.
+    tests/stubs_package.c
+    src/recon_package.c
+    src/recon_sign.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_registry.c
+    src/recon_users.c
+    src/recon_error.c)
+
+target_include_directories(recon_package_sign_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_package_sign_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+add_test(NAME package-signatures COMMAND recon_package_sign_tests)
+
+
 add_test(NAME malformed-input COMMAND recon_malformed_tests)
 add_test(NAME firewall COMMAND recon_firewall_tests)
 add_test(NAME title-bars COMMAND recon_titlebar_tests)

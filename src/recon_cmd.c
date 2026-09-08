@@ -28,6 +28,7 @@
 #include "recon_icons.h"
 #include "recon_modules.h"
 #include "recon_package.h"
+#include "recon_sign.h"
 #include "recon_net.h"
 #include "recon_procinfo.h"
 #include "recon_registry.h"
@@ -3090,6 +3091,141 @@ static void cmd_packages(struct recon_cmd_session *s, int argc, char **argv) {
     out(s, "\n  %d package%s\n", count, count == 1 ? "" : "s");
 }
 
+/*
+ * `keys` -- what this machine trusts, and what it signs with.
+ *
+ * A command of its own rather than a corner of `packages`, because the trust
+ * store is not about packages. It is about which publishers this machine
+ * believes, and a package is only the first thing to ask.
+ */
+static void cmd_keys(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2 || strcasecmp(argv[1], "list") == 0) {
+        int count = recon_sign_trusted_count();
+        if (count == 0) {
+            out(s, "This machine trusts no keys, so nothing will install.\n\n"
+                "'keys make <name>' makes one and trusts it, which is what to\n"
+                "do on a machine that builds its own packages.\n"
+                "'keys trust <file> <name>' trusts somebody else's.\n");
+            return;
+        }
+
+        for (int i = 0; i < count; i++) {
+            char name[RECON_SIGN_NAME_MAX];
+            if (recon_sign_trusted_at(i, name, sizeof(name))) {
+                out(s, "  %s\n", name);
+            }
+        }
+        out(s, "\n  %d trusted key%s%s\n", count, count == 1 ? "" : "s",
+            recon_sign_have_own_key()
+                ? ", and this machine can sign" : ", and this machine cannot sign");
+        return;
+    }
+
+    if (strcasecmp(argv[1], "make") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: keys make <name>\n");
+            return;
+        }
+        if (!recon_sign_make_key(argv[2])) {
+            out_err(s, "%s\n", recon_sign_last_error());
+            return;
+        }
+        out(s, "Made a signing key called '%s' and trusted it.\n\n"
+            "The private half is in " RECON_SIGN_OWN_KEY ", readable only by\n"
+            "its owner. Everything this machine signs is signed with it.\n",
+            argv[2]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "trust") == 0) {
+        if (argc < 4) {
+            out(s, "Usage: keys trust <file> <name>\n");
+            out(s, "The file is somebody's public key. The name is what this\n"
+                "machine will call them.\n");
+            return;
+        }
+        if (!recon_sign_trust(argv[2], argv[3])) {
+            out_err(s, "%s\n", recon_sign_last_error());
+            return;
+        }
+        out(s, "Trusting '%s'. Packages signed with that key will install.\n",
+            argv[3]);
+        return;
+    }
+
+    if (strcasecmp(argv[1], "distrust") == 0) {
+        if (argc < 3) {
+            out(s, "Usage: keys distrust <name>\n");
+            return;
+        }
+        if (!recon_sign_distrust(argv[2])) {
+            out_err(s, "%s\n", recon_sign_last_error());
+            return;
+        }
+        /*
+         * Said plainly, because the obvious expectation is wrong. Removing a
+         * key stops anything it signed from *installing*; it does not remove
+         * what is already installed, which is code that is already on the
+         * disk and already loaded.
+         */
+        out(s, "No longer trusting '%s'.\n\n"
+            "Packages it signed will not install from now on. Anything it\n"
+            "signed that is already installed stays installed -- that code is\n"
+            "already here, and 'uninstall' is what removes it.\n", argv[2]);
+        return;
+    }
+
+    out(s, "Usage: keys [list|make <name>|trust <file> <name>|distrust <name>]\n");
+}
+
+/*
+ * `sign <folder>` -- put this machine's name on a package.
+ *
+ * Separate from `install` on purpose. Signing is a claim about who made
+ * something, and a command that signed whatever it was about to install would
+ * make the claim automatically and therefore worthless.
+ */
+static void cmd_sign(struct recon_cmd_session *s, int argc, char **argv) {
+    if (argc < 2) {
+        out(s, "Usage: sign <package folder>\n\n"
+            "Signs with this machine's key, so it will install here. 'keys'\n"
+            "shows whether there is one.\n");
+        return;
+    }
+
+    if (!recon_sign_have_own_key()) {
+        out_err(s, "This machine has no signing key. 'keys make <name>' makes "
+            "one.\n");
+        return;
+    }
+
+    /* Resolved against where the terminal is, the same as install does. */
+    char host[RECON_PATH_MAX];
+    char canonical[RECON_PATH_MAX];
+    if (!recon_fs_resolve(s->cwd, argv[1], host, sizeof(host), canonical,
+            sizeof(canonical))) {
+        out_err(s, "%s\n", recon_fs_last_error());
+        return;
+    }
+
+    if (!recon_package_sign(canonical)) {
+        out_err(s, "%s\n", recon_package_last_error());
+        return;
+    }
+
+    char signer[RECON_SIGN_NAME_MAX];
+    if (recon_package_signed_by(canonical, signer, sizeof(signer))) {
+        out(s, "Signed as '%s'.\n", signer);
+    } else {
+        /*
+         * Signed and then did not verify, which should be impossible and is
+         * worth saying loudly rather than reporting success.
+         */
+        out_err(s, "Signed, and the signature did not then verify: %s\n",
+            recon_package_last_error());
+    }
+}
+
 static void cmd_uninstall(struct recon_cmd_session *s, int argc, char **argv) {
     if (argc < 2) {
         out(s, "Usage: uninstall <module name>\n");
@@ -3321,6 +3457,9 @@ static const struct command COMMANDS[] = {
     { "upgrade",  "upgrade <path>",        "Replace a package with a newer one",  cmd_upgrade },
     { "uninstall","uninstall <name>",      "Take a program out again",           cmd_uninstall },
     { "packages", "packages",              "What is installed as a package",     cmd_packages },
+    { "keys",     "keys [list|make|trust|distrust] ...",
+                                           "Publishers this machine believes",   cmd_keys },
+    { "sign",     "sign <folder>",         "Put this machine's name on a package", cmd_sign },
     { "reg",      "reg <hive> <action>",   "Read or change stored settings",    cmd_reg },
     { "theme",    "theme [name|roles|install|remove]",
                                        "List skins, put one on, add or remove",

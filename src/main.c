@@ -85,6 +85,7 @@
 #include "recon_session.h"
 #include "recon_shell.h"
 #include "recon_keyring.h"
+#include "recon_sign.h"
 #include "recon_users.h"
 
 /* Where image assets live. CMake defines this; the env var overrides it so the
@@ -2785,6 +2786,35 @@ static void server_new_output(struct wl_listener *listener, void *data) {
         if (!recon_users_init()) {
             recon_error_raisef(server, RECON_ERR_C001, "%s",
                 recon_users_last_error());
+        }
+
+        /*
+         * --- A key of this machine's own, on first run ---
+         *
+         * Nothing installs without a signature from a key this machine
+         * trusts, which on a machine that trusts nothing means nothing
+         * installs at all. That is the correct default and a terrible first
+         * experience: a person who has just built a package is told it is
+         * unsigned, and the way out is a command they have no reason to know
+         * exists.
+         *
+         * So the machine makes one for itself the first time it runs. This is
+         * not a weakening -- the key is generated here, its private half is
+         * readable only by its owner, and nothing outside this machine has
+         * it. What it buys is that `sign` always works, so the refusal to
+         * install something unsigned is a refusal somebody can act on.
+         *
+         * Failure is not worth stopping for. A machine with no signing key
+         * still runs; it simply cannot sign, and `keys` says so.
+         */
+        if (!recon_sign_have_own_key()) {
+            if (recon_sign_make_key("this-machine")) {
+                wlr_log(WLR_INFO,
+                    "ReconOS: made this machine's signing key");
+            } else {
+                wlr_log(WLR_ERROR, "ReconOS: no signing key: %s",
+                    recon_sign_last_error());
+            }
         }
 
         int loaded = recon_modules_load_all();

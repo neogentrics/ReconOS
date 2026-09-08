@@ -128,6 +128,28 @@ bool recon_package_read(const char *path, struct recon_package_info *out);
  * Administrator only: a module runs inside ReconOS with everything ReconOS
  * can do, which is closer to installing a driver than to saving a file.
  */
+/*
+ * Sign the package at `path` with the machine's own key.
+ *
+ * The signature covers a list of digests -- the manifest and every file it
+ * names, sorted -- rather than the manifest alone. Signing the manifest would
+ * bind the *names* of the files and none of their contents, which leaves the
+ * module free to be replaced and the module is the file that matters.
+ *
+ * Writes `package.sig` inside the folder.
+ */
+bool recon_package_sign(const char *path);
+
+/*
+ * Is this package signed by a key this machine trusts?
+ *
+ * `signer` receives the key's name when it is. The errors distinguish "never
+ * signed" from "signed and since changed", because the first is something
+ * somebody can fix and the second is not.
+ */
+bool recon_package_signed_by(const char *path, char *signer,
+    size_t signer_size);
+
 bool recon_package_install(const char *path);
 
 /*

@@ -206,6 +206,19 @@ twenty-five years of somebody solving line boxes, floats and table widths, and
 reading how they did it is cheaper than deriving it -- which is the next thing
 this viewer actually needs.
 
+**A package says who made it** — v0.4.13. The largest hole in the package
+area, and the one deliberately left until the keyring had been read: adding a
+second piece of unattended crypto before the first had been looked at would
+have compounded the debt.
+
+ECDSA P-256 with SHA-256, and no random per-signature secret -- `k` comes from
+the key and the message by RFC 6979, and the file refuses to compile against
+an mbedTLS built without it. The signature covers a sorted list of digests of
+every file the package brings, not just the manifest, because a manifest-only
+signature leaves the module free to be swapped and the module is the only file
+that can do anything. No `--force`: a machine makes its own key on first run,
+so signing is always one command away and the refusal is actionable.
+
 **A browser with the controls a browser has** — v0.4.8. Asked for as
 "redesign the entire layout of the browser -- it doesn't have a lot of buttons
 and features". It had three buttons. It now has tabs, home, a stop that is the
