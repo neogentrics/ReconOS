@@ -195,8 +195,28 @@ it gets its own name and says what it is doing.
 
 ### Asked for, and not started
 
-*Nothing outstanding. Everything asked for so far is built; what is left is
-listed under "What ReconOS does and does not do yet".*
+**Screens for every way a session ends.** Signing out, logging out, switching
+users, restarting, shutting down -- and hibernate and sleep once those exist.
+Each should say what is happening and that the account's work is being kept,
+then show the screen that belongs to it: a shutting-down scene for shutting
+down, a restarting one for restarting, a saving-then-back-to-the-picker one for
+switching users, and the same before locking.
+
+The point is not decoration. Every one of these is a moment where the machine
+stops answering and the person cannot tell whether it is working or has hung,
+and the difference between "Saving your work" and a frozen desktop is entirely
+what is on the screen. It is also where a system quietly tells somebody their
+work was kept, which is a promise worth making out loud at the one moment they
+would otherwise be wondering.
+
+**Sleep is the exception**, and deliberately: going to sleep should be
+immediate. A screen explaining that the machine is about to stop drawing is a
+screen nobody reads, on the one transition that is supposed to feel like
+closing a lid.
+
+`recon_session` already has the shape for this -- it is a stage machine with a
+screen per stage, which is how setup, the account picker and the sign-in flow
+are drawn. These are more stages, not a new mechanism.
 
 ### Parallel tracks
 

@@ -10,6 +10,627 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+The Glass icon set fills nearly every name ReconOS asks by. 198 pictures,
+36 of them answering a ReconOS name. The Control Panel is one set now rather
+than a mix: Accounts, Passwords, Appearance, Display Settings, Programs,
+Modules, Network, Firewall, Storage, Disk Cleanup, Update, Troubleshoot,
+Recovery and Registry all come from it.
+
+scripts/install-icon-pack.py is what puts one in, and it handles what a
+folder of downloads actually looks like -- several sizes of the same picture, a
+web subfolder the browser dropped things into, -liquid-glass in some names
+and not others, and -2/-3 suffixes where the same file was fetched twice.
+Adding a pack is dropping a folder next to the others and running it.
+
+The taskbar is above every window, because it is not a window.
+Everything joined one scene tree, so what sat in front of what was a running
+argument that whoever raised last won -- and focusing a built-in window raised
+it over the taskbar, because the code that focuses a window has no reason to
+know the taskbar exists. The shell re-raised itself in the path for *client*
+windows and not in the path for its own, so the fault showed on the Control
+Panel and the Calculator and not on anything a client opened, which is a good
+disguise for a bug.
+
+The fix is not another raise. It is four trees under the scene root --
+background, windows, chrome, system -- and a node can be raised to the top of
+its own tree and no further. Where something sits is now decided once, by which
+tree it was created in, and the taskbar is not in the argument at all. It is
+how you reach everything else; it is a different kind of thing from a window.
+
+The top tree is what has taken the screen: the login screen, the security box,
+a modal dialog and the dimmer that goes with it. Dimming everything and leaving
+the taskbar bright would say the taskbar still works, and it does not. The
+tooltip is up there too, because it explains whatever is in front and is never
+in the way -- it takes no clicks and leaves on its own.
+
+Two of the five session marks were wrong, and one of them had never been
+right. The power symbol was a closed ring with a bar across it, which reads
+as *no*. It was drawn as two rings, one with the gap from 340 to 360 and one
+from 0 to 20 -- and two rings do not intersect, they add: between them they
+drew the whole circle. The ring can now be given a gap that crosses straight
+up, written the way it is said, from 340 round to 20.
+
+Switch user was a person and a floating notch. The cut that separates the two
+figures was a rectangle placed over the front one's corner, which took the
+middle out of the *back* one's shoulders. It now cuts the front figure's own
+shape, two pixels fat, so what survives is a line following its head and
+shoulders -- which is the thing that says one person is standing behind
+another.
+
+Both found by photographing the five buttons at five times size. Neither is
+visible at the size they are drawn, and both are obvious at that one.
+
+The power symbol was drawn into the pack rather than left out of it.
+Nothing in a folder of firewalls and spreadsheets means *power*, and it is the
+one picture that had to exist. So it is ours: the same ring-and-stem everybody
+already knows, drawn at ninety-six pixels and given the pack's own alpha ramp
+-- white falling from about 212 at the top to 130 at the bottom, sampled off
+stop, which is a solid shape and shows the ramp cleanly. That ramp is what
+gives those icons their lit-from-above look, and matching it is the difference
+between an icon that belongs to the set and one that is merely also white.
+Nothing to license, because nobody else drew it.
+
+Three names are left drawn, on purpose, and the reasons are in the script.
+application, file-video and file-font, because a wrong picture on a file
+type is worse than the plain sheet. And all four caption buttons, which is a
+decision about the *set*: the
+pack's maximize and minimize are a glyph inside a box and a caption button is
+already a box, so at twelve pixels both come out a featureless blob, while its
+bare X survives -- and one soft grey icon between two solid drawn ones looks
+worse than three that are merely plain.
+
+The avatar caps were sized for eight pictures in a folder of forty icons.
+Thirty-two pictures, and a hundred and twenty-eight entries read from the icon
+folder to find them -- which is a bound on the whole folder rather than on the
+pictures in it, so every ordinary icon added ate into how many account pictures
+could be found. At two hundred icons neither reached. Both raised, and the scan
+moved off the stack.
+
+On the desktop, a picture beats a silhouette. A silhouette is the right
+thing on a toolbar -- small, one colour, on chrome whose colour it should
+follow -- and the wrong thing on a wallpaper. A desktop icon is drawn four
+times that size on a photograph nobody chose for it, and a shape with no detail
+inside it comes out as a blob: the Recycle Bin was a black bin-shaped hole on a
+pale wallpaper, where the drawn one has a lid, a rim and ribs. The desktop asks
+the shared set for its picture first and falls back to the skin's silhouette
+when there is none, because a silhouette beats a hole.
+
+recon_icon_draw_shared is how it asks. The marker lives in the cache key
+rather than beside it, since the two versions of one name are two different
+pictures and a cache keyed on the name alone can hold only one.
+
+Smoked: the dark glass that was missing. Every see-through skin was a pale
+one, which is half of an idea -- glass is a *material*, not a brightness, and a
+dark desktop that wanted a translucent title bar had nothing to choose. Midnight
+is dark and deliberately flat; this is the other half.
+
+Built from Glass by turning the palette over rather than by darkening it.
+Darkening a light skin gives grey text on grey chrome, because a palette's
+structure is which surfaces sit above which, and that structure inverts along
+with the lightness. Slightly more solid than Glass at 200 against 210: dark
+chrome has less contrast with a dark wallpaper to start with, so the same
+transparency reads as further gone, and the number that looks identical on the
+two skins is not the same number.
+
+It shares Glass's icons rather than having a set of its own. They are
+silhouettes coloured from the skin wherever they are drawn, so one set of files
+comes out dark on Glass's pale chrome and pale on Smoked's dark chrome.
+
+Three Control Panel pages stopped borrowing. Accounts showed the generic
+application icon, Troubleshoot the terminal's, and Display Settings the
+notepad's -- which Registry also showed, so two pages wore the same picture.
+
+The account pictures show the chosen one large. A grid of thirty-two-pixel
+discs is a grid of coloured dots to anybody who cannot see thirty-two pixels
+clearly, and choosing from it means picking one and finding out afterwards.
+Asked for in those words. It shows what is *chosen* rather than what is under
+the pointer -- a preview that followed the pointer would be blank whenever
+nobody was moving the mouse, which is exactly when they are looking at it --
+with its name beside it, because a picture somebody cannot make out is not
+helped by a larger copy of itself alone.
+
+The Explorer toolbar asks for icons and keeps its drawings as the fallback.
+Back, forward, refresh, home, rename, delete and restore take the skin's
+picture where there is one; up and new-folder keep their drawn glyphs, because
+no set seems to carry an up arrow and a new folder wants a folder with
+something *added* to it. Not a switch between two toolbars: an icon that exists
+should be used and one that does not should not leave a hole.
+
+Accounts and Troubleshoot stopped borrowing. They showed the generic
+application icon and the terminal's -- the nearest things to hand rather than
+pictures of what those pages are. That works until an icon set arrives with the
+right picture in it and nothing can ask for it, because the name says
+"application" and means "the people who may sign in". The generated set draws
+the same shapes under the new names, so a skin without an icon set looks
+exactly as it did.
+
+A silhouette on the desktop gets the ring the label already had. A desktop
+icon sits on a photograph nobody chose for it, which is the problem the label
+solved a while ago -- a halo of the shadow colour, drawn only when it earns its
+place against the wallpaper actually behind it. A *silhouette* has that problem
+worse than the label does, being one flat colour with no internal contrast to
+fall back on: the bin drawn in Glass's near-black label colour vanished on a
+dark wallpaper. The measurement that decides it is now asked once and answered
+for both, because two separate decisions about the same square inch of
+wallpaper eventually disagree, and the way that shows is a label with a halo
+above an icon without one. A picture with colours of its own gets no ring -- it
+carries its own contrast, and eight offset copies of a folder would be a smear.
+
+The login screen is a window like any other. Its card rounds to the skin's
+window corner, carries the skin's glass where the skin asks for it, and its
+account tiles highlight rounded like every other selection. It was the first
+thing anybody sees and the last flat rectangle in the system -- on a skin whose
+whole idea is that surfaces are not solid, the sign-in screen was solid.
+
+The card is drawn square and its corners are kept and put back, rather than
+being drawn as a shape: every stage draws into that rectangle as though it
+were square, and there are a dozen of them with early exits, so restoring once
+at the end is exact where threading a curve through all of them would be a
+great deal of arithmetic arriving at the same four corners.
+
+A skin can bring its own icons, and a silhouette takes the skin's colour.
+Two mechanisms, and the rule for the first is the whole rule: a skin uses the
+icons in a directory named after it. /System/Icons/Glass/ is the Glass
+skin's, no manifest and nothing to keep in step, and anything that directory
+does not have falls back to the shared set -- because a skin that silently
+loses icons looks like the icons are broken rather than like the skin is
+incomplete.
+
+The second is for icon sets drawn as silhouettes: every visible pixel
+white, the whole picture in the alpha channel. Detected rather than declared,
+since the pixels already say what they are. ReconOS colours them where they
+are drawn, so one file is a dark glyph on a light toolbar and a light one on a
+dark title bar without being two files -- and the colour comes from the skin,
+which is what makes an icon set part of a theme rather than a decoration on
+top of one. recon_icon_draw_in takes the colour; recon_icon_draw uses the
+surface's text colour, which is right for a menu, a list or a tile, and the
+places where it is not -- the desktop, the taskbar, a title bar -- say so.
+
+The Glass skin has an icon set. Eighty-three files, twenty-three of them
+answering names ReconOS already asks for and the rest available as glyphs for
+toolbars that currently draw their own. See THIRD_PARTY.md for where they came
+from.
+
+Highlights are a step now, not a fraction of the way to white. A constant
+fraction is not a constant effect: mixing 110 of 255 toward white lifts a light
+button by nine levels and a dark one by eighty-five, so every dark skin had a
+pale grey bar across the top of every button. The taskbar had its own version
+of the same thing -- a hardcoded E8E8E8 along its top edge, which is a gentle
+lift on a light bar and a white stripe the width of the screen on Midnight's
+24282E. Both are derived from the surface now. Third time this shape of fault
+turned up in one session; all three were written when every skin was grey.
+BG-144.
+
+Fill and outline are one pass, so the outline stops being diluted. Drawn as
+two blends, the outline landed on a corner pixel the fill had already
+part-covered, and so came out mixed with the *face* rather than with what is
+behind the control -- a pale wedge in each corner, visible wherever a light
+button sits on dark chrome. A corner pixel is three things at once and is
+worked out as three. BG-145.
+
+A control is drawn as a shape, so its corners stop being a guess. The
+rounding worked by filling a square rectangle and painting the corners back out
+with a colour the caller *believed* was behind them. Wrong over a gradient
+always -- a graded surface is a different colour on every row and one flat
+colour cannot be all of them -- and the title bar is graded on several skins,
+so every close, maximize and minimize button had a wedge of the wrong colour in
+each corner. Nothing paints over the corners now, so nothing has to know what
+is under them. BG-142.
+
+Selections and hovers round like everything else. Around thirty plain
+rectangles -- the selected file on the desktop, the chosen tile in the Control
+Panel, the row under the pointer in a list, the menu entry being pointed at --
+each written where it was wanted, so when the rest of the system learnt to
+round, they did not. One routine owns it now, and uses the same radius a button
+of that size gets. Two compositing faults surfaced doing it, both invisible
+until something anti-aliased was drawn onto the desktop: blending onto a
+*transparent* pixel kept the destination's alpha and so produced nothing at
+all, and the source colour's own alpha was ignored, which put a bright rim
+around a translucent highlight. BG-143.
+
+Every button has a boundary now, in its own colour. recon_draw_bevel
+carried a comment reading *"Fixed highlight and shadow for now; a skin would
+supply these."* Nothing ever did, so every button in the system was edged in
+the same two greys whatever it was painted in. Worse, a 95 bevel is a lighting
+effect and reads as an edge only while the button sits between its own
+highlight and the surface behind it -- true for as long as every skin was grey.
+On Glass the Calculator's keys are E8EBF5 and the panel they sit on is
+F0F2F8, eight levels apart, so the lit half landed lighter than the
+background and the top and left of every key stopped existing. Two edges out of
+four. A boundary is not a lighting effect: it is a one-pixel outline in the
+shaded tone, on all four sides, following the corner, derived from the button's
+own colour so a skin made this afternoon gets a correct edge without naming
+one. BG-141.
+
+The icons are drawn at four times the size, because that is where the
+blockiness was. They were 32 by 32, and recon_draw_image averages when it
+shrinks an image and takes the nearest pixel when it grows one -- which is
+right for pixel art, and wrong for an account picture the login screen draws at
+seventy pixels, where every pixel of the drawing becomes a 2.25-pixel block.
+Redrawing at 32 would not have helped; the fault was not in the drawing. At 128
+every size ReconOS asks for is a shrink, and the averaging that already existed
+handles all of them. Round things are round now: a disc drawn at 128 and
+averaged down has a soft edge, where the same disc drawn at 32 has a staircase.
+
+And they can be improved, which they could not before. The rule was "write
+an icon if it is not already there", which keeps a real promise -- a replaced
+icon stays replaced -- and quietly meant an icon *improved* here never reached
+a machine that had run ReconOS once. The set was not a default, it was a
+one-time imprint. Each icon now carries the generation that wrote it and a
+fingerprint of what was written, and is brought up to date only when the
+generation has moved on and the file is still byte-for-byte ours. icons
+refresh does that on demand; icons replace overwrites the lot, its own word
+because it is the one that can lose something.
+
+Eighteen more account pictures, and the flame became a campfire. Eight was
+not a choice, it was a shortage. The flame was described as looking odd, and
+the reason is that a bare tapering blob is not a picture of anything -- so
+whoever looks at it supplies the nearest thing, and the nearest thing is a
+campfire. Given that everybody was going to read it as one, it should be one:
+two crossed logs give the flame something to be *on*. Four of the new ones were
+redrawn after being looked at rather than reasoned about -- a gear with four
+short teeth is a crosshair, a symmetrical taper is a grain of rice and not a
+leaf, a fourteen-row lighthouse is a spool of thread, and three arcs computed
+by walking x and solving for y flatten into a palm tree. An account that had
+chosen a picture since renamed follows the rename rather than silently falling
+back to its initial.
+
+A widget layer, and it is the answer to why nothing reacted to the
+pointer. Every application in ReconOS drew its own buttons -- a fill, a
+bevel, a label, a hit region and a tooltip, five or six lines at a time,
+around two hundred times across this repository. Writing that out is not the
+problem; what it means is. A behaviour that has to be written two hundred
+times is a behaviour that gets written zero times, and so nothing anywhere
+highlighted under the pointer, nothing sank when pressed, and the close button
+on every window did not go red on approach the way close buttons have on every
+desktop for twenty years.
+
+recon_widget is the place those answers now live. An application says *this
+is a button, here, called that, and pressing it means this*, and is told
+nothing about bevels, corner radii, hover tints or hit regions. A control is in
+one of four states -- normal, hot, active, disabled -- and the panel knows
+which without the application being asked.
+
+It carries its own version, separate from the module ABI, because the two ask
+different questions: RECON_MODULE_ABI asks whether a module can be loaded at
+all and refuses a mismatch, while RECON_WIDGET_VERSION asks whether its
+controls will match the rest of the screen and reports one. A module a version
+behind still draws working buttons; a module that will not load draws nothing.
+docs/WIDGETS.md records what each version means.
+
+Adopted across the system in the same release: window frames for built-in and
+client windows alike, the taskbar and its Apps button and pager, the start
+menu and the five buttons that lock and restart the machine, the login screen,
+the question dialog, the security box, the file dialog, File Explorer,
+Watchtower, Photos, Notepad, the Calendar, Mail, the Player, the browser, Help,
+the Control Panel and the Calculator -- which, being a module, is also the
+first thing to be checked against the version it was built for.
+
+Held and hovered is what counts as pressed. Press a button, think better of
+it, slide off it, let go -- and nothing happens, which is what every desktop
+does and this one could not. The caption buttons act on the release now rather
+than the press, which is also why they never appeared to do anything before:
+the window was closed or minimized before the frame showing the button sunk had
+been drawn.
+
+Close goes red under the pointer, and so does anything else that throws
+something away: End Task in Watchtower, Delete in the File Explorer, Remove on
+a mail attachment. Under the pointer and not at rest -- a close button that is
+red all the time is a close button somebody stops seeing.
+
+A disabled control stops answering clicks, in one place. It keeps its
+region and its tooltip, so pointing at it can still say why it is unavailable,
+and it no longer lets the click fall through to whatever is behind it. Saying
+disabled is now the whole of saying it: several applications had been
+remembering a second guard in their own click handler, and one of them had
+forgotten.
+
+Rounding is the default. metric.corner went from 0 to 5 and
+metric.button-corner from 0 to 4, and the ceiling on the button radius from 8
+to 12. Zero was chosen when Beacon and Glass were the only skins that rounded
+anything, which left nine of the eleven built-in skins drawing square buttons
+not because anything had decided they should but because nobody had written a
+number for them. Classic, Reading and Contrast now say zero out loud, each for
+a reason that is written down next to it.
+
+Glass's six colours are reachable from the Control Panel. They have existed
+since v0.4.0 with no way to reach them but the Terminal --
+recon_tint_available was written for "a page that should not offer a choice
+that cannot be made" and nothing had ever asked it. Glass is the only skin with
+metric.tintable, so the row appears under the skin list only when Glass is
+the skin on screen.
+
+Shown rather than named: six swatches, the one in use drawn pressed, with its
+name in words beside them -- a swatch says the colour and not its name, and the
+name is what the Terminal and the help use.
+
+The Appearance window's stale skin name is fixed, and not with a pointer.
+Renaming in the Skin Editor left the Appearance window still naming the old
+skin, because they are separate windows with separate state. A pointer between
+two things that can each be closed first would be a worse defect than a stale
+line, so the line notices instead: recon_theme already counts its own
+changes, and a status that names a skin is dropped when that count moves.
+Dropped rather than corrected -- it was true when it was said, and there is
+nothing to replace it with until somebody picks a row again.
+
+A fourth hit-id hazard, and this file had already written the warning. The
+click ladder is descending and every test in it is an unbounded >=; the
+comment at the top says an id belonging to a base above the one being tested
+"is answered by the wrong branch and vanishes without a trace". The tint base
+is the highest in the file and the check went in near the bottom, so every tint
+click set a time zone instead. Nothing failed and nothing was logged. A
+photograph found it; re-reading the code I had just written did not.
+
+A skin can be renamed and deleted from the page it is edited on, which
+was the last thing in that editor that meant opening the file by hand. Two
+buttons on a second row labelled *The skin itself*, because they act on the
+skin rather than on the chosen line -- five buttons together would have made
+Delete look like something that happens to title.active.
+
+Renaming moves three things at once, and that is the whole of why it is one
+function: the file's name, the name written inside it, and what the account
+remembers. Any two of them leaves a skin that half exists -- a file whose name
+and contents disagree loads under neither, and a rename the account has not
+been told about works until the next sign-in and then looks undone.
+
+It refuses a built-in, an empty name, a name with a slash (it becomes a file
+name, and ../Config/system would write over the machine's settings), a name
+another skin has, and renaming a skin to what it is already called -- that last
+because the work removes the old file after writing the new one, which with
+both names the same would delete what it had just written. Changing only the
+capitalisation is allowed: a skin is found without regard to case, so
+testing and Testing are one skin but two files, and the old file still goes.
+
+Deleting asks first and says both things -- that the file goes and cannot be
+brought back, and, when it is the skin in use, that the default comes back with
+it. Then the editor leaves editing, rather than sitting there with every button
+writing to a file that is not there.
+
+Twenty-four checks, and the two that matter -- that the old file is gone, and
+that the account followed the rename -- confirmed by removing each in turn and
+watching the right checks fail.
+
+And a second hand-assigned id collision. The rename field took
+HIT_FIELD_BASE + 8, which the firewall's custom-rule name already had.
+Different pages, so no click could reach both, but the handler for one was
+about to run for the other. There is a map of which offsets are taken beside
+the definition now, so the next one is chosen by reading rather than guessing.
+
+A ramp can be set, not only removed. The list already showed one as
+E8E8EC to D4DAE2; the field is now filled with exactly that, and exactly that
+can be typed back -- one text in both directions.
+
+That round trip is what lets one colour mean flat with no separate control
+to say so. A field holding the whole value is one somebody replaces rather than
+edits part of, so typing AABBCC over E8E8EC to D4DAE2 has said what the
+role should be; keeping the old far end would leave a colour nobody asked for
+and nobody typed. Same reasoning as metric.buttons reading its three names.
+
+Remove Ramp stays as a one-click shortcut, but the reason it used to give --
+that there was nothing to type for "no gradient" -- is no longer true, and the
+comment saying so has gone.
+
+The notation moved into recon_theme, where it belongs (it is the skin file's,
+not the Control Panel's) and where it can be tested without a window. The parse
+got strict on the way: the old one stopped at the first space and returned what
+it had, so AABBCC junk was accepted as AABBCC with the junk silently
+dropped. Twenty-one checks; the one that matters is that one colour means flat,
+confirmed by making it keep the ramp and watching that check fail.
+
+And the field's label said *"Empty leaves it alone."* It never did -- an empty
+field has always been refused as not a colour. A label describing behaviour the
+code does not have is worse than no label, because somebody clears the field on
+the strength of it.
+
+The skin editor sets the four measurements -- all ten of them. They sit
+under the colours in the same list, because they are the same kind of thing: a
+line in a skin file. Down walks off the last colour onto the first measurement
+rather than stopping there.
+
+Three are questions rather than amounts and one is a bit set, and the list says
+so in words. metric.buttons reads close maximize minimize rather than 7,
+and typing those words back in any order sets it -- with the maximize button
+disappearing from every window on the desktop as the sentence appears.
+icon-gloss, tintable and buttons-left read yes or no.
+
+A number out of range is refused, not clamped. recon_theme_set_metric
+clamps, which is right for a file being read and wrong as the only answer a
+person gets: 4000 silently becoming 48 tells somebody their number worked. The
+field names the range before anything is typed, and 4000 comes back as
+"'4000' is not a number from 18 to 48".
+
+"Use Default" takes the line out of the file rather than writing the
+default into it -- confirmed by reading the file afterwards, where
+metric.buttons is absent rather than set to 7. A skin that says nothing
+follows the default if the default moves; one that asks for that number does
+not. The list marks which is which and the button greys itself on a row that is
+already following the default.
+
+The wording and the parsing went into recon_theme rather than the Control
+Panel, for the reason recon_expr is not in the Calculator: it is the skin
+file's own vocabulary, and there it can be tested without a window. Twenty-nine
+checks, and the one that matters -- that the range is refused rather than moved
+-- confirmed by making it clamp and watching two fail.
+
+Found by photograph rather than by reading: the first version let
+close maximize minimize run underneath the word default, because it had
+been given the column width a colour needs and a colour is eight characters.
+
+The sweeps run without being remembered. .github/workflows/sweeps.yml
+builds and runs every suite sanitized, then again the way scripts/package.sh
+builds, and runs the analyzer as a job of its own. The second pass is the
+BG-134 lesson: a containment check passed the sanitizers, the analyzer and
+every suite, then aborted on the first path it resolved in an optimised build,
+because every build this project makes for itself is Debug and the one that
+ships is not.
+
+What made it possible was fixing a claim this file has made for a year.
+Every suite was written to need no window -- that is stated all over
+CMakeLists.txt -- but it was true of the *code* and not of the *build*:
+pkg_check_modules(WLR REQUIRED wlroots) ran before anything else, so
+configuring at all wanted wlroots 0.17.1 and no other machine could run a
+single suite. -DRECONOS_TESTS_ONLY=ON configures the twenty-five against
+stock libraries. wlroots is needed only by the compositor; two suites want
+wayland-server for an event loop, which every distribution has.
+
+And ctest was running eleven of them. The other fourteen -- the
+malformed-input sweep, the firewall, the keyring, the error catalogue among
+them -- were built and never registered. "100% tests passed, 0 tests failed out
+of 11" was true, and meant less than half. All twenty-five are registered now.
+That is the exact shape of green this project keeps writing tests against,
+sitting in its own build file.
+
+Rehearsed rather than pushed and watched: the machine this is written on is
+ubuntu-24.04 with mbedTLS 2.28, the same as the runner image, so both
+configurations were built and run before the commit. 25/25 sanitized in 45
+seconds, 25/25 optimised in four.
+
+What the optimised pass reports. 330 warnings from twelve distinct sites --
+ten in recon_fs.c, one each in recon_users.c and recon_theme.c, every one
+-Wformat-truncation, none of them visible to any build this project makes for
+itself because GCC needs the optimiser's value ranges to see them. snprintf
+truncates rather than overflows, so none is a memory fault; but a path silently
+cut is the thing this system refuses everywhere else, so they are counted in
+the run summary and left as work. Counted rather than gated, because failing on
+twelve pre-existing warnings would have made it red on its first run, and that
+is how somebody learns to ignore a red build.
+
+The Terminal answers questions. help password used to say "No command
+named 'password'" -- true, useless, and said by a system with three pages about
+passwords that had just declined to mention them. It now names what the help
+has, six pages at most, because a word like "file" is in most of the document
+and a terminal answering with forty lines has not answered anything.
+
+And the answers are in a better order, everywhere. Adding the second caller
+exposed how recon_help_search ranked things: password returned six pages of
+which three were release notes, and skin put "Files" above "How it looks".
+Two signals decide it now -- a page named after the word beats one that merely
+mentions it, and a subject page beats a release note. The second needed nothing
+added, because make-help.sh already writes the two kinds as help-NN.txt and
+changes-NN.txt. Release notes are ranked below rather than dropped: one about
+the thing being asked about is a reasonable answer when there is nothing
+better. The Start menu leads with Passwords now rather than Accounts.
+
+"Open with" looks inside the file now. recon_sniff reads a file's first
+bytes and says what format it is in -- PNG, JPEG, GIF, BMP, ICO, WAV, MP3, MP4,
+zip, gzip, PDF, a program, a web page, or plain text. Evidence rather than a
+guess: a file beginning with the eight bytes PNG defines is a PNG.
+
+It does not change what recon_props_claims decides. Only a program knows what
+it will open and nothing here asks it, so the declared extension list still
+decides. What changed is what the warning says, and that was the more useful
+half. It used to read "Photos does not say it opens files like 'notes.txt'. It
+will probably show something that is not readable." For a PNG somebody had
+named notes.txt, every word of that was wrong. It now says the file is really a
+PNG image, which Photos does open, and that it is the name that is wrong rather
+than the choice -- worked out by asking the extension machinery a different
+question: not whether the program opens files *called* .txt, but whether it
+opens files that really *are* a PNG.
+
+The intermediate version was worse than either end and is worth recording:
+bolting the new sentence onto the old one produced a warning that contradicted
+itself in consecutive lines. There is one sentence now, decided in one place,
+and File Explorer and the desktop share it -- they had been carrying the same
+two sentences written twice, with only one copy improved.
+
+Text and unrecognised formats produce nothing at all, deliberately. A warning
+that grows a line every time is one people stop reading, and text has no
+signature to find in the first place.
+
+And two things the suite caught that reasoning had not. A sentence
+beginning "BM" was read as a bitmap, because "BM" is the whole of that format's
+signature and two ordinary letters are not a signature -- it needs the reserved
+bytes and the DIB header size to corroborate it. And six bytes of 0xFF passed
+as plain text, because the check allowed any byte above 127 on the grounds that
+other alphabets are full of them. Right instinct, too generous: high bytes are
+now allowed as valid UTF-8 *sequences*, which keeps every real alphabet and
+rejects the runs of high bytes that ordinary binary is made of. 0xFF is not a
+legal UTF-8 byte at all.
+
+recon_fs_read_head came out of it too -- the first bytes of a file, rather
+than recon_fs_read pulling an entire film into memory to look at eight of
+them.
+
+How far the parameter runs is somebody's to set. Two fields on the
+grapher's button row in parametric mode, holding expressions rather than
+numbers -- 2pi, -pi/2 and 3 all work, and the defaults are written
+-2pi and 2pi because that says what the range is in a way -6.283185
+does not. Tab reaches them. The x range is no longer drawn in that mode: it
+describes the view, which the plane already shows, and leaving it there got it
+clipped to "x -2.50 to ...".
+
+A bound that does not evaluate falls back to the default and says so under the
+buttons, rather than quietly drawing a right-looking curve over the wrong
+range. Reversed bounds are swapped without comment, because from and to
+describe an interval and not a direction here.
+
+That empties the grapher's list of named gaps: the parameter range, the file
+picker and the decimal comma were the three, and all three are done.
+
+Every file dialog was putting a hole through the window behind it. The
+dialog dims what is behind so it reads as a question, and dim is a
+translucent black -- but it was laid down with recon_fill_rect, which writes
+the colour rather than blending it. So the content area got a 60%-opaque black
+*pixel* instead of a dimmed form, and the compositor blended the window over
+the desktop through it: the wallpaper and whatever windows were behind showed
+through the middle of an opaque application.
+
+Notepad and Mail had it too, for as long as they have had dialogs. It surfaced
+because a picker was added to the Calculator and the first photograph showed
+What's New through the middle of it -- and the first guess, that the new code
+had broken the Calculator's drawing, was wrong. Notepad did the same thing.
+
+recon_fill_rect is right to write: a Glass window frame is drawn translucent
+*on purpose*, so the compositor blends the window over the wallpaper, and
+making fills blend would have made the frame opaque and the skin pointless.
+Making a window see-through and veiling something inside it are different
+operations, so there is now a recon_blend_rect for the second. BG-136.
+
+A data file can be chosen instead of typed. A Choose button on each of the
+three rows in the grapher's data mode. It costs the path field some width
+rather than costing the form a row -- a fourth row would come off the plane's
+height, and the plane is what the mode is for.
+
+Two things came out of building it. The first attempt drew the button off the
+right-hand edge, on the assumption that the space parametric mode uses for its
+second field was spare in data mode; an unpaired field takes the whole row, and
+a photograph said so in one step. And RECON_FILEDLG_HIT_BASE turned out to be
+sitting exactly on top of the Calculator's own hit ids -- 1500, with a comment
+claiming that was four hundred and ninety more than any application used, while
+the Calculator ran to 2007. Harmless only because it had no dialog to put up.
+The base is 3000 now and RECON_FILEDLG_IDS_BELOW asserts it, so the next
+application to grow past it fails to compile rather than behaving strangely.
+Confirmed by putting the old value back and watching the build fail.
+
+A file that writes 3,14 is no longer read as the point (3, 14). The
+grapher's data mode used strtod, whose decimal point is a dot, always. Handed
+a file written where the convention is a comma that is not a refusal and not a
+mangled number -- it is a *different number*: 3,14 2,71 reads as x = 3, the
+comma is skipped as a separator, y = 14. Two valid numbers, no bad line
+counted, a point five hundred times too high.
+
+Every other way that reader can fail announces itself. This one produced a
+wrong picture indistinguishable from a right one, which is the failure the
+whole mode was designed against.
+
+The fix asks the file rather than the machine, which is the part worth keeping.
+A machine's language setting says how the person at the keyboard writes
+numbers; the file was written by somebody else. A row votes for the comma only
+if it is two whitespace-separated tokens each holding one comma and no dot;
+any row with a dot, or using a comma to separate, votes against; and the comma
+wins only if it has votes and nothing contradicts it. Mixed files are read the
+ordinary way rather than guessed at, plain integers vote for neither, and when
+the comma does win the plot says so underneath rather than leaving the
+interpretation invisible.
+
+And the reader moved out of the Calculator to be testable.
+src/recon_data.c, for the same reason recon_expr is not in there: it
+touches no screen and can be asked questions with known answers. The suite is
+the twenty-fourth, and its first check names the wrong answer out loud -- with
+the sniff deleted on purpose it reports "first point came back as (3, 14); it
+should be (3.14, 2.71)" rather than a bare mismatch. A passing test that has
+never been seen to fail is not a test yet.
+
 Every day from 1970 to 2100, turned into a number and back again. 47,847
 of them, which takes no measurable time. The eight dates the clock suite
 already checked are well chosen -- 2000 is a leap year, 2100 is not, and both

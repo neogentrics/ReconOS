@@ -436,7 +436,7 @@ struct recon_decor *recon_decor_create(struct recon_server *server,
      * A title bar that floated over other people's windows would be a worse
      * fault than the one this is fixing.
      */
-    decor->panel = recon_panel_create(&server->scene->tree, 1,
+    decor->panel = recon_panel_create(server->layer_windows, 1,
         TITLE_HEIGHT);
     if (decor->panel == NULL) {
         free(decor);

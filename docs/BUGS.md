@@ -2575,6 +2575,60 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-148 — Switch user was a person standing next to a floating notch
+
+- **Found in** v0.4.0. **Found by** photographing the start menu's five
+  session buttons at five times size, after BG-147 was found the same way.
+- **What it was** the two figures are drawn back one first, then a gap in the
+  button's own colour, then the front one. The gap was a disc and a wide
+  rectangle placed over where the *front* figure goes -- which is the wrong
+  shape to cut: the rectangle reached across and took the middle out of the
+  **back** figure's shoulders, leaving it a head and a disconnected block.
+- **Fixed in** v0.4.0. The cut is now the front figure's own outline, two
+  pixels fat -- its head disc and its shoulder rectangle, each grown by two.
+  What survives is a line that follows the front figure, which is exactly what
+  says one person is standing behind another.
+
+### BG-147 — The power symbol was a closed ring with a bar across it
+
+- **Found in** v0.4.0. **Found by** photographing the start menu's five
+  session buttons at five times size. At the size they are drawn the mark is
+  fourteen pixels and reads as roughly a circle; at five times it reads as a
+  *no entry* sign.
+- **What it was** `glyph_ring` takes one gap, and a gap that crosses straight
+  up cannot be written as one pair of angles -- so the power symbol asked for
+  two rings, one missing 340-360 and one missing 0-20. Two rings do not
+  intersect, they add: the first drew 0-340, the second drew 20-360, and
+  between them they drew all of it. The gap the stem was supposed to pass
+  through was never there.
+- **Fixed in** v0.4.0. A gap where `gap_to` is less than `gap_from` wraps
+  through zero, so it is written the way it is said: from 340 round to 20. One
+  ring, one gap.
+
+### BG-146 — Windows covered the taskbar
+
+- **Found in** v0.4.0. **Found by** the author, moving windows about: "the
+  task bar should always be on top of every window no matter what because it's
+  required to be able to access most things. Yet windows are going over it."
+- **What it was** every drawn thing joined the scene's single root tree, so
+  the order was decided by whoever raised last. `recon_appwin_focus` raises
+  the window it focuses and has no reason to know the taskbar exists, so
+  focusing a built-in window put it in front of the taskbar.
+- The disguise: the shell re-raised its own panels in the path that handles
+  *client* windows and not in the path that handles built-in ones. So it never
+  happened to anything a client opened, and always happened to the Control
+  Panel and the Calculator -- which looks like a bug in those two programs.
+- **Fixed in** v0.4.0. Four trees under the scene root: background, windows,
+  chrome, system. A node can be raised to the top of its own tree and no
+  further, so where something sits is decided once, at creation, by which tree
+  it joined. The taskbar is not in the argument at all -- it is how you reach
+  everything else, which makes it a different kind of thing from a window.
+- The top tree is what has *taken* the screen: the login screen, the security
+  box, a modal dialog and its dimmer. Dimming everything and leaving the
+  taskbar bright would say the taskbar still works. The tooltip is up there
+  too: it explains whatever is in front, takes no clicks, and leaves on its
+  own.
+
 ### BG-145 — The outline was diluted by the fill at every corner
 
 - **Found in** v0.4.0. **Found by** the author, going through the skins: "in

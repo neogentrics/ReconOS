@@ -743,7 +743,8 @@ struct recon_desktop *recon_desktop_create(struct recon_server *server,
     /* Nothing is being dragged yet. Zero would mean the first icon. */
     desktop->dragging = -1;
 
-    desktop->panel = recon_panel_create(&server->scene->tree, width, height);
+    desktop->panel = recon_panel_create(server->layer_background, width,
+        height);
     if (desktop->panel == NULL) {
         free(desktop);
         return NULL;

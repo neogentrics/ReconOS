@@ -2878,14 +2878,27 @@ static void glyph_ring(struct recon_panel *p, int cx, int cy, int radius,
                 continue;
             }
 
-            /* Degrees clockwise from straight up, so a gap can be described
-             * the way somebody would point at it. */
-            if (gap_to > gap_from) {
+            /*
+             * Degrees clockwise from straight up, so a gap can be described
+             * the way somebody would point at it -- including one that
+             * crosses straight up, which is written the way it is said: from
+             * 340 round to 20.
+             *
+             * That case used to be written as two rings, each with half the
+             * gap. Two rings do not intersect, they add: the first drew
+             * everything but 340-360 and the second everything but 0-20, so
+             * between them they drew all of it and the power symbol came out
+             * as a closed ring with a bar across it.
+             */
+            if (gap_to != gap_from) {
                 double angle = atan2((double)dx, (double)-dy) * 180.0 / M_PI;
                 if (angle < 0) {
                     angle += 360.0;
                 }
-                if (angle >= gap_from && angle <= gap_to) {
+                bool in_gap = gap_to > gap_from
+                    ? (angle >= gap_from && angle <= gap_to)
+                    : (angle >= gap_from || angle <= gap_to);
+                if (in_gap) {
                     continue;
                 }
             }
@@ -2898,8 +2911,7 @@ static void glyph_ring(struct recon_panel *p, int cx, int cy, int radius,
 /* The power symbol: a broken ring with a stem through the break. */
 static void glyph_power(struct recon_panel *p, int cx, int cy,
         recon_color ink) {
-    glyph_ring(p, cx, cy + 1, 7, 2, ink, 340, 360);
-    glyph_ring(p, cx, cy + 1, 7, 2, ink, 0, 20);
+    glyph_ring(p, cx, cy + 1, 7, 2, ink, 340, 20);
     recon_fill_rect(p, cx - 1, cy - 8, 2, 7, ink);
 }
 
@@ -2946,24 +2958,33 @@ static void glyph_signout(struct recon_panel *p, int cx, int cy,
 /*
  * Switch user: two heads and shoulders, one behind the other.
  *
- * The one behind is drawn first and then cut back by a gap in the footer's
- * own colour before the front one goes on top. Without the gap the two
- * overlap into a single lumpy shape that reads as neither one person nor two.
+ * The one behind is drawn first, then a straight channel is cut down between
+ * them in the button's own colour, then the front one goes on top of its own
+ * side of the channel. The cut used to be a disc and a wide rectangle placed
+ * over the *front* figure's area, which took the middle out of the back
+ * figure's shoulders and left it a floating notch rather than somebody
+ * standing behind.
  */
 static void glyph_people(struct recon_panel *p, int cx, int cy,
         recon_color ink, recon_color back) {
-    /* Behind, up and to the right. */
-    glyph_ring(p, cx + 4, cy - 4, 3, 3, ink, 0, 0);
-    recon_fill_rect(p, cx + 1, cy - 1, 8, 4, ink);
+    /* Behind: the same size as the one in front, half a head higher and to
+     * the right, so what shows of it is a head and one shoulder. */
+    glyph_ring(p, cx + 4, cy - 5, 3, 3, ink, 0, 0);
+    recon_fill_rect(p, cx - 1, cy - 1, 10, 7, ink);
 
-    /* The gap. Wider than the shape it protects, so there is a clear line
-     * between the two rather than them merely not touching. */
-    glyph_ring(p, cx - 2, cy - 2, 5, 5, back, 0, 0);
-    recon_fill_rect(p, cx - 8, cy + 1, 12, 7, back);
+    /*
+     * The front figure's own outline, two pixels fat, cut out of the one
+     * behind before the front one is drawn into it. Cutting the front
+     * figure's *shape* rather than a rectangle over its corner is the whole
+     * trick: the two pixels that survive are a line that follows the front
+     * head and shoulders, which is what says one is in front of the other.
+     */
+    glyph_ring(p, cx - 3, cy - 4, 5, 5, back, 0, 0);
+    recon_fill_rect(p, cx - 10, cy - 2, 14, 11, back);
 
     /* In front. */
-    glyph_ring(p, cx - 2, cy - 2, 3, 3, ink, 0, 0);
-    recon_fill_rect(p, cx - 6, cy + 2, 9, 5, ink);
+    glyph_ring(p, cx - 3, cy - 4, 3, 3, ink, 0, 0);
+    recon_fill_rect(p, cx - 8, cy, 10, 7, ink);
 }
 
 /*
@@ -3667,7 +3688,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      */
     shell->font = recon_font_system(FONT_HEIGHT);
 
-    shell->taskbar = recon_panel_create(&server->scene->tree,
+    shell->taskbar = recon_panel_create(server->layer_chrome,
         screen_width, TASKBAR_HEIGHT);
     if (shell->taskbar == NULL) {
         wlr_log(WLR_ERROR, "ReconOS: could not create the taskbar");
@@ -3675,7 +3696,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         return NULL;
     }
 
-    shell->menu = recon_panel_create(&server->scene->tree, MENU_WIDTH,
+    shell->menu = recon_panel_create(server->layer_chrome, MENU_WIDTH,
         menu_height(false, ""));
     if (shell->menu != NULL) {
         recon_panel_set_enabled(shell->menu, false);
@@ -3687,7 +3708,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
      * including the dim and the session screen -- it is the last thing drawn
      * because it is meant to cover all of them.
      */
-    shell->blank = recon_panel_create(&server->scene->tree,
+    shell->blank = recon_panel_create(server->layer_chrome,
         screen_width, screen_height);
     if (shell->blank != NULL) {
         recon_panel_set_enabled(shell->blank, false);
@@ -3700,7 +3721,7 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
     clock_arm(shell);
 
     /* Small to start with; it is resized to whatever it has to say. */
-    shell->tip = recon_panel_create(&server->scene->tree, 120, 24);
+    shell->tip = recon_panel_create(server->layer_system, 120, 24);
     if (shell->tip != NULL) {
         recon_panel_set_enabled(shell->tip, false);
     }
@@ -3710,32 +3731,32 @@ struct recon_shell *recon_shell_create(struct recon_server *server,
         wl_display_get_event_loop(server->wl_display), on_slide_tick, shell);
     recon_shell_blank_reload(shell);
 
-    shell->programs = recon_panel_create(&server->scene->tree,
+    shell->programs = recon_panel_create(server->layer_chrome,
         MENU_LEFT_WIDTH, MENU_ITEM_HEIGHT * 4);
     if (shell->programs != NULL) {
         recon_panel_set_enabled(shell->programs, false);
     }
     shell->programs_hover = -1;
 
-    shell->dim = recon_panel_create(&server->scene->tree,
+    shell->dim = recon_panel_create(server->layer_system,
         screen_width, screen_height);
     if (shell->dim != NULL) {
         recon_panel_set_enabled(shell->dim, false);
     }
 
-    shell->dialog = recon_panel_create(&server->scene->tree, DIALOG_WIDTH, 200);
+    shell->dialog = recon_panel_create(server->layer_system, DIALOG_WIDTH, 200);
     if (shell->dialog != NULL) {
         recon_panel_set_enabled(shell->dialog, false);
     }
     shell->dialog_hover = -1;
 
-    shell->context = recon_panel_create(&server->scene->tree,
+    shell->context = recon_panel_create(server->layer_chrome,
         CONTEXT_WIDTH, CONTEXT_ITEM_HEIGHT * CONTEXT_ITEMS_MAX);
     if (shell->context != NULL) {
         recon_panel_set_enabled(shell->context, false);
     }
 
-    shell->security = recon_panel_create(&server->scene->tree,
+    shell->security = recon_panel_create(server->layer_system,
         SEC_WIDTH, security_height());
     if (shell->security != NULL) {
         recon_panel_set_enabled(shell->security, false);

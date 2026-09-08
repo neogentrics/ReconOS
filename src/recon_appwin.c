@@ -543,7 +543,8 @@ struct recon_appwin *recon_appwin_create(struct recon_server *server,
     win->restore_w = win->width;
     win->restore_h = win->height;
 
-    win->panel = recon_panel_create(&server->scene->tree, win->width, win->height);
+    win->panel = recon_panel_create(server->layer_windows, win->width,
+        win->height);
     if (win->panel == NULL) {
         free(win);
         return NULL;

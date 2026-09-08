@@ -63,6 +63,46 @@ struct recon_server {
     struct wlr_allocator *allocator;
 
     struct wlr_scene *scene;
+
+    /*
+     * --- What is in front of what ---
+     *
+     * Four trees under the scene's root, in this order. A node can be raised
+     * to the top of the tree it is in and no further, so where something sits
+     * is decided by which of these it was created in -- once, at creation --
+     * rather than by who called raise most recently.
+     *
+     * That was the arrangement before, and it did not work. Everything went
+     * into the one root, so the order was a running argument that whoever
+     * raised last won: focusing a built-in window put it above the taskbar,
+     * because recon_appwin_focus raises the window and had no reason to know
+     * the taskbar existed. The shell re-raised itself afterwards in the path
+     * for *client* windows and not in the path for its own, so the fault
+     * showed on the Control Panel and the Calculator and not on anything a
+     * client opened, which is a good disguise.
+     *
+     * The fix is not another raise. It is that the taskbar is a different
+     * *kind* of thing from a window -- it is how you reach everything else,
+     * so it is not in the argument at all.
+     *
+     *   layer_background   the wallpaper, and the icons sitting on it
+     *   layer_windows      every window, built-in and client alike
+     *   layer_chrome       the taskbar, the start menu, context menus
+     *   layer_system       the login screen, the dimmer and what it dims for
+     *                      -- the security box, a modal dialog -- and the
+     *                      tooltip
+     *
+     * The top layer is what has taken the screen, so it is above even the
+     * chrome: dimming everything and then leaving the taskbar bright would
+     * say the taskbar still works, and it does not. The tooltip is up there
+     * with it because it explains whatever is in front and is never in the
+     * way -- it takes no clicks and leaves on its own.
+     */
+    struct wlr_scene_tree *layer_background;
+    struct wlr_scene_tree *layer_windows;
+    struct wlr_scene_tree *layer_chrome;
+    struct wlr_scene_tree *layer_system;
+
     /* Keeps scene outputs positioned in step with the output layout. */
     struct wlr_scene_output_layout *scene_layout;
 

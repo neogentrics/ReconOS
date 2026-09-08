@@ -2213,7 +2213,8 @@ static void setup_background(struct recon_server *server, int width, int height)
 
     struct wlr_scene_node *node;
     if (wallpaper != NULL) {
-        server->background_buffer = wlr_scene_buffer_create(&server->scene->tree, wallpaper);
+        server->background_buffer = wlr_scene_buffer_create(
+            server->layer_background, wallpaper);
         /* The scene holds its own reference now. */
         wlr_buffer_drop(wallpaper);
         if (server->background_buffer == NULL) {
@@ -2224,7 +2225,8 @@ static void setup_background(struct recon_server *server, int width, int height)
     } else {
         float color[4] = {0.1f, 0.1f, 0.3f, 1.0f};
         server->background_rect =
-            wlr_scene_rect_create(&server->scene->tree, width, height, color);
+            wlr_scene_rect_create(server->layer_background, width, height,
+                color);
         if (server->background_rect == NULL) {
             return;
         }
@@ -2450,7 +2452,8 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 
     toplevel->server = server;
     toplevel->xdg_toplevel = xdg_surface->toplevel;
-    toplevel->scene_tree = wlr_scene_xdg_surface_create(&server->scene->tree, xdg_surface);
+    toplevel->scene_tree = wlr_scene_xdg_surface_create(
+        server->layer_windows, xdg_surface);
 
     /* Tag the tree so a surface found under the pointer can be traced back to
      * its window; see toplevel_at(). */
@@ -3010,6 +3013,16 @@ int main(int argc, char **argv) {
      * what area to ask for. */
     wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
     server.scene = wlr_scene_create();
+
+    /*
+     * The four layers, created in the order they stack. Nothing is added to
+     * the scene root after this: everything joins one of these, and that
+     * choice is the whole of what decides where it sits.
+     */
+    server.layer_background = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_windows = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_chrome = wlr_scene_tree_create(&server.scene->tree);
+    server.layer_system = wlr_scene_tree_create(&server.scene->tree);
     server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
     if (server.scene_layout == NULL) {
         wlr_log(WLR_ERROR, "ReconOS: failed to attach output layout to scene");

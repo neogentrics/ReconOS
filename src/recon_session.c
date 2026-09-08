@@ -2189,7 +2189,7 @@ struct recon_session *recon_session_create(struct recon_server *server,
     session->stage = STAGE_DONE;
     session->hover = -1;
 
-    session->panel = recon_panel_create(&server->scene->tree, width, height);
+    session->panel = recon_panel_create(server->layer_system, width, height);
     if (session->panel == NULL) {
         free(session);
         return NULL;

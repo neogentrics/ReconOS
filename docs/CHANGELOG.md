@@ -35,11 +35,58 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
-**Four names are left drawn, on purpose, and the reasons are in the script.**
-`shutdown` because nothing in the pack means *power* and the drawn red symbol
-is instantly recognisable -- meaning beats matching. `application`, `file-video`
-and `file-font` because a wrong picture on a file type is worse than the plain
-sheet. And all four caption buttons, which is a decision about the *set*: the
+**The taskbar is above every window, because it is not a window.**
+Everything joined one scene tree, so what sat in front of what was a running
+argument that whoever raised last won -- and focusing a built-in window raised
+it over the taskbar, because the code that focuses a window has no reason to
+know the taskbar exists. The shell re-raised itself in the path for *client*
+windows and not in the path for its own, so the fault showed on the Control
+Panel and the Calculator and not on anything a client opened, which is a good
+disguise for a bug.
+
+The fix is not another raise. It is four trees under the scene root --
+background, windows, chrome, system -- and a node can be raised to the top of
+its own tree and no further. Where something sits is now decided once, by which
+tree it was created in, and the taskbar is not in the argument at all. It is
+how you reach everything else; it is a different kind of thing from a window.
+
+The top tree is what has taken the screen: the login screen, the security box,
+a modal dialog and the dimmer that goes with it. Dimming everything and leaving
+the taskbar bright would say the taskbar still works, and it does not. The
+tooltip is up there too, because it explains whatever is in front and is never
+in the way -- it takes no clicks and leaves on its own.
+
+**Two of the five session marks were wrong, and one of them had never been
+right.** The power symbol was a closed ring with a bar across it, which reads
+as *no*. It was drawn as two rings, one with the gap from 340 to 360 and one
+from 0 to 20 -- and two rings do not intersect, they add: between them they
+drew the whole circle. The ring can now be given a gap that crosses straight
+up, written the way it is said, from 340 round to 20.
+
+Switch user was a person and a floating notch. The cut that separates the two
+figures was a rectangle placed over the front one's corner, which took the
+middle out of the *back* one's shoulders. It now cuts the front figure's own
+shape, two pixels fat, so what survives is a line following its head and
+shoulders -- which is the thing that says one person is standing behind
+another.
+
+Both found by photographing the five buttons at five times size. Neither is
+visible at the size they are drawn, and both are obvious at that one.
+
+**The power symbol was drawn into the pack rather than left out of it.**
+Nothing in a folder of firewalls and spreadsheets means *power*, and it is the
+one picture that had to exist. So it is ours: the same ring-and-stem everybody
+already knows, drawn at ninety-six pixels and given the pack's own alpha ramp
+-- white falling from about 212 at the top to 130 at the bottom, sampled off
+`stop`, which is a solid shape and shows the ramp cleanly. That ramp is what
+gives those icons their lit-from-above look, and matching it is the difference
+between an icon that belongs to the set and one that is merely also white.
+Nothing to license, because nobody else drew it.
+
+**Three names are left drawn, on purpose, and the reasons are in the script.**
+`application`, `file-video` and `file-font`, because a wrong picture on a file
+type is worse than the plain sheet. And all four caption buttons, which is a
+decision about the *set*: the
 pack's maximize and minimize are a glyph inside a box and a caption button is
 already a box, so at twelve pixels both come out a featureless blob, while its
 bare X survives -- and one soft grey icon between two solid drawn ones looks
