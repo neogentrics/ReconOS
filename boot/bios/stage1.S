@@ -232,6 +232,23 @@ stage2_count:
 stage2_lba:
 	.quad	2048		/* patched by the installer */
 
+/* Where the two patchable numbers are, said by stage 1 itself.
+ *
+ * The build patches them by reading the symbol table, which the installer
+ * cannot do: it has a 440-byte binary and nothing else. Hard-coding the offsets
+ * into the installer would work until this file is edited, and then it would
+ * write the sector count over something else -- silently, on a stranger's disk.
+ *
+ * So stage 1 describes itself, at a fixed offset chosen once and asserted
+ * below. The assembler computes the two offsets, so they follow the code
+ * wherever it moves.
+ */
+	.org 432
+patch_info:
+	.word	0x3153			/* "S1" -- this is a patchable stage 1 */
+	.word	stage2_count - _start
+	.word	stage2_lba - _start
+
 /* Fits, or the build stops here.
  *
  * 440 bytes is where the partition table starts. A stage 1 that overran it

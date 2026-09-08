@@ -90,6 +90,25 @@ static const u8 type_reconos[16] = {
 	'S', 'y', 's', 't', 'e', 'm', 0x00, 0x01
 };
 
+/* 21686148-6449-6E6F-744E-656564454649, the BIOS Boot Partition.
+ *
+ * Somebody else's identifier, used exactly as specified: it is how every other
+ * tool on the disk knows this megabyte is occupied. Inventing our own would
+ * make the space look like ours alone and mean nothing to `sgdisk`, `parted` or
+ * a Windows installer -- which is the entire reason for putting stage 2 in a
+ * partition rather than in the gap after the protective MBR.
+ *
+ * The first three fields are little-endian on disk and the last two are not,
+ * which is why this is written out byte by byte: getting that mixed endianness
+ * wrong produces a GUID that matches nothing and looks entirely plausible in a
+ * hex dump. Read as ASCII it is "!haHdInotNeedEFI", which is somebody's joke
+ * and a useful check that the bytes are in the right order.
+ */
+static const u8 type_bios_boot[16] = {
+	0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E,
+	0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49
+};
+
 static void put32(u8 *p, u32 v)
 {
 	p[0] = (u8)v; p[1] = (u8)(v >> 8); p[2] = (u8)(v >> 16); p[3] = (u8)(v >> 24);
@@ -387,6 +406,19 @@ enum install_verdict install_write_gpt(struct block_device *disk,
 	{
 		unsigned index;
 		u8 *e;
+
+		/* First, so that a disk read by a person top to bottom shows
+		 * the boot chain in the order the machine uses it. */
+		if (plan->bios_boot.count) {
+			e = free_slot(&t, &index);
+			if (!e) {
+				v = INSTALL_TOO_MANY_SLICES;
+				goto out;
+			}
+			fill_entry(disk, e, type_bios_boot,
+				   plan->bios_boot.first_lba,
+				   plan->bios_boot.count, "BIOS boot");
+		}
 
 		if (!plan->reuse_esp) {
 			e = free_slot(&t, &index);

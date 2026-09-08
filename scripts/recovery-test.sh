@@ -70,7 +70,23 @@ fi
 
 # --- break one volume, with a tool that shares no code with the kernel ------
 
-START=$(( 2048 + 256 * 2048 ))
+# Where the system volume is, asked of the disk rather than computed from what
+# the installer used to do.
+#
+# This was `2048 + 256 * 2048` -- the block after a 256 MB EFI partition that
+# started at 2048 -- and it was right until a BIOS boot partition went in front
+# of the ESP and moved everything by one. The damage then landed in free space,
+# recovery correctly reported both volumes sound, and the test failed saying
+# "it did not notice". A layout constant in a harness is a claim about a program
+# somebody else is still editing.
+START=$(sgdisk -p "$W/d.img" 2>/dev/null |
+	awk '/ReconOS System/ { print $2; exit }')
+
+[ -n "$START" ] || {
+	echo "  no ReconOS System partition on the installed disk" >&2
+	sgdisk -p "$W/d.img" 2>/dev/null | tail -6 >&2
+	exit 1
+}
 dd if="$W/d.img" of="$W/p2.img" bs=512 skip="$START" count=4194304 status=none
 
 say "the damage tool actually damaged something"

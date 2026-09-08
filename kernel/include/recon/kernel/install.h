@@ -44,6 +44,12 @@
  * condition halfway down a function. */
 #define INSTALL_ALIGN_BLOCKS	2048u		/* 1 MiB, what every tool aligns to */
 #define INSTALL_ESP_CREATE	(256u * 2048u)	/* 256 MiB when we make one */
+
+/* One megabyte for the BIOS Boot Partition, which is the alignment unit
+ * anyway. Stage 2 is under ten kilobytes; the rest is room to grow into
+ * without moving anything, and there is no cheaper size than the one every
+ * partition already starts on. */
+#define INSTALL_BIOS_BOOT	(1u * 2048u)
 #define INSTALL_ESP_MIN_FREE	(16u * 2048u)	/* 16 MiB, to reuse somebody else's */
 
 /* --- Three partitions, and why applications get one of their own -----------
@@ -117,6 +123,22 @@ struct install_plan {
 	struct block_extent esp;	/* created when !reuse_esp */
 	struct block_extent system;
 	struct block_extent programs;
+
+	/* One megabyte for the BIOS bootloader's second stage, and the reason
+	 * it is a partition rather than the gap after the protective MBR.
+	 *
+	 * Hiding stage 2 in unallocated space is what a lot of installers do
+	 * and it works -- until the next tool along, which is entitled to that
+	 * space because **nothing on the disk says it is in use.** A partition
+	 * entry is how a disk says "occupied", and this project does not
+	 * install beside other systems by relying on them not to notice.
+	 *
+	 * `count` is zero when there is nowhere to put it. That is not a
+	 * failure: a UEFI-only machine has no use for it, and refusing to
+	 * install for want of a partition only one kind of firmware reads
+	 * would be the wrong answer.
+	 */
+	struct block_extent bios_boot;
 
 	/* What is being left alone, which is the number a person actually wants
 	 * to see before agreeing to any of this. */
@@ -192,6 +214,20 @@ void install_plan_run(void);
  * partition -- a recovery environment must not depend on the thing it
  * repairs, and a separate recovery build is a second thing to keep working
  * whose one moment of use is the moment nobody has been testing it. */
+/* Writes the BIOS boot path: stage 1 into the first sector's boot code area,
+ * stage 2 into the BIOS boot partition, and the block number of the second
+ * patched into the first.
+ *
+ * Only bytes 0 to 439 of the first sector are touched. The partition table and
+ * the boot signature are the disk's own.
+ *
+ * A medium with no BIOS loader on it, or a plan with no room for the partition,
+ * is reported and is not a failure -- a UEFI-only machine has no use for any of
+ * it. */
+enum install_verdict install_write_bios_boot(struct block_device *source_esp,
+					     struct block_device *disk,
+					     const struct install_plan *plan);
+
 void recovery_run(void);
 
 #endif /* RECON_KERNEL_INSTALL_H */

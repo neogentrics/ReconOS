@@ -399,19 +399,27 @@ enum install_verdict install_plan(struct block_device *disk,
 
 		usable = disk->block_count - 33 - first;
 
-		if (usable < INSTALL_ESP_CREATE + INSTALL_SYSTEM_MIN +
-			     INSTALL_PROGRAMS_MIN) {
+		if (usable < INSTALL_BIOS_BOOT + INSTALL_ESP_CREATE +
+			     INSTALL_SYSTEM_MIN + INSTALL_PROGRAMS_MIN) {
 			out->verdict = usable < INSTALL_ESP_CREATE
 					     ? INSTALL_NO_ROOM_ESP
 					     : INSTALL_NO_ROOM_PROGRAMS;
 			return out->verdict;
 		}
 
-		out->esp.first_lba = first;
+		/* The BIOS Boot Partition goes first, at the first aligned
+		 * block, because that is where the space is on a blank disk and
+		 * nothing else wants it. It is one megabyte -- the alignment
+		 * unit -- so it costs nothing that was not already padding. */
+		out->bios_boot.first_lba = first;
+		out->bios_boot.count = INSTALL_BIOS_BOOT;
+
+		out->esp.first_lba = first + INSTALL_BIOS_BOOT;
 		out->esp.count = INSTALL_ESP_CREATE;
 
-		split_rest(first + INSTALL_ESP_CREATE,
-			   usable - INSTALL_ESP_CREATE, out);
+		split_rest(first + INSTALL_BIOS_BOOT + INSTALL_ESP_CREATE,
+			   usable - INSTALL_BIOS_BOOT - INSTALL_ESP_CREATE,
+			   out);
 
 		out->verdict = INSTALL_OK;
 		return out->verdict;
@@ -498,6 +506,25 @@ enum install_verdict install_plan(struct block_device *disk,
 			return out->verdict;
 		}
 
+		/* A megabyte for the BIOS bootloader, taken off the front of
+		 * the chosen gap rather than hunted for separately: it has to
+		 * come from somewhere already known to be free, and this is the
+		 * space this install is taking anyway.
+		 *
+		 * Skipped without complaint when the gap is only just big
+		 * enough. A UEFI-only machine has no use for it, and refusing
+		 * to install for want of a partition that only one kind of
+		 * firmware reads would be the wrong answer.
+		 */
+		if (best.count >= INSTALL_BIOS_BOOT + INSTALL_SYSTEM_MIN +
+				  INSTALL_PROGRAMS_MIN) {
+			out->bios_boot.first_lba = best.first_lba;
+			out->bios_boot.count = INSTALL_BIOS_BOOT;
+
+			best.first_lba += INSTALL_BIOS_BOOT;
+			best.count -= INSTALL_BIOS_BOOT;
+		}
+
 		split_rest(best.first_lba, best.count, out);
 	}
 
@@ -505,9 +532,11 @@ enum install_verdict install_plan(struct block_device *disk,
 	 * that produced it. Four writes that each land on the disk can still
 	 * describe two partitions that overlap. */
 	{
-		struct block_extent plan[3];
+		struct block_extent plan[4];
 		unsigned n = 0;
 
+		if (out->bios_boot.count)
+			plan[n++] = out->bios_boot;
 		if (!out->reuse_esp)
 			plan[n++] = out->esp;
 		plan[n++] = out->system;
@@ -559,6 +588,19 @@ void install_print_plan(const struct install_plan *p)
 	if (!p->fresh_table) {
 		print_size(p->untouched_blocks, d->block_size);
 		kputs("\n");
+	}
+
+	/* Listed first, because it is first on the disk and because somebody
+	 * reading this before agreeing to it should see everything that will be
+	 * written. A megabyte is small enough to leave out of a summary and
+	 * exactly the kind of thing that should not be. */
+	if (p->bios_boot.count) {
+		kputs("      a BIOS boot partition of ");
+		print_size(p->bios_boot.count, d->block_size);
+		kprintf(" at block %lu\n", p->bios_boot.first_lba);
+	} else {
+		kputs("      no BIOS boot partition -- this disk will start "
+		      "only on a machine with UEFI\n");
 	}
 
 	if (p->reuse_esp) {

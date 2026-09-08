@@ -126,6 +126,16 @@ enum install_verdict install_execute(struct block_device *disk,
 	if (!system || !programs)
 		return INSTALL_TOO_MANY_SLICES;
 
+	/* The BIOS boot partition becomes a device too, even though nothing
+	 * mounts it: it is written through, and the block layer refuses a write
+	 * to a whole disk that has slices unless the caller has claimed it.
+	 * Writing stage 2 through the parent instead would be a write bounded
+	 * by the disk rather than by the partition -- which is the exact shape
+	 * of mistake that lands in a neighbour's filesystem. */
+	if (plan->bios_boot.count &&
+	    !slice_for(disk, 4, &plan->bios_boot))
+		return INSTALL_TOO_MANY_SLICES;
+
 	if (!plan->reuse_esp) {
 		struct block_device *esp = slice_for(disk, 1, &plan->esp);
 
@@ -180,6 +190,16 @@ enum install_verdict install_execute(struct block_device *disk,
 			return INSTALL_TOO_MANY_SLICES;
 
 		v = install_copy_boot(medium, target);
+		if (v != INSTALL_OK)
+			return v;
+
+		/* And the BIOS path, last of all.
+		 *
+		 * Last because it is the only step that writes to the first
+		 * sector of the disk -- the one that also holds the partition
+		 * table. Everything reversible happens before the one thing
+		 * that changes how the machine starts. */
+		v = install_write_bios_boot(medium, disk, plan);
 		if (v != INSTALL_OK)
 			return v;
 	}

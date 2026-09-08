@@ -53,6 +53,15 @@ mmd   -i "$W/esp.part" ::/EFI ::/EFI/BOOT ::/reconos
 mcopy -i "$W/esp.part" "$LOADER" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$W/esp.part" "$KERNEL" ::/reconos/kernel-x86_64.elf
 
+# And the BIOS loader, which a real medium carries for the same reason it
+# carries BOOTX64.EFI: the machine this is installed on may have no UEFI in it,
+# and the installer cannot write a loader it was not given.
+make -C boot/bios >/dev/null 2>&1 || true
+if [ -f boot/bios/build/stage1.bin ] && [ -f boot/bios/build/stage2.bin ]; then
+	mcopy -i "$W/esp.part" boot/bios/build/stage1.bin ::/reconos/stage1.bin
+	mcopy -i "$W/esp.part" boot/bios/build/stage2.bin ::/reconos/stage2.bin
+fi
+
 # What the kernel is told to do, on the medium rather than on the QEMU command
 # line. `-append` only exists on the `-kernel` path, which skips the bootloader
 # entirely -- so a test that used it would be testing a boot nobody's machine
@@ -81,14 +90,25 @@ else
 	fail=$((fail + 1))
 fi
 
+# Where the EFI partition is, asked of the disk rather than assumed.
+#
+# This used to be a literal 1 MiB, which was true while the ESP was the first
+# partition and stopped being true the moment a BIOS boot partition went in
+# front of it. The failure read as "non DOS media" -- mtools looking at the
+# BIOS partition and correctly saying it is not a filesystem -- which is a
+# confusing way to be told that a constant went stale.
+esp_lba=$(sgdisk -p "$W/target.img" 2>/dev/null |
+	awk '$6 == "EF00" { print $2; exit }')
+esp_at=$(( ${esp_lba:-2048} * 512 ))
+
 say "the loader and kernel are on the target"
-if mdir -i "$W/target.img@@1048576" ::/EFI/BOOT 2>/dev/null | grep -qi 'BOOTX64' &&
-   mdir -i "$W/target.img@@1048576" ::/reconos 2>/dev/null | grep -qi 'kernel'; then
-	echo "BOOTX64.EFI and a kernel"
+if mdir -i "$W/target.img@@$esp_at" ::/EFI/BOOT 2>/dev/null | grep -qi 'BOOTX64' &&
+   mdir -i "$W/target.img@@$esp_at" ::/reconos 2>/dev/null | grep -qi 'kernel'; then
+	echo "BOOTX64.EFI and a kernel, at block ${esp_lba:-2048}"
 	pass=$((pass + 1))
 else
 	echo "FAILED"
-	mdir -i "$W/target.img@@1048576" -/ :: 2>&1 | sed 's/^/      /' | head -12
+	mdir -i "$W/target.img@@$esp_at" -/ :: 2>&1 | sed 's/^/      /' | head -12
 	fail=$((fail + 1))
 fi
 
@@ -113,6 +133,31 @@ if echo "$boot" | grep -q 'ReconOS kernel'; then
 else
 	echo "DID NOT BOOT"
 	echo "$boot" | tail -14 | sed 's/^/      /'
+	fail=$((fail + 1))
+fi
+
+# --- and the same disk again, on a machine with no UEFI in it ---------------
+#
+# The disk above booted under OVMF, through the EFI partition. This is the same
+# disk with SeaBIOS underneath it instead: no firmware that knows what a
+# filesystem is, nothing but "read the first sector and jump".
+#
+# It is the same image, not a second install. If the installer wrote one path
+# and broke the other, exactly one of these two assertions fails -- which is the
+# whole reason to boot it twice rather than once.
+
+say "and boots the same disk with no UEFI at all"
+bios_boot=$(timeout 90 qemu-system-x86_64 -m 512M -display none -serial stdio \
+	-no-reboot -drive "file=$W/target.img,format=raw,if=ide" 2>&1 |
+	tr -d '\r')
+
+if echo "$bios_boot" | grep -qa 'ReconOS kernel' &&
+   echo "$bios_boot" | grep -qaE 'firmware +: BIOS'; then
+	echo "$(echo "$bios_boot" | grep -oaE 'ReconOS kernel [0-9.]+' | head -1), over BIOS"
+	pass=$((pass + 1))
+else
+	echo "DID NOT BOOT"
+	echo "$bios_boot" | sed -n '/Booting from/,$p' | head -12 | sed 's/^/      /'
 	fail=$((fail + 1))
 fi
 

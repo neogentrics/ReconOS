@@ -79,26 +79,42 @@ fi
 # printed 2 when the plan had three partitions -- the writer was leaving the
 # programs volume out of the table, so the executor formatted a filesystem that
 # no entry pointed at. A number in the output is not a check.
-say "sgdisk agrees, and there are three partitions"
-parts=$(sgdisk -p "$W/blank.img" 2>/dev/null | grep -c '^ *[0-9]')
+# Named, not counted by position.
+#
+# This asked for three and got four the moment a BIOS boot partition was added,
+# which is a test failing for a change that was correct. Checking that each
+# expected partition is *there* says the same thing about the writer leaving one
+# out -- which is what this exists for -- without breaking every time the layout
+# legitimately gains one.
+say "sgdisk agrees, and every partition is there"
+layout=$(sgdisk -p "$W/blank.img" 2>/dev/null)
+missing=
+for want in "BIOS boot" "ReconOS Boot" "ReconOS System" "ReconOS Programs"; do
+	echo "$layout" | grep -q "$want" || missing="$missing '$want'"
+done
+
 if sgdisk -v "$W/blank.img" 2>&1 | grep -q 'No problems found' &&
-   [ "$parts" = "3" ]; then
-	echo "EFI, system and programs"
+   [ -z "$missing" ]; then
+	echo "$(echo "$layout" | grep -c '^ *[0-9]') partitions, all named"
 	pass=$((pass + 1))
 else
-	echo "FAILED -- $parts partitions"
-	sgdisk -p "$W/blank.img" 2>&1 | sed 's/^/      /' | tail -8
+	echo "FAILED -- missing:${missing:- none, but sgdisk objects}"
+	echo "$layout" | sed 's/^/      /' | tail -8
 	sgdisk -v "$W/blank.img" 2>&1 | sed 's/^/      /' | head -6
 	fail=$((fail + 1))
 fi
 
+# Where the EFI partition is, asked of the disk. It was the first partition
+# until it was not.
+esp_at=$(( $(echo "$layout" | awk '$6 == "EF00" { print $2; exit }') * 512 ))
+
 say "the EFI partition is a FAT32 mtools can read"
-if mdir -i "$W/blank.img@@1048576" :: >/dev/null 2>&1; then
-	echo "mounted"
+if mdir -i "$W/blank.img@@$esp_at" :: >/dev/null 2>&1; then
+	echo "mounted, at block $(( esp_at / 512 ))"
 	pass=$((pass + 1))
 else
 	echo "FAILED"
-	mdir -i "$W/blank.img@@1048576" :: 2>&1 | sed 's/^/      /' | head -4
+	mdir -i "$W/blank.img@@$esp_at" :: 2>&1 | sed 's/^/      /' | head -4
 	fail=$((fail + 1))
 fi
 
@@ -167,6 +183,11 @@ else
 	fail=$((fail + 1))
 fi
 
+# 1 MiB is correct here and stays hard-coded on purpose: this test *made* that
+# partition, four lines of sgdisk above, and the installer reuses it where it
+# is rather than moving it. A constant describing the harness's own setup is a
+# fact; a constant describing where the installer puts things is a claim about
+# a program somebody is still editing, and three of those went stale today.
 say "their bootloader is still on the EFI partition"
 if mdir -i "$W/beside.img@@1048576" :: 2>/dev/null | grep -qi 'theirs'; then
 	echo "theirs.efi intact"
@@ -199,11 +220,15 @@ else
 	fail=$((fail + 1))
 fi
 
-say "sgdisk agrees, and there are four partitions"
+# Their two are still there and ours were added. Counted as "more than before"
+# rather than as an exact number, because the exact number is a property of our
+# layout and this assertion is about theirs surviving.
+say "sgdisk agrees, and their partitions are still there"
 bparts=$(sgdisk -p "$W/beside.img" 2>/dev/null | grep -c '^ *[0-9]')
 if sgdisk -v "$W/beside.img" 2>&1 | grep -q 'No problems found' &&
-   [ "$bparts" = "4" ]; then
-	echo "their two, plus system and programs"
+   [ "$bparts" -ge 4 ] &&
+   sgdisk -p "$W/beside.img" 2>/dev/null | grep -q 'ReconOS System'; then
+	echo "their two, plus ours: $bparts in all"
 	pass=$((pass + 1))
 else
 	echo "FAILED"; sgdisk -v "$W/beside.img" 2>&1 | sed 's/^/      /' | head -8
