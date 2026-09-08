@@ -309,8 +309,8 @@ enum recon_widget_state recon_widget_caption_button(struct recon_panel *panel,
      * controls that have to work before anything has been loaded.
      */
     int nudge = state == RECON_WIDGET_ACTIVE ? 1 : 0;
-    if (!recon_icon_draw(panel, caption_icon(glyph), x + 2 + nudge,
-            y + 2 + nudge, size - 4)) {
+    if (!recon_icon_draw_in(panel, caption_icon(glyph), x + 2 + nudge,
+            y + 2 + nudge, size - 4, ink)) {
         caption_glyph(panel, x + nudge, y + nudge, size, glyph, ink);
     }
 

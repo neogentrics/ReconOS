@@ -2442,7 +2442,8 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
     int text_x = x + TEXT_INSET;
     int icon_size = BUTTON_HEIGHT - 10;
     if (icon != NULL &&
-            recon_icon_draw(bar, icon, x + 5, TASKBAR_PADDING + 5, icon_size)) {
+            recon_icon_draw_in(bar, icon, x + 5, TASKBAR_PADDING + 5,
+                icon_size, active ? COLOR_TEXT : COLOR_TEXT_DIM)) {
         text_x = x + 5 + icon_size + 5;
     }
 
@@ -2698,8 +2699,9 @@ static void draw_taskbar(struct recon_shell *shell) {
 
     /* A mark so the button reads as the system menu rather than a window. */
     int mark_size = BUTTON_HEIGHT - 10;
-    if (!recon_icon_draw(bar, RECON_ICON_APPS, TASKBAR_PADDING + 6,
-            TASKBAR_PADDING + 5, mark_size)) {
+    if (!recon_icon_draw_in(bar, RECON_ICON_APPS, TASKBAR_PADDING + 6,
+            TASKBAR_PADDING + 5, mark_size,
+            shell->menu_open ? COLOR_TEXT : COLOR_BUTTON_TEXT)) {
         recon_fill_rect(bar, TASKBAR_PADDING + TEXT_INSET, TASKBAR_PADDING + 9,
             10, 10, COLOR_ACCENT);
     }

@@ -56,6 +56,17 @@ struct cached_icon {
     int width, height;
     bool looked_up;
 
+    /*
+     * Every visible pixel is white, and the picture is entirely in the alpha.
+     *
+     * A whole family of icon sets is drawn this way -- a silhouette, with the
+     * colour left to whoever shows it. Worth detecting rather than declaring,
+     * because the alternative is a naming rule or a manifest, and both are
+     * things somebody has to keep in step with the files. The pixels already
+     * say what they are.
+     */
+    bool mask;
+
     /* When this was last asked for. A plain counter rather than a clock: the
      * only question is which of two entries was wanted more recently, and a
      * clock would answer it with more machinery and no more accuracy. */
@@ -112,6 +123,38 @@ static bool evict_one(void) {
     g_cache[oldest] = g_cache[g_cache_count - 1];
     g_cache_count--;
     return true;
+}
+
+/*
+ * Is this a silhouette -- white everywhere it is visible at all?
+ *
+ * Checked once, when the file is loaded, so showing it costs nothing. A single
+ * coloured pixel is enough to say no: an icon that is *mostly* white is a
+ * picture with white in it, and recolouring that would ruin it.
+ *
+ * The test is on pixels that are actually there. Anti-aliased edges carry the
+ * shape's colour at a low alpha, and a fully transparent pixel's colour is
+ * whatever happened to be in the file, which is frequently black and means
+ * nothing.
+ */
+static bool looks_like_a_mask(const unsigned char *rgba, int width,
+        int height) {
+    if (rgba == NULL || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    bool seen = false;
+    for (int i = 0; i < width * height; i++) {
+        const unsigned char *px = rgba + (size_t)i * 4;
+        if (px[3] < 8) {
+            continue;              /* not really there */
+        }
+        if (px[0] < 0xF0 || px[1] < 0xF0 || px[2] < 0xF0) {
+            return false;
+        }
+        seen = true;
+    }
+    return seen;
 }
 
 /* Try one file, returning pixels or NULL. */
@@ -226,10 +269,39 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
      */
     bool glossy = recon_theme_metric(RECON_METRIC_ICON_GLOSS) > 0;
 
-    for (int pass = glossy ? 0 : 1; pass < 2 && entry->pixels == NULL; pass++) {
+    /*
+     * --- Three places to look, in order ---
+     *
+     *   /System/Icons/<skin>/     the skin's own set, if it has one
+     *   /System/Icons/Glossy/     the lit versions, if the skin asks for gloss
+     *   /System/Icons/            the set every skin shares
+     *
+     * A skin brings its own icons by having a directory named after it, and
+     * that is the whole of the rule -- no manifest, no metric, nothing to keep
+     * in step. Drop a folder called Glass beside the icons and the Glass skin
+     * uses what is in it.
+     *
+     * Each is a *fallback* rather than a switch. An icon that exists only in
+     * the shared set still appears under a skin that has its own, because a
+     * skin that silently loses icons looks like the icons are broken rather
+     * than like the skin is incomplete.
+     */
+    const char *skin = recon_theme_current();
+
+    for (int pass = 0; pass < 3 && entry->pixels == NULL; pass++) {
+        if (pass == 0 && (skin == NULL || skin[0] == '\0')) {
+            continue;
+        }
+        if (pass == 1 && !glossy) {
+            continue;
+        }
+
         for (int i = 0; EXTENSIONS[i] != NULL && entry->pixels == NULL; i++) {
             char path[RECON_PATH_MAX];
             if (pass == 0) {
+                snprintf(path, sizeof(path), "%s/%s/%s.%s",
+                    RECON_DIR_SYSTEM_ICONS, skin, name, EXTENSIONS[i]);
+            } else if (pass == 1) {
                 snprintf(path, sizeof(path), "%s/%s/%s.%s",
                     RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, name,
                     EXTENSIONS[i]);
@@ -246,6 +318,9 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
     if (entry->pixels == NULL) {
         return NULL;
     }
+
+    entry->mask = looks_like_a_mask(entry->pixels, entry->width,
+        entry->height);
 
     g_cache_bytes += entry_bytes(entry);
     while (g_cache_bytes > CACHE_BYTES_MAX) {
@@ -269,15 +344,94 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
     return entry->pixels;
 }
 
-bool recon_icon_draw(struct recon_panel *panel, const char *name,
-        int x, int y, int size) {
+/*
+ * Is the icon by this name a silhouette waiting to be coloured?
+ *
+ * Loads it if it is not loaded, because the answer is in the file. False for a
+ * name with no icon, which keeps a caller from having to ask twice.
+ */
+bool recon_icon_is_mask(const char *name) {
+    int width = 0, height = 0;
+    if (recon_icon_get(name, &width, &height) == NULL) {
+        return false;
+    }
+    for (int i = 0; i < g_cache_count; i++) {
+        if (strcasecmp(g_cache[i].name, name) == 0) {
+            return g_cache[i].mask;
+        }
+    }
+    return false;
+}
+
+bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
+        int x, int y, int size, recon_color ink) {
     int width = 0, height = 0;
     const unsigned char *pixels = recon_icon_get(name, &width, &height);
     if (pixels == NULL) {
         return false;
     }
-    recon_draw_image(panel, x, y, size, size, pixels, width, height);
+
+    if (!recon_icon_is_mask(name)) {
+        /* A picture, drawn as it was made. `ink` is what a silhouette would
+         * have been coloured with and has nothing to say about a photograph
+         * of a folder. */
+        recon_draw_image(panel, x, y, size, size, pixels, width, height);
+        return true;
+    }
+
+    /*
+     * A silhouette, in the colour asked for.
+     *
+     * The shape lives entirely in the alpha channel, so colouring it is a
+     * matter of replacing the colour and keeping the alpha -- which is why
+     * this can be done at draw time rather than at load: the same file is one
+     * icon in a menu, another on a toolbar and a third on a title bar, in
+     * three different colours, without three copies of it.
+     *
+     * Scaled into a scratch buffer at the size wanted, then recoloured, so the
+     * averaging that makes a small icon look like a small icon happens on the
+     * alpha rather than on the colour -- which is the same reason
+     * recon_draw_image weights by alpha in the first place.
+     */
+    size_t count = (size_t)size * (size_t)size;
+    unsigned char *tinted = malloc(count * 4);
+    if (tinted == NULL) {
+        recon_draw_image(panel, x, y, size, size, pixels, width, height);
+        return true;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        int col = (int)(i % (size_t)size);
+        int row = (int)(i / (size_t)size);
+
+        /* Nearest source pixel for the colour, which is white everywhere it
+         * matters, and for the alpha, which is the picture. Shrinking is
+         * handled by recon_draw_image below; this only recolours. */
+        int sx = col * width / size;
+        int sy = row * height / size;
+        const unsigned char *src = pixels + ((size_t)sy * width + sx) * 4;
+
+        tinted[i * 4 + 0] = (unsigned char)((ink >> 16) & 0xFF);
+        tinted[i * 4 + 1] = (unsigned char)((ink >> 8) & 0xFF);
+        tinted[i * 4 + 2] = (unsigned char)(ink & 0xFF);
+        tinted[i * 4 + 3] = src[3];
+    }
+
+    recon_draw_image(panel, x, y, size, size, tinted, size, size);
+    free(tinted);
     return true;
+}
+
+bool recon_icon_draw(struct recon_panel *panel, const char *name,
+        int x, int y, int size) {
+    /*
+     * A silhouette with no colour named takes the surface's text colour,
+     * which is the right guess for the majority of places one is drawn -- a
+     * menu row, a list, a tile. Somewhere it is wrong, the caller says so:
+     * recon_icon_draw_in is the same call with the colour spelled out, and a
+     * title bar and a taskbar both want their own.
+     */
+    return recon_icon_draw_in(panel, name, x, y, size, THEME(SURFACE_TEXT));
 }
 
 void recon_icons_forget(void) {

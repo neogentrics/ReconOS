@@ -106,8 +106,27 @@
 /* The pixels for an icon, or NULL if there is no file for it. */
 const unsigned char *recon_icon_get(const char *name, int *width, int *height);
 
+/*
+ * Draw an icon in a colour of the caller's choosing.
+ *
+ * The colour is used only for a *silhouette* -- an icon whose every visible
+ * pixel is white and whose picture is entirely in its alpha channel. Whole
+ * icon sets are drawn that way, the colour left to whoever shows them, and it
+ * is what lets one file be a dark glyph on a light toolbar and a light one on
+ * a dark title bar without being two files.
+ *
+ * A picture is drawn as it was made and ignores the colour, so a caller does
+ * not have to know which kind it is asking for.
+ */
+bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
+    int x, int y, int size, recon_color ink);
+
+/* Whether this icon is one of those silhouettes. */
+bool recon_icon_is_mask(const char *name);
+
 /* Draw an icon, returning false if there is none, so the caller can draw its
- * own. */
+ * own. A silhouette takes the surface's text colour; recon_icon_draw_in is
+ * the way to say otherwise. */
 bool recon_icon_draw(struct recon_panel *panel, const char *name,
     int x, int y, int size);
 

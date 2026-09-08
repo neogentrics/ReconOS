@@ -11,6 +11,24 @@ written here.
 
 Included directly in the repository under `third_party/`.
 
+### Glass icon set
+
+- **Author:** Icons8 (icons8.com)
+- **License:** as obtained by the project owner, who confirmed the terms allow
+  this use. **Attribution may be required** depending on which Icons8 licence
+  the files were taken under -- their free tier asks for a visible credit, the
+  paid ones do not. Whoever added them knows which; this entry is where the
+  credit goes if one is owed.
+- **Source:** `assets/icons/Glass/`, installed into
+  `/System/Icons/Glass/` on first run.
+- **Used for:** the icons the Glass skin shows. They are white silhouettes
+  with the picture in the alpha channel, so ReconOS colours them from the skin
+  rather than showing them as they arrived -- see `recon_icon_draw_in`.
+- **Not used by any other skin.** A skin uses the icons in a directory named
+  after it and falls back to the generated set for anything that directory
+  does not have, so removing this folder removes the dependency entirely and
+  leaves a working system.
+
 ### stb_image
 
 - **Author:** Sean Barrett and contributors

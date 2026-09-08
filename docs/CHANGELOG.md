@@ -23,6 +23,29 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**A skin can bring its own icons, and a silhouette takes the skin's colour.**
+Two mechanisms, and the rule for the first is the whole rule: a skin uses the
+icons in a directory named after it. `/System/Icons/Glass/` is the Glass
+skin's, no manifest and nothing to keep in step, and anything that directory
+does not have falls back to the shared set -- because a skin that silently
+loses icons looks like the icons are broken rather than like the skin is
+incomplete.
+
+The second is for icon sets drawn as **silhouettes**: every visible pixel
+white, the whole picture in the alpha channel. Detected rather than declared,
+since the pixels already say what they are. ReconOS colours them where they
+are drawn, so one file is a dark glyph on a light toolbar and a light one on a
+dark title bar without being two files -- and the colour comes from the skin,
+which is what makes an icon set part of a theme rather than a decoration on
+top of one. `recon_icon_draw_in` takes the colour; `recon_icon_draw` uses the
+surface's text colour, which is right for a menu, a list or a tile, and the
+places where it is not -- the desktop, the taskbar, a title bar -- say so.
+
+**The Glass skin has an icon set.** Eighty-three files, twenty-three of them
+answering names ReconOS already asks for and the rest available as glyphs for
+toolbars that currently draw their own. See THIRD_PARTY.md for where they came
+from.
+
 **Highlights are a step now, not a fraction of the way to white.** A constant
 fraction is not a constant effect: mixing 110 of 255 toward white lifts a light
 button by nine levels and a dark one by eighty-five, so every dark skin had a

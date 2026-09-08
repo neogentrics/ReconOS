@@ -319,10 +319,32 @@ char *recon_asset_read(const char *name, size_t *size_out) {
     return data;
 }
 
-static void install_asset_icon(const char *asset, const char *icon_name) {
+/*
+ * Copy one icon out of the asset directory, into a skin's set or the shared
+ * one.
+ *
+ * `skin` NULL puts it where every skin can see it. Naming a skin puts it in a
+ * directory of that name, which is the whole of how a skin brings its own
+ * icons -- recon_icons looks there first when that skin is on, and falls back
+ * to the shared set for anything the skin does not have. No manifest, nothing
+ * to keep in step: the directory's name is the statement.
+ */
+static void install_asset_icon_for(const char *asset, const char *icon_name,
+        const char *skin) {
     char destination[RECON_PATH_MAX];
-    snprintf(destination, sizeof(destination), "%s/%s.png",
-        RECON_DIR_SYSTEM_ICONS, icon_name);
+    if (skin != NULL) {
+        /* Built from the two parts rather than from a joined directory
+         * string: the compiler cannot see that a path made of two bounded
+         * pieces still fits, and it is right to ask. */
+        char dir[RECON_PATH_MAX];
+        snprintf(dir, sizeof(dir), "%s/%s", RECON_DIR_SYSTEM_ICONS, skin);
+        recon_fs_mkdir("/", dir);
+        snprintf(destination, sizeof(destination), "%s/%s/%s.png",
+            RECON_DIR_SYSTEM_ICONS, skin, icon_name);
+    } else {
+        snprintf(destination, sizeof(destination), "%s/%s.png",
+            RECON_DIR_SYSTEM_ICONS, icon_name);
+    }
     if (recon_fs_exists("/", destination)) {
         return;
     }
@@ -334,7 +356,7 @@ static void install_asset_icon(const char *asset, const char *icon_name) {
 
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
-        wlr_log(WLR_INFO, "ReconOS: no '%s' to install", path);
+        wlr_log(WLR_DEBUG, "ReconOS: no '%s' to install", path);
         free(path);
         return;
     }
@@ -355,6 +377,59 @@ static void install_asset_icon(const char *asset, const char *icon_name) {
 
     fclose(f);
     free(path);
+}
+
+static void install_asset_icon(const char *asset, const char *icon_name) {
+    install_asset_icon_for(asset, icon_name, NULL);
+}
+
+/*
+ * A whole skin's worth, by listing the asset directory rather than by naming
+ * each file.
+ *
+ * The shared set is named one line at a time below, because each of those is
+ * a decision about which drawing belongs to which idea. A skin's set is not:
+ * it is somebody's folder of pictures, already named for what they are, and
+ * writing sixty lines to say "copy the file called folder to the icon called
+ * folder" would be sixty lines that exist to be forgotten when the
+ * sixty-first file arrives.
+ */
+static int install_skin_icons(const char *skin) {
+    char relative[128];
+    snprintf(relative, sizeof(relative), "icons/%s", skin);
+
+    char *dir = asset_path(relative);
+    if (dir == NULL) {
+        return 0;
+    }
+
+    DIR *d = opendir(dir);
+    if (d == NULL) {
+        free(dir);
+        return 0;
+    }
+
+    int installed = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        size_t length = strlen(entry->d_name);
+        if (length < 5 || strcmp(entry->d_name + length - 4, ".png") != 0) {
+            continue;
+        }
+
+        char name[128];
+        snprintf(name, sizeof(name), "%.*s", (int)(length - 4), entry->d_name);
+
+        char asset[RECON_PATH_MAX];
+        snprintf(asset, sizeof(asset), "icons/%s/%s", skin, entry->d_name);
+
+        install_asset_icon_for(asset, name, skin);
+        installed++;
+    }
+
+    closedir(d);
+    free(dir);
+    return installed;
 }
 
 /* The bundled photograph, copied in as one wallpaper among the drawn ones. */
@@ -2775,6 +2850,18 @@ int main(int argc, char **argv) {
     install_asset_icon("icons/mail.png", RECON_ICON_MAIL);
     install_asset_icon("icons/web.png", RECON_ICON_WEB);
     install_asset_icon("icons/player.png", RECON_ICON_PLAYER);
+
+    /*
+     * And any set a skin brings with it.
+     *
+     * Named here rather than discovered, because the asset directory is the
+     * project's and a folder appearing in it is a decision somebody made. The
+     * files inside are not named here -- see install_skin_icons.
+     */
+    int skinned = install_skin_icons("Glass");
+    if (skinned > 0) {
+        wlr_log(WLR_INFO, "ReconOS: %d icons for the Glass skin", skinned);
+    }
 
     /*
      * The help and the change log, rewritten every start rather than only

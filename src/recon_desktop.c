@@ -534,7 +534,8 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     if (item->kind == ITEM_SHORTCUT && item->target[0] != '\0') {
         const char *icon = recon_shell_icon_for_app(desktop->server->shell,
             item->target);
-        if (icon != NULL && recon_icon_draw(p, icon, cx, cy, ICON_IMAGE)) {
+        if (icon != NULL && recon_icon_draw_in(p, icon, cx, cy, ICON_IMAGE,
+            THEME(DESKTOP_LABEL))) {
             return;
         }
     }
@@ -544,7 +545,8 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
     if (item->kind == ITEM_TRASH) {
         const char *icon = recon_fs_trash_count() > 0
             ? RECON_ICON_TRASH_FULL : RECON_ICON_TRASH;
-        if (recon_icon_draw(p, icon, cx, cy, ICON_IMAGE)) {
+        if (recon_icon_draw_in(p, icon, cx, cy, ICON_IMAGE,
+            THEME(DESKTOP_LABEL))) {
             return;
         }
     }
@@ -561,7 +563,8 @@ static void draw_icon(struct recon_desktop *desktop, struct recon_panel *p,
         item->kind == ITEM_SHORTCUT ? RECON_ICON_APP :
         item->kind == ITEM_TRASH ? RECON_ICON_TRASH :
         recon_props_icon(item->name);
-    if (recon_icon_draw(p, generic, cx, cy, ICON_IMAGE)) {
+    if (recon_icon_draw_in(p, generic, cx, cy, ICON_IMAGE,
+            THEME(DESKTOP_LABEL))) {
         return;
     }
 

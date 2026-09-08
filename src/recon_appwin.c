@@ -249,8 +249,9 @@ static void draw_frame(struct recon_appwin *win) {
     /* An icon beside the title, so a window says what it is before it is read.
      * The window's own, which is the application's unless it said otherwise --
      * and the same one the taskbar draws, because both ask here. */
-    recon_icon_draw(p, recon_appwin_icon(win), bar.icon.x, bar.icon.y,
-        bar.icon.w);
+    recon_icon_draw_in(p, recon_appwin_icon(win), bar.icon.x, bar.icon.y,
+        bar.icon.w,
+        win->focused ? THEME(TITLE_TEXT) : THEME(TITLE_TEXT_INACTIVE));
     /*
      * The colour that goes with the bar underneath it.
      *
