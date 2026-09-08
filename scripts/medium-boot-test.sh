@@ -129,23 +129,44 @@ else
 	fail=$((fail + 1))
 fi
 
-# --- the boundary, said out loud --------------------------------------------
+# --- reading the stick it came from -----------------------------------------
 #
-# The kernel cannot read the stick it was booted from: it is on a USB
-# controller and there is no USB driver (checkpoint 11b). That is a real
-# limitation and the point of this assertion is that the kernel **says** so
-# rather than reporting an empty machine.
+# This assertion used to say the opposite. Until checkpoint 11b the kernel
+# could not read the medium it had booted from -- the stick is on a USB
+# controller and there was no USB driver -- and what this checked was that the
+# kernel *said* so rather than reporting an empty machine.
 #
-# "No storage found" and "storage I cannot reach" are different sentences, and
-# a person holding a stick that will not install needs the second one.
+# It now reads it, so the assertion is the other way round, and it is
+# deliberately not a check that a device merely appeared. A driver that
+# enumerates the controller and registers a device of the wrong size, or one
+# whose reads return another page's contents, passes "a disk is present" and
+# fails the only thing anybody wants from it. So what is checked is the
+# partition table: the kernel must find a GPT on the stick with the two
+# partitions make-medium.sh put there, at the offsets it put them at. Those
+# bytes are 1 MiB into the device and cannot be produced by accident.
 
-say "and says it cannot read the stick it came from"
-if echo "$uefi" | grep -qaE 'devices *: none found|no device'; then
-	echo "no block devices -- 11b is what fixes it"
+say "and reads the stick it came from"
+if echo "$uefi" | grep -qaE '^table usb0 gpt 2'; then
+	slices=$(echo "$uefi" | grep -acE '^slice usb0 ')
+	echo "gpt, $slices partitions off USB"
 	pass=$((pass + 1))
 else
-	echo "FAILED -- it claims to see storage it cannot have"
-	echo "$uefi" | grep -a -A3 'Storage' | head -6 | sed 's/^/      /'
+	echo "FAILED -- no readable table on the medium"
+	echo "$uefi" | grep -aE 'usb|Storage|table ' | head -8 | sed 's/^/      /'
+	fail=$((fail + 1))
+fi
+
+# The offsets, not just the count. make-medium.sh puts the BIOS boot partition
+# at 2048 and the ESP at 4096; a driver with an off-by-one in its block
+# addressing still returns two slices, just not these ones.
+say "at the offsets the medium was built with"
+if echo "$uefi" | grep -qaE '^slice usb0 1 2048 ' &&
+   echo "$uefi" | grep -qaE '^slice usb0 2 4096 '; then
+	echo "2048 and 4096, as written"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- the partitions are not where they were put"
+	echo "$uefi" | grep -aE '^slice usb0' | head -4 | sed 's/^/      /'
 	fail=$((fail + 1))
 fi
 

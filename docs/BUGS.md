@@ -855,10 +855,24 @@ real from the first line; what was missing was a medium that could show it.
 
 - **Found:** 6 September 2026, on a physical USB stick, the first real disk this
   kernel has ever been shown.
-- **Status:** **Open.** It cannot bite until checkpoint 11b exists, because
-  there is no USB driver for it to be wrong in yet. Recorded now because the
-  assumption is already written into the storage layer, and the moment a USB
-  disk appears it becomes wrong silently.
+- **Status:** **Half fixed, 8 September 2026, and the open half is the one that
+  bites.** Checkpoint 11b's driver now *asks*: it sends INQUIRY for vital
+  product data page B1 and sets `seek_is_free` from the medium rotation rate,
+  rather than inferring anything from the bus. A device that does not offer the
+  page leaves the field at its default, which is now a measured default rather
+  than a guess -- the question was put and the device declined to answer.
+  `scripts/usb-storage-test.sh` asserts the question is asked, from QEMU's SCSI
+  trace, so it cannot quietly stop being asked.
+
+  **What is still open is the part this bug is actually about.** The hazard was
+  never the allocator hint; it was that a USB SSD would never be told a block
+  had been freed. `usb_storage.c` sets `discard = NULL`, so it still is not
+  told -- correctly reported as `BLOCK_ERR_UNSUPPORTED` rather than as success,
+  but not told. SCSI's answer is UNMAP, gated on the Block Limits VPD page, and
+  nothing has asked for it yet. And `seek_is_free` remains a bool, so the three
+  states this entry argues for -- rotating, solid state, **unknown** -- are
+  still two. The driver knows which of the three it is and has nowhere to say
+  so.
 
 The storage layer decides whether a drive is solid state in order to decide
 whether to tell it about blocks that stop being needed — Dataset Management on

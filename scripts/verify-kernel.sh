@@ -746,6 +746,33 @@ else
 	FAILED_PATHS+=("install medium")
 fi
 
+# --- the stick, read and written --------------------------------------------
+#
+# Checkpoint 11b. The medium test above proves the kernel can read the stick it
+# booted from, which is the half that matters for installing; this proves the
+# other half, and proves it from the wire rather than from the driver's own
+# report. See the script: a restoring self-test leaves an image that looks
+# exactly like one no write ever touched, so the WRITE(10) is asserted in
+# QEMU's SCSI trace.
+
+printf '%-46s' "  the kernel reads and writes a USB stick"
+
+usb_out=$(sh scripts/usb-storage-test.sh 2>&1)
+usb_rc=$?
+
+if [ "$usb_rc" -eq 0 ]; then
+	echo "$(echo "$usb_out" | grep -oE '[0-9]+ of [0-9]+: the kernel.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$usb_rc" -eq 2 ]; then
+	echo "skipped, qemu is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$usb_out" | sed 's/^/      /' | head -12
+	failures=$((failures + 1))
+	FAILED_PATHS+=("usb storage")
+fi
+
 # --- the menu draws where it can, and falls back where it cannot -------------
 #
 # Both halves asserted, because only one of them is the interesting one.

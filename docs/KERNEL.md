@@ -102,13 +102,13 @@ courtesy now rather than a dependency.
 | 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
 | 11 | Block devices — storage the kernel can read and write | **Done** |
-| 11b | USB mass storage — a USB stack, and a disk on the end of it | |
+| 11b | USB mass storage — a USB stack, and a disk on the end of it | **Done** |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | **Done** |
 | 13 | ReconFS — a filesystem of its own | **Done** |
 | 14 | Reads foreign filesystems well enough to install beside them | **Done** |
 | 15 | The installer | **Done** |
-| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | **Next**, designed |
-| 17 | Boots on real hardware: both architectures, both firmwares | |
+| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | **Done** |
+| 17 | Boots on real hardware: both architectures, both firmwares | **Next** |
 
 Asked for after this list was made, and not numbered into it:
 
@@ -1201,6 +1201,39 @@ to *read the installation medium*, and on both architectures that medium is
 reached through firmware during boot and through a real disk afterwards. USB
 becomes necessary when somebody wants to plug a drive in while the system is
 running, which is a desktop feature rather than an install one.
+
+### Done, 8 September 2026 — and what it still does not do
+
+All three layers exist: `core/xhci.c` is the controller and the bus,
+`core/usb_storage.c` is the class driver, and a stick registers as an ordinary
+block device that the partition reader and the filesystems use without knowing
+what it is on the end of. The kernel now boots from the install medium and reads
+that same medium's partition table back over USB, which is the round trip the
+checkpoint is for.
+
+Two assertions hold it: `medium-boot-test.sh` requires the GPT to be found *at
+the offsets `make-medium.sh` wrote*, and `usb-storage-test.sh` requires a real
+`WRITE(10)` and `SYNCHRONIZE CACHE` in QEMU's SCSI trace. The second exists
+because the block layer's self-test restores what it borrowed, so a passing run
+leaves an image byte-identical to one where nothing was ever written — the
+driver's own report cannot tell those apart and the wire can.
+
+**What is deliberately not built, so that it is not mistaken for finished:**
+
+- **Hot-plug.** Ports are enumerated once, during the storage probe. A stick
+  pushed in afterwards is not noticed, and one pulled out is discovered by a
+  transfer failing rather than by a port-change event.
+- **Hubs.** Only devices on a root port are found. Anything behind an external
+  hub is invisible, which is most of what is plugged into a laptop.
+- **Error recovery.** A stalled endpoint is not cleared and the Bulk-Only
+  Transport reset is not implemented, so a device that stalls once stays broken
+  until reboot. `BOT_RESET` is defined and unused, which is the honest state.
+- **UAS**, the newer transport — SCSI over four endpoints, with a real queue.
+  Interface protocol `0x62` is refused rather than misread as Bulk-Only.
+- **UNMAP**, so a USB SSD is still never told a block was freed. See BG-127,
+  which this checkpoint half fixed: the rotation rate is now *asked* for over
+  SCSI rather than inferred from the bus, but the discard path it governs is
+  still absent.
 
 ## Storage, partitions and filesystems
 
