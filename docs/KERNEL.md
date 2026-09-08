@@ -117,8 +117,8 @@ Asked for after this list was made, and not numbered into it:
 | The boot chain verifies itself — the loader refuses a kernel that is not ours | **Done**, boot-time half |
 | The other systems on the disk, found and offered | **Done** |
 | Three partitions: EFI, system, and programs | **Done** |
-| A recovery environment | **Done**, and not yet reachable without a second computer |
-| Gatekeeper — what the running system may load | |
+| A recovery environment | **Done**, and reachable from the boot menu on every machine |
+| Gatekeeper — what the running system may load | Open, and mostly the desktop's |
 | macOS on hardware Apple never supported | Parked, on Joshua's call |
 
 Eighteen, numbered 0 to 17, is a lot to hold in your head, so they group into four stages: **the
