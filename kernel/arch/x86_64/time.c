@@ -263,6 +263,29 @@ void x86_timer_interrupt(void)
 		sched_switch();
 }
 
+/* The same tick, from this processor's own APIC rather than from the one 8254.
+ *
+ * Deliberately not x86_timer_interrupt with a flag. Two things differ and both
+ * of them are the kind that fail silently: the acknowledgement goes to the APIC
+ * and must *not* go to the 8259 -- telling that chip about an interrupt it did
+ * not send unbalances it, and it stops delivering the ones it did -- and the
+ * global tick counter is advanced by one processor rather than by all of them.
+ *
+ * The end-of-interrupt is before the switch, for the reason written out in
+ * x86_timer_interrupt: a switch does not return here. */
+void x86_apic_timer_interrupt(void)
+{
+	bool preempt;
+
+	time_tick();
+	preempt = sched_tick();
+
+	x86_apic_eoi();
+
+	if (preempt)
+		sched_switch();
+}
+
 void arch_time_init(void)
 {
 	struct cpu_caps caps;

@@ -244,6 +244,44 @@ paddr_t pmm_alloc_page(void)
 	return pmm_alloc_pages(1);
 }
 
+/* A page below a given physical address.
+ *
+ * Not a convenience. Hardware imposes ceilings that have nothing to do with how
+ * much memory there is: a processor started by its neighbour begins in a mode
+ * that can only address the first megabyte, and older bus masters can only
+ * reach the first four gigabytes. A caller that needs one of those cannot use
+ * pmm_alloc_pages and then check, because by then the page it wanted has been
+ * handed out to somebody else.
+ *
+ * The limit is the caller's, not this file's -- nothing here knows what a real
+ * mode is. That is what keeps the constraint expressible without putting a
+ * machine into core/.
+ */
+paddr_t pmm_alloc_page_below(paddr_t limit)
+{
+	size_t i;
+
+	/* Searched from the bottom rather than from the hint. The hint exists to
+	 * spread allocations out, which is exactly the wrong instinct here:
+	 * pages under a ceiling are scarce and the ones nearest the bottom are
+	 * the ones nothing else can be made to want. */
+	for (i = 0; i < total_pages; i++) {
+		paddr_t at = page_addr(i);
+
+		if (at + PAGE_SIZE > limit)
+			break;		/* addresses only rise from here */
+
+		if (bit_test(i))
+			continue;
+
+		mark_used(i, 1);
+		kmemset(phys_to_virt(at), 0, PAGE_SIZE);
+		return at;
+	}
+
+	return 0;
+}
+
 void pmm_free_pages(paddr_t page, size_t count)
 {
 	size_t index;

@@ -711,8 +711,29 @@ void block_print_summary(void)
  *
  * The choice below is not an off-switch for that rule, which this project does
  * not allow. It is the test finding a surface it is entitled to write to: a
- * disk with no table on it, or failing that a single partition. What it can do
- * depends on what the disk is, the same way the read-only case already worked.
+ * disk with no table on it. What it can do depends on what the disk is, the
+ * same way the read-only case already worked.
+ *
+ * --- And it used to accept a partition, which was worse (BG-140) ---
+ *
+ * The second preference used to be "failing that, a single partition -- bounded,
+ * and exercises the slice arithmetic". That reads as the careful choice and is
+ * the opposite of one, because of *when* it fires: only when no disk is blank,
+ * which is to say only on a machine whose disks are all partitioned. That is
+ * not a description of the test rig. It is a description of somebody's computer.
+ *
+ * So the branch that wrote to a stranger's partition was the branch that could
+ * only ever run on a stranger's machine, and it never ran in the rig at all --
+ * every disk the rig builds is blank, so the first preference always won and
+ * this one sat unexercised through five checkpoints.
+ *
+ * It was found by booting the real install medium: with USB storage working the
+ * kernel could finally see the stick it had booted from, the stick is
+ * partitioned, and the self-test picked the BIOS boot partition and wrote to
+ * it. It only failed because that run was deliberately read-only.
+ *
+ * A partition belongs to whoever's data is in it. There is no version of this
+ * test worth a write to that.
  */
 #define BLOCK_TEST_PAGES 4
 
@@ -722,12 +743,15 @@ void block_print_summary(void)
  *
  *   an unpartitioned disk   -- the whole surface, which is what the rig builds
  *                              and what an installer meets on a new machine
- *   a partition             -- bounded, and exercises the slice arithmetic
  *   anything at all         -- read-only test, better than no test
+ *
+ * There is no third option, and the missing one is the point: see BG-140 above.
+ * A partitioned disk and every slice of it are refused for writing on a machine
+ * this kernel does not own, which is every machine except the rig's.
  */
 static struct block_device *pick_test_device(bool *writable)
 {
-	struct block_device *whole_blank = 0, *slice = 0, *anything = 0;
+	struct block_device *whole_blank = 0, *anything = 0;
 
 	for (unsigned i = 0; i < device_count; i++) {
 		struct block_device *d = &devices[i];
@@ -741,19 +765,17 @@ static struct block_device *pick_test_device(bool *writable)
 		if (d->read_only)
 			continue;
 
+		/* A whole device with no table and no slices. Both conditions,
+		 * not one: `!parent` alone would accept a partitioned disk, and
+		 * writing to the end of one lands on its backup GPT. */
 		if (!d->parent && !d->slice_count && !whole_blank)
 			whole_blank = d;
-
-		if (d->parent && !slice)
-			slice = d;
 	}
 
-	*writable = true;
-
-	if (whole_blank)
+	if (whole_blank) {
+		*writable = true;
 		return whole_blank;
-	if (slice)
-		return slice;
+	}
 
 	*writable = false;
 	return anything;

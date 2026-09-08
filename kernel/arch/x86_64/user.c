@@ -96,9 +96,10 @@ void arch_user_init(void)
 	 * and let it read the structure itself as permissions. */
 	tss[cpu].iomap_base = sizeof(struct tss);
 
-	write_tss_descriptor(SEL_TSS / 8, (u64)(uintptr_t)&tss[cpu],
+	/* This processor's own slot, not the shared one. See trap.c. */
+	write_tss_descriptor(SEL_TSS_FOR(cpu) / 8, (u64)(uintptr_t)&tss[cpu],
 			     sizeof(struct tss) - 1);
-	__asm__ volatile("ltr %w0" : : "r"((u16)SEL_TSS));
+	__asm__ volatile("ltr %w0" : : "r"(SEL_TSS_FOR(cpu)));
 
 	/* SYSCALL is off until EFER says otherwise. Read, modify, write: NXE was
 	 * turned on in vm.c and clearing it here would make every no-execute

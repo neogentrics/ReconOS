@@ -73,6 +73,17 @@ struct thread {
 	 * and it is checked before anything is scheduled. */
 	int cpu;
 
+	/* Which processor this is the idle thread *of*, or -1 for an ordinary
+	 * thread.
+	 *
+	 * An idle thread belongs to one processor and must never be run by
+	 * another. It looks like an ordinary ready thread in a ring every
+	 * processor picks from, so without this a processor takes somebody
+	 * else's idle thread, and the processor it belonged to is left with a
+	 * ring in which everything is running elsewhere and nothing at all it
+	 * may run. */
+	int idle_for;
+
 	u64 slice_left;
 	u64 ran_ticks;			/* total, for the summary */
 

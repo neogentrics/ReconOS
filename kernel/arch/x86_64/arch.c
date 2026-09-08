@@ -133,11 +133,14 @@ void arch_wait_for_interrupt(void)
 
 unsigned arch_cpu_id(void)
 {
-	/* One processor until checkpoint 9b wakes the others. When it does, this
-	 * reads the local APIC's identifier rather than returning a constant,
-	 * and every caller keeps working -- which is the reason it is a function
-	 * now rather than a zero written at each call site. */
-	return 0;
+	/* It reads the local APIC now, which is what this comment promised at
+	 * checkpoint 9 it would do once there were other processors. Every
+	 * caller kept working, which is the reason it was a function from the
+	 * start rather than a zero written at each call site.
+	 *
+	 * The APIC's identifier is not the kernel's processor number -- see
+	 * smp.c, where the two are kept apart deliberately. */
+	return x86_cpu_index();
 }
 
 u64 arch_irq_save(void)

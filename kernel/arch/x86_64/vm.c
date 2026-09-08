@@ -388,6 +388,32 @@ void vm_init(void)
 	pmm_remap();
 }
 
+/* The same switch, on a processor that is not the boot processor.
+ *
+ * The tables are the machine's and were built once; what is per-processor is
+ * the register that points at them. A secondary reaches this having already
+ * loaded CR3 in the trampoline -- it had to, because it could not have executed
+ * the instruction after enabling paging otherwise -- so on x86_64 this is a
+ * confirmation rather than a change, and it is written out rather than left
+ * empty because "the trampoline already did it" is a fact about another file.
+ *
+ * It also sets the bit that makes global mappings global. That is per-processor
+ * and is easy to miss: the kernel's mappings are marked global so they survive
+ * an address-space change, and on a processor where CR4.PGE is clear the flag
+ * is simply ignored, so nothing fails -- the mappings are merely flushed more
+ * often than they should be, invisibly and only on the secondaries. */
+void vm_activate_this_cpu(void)
+{
+	u64 cr4;
+
+	__asm__ volatile("movq %%cr4, %0" : "=r"(cr4));
+	cr4 |= (1ull << 7);				/* page global enable */
+	__asm__ volatile("movq %0, %%cr4" : : "r"(cr4) : "memory");
+
+	__asm__ volatile("mov %0, %%cr3"
+			 : : "r"(kernel_pml4_phys) : "memory");
+}
+
 void vm_print_summary(void)
 {
 	kprintf("\nVirtual memory\n");

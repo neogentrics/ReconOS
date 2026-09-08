@@ -6,7 +6,19 @@ static volatile u64 ticks;
 
 void time_tick(void)
 {
-	ticks++;
+	/* Counted once per interval, not once per processor.
+	 *
+	 * Every processor's timer calls this, and on a four-processor machine
+	 * that made the reported count four times the number of intervals that
+	 * had actually passed. Nothing depended on it -- monotonic time comes
+	 * from a hardware counter, not from here -- so it was a number on a
+	 * summary being wrong rather than a clock being wrong, and it would
+	 * have stayed wrong quietly for exactly that reason.
+	 *
+	 * The boot processor is the one that counts. Not because its ticks are
+	 * special, but because there is exactly one of it. */
+	if (arch_cpu_id() == 0)
+		ticks++;
 }
 
 u64 time_ticks(void)

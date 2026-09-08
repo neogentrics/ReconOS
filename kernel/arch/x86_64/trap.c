@@ -15,6 +15,8 @@
  */
 #include "x86_64.h"
 
+#include <recon/kernel/smp.h>
+
 #include <recon/kernel/trap.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -61,17 +63,28 @@ static struct idt_entry idt[256];
  * would find natural -- code, code, data, data -- does not work, and fails by
  * loading a plausible wrong segment rather than by refusing.
  *
- * The last two entries are one descriptor: a task-state segment is sixteen
- * bytes in 64-bit mode, because its base address no longer fits in one. It is
- * filled in at run time by user.c, which is the only code that needs it. */
-u64 x86_gdt[7] RK_ALIGNED(16) = {
+ * After them come the task-state segments: sixteen bytes each, because a base
+ * address no longer fits in one entry, and **one per processor**.
+ *
+ * One per processor rather than one shared, which is what this was until
+ * checkpoint 9b. A TSS holds the stack a system call lands on, and that stack
+ * cannot be shared: two processors entering the kernel at once on one stack
+ * overwrite each other's frames. The single slot worked only because there was
+ * only ever one processor to write it -- arch_user_init filled it with the
+ * caller's own TSS, so with secondaries running every processor would have used
+ * whichever one was written last. Nothing would have failed until two of them
+ * took a system call at the same moment.
+ *
+ * They are filled in at run time by user.c, which is the only code that needs
+ * them. */
+u64 x86_gdt[5 + 2 * MAX_CPUS] RK_ALIGNED(16) = {
 	0,
 	0x00AF9A000000FFFFULL,	/* 0x08 kernel code: executable, long mode */
 	0x00CF92000000FFFFULL,	/* 0x10 kernel data: writable */
 	0x00CFF2000000FFFFULL,	/* 0x18 user data: writable, DPL 3 */
 	0x00AFFA000000FFFFULL,	/* 0x20 user code: executable, long mode, DPL 3 */
-	0,			/* 0x28 task-state segment, low half */
-	0,			/*      and high half */
+	/* 0x28 onwards: one task-state segment per processor, two entries each,
+	 * left zero until the processor that owns it fills it in. */
 };
 
 static struct table_descriptor gdt_ptr, idt_ptr;
@@ -99,6 +112,10 @@ extern void irq_6(void);   extern void irq_7(void);   extern void irq_8(void);
 extern void irq_9(void);   extern void irq_10(void);  extern void irq_11(void);
 extern void irq_12(void);  extern void irq_13(void);  extern void irq_14(void);
 extern void irq_15(void);
+
+/* The local APIC's two, which have vectors rather than IRQ numbers. */
+extern void vector_64(void);
+extern void vector_255(void);
 
 static void (*const stubs[32])(void) = {
 	isr_0,  isr_1,  isr_2,  isr_3,  isr_4,  isr_5,  isr_6,  isr_7,
@@ -167,6 +184,22 @@ static void describe_page_fault(u64 error)
 
 void trap_dispatch(struct trap_frame *f)
 {
+	/* This processor's own timer, from its local APIC rather than from the
+	 * one 8254 in the machine. Acknowledged to the APIC, never to the 8259:
+	 * telling the 8259 an interrupt it did not send has been handled
+	 * unbalances it, and it stops delivering the ones it did send. */
+	if (f->vector == VECTOR_APIC_TIMER) {
+		x86_apic_timer_interrupt();
+		return;
+	}
+
+	/* Raised when an interrupt is withdrawn between being raised and being
+	 * taken. Rare, harmless, and it must land somewhere that returns --
+	 * with no acknowledgement, which is the one thing the specification is
+	 * explicit about. */
+	if (f->vector == VECTOR_SPURIOUS)
+		return;
+
 	/* A hardware interrupt rather than a fault. Handled and acknowledged;
 	 * an interrupt the controller is not told about is the last one it
 	 * ever sends. */
@@ -275,8 +308,23 @@ void trap_init(void)
 	for (unsigned i = 0; i < 16; i++)
 		set_gate(32 + i, irq_stubs[i], 0x08);
 
+	set_gate(VECTOR_APIC_TIMER, vector_64, 0x08);
+	set_gate(VECTOR_SPURIOUS, vector_255, 0x08);
+
 	idt_ptr.limit = sizeof(idt) - 1;
 	idt_ptr.base  = (u64)(uintptr_t)idt;
 
+	x86_load_tables(&gdt_ptr, &idt_ptr);
+}
+
+/* The same two tables, on a processor that has just started.
+ *
+ * Not a second trap_init: the descriptors are the machine's, built once, and
+ * rebuilding them per processor would mean eight chances to build them
+ * differently. What is per-processor is only that each one must be *told* --
+ * a secondary begins on whatever GDT the trampoline left it with and with no
+ * IDT at all, so the first fault it takes without this would triple-fault. */
+void x86_load_tables_this_cpu(void)
+{
 	x86_load_tables(&gdt_ptr, &idt_ptr);
 }

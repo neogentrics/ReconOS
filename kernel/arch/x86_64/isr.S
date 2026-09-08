@@ -132,6 +132,20 @@ irq_\n:
 	IRQ 14
 	IRQ 15
 
+/* The two the local APIC raises, which are not the 8259's and must not be
+ * acknowledged to it. A vector rather than an IRQ number, because there is no
+ * controller in between to number them. */
+	.macro VECTOR n
+	.global vector_\n
+vector_\n:
+	pushq	$0
+	pushq	$\n
+	jmp	isr_common
+	.endm
+
+	VECTOR 64	/* the local APIC timer: this processor's own tick */
+	VECTOR 255	/* spurious, and it must return without doing anything */
+
 isr_common:
 	SAVE_REGS
 

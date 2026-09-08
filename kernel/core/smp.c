@@ -84,6 +84,10 @@ void smp_init(void)
 			break;
 		}
 
+		/* Claimed for this processor before it can be scheduled
+		 * anywhere. An idle thread in the ring with no owner is a
+		 * thread another processor will happily take. */
+		idle->idle_for = (int)i;
 		cpus[i].idle = idle;
 
 		if (!arch_smp_start(cpu_ids[i], i,
@@ -136,7 +140,8 @@ void smp_print_summary(void)
 	kprintf("  found        : %u, %u online\n", cpu_count, online_count);
 
 	if (dropped)
-		kprintf("  WARNING      : %u more than this kernel can hold\n", dropped);
+		kprintf("  WARNING      : at least %u more than this kernel "
+			"can hold\n", dropped);
 
 	for (unsigned i = 0; i < cpu_count && i < MAX_CPUS; i++)
 		kprintf("  cpu %u        : %s, %lu ticks, %lu switches\n",

@@ -348,6 +348,196 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
+### BG-140 — The block self-test would write to a stranger's partition, and only ever on a stranger's machine
+
+- **Found:** 8 September 2026, booting the real install medium off a physical
+  USB stick in preparation for checkpoint 17 — the first boot where the kernel
+  could see a partitioned disk it did not create.
+- **Cost:** nothing, because the run that found it was deliberately read-only.
+  It was one boot away from writing to the test machine's system disk.
+
+`block_self_test` picks a device to write a pattern to, read back, and restore.
+Its preference order was: an unpartitioned disk, **failing that a single
+partition**, failing that a read-only test on anything.
+
+The middle option was written as the careful choice — *"bounded, and exercises
+the slice arithmetic"* — and is the opposite of one, because of **when it
+fires**. It is reached only when no disk is blank, which is to say only on a
+machine whose disks are all already partitioned. That is not a description of
+the test rig. It is a description of somebody's computer.
+
+So the branch that wrote to a partition it did not own was reachable *only* on a
+machine where every partition belongs to somebody else. And it never ran in the
+rig at all: every disk the rig builds is blank, so the first preference always
+won, and this branch sat unexercised from checkpoint 12 to checkpoint 17.
+
+**What made it visible was the thing that made it dangerous.** Until checkpoint
+11b the kernel could not see a USB disk, so a machine booted from the install
+medium reported no storage and the picker had nothing to choose. With the USB
+driver working, the kernel finally saw the stick it had booted from — which is
+partitioned — and the self-test chose the BIOS boot partition and wrote to it:
+
+    block: could not write to usb0p1: the hardware reported a failure
+
+That failure is QEMU refusing the write because the physical stick was attached
+`readonly=on`, on purpose, for exactly this class of surprise. On a writable
+stick it would have succeeded. On the machine this was being prepared for, the
+first partition of a 1 TB disk with Windows on it would have been chosen
+instead.
+
+It restores what it borrows and it would very probably have left no trace. That
+is not a defence — it is the reason it could have run for years unnoticed.
+
+**The fix is a removal.** A partition belongs to whoever's data is in it, and
+there is no version of a self-test worth a write to that. The picker now writes
+only to a whole device with no table and no slices, and everything else takes
+the read-only path, which is still a real test and already existed. Nothing lost
+any coverage: the rig always took the first branch anyway.
+
+- **Fixed in:** `kernel/core/block.c`, `pick_test_device`. The rationale is
+  written where the old one stood, because the old one read as careful.
+
+**Worth generalising.** This is the second time this project has found a check
+whose *only* reachable case is the case nobody tests — after BG-119's comment
+arguing that a case "does not arise here" about a case that then arose. The
+shape to look for is not a wrong branch. It is a fallback whose precondition is
+"the situation the rig never builds".
+
+### BG-141 — A processor count that saturates, and states the shortfall as a fact
+
+- **Found:** 8 September 2026, sweeping processor counts on aarch64 while
+  finishing checkpoint 9b on the other architecture.
+- **Cost:** nothing. No machine in the rig has more than sixteen processors, and
+  the number is only printed.
+
+aarch64 has no device-tree walk for `/cpus` yet, so it discovers processors by
+*asking*: PSCI `AFFINITY_INFO` for each candidate identifier, where a machine
+that has no such processor gives a definite refusal. The probe is bounded at
+twice the array, and the comment says why — *"twice the array is enough to
+notice; probing without a bound would ask forever."*
+
+Enough to **notice** is not enough to **report**, and the code then reports:
+
+| machine | says | true answer |
+| --- | --- | --- |
+| 9 processors | at least 1 more than this kernel can hold | 1 |
+| 16 processors | at least 8 more | 8 |
+| **32 processors** | **8 more** | **24** |
+
+The count stops at sixteen, so a 32-processor machine is indistinguishable from
+a 16-processor one and the shortfall is understated by two thirds — stated in a
+sentence with a number in it, which is the form people believe.
+
+**This is the exact failure `smp_init` has a comment about.** Fifteen lines
+above, on the cap this number comes from: *"Reported, never silently truncated.
+The memory map's region cap taught this: a limit that quietly drops what it
+cannot hold produces a wrong number rather than an error."* The cap does report.
+The **probe** truncates, one layer down, and the reporting layer cannot tell.
+
+- **Fixed in:** `kernel/core/smp.c` — the warning now says *at least* N. That is
+  true whether the count was exact or bounded, and a message that is never wrong
+  is worth more than one that is precise and sometimes false.
+
+**Still open:** the count itself. The real answer is to read `/cpus` from the
+device tree, which the parser can now do — it gained the ability at BG-125, when
+the walker learned to report a node that has children. Until then the number is
+a floor rather than a total, and the wording says so.
+
+**Worth generalising.** The bug is not in either layer. It is that a lower layer
+was allowed to return a *saturated* value through an interface whose caller
+treats it as a *total*, with no way to ask which it got. The same shape as a
+read that returns fewer bytes than asked for and is treated as a failure — see
+the transfer-event residue in `xhci.c`, where the distinction was built in
+deliberately for exactly this reason.
+
+### BG-142 — The scheduler's own test hung one boot in three, on a counter that `volatile` did not protect
+
+- **Found:** 8 September 2026, sweeping processor counts on x86_64 after
+  checkpoint 9b started the secondaries.
+- **Cost:** nothing shipped, and it had been latent on aarch64 since 9b landed
+  there — see BG-143 for why nothing saw it.
+
+The scheduler self-test runs three threads against a deadline, then waits:
+
+    static volatile unsigned finished;
+
+    while (time_monotonic_ns() < test_deadline_ns)
+            counter[which]++;
+    finished++;                       /* each of the three threads */
+
+    while (finished < 3)              /* the waiter */
+            sched_yield();
+
+`finished++` is a read, an add and a write. **`volatile` stops the compiler
+keeping the value in a register and does nothing whatever about another
+processor landing between those three steps.** Two threads increment, one
+increment is lost, the count reaches two, and the waiter yields for ever.
+
+**The deadline makes the collision the expected case rather than a rare one.**
+All three threads stop at the *same* `test_deadline_ns`, so on a machine with
+three free processors they arrive at that increment together by construction.
+Measured: three hangs in six boots at `-smp 4`, and six clean boots in six after
+the fix.
+
+It was written when there was one processor, where it was correct. The general
+shape is the one this project keeps meeting and has now met on both
+architectures: **a property that held because there was only ever one processor
+to break it** — the same family as the shared TSS descriptor found in the same
+checkpoint, and as `VBAR_EL1` at 9b on aarch64.
+
+- **Fixed in:** `kernel/core/sched.c`. The increment is
+  `__atomic_add_fetch(..., __ATOMIC_RELEASE)` and the reads are
+  `__atomic_load_n(..., __ATOMIC_ACQUIRE)`.
+
+**And the wait is now bounded**, which is a separate fix for a separate fault.
+An unbounded wait for a count that never arrives is a machine that stops with
+nothing printed — the least informative failure a kernel can have. This project
+already converted one of those into a failed test, at checkpoint 7, when a
+recovery loop ran forever at full speed printing nothing. The same conversion
+applies here: after five seconds it reports how many of the three actually
+reported in, and fails.
+
+### BG-143 — The rig reported a boot that stopped half way as a boot that passed
+
+- **Found:** 8 September 2026, immediately after BG-142, by asking why a hang
+  that happened on one boot in three had never turned the matrix red.
+- **Cost:** nothing yet. It is the reason BG-142 could have shipped.
+
+`check()` in `scripts/verify-kernel.sh` decides a boot passed by four tests, and
+a boot that hangs part-way through satisfies **all four**:
+
+| it asks | a hung boot |
+| --- | --- |
+| did any self-test run? | yes — five of them |
+| did any report FAIL? | no |
+| did it panic? | no, it is still sitting there |
+| did it name the disk it was given? | yes |
+
+So it printed `5 self-tests, all pass` and added five to the total. There is no
+count to compare against, because the number of self-tests legitimately differs
+between paths — a diskless run has fewer than one with a disk.
+
+**The storage summary is what makes this quiet.** It prints *before* the
+self-tests, so the string every `check_for` waits on is already in the log by
+the time anything can hang. The aarch64 processor sweep — the check whose whole
+purpose is to exercise several processors — was therefore structurally incapable
+of noticing a hang in the scheduler, which is the thing several processors break.
+
+- **Fixed in:** `scripts/verify-kernel.sh`. `check()` now also requires the log
+  to contain `Idling.`, which `main.c` prints as its last line. Nothing else in
+  the boot says "and it got to the end", and `medium-boot-test.sh` had already
+  worked this out for itself — it waits for `Idling` rather than for the banner,
+  after an earlier version waited for the banner and asserted on evidence that
+  had not been printed yet.
+
+**Worth generalising, and it is the third time.** A check that asks *"did
+anything go wrong?"* passes a run in which nothing went wrong because nothing
+happened. The two before it: a crash harness that reported success on rounds
+where the checker had not run at all, and a recovery test that passed because the
+damage tool was given its arguments the wrong way round and damaged nothing. The
+answer each time is the same — **assert that the thing you are measuring
+actually took place**, not merely that no complaint was printed.
+
 ### BG-139 — Two tests generated a signing key into the source tree and left it there
 
 [#296](https://github.com/neogentrics/ReconOS/issues/296)

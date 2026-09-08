@@ -99,7 +99,7 @@ courtesy now rather than a dependency.
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
 | 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and preemption | **Done** |
-| 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
+| 9b | Every core in use — waking the other processors | **Done** |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
 | 11 | Block devices — storage the kernel can read and write | **Done** |
 | 11b | USB mass storage — a USB stack, and a disk on the end of it | **Done** |

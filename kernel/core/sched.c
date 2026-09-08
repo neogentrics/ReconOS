@@ -142,6 +142,7 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
 	kstrlcpy(t->name, name, sizeof(t->name));
 
 	t->cpu = -1;		/* not running anywhere */
+	t->idle_for = -1;	/* and not anybody's idle thread */
 
 	t->stack_pointer = arch_thread_stack_init(
 		(u8 *)t->stack_base + THREAD_STACK_PAGES * PAGE_SIZE,
@@ -168,13 +169,19 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
  * That check is the single line on which the whole of this checkpoint's
  * safety rests.
  */
-static struct thread *pick_next(struct thread *cur)
+static struct thread *pick_next(struct thread *cur, unsigned me)
 {
 	struct thread *t = cur->next;
 
 	while (t != cur) {
-		if (t->state == THREAD_READY)
+		/* Somebody else's idle thread is not work. Taking it leaves the
+		 * processor it belongs to with nothing it is allowed to run,
+		 * which is how a machine with four processors and two threads
+		 * panics while three of them are idle. */
+		if (t->state == THREAD_READY &&
+		    (t->idle_for < 0 || t->idle_for == (int)me))
 			return t;
+
 		t = t->next;
 	}
 
@@ -190,15 +197,30 @@ void sched_switch(void)
 	flags = spin_lock_irq(&ring_lock);
 
 	prev = me->current;
-	next = pick_next(prev);
+	next = pick_next(prev, me->id);
 
 	if (!next) {
-		/* Nothing here can run, including the caller. On one processor
-		 * that means everything has finished; on several it can also
-		 * mean every other thread is running elsewhere, which is normal
-		 * and is not an error. */
-		spin_unlock_irq(&ring_lock, flags);
-		panic("sched: nothing left to run");
+		/* Nothing here can run, including the caller.
+		 *
+		 * On one processor that means everything has finished, and
+		 * there is nothing to do but say so. On several it usually
+		 * means every other thread is running elsewhere -- which is
+		 * ordinary, happens constantly, and is what this processor's
+		 * idle thread exists for.
+		 *
+		 * The comment that used to sit here said exactly that, and the
+		 * line under it panicked anyway. It was written before there
+		 * was a second processor to make it true, and it stayed while
+		 * 9b made it true on aarch64 -- where nothing hit it, because
+		 * that architecture's processors happened never to run out at
+		 * the same moment. x86_64 hit it on the first four-processor
+		 * boot, six times out of six. */
+		next = me->idle;
+
+		if (!next || next->state == THREAD_FINISHED) {
+			spin_unlock_irq(&ring_lock, flags);
+			panic("sched: nothing left to run");
+		}
 	}
 
 	if (next == prev) {
@@ -392,7 +414,20 @@ static void counting_thread(void *arg)
 	while (time_monotonic_ns() < test_deadline_ns)
 		counter[which]++;
 
-	finished++;
+	/* Atomically, and the reason is the deadline above.
+	 *
+	 * `volatile` stops the compiler keeping this in a register. It does
+	 * nothing whatever about two processors incrementing it at once, which
+	 * is a read, an add and a write that another processor can land in the
+	 * middle of -- and then one of the two increments never happened.
+	 *
+	 * All three threads stop at the *same* deadline, so on a machine with
+	 * three free processors they arrive here together by construction. The
+	 * collision is not a rare interleaving this test might hit; it is the
+	 * expected one. The waiter then never sees three and yields for ever.
+	 *
+	 * Written when there was one processor, where it was correct. */
+	__atomic_add_fetch(&finished, 1, __ATOMIC_RELEASE);
 }
 
 bool sched_self_test(void)
@@ -419,9 +454,26 @@ bool sched_self_test(void)
 
 	/* Wait by yielding rather than spinning: this thread has nothing to do,
 	 * and a scheduler test that burns a slice proving it is scheduled is
-	 * measuring the wrong thing. */
-	while (finished < 3)
-		sched_yield();
+	 * measuring the wrong thing.
+	 *
+	 * Bounded, because an unbounded wait for a count that never arrives is
+	 * a machine that stops with nothing printed -- the least informative
+	 * failure a kernel can have, and the one this project has already
+	 * decided to convert into a failed test wherever it appears. The bound
+	 * is generous: the threads run against a deadline 400 ms out. */
+	{
+		u64 give_up = time_monotonic_ns() + 5000000000ULL;	/* 5 s */
+
+		while (__atomic_load_n(&finished, __ATOMIC_ACQUIRE) < 3 &&
+		       time_monotonic_ns() < give_up)
+			sched_yield();
+	}
+
+	if (__atomic_load_n(&finished, __ATOMIC_ACQUIRE) < 3) {
+		kprintf("  sched: only %u of 3 threads reported finishing\n",
+			__atomic_load_n(&finished, __ATOMIC_ACQUIRE));
+		ok = false;
+	}
 
 	if (preemptions <= preemptions_before) {
 		kputs("  sched: no thread was ever preempted, so the tick is not "

@@ -93,6 +93,26 @@ check() {
 		return
 	fi
 
+	# And it has to have *finished*.
+	#
+	# Everything above is satisfied by a boot that stopped half way: some
+	# passes, no failures, no panic, and the disk it was asked about already
+	# named -- because the storage summary prints before the self-tests do.
+	# A run that hung after five of fourteen tests reported "5 self-tests,
+	# all pass", and there is no count to compare it against, because the
+	# count legitimately differs between paths.
+	#
+	# Found when a lost increment made the scheduler test hang on one boot
+	# in three, and every processor-count check in this file went on passing
+	# through it. (BG-143)
+	if ! grep -q 'Idling\.' "$log"; then
+		echo "$ran passed, then it stopped before the end -- $log"
+		tr -d "\r" < "$log" | tail -3 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$name")
+		return
+	fi
+
 	echo "$ran self-tests, all pass"
 	passes=$((passes + ran))
 }
@@ -108,6 +128,65 @@ check_for() {
 	EXPECT=$1
 	shift
 	check "$@"
+}
+
+# --- every processor, on both architectures ---------------------------------
+#
+# Asserted by the *count*, not by the machine booting. A kernel that starts none
+# of the other processors boots perfectly and reports one, which is why the
+# check that "it still boots with -smp 4" is worth nothing here.
+#
+# Both numbers are required to match the machine QEMU was told to build: found,
+# because discovery can silently stop early, and online, because starting them
+# is the part that fails. They are different failures and a check that asks only
+# one of them cannot tell which happened.
+#
+# And ticks, because of what 9b cost on both architectures. On aarch64 the
+# secondaries came online with the firmware's exception vectors and took not one
+# tick between them; on x86_64 they came online with interrupts still masked
+# from the trampoline and did exactly the same thing. Both report as healthy,
+# online processors. Nothing but a tick count tells them from working ones.
+check_cpus() {
+	local label=$1 n=$2
+	shift 2
+	local log="$WORK/cpus_$label.log"
+
+	printf '%-46s' "  $label, $n processors"
+
+	timeout "$TIMEOUT" "$@" >"$log" 2>&1
+
+	local found
+	found=$(sed -e 's/\r$//' "$log" |
+		sed -n 's/^  found *: \([0-9]*\), \([0-9]*\) online$/\1 \2/p' |
+		head -1)
+
+	if [ "$found" != "$n $n" ]; then
+		echo "FAILED -- expected \"$n $n\", got \"${found:-nothing}\""
+		sed -e 's/\r$//' "$log" | tail -6 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label $n processors")
+		return
+	fi
+
+	# Every processor must have been preempted at least once by the end. The
+	# summary is printed late, after the self-tests, so an idle processor has
+	# had a hundred ticks' worth of opportunity.
+	local idle_ticks
+	idle_ticks=$(sed -e 's/\r$//' "$log" |
+		sed -n 's/^  thread [0-9]* *: idle-[0-9]*, running, \([0-9]*\) ticks$/\1/p' |
+		sort -n | head -1)
+
+	if [ "$n" -gt 1 ] && { [ -z "$idle_ticks" ] || [ "$idle_ticks" -eq 0 ]; }; then
+		echo "FAILED -- online, and not one of them was preempted"
+		sed -e 's/\r$//' "$log" | grep -aE "^  thread|^  cpu " |
+			head -8 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label $n processors, no ticks")
+		return
+	fi
+
+	echo "$n online, least-busy idle thread took ${idle_ticks:-0} ticks"
+	passes=$((passes + 1))
 }
 
 # Boots against one partition fixture and compares what the kernel read with
@@ -241,6 +320,15 @@ check_for sata0 "  PVH, AHCI" \
 		-drive "file=$DISK,format=raw,if=none,id=s0" \
 		-device ide-hd,drive=s0,bus=ahci0.0
 
+# Checkpoint 9b on this architecture: a real-mode trampoline, INIT and two
+# startup messages, and a local APIC timer per processor. Every one of those is
+# a separate way to end up with a machine that boots and uses one processor.
+for n in 2 4 8; do
+	check_cpus "PVH" "$n" \
+		qemu-system-x86_64 -m 512M -smp "$n" -nographic -no-reboot \
+			-kernel "$X64_ELF" "${X64_DISK[@]}"
+done
+
 if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 	if command -v grub-mkrescue >/dev/null && make_iso; then
 		check_for virtio0 "  Multiboot2 via GRUB, BIOS" \
@@ -314,6 +402,16 @@ check_for sata0 "  device tree, AHCI" \
 # have shown this one.
 for n in 2 4 8 16; do
 	check_for virtio0 "  device tree, $n processors" \
+		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
+			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
+done
+
+# The same machines again, asked how many processors they ended up with rather
+# than whether they found a disk. Sixteen is left out on purpose: this kernel
+# holds eight, so a sixteen-processor machine is *supposed* to report eight and
+# say so, and asserting sixteen there would be asserting a bug.
+for n in 2 4 8; do
+	check_cpus "device tree" "$n" \
 		qemu-system-aarch64 -M virt -cpu cortex-a72 -smp "$n" -m 512M \
 			-nographic -kernel "$ARM_IMG" "${ARM_DISK[@]}"
 done
