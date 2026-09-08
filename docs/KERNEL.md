@@ -1712,6 +1712,90 @@ enforcement point for anything it loads into its own address space, and the
 per-process syscall personality from checkpoint 10 is already the seam a
 compatibility layer will hang off.
 
+## A screen
+
+**Built.** `kernel/core/fbcon.c` and `boot/src/gfx.c`.
+
+Everything the kernel said went to a serial port. That is right for the
+verification rig, which is holding the other end of the cable, and useless on a
+machine somebody has just installed ReconOS onto: the screen stopped at the
+bootloader's last line, and the recovery report, the boot log and the fault
+reporter were all somewhere nobody was looking.
+
+It was found by taking a screenshot of the recovery environment and getting the
+*loader's* last frame instead — `reconboot: leaving UEFI.` and then nothing.
+Not a capture fault. There was nothing after it to capture.
+
+### One font, drawn as pictures
+
+`scripts/make-font.py` carries the glyphs as art and generates the table:
+
+```python
+'A': ("...##...", "..#..#..", ".#....#.", ".#....#.",
+      ".######.", ".#....#.", ".#....#.", "........"),
+```
+
+A font written directly as hex is how you get a `k` with one wrong row that
+nobody notices until it is on a screen. **Rendering the whole set found two
+defects that reading it would not have**: `J` and `*` ran to the right edge of
+the cell and would have touched the next character, and `g j p q y` had no
+descenders, so *"storage"* and *"personality"* sat flat on the line.
+
+The header is committed rather than generated at build time — a header that
+only exists once somebody has run a script is a header the build can be
+missing, which this project has been bitten by twice.
+
+Shared by the kernel and the loader, so a machine looks like one machine from
+the first pixel to the last rather than two programs that happen to run in
+sequence.
+
+### The console
+
+Started as soon as `vm_init` has built a direct map to reach the framebuffer
+through — which `vm_init` already mapped uncached, because a write that sits in
+a cache line is a pixel that does not appear.
+
+**Both surfaces get everything.** `kputc` writes to the serial port *and* the
+screen rather than choosing: the rig reads the cable, a person reads the glass,
+and a message that went to only one of them is a message somebody did not get.
+
+Scrolling redraws from a four-kilobyte shadow of the characters rather than
+copying the screen. A framebuffer is memory across a bus and reading it back is
+far slower than writing to it, so a scroll is writes only.
+
+No framebuffer is a normal answer, not a failure — and that branch is taken on
+every aarch64 boot in the matrix, because AAVMF provides none.
+
+### The menu, tried and fallen back from
+
+An attempt, with the text menu behind it. It gives up on **no framebuffer**, **a
+layout it cannot name**, **a pitch that cannot hold a row**, or **a screen too
+small**, and none of those is an error. Drawing into a framebuffer we have
+misread writes past the end of every row, and on a device mapping that is
+somebody else's registers; refusing is the cheaper failure.
+
+**One list of entries, two renderers.** What to offer, what a keypress means and
+when the clock runs out is decided once, and neither surface gets a say. A
+graphical menu that decided differently from the text one would be a second
+bootloader.
+
+The matrix requires **`drawn` on OVMF and `text` on AAVMF**. That it draws where
+there is a framebuffer is the feature; that it does not where there is none is
+what stops the feature being a machine that shows nothing. An unasserted
+fallback is the branch that rots, and this fallback is the reason the graphical
+menu was allowed to exist at all.
+
+### The bug that was in both, and invisible
+
+`pack()` had the BGRA and RGBA cases the wrong way round, in the console and in
+the menu. Amber came out blue.
+
+**It could not be seen until something drew a colour that was not grey.** The
+console draws light grey on near-black, and swapping red and blue does nothing
+at all to a colour whose red and blue are equal — so it looked perfectly
+correct, and would have gone on looking correct until the first error message
+anybody wanted in red.
+
 ## The recovery environment
 
 **Built.** `kernel/core/recovery.c`, reached by booting the kernel with
