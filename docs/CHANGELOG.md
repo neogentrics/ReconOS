@@ -11,6 +11,13 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**A link is underlined once, not once per word.** The rule and the clickable
+region were drawn by the function that draws one *word*, so a headline of eight
+words got eight underlines with seven holes between them -- which reads as
+damage. Invisible until a page with multi-word links: everything this was built
+against had links of one or two, where the gaps pass for letter spacing. It
+also put eight regions in a finite hit table where one would do.
+
 **The web viewer reads stylesheets.** Not all of CSS -- a subset chosen for
 one question: what makes a page readable rather than what makes it look the
 way its author drew it. `display`, `visibility`, `color`, `background-color`,

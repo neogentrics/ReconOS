@@ -724,16 +724,40 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
     recon_draw_text(f->panel, font, screen_x, screen_y + ascent,
         f->width - x, word, ink);
 
-    if (is_link) {
-        int w = recon_text_width(font, word);
-        /* Underlined, not only coloured. A link that is only a different
-         * colour is invisible to a reader who cannot see that difference,
-         * which is the same reason the accessibility skins exist. */
-        recon_fill_rect(f->panel, screen_x, screen_y + ascent + 2, w, 1,
-            COLOR_LINK);
-        recon_hit_add(f->panel, screen_x, screen_y, w,
-            recon_font_line_height(font), HIT_LINK_BASE + link);
+    (void)is_link;
+}
+
+/*
+ * The rule under a link, and the region that opens it.
+ *
+ * Drawn for a whole run of words rather than for each -- which is what a link
+ * is. Per word, the spaces between them are not underlined and every gap is a
+ * break in the line: "We have a year to fix security everywhere" came out as
+ * eight separate underlines with seven holes, which reads as damage rather
+ * than as a link.
+ *
+ * The region goes with it for the same reason, and one region instead of
+ * eight is seven fewer out of a table that is finite.
+ */
+static void underline_link(struct flow *f, struct recon_font *font,
+        int from_x, int to_x, int y, int link) {
+    if (f->panel == NULL || link < 0 || to_x <= from_x) {
+        return;
     }
+    int screen_y = y - f->scroll + f->origin_y;
+    if (screen_y + 24 < f->clip_top || screen_y > f->clip_bottom) {
+        return;
+    }
+    int ascent = recon_font_ascent(font);
+    int screen_x = from_x + f->origin_x;
+
+    /* Underlined, not only coloured. A link that is only a different colour
+     * is invisible to a reader who cannot see that difference, which is the
+     * same reason the accessibility skins exist. */
+    recon_fill_rect(f->panel, screen_x, screen_y + ascent + 2,
+        to_x - from_x, 1, COLOR_LINK);
+    recon_hit_add(f->panel, screen_x, screen_y, to_x - from_x,
+        recon_font_line_height(font), HIT_LINK_BASE + link);
 }
 
 /*
@@ -930,6 +954,14 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             continue;
         }
 
+        /*
+         * Where the link being drawn began on this line, so its rule can be
+         * drawn once when it ends -- at the end of the link, at a wrap, or at
+         * the end of the block.
+         */
+        int link_from = -1;
+        int link_last = -1;
+
         size_t at = 0;
         while (at < run->length) {
             /* One word, and the space after it if there is one. */
@@ -949,9 +981,24 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                 int wide = recon_text_width(font, text);
 
                 if (anything_on_line && x + wide > f->width) {
+                    /* The rule ends at the edge of the line it was on. */
+                    if (link_from >= 0) {
+                        underline_link(f, font, link_from, x, y, link_last);
+                        link_from = -1;
+                    }
                     x = indent;
                     y += line_height;
                     anything_on_line = false;
+                }
+
+                bool is_link = (style & RECON_HTML_LINK) != 0 && run->link >= 0;
+                if (link_from >= 0 && (!is_link || run->link != link_last)) {
+                    underline_link(f, font, link_from, x, y, link_last);
+                    link_from = -1;
+                }
+                if (is_link && link_from < 0) {
+                    link_from = x;
+                    link_last = run->link;
                 }
 
                 put_word(f, font, x, y, run->text + at, word_length,
@@ -967,6 +1014,15 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             } else {
                 at = word;
             }
+        }
+
+        /*
+         * A link that runs to the end of its run. Closed here rather than at
+         * the end of the block, because the next run may be a different link
+         * or none, and either way the rule under this one stops here.
+         */
+        if (link_from >= 0) {
+            underline_link(f, font, link_from, x, y, link_last);
         }
     }
 

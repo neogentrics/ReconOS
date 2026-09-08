@@ -2575,6 +2575,22 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-161 — A link was underlined once per word, with a hole at every space
+
+- **Found in** v0.4.5. **Found by** loading news.ycombinator.com, where every
+  headline is a link of several words.
+- **What it was** the rule and the clickable region were drawn by the function
+  that draws one *word*, so a link of eight words got eight underlines with
+  seven gaps between them -- which reads as damage rather than as a link. It
+  also put eight regions in a finite hit table where one would do.
+- Invisible until a page with multi-word links: the pages this was built
+  against had links of one or two words, where the holes are easy to read as
+  letter spacing.
+- **Fixed in** v0.4.5. The wrapping loop tracks where a link began on the line
+  it is on and draws one rule when it ends -- at the end of the link, at a
+  wrap, or at the end of the run. A link that wraps gets one rule per line,
+  which is what it should get.
+
 ### BG-160 — The window's title was every `<title>` in the page, not the page's
 
 - **Found in** v0.4.5. **Found by** loading wikipedia.org to see whether the web
