@@ -23,6 +23,18 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**The login screen is a window like any other.** Its card rounds to the skin's
+window corner, carries the skin's glass where the skin asks for it, and its
+account tiles highlight rounded like every other selection. It was the first
+thing anybody sees and the last flat rectangle in the system -- on a skin whose
+whole idea is that surfaces are not solid, the sign-in screen was solid.
+
+The card is drawn square and its corners are kept and put back, rather than
+being drawn as a shape: every stage draws into that rectangle as though it
+were square, and there are a dozen of them with early exits, so restoring once
+at the end is exact where threading a curve through all of them would be a
+great deal of arithmetic arriving at the same four corners.
+
 **A skin can bring its own icons, and a silhouette takes the skin's colour.**
 Two mechanisms, and the rule for the first is the whole rule: a skin uses the
 icons in a directory named after it. `/System/Icons/Glass/` is the Glass

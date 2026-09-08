@@ -471,6 +471,18 @@ enum focus {
 struct recon_session {
     struct recon_server *server;
     struct recon_font *font;
+
+    /*
+     * What was behind the card's corners, kept from the start of a draw to
+     * the end of it.
+     *
+     * On the session rather than on the stack because the drawing is a
+     * switch with a case per stage and a dozen early exits; a local would
+     * have to be threaded through all of them, and a corner restored in only
+     * eleven of twelve places is a screen with one square corner nobody can
+     * reproduce.
+     */
+    struct recon_corners card_corners;
     /*
      * A second, larger font for headings.
      *
@@ -768,7 +780,7 @@ static void draw_row_at(struct recon_session *session, struct recon_panel *p,
     if (selected) {
         recon_fill_rect(p, x, y, w, ROW_HEIGHT, THEME(SELECTION));
     } else if (hovered) {
-        recon_fill_rect(p, x, y, w, ROW_HEIGHT, THEME(MENU_HILITE));
+        recon_widget_highlight(p, x, y, w, ROW_HEIGHT, THEME(MENU_HILITE));
     }
 
     recon_color ink = (selected || hovered)
@@ -1362,9 +1374,25 @@ static void draw(struct recon_session *session) {
     int cx, cy, cw, ch;
     card_rect(session, &cx, &cy, &cw, &ch);
 
+    /*
+     * --- The card, rounded to the skin's window corner ---
+     *
+     * Kept and restored rather than drawn as a shape, because everything that
+     * follows -- the banner, the avatar, the fields, the buttons -- is drawn
+     * into this rectangle as though it were square, and rewriting all of that
+     * to respect a curve would be a great deal of arithmetic to arrive at the
+     * same four corners. The corners are remembered here and put back at the
+     * end of the draw, which is exact and costs one small copy.
+     *
+     * The window corner rather than the button corner: this is the shape of a
+     * window, and on a skin that rounds its windows the login screen should
+     * not be the one rectangle that does not.
+     */
+    int card_radius = recon_theme_metric(RECON_METRIC_CORNER);
+    recon_corners_keep(p, cx, cy, cw, ch, card_radius, &session->card_corners);
+
     recon_fill_rect(p, cx, cy, cw, ch, THEME(DIALOG));
     recon_draw_bevel(p, cx, cy, cw, ch, false);
-    recon_stroke_rect(p, cx, cy, cw, ch, THEME(MENU_BORDER));
 
     /* Every screen but the login carries the band; the login screen has its
      * own, drawn larger, because it is the one people see every day. */
@@ -1619,7 +1647,7 @@ static void draw(struct recon_session *session) {
                 bool hovered = (id == (uint32_t)session->hover);
 
                 if (hovered) {
-                    recon_fill_rect(p, tx + 4, ty, step - 8,
+                    recon_widget_highlight(p, tx + 4, ty, step - 8,
                         PICK_FACE + line * 2 + 12, THEME(MENU_HILITE));
                 }
 
@@ -1807,6 +1835,42 @@ static void draw(struct recon_session *session) {
 
     default:
         break;
+    }
+
+    /*
+     * --- The card's corners, put back, and its edge drawn round them ---
+     *
+     * Last, after every stage has finished drawing into the rectangle, so
+     * nothing can put a square corner back afterwards. The same reason
+     * recon_round_top_corners is called last on a window.
+     */
+    {
+        int rcx, rcy, rcw, rch;
+        card_rect(session, &rcx, &rcy, &rcw, &rch);
+
+        recon_corners_restore(p, rcx, rcy, &session->card_corners);
+        recon_stroke_round_rect(p, rcx, rcy, rcw, rch,
+            session->card_corners.radius, THEME(MENU_BORDER));
+
+        /*
+         * And the skin's own glass, over the finished card.
+         *
+         * The same treatment the shell gives a title bar: drawn opaque by code
+         * that knows nothing about transparency, then made see-through once,
+         * as one image. A skin that asks for glass gets a login screen made of
+         * it -- which is the first thing anybody sees, and was the one surface
+         * still solid on a skin whose whole idea is that things are not.
+         *
+         * Halfway to the skin's number rather than all the way. A window's
+         * chrome is a strip with a desktop behind it; this is the only thing
+         * on the screen, and at Glass's 210 the wallpaper reads straight
+         * through the words asking for a password.
+         */
+        int chrome = recon_theme_metric(RECON_METRIC_CHROME_OPACITY);
+        if (chrome < 255) {
+            recon_panel_fade(p, rcx, rcy, rcw, rch,
+                (uint8_t)((chrome + 255) / 2));
+        }
     }
 
     recon_panel_commit(p);

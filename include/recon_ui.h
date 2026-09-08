@@ -438,7 +438,7 @@ struct recon_corners {
 };
 
 void recon_corners_keep(struct recon_panel *panel, int x, int y, int w, int h,
-    struct recon_corners *out);
+    int radius, struct recon_corners *out);
 void recon_corners_restore(struct recon_panel *panel, int x, int y,
     const struct recon_corners *keep);
 

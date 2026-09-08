@@ -1903,14 +1903,18 @@ int recon_button_radius(int w, int h) {
  * curve gives.
  */
 void recon_corners_keep(struct recon_panel *panel, int x, int y, int w, int h,
-        struct recon_corners *out) {
+        int radius, struct recon_corners *out) {
     if (out == NULL) {
         return;
     }
     out->held = false;
     out->w = w;
     out->h = h;
-    out->radius = recon_button_radius(w, h);
+
+    /* Never rounder than the shape, the same clamp the drawing uses, so a
+     * caller cannot keep one curve and have another put back. */
+    int most = (w < h ? w : h) / 2;
+    out->radius = radius > most ? most : radius;
 
     if (panel == NULL || out->radius <= 0 ||
             out->radius > RECON_CORNER_MAX) {

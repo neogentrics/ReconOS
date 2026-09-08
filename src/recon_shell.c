@@ -2431,7 +2431,8 @@ static void draw_task_button(struct recon_shell *shell, struct recon_panel *bar,
      * the corner of every taskbar button.
      */
     struct recon_corners keep;
-    recon_corners_keep(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT, &keep);
+    recon_corners_keep(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
+        recon_button_radius(w, BUTTON_HEIGHT), &keep);
 
     recon_fill_rect(bar, x, TASKBAR_PADDING, w, BUTTON_HEIGHT,
         recon_widget_surface(recon_theme_color(fill),
