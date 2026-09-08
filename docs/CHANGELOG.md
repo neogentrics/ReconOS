@@ -23,6 +23,19 @@ Noticed by the user, not by the project, which is the part worth writing down:
 nothing here counts commits, so "in progress" stayed true for as long as
 somebody kept typing under it.
 
+**On the desktop, a picture beats a silhouette.** A silhouette is the right
+thing on a toolbar -- small, one colour, on chrome whose colour it should
+follow -- and the wrong thing on a wallpaper. A desktop icon is drawn four
+times that size on a photograph nobody chose for it, and a shape with no detail
+inside it comes out as a blob: the Recycle Bin was a black bin-shaped hole on a
+pale wallpaper, where the drawn one has a lid, a rim and ribs. The desktop asks
+the shared set for its picture first and falls back to the skin's silhouette
+when there is none, because a silhouette beats a hole.
+
+`recon_icon_draw_shared` is how it asks. The marker lives in the cache key
+rather than beside it, since the two versions of one name are two different
+pictures and a cache keyed on the name alone can hold only one.
+
 **Smoked: the dark glass that was missing.** Every see-through skin was a pale
 one, which is half of an idea -- glass is a *material*, not a brightness, and a
 dark desktop that wanted a translucent title bar had nothing to choose. Midnight

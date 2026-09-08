@@ -146,6 +146,21 @@ bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
 /* Whether this icon is one of those silhouettes. */
 bool recon_icon_is_mask(const char *name);
 
+/*
+ * The shared set's version of a name, ignoring whatever the skin has.
+ *
+ * For the desktop. A silhouette is the right thing on a toolbar and the wrong
+ * thing on a wallpaper: it is one flat colour with no detail inside it, so at
+ * the size a desktop draws icons it is a shape rather than a picture -- a
+ * black bin-shaped blob where the drawn one has a lid, a rim and ribs.
+ *
+ * Returns false when the shared set has nothing by that name, which is the
+ * caller's signal to use whatever the skin gave it after all. Better a
+ * silhouette than a hole.
+ */
+bool recon_icon_draw_shared(struct recon_panel *panel, const char *name,
+    int x, int y, int size);
+
 /* Draw an icon, returning false if there is none, so the caller can draw its
  * own. A silhouette takes the surface's text colour; recon_icon_draw_in is
  * the way to say otherwise. */

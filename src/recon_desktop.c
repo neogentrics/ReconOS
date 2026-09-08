@@ -562,6 +562,24 @@ static bool draw_desktop_icon(struct recon_desktop *desktop,
         return recon_icon_draw(p, icon, cx, cy, ICON_IMAGE);
     }
 
+    /*
+     * The skin gave a silhouette. Take the shared set's picture instead, if
+     * there is one.
+     *
+     * A silhouette is the right thing on a toolbar -- small, one colour,
+     * sitting on chrome whose colour it should follow -- and the wrong thing
+     * here. A desktop icon is drawn four times that size on a photograph
+     * nobody chose for it, and a shape with no detail inside it comes out as a
+     * blob: the bin was a black bin-shaped hole on a pale wallpaper, where the
+     * drawn one has a lid, a rim and ribs.
+     *
+     * Falls through to the silhouette when the shared set has nothing by that
+     * name, which is better than a hole.
+     */
+    if (recon_icon_draw_shared(p, icon, cx, cy, ICON_IMAGE)) {
+        return true;
+    }
+
     recon_color ring = ring_colour();
     if (ring_earns_it(desktop, cx, cy, ring)) {
         for (size_t i = 0; i < sizeof(RING) / sizeof(RING[0]); i++) {

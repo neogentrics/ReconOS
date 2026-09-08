@@ -204,11 +204,25 @@ static void forget_if_the_skin_moved(void) {
     recon_icons_forget();
 }
 
+/*
+ * The marker that means "the shared set, not the skin's".
+ *
+ * Carried in the cache key rather than passed alongside it, because the two
+ * versions of one name are two different pictures and a cache keyed on the
+ * name alone can hold only one of them. A real icon name never begins with
+ * this, so it cannot collide.
+ */
+#define SHARED_ONLY '*'
+
 const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
     forget_if_the_skin_moved();
     if (name == NULL || *name == '\0') {
         return NULL;
     }
+
+    /* Stripped for the lookup on disk; kept for the cache. */
+    bool shared_only = (*name == SHARED_ONLY);
+    const char *wanted = shared_only ? name + 1 : name;
 
     for (int i = 0; i < g_cache_count; i++) {
         if (strcasecmp(g_cache[i].name, name) == 0) {
@@ -289,6 +303,9 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
     const char *skin = recon_theme_current();
 
     for (int pass = 0; pass < 3 && entry->pixels == NULL; pass++) {
+        if (shared_only && pass < 2) {
+            continue;    /* asked for the shared set and nothing else */
+        }
         if (pass == 0 && (skin == NULL || skin[0] == '\0')) {
             continue;
         }
@@ -300,14 +317,14 @@ const unsigned char *recon_icon_get(const char *name, int *width, int *height) {
             char path[RECON_PATH_MAX];
             if (pass == 0) {
                 snprintf(path, sizeof(path), "%s/%s/%s.%s",
-                    RECON_DIR_SYSTEM_ICONS, skin, name, EXTENSIONS[i]);
+                    RECON_DIR_SYSTEM_ICONS, skin, wanted, EXTENSIONS[i]);
             } else if (pass == 1) {
                 snprintf(path, sizeof(path), "%s/%s/%s.%s",
-                    RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, name,
+                    RECON_DIR_SYSTEM_ICONS, RECON_ICONS_GLOSSY, wanted,
                     EXTENSIONS[i]);
             } else {
                 snprintf(path, sizeof(path), "%s/%s.%s",
-                    RECON_DIR_SYSTEM_ICONS, name, EXTENSIONS[i]);
+                    RECON_DIR_SYSTEM_ICONS, wanted, EXTENSIONS[i]);
             }
             entry->pixels = try_load(path, &entry->width, &entry->height);
         }
@@ -419,6 +436,24 @@ bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
 
     recon_draw_image(panel, x, y, size, size, tinted, size, size);
     free(tinted);
+    return true;
+}
+
+bool recon_icon_draw_shared(struct recon_panel *panel, const char *name,
+        int x, int y, int size) {
+    if (name == NULL || *name == '\0') {
+        return false;
+    }
+
+    char wanted[80];
+    snprintf(wanted, sizeof(wanted), "%c%s", SHARED_ONLY, name);
+
+    int width = 0, height = 0;
+    const unsigned char *pixels = recon_icon_get(wanted, &width, &height);
+    if (pixels == NULL) {
+        return false;
+    }
+    recon_draw_image(panel, x, y, size, size, pixels, width, height);
     return true;
 }
 
