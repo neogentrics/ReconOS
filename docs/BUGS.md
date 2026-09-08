@@ -2575,6 +2575,36 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-171 — Half of a Wikipedia article was the contents of an attribute
+
+- **Found in** v0.4.19. **Found by** a sweep of twelve real sites, looking at
+  what came back rather than at whether it crashed. Wikipedia's *Comparison of
+  operating systems* had `{{cite web|...}}` and `[[Lisa OS]]` in the middle of
+  it -- wiki source, in a rendered article.
+- **What it was** the parser found the end of a tag with `memchr` for the
+  first `>`. An attribute value may be quoted, and a quoted value may contain
+  anything at all including `>`, and it is still inside the tag.
+
+  Wikipedia carries the wiki source of every reference in a
+  `data-mw='{"parts":...}'` attribute: single-quoted, holding JSON, and that
+  JSON holds escaped HTML with `>` in it. The scan stopped at the first one,
+  decided the tag had ended in the middle of an attribute, and rendered the
+  remaining several hundred bytes as page text.
+- **How much of the page it was.** 411 blocks before, **219 after** -- so
+  nearly half of what that article appeared to say was attribute rather than
+  content.
+- **Why nothing had caught it.** Every hand-written test used well-formed
+  markup with short attributes, because that is what somebody writing a test
+  writes. The html5lib corpus did not catch it either: it tests tree
+  construction and this parser builds no tree, so it was only ever run for the
+  invariants -- and "the page says something it should not" is not an
+  invariant, it is a fact about a particular page. It took loading real ones.
+- **Fixed in** v0.4.19. `tag_end` tracks the quote character, handles both
+  kinds, treats a quote of the other kind inside a value as ordinary text --
+  `alt="it's fine"` is one apostrophe and no quoting problem -- and ends an
+  unclosed quote at the newline, so a malformed tag loses its own line rather
+  than the rest of the page.
+
 ### BG-170 — Two secrets were erased with `memset`, which the compiler deletes
 
 - **Found in** v0.4.12. **Found by** the keyring review Joshua asked for --

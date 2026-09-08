@@ -206,6 +206,61 @@ static bool breaks_line(const char *tag, size_t length) {
     return false;
 }
 
+/*
+ * Where a tag ends.
+ *
+ * Not the first `>`, which is what `memchr` finds and what this did. An
+ * attribute value may be quoted, and a quoted value may contain anything at
+ * all -- including `>` -- and it is still inside the tag.
+ *
+ * Measured on Wikipedia, which was the one page in a twelve-site sweep that
+ * showed it. Its articles carry the wiki source of every reference in a
+ * `data-mw='{"parts":...}'` attribute: single-quoted, holding JSON, and that
+ * JSON holds escaped HTML with `>` in it. The scan stopped at the first one,
+ * decided the tag had ended in the middle of an attribute, and rendered the
+ * remaining several hundred bytes of JSON as page text -- `{{cite web|...}}`
+ * and `[[Lisa OS]]` in the middle of an article.
+ *
+ * Both quote characters, because HTML allows both and the one that broke this
+ * was the single. A quote inside a value quoted with the other kind is
+ * ordinary text and must not open anything: `alt="it's fine"` has one
+ * apostrophe and no quoting problem.
+ *
+ * An unclosed quote is not treated as running to the end of the document.
+ * That is the difference between a malformed tag losing its own line and a
+ * malformed tag losing the rest of the page, and a page whose last tag is
+ * `<a href="` is a page somebody should still be able to read.
+ */
+static const char *tag_end(const char *html, size_t from, size_t length) {
+    char quote = '\0';
+    for (size_t i = from; i < length; i++) {
+        char c = html[i];
+
+        if (quote != '\0') {
+            if (c == quote) {
+                quote = '\0';
+            } else if (c == '\n') {
+                /*
+                 * A newline inside a quote is almost always a quote that was
+                 * never closed rather than a value spanning lines. Ending the
+                 * quote here is what keeps one bad tag from swallowing the
+                 * document -- and an attribute genuinely containing a newline
+                 * loses that attribute, which is the smaller loss.
+                 */
+                quote = '\0';
+            }
+            continue;
+        }
+
+        if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '>') {
+            return html + i;
+        }
+    }
+    return NULL;
+}
+
 static bool is_void_element(const char *tag, size_t length) {
     static const char *const VOID[] = {
         "area", "base", "br", "col", "embed", "hr", "img", "input",
@@ -938,7 +993,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 continue;
             }
 
-            const char *close = memchr(html + i, '>', length - i);
+            const char *close = tag_end(html, i, length);
             if (close == NULL) {
                 break;                       /* an unterminated tag ends it */
             }
@@ -1211,7 +1266,7 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 for (size_t j = after; j + 8 < length; j++) {
                     if (strncasecmp(html + j, want, strlen(want)) == 0) {
                         body_end = j;
-                        end = memchr(html + j, '>', length - j);
+                        end = tag_end(html, j, length);
                         break;
                     }
                 }

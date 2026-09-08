@@ -9,6 +9,35 @@ way for the two to disagree.
 
 ---
 
+## v0.4.19 — a > inside an attribute is not the end of a tag
+
+A sweep of twelve real sites, looking at *what came back* rather than at
+whether anything crashed. Eleven were fine. Wikipedia's "Comparison of
+operating systems" had `{{cite web|...}}` and `[[Lisa OS]]` in the middle of
+it -- wiki source, in a rendered article.
+
+**BG-171.** The parser found the end of a tag with `memchr` for the first `>`.
+An attribute value may be quoted, and a quoted value may contain anything at
+all -- including `>` -- and it is still inside the tag. Wikipedia carries the
+wiki source of every reference in a `data-mw='{"parts":...}'` attribute:
+single-quoted, holding JSON, and that JSON holds escaped HTML. The scan
+stopped at the first `>` and rendered the rest of the attribute as page text.
+
+**411 blocks before, 219 after.** Nearly half of what that article appeared to
+say was attribute rather than content.
+
+Nothing had caught it because every hand-written test uses well-formed markup
+with short attributes -- that is what somebody writing a test writes. The
+html5lib corpus did not catch it either: it tests tree construction, this
+parser builds no tree, so it is only run for the invariants, and "the page
+says something it should not" is not an invariant. It took loading real pages.
+
+The sweep is worth keeping as a habit rather than a script. The other eleven
+sites all rendered, and the RFC 2616 page hit the four-thousand-block ceiling
+and **said so**, which is the behaviour that ceiling exists for.
+
+---
+
 ## v0.4.18 — the package module splits, and the stub file goes
 
 `recon_package.c` was one file doing two jobs. Reading a manifest and taking

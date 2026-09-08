@@ -982,6 +982,76 @@ static void test_a_table_used_for_layout(void) {
     recon_html_free(d);
 }
 
+static void test_where_a_tag_ends(void) {
+    printf("a > inside a quoted attribute does not end the tag\n");
+
+    /*
+     * BG-171. Wikipedia carries the wiki source of every reference in a
+     * `data-mw='{"parts":...}'` attribute: single-quoted, holding JSON, and
+     * that JSON holds escaped HTML with `>` in it. Stopping at the first `>`
+     * decided the tag had ended in the middle of an attribute and rendered
+     * the rest of it as page text -- `{{cite web|...}}` and `[[Lisa OS]]` in
+     * the middle of an article. Measured: 411 blocks became 219 when this was
+     * fixed, so nearly half of what that page appeared to say was attribute.
+     */
+    const char *single =
+        "<p>before</p>"
+        "<div data-mw='{\"a\": \"<ref name=x>text</ref>\"}'>inside</div>"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(single, strlen(single));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+    check(page_says(d, "before") && page_says(d, "inside") &&
+        page_says(d, "after"), "the real text is all there");
+    check(!page_says(d, "ref name"),
+        "and the attribute's contents are not rendered");
+    check(!page_says(d, "{"), "no part of the JSON leaked out");
+    recon_html_free(d);
+
+    /* The same with double quotes, which is the commoner spelling. */
+    const char *double_quoted =
+        "<p>one</p><div title=\"a > b\">two</div><p>three</p>";
+    d = recon_html_parse(double_quoted, strlen(double_quoted));
+    if (d != NULL) {
+        check(page_says(d, "two"), "a double-quoted value may hold a >");
+        check(!page_says(d, "b\""), "and none of it is rendered");
+        recon_html_free(d);
+    }
+
+    /*
+     * A quote of the other kind inside a quoted value is ordinary text and
+     * must not open anything. `alt="it's fine"` is one apostrophe and no
+     * quoting problem, and a scanner that treated it as an opening quote
+     * would swallow the rest of the document looking for its partner.
+     */
+    const char *apostrophe =
+        "<p>a</p><img alt=\"it's fine\"><p>b</p><p>c</p>";
+    d = recon_html_parse(apostrophe, strlen(apostrophe));
+    if (d != NULL) {
+        check(page_says(d, "a") && page_says(d, "b") && page_says(d, "c"),
+            "an apostrophe inside double quotes is just text");
+        recon_html_free(d);
+    }
+
+    /*
+     * And a quote that is never closed must not eat the page. That is the
+     * difference between a malformed tag losing its own line and one losing
+     * everything after it.
+     */
+    const char *unclosed =
+        "<p>kept</p><div title=\"never closed>\n<p>also kept</p>";
+    d = recon_html_parse(unclosed, strlen(unclosed));
+    if (d != NULL) {
+        check(page_says(d, "kept"), "text before an unclosed quote survives");
+        check(page_says(d, "also kept"),
+            "and so does the page after it");
+        recon_html_free(d);
+    }
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -1025,6 +1095,7 @@ int main(void) {
     test_a_table_becomes_rows_and_cells();
     test_a_cell_is_not_merged_into_the_one_before_it();
     test_a_table_used_for_layout();
+    test_where_a_tag_ends();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
