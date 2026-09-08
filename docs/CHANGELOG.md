@@ -11,6 +11,52 @@ way for the two to disagree.
 
 ## v0.4.5
 
+**The web viewer reads stylesheets.** Not all of CSS -- a subset chosen for
+one question: what makes a page readable rather than what makes it look the
+way its author drew it. `display`, `visibility`, `color`, `background-color`,
+`font-weight`, `font-style`, `font-family`, `font-size` and `text-align`,
+under selectors of one compound each with descendants: `p`, `.footer`, `#nav`,
+`p.lead`, `div.body p`.
+
+**The one that matters is `display: none`.** Most of what makes a real page
+unreadable in a structural reader is not layout -- it is the parts of the page
+that were never meant to be seen at once. wikipedia.org's front page loses
+eight blocks of language-name wall to its own stylesheet, which is exactly
+what its own stylesheet was for.
+
+**What it will not do is as deliberate as what it will.** A child, sibling,
+attribute or pseudo-class selector is kept *out* rather than half-matched:
+`a:hover` is not `a`, and a rule that fires when it should not is worse than
+one that never fires, because the first hides text. `@media` is skipped whole
+-- its condition needs a viewport this does not model, and a print stylesheet
+applied to a screen is worse than neither. A colour name it does not know
+leaves the colour unset rather than guessing at somebody's brand.
+
+**A page's colour is checked against the skin's paper before it is used.**
+Ignoring the page loses a distinction the document drew between its own parts;
+obeying it blindly is worse -- a page written for white says `color: #f8f8f8`
+for something it puts on a dark panel, and a reader that takes that draws white
+on white. `recon_color_readable_on` again, the third place in this system to
+need it. A link keeps the skin's accent whatever the page says: it is the one
+colour here carrying a *meaning*, and a meaning whose colour changes per page
+is one nobody can learn.
+
+**Smaller as asked; larger by half of what was asked.** A page sets a large
+size because it has a layout to fill -- columns, a sidebar, a header the text
+sits beside. This has one column the width of the window, so the same number
+is far more of the screen here. Taken whole, wikipedia.org went from thirteen
+visible lines to nine. Smaller is left alone, because a page marking something
+down reads the same in one column as in six.
+
+**A page that links stylesheets is parsed twice**: once to find what it asks
+for, and again when the answers are in. They are fetched in the order the page
+named them, because order is half of the cascade, and the page is redrawn once
+at the end rather than per sheet -- half a cascade is not a cascade, and a page
+that moves under somebody reading it is worse than one that changes once. The
+markup is held for that second pass and only up to two megabytes: holding a
+ten-megabyte document to restyle it later is a cost every page would pay for
+the benefit of a few.
+
 **The web viewer shows pictures.** An `<img>` becomes a block carrying the
 address and the alt text; the viewer resolves each address against the page it
 came from, fetches the distinct ones **one at a time after the words are on

@@ -18,6 +18,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "recon_css.h"
 #include "recon_html.h"
 
 /*
@@ -52,12 +53,86 @@ struct recon_html_document {
 
     char title[256];
     bool saw_script;
+
+    /*
+     * The stylesheets the page asked for, unresolved. Kept so a viewer can
+     * fetch them and parse again -- this does not know where the page came
+     * from, so it cannot resolve them and does not try.
+     */
+    char sheets[16][1024];
+    int sheet_count;
 };
 
 /* --- Building --- */
 
+/*
+ * Elements that never have a closing tag, so never go on the stack.
+ *
+ * A stack that pushed these would never pop them, and everything after the
+ * first `<br>` would be treated as being inside it -- which for `display:
+ * none` on a `<meta>` would hide the rest of the page.
+ */
+static bool is_void_element(const char *tag, size_t length) {
+    static const char *const VOID[] = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    };
+    for (size_t i = 0; i < sizeof(VOID) / sizeof(VOID[0]); i++) {
+        size_t n = strlen(VOID[i]);
+        if (n == length && strncasecmp(tag, VOID[i], n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * How deep the open-element stack goes.
+ *
+ * Past this the page is nested more deeply than any descendant selector this
+ * honours can reach, so the levels above are recorded and the ones below are
+ * treated as the deepest one -- which keeps the styles inherited and only
+ * loses the ability to match an ancestor nobody could have selected anyway.
+ */
+#define STACK_MAX 64
+
+/*
+ * One open element, and what it looks like.
+ *
+ * The style fields are *inherited*: a level starts as a copy of the one above
+ * it and the stylesheet overlays what it says. That is what makes `body {
+ * color: #333 }` colour the whole page without a rule per element, and it is
+ * the only part of the cascade that needs the stack rather than the sheet.
+ */
+struct level {
+    char tag[48];
+    char id[64];
+    char classes[192];
+
+    unsigned add_style;            /* bold, italic, mono, from CSS */
+    bool has_colour;
+    unsigned colour;
+    int size_percent;
+    int align;
+};
+
 struct builder {
     struct recon_html_document *d;
+
+    /* The stylesheet, when a caller handed one over. */
+    struct recon_css_sheet *sheet;
+
+    struct level stack[STACK_MAX];
+    int depth;
+
+    /*
+     * The depth at which something was hidden, or -1.
+     *
+     * A depth rather than a flag, because hiding nests: an element inside a
+     * hidden one is also hidden, and the hide ends when the element that
+     * started it closes -- not when the first close tag comes along.
+     */
+    int hidden_at;
 
     /* The block being filled in, if any. */
     bool in_block;
@@ -72,6 +147,12 @@ struct builder {
 
     /* For an image block, where the picture is. -1 otherwise. */
     int source;
+
+    /* What the stylesheet said about the block as a whole, captured when it
+     * opened rather than when it closed: a block's appearance belongs to the
+     * element it started in. */
+    int size_percent;
+    int align;
 
     /*
      * Whether the last thing appended ended in a space.
@@ -97,7 +178,15 @@ static bool add_text(struct builder *b, const char *bytes, size_t length) {
 
 /* Start a run, or extend the last one when nothing about it has changed. */
 static void emit(struct builder *b, const char *bytes, size_t length) {
-    if (length == 0 || !b->in_block) {
+    /*
+     * Nothing inside something the page hid.
+     *
+     * Checked here rather than at every caller, because there are four of
+     * them -- text, an entity, a bare ampersand, an image's alt text -- and
+     * three of them being right is a page that hides its navigation and keeps
+     * the alt text of the icons inside it.
+     */
+    if (length == 0 || !b->in_block || b->hidden_at >= 0) {
         return;
     }
 
@@ -115,7 +204,18 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
      * produce a run per "&amp;", and the layout would have a word boundary
      * inside every one of them.
      */
-    if (last != NULL && last->style == b->style && last->link == b->link &&
+    /*
+     * The style is the markup's and the stylesheet's together. A `<b>` inside
+     * an element a sheet has made italic is both, and neither half knows
+     * about the other.
+     */
+    const struct level *now = (b->depth > 0) ? &b->stack[b->depth - 1] : NULL;
+    unsigned style = b->style | (now != NULL ? now->add_style : 0u);
+    bool has_colour = (now != NULL) && now->has_colour;
+    unsigned colour = has_colour ? now->colour : 0u;
+
+    if (last != NULL && last->style == style && last->link == b->link &&
+            last->has_colour == has_colour && last->colour == colour &&
             last->text + last->length == b->d->text + at) {
         last->length += length;
         return;
@@ -128,8 +228,10 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     struct recon_html_run *run = &b->d->runs[b->d->run_count++];
     run->text = b->d->text + at;
     run->length = length;
-    run->style = b->style;
+    run->style = style;
     run->link = b->link;
+    run->has_colour = has_colour;
+    run->colour = colour;
 }
 
 /*
@@ -157,6 +259,10 @@ static void open_block(struct builder *b, enum recon_html_block kind,
     b->kind = kind;
     b->level = level;
     b->source = -1;
+
+    const struct level *now = (b->depth > 0) ? &b->stack[b->depth - 1] : NULL;
+    b->size_percent = (now != NULL) ? now->size_percent : 0;
+    b->align = (now != NULL) ? now->align : 0;
     b->first_run = b->d->run_count;
     b->pending_space = false;
     b->at_block_start = true;
@@ -203,6 +309,8 @@ static void close_block(struct builder *b) {
     block->kind = b->kind;
     block->level = b->level;
     block->source = b->source;
+    block->size_percent = b->size_percent;
+    block->align = b->align;
     block->first_run = b->first_run;
     block->run_count = count;
 }
@@ -427,6 +535,11 @@ struct open_tag {
 };
 
 struct recon_html_document *recon_html_parse(const char *html, size_t length) {
+    return recon_html_parse_styled(html, length, NULL);
+}
+
+struct recon_html_document *recon_html_parse_styled(const char *html,
+        size_t length, struct recon_css_sheet *sheet) {
     struct recon_html_document *d = calloc(1, sizeof(*d));
     if (d == NULL) {
         return NULL;
@@ -450,6 +563,8 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
     memset(&b, 0, sizeof(b));
     b.d = d;
     b.link = -1;
+    b.sheet = sheet;
+    b.hidden_at = -1;
 
     struct open_tag stack[NEST_MAX];
     int depth = 0;
@@ -502,6 +617,136 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
             size_t attrs_length = tag_length - name_length;
 
             /*
+             * --- The open-element stack, and what the sheet says ---
+             *
+             * Kept for every element rather than only for the ones this draws
+             * from, because a selector names ancestors and an ancestor is
+             * usually a `<div>` that produces nothing itself.
+             *
+             * A level inherits the one above it and the stylesheet overlays
+             * what it says, which is what makes `body { color: #333 }` colour
+             * a whole page without a rule per element.
+             */
+            bool self_closing = (tag_length > 0 && tag[tag_length - 1] == '/');
+            bool voidish = is_void_element(tag, name_length) || self_closing;
+
+            if (closing && !voidish) {
+                if (b.depth > 0) {
+                    b.depth--;
+                }
+                if (b.hidden_at >= 0 && b.depth <= b.hidden_at) {
+                    b.hidden_at = -1;
+                }
+            } else if (!closing) {
+                struct level fresh;
+                if (b.depth > 0) {
+                    fresh = b.stack[b.depth - 1];
+                } else {
+                    memset(&fresh, 0, sizeof(fresh));
+                }
+                snprintf(fresh.tag, sizeof(fresh.tag), "%.*s",
+                    (int)name_length, tag);
+                fresh.id[0] = '\0';
+                fresh.classes[0] = '\0';
+                attribute(attrs, attrs_length, "id", fresh.id,
+                    sizeof(fresh.id));
+                attribute(attrs, attrs_length, "class", fresh.classes,
+                    sizeof(fresh.classes));
+
+                /*
+                 * A void element is asked about without being pushed: an
+                 * `<img class=hidden>` should not be drawn, and an `<hr>`
+                 * that never pops would swallow the rest of the page.
+                 */
+                int at = b.depth < STACK_MAX ? b.depth : STACK_MAX - 1;
+                struct level was = b.stack[at];
+                b.stack[at] = fresh;
+
+                struct recon_css_style style;
+                memset(&style, 0, sizeof(style));
+                if (b.sheet != NULL) {
+                    struct recon_css_element seen[STACK_MAX];
+                    for (int j = 0; j <= at; j++) {
+                        seen[j].tag = b.stack[j].tag;
+                        seen[j].id = b.stack[j].id[0] != '\0'
+                            ? b.stack[j].id : NULL;
+                        seen[j].classes = b.stack[j].classes[0] != '\0'
+                            ? b.stack[j].classes : NULL;
+                    }
+                    recon_css_match(b.sheet, seen, at + 1, &style);
+                }
+
+                char inline_style[512];
+                if (attribute(attrs, attrs_length, "style", inline_style,
+                        sizeof(inline_style))) {
+                    recon_css_inline(inline_style, strlen(inline_style),
+                        &style);
+                }
+
+                if (style.weight != 0) {
+                    if (style.weight >= 700) {
+                        b.stack[at].add_style |= RECON_HTML_BOLD;
+                    } else {
+                        b.stack[at].add_style &= ~(unsigned)RECON_HTML_BOLD;
+                    }
+                }
+                if (style.italic_set) {
+                    if (style.italic) {
+                        b.stack[at].add_style |= RECON_HTML_ITALIC;
+                    } else {
+                        b.stack[at].add_style &= ~(unsigned)RECON_HTML_ITALIC;
+                    }
+                }
+                if (style.mono_set) {
+                    if (style.mono) {
+                        b.stack[at].add_style |= RECON_HTML_MONO;
+                    } else {
+                        b.stack[at].add_style &= ~(unsigned)RECON_HTML_MONO;
+                    }
+                }
+                if (style.has_colour) {
+                    b.stack[at].has_colour = true;
+                    b.stack[at].colour = style.colour;
+                }
+                if (style.size_percent != 0) {
+                    b.stack[at].size_percent = style.size_percent;
+                }
+                if (style.align != RECON_CSS_ALIGN_NONE) {
+                    b.stack[at].align = (int)style.align;
+                }
+
+                if (style.display == RECON_CSS_NONE && b.hidden_at < 0) {
+                    b.hidden_at = voidish ? at + 1 : at;
+                }
+
+                if (voidish) {
+                    /*
+                     * Asked about, not pushed. A hide it started ends here
+                     * too, since there is no closing tag to end it.
+                     */
+                    if (b.hidden_at == at + 1) {
+                        b.hidden_at = -1;
+                        b.stack[at] = was;
+                        i = after;
+                        continue;
+                    }
+                    b.stack[at] = was;
+                } else if (b.depth < STACK_MAX) {
+                    b.depth++;
+                }
+            }
+
+            /*
+             * Inside something hidden, only the structure is followed. No
+             * text, no blocks, no links -- the page said not to show this.
+             */
+            if (b.hidden_at >= 0 &&
+                    !named(tag, name_length, "title")) {
+                i = after;
+                continue;
+            }
+
+            /*
              * Script and style hold text that is not prose. Skipped to their
              * closing tag rather than parsed, because the contents contain
              * "<" and ">" that are not markup and would otherwise be read as
@@ -515,13 +760,47 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
                 }
                 const char *want = is_script ? "</script" : "</style";
                 const char *end = NULL;
+                size_t body_end = length;
                 for (size_t j = after; j + 8 < length; j++) {
                     if (strncasecmp(html + j, want, strlen(want)) == 0) {
+                        body_end = j;
                         end = memchr(html + j, '>', length - j);
                         break;
                     }
                 }
+
+                /*
+                 * A `<style>` is not prose, but it is not nothing either. Its
+                 * contents go to the sheet in the order the page named them,
+                 * because order is half of the cascade.
+                 */
+                if (!is_script && b.sheet != NULL && body_end > after) {
+                    recon_css_add(b.sheet, html + after, body_end - after);
+                }
+
                 i = (end != NULL) ? (size_t)(end - html) + 1 : length;
+                continue;
+            }
+
+            /*
+             * A stylesheet the page asked for. Recorded rather than followed:
+             * resolving an address against the page it was written in needs
+             * to know where the page came from, and this does not.
+             */
+            if (!closing && named(tag, name_length, "link")) {
+                char rel[64];
+                char href[1024];
+                if (attribute(attrs, attrs_length, "rel", rel, sizeof(rel)) &&
+                        strcasecmp(rel, "stylesheet") == 0 &&
+                        attribute(attrs, attrs_length, "href", href,
+                            sizeof(href)) && href[0] != '\0' &&
+                        d->sheet_count <
+                            (int)(sizeof(d->sheets) / sizeof(d->sheets[0]))) {
+                    snprintf(d->sheets[d->sheet_count],
+                        sizeof(d->sheets[d->sheet_count]), "%s", href);
+                    d->sheet_count++;
+                }
+                i = after;
                 continue;
             }
 
@@ -994,6 +1273,18 @@ const struct recon_html_run *recon_html_run_at(
         return NULL;
     }
     return &document->runs[index];
+}
+
+int recon_html_stylesheet_count(const struct recon_html_document *document) {
+    return document != NULL ? document->sheet_count : 0;
+}
+
+const char *recon_html_stylesheet_at(const struct recon_html_document *document,
+        int index) {
+    if (document == NULL || index < 0 || index >= document->sheet_count) {
+        return NULL;
+    }
+    return document->sheets[index];
 }
 
 const char *recon_html_link_at(const struct recon_html_document *document,

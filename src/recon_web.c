@@ -24,6 +24,7 @@
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_fs.h"
+#include "recon_css.h"
 #include "recon_html.h"
 #include "recon_http.h"
 #include "recon_icons.h"
@@ -96,6 +97,17 @@ static const int HEADING_SIZE[7] = { 0, 26, 22, 19, 17, 16, 15 };
  * megabytes is not a picture, it is somebody finding out what this does with
  * one.
  */
+/*
+ * How much markup is worth keeping to parse a second time.
+ *
+ * A page that links stylesheets is parsed twice: once to find out what it
+ * asks for, and again once they are here. Holding the source is what makes
+ * the second pass possible, and holding a ten-megabyte document to restyle it
+ * later is a cost every page would pay for the benefit of a few. Past this,
+ * the page is shown as its first pass and never restyled.
+ */
+#define SOURCE_MAX (2 * 1024 * 1024)
+
 #define IMAGES_MAX 48
 #define IMAGE_BYTES_MAX (8 * 1024 * 1024)
 
@@ -163,6 +175,27 @@ struct recon_web {
     int image_count;
     int fetching;                          /* which one, or -1 */
     struct recon_http_request *image_request;
+
+    /*
+     * --- The stylesheets ---
+     *
+     * The page's own `<style>` elements go in as it is parsed. The ones it
+     * links to have to be fetched, which means the page is parsed twice: once
+     * to find out what it asks for, and again once the answers are here.
+     *
+     * `source` is the markup, kept for exactly that second pass and freed the
+     * moment there is nothing left to fetch. A page larger than the cap is
+     * shown from the first pass and never restyled, which is the honest
+     * trade: holding a ten-megabyte document to restyle it later is a cost
+     * paid by every page for the benefit of a few.
+     */
+    struct recon_css_sheet *sheet;
+    char *source;
+    size_t source_length;
+    int sheets_wanted;
+    int sheets_done;
+    struct recon_http_request *sheet_request;
+    bool restyled;
 };
 
 static void set_status(struct recon_web *w, bool error, const char *fmt, ...)
@@ -195,6 +228,133 @@ static void on_progress(void *user, size_t received) {
 /* Measure the page without drawing it, so the scrollbar is right on the first
  * frame. Defined after the layout it shares. */
 static int measure(struct recon_web *w, int width);
+
+/* --- The stylesheets --- */
+
+/* Both defined below, beside the things they are shared with. */
+static void show_document(struct recon_web *w,
+    struct recon_html_document *page, const char *shown, size_t length);
+static void fetch_next_sheet(struct recon_web *w);
+static void restyle(struct recon_web *w);
+
+/* The markup only. The sheet stays: the document on screen was parsed with
+ * it and the rules are not copied into the document. */
+static void forget_sheets_source(struct recon_web *w) {
+    free(w->source);
+    w->source = NULL;
+    w->source_length = 0;
+}
+
+static void forget_sheets(struct recon_web *w) {
+    if (w->sheet_request != NULL) {
+        recon_http_cancel(w->sheet_request);
+        w->sheet_request = NULL;
+    }
+    recon_css_free(w->sheet);
+    w->sheet = NULL;
+    free(w->source);
+    w->source = NULL;
+    w->source_length = 0;
+    w->sheets_wanted = 0;
+    w->sheets_done = 0;
+    w->restyled = false;
+}
+
+static void on_sheet_done(void *user, bool ok, char *body, size_t length,
+        const char *content_type, const struct recon_http_url *final_url,
+        const char *error) {
+    struct recon_web *w = user;
+    (void)content_type; (void)final_url; (void)error;
+
+    w->sheet_request = NULL;
+    w->sheets_done++;
+
+    if (ok && body != NULL && length > 0 && w->sheet != NULL) {
+        recon_css_add(w->sheet, body, length);
+    }
+    free(body);
+
+    if (w->sheets_done >= w->sheets_wanted) {
+        /*
+         * Once, when the last one is in, rather than after each. A page
+         * redrawn per stylesheet would move under somebody reading it, and
+         * the middle states are wrong anyway -- half a cascade is not a
+         * cascade.
+         */
+        restyle(w);
+        return;
+    }
+    fetch_next_sheet(w);
+}
+
+static const struct recon_http_handlers SHEET_HANDLERS = {
+    .progress = NULL,
+    .done = on_sheet_done,
+};
+
+/*
+ * Ask for the next stylesheet the page named.
+ *
+ * In the order the page named them, and one at a time, because order is half
+ * of the cascade and a queue is the only way to keep it with one connection
+ * at a time.
+ */
+static void fetch_next_sheet(struct recon_web *w) {
+    if (w->sheet_request != NULL || w->page == NULL) {
+        return;
+    }
+    while (w->sheets_done < w->sheets_wanted) {
+        const char *href = recon_html_stylesheet_at(w->page, w->sheets_done);
+        struct recon_http_url url;
+        if (href == NULL || !recon_http_parse_url(href, &w->url, &url)) {
+            w->sheets_done++;
+            continue;
+        }
+        w->sheet_request = recon_http_get(WEB_APPLICATION, &url,
+            &SHEET_HANDLERS, w);
+        if (w->sheet_request == NULL) {
+            w->sheets_done++;
+            continue;
+        }
+        return;
+    }
+    restyle(w);
+}
+
+/*
+ * Parse the page again, with the stylesheets it asked for.
+ *
+ * The scroll position is kept: somebody is reading, and a page that jumps to
+ * the top when its stylesheet arrives is a page that punished them for
+ * starting early.
+ */
+static void restyle(struct recon_web *w) {
+    if (w->source == NULL || w->restyled) {
+        forget_sheets_source(w);
+        return;
+    }
+    w->restyled = true;
+
+    char *markup = w->source;
+    size_t length = w->source_length;
+    w->source = NULL;
+    w->source_length = 0;
+
+    int was_scroll = w->scroll;
+
+    char shown[RECON_HTTP_URL_MAX];
+    recon_http_format_url(&w->url, shown, sizeof(shown));
+
+    struct recon_html_document *page =
+        recon_html_parse_styled(markup, length, w->sheet);
+    free(markup);
+
+    if (page != NULL) {
+        show_document(w, page, shown, length);
+        w->scroll = was_scroll;
+        recon_appwin_refresh(w->win);
+    }
+}
 
 /* --- The pictures --- */
 
@@ -355,11 +515,6 @@ static void fetch_next_image(struct recon_web *w) {
     }
 }
 
-/* Everything that happens once a document has been read, from wherever.
- * Defined below, beside the one other thing that reads one. */
-static void show_document(struct recon_web *w, struct recon_html_document *page,
-    const char *shown, size_t length);
-
 static void on_done(void *user, bool ok, char *body, size_t length,
         const char *content_type, const struct recon_http_url *final_url,
         const char *error) {
@@ -381,8 +536,32 @@ static void on_done(void *user, bool ok, char *body, size_t length,
      */
     bool is_html = (content_type == NULL || content_type[0] == '\0' ||
         strstr(content_type, "html") != NULL);
+
+    /*
+     * A sheet per page, holding the page's own `<style>` elements as it is
+     * parsed and, after they arrive, the ones it linked to.
+     */
+    forget_sheets(w);
+    w->sheet = recon_css_new();
+
     struct recon_html_document *page = is_html
-        ? recon_html_parse(body, length) : recon_html_plain(body, length);
+        ? recon_html_parse_styled(body, length, w->sheet)
+        : recon_html_plain(body, length);
+
+    /*
+     * The markup, kept only if it might be worth parsing again. Copied rather
+     * than adopted because `body` is the caller's to free on this line and
+     * the second pass happens some seconds later.
+     */
+    if (is_html && page != NULL && length > 0 && length <= SOURCE_MAX &&
+            recon_html_stylesheet_count(page) > 0) {
+        w->source = malloc(length + 1);
+        if (w->source != NULL) {
+            memcpy(w->source, body, length);
+            w->source[length] = '\0';
+            w->source_length = length;
+        }
+    }
     free(body);
 
     /* Where it actually came from, which a redirect may have changed. */
@@ -484,7 +663,8 @@ static struct recon_font *font_for(unsigned style, int size) {
 
 /* Draw one word, if this pass draws. */
 static void put_word(struct flow *f, struct recon_font *font, int x, int y,
-        const char *text, size_t length, unsigned style, int link) {
+        const char *text, size_t length, unsigned style, int link,
+        bool has_colour, unsigned colour) {
     if (f->panel == NULL) {
         return;
     }
@@ -514,8 +694,35 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
     int ascent = recon_font_ascent(font);
     int screen_x = x + f->origin_x;
 
+    /*
+     * --- Whose colour ---
+     *
+     * The skin's, unless the page asked for one and the one it asked for can
+     * actually be read on the skin's page.
+     *
+     * Both halves matter. Ignoring the page loses the distinction a document
+     * drew between its own parts. Obeying it blindly is worse: a page written
+     * for a white background says `color: #f8f8f8` for something it puts on a
+     * dark panel, and a reader that takes it draws white on white. The panel
+     * here belongs to the skin, so the page's colour has to be checked
+     * against the skin's paper -- which is exactly what
+     * recon_color_readable_on does, and it is the third place in this system
+     * to need it.
+     *
+     * A link keeps the skin's accent whatever the page says. It is the one
+     * colour here that carries a *meaning* -- "this goes somewhere" -- and a
+     * meaning whose colour changes per page is one nobody can learn.
+     */
+    recon_color ink = is_link ? COLOR_LINK : COLOR_TEXT;
+    if (!is_link && has_colour) {
+        ink = recon_color_readable_on(THEME(SURFACE),
+            RECON_RGB((colour >> 16) & 0xFF, (colour >> 8) & 0xFF,
+                colour & 0xFF),
+            COLOR_TEXT, COLOR_TEXT);
+    }
+
     recon_draw_text(f->panel, font, screen_x, screen_y + ascent,
-        f->width - x, word, is_link ? COLOR_LINK : COLOR_TEXT);
+        f->width - x, word, ink);
 
     if (is_link) {
         int w = recon_text_width(font, word);
@@ -613,6 +820,43 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         break;
     }
 
+    /*
+     * What a stylesheet said, over what the kind decided.
+     *
+     * A percentage rather than a size, because the kind is still what makes a
+     * heading big: `font-size: 90%` on an h2 means nine tenths of *that
+     * heading's* size, not nine tenths of body text. Clamped either side --
+     * the value came from somebody else's file, and a size of four is a line
+     * nobody can read while a size of two hundred is one word per screen.
+     */
+    if (b->size_percent > 0) {
+        /*
+         * Smaller as asked; larger by half of what was asked.
+         *
+         * Not a fudge -- a difference between this and a browser that has to
+         * be reasoned about. A page sets a large size because it has a layout
+         * to fill: columns, a sidebar, a header the text sits beside. This has
+         * one column the width of the window, so the same number is a great
+         * deal more of the screen here than it is there. Taken whole,
+         * wikipedia.org's portal went from thirteen visible lines to nine.
+         *
+         * Smaller is left alone because it means the opposite: a page marking
+         * something down is de-emphasising it, and that reads the same in one
+         * column as in six.
+         */
+        int percent = b->size_percent;
+        if (percent > 100) {
+            percent = 100 + (percent - 100) / 2;
+        }
+        size = size * percent / 100;
+        if (size < 8) {
+            size = 8;
+        }
+        if (size > 40) {
+            size = 40;
+        }
+    }
+
     /* Space above a heading, so it belongs to what follows rather than
      * floating between two paragraphs. */
     if (b->kind == RECON_HTML_HEADING) {
@@ -669,7 +913,8 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
          * end, and rewrapping it destroys the one thing they controlled.
          */
         if (b->kind == RECON_HTML_PRE) {
-            put_word(f, font, x, y, run->text, run->length, style, run->link);
+            put_word(f, font, x, y, run->text, run->length, style,
+                run->link, run->has_colour, run->colour);
 
             /* Measured, not one character's width times the length. That is
              * right for a monospaced face and silently wrong for any other,
@@ -709,8 +954,8 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                     anything_on_line = false;
                 }
 
-                put_word(f, font, x, y, run->text + at, word_length, style,
-                    run->link);
+                put_word(f, font, x, y, run->text + at, word_length,
+                    style, run->link, run->has_colour, run->colour);
                 x += wide;
                 anything_on_line = true;
             }
@@ -1087,6 +1332,7 @@ static void web_destroy(void *user) {
     /* The picture in flight as well as the ones already here: a fetch that
      * outlives the window it was for calls back into freed memory. */
     forget_images(w);
+    forget_sheets(w);
     recon_html_free(w->page);
     free(w);
 }
@@ -1153,6 +1399,20 @@ static void show_document(struct recon_web *w, struct recon_html_document *page,
     collect_images(w);
     fetch_next_image(w);
 
+    /*
+     * And the stylesheets, if this is the first pass over this page and it
+     * asked for any. `restyled` stops the second pass starting a third.
+     */
+    if (!w->restyled && w->source != NULL) {
+        w->sheets_wanted = recon_html_stylesheet_count(w->page);
+        w->sheets_done = 0;
+        if (w->sheets_wanted > 0) {
+            fetch_next_sheet(w);
+        } else {
+            forget_sheets_source(w);
+        }
+    }
+
     if (recon_html_needs_scripting(w->page)) {
         set_status(w, true, "That page builds itself with JavaScript, which "
             "this does not have. There is nothing to show.");
@@ -1217,7 +1477,9 @@ bool recon_web_open_path(struct recon_appwin *win, const char *path) {
     bool markup = dot != NULL &&
         (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0);
 
-    show_document(w, markup ? recon_html_parse(text, length)
+    forget_sheets(w);
+    w->sheet = recon_css_new();
+    show_document(w, markup ? recon_html_parse_styled(text, length, w->sheet)
                             : recon_html_plain(text, length),
         path, length);
     free(text);

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "recon_css.h"
 #include "recon_html.h"
 
 static int g_failures;
@@ -219,6 +220,216 @@ static void test_only_the_first_title_counts(void) {
     recon_html_free(d);
 }
 
+static void test_a_stylesheet_hides_things(void) {
+    printf("what a stylesheet does to a page\n");
+
+    /*
+     * The one that matters. Most of what makes a real page unreadable in a
+     * structural reader is not layout -- it is the parts that were never
+     * meant to be seen at once.
+     */
+    const char *html =
+        "<style>.chrome { display: none } p { color: #112233 }</style>"
+        "<div class=\"chrome\"><p>navigation</p><p>more navigation</p></div>"
+        "<p>the article</p>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    check(recon_css_rule_count(sheet) == 2,
+        "the page's own <style> reached the sheet");
+
+    bool saw_article = false;
+    bool saw_navigation = false;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "article") != NULL) {
+            saw_article = true;
+        }
+        if (strstr(text, "navigation") != NULL) {
+            saw_navigation = true;
+        }
+    }
+    check(saw_article, "the article is there");
+    check(!saw_navigation, "and everything inside the hidden div is not");
+
+    /* The colour reached the run, which is what a page written for a light
+     * background needs in order not to be black on black. */
+    int at = first_of(d, RECON_HTML_PARAGRAPH);
+    if (at >= 0) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, at);
+        const struct recon_html_run *r = recon_html_run_at(d, b->first_run);
+        check(r != NULL && r->has_colour && r->colour == 0x112233,
+            "and the colour is on the run");
+    }
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+static void test_hiding_nests_and_ends(void) {
+    printf("a hide ends with the element that started it\n");
+
+    /*
+     * The failure this guards against is a hide that never ends: one flag
+     * instead of a depth, and the first closing tag inside the hidden element
+     * turns everything back on -- or the outermost one never does, and the
+     * rest of the page disappears.
+     */
+    const char *html =
+        "<style>.gone { display: none }</style>"
+        "<div class=\"gone\"><div><p>inside</p></div></div>"
+        "<p>after</p>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    bool inside = false, after = false;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "inside") != NULL) { inside = true; }
+        if (strstr(text, "after") != NULL) { after = true; }
+    }
+    check(!inside, "a nested element inside a hidden one stays hidden");
+    check(after, "and the page comes back when the hidden element closes");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+static void test_a_void_element_does_not_swallow_the_page(void) {
+    printf("a void element is asked about and not pushed\n");
+
+    /*
+     * <br>, <img>, <meta> have no closing tag. A stack that pushed them would
+     * never pop, so a hidden <img> would hide everything after it and a plain
+     * <br> would put the rest of the page one level too deep.
+     */
+    const char *html =
+        "<style>.gone { display: none }</style>"
+        "<p>before</p><img class=\"gone\" src=\"/x.png\" alt=\"hidden\">"
+        "<br><p>after</p>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    bool before = false, after = false;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        char text[128];
+        block_text(d, i, text, sizeof(text));
+        if (strstr(text, "before") != NULL) { before = true; }
+        if (strstr(text, "after") != NULL) { after = true; }
+    }
+    check(before && after, "the page either side of them survives");
+    check(first_of(d, RECON_HTML_IMAGE) < 0, "and the hidden picture is gone");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+static void test_an_inline_style(void) {
+    printf("a style attribute, which beats the sheet\n");
+
+    const char *html =
+        "<style>p { color: red }</style>"
+        "<p style=\"color: #00ff00; font-weight: bold\">text</p>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    int at = first_of(d, RECON_HTML_PARAGRAPH);
+    check(at >= 0, "the paragraph is there");
+    if (at >= 0) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, at);
+        const struct recon_html_run *r = recon_html_run_at(d, b->first_run);
+        check(r != NULL && r->has_colour && r->colour == 0x00FF00,
+            "the attribute's colour wins over the sheet's");
+        check(r != NULL && (r->style & RECON_HTML_BOLD) != 0,
+            "and its weight is on the run");
+    }
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+static void test_style_is_inherited(void) {
+    printf("a colour set on an ancestor reaches the text inside it\n");
+
+    /*
+     * Without inheritance, `body { color: #333 }` -- which is how nearly
+     * every page sets its text colour -- would colour nothing at all, because
+     * no text is a direct child of body.
+     */
+    const char *html =
+        "<style>body { color: #334455 }</style>"
+        "<body><div><p>deep</p></div></body>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    int at = first_of(d, RECON_HTML_PARAGRAPH);
+    if (at >= 0) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, at);
+        const struct recon_html_run *r = recon_html_run_at(d, b->first_run);
+        check(r != NULL && r->has_colour && r->colour == 0x334455,
+            "the body's colour reaches a paragraph two levels down");
+    }
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+static void test_the_sheets_a_page_asks_for(void) {
+    printf("the stylesheets a page names, for the viewer to fetch\n");
+
+    const char *html =
+        "<link rel=\"stylesheet\" href=\"/one.css\">"
+        "<link rel=\"icon\" href=\"/favicon.ico\">"
+        "<link rel=\"Stylesheet\" href=\"two.css\">"
+        "<p>text</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    if (d == NULL) {
+        return;
+    }
+    check(recon_html_stylesheet_count(d) == 2, "two stylesheets, not three");
+    if (recon_html_stylesheet_count(d) == 2) {
+        check(strcmp(recon_html_stylesheet_at(d, 0), "/one.css") == 0,
+            "in the order the page named them");
+        check(strcmp(recon_html_stylesheet_at(d, 1), "two.css") == 0,
+            "and unresolved, which is the viewer's job");
+    }
+    recon_html_free(d);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -245,6 +456,12 @@ int main(void) {
     test_an_image_keeps_both_halves();
     test_an_image_with_only_one_half();
     test_only_the_first_title_counts();
+    test_a_stylesheet_hides_things();
+    test_hiding_nests_and_ends();
+    test_a_void_element_does_not_swallow_the_page();
+    test_an_inline_style();
+    test_style_is_inherited();
+    test_the_sheets_a_page_asks_for();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

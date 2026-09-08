@@ -212,6 +212,7 @@ add_executable(ReconOS
     src/recon_video.c
     src/recon_player.c
     src/recon_html.c
+    src/recon_css.c
     src/recon_web.c
     src/recon_http.c
     src/recon_mail.c
@@ -637,7 +638,8 @@ add_test(NAME css COMMAND recon_css_tests)
 # turns somebody else's file into what a window draws wants tests.
 add_executable(recon_html_tests
     tests/test_html.c
-    src/recon_html.c)
+    src/recon_html.c
+    src/recon_css.c)
 
 target_include_directories(recon_html_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -650,6 +652,7 @@ add_executable(recon_malformed_tests
     src/recon_stb.c
     src/recon_mp4.c
     src/recon_html.c
+    src/recon_css.c
     src/recon_expr.c)
 
 # The ICO decoder is built on stb_image, so this reaches into third_party the

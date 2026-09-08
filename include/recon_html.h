@@ -8,10 +8,16 @@
  *
  * --- Where the line is ---
  *
- * **No CSS.** Structure decides appearance: a heading is large because it is a
- * heading. A page whose layout lives entirely in a stylesheet will render as
- * its underlying structure, which for a well-written page is readable and for
- * a badly-written one is a column of text. That is the honest failure.
+ * **CSS, as far as it decides what is readable.** A stylesheet can hide an
+ * element, colour it, weight it, slant it, size it and align it -- see
+ * recon_css.h for exactly how much and why no more. Structure still decides
+ * most of it: a heading is large because it is a heading, and a stylesheet
+ * that only moves things about changes nothing here, because there is nothing
+ * to move things about in.
+ *
+ * The one that matters is `display: none`. Most of what makes a real page
+ * unreadable in a structural reader is not layout, it is the parts of the
+ * page that were never meant to be seen at once.
  *
  * **No JavaScript.** A page that builds itself at run time arrives empty, and
  * says so rather than showing a blank window.
@@ -37,6 +43,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
+#include "recon_css.h"
 
 /* What kind of block this is, which is what decides how it is drawn. */
 enum recon_html_block {
@@ -77,6 +85,15 @@ struct recon_html_run {
     /* Which link this run belongs to, or -1. An index rather than a pointer,
      * so the array can grow without leaving anything dangling. */
     int link;
+
+    /*
+     * What a stylesheet said to write this in, as 0xRRGGBB. Unset means the
+     * skin decides, which is what should happen for the overwhelming majority
+     * of text -- a reader that took every page's colours would be a reader
+     * whose dark skin is undone by the first page written for a light one.
+     */
+    bool has_colour;
+    unsigned colour;
 };
 
 struct recon_html_link {
@@ -99,6 +116,19 @@ struct recon_html_block_entry {
      * second set of bounds to get right.
      */
     int source;
+
+    /* What a stylesheet said about the block as a whole. 0 means unset, and
+     * then the kind decides -- which is what happens on every page that has
+     * no stylesheet, and on most blocks of every page that has one. */
+    int size_percent;
+
+    /*
+     * Read and recorded; not yet drawn. Centring a line means knowing its
+     * width before placing the first word on it, which is a second pass the
+     * flow does not make -- so this is here, honest and unused, rather than
+     * absent and then discovered to be missing by whoever adds the pass.
+     */
+    int align;                 /* enum recon_css_align, 0 unset */
 };
 
 struct recon_html_document;
@@ -113,6 +143,31 @@ struct recon_html_document;
  * nothing here" is more use than one showing an error about markup.
  */
 struct recon_html_document *recon_html_parse(const char *html, size_t length);
+
+/*
+ * The same, with stylesheets already in hand.
+ *
+ * `sheet` is added to as the page's own `<style>` elements are met, in the
+ * order the page names them -- so a caller fetches the `<link>` sheets from a
+ * first pass, puts them in a sheet in that order, and parses again. Order is
+ * half of the cascade, which is why this takes a sheet rather than a list of
+ * texts: the caller already knows the order and this does not.
+ *
+ * NULL `sheet` is exactly recon_html_parse.
+ */
+struct recon_html_document *recon_html_parse_styled(const char *html,
+    size_t length, struct recon_css_sheet *sheet);
+
+/*
+ * The stylesheets a page asked for, so a caller can fetch them.
+ *
+ * `<link rel=stylesheet href=...>` only, unresolved -- resolving an address
+ * against the page it was written in is the viewer's job, and this does not
+ * know where the page came from.
+ */
+int recon_html_stylesheet_count(const struct recon_html_document *document);
+const char *recon_html_stylesheet_at(const struct recon_html_document *document,
+    int index);
 void recon_html_free(struct recon_html_document *document);
 
 /* Everything between <title> and </title>, or "" for a page with none. */
