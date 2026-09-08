@@ -4322,6 +4322,19 @@ static void set_desktop_visible(struct recon_shell *shell, bool visible) {
     if (!visible) {
         recon_shell_close_menu(shell);
         recon_shell_close_context(shell);
+        /*
+         * And the tooltip, which was not in this list and should always have
+         * been: a label explaining a control that is no longer on screen is
+         * wrong whatever is drawn over it.
+         *
+         * It became visible when the tooltip moved into the top scene layer.
+         * Before that it was in the same flat tree as everything else and the
+         * login screen, raised last, happened to cover it -- so "Switch User"
+         * sat on the account picker as a small stranded box, explaining a menu
+         * row that had closed a second earlier. The layer did not cause it. It
+         * stopped hiding it.
+         */
+        tip_hide(shell);
     }
 
     struct wlr_scene_node *desktop = recon_desktop_node(shell->desktop);

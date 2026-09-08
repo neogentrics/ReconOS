@@ -25,6 +25,23 @@ and the system is complete without them.
 If open-licensed replacements turn up they can go in `assets/` like everything
 else, and this entry becomes a real one.
 
+### Colored Glass icon set
+
+Fifty tiles, generated for this project by the author with an image model,
+using Apple's application icons as the stylistic reference. That is the
+author's account of where they came from and it is recorded here rather than
+left to be inferred, because several of them are plainly *about* a
+recognisable design.
+
+Thirty-one are installed, under the ReconOS name each one answers, and the
+mapping is in `scripts/install-colored-glass.py` together with what each
+picture actually is. The ones left out are left out because ReconOS has no
+page they belong to, not because of any doubt about them.
+
+They are the Smoked skin's set. Glass keeps the silhouettes, so the two skins
+show the two ways an icon set can work -- one colour taking the skin's ink, or
+pictures keeping their own.
+
 ### Glass icon set
 
 - **Author:** Icons8 (icons8.com)

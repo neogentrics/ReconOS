@@ -35,6 +35,33 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+**Smoked has pictures where Glass has silhouettes.** Thirty-one of the fifty
+Colored Glass tiles, under the ReconOS name each one answers. Glass and Smoked
+are the same idea light and dark, so they are the pair to show the two ways an
+icon set can work: one colour taking the skin's own ink, or a picture keeping
+its own colours on a chrome that suits them.
+
+Every file in that pack is RGB with **no alpha channel at all**, so the rounded
+tile sits on an opaque near-black rectangle -- a black square on the wallpaper
+and a black square on the chrome. The corners are cut geometrically rather than
+by colour, by flooding inward from the border: the tile's own darkest pixels
+are the same near-black as the surround, so keying by colour eats holes out of
+the middle of a dark icon, and only what is connected to the outside can be
+removed.
+
+**And a skin's icon set can be improved now, which it could not before.** "Write
+it if it is not there" keeps a real promise -- a replaced icon stays replaced --
+and quietly meant a better set never reached a machine that had run ReconOS
+once. The drawn icons answered that with a generation and a per-file
+fingerprint; a skin's set cannot, because there is nothing of ours to compare a
+downloaded picture against. So it is one number for the directory. The rule
+that falls out is worth stating: a skin's icon directory is ReconOS's to manage,
+and the **shared** set is the one to replace a picture in -- which is also the
+one every skin without an opinion falls back to.
+
+The order of two calls is the whole arrangement: the coloured pack is installed
+first and replaces, then Glass's is installed and only fills gaps.
+
 **The skin list is four lists.** Twelve skins in one column, of which three
 exist for colour blindness and two for reading, is a list where the ones
 somebody is choosing between are outnumbered by the ones they are not. They

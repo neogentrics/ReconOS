@@ -329,8 +329,60 @@ char *recon_asset_read(const char *name, size_t *size_out) {
  * to the shared set for anything the skin does not have. No manifest, nothing
  * to keep in step: the directory's name is the statement.
  */
+/*
+ * --- Why a skin's icon set needs a generation, and the shared one needs a
+ *     fingerprint ---
+ *
+ * "Write it if it is not there" keeps a real promise -- an icon somebody
+ * replaced stays replaced -- and quietly means an *improved* set never reaches
+ * a machine that has run ReconOS once. The drawn icons answered that with a
+ * generation and a fingerprint per file, so a better drawing arrives and a
+ * replaced one is left alone.
+ *
+ * A skin's set cannot use the same answer, because there is nothing to
+ * fingerprint against: the file came out of a folder somebody dropped next to
+ * the others, and ReconOS has no drawing of its own to compare it with. So it
+ * is one number for the whole directory. When the number moves, the pack's own
+ * names are written again.
+ *
+ * The rule that falls out, stated rather than discovered: a skin's icon
+ * directory is ReconOS's to manage. The *shared* set is the one to replace a
+ * picture in -- it is what a skin falls back to, so a replacement there is
+ * seen by every skin that has no opinion, which is what somebody replacing an
+ * icon meant anyway.
+ */
+#define SKIN_ICONS_GENERATION 2
+
+static bool skin_icons_are_current(const char *skin) {
+    char stamp[RECON_PATH_MAX];
+    snprintf(stamp, sizeof(stamp), "%s/%s/.generation",
+        RECON_DIR_SYSTEM_ICONS, skin);
+
+    size_t size = 0;
+    char *text = recon_fs_read("/", stamp, &size);
+    if (text == NULL) {
+        return false;
+    }
+
+    long had = strtol(text, NULL, 10);
+    free(text);
+    return had >= SKIN_ICONS_GENERATION;
+}
+
+static void mark_skin_icons(const char *skin) {
+    char stamp[RECON_PATH_MAX];
+    snprintf(stamp, sizeof(stamp), "%s/%s/.generation",
+        RECON_DIR_SYSTEM_ICONS, skin);
+
+    char text[32];
+    int length = snprintf(text, sizeof(text), "%d\n", SKIN_ICONS_GENERATION);
+    if (length > 0) {
+        recon_fs_write("/", stamp, text, (size_t)length);
+    }
+}
+
 static void install_asset_icon_for(const char *asset, const char *icon_name,
-        const char *skin) {
+        const char *skin, bool overwrite) {
     char destination[RECON_PATH_MAX];
     if (skin != NULL) {
         /* Built from the two parts rather than from a joined directory
@@ -345,7 +397,7 @@ static void install_asset_icon_for(const char *asset, const char *icon_name,
         snprintf(destination, sizeof(destination), "%s/%s.png",
             RECON_DIR_SYSTEM_ICONS, icon_name);
     }
-    if (recon_fs_exists("/", destination)) {
+    if (!overwrite && recon_fs_exists("/", destination)) {
         return;
     }
 
@@ -380,7 +432,7 @@ static void install_asset_icon_for(const char *asset, const char *icon_name,
 }
 
 static void install_asset_icon(const char *asset, const char *icon_name) {
-    install_asset_icon_for(asset, icon_name, NULL);
+    install_asset_icon_for(asset, icon_name, NULL, false);
 }
 
 /*
@@ -410,6 +462,14 @@ static int install_skin_icons(const char *skin) {
 }
 
 static int install_skin_icons_from(const char *assets, const char *skin) {
+    /*
+     * Behind a newer set, everything the pack names is written again. The
+     * *first* pack installed for a skin therefore lands on top, and the ones
+     * after it still only fill gaps -- which is how Smoked gets the coloured
+     * tiles where they exist and Glass's silhouettes where they do not.
+     */
+    bool overwrite = !skin_icons_are_current(skin);
+
     char relative[128];
     snprintf(relative, sizeof(relative), "icons/%s", assets);
 
@@ -438,12 +498,23 @@ static int install_skin_icons_from(const char *assets, const char *skin) {
         char asset[RECON_PATH_MAX];
         snprintf(asset, sizeof(asset), "icons/%s/%s", assets, entry->d_name);
 
-        install_asset_icon_for(asset, name, skin);
+        install_asset_icon_for(asset, name, skin, overwrite);
         installed++;
     }
 
     closedir(d);
     free(dir);
+
+    /*
+     * Marked current here rather than by the caller, so the *second* pack
+     * installed for the same skin sees a current directory and goes back to
+     * filling gaps only. That is the whole of how Smoked ends up with the
+     * coloured tiles where they exist and Glass's silhouettes where they do
+     * not -- the order of the two calls, and nothing else.
+     */
+    if (overwrite) {
+        mark_skin_icons(skin);
+    }
     return installed;
 }
 
@@ -2882,15 +2953,24 @@ int main(int argc, char **argv) {
     }
 
     /*
-     * Smoked takes the same set.
+     * --- Smoked: the coloured set, and Glass's underneath it ---
      *
-     * They are silhouettes, coloured from the skin wherever they are drawn --
-     * so the same files come out dark on Glass's pale chrome and pale on
-     * Smoked's dark chrome without being two sets. Installed under Smoked's
-     * name rather than shared, because the rule is that a skin's icons live in
-     * a directory called after it, and a special case for "these two skins
-     * share" would be a second rule to remember.
+     * Glass and Smoked are the same idea light and dark, so they are the pair
+     * to show the two ways an icon set can work: Glass keeps the silhouettes,
+     * which are one colour and take the skin's own ink, and Smoked gets the
+     * Colored Glass tiles, which are pictures and keep their own colours on
+     * a dark chrome that suits them.
+     *
+     * The coloured pack goes in FIRST and that ordering is the whole of the
+     * arrangement: install_asset_icon_for leaves an icon that is already
+     * there, so Glass's set fills in the thirty-odd names the coloured one
+     * has no picture for rather than replacing what it does.
+     *
+     * Both under Smoked's own name rather than shared, because the rule is
+     * that a skin's icons live in a directory called after it, and a special
+     * case for "these two skins share" would be a second rule to remember.
      */
+    install_skin_icons_from("Colored Glass", "Smoked");
     install_skin_icons_from("Glass", "Smoked");
 
     /*
