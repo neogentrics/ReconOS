@@ -844,6 +844,144 @@ static void test_an_id_inside_something_hidden(void) {
     recon_html_free(d);
 }
 
+static void test_a_table_becomes_rows_and_cells(void) {
+    printf("a row is a block, and a cell marks where it begins\n");
+
+    /*
+     * The two together are what lets a viewer line the columns up. A row has
+     * to be its own kind so consecutive rows can be recognised as one table,
+     * and a cell has to mark a run rather than be a block of its own -- a
+     * cell that was a block would get its own line, which is the one thing a
+     * table exists not to do.
+     */
+    const char *html =
+        "<p>before</p>"
+        "<table>"
+        "<tr><th>Version</th><th>Released</th></tr>"
+        "<tr><td>0.4.13</td><td>8 September</td></tr>"
+        "<tr><td>0.4.12</td><td>8 September</td></tr>"
+        "</table>"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    int rows = 0;
+    int header_rows = 0;
+    int first_row = -1;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b == NULL || b->kind != RECON_HTML_ROW) {
+            continue;
+        }
+        if (first_row < 0) {
+            first_row = i;
+        }
+        rows++;
+        if (b->level == 1) {
+            header_rows++;
+        }
+    }
+
+    check(rows == 3, "three rows");
+    check(header_rows == 1, "one of them a header row, because it has a th");
+
+    /* Consecutive, which is what makes them one table. */
+    bool consecutive = true;
+    for (int i = first_row; i < first_row + rows; i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b == NULL || b->kind != RECON_HTML_ROW) {
+            consecutive = false;
+        }
+    }
+    check(consecutive, "and they sit next to each other");
+
+    /* Two cells in each row, and the text of each is its own run. */
+    const struct recon_html_block_entry *row =
+        recon_html_block_at(d, first_row + 1);
+    check(row != NULL, "the first data row is there");
+    if (row != NULL) {
+        int cells = 0;
+        for (int j = 0; j < row->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(d, row->first_run + j);
+            if (r != NULL && r->starts_cell) {
+                cells++;
+            }
+        }
+        check(cells == 2, "with two cells in it");
+    }
+
+    check(page_says(d, "before") && page_says(d, "after"),
+        "and the paragraphs either side survive");
+
+    recon_html_free(d);
+}
+
+static void test_a_cell_is_not_merged_into_the_one_before_it(void) {
+    printf("two cells of identical text stay two runs\n");
+
+    /*
+     * Runs that look the same and sit next to each other are merged, which is
+     * right everywhere else and wrong here: merging across a cell boundary
+     * loses the boundary, and the boundary is the only thing saying where one
+     * column ends. A table of plain unstyled text -- which is most tables --
+     * would come back as a single run and could not be laid out at all.
+     */
+    const char *html = "<table><tr><td>same</td><td>same</td></tr></table>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    if (d == NULL) {
+        return;
+    }
+
+    int cells = 0;
+    for (int i = 0; i < recon_html_block_count(d); i++) {
+        const struct recon_html_block_entry *b = recon_html_block_at(d, i);
+        if (b == NULL || b->kind != RECON_HTML_ROW) {
+            continue;
+        }
+        for (int j = 0; j < b->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(d, b->first_run + j);
+            if (r != NULL && r->starts_cell) {
+                cells++;
+            }
+        }
+    }
+    check(cells == 2, "both cells are marked, not merged into one run");
+
+    recon_html_free(d);
+}
+
+static void test_a_table_used_for_layout(void) {
+    printf("a table with no cells, and one with text loose in a row\n");
+
+    /*
+     * The old web laid pages out in tables, and a great many of those tables
+     * are malformed. None of it may crash and none of it may lose the text.
+     */
+    const char *odd =
+        "<table><tr>loose text</tr></table>"
+        "<table><tr></tr></table>"
+        "<table></table>"
+        "<table><td>a cell with no row</td></table>";
+
+    struct recon_html_document *d = recon_html_parse(odd, strlen(odd));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+    check(page_says(d, "loose text"),
+        "text loose in a row is not lost");
+    check(page_says(d, "a cell with no row"),
+        "nor is a cell outside one");
+    recon_html_free(d);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -884,6 +1022,9 @@ int main(void) {
     test_the_paper_a_page_paints_for_itself();
     test_the_named_places_on_a_page();
     test_an_id_inside_something_hidden();
+    test_a_table_becomes_rows_and_cells();
+    test_a_cell_is_not_merged_into_the_one_before_it();
+    test_a_table_used_for_layout();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

@@ -9,6 +9,44 @@ way for the two to disagree.
 
 ---
 
+## v0.4.17 — tables have columns
+
+A table was one line per row with the cells run together by spaces. You could
+read it and you could not scan it: "0.4.13 8 September Package signing" is
+three facts with nothing to say where one ends.
+
+Two things had to exist first. **A row is a block of its own kind**, so a
+viewer can tell which blocks belong to one table -- consecutive rows is what a
+table is, once the tags are gone. **A cell marks the run it begins at** rather
+than being a block itself: a cell that was a block would get its own line,
+which is the one thing a table exists not to do.
+
+That second one needed a change where it was easy to miss. Runs that look the
+same and sit next to each other are merged into one, which is right everywhere
+else and wrong across a cell boundary -- merging loses the boundary, and the
+boundary is the only thing saying where a column ends. A table of plain
+unstyled text, which is most tables, would have come back as a single run and
+could not have been laid out at all.
+
+A column's width is a property of the **table**, not of any row -- it is the
+widest that column gets anywhere -- so it is measured once over every row
+before the first is drawn. A table wider than the window has all its columns
+scaled down together, which keeps their relative widths: the shape survives
+even when the size cannot.
+
+`<th>` records itself as level 1 on the row it is in, which is the field a row
+otherwise has no use for, and that is the whole of what makes the top of a
+table read as a heading rather than as more data.
+
+**What this does not do**, said plainly: no colspan, no rowspan, no nested
+tables, no borders, and a cell whose text is wider than its share overlaps
+rather than wrapping. Wrapping inside a cell means a row of variable height,
+which means measuring the height before placing the row, which is the whole
+layout problem again one level down. Lining the columns up is most of what a
+table is for and it is the part that can be had honestly.
+
+---
+
 ## v0.4.16 — the fuzzer learns about stylesheets and addresses
 
 `test_malformed` swept the ICO, MP4, HTML and expression parsers with

@@ -263,6 +263,17 @@ struct level {
 struct builder {
     struct recon_html_document *d;
 
+    /*
+     * Set when the next run written begins a cell of a table row.
+     *
+     * On the builder rather than on the open element, because it survives the
+     * `<td>` closing: the text of a cell is emitted between the tags, and by
+     * the time it arrives the tag that announced it has been and gone.
+     * Cleared by being written, so a cell holding several runs marks only the
+     * one it starts at.
+     */
+    bool cell_next;
+
     /* The stylesheet, when a caller handed one over. */
     struct recon_css_sheet *sheet;
 
@@ -368,7 +379,16 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     bool has_colour = (now != NULL) && now->has_colour;
     unsigned colour = has_colour ? now->colour : 0u;
 
-    if (last != NULL && last->style == style && last->link == b->link &&
+    /*
+     * Runs that look the same and sit next to each other are one run.
+     *
+     * Except when this one begins a cell. Merging it into the last would lose
+     * the boundary -- and the boundary is the only thing that says where one
+     * column ends and the next begins, so a table of plain text in one style
+     * would come back as a single run and could not be laid out at all.
+     */
+    if (!b->cell_next && last != NULL && last->style == style &&
+            last->link == b->link &&
             last->has_colour == has_colour && last->colour == colour &&
             last->text + last->length == b->d->text + at) {
         last->length += length;
@@ -386,6 +406,11 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     run->link = b->link;
     run->has_colour = has_colour;
     run->colour = colour;
+
+    /* Consumed by being written, so a cell with several runs in it marks
+     * only the one it starts at. */
+    run->starts_cell = b->cell_next;
+    b->cell_next = false;
 }
 
 /*
@@ -1255,7 +1280,6 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     named(tag, name_length, "footer") ||
                     named(tag, name_length, "nav") ||
                     named(tag, name_length, "main") ||
-                    named(tag, name_length, "tr") ||
                     named(tag, name_length, "table") ||
                     named(tag, name_length, "form") ||
                     named(tag, name_length, "figure")) {
@@ -1285,11 +1309,46 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                 continue;
             }
 
-            /* A table cell is a word boundary, not a new paragraph -- a table
-             * used for layout reads as a line, which is what it was. */
+            /*
+             * --- A row, and the cells in it ---
+             *
+             * A row is a block of its own so a viewer can tell which blocks
+             * belong to one table: consecutive rows is what a table is once
+             * the tags are gone.
+             *
+             * A cell is *not* a block. It is a piece of a line, and making
+             * each one a block would give every cell its own line -- which is
+             * the one thing a table exists not to do. It marks the run it
+             * begins at instead, which is enough to measure a column by.
+             */
+            if (named(tag, name_length, "tr")) {
+                close_block(&b);
+                if (!closing) {
+                    open_block(&b, RECON_HTML_ROW, 0);
+                }
+                i = after;
+                continue;
+            }
+
             if (named(tag, name_length, "td") ||
                     named(tag, name_length, "th")) {
-                b.pending_space = true;
+                if (!closing) {
+                    b.cell_next = true;
+                    /*
+                     * A row holding a `<th>` is a header row, recorded as
+                     * level 1 -- the field a row otherwise has no use for.
+                     * That is the whole of what `<th>` means here, and it is
+                     * the one thing that makes the top row of a table read as
+                     * a heading rather than as more data.
+                     */
+                    if (named(tag, name_length, "th")) {
+                        b.level = 1;
+                    }
+                    /* Still a word boundary, so a cell's text does not run
+                     * into the last one's for anything that ignores cells --
+                     * the find bar, and a page read as plain text. */
+                    b.pending_space = true;
+                }
                 i = after;
                 continue;
             }

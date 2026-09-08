@@ -60,6 +60,20 @@ enum recon_html_block {
      * degrades to what it did before.
      */
     RECON_HTML_IMAGE,
+
+    /*
+     * One row of a table.
+     *
+     * A kind of its own rather than a paragraph, because a viewer that wants
+     * to line the columns up has to know which blocks belong to one table --
+     * and consecutive rows is what a table is, once the tags are gone.
+     *
+     * The cells are marked on the runs, by `starts_cell`, rather than being
+     * blocks of their own. A cell is not a paragraph: it is a piece of a line,
+     * and making each one a block would give every cell in a table its own
+     * line, which is exactly the thing tables exist not to do.
+     */
+    RECON_HTML_ROW,
 };
 
 /* How a run of text is drawn, as flags because they combine. */
@@ -94,6 +108,19 @@ struct recon_html_run {
      */
     bool has_colour;
     unsigned colour;
+
+    /*
+     * This run begins a cell of a table row.
+     *
+     * Only meaningful inside a RECON_HTML_ROW block. It is what lets a viewer
+     * measure a column: the widest first-run-of-cell-two across every row is
+     * how wide column two has to be.
+     *
+     * A flag on the run rather than a list of offsets on the block, because
+     * the runs are already the thing being walked and a parallel list is a
+     * second thing to keep in step with them.
+     */
+    bool starts_cell;
 };
 
 struct recon_html_link {

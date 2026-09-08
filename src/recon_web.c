@@ -1136,6 +1136,36 @@ static void go_typed(struct web_tab *w) {
  * loop drift, and the drift shows up as a scrollbar that does not reach the
  * bottom of the page.
  */
+/*
+ * --- Tables ---
+ *
+ * A table used to be one line per row with the cells run together by spaces.
+ * You could read it and you could not scan it: "0.4.13 8 September Package
+ * signing" is three facts with nothing to say where one ends.
+ *
+ * Columns need a width, and a column's width is a property of the *table*
+ * rather than of any row -- it is the widest that column gets anywhere. So it
+ * is measured once, over every row, before the first one is drawn.
+ *
+ * What this does not do is the rest of table layout. No colspan, no rowspan,
+ * no nested tables, no borders, and a cell whose text is wider than its share
+ * of the window is left to overlap rather than wrapped inside its column --
+ * wrapping inside a cell means a row of variable height, which means
+ * measuring the height before placing the row, which is the whole layout
+ * problem again one level down. Lining the columns up is most of what a table
+ * is for and it is the part that can be had honestly.
+ */
+#define COLUMNS_MAX 12
+
+struct columns {
+    int width[COLUMNS_MAX];
+    int count;
+
+    /* Where the table this describes starts, so a row can tell whether the
+     * measurement it is holding is its own table's. */
+    int first_block;
+};
+
 struct flow {
     struct web_tab *w;
     struct recon_panel *panel;        /* NULL to measure */
@@ -1202,6 +1232,15 @@ struct flow {
     int jump_to;
     int jump_y;
     bool jump_found;
+
+    /*
+     * The columns of the table being drawn, measured once when its first row
+     * is reached and used by every row after it.
+     *
+     * `columns.count` of zero means no table is open, which is the ordinary
+     * state of a page.
+     */
+    struct columns columns;
 };
 
 /*
@@ -1547,6 +1586,93 @@ static void flush_line(struct flow *f, struct line *l, int align, int indent,
     l->full = false;
 }
 
+/* How wide one run is, in the face the row will draw it in. */
+static int run_width(const struct recon_html_run *r, struct recon_font *font) {
+    char text[512];
+    size_t take = r->length < sizeof(text) - 1 ? r->length : sizeof(text) - 1;
+    memcpy(text, r->text, take);
+    text[take] = '\0';
+    return recon_text_width(font, text);
+}
+
+/*
+ * Measure every column of the table beginning at `first`.
+ *
+ * A table is the run of consecutive RECON_HTML_ROW blocks starting there --
+ * which is what a table is once the tags are gone, and is why a row is a kind
+ * of its own.
+ */
+static void measure_columns(struct flow *f, int first, int size,
+        struct columns *out) {
+    memset(out, 0, sizeof(*out));
+    out->first_block = first;
+
+    struct recon_font *font = font_for(0, size);
+    struct recon_font *head = font_for(RECON_HTML_BOLD, size);
+    int total = recon_html_block_count(f->w->page);
+
+    for (int i = first; i < total; i++) {
+        const struct recon_html_block_entry *row =
+            recon_html_block_at(f->w->page, i);
+        if (row == NULL || row->kind != RECON_HTML_ROW) {
+            break;
+        }
+
+        int column = -1;
+        int used = 0;
+        for (int j = 0; j < row->run_count; j++) {
+            const struct recon_html_run *r =
+                recon_html_run_at(f->w->page, row->first_run + j);
+            if (r == NULL) {
+                continue;
+            }
+
+            if (r->starts_cell || column < 0) {
+                /* Bank the column that just ended before starting the next. */
+                if (column >= 0 && column < COLUMNS_MAX &&
+                        used > out->width[column]) {
+                    out->width[column] = used;
+                }
+                column++;
+                used = 0;
+                if (column >= out->count) {
+                    out->count = column + 1;
+                }
+            }
+            used += run_width(r,
+                (r->style & RECON_HTML_BOLD) != 0 ? head : font);
+        }
+        if (column >= 0 && column < COLUMNS_MAX && used > out->width[column]) {
+            out->width[column] = used;
+        }
+    }
+
+    if (out->count > COLUMNS_MAX) {
+        out->count = COLUMNS_MAX;
+    }
+
+    /*
+     * A gap between columns, and a ceiling on the lot.
+     *
+     * Without the ceiling a table with one very long cell pushes every column
+     * after it off the right-hand side, and the columns that would have fit
+     * are lost to one that never would. Scaled down together instead, which
+     * keeps their relative widths -- the shape of the table survives even
+     * when its size cannot.
+     */
+    int gap = recon_text_width(font, "  ");
+    int total_width = 0;
+    for (int i = 0; i < out->count; i++) {
+        out->width[i] += gap;
+        total_width += out->width[i];
+    }
+    if (total_width > f->width && total_width > 0) {
+        for (int i = 0; i < out->count; i++) {
+            out->width[i] = out->width[i] * f->width / total_width;
+        }
+    }
+}
+
 static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     struct web_tab *w = f->w;
 
@@ -1570,6 +1696,10 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         break;
     case RECON_HTML_QUOTE:
         indent = INDENT;
+        break;
+    case RECON_HTML_ROW:
+        /* A row is laid out like a paragraph. What makes it a row is where
+         * its cells are placed, which happens in the run loop below. */
         break;
     case RECON_HTML_RULE: {
         f->height += 6;
@@ -1731,6 +1861,11 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     memset(&held, 0, sizeof(held));
     int align = b->align;
 
+    /* Which cell of a row is being drawn, and whether the pen still has to
+     * move to its column. -1 because the first `starts_cell` makes it 0. */
+    int cell_index = -1;
+    bool cell_pending = false;
+
     /*
      * Where the link being drawn began on this line, and in which face.
      *
@@ -1750,8 +1885,28 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
             continue;
         }
 
+        /*
+         * A cell boundary, noted before the run is drawn.
+         *
+         * `cell_index` counts them, and starts at -1 so the first cell is
+         * column zero. A row whose first run does not say `starts_cell` --
+         * a `<tr>` with text loose in it -- is treated as one unnamed cell
+         * before column zero, which is what the pen is already doing.
+         */
+        if (b->kind == RECON_HTML_ROW && run->starts_cell) {
+            cell_pending = true;
+            cell_index++;
+        }
+
         unsigned style = run->style;
         if (b->kind == RECON_HTML_HEADING) {
+            style |= RECON_HTML_BOLD;
+        }
+        /* A header row is bold. `<th>` records itself as level 1 on the row
+         * it is in -- the field a row otherwise has no use for -- and this is
+         * the one thing that makes the top of a table read as a heading
+         * rather than as more data. */
+        if (b->kind == RECON_HTML_ROW && b->level == 1) {
             style |= RECON_HTML_BOLD;
         }
         if (b->kind == RECON_HTML_PRE) {
@@ -1789,6 +1944,29 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                 word++;
             }
             size_t word_length = word - at;
+
+            /*
+             * --- A cell begins, so the pen moves to its column ---
+             *
+             * Set when the run started one; acted on at the first word of it,
+             * because that is where the pen is about to be used. A column
+             * this cannot fit -- more columns than COLUMNS_MAX, or a cell
+             * whose text is wider than its share -- leaves the pen where it
+             * was, which is the old behaviour: the cells run on with a space
+             * between them, and the row is still readable.
+             */
+            if (cell_pending && at == 0) {
+                cell_pending = false;
+                if (cell_index >= 0 && cell_index < f->columns.count) {
+                    int wanted = indent;
+                    for (int c = 0; c < cell_index; c++) {
+                        wanted += f->columns.width[c];
+                    }
+                    if (wanted > x) {
+                        x = wanted;
+                    }
+                }
+            }
 
             if (word_length > 0) {
                 char text[512];
@@ -1923,6 +2101,23 @@ static int run_flow(struct flow *f) {
         const struct recon_html_block_entry *b = recon_html_block_at(w->page, i);
         if (b == NULL) {
             continue;
+        }
+
+        /*
+         * The first row of a table measures the whole of it.
+         *
+         * Here rather than inside flow_block, because a column's width is a
+         * property of the table and every row after this one needs the same
+         * answer. Recognised by being a row that the block before was not.
+         */
+        if (b->kind == RECON_HTML_ROW) {
+            const struct recon_html_block_entry *previous = (i > 0)
+                ? recon_html_block_at(w->page, i - 1) : NULL;
+            if (previous == NULL || previous->kind != RECON_HTML_ROW) {
+                measure_columns(f, i, BODY_SIZE, &f->columns);
+            }
+        } else {
+            f->columns.count = 0;
         }
 
         /*
