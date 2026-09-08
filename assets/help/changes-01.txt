@@ -22,6 +22,26 @@ web subfolder the browser dropped things into, -liquid-glass in some names
 and not others, and -2/-3 suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+The skin list is four lists. Twelve skins in one column, of which three
+exist for colour blindness and two for reading, is a list where the ones
+somebody is choosing between are outnumbered by the ones they are not. They
+are all skins and they are not all the same kind of thing -- Deuteran is not an
+alternative to Glass, it is an alternative to *needing* to tell red from green.
+
+Standard, Colour Blindness, Easier to Read, Your Own. Which
+family a shipped skin belongs to is written down rather than guessed from its
+description, because it is a decision about what the skin is *for* and a rule
+read out of prose breaks the first time somebody rewords it. Anything not named
+lands in Standard, which is the right default: a new skin is a new look until
+somebody says otherwise.
+
+The filter changes which rows are drawn and nothing else. Use This Skin,
+Customize Skin and the per-skin colour lookups all speak in whole-list
+positions, so the rows map back through the family and the rest of the page
+never learns a filter exists. Copying a skin moves the list to Your Own,
+because closing the editor onto a tab the new skin is not in reads as the copy
+having failed.
+
 The taskbar is opaque, and that is not a setting. It took the skin's full
 glass, on the reasoning that a strip of short labels survives being
 see-through. Measured on Smoked it does not: the bar and the wallpaper behind

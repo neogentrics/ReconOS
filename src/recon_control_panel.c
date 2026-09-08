@@ -112,6 +112,8 @@
 #define HIT_TILE_BASE (RECON_APPWIN_HIT_USER + 700)
 /* The Themes / Colours / Wallpapers bar across the top of Appearance. */
 #define HIT_SECTION_BASE (RECON_APPWIN_HIT_USER + 800)
+/* The four skin families, under the Themes tab. */
+#define HIT_FAMILY_BASE (RECON_APPWIN_HIT_USER + 830)
 /* The firewall's preset rules, on the Add Rule page. */
 #define HIT_PRESET_BASE (RECON_APPWIN_HIT_USER + 900)
 /* The System / Programs / User selector on the Storage page. */
@@ -503,6 +505,85 @@ static const char *const APPEARANCE_SECTION_NAMES[APPEARANCE_SECTIONS] = {
 };
 
 /*
+ * --- The Themes list, split four ways ---
+ *
+ * Twelve skins in one column, of which three exist for colour blindness and
+ * two for reading, is a list where the ones somebody is choosing between are
+ * outnumbered by the ones they are not. They are all skins and they are not
+ * all the same kind of thing: Deuteran is not an alternative to Glass, it is
+ * an alternative to *needing* to tell red from green.
+ *
+ * Four lists, so choosing a look is choosing between looks, and somebody who
+ * came here because they cannot read the screen has a button that says so.
+ */
+enum theme_family {
+    FAMILY_STANDARD,
+    FAMILY_COLOUR_BLIND,
+    FAMILY_READABLE,
+    FAMILY_OWN,
+    FAMILY_COUNT,
+};
+
+static const char *const FAMILY_NAMES[FAMILY_COUNT] = {
+    "Standard", "Colour Blindness", "Easier to Read", "Your Own",
+};
+
+/*
+ * Which family a shipped skin belongs to, named here rather than worked out.
+ *
+ * A rule could be guessed from the descriptions -- "Red-green safe", "Black on
+ * white throughout" -- and would be a rule that breaks the first time somebody
+ * rewords one. This is a decision about what each skin is *for*, and a
+ * decision belongs written down. Anything not named here is Standard, which is
+ * the right default: a new skin is a new look until somebody says otherwise.
+ */
+static const struct {
+    const char *name;
+    enum theme_family family;
+} SKIN_FAMILY[] = {
+    { "Deuteran", FAMILY_COLOUR_BLIND },
+    { "Protan",   FAMILY_COLOUR_BLIND },
+    { "Tritan",   FAMILY_COLOUR_BLIND },
+    { "Contrast", FAMILY_READABLE },
+    { "Reading",  FAMILY_READABLE },
+};
+
+static enum theme_family family_of(const struct recon_theme_info *info) {
+    /* One somebody made is theirs, whatever it is for. */
+    if (!info->built_in) {
+        return FAMILY_OWN;
+    }
+    for (size_t i = 0; i < sizeof(SKIN_FAMILY) / sizeof(SKIN_FAMILY[0]); i++) {
+        if (strcasecmp(info->name, SKIN_FAMILY[i].name) == 0) {
+            return SKIN_FAMILY[i].family;
+        }
+    }
+    return FAMILY_STANDARD;
+}
+
+/*
+ * The skins in one family, as indices into the whole list.
+ *
+ * Indices rather than a copy, because everything downstream -- `cp->selected`,
+ * `recon_theme_color_of`, `Use This Skin` -- speaks in whole-list positions.
+ * Filtering the *rows* and leaving the numbering alone is what keeps the
+ * filter from reaching into any of that.
+ */
+#define FAMILY_MAX 64
+
+static int family_members(enum theme_family family, int *out, int max) {
+    int found = 0;
+    int count = recon_theme_count();
+    for (int i = 0; i < count && found < max; i++) {
+        struct recon_theme_info info;
+        if (recon_theme_at(i, &info) && family_of(&info) == family) {
+            out[found++] = i;
+        }
+    }
+    return found;
+}
+
+/*
  * Network, split the same way and for the same reason.
  *
  * It was one page holding the machine's name, every interface, the gateway,
@@ -721,6 +802,9 @@ struct control_panel {
      */
     /* Which of Themes, Colours, Wallpapers is showing. */
     enum appearance_section section;
+
+    /* And which of the four skin families, under Themes. */
+    enum theme_family family;
 
     /* Which of the two Programs lists is showing, and where it is scrolled. */
     enum programs_tab programs;
@@ -1978,6 +2062,14 @@ static void draw_appearance_themes(struct control_panel *cp,
 
     int bottom = y + h;
 
+    /* The four families, above the list. Drawn even while naming a copy, so
+     * the row does not jump about as the form opens and closes. */
+    y = draw_tabs(cp, p, x, y, w, FAMILY_NAMES, FAMILY_COUNT,
+        (int)cp->family, HIT_FAMILY_BASE);
+
+    int member[FAMILY_MAX];
+    int count = family_members(cp->family, member, FAMILY_MAX);
+
     /*
      * The buttons are laid out from the bottom up, and the list takes what is
      * left. The other way round -- list first, buttons after -- is what left
@@ -1994,10 +2086,28 @@ static void draw_appearance_themes(struct control_panel *cp,
         list_h = ROW_HEIGHT;
     }
 
-    int count = recon_theme_count();
     int rows = list_h / ROW_HEIGHT;
     if (rows > count) {
         rows = count;
+    }
+
+    /*
+     * Nothing in this family, which happens on Your Own until somebody makes
+     * one. Said in a sentence rather than left as an empty panel: an empty
+     * list and a list that failed to load look identical.
+     */
+    if (count == 0) {
+        recon_draw_text(p, cp->font, x, y + ascent, w,
+            "Nothing here yet. \"Customize Skin\" on any other tab makes a "
+            "copy you can change.", COLOR_DIM);
+        cp->list_x = x;
+        cp->list_y = y;
+        cp->list_w = w;
+        cp->list_h = 0;
+        y = bottom - controls;
+        draw_button(cp, p, x, y, "New Skin",
+            HIT_ACTION_BASE + ACTION_NEW_SKIN, true);
+        return;
     }
 
     clamp_scroll(&cp->theme_scroll, rows, count);
@@ -2016,10 +2126,14 @@ static void draw_appearance_themes(struct control_panel *cp,
     const char *current = recon_theme_current();
 
     for (int row = 0; row < rows; row++) {
-        int i = cp->theme_scroll + row;
-        if (i >= count) {
+        int at = cp->theme_scroll + row;
+        if (at >= count) {
             break;
         }
+
+        /* The row's place in this family, turned back into its place in the
+         * whole list. Everything below speaks in whole-list positions. */
+        int i = member[at];
 
         struct recon_theme_info info;
         if (!recon_theme_at(i, &info)) {
@@ -7083,6 +7197,15 @@ static void do_action(struct control_panel *cp, enum action action) {
         recon_access_apply(cp->font);
         recon_shell_restyle(cp->server->shell);
 
+        /*
+         * And the list behind the editor moves to Your Own, which is where
+         * the copy now lives. Closing the editor onto the Standard tab would
+         * be closing it onto a list the new skin is not in -- which reads as
+         * the copy having failed.
+         */
+        cp->family = FAMILY_OWN;
+        cp->theme_scroll = 0;
+
         open_skin_editor(cp, name);
         set_status(cp, false, "'%s' is yours. Pick a colour to change it.",
             name);
@@ -7935,6 +8058,25 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         return true;
     }
 
+    /*
+     * Before the sections, because this is a ladder of unbounded `>=` tests
+     * and 830 is also "section 30" to the test below.
+     */
+    if (hit_id >= HIT_FAMILY_BASE) {
+        int family = (int)(hit_id - HIT_FAMILY_BASE);
+        if (family >= 0 && family < FAMILY_COUNT) {
+            cp->family = (enum theme_family)family;
+            /* A new list, so nothing is chosen in it and it starts at the
+             * top. Carrying a position from a list of seven into a list of
+             * two lands past the end of it. */
+            cp->selected = -1;
+            cp->theme_scroll = 0;
+            cp->naming_skin = false;
+            clear_status(cp);
+        }
+        return true;
+    }
+
     if (hit_id >= HIT_SECTION_BASE) {
         int section = (int)(hit_id - HIT_SECTION_BASE);
         if (section >= 0 && section < APPEARANCE_SECTIONS) {
@@ -8122,7 +8264,20 @@ static bool panel_click(void *user, uint32_t hit_id, int cx, int cy,
         }
 
         if (cp->page == PAGE_APPEARANCE) {
-            index += cp->theme_scroll;
+            /*
+             * The row's place on screen, turned into its place in the whole
+             * list: scrolled down by where the list sits, then through the
+             * family showing. `cp->selected` is a whole-list position because
+             * everything that acts on it -- Use This Skin, Customize,
+             * recon_theme_color_of -- speaks in those.
+             */
+            int member[FAMILY_MAX];
+            int members = family_members(cp->family, member, FAMILY_MAX);
+            int at = cp->theme_scroll + index;
+            if (at < 0 || at >= members) {
+                return true;
+            }
+            index = member[at];
         }
 
         if (cp->page == PAGE_APPEARANCE) {
