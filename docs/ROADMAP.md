@@ -143,13 +143,13 @@ the word.
 
 ### Asked for, and done
 
-**A dark glass skin** — v0.4.0. Noticed while looking at the skin list: every
+**A dark glass skin** — v0.4.5. Noticed while looking at the skin list: every
 see-through skin there was a pale one. Glass is a material rather than a
 brightness, so Smoked is the same material dark -- turned over rather than
 darkened, because a palette's structure is which surfaces sit above which and
 that inverts with the lightness.
 
-**A framework for how everything looks and behaves** — v0.4.0. Asked for in
+**A framework for how everything looks and behaves** — v0.4.5. Asked for in
 those words, with the .NET Framework named as the comparison: one versioned
 layer where this sort of thing is fixed once instead of in every application.
 The immediate complaint was that nothing anywhere reacted to the pointer and

@@ -9,19 +9,23 @@ way for the two to disagree.
 
 ---
 
-## v0.4.0
+## v0.4.5
 
-**Why this is 0.4.0 and not 0.3.1.** It was numbered 0.3.1 for seventy commits
-and seventy-six entries in this file, and a patch release is not that. The
-number is supposed to say what changed: sound, video, a codec registry, a
-theme protocol for clients that are not part of this program, mail that can
-send, an expression grammar with its own tests, and a filesystem call that
-creates a private file rather than tightening one afterwards. None of those is
-a fix to 0.3.0 — each is a thing 0.3.0 could not do at all.
+**Why this is 0.4.5 and not 0.4.1.** Eighty-seven commits landed on top of the
+v0.4.0 tag without the number moving, which is exactly what the entry below
+this one was written to complain about -- it says a release numbered 0.3.1 for
+seventy commits is not a patch release, and then the same thing happened again
+underneath it. A version that only moves when somebody remembers is a version
+that says nothing.
 
-Noticed by the user, not by the project, which is the part worth writing down:
-nothing here counts commits, so "in progress" stayed true for as long as
-somebody kept typing under it.
+Five patch-sized rounds went by unnumbered: mail and the network page, the
+widget layer, the icons, the scene layers, and the skins. So the number jumps
+to where it would have been if each had been cut when it was finished. It stays
+in 0.4.x on the author's call -- the network stack is what 0.5.0 is for, and
+the web viewer cannot reach the internet until it exists.
+
+Twenty-two faults were found and fixed in this stretch, BG-137 to BG-158, and
+every one of them is in [BUGS.md](BUGS.md) and on the tracker.
 
 **The Glass icon set fills nearly every name ReconOS asks by.** 198 pictures,
 36 of them answering a ReconOS name. The Control Panel is one set now rather
@@ -1978,6 +1982,20 @@ setup screen showed six carets and two highlights, none of which meant
 anything. `struct recon_edit` has carried the flag that answers this the whole
 time and the drawing never read it. BG-118.
 
+## v0.4.0
+
+**Why this is 0.4.0 and not 0.3.1.** It was numbered 0.3.1 for seventy commits
+and seventy-six entries in this file, and a patch release is not that. The
+number is supposed to say what changed: sound, video, a codec registry, a
+theme protocol for clients that are not part of this program, mail that can
+send, an expression grammar with its own tests, and a filesystem call that
+creates a private file rather than tightening one afterwards. None of those is
+a fix to 0.3.0 — each is a thing 0.3.0 could not do at all.
+
+Noticed by the user, not by the project, which is the part worth writing down:
+nothing here counts commits, so "in progress" stayed true for as long as
+somebody kept typing under it.
+
 **The Calculator opens at a size it can be used at.** Six mode tabs on one
 row, each sized to its own label; a keypad whose columns divide the width
 exactly rather than throwing the remainder away; labels centred by the line's
@@ -2842,6 +2860,7 @@ disagree with the first, and the disagreement shows up as a link a few pixels
 from where it looks.
 
 ---
+
 
 ## v0.3.0
 
