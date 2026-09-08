@@ -2794,6 +2794,33 @@ static bool tint_is_solid(void) {
  * and the line round a window. What somebody would call "the colour of the
  * machine", and nothing they have to read words on.
  */
+/*
+ * --- The selection follows the tint, and always should have ---
+ *
+ * These were left out with the accent and the warning, on the rule that a
+ * colour carrying a *meaning* should not change with the decor. That rule is
+ * right and these are not it. The accent says "this is the important one" and
+ * the warning says "this will lose something": learned colours, and a system
+ * that recolours them is a system whose signals have to be relearned.
+ *
+ * A selection says "this one, the one you are pointing at" -- and it says it
+ * by being different from its neighbours, not by being blue. Leaving it out
+ * meant a deep garnet desktop opened a grey menu with a slate blue bar across
+ * the row under the pointer: one thing on screen that had not been told what
+ * skin this is.
+ */
+static bool selection_takes_tint(enum recon_theme_role role) {
+    switch (role) {
+    case RECON_THEME_MENU_HILITE:
+    case RECON_THEME_SELECTION:
+    case RECON_THEME_FIELD_SELECTION:
+    case RECON_THEME_DESKTOP_SELECTION:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool role_takes_solid_tint(enum recon_theme_role role) {
     switch (role) {
     case RECON_THEME_TITLE_ACTIVE:
@@ -2824,6 +2851,19 @@ static recon_color tint_lens(enum recon_theme_role role, recon_color colour) {
         if (!role_takes_tint(role)) {
             return colour;
         }
+        return recon_color_tint(colour, hue, (uint8_t)tint_strength());
+    }
+
+    /*
+     * A selection is shifted rather than repainted, even here.
+     *
+     * The chrome takes the metal's own lightness, which is the whole point.
+     * A selection cannot: it carries white text, and Silver's lightness under
+     * white text is a row nobody can read. So it keeps its own lightness and
+     * only moves hue -- the same rule the glass skins use for everything, for
+     * the same reason.
+     */
+    if (selection_takes_tint(role)) {
         return recon_color_tint(colour, hue, (uint8_t)tint_strength());
     }
 
@@ -2879,7 +2919,7 @@ static bool role_takes_tint(enum recon_theme_role role) {
     case RECON_THEME_SURFACE_HEADER:
         return true;
     default:
-        return false;
+        return selection_takes_tint(role);
     }
 }
 

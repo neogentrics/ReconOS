@@ -22,6 +22,19 @@ web subfolder the browser dropped things into, -liquid-glass in some names
 and not others, and -2/-3 suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+The Start menu's header is a button, and it goes where you would expect.
+It names an account and shows that account's picture, and the one thing
+somebody wants after looking at it is to change one of those -- which was four
+clicks away through the Control Panel's front page. It lights under the pointer
+like every other row and carries the Accounts mark at its far end, because a
+row that acts and does not react is a row nobody discovers.
+
+The Photos window's controls are along the top. They were along the bottom,
+which is where a *status* line goes -- and that row is not status, it is the
+only way to do anything there. Every other window in ReconOS puts what you can
+do above what you are looking at, and a picture is the one thing on screen big
+enough that a row underneath it is genuinely far away.
+
 The Start menu's search does what the box under it says it does. The
 tooltip has always read "Programs, places, settings and help", and it looked
 through programs and help. Two of four -- and the missing two are the ones
@@ -66,6 +79,30 @@ per skin as well, which turned out to matter more: Glass's 150 is right for
 Glass, where a tint is a mood. Beacon's two are styles -- the machine came in
 blue or it came in olive -- so a 59% move produced neither, and Beacon plus
 Olive came out a slate blue-grey nobody asked for. It goes all the way now.
+
+The selection follows the tint now, and always should have. The menu
+highlight, the list selection, the field selection and the desktop selection
+were left out with the accent and the warning, on the rule that a colour
+carrying a *meaning* should not change with the decor. That rule is right and
+these are not it: the accent says "this is the important one" and the warning
+says "this will lose something", and those are learned. A selection says "this
+one, the one you are pointing at" -- and it says it by being different from its
+neighbours, not by being blue. A deep garnet desktop was opening a grey menu
+with a slate blue bar across the row under the pointer: one thing on screen
+that had not been told what skin this is.
+
+On a solid-tint skin they are shifted rather than repainted -- their own
+lightness, hue only -- because they carry white text, and Silver's lightness
+under white text is a row nobody can read.
+
+An icon that is a picture gets an outline on chrome. A silhouette is drawn
+in the skin's own ink and reads on whatever is behind it. A picture keeps the
+colours it was made with and takes its chances: measured on the Photos window
+under Metallic in garnet, a blue picture-frame icon on a dark red bar, and
+worse on Classic, the same blue on navy. It now gets a one-pixel outline in the
+ink the title text is written in -- a colour the skin already knows reads
+there -- which says where the shape is without pretending to know what colour
+the shape should be.
 
 A tint that keeps the base's lightness is a mood. Metal is not a mood.
 This is the change that made Metallic work, and it took being told twice: "the

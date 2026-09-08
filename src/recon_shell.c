@@ -134,6 +134,9 @@
 #define HIT_MENU_BASE 200
 /* The right column and the footer have their own ranges, so a click resolves
  * to the right column without any arithmetic about how many are in the other. */
+/* The header, which is the account and is also the way to the page about
+ * it. One id, because there is one of it. */
+#define HIT_MENU_ACCOUNT 245
 #define HIT_PLACE_BASE 250
 #define HIT_POWER_BASE 280
 /* The row at the foot of the left column, which is neither an application nor
@@ -3223,11 +3226,28 @@ static void draw_menu(struct recon_shell *shell) {
     int icon_size = MENU_ITEM_HEIGHT - 8;
 
     /*
-     * The header: who is signed in. Across the top of both columns, because it
-     * is a fact about the whole menu rather than about either side.
+     * --- The header: who is signed in, and the way to the page about them ---
+     *
+     * Across the top of both columns, because it is a fact about the whole
+     * menu rather than about either side.
+     *
+     * And it is a button. It names an account and shows that account's
+     * picture, and the one thing somebody wants after looking at it is to
+     * change one of those -- which was four clicks away through the Control
+     * Panel's front page. A row that already says "this is you" is the
+     * shortest possible route to "and here is where you change that".
      */
     recon_fill_role(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
         RECON_THEME_DIALOG_TITLE);
+
+    /*
+     * Lit under the pointer, the same way every other row in this menu is.
+     * A region that acts and does not react is a region nobody discovers.
+     */
+    if (shell->menu_hover == HIT_MENU_ACCOUNT) {
+        recon_widget_highlight(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
+            COLOR_MENU_HILITE);
+    }
 
     /*
      * The person's own picture, not the system's mark. The mark is already on
@@ -3241,8 +3261,25 @@ static void draw_menu(struct recon_shell *shell) {
     int header_x = 10 + face + 12;
 
     recon_draw_text(menu, shell->font, header_x,
-        (MENU_HEADER_HEIGHT + ascent) / 2 - 1, width - header_x - 12,
-        who != NULL ? who : RECONOS_FULL_NAME, COLOR_DIALOG_TITLE_TEXT);
+        (MENU_HEADER_HEIGHT + ascent) / 2 - 1,
+        width - header_x - 12 - icon_size - 10,
+        who != NULL ? who : RECONOS_FULL_NAME,
+        shell->menu_hover == HIT_MENU_ACCOUNT
+            ? COLOR_MENU_HILITE_TEXT : COLOR_DIALOG_TITLE_TEXT);
+
+    /*
+     * The Accounts mark at the far end, which is what says this row goes
+     * somewhere. Without it the header is a label that happens to react, and
+     * a label that reacts is a surprise rather than an offer.
+     */
+    recon_icon_draw_in(menu, RECON_ICON_ACCOUNTS, width - 12 - icon_size,
+        (MENU_HEADER_HEIGHT - icon_size) / 2 + 1, icon_size,
+        shell->menu_hover == HIT_MENU_ACCOUNT
+            ? COLOR_MENU_HILITE_TEXT : COLOR_DIALOG_TITLE_TEXT);
+
+    recon_hit_add(menu, 1, 1, width - 2, MENU_HEADER_HEIGHT,
+        HIT_MENU_ACCOUNT);
+    recon_hit_tip(menu, "Who can use this system");
 
     int body_y = MENU_HEADER_HEIGHT + MENU_PADDING;
     int body_bottom = height - MENU_FOOTER_HEIGHT - MENU_PADDING;
@@ -6869,6 +6906,19 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             layout(shell);
             draw_menu(shell);
             recon_damage_all(shell->server);
+            return true;
+        }
+
+        /*
+         * The header, before the ranges: 245 sits inside the block the
+         * application rows use, and this dispatch is a ladder of `>=` tests.
+         */
+        if (hit == HIT_MENU_ACCOUNT) {
+            recon_shell_close_menu(shell);
+            if (!recon_control_panel_open_named(shell->server, shell->font,
+                    "Accounts")) {
+                recon_shell_open_named(shell, "Control Panel");
+            }
             return true;
         }
 

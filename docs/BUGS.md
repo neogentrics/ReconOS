@@ -2575,6 +2575,42 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-156 — A picture icon on a coloured title bar was dark on dark
+
+- **Found in** v0.4.0. **Found by** the author: "the icons in the top left
+  corner can't be seen, and they should be."
+- **What it was** an icon that is a *silhouette* is drawn in the skin's own
+  ink, so it reads on whatever the skin puts behind it. An icon that is a
+  *picture* keeps the colours it was made with and takes its chances.
+  Measured on the Photos window under Metallic in garnet: a blue picture-frame
+  icon on a dark red title bar. Classic was worse -- the same blue on navy.
+- **Why it survived** every skin whose icons are silhouettes was fine, and the
+  ones that are not had grey title bars until the tint arrived.
+- **Fixed in** v0.4.0. At chrome size a picture gets a one-pixel outline in the
+  ink the title text is written in. That colour is by definition one the skin
+  knows reads on that surface, and an outline says where the shape is without
+  pretending to know what colour the shape should be. Silhouettes are
+  untouched: they already answer this by being recoloured.
+
+### BG-155 — The selection colour was the one thing on screen not told which skin this is
+
+- **Found in** v0.4.0. **Found by** the author: "the right-click context menus
+  aren't showing up properly. They're not theming like they're supposed to."
+- **What it was** `role_takes_tint` left out the accent, the warning *and* the
+  selection, on the rule that a colour carrying a meaning should not change
+  with the decor. That rule is right and the selection is not it. The accent
+  says "this is the important one" and the warning says "this will lose
+  something" -- learned colours. A selection says "this one, the one you are
+  pointing at", and it says that by being different from its neighbours, not
+  by being blue.
+- So a deep garnet desktop opened a grey menu with a slate blue bar across the
+  row under the pointer.
+- **Fixed in** v0.4.0. The menu highlight, the list selection, the field
+  selection and the desktop selection follow the tint. On a solid-tint skin
+  they are *shifted* rather than repainted -- they keep their own lightness and
+  move only in hue -- because they carry white text and Silver's lightness
+  under white text is a row nobody can read.
+
 ### BG-154 — Sixteen skins was thirteen shipped ones and a rounding error
 
 - **Found in** v0.4.0. **Found by** the skin tests, the moment Metallic became

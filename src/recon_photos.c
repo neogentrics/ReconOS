@@ -806,13 +806,24 @@ static void photos_draw(void *user, struct recon_panel *panel,
     struct recon_photos *ph = user;
     int ascent = recon_font_ascent(ph->font);
 
+    /*
+     * The controls across the top, the picture under them.
+     *
+     * They were along the bottom, which is where a *status* line goes -- and
+     * this row is not status, it is the only way to do anything here. Every
+     * other window in ReconOS puts what you can do above what you are looking
+     * at, and a picture is the one thing on screen big enough that a row
+     * underneath it is genuinely far away.
+     */
+    int bar_y = y;
+    int view_y = y + BAR_HEIGHT;
     int view_h = h - BAR_HEIGHT;
     if (view_h < 1) {
         view_h = 1;
     }
 
-    recon_fill_rect(panel, x, y, w, view_h, COLOR_MAT);
-    recon_hit_add(panel, x, y, w, view_h, HIT_PICTURE);
+    recon_fill_rect(panel, x, view_y, w, view_h, COLOR_MAT);
+    recon_hit_add(panel, x, view_y, w, view_h, HIT_PICTURE);
 
     if (ph->pixels != NULL && ph->width > 0 && ph->height > 0) {
         int draw_w = ph->width;
@@ -856,7 +867,7 @@ static void photos_draw(void *user, struct recon_panel *panel,
         /* Centred, and clipped by the panel when it is larger than the
          * window -- which is what "actual size" means for a photograph. */
         int px = x + (w - draw_w) / 2;
-        int py = y + (view_h - draw_h) / 2;
+        int py = view_y + (view_h - draw_h) / 2;
         recon_draw_image(panel, px, py, draw_w, draw_h, ph->pixels,
             ph->width, ph->height);
     } else {
@@ -865,13 +876,14 @@ static void photos_draw(void *user, struct recon_panel *panel,
             : "Nothing to show.";
         int width = recon_text_width(ph->font, nothing);
         recon_draw_text(panel, ph->font, x + (w - width) / 2,
-            y + view_h / 2, w, nothing, COLOR_DIM);
+            view_y + view_h / 2, w, nothing, COLOR_DIM);
     }
 
-    /* The bar along the bottom: what this is, and how to reach the rest. */
-    int by = y + view_h;
+    /* The bar along the top: what this is, and how to reach the rest. The
+     * rule sits under it, against the picture, rather than over it. */
+    int by = bar_y;
     recon_fill_rect(panel, x, by, w, BAR_HEIGHT, COLOR_BG);
-    recon_fill_rect(panel, x, by, w, 1, COLOR_BAR);
+    recon_fill_rect(panel, x, by + BAR_HEIGHT - 1, w, 1, COLOR_BAR);
 
     int baseline = by + (BAR_HEIGHT + ascent) / 2 - 2;
 

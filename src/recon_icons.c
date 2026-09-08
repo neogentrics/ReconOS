@@ -380,6 +380,74 @@ bool recon_icon_is_mask(const char *name) {
     return false;
 }
 
+/*
+ * Below this, a picture is worse than a silhouette.
+ *
+ * The desktop rule is the other way round and both are true. A desktop icon is
+ * drawn four times this size on a photograph nobody chose for it, and a shape
+ * with no detail inside it comes out as a blob -- so there, a picture wins.
+ *
+ * A title bar is sixteen pixels of *coloured chrome*. A silhouette takes the
+ * skin's own ink and reads on any of it; a picture keeps whatever colours it
+ * was made with and takes its chances. Measured on the Photos window under
+ * Metallic in garnet: the picture-frame icon is a blue frame on a dark red
+ * bar, which is not an icon anybody can see. The same name's silhouette comes
+ * out near-white, because that is what the title text is.
+ */
+#define ICON_SMALL 20
+
+/*
+ * The shape of an icon, in one colour.
+ *
+ * The shape lives entirely in the alpha channel, so colouring it is a matter
+ * of replacing the colour and keeping the alpha -- which is why this can be
+ * done at draw time rather than at load: the same file is one icon in a menu,
+ * another on a toolbar and a third on a title bar, in three different
+ * colours, without three copies of it.
+ *
+ * Scaled into a scratch buffer at the size wanted and recoloured there, so the
+ * averaging that makes a small icon look like a small icon happens on the
+ * alpha rather than on the colour -- the same reason recon_draw_image weights
+ * by alpha in the first place.
+ *
+ * `spread` of one draws it four times, offset by a pixel each way: an outline
+ * for a picture that is about to be drawn on top of it.
+ */
+static void draw_silhouette(struct recon_panel *panel,
+        const unsigned char *pixels, int width, int height,
+        int x, int y, int size, recon_color ink, int spread) {
+    size_t count = (size_t)size * (size_t)size;
+    unsigned char *tinted = malloc(count * 4);
+    if (tinted == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        int col = (int)(i % (size_t)size);
+        int row = (int)(i / (size_t)size);
+
+        int sx = col * width / size;
+        int sy = row * height / size;
+        const unsigned char *src = pixels + ((size_t)sy * width + sx) * 4;
+
+        tinted[i * 4 + 0] = (unsigned char)((ink >> 16) & 0xFF);
+        tinted[i * 4 + 1] = (unsigned char)((ink >> 8) & 0xFF);
+        tinted[i * 4 + 2] = (unsigned char)(ink & 0xFF);
+        tinted[i * 4 + 3] = src[3];
+    }
+
+    if (spread <= 0) {
+        recon_draw_image(panel, x, y, size, size, tinted, size, size);
+    } else {
+        const int AT[][2] = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} };
+        for (size_t i = 0; i < sizeof(AT) / sizeof(AT[0]); i++) {
+            recon_draw_image(panel, x + AT[i][0] * spread,
+                y + AT[i][1] * spread, size, size, tinted, size, size);
+        }
+    }
+    free(tinted);
+}
+
 bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
         int x, int y, int size, recon_color ink) {
     int width = 0, height = 0;
@@ -389,9 +457,26 @@ bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
     }
 
     if (!recon_icon_is_mask(name)) {
-        /* A picture, drawn as it was made. `ink` is what a silhouette would
+        /*
+         * A picture, drawn as it was made. `ink` is what a silhouette would
          * have been coloured with and has nothing to say about a photograph
-         * of a folder. */
+         * of a folder.
+         *
+         * Except at chrome size, where it has one thing to say: the picture
+         * keeps whatever colours it was made with, and a title bar is a
+         * *coloured* surface the picture has never heard of. Measured on the
+         * Photos window under Metallic in garnet -- a blue picture-frame icon
+         * on a dark red bar, dark on dark, which is not an icon anybody can
+         * see.
+         *
+         * So it gets a one-pixel outline in the ink the title text is written
+         * in. That colour is by definition one this skin knows reads on this
+         * surface, and an outline says where the shape is without pretending
+         * to know what colour the shape should be.
+         */
+        if (size > 0 && size <= ICON_SMALL) {
+            draw_silhouette(panel, pixels, width, height, x, y, size, ink, 1);
+        }
         recon_draw_image(panel, x, y, size, size, pixels, width, height);
         return true;
     }
@@ -410,32 +495,7 @@ bool recon_icon_draw_in(struct recon_panel *panel, const char *name,
      * alpha rather than on the colour -- which is the same reason
      * recon_draw_image weights by alpha in the first place.
      */
-    size_t count = (size_t)size * (size_t)size;
-    unsigned char *tinted = malloc(count * 4);
-    if (tinted == NULL) {
-        recon_draw_image(panel, x, y, size, size, pixels, width, height);
-        return true;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        int col = (int)(i % (size_t)size);
-        int row = (int)(i / (size_t)size);
-
-        /* Nearest source pixel for the colour, which is white everywhere it
-         * matters, and for the alpha, which is the picture. Shrinking is
-         * handled by recon_draw_image below; this only recolours. */
-        int sx = col * width / size;
-        int sy = row * height / size;
-        const unsigned char *src = pixels + ((size_t)sy * width + sx) * 4;
-
-        tinted[i * 4 + 0] = (unsigned char)((ink >> 16) & 0xFF);
-        tinted[i * 4 + 1] = (unsigned char)((ink >> 8) & 0xFF);
-        tinted[i * 4 + 2] = (unsigned char)(ink & 0xFF);
-        tinted[i * 4 + 3] = src[3];
-    }
-
-    recon_draw_image(panel, x, y, size, size, tinted, size, size);
-    free(tinted);
+    draw_silhouette(panel, pixels, width, height, x, y, size, ink, 0);
     return true;
 }
 
