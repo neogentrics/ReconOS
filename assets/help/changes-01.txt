@@ -1,3 +1,14 @@
+Two faults in the web viewer, found by pointing it at the internet. The
+window's title bar read *"Wikipedia Close"* -- <title> is not only the
+document's, SVG uses it for the accessible name of a drawing, and the parser
+turned collection back on at every one. The first wins now: which is the
+document's cannot be told from the tag, so it is told from the order.
+
+And the status line was drawn in a page's ink on the *bar's* colour -- correct
+while every skin's bar was grey, invisible on Beacon's blue or Metallic in
+garnet. It goes through recon_color_readable_on, which was written for the
+clock and is the answer to this whole class.
+
 The two names no icon pack answered are drawn, in the Glass set's own
 terms. application is what a program without an icon of its own gets, and
 it was the one thing left on a themed desktop still wearing the drawn blue

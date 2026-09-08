@@ -2575,6 +2575,33 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-160 — The window's title was every `<title>` in the page, not the page's
+
+- **Found in** v0.4.5. **Found by** loading wikipedia.org to see whether the web
+  viewer reaches the internet. It does; the title bar said **"Wikipedia Close"**.
+- **What it was** `<title>` is not only the document's. SVG uses it for the
+  accessible name of a drawing, so an icon inside the page can carry one --
+  wikipedia.org has several, and the parser turned collection back on at every
+  opening tag. The document's title, then the label on a close button inside an
+  inline SVG, concatenated.
+- **Fixed in** v0.4.5. The first one wins. Which `<title>` is the document's
+  cannot be told from the tag, so it is told from the order: a document's title
+  is in its head, and the head comes first.
+
+### BG-159 — The web viewer's status line was the bar's colour written in a page's ink
+
+- **Found in** v0.4.5. **Found by** the same load: "396 blocks, 117 KB" was
+  drawn on the strip and could not be read.
+- **What it was** the strip fills with `bar` and the text was `surface.text-dim`
+  -- a dark grey meant for a pale page. Correct for as long as every skin's bar
+  was grey. On Beacon's blue or Metallic in garnet the line was there and
+  invisible. Exactly BG-151, one window over.
+- **Fixed in** v0.4.5. `recon_color_readable_on`, which was written for the
+  clock and is the answer to this whole class: keep what the skin asked for
+  wherever it can be read, and otherwise take the ink that skin writes on a
+  coloured surface. The warning colour goes through the same lens -- a red
+  warning on a red bar is the case where being unreadable matters most.
+
 ### BG-158 — The search box only showed a caret once somebody had typed
 
 - **Found in** v0.4.0. **Found by** the author: "I can type in it, but I can't

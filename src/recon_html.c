@@ -520,7 +520,21 @@ struct recon_html_document *recon_html_parse(const char *html, size_t length) {
             }
 
             if (named(tag, name_length, "title")) {
-                in_title = !closing;
+                /*
+                 * The first one wins, and the rest are ignored.
+                 *
+                 * `<title>` is not only the document's -- SVG uses it for the
+                 * accessible name of a drawing, so an icon in the page can
+                 * carry one. wikipedia.org has several, and collecting them
+                 * all put "Wikipedia Close" on the window's title bar: the
+                 * document's title, then the label on a close button inside
+                 * an inline SVG.
+                 *
+                 * Which one is the document's cannot be told from the tag, so
+                 * it is told from the order: a document's title is in its
+                 * head, and the head comes first.
+                 */
+                in_title = !closing && title_used == 0;
                 i = after;
                 continue;
             }

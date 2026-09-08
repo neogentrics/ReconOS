@@ -588,13 +588,29 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     recon_edit_draw(p, w->font, bx, by, field_width, FIELD_HEIGHT, &w->address);
     recon_hit_add(p, bx, by, field_width, FIELD_HEIGHT, HIT_ADDRESS);
 
-    /* --- The status line --- */
+    /*
+     * --- The status line ---
+     *
+     * The ink is chosen against the strip rather than asked of the skin, for
+     * the reason the clock had to be (BG-151): this fills with the *bar*
+     * colour and was writing in `surface.text-dim`, which is a dark grey
+     * meant for a pale page. On a skin whose bar is a colour -- Beacon's
+     * blue, Metallic in garnet -- the line was there and unreadable.
+     *
+     * The warning goes through the same lens. A red warning on a red bar is
+     * the case where being unreadable matters most.
+     */
     int status_y = y + height - STATUS_HEIGHT;
     recon_fill_rect(p, x, status_y, width, STATUS_HEIGHT, COLOR_BAR);
     recon_fill_rect(p, x, status_y, width, 1, COLOR_RULE);
+
+    recon_color asked = w->status_is_error ? COLOR_WARNING : COLOR_DIM;
+    recon_color ink = recon_color_readable_on(COLOR_BAR, asked,
+        THEME(TITLE_TEXT), THEME(SURFACE_TEXT));
+
     recon_draw_text(p, w->font, x + 8,
         status_y + (STATUS_HEIGHT + ascent) / 2 - 1, width - 16, w->status,
-        w->status_is_error ? COLOR_WARNING : COLOR_DIM);
+        ink);
 
     /* --- The page --- */
     int top = y + BAR_HEIGHT + PADDING;
