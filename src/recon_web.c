@@ -1375,6 +1375,92 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
 }
 
 /*
+ * --- A line, held until its width is known ---
+ *
+ * Centring a line means knowing how wide it came out before placing its first
+ * word, and how wide it came out is only known once the last one is placed.
+ * That was the whole reason `text-align` was read, recorded and then not
+ * drawn: the flow puts each word down as it reaches it, and by the time the
+ * width is known the words are already somewhere.
+ *
+ * So the words are held instead, and the line is drawn when it ends -- at a
+ * wrap, or at the end of the block. Each one keeps the x it would have had on
+ * a left-aligned line, and the flush adds one offset to all of them. That is
+ * the whole of it: no second pass over the document, no second idea of where
+ * a word goes, and left alignment comes out with an offset of zero, which is
+ * bit-for-bit what it did before.
+ *
+ * The underlines are held with them and shifted by the same amount. A rule
+ * drawn at the unshifted position under a centred line is a rule sitting to
+ * the left of the words it belongs to, which is the sort of thing that gets
+ * noticed six changes later.
+ */
+#define HELD_WORDS_MAX 256
+#define HELD_RULES_MAX 32
+
+struct held_word {
+    struct recon_font *font;
+    const char *text;
+    size_t length;
+    int x;
+    int y;
+    unsigned style;
+    int link;
+    bool has_colour;
+    unsigned colour;
+};
+
+struct held_rule {
+    struct recon_font *font;
+    int from_x;
+    int to_x;
+    int y;
+    int link;
+};
+
+struct line {
+    struct held_word words[HELD_WORDS_MAX];
+    int word_count;
+    struct held_rule rules[HELD_RULES_MAX];
+    int rule_count;
+
+    /*
+     * Set when a line had more words than can be held.
+     *
+     * A line of two hundred and fifty-seven words at this width does not
+     * happen in prose; it happens in a `<pre>` of minified script, and the
+     * honest answer there is to draw what was held and leave the rest rather
+     * than to drop the line. The alignment of such a line is wrong, and a
+     * line nobody can read the end of anyway is the right place to be wrong.
+     */
+    bool full;
+};
+
+static void hold_word(struct line *l, struct recon_font *font, int x, int y,
+        const char *text, size_t length, unsigned style, int link,
+        bool has_colour, unsigned colour) {
+    if (l->word_count >= HELD_WORDS_MAX) {
+        l->full = true;
+        return;
+    }
+    l->words[l->word_count++] = (struct held_word){
+        .font = font, .text = text, .length = length,
+        .x = x, .y = y, .style = style, .link = link,
+        .has_colour = has_colour, .colour = colour,
+    };
+}
+
+static void hold_rule(struct line *l, struct recon_font *font, int from_x,
+        int to_x, int y, int link) {
+    if (l->rule_count >= HELD_RULES_MAX) {
+        return;
+    }
+    l->rules[l->rule_count++] = (struct held_rule){
+        .font = font, .from_x = from_x, .to_x = to_x, .y = y, .link = link,
+    };
+}
+
+/*
  * The rule under a link, and the region that opens it.
  *
  * Drawn for a whole run of words rather than for each -- which is what a link
@@ -1415,6 +1501,52 @@ static void underline_link(struct flow *f, struct recon_font *font,
  * breaking a word is a decision about somebody's language and getting it wrong
  * is worse than a line that is too long.
  */
+/*
+ * Draw a held line, shifted by whatever its alignment asks for.
+ *
+ * `used` is where the pen ended up, so `used - indent` is the width the line
+ * actually came to. Everything is placed relative to that one number.
+ *
+ * Justified is not here. `text-align: justify` means changing the space
+ * *between* words rather than moving the line, which is a different operation
+ * on a different unit, and doing it badly -- by stretching the last line, or
+ * by leaving rivers -- looks worse than not doing it. Left is the honest
+ * answer until it is done properly.
+ */
+static void flush_line(struct flow *f, struct line *l, int align, int indent,
+        int used) {
+    int shift = 0;
+    if (!l->full && used > indent) {
+        int room = f->width - indent;
+        int width = used - indent;
+        if (align == RECON_CSS_ALIGN_CENTRE) {
+            shift = (room - width) / 2;
+        } else if (align == RECON_CSS_ALIGN_RIGHT) {
+            shift = room - width;
+        }
+        /* A line wider than the room it has is already past the edge; moving
+         * it further would push its start off the other side. */
+        if (shift < 0) {
+            shift = 0;
+        }
+    }
+
+    for (int i = 0; i < l->word_count; i++) {
+        const struct held_word *w = &l->words[i];
+        put_word(f, w->font, w->x + shift, w->y, w->text, w->length,
+            w->style, w->link, w->has_colour, w->colour);
+    }
+    for (int i = 0; i < l->rule_count; i++) {
+        const struct held_rule *r = &l->rules[i];
+        underline_link(f, r->font, r->from_x + shift, r->to_x + shift,
+            r->y, r->link);
+    }
+
+    l->word_count = 0;
+    l->rule_count = 0;
+    l->full = false;
+}
+
 static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     struct web_tab *w = f->w;
 
@@ -1590,6 +1722,16 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     bool anything_on_line = false;
 
     /*
+     * Where this block's words go until the line they are on ends.
+     *
+     * `align` is the block's, from the stylesheet, and 0 -- unset -- is left,
+     * which is what everything did before and what the shift computes to.
+     */
+    struct line held;
+    memset(&held, 0, sizeof(held));
+    int align = b->align;
+
+    /*
      * Where the link being drawn began on this line, and in which face.
      *
      * Outside the run loop, because one link is often several runs: `<a>Free
@@ -1622,7 +1764,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
          * end, and rewrapping it destroys the one thing they controlled.
          */
         if (b->kind == RECON_HTML_PRE) {
-            put_word(f, font, x, y, run->text, run->length, style,
+            hold_word(&held, font, x, y, run->text, run->length, style,
                 run->link, run->has_colour, run->colour);
 
             /* Measured, not one character's width times the length. That is
@@ -1660,9 +1802,16 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                 if (anything_on_line && x + wide > f->width) {
                     /* The rule ends at the edge of the line it was on. */
                     if (link_from >= 0) {
-                        underline_link(f, font, link_from, x, y, link_last);
+                        hold_rule(&held, font, link_from, x, y, link_last);
                         link_from = -1;
                     }
+                    /*
+                     * The line is finished, so its width is known and it can
+                     * be drawn. Everything above this point only decided
+                     * *where on the line* each word goes; this is where the
+                     * line itself is placed.
+                     */
+                    flush_line(f, &held, align, indent, x);
                     x = indent;
                     y += line_height;
                     anything_on_line = false;
@@ -1670,7 +1819,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
 
                 bool is_link = (style & RECON_HTML_LINK) != 0 && run->link >= 0;
                 if (link_from >= 0 && (!is_link || run->link != link_last)) {
-                    underline_link(f, font, link_from, x, y, link_last);
+                    hold_rule(&held, font, link_from, x, y, link_last);
                     link_from = -1;
                 }
                 if (is_link && link_from < 0) {
@@ -1679,7 +1828,7 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                     link_font = font;
                 }
 
-                put_word(f, font, x, y, run->text + at, word_length,
+                hold_word(&held, font, x, y, run->text + at, word_length,
                     style, run->link, run->has_colour, run->colour);
                 x += wide;
                 anything_on_line = true;
@@ -1698,8 +1847,11 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
 
     /* A link that reached the end of the block. */
     if (link_from >= 0 && link_font != NULL) {
-        underline_link(f, link_font, link_from, x, y, link_last);
+        hold_rule(&held, link_font, link_from, x, y, link_last);
     }
+
+    /* And the last line, which ends because the block does. */
+    flush_line(f, &held, align, indent, x);
 
     f->height = y + line_height;
 

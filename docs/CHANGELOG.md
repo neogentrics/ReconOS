@@ -9,6 +9,32 @@ way for the two to disagree.
 
 ---
 
+## v0.4.15 — text-align, which needed a line before it could be placed
+
+`text-align` had been read, recorded on the block, and then not drawn. The
+comment beside the field said so and said why: centring a line means knowing
+how wide it came out before placing its first word, and how wide it came out
+is only known once the last one is placed. The flow put each word down as it
+reached it, so by the time the width was known the words were already
+somewhere.
+
+So the words are held now, and the line is drawn when it ends -- at a wrap, or
+at the end of the block. Each keeps the x it would have had on a left-aligned
+line and the flush adds one offset to all of them. No second pass over the
+document, no second idea of where a word goes, and **left alignment comes out
+with an offset of zero, which is bit-for-bit what it did before**.
+
+The link underlines are held with the words and shifted by the same amount. A
+rule drawn at the unshifted position under a centred line is a rule sitting to
+the left of the words it belongs to.
+
+`justify` is not here. It means changing the space *between* words rather than
+moving the line, which is a different operation on a different unit, and doing
+it badly -- stretching the last line, or leaving rivers down the column --
+looks worse than not doing it.
+
+---
+
 ## v0.4.14 — the configuration that ships, built for the first time
 
 Every build ReconOS makes for itself is Debug with no `-O`. `scripts/check.sh`
