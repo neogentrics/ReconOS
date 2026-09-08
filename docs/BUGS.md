@@ -2575,6 +2575,87 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-152 — The skin list rounded its sample buttons by painting the corners out
+
+- **Found in** v0.4.0. **Found by** the author: "if you're gonna round them
+  all, make sure they are actually rounded. This doesn't look right. And it's
+  not just this way on Beacon. It's like this on a lot of them."
+- **What it was** BG-142, still alive in one place after being fixed
+  everywhere else. The Appearance page's sample button filled a square,
+  bevelled the square, and then painted the four corners back out in a colour
+  it *believed* was behind them. The bevel is square and the paint-out is
+  round, so the two disagree about where the corner is: what survives is a
+  button rounded on the corners the paint-out reached and ragged on the ones
+  the bevel had already lit.
+- **Why it lived here** the sample is drawn in *another* skin's numbers, so it
+  could not call the framework's button -- that reads the current skin. It had
+  its own copy of the drawing and its own copy of the radius cap.
+- **Fixed in** v0.4.0. `recon_fill_button_radius` is the same function every
+  other button uses with the radius passed in, and `recon_button_radius_of`
+  puts the cap in one place instead of two. A copy of a rule is a rule that
+  will differ later.
+
+### BG-151 — The clock took its colour from a role that also means "on a button"
+
+- **Found in** v0.4.0. **Found by** the author, on Beacon: "you can barely see
+  the time".
+- **What it was** `bar.text` is used for the label on a task button *and* for
+  the clock, which is the one thing written straight onto the taskbar. Beacon's
+  task buttons are pale, so its `bar.text` is a near-black -- correct on a
+  button and fifty-five levels from the deep blue bar. The skin was not wrong.
+  The role was being asked a question it cannot answer, because it does not
+  know which of its two surfaces is being drawn on.
+- **Fixed in** v0.4.0. `recon_color_readable_on` keeps what the skin asked for
+  wherever it can be read and otherwise takes the ink that skin writes on its
+  *title* bar -- which is by definition its ink for a coloured surface, so the
+  answer still comes from the palette. The date is the time's ink pulled a
+  third of the way back toward the bar, so it stays quieter.
+- A test now checks the colours the clock will actually use, for every skin
+  that ships, including that the date stays quieter than the time. It checks
+  what is drawn rather than what the table holds, because the table is allowed
+  to hold a dark `bar.text`.
+
+### BG-150 — A button's outline was a grey that had never looked at the background
+
+- **Found in** v0.4.0. **Found by** the author, on Beacon: "there's that weird
+  black line on the outer ring of the buttons".
+- **What it was** the outline was the face mixed toward black, and nothing
+  else. On Beacon the taskbar's buttons are E0E6F2 on a bar of 2959C4 -- a
+  hundred and forty-four levels apart -- and the rule put a 777A81 ring round
+  each one. A neutral grey against a saturated blue does not read as an edge;
+  it reads as dirt.
+- **Why the rule was there at all** BG-141. On Glass the Calculator's keys are
+  E8EBF5 on a panel of F0F2F8, eight levels apart, and without an outline the
+  button has no edge. Both are true. They are the same rule at two ends of a
+  range nobody had noticed was a range.
+- **Fixed in** v0.4.0. An outline exists to separate a control from what is
+  behind it, so how strong it needs to be is not a property of the control. It
+  is now the shaded tone when the two are close and slides toward a shadow of
+  the *background* as they separate -- fully so by 128 apart. Glass keeps its
+  edge; Beacon gets a deep blue shadow instead of a grey ring.
+
+### BG-149 — The taskbar was see-through, so a window under it washed it out
+
+- **Found in** v0.4.0. **Found by** the author: "when a window opens, no matter
+  what it is, for some reason the taskbar greys out and you can't see it. It's
+  supposed to stay fully functional and fully visible, like as if it's the only
+  thing on screen."
+- **What it was** the taskbar took the skin's full chrome opacity, on the
+  written reasoning that it is "a strip with a few short labels and survives
+  being see-through". Measured, it does not. On Smoked the bar is 1C222C, the
+  wallpaper behind it 26374B, and at 200 of 255 the composite lands on 1E --
+  sixteen levels from the desktop it is supposed to be in front of.
+- And the report is literally true: the same strip measured `1C1D2B` with the
+  desktop behind it and `2E2D47` with the Calculator behind it. Seventy-eight
+  per cent of a taskbar plus twenty-two per cent of somebody's window.
+- **Fixed in** v0.4.0. The taskbar takes no glass, and that is not a number a
+  skin can lower -- same reasoning as BG-146 putting it in its own scene layer.
+  A skin keeps its bar colour and its gradient, which is what makes an opaque
+  strip still look like glass.
+- Smoked's bar was also 1C222C against a window frame of 1A1E26 -- the strip
+  everything else sits in front of was the *lighter* of the two. It is 0E121A
+  now: on a dark skin the taskbar is the floor.
+
 ### BG-148 — Switch user was a person standing next to a floating notch
 
 - **Found in** v0.4.0. **Found by** photographing the start menu's five

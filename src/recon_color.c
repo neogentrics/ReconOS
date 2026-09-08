@@ -151,3 +151,28 @@ recon_color recon_color_fade(recon_color color, uint8_t alpha) {
 
     return (now << 24) | (r << 16) | (g << 8) | b;
 }
+
+/*
+ * Enough of a step that text does not sit *on* its background. Sixty is where
+ * the shipped skins land for their dimmed text once the bad ones are fixed,
+ * and the taskbar test holds them there.
+ */
+#define READABLE_GAP 60
+
+recon_color recon_color_readable_on(recon_color surface, recon_color preferred,
+        recon_color light_ink, recon_color dark_ink) {
+    int on = recon_color_luminance(surface);
+    int want = recon_color_luminance(preferred);
+
+    int gap = want > on ? want - on : on - want;
+    if (gap >= READABLE_GAP) {
+        return preferred;
+    }
+
+    /* Whichever of the skin's two inks is further from the surface. */
+    int lit = recon_color_luminance(light_ink);
+    int dim = recon_color_luminance(dark_ink);
+    int from_light = lit > on ? lit - on : on - lit;
+    int from_dark = dim > on ? dim - on : on - dim;
+    return from_light >= from_dark ? light_ink : dark_ink;
+}

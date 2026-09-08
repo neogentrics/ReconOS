@@ -1333,9 +1333,6 @@ static int dialog_height(struct recon_shell *shell) {
  * is a judgement about what a surface is *for*, and a bare `true` at the call
  * site says none of it.
  *
- * Full glass is for chrome you look past: the taskbar is a strip with a few
- * short labels and survives being see-through.
- *
  * Half is for chrome you read. At full strength the Apps menu put "Recon Core"
  * directly on top of another window's "Line 1, Column 1" -- two things to read
  * in one place, which is worse than either alone. Halved rather than given its
@@ -1344,10 +1341,30 @@ static int dialog_height(struct recon_shell *shell) {
  *
  * Neither is for the security box. See draw_security.
  */
-static void finish_chrome(struct recon_panel *panel) {
-    recon_panel_fade(panel, 0, 0, recon_panel_width(panel),
-        recon_panel_height(panel),
-        (uint8_t)recon_theme_metric(RECON_METRIC_CHROME_OPACITY));
+
+/*
+ * The taskbar takes no glass at all.
+ *
+ * It used to take the full amount, on the reasoning that it is "a strip with
+ * a few short labels and survives being see-through". Measured on Smoked, it
+ * does not. The bar is 1C222C, the wallpaper behind it 26374B, and at 200 of
+ * 255 the composite lands on 1E -- sixteen levels from the desktop it is
+ * supposed to be sitting in front of. On a dark wallpaper the bar is simply
+ * not there.
+ *
+ * Worse, and this is the part somebody notices without knowing why: a pale
+ * window sliding under it *lifts* it. The same strip measured 1C1D2B with the
+ * desktop behind it and 2E2D47 with the Calculator behind it. It looked like
+ * the taskbar greyed out when a window opened, and it was: seventy-eight per
+ * cent of a bar plus twenty-two per cent of somebody's window.
+ *
+ * So it is opaque, and that is not a number a skin can lower. The taskbar is
+ * how you reach everything else -- the same reason it is in its own scene
+ * layer above every window -- and a control you cannot see is a control you do
+ * not have. A skin still gets its own bar colour and its own gradient, which
+ * is what makes an opaque strip still look like glass.
+ */
+static void finish_taskbar(struct recon_panel *panel) {
     recon_panel_commit(panel);
 }
 
@@ -2558,13 +2575,37 @@ static void draw_clock(struct recon_shell *shell, struct recon_panel *bar,
      * pinned to the top of a button looks like it fell. */
     int top = TASKBAR_PADDING + (BUTTON_HEIGHT - line * 2) / 2;
 
+    /*
+     * --- Ink chosen against the bar, not asked of the skin ---
+     *
+     * The clock is the one thing written straight onto the taskbar; every
+     * other label up here sits on a button. So `bar.text` has two jobs, and a
+     * skin can only answer for one of them: Beacon's is a near-black, correct
+     * on that skin's pale task buttons and fifty-five levels from the deep
+     * blue bar the date was being drawn on. Barely visible, and the skin was
+     * not wrong -- the role was being asked a question it cannot answer.
+     *
+     * The skin's own choice is kept wherever it can be read. Where it cannot,
+     * the fallback still comes from the palette: the ink this skin writes on
+     * its title bar, which is by definition its ink for a coloured surface.
+     */
+    recon_color ink = recon_color_readable_on(COLOR_BAR, COLOR_TEXT,
+        THEME(TITLE_TEXT), THEME(MENU_TEXT));
+
+    /* The date stays quieter than the time. If the skin's dim will not read,
+     * it becomes the time's ink pulled a third of the way back toward the
+     * bar -- dimmer than the line above it, and still legible. */
+    recon_color quiet = recon_color_mix(ink, COLOR_BAR, 90);
+    recon_color faint = recon_color_readable_on(COLOR_BAR, COLOR_TEXT_DIM,
+        quiet, quiet);
+
     int width = recon_text_width(small, now);
     recon_draw_text(bar, small, x + (CLOCK_WIDTH - width) / 2, top + ascent,
-        CLOCK_WIDTH, now, COLOR_TEXT);
+        CLOCK_WIDTH, now, ink);
 
     width = recon_text_width(small, today);
     recon_draw_text(bar, small, x + (CLOCK_WIDTH - width) / 2,
-        top + line + ascent, CLOCK_WIDTH, today, COLOR_TEXT_DIM);
+        top + line + ascent, CLOCK_WIDTH, today, faint);
 
     (void)baseline;
 
@@ -2766,7 +2807,7 @@ static void draw_taskbar(struct recon_shell *shell) {
     draw_clock(shell, bar, width - CLOCK_WIDTH, baseline);
 
     if (window_count <= 0 || available < TASK_BUTTON_MIN_WIDTH) {
-        finish_chrome(bar);
+        finish_taskbar(bar);
         return;
     }
 
@@ -2853,7 +2894,7 @@ static void draw_taskbar(struct recon_shell *shell) {
         x += button_width + TASKBAR_PADDING;
     }
 
-    finish_chrome(bar);
+    finish_taskbar(bar);
 }
 
 /*

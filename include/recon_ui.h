@@ -79,6 +79,23 @@ recon_color recon_color_highlight(recon_color base);
 int recon_color_luminance(recon_color color);
 
 /*
+ * A colour to write in, on a surface of a given colour.
+ *
+ * `preferred` is what the skin asked for and is used whenever it can actually
+ * be read there. When it cannot, this returns the skin's own light or dark
+ * ink instead of a guess at black or white, so the answer still belongs to
+ * the palette.
+ *
+ * This exists because one role can be right in two places and wrong in a
+ * third. Beacon's `bar.text` is a near-black, chosen because that skin's task
+ * buttons are pale -- correct on a button, and invisible on the deep blue bar
+ * the clock is drawn straight onto. A role cannot know which of its uses is
+ * being asked about. The surface can.
+ */
+recon_color recon_color_readable_on(recon_color surface, recon_color preferred,
+    recon_color light_ink, recon_color dark_ink);
+
+/*
  * Move a colour towards a hue while keeping how light it was.
  *
  * The point of keeping the lightness is that a palette's *structure* is in its
@@ -461,6 +478,11 @@ void recon_edge_button(struct recon_panel *panel, int x, int y, int w, int h,
 void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
     bool pressed, recon_color face);
 
+/* The same button at a radius the caller supplies, for drawing one skin's
+ * button while another skin is on screen. */
+void recon_fill_button_radius(struct recon_panel *panel, int x, int y, int w,
+    int h, bool pressed, recon_color face, int radius);
+
 /*
  * The edge alone, for a caller that has already filled and drawn into the
  * button -- which the taskbar has to, because it washes a put-away window's
@@ -482,6 +504,16 @@ void recon_draw_button_edge(struct recon_panel *panel, int x, int y, int w,
  * reading the metric and subtracting a guess.
  */
 int recon_button_radius(int w, int h);
+
+/*
+ * The same, for a skin that is not the one on screen.
+ *
+ * The Appearance page draws a sample button for every skin in the list, in
+ * that skin's own numbers -- so the list cannot disagree with what the skin
+ * will actually do. It needs the cap as much as the live one does, and having
+ * its own copy of it is how the two come to differ.
+ */
+int recon_button_radius_of(int skin, int w, int h);
 
 /*
  * Draw text with its left edge at x and its baseline at y.

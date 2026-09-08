@@ -35,6 +35,57 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+**The taskbar is opaque, and that is not a setting.** It took the skin's full
+glass, on the reasoning that a strip of short labels survives being
+see-through. Measured on Smoked it does not: the bar and the wallpaper behind
+it landed sixteen levels apart. And a pale window sliding under it *lifted*
+it -- the same strip read `1C1D2B` over the desktop and `2E2D47` over the
+Calculator, which is what "the taskbar greys out when a window opens" is a
+picture of. It is how you reach everything else, which is the same reason it
+sits in its own scene layer above every window. Smoked's bar is darker than its
+window frames now, too: on a dark skin the taskbar is the floor.
+
+**An outline is about what is behind it.** The ring round a button was the face
+mixed toward black and nothing else -- right when a button and its background
+are close, which is the whole reason it exists (BG-141: Glass's keys are eight
+levels from the panel they sit on). On Beacon the taskbar's buttons are a
+hundred and forty-four levels from the bar, already unmistakable, and the same
+rule put a neutral grey ring round each one. Against a saturated blue that
+does not read as an edge, it reads as dirt. It now slides from the shaded tone
+to a shadow of the background as the two separate.
+
+**The clock picks ink that can be read.** `bar.text` is the label on a task
+button *and* the clock written straight onto the bar, and Beacon's is a
+near-black because that skin's buttons are pale. Both uses are legitimate and
+one role cannot answer for both. `recon_color_readable_on` keeps the skin's own
+choice wherever it works and otherwise takes the ink that skin writes on its
+title bar -- still the palette's answer, not black or white. A test checks the
+colours the clock will actually use, in every skin that ships.
+
+**Recon is violet.** It was grey chrome with navy titles and an oxblood accent,
+which is a good skin and is not this one. Recon Core is the hub of the story
+this system is named after and the hub is violet -- it is on the wallpaper, it
+is the tint the author reaches for, and the one place it was not was the skin
+called Recon. The greys carry a little of it, because a pure grey beside a
+violet title bar reads as two decisions.
+
+**Two tests stopped depending on a colour.** They asserted that a skin file
+which mentions one role inherits the rest, and checked that by comparing
+against the old Recon accent written out as hex. Making Recon violet broke two
+tests that are not about Recon. They ask the default skin now.
+
+**The Appearance page stopped drawing its own buttons.** Each row shows a
+sample in that skin's own numbers, and it had its own copy of the drawing and
+its own copy of the radius cap -- including the paint-out-the-corners trick
+fixed everywhere else as BG-142. `recon_fill_button_radius` is the real button
+with the radius passed in.
+
+**"Edit Colours" is gone unless there are colours to edit.** A built-in skin
+cannot be changed, so the button was drawn greyed out on eleven of the twelve
+rows: a control that has never once worked, sitting in a row of controls that
+do. "Customize Skin" beside it is how a built-in becomes one that can be
+edited.
+
 **Three wallpapers the author made, and the two skins they were made for.**
 `Constellation` is a star field behind frosted panes, `Millpond` is the same
 idea in daylight -- glass over still water -- and `Meadow` is flat, bright and

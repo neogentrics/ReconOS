@@ -181,6 +181,25 @@ static void test_remembered(void) {
  * what lets one colour mean flat without a second control to say so -- and it
  * is only true if the two functions agree, which is what most of this checks.
  */
+/*
+ * What a skin that says nothing about a role inherits.
+ *
+ * Asked of the default skin rather than written here as a hex value. It was a
+ * literal, and the literal was the old Recon accent -- so making Recon violet
+ * broke two tests that are not about Recon's colour at all. A test that has
+ * to be edited when an unrelated palette changes is a test that will
+ * eventually be edited to match whatever the code now does.
+ */
+static recon_color inherited(enum recon_theme_role role) {
+    struct recon_theme_info info;
+    for (int i = 0; recon_theme_at(i, &info); i++) {
+        if (strcasecmp(info.name, "Recon") == 0) {
+            return recon_theme_color_of(i, role);
+        }
+    }
+    return 0;
+}
+
 /* Whether the system lists a skin by that name, the way it looks a skin up:
  * without regard to case. */
 static bool listed(const char *name) {
@@ -536,7 +555,7 @@ static void test_files(void) {
     check(recon_theme_color(RECON_THEME_BAR) == RECON_RGB(0x12, 0x34, 0x56),
         "the role it set is its own");
     check(recon_theme_color(RECON_THEME_ACCENT) ==
-        RECON_RGB(0x8B, 0x1A, 0x1A),
+        inherited(RECON_THEME_ACCENT),
         "and everything it did not mention is inherited, not blank");
 
     /* Six digits mean opaque; a person writing a colour by hand means opaque
@@ -575,7 +594,7 @@ static void test_damaged_file(void) {
     check(recon_theme_set("Patchy"), "it still loaded");
     check(recon_theme_color(RECON_THEME_WARNING) == RECON_RGB(0x00, 0xFF, 0x00),
         "the good line after the bad ones was read");
-    check(recon_theme_color(RECON_THEME_ACCENT) == RECON_RGB(0x8B, 0x1A, 0x1A),
+    check(recon_theme_color(RECON_THEME_ACCENT) == inherited(RECON_THEME_ACCENT),
         "the unparseable colour was left at the default, not zeroed");
 }
 
@@ -643,6 +662,74 @@ static void test_glass(void) {
      */
     check(recon_theme_metric(RECON_METRIC_CHROME_OPACITY) >= 140,
         "chrome never fades past what can still be read");
+}
+
+/* --- The taskbar has to be readable in every skin --- */
+
+/*
+ * The taskbar is the one strip that has to work. It is how you reach
+ * everything else -- which is why it sits in its own scene layer above every
+ * window, and why it takes no glass -- and a clock nobody can read is a clock
+ * that is not there.
+ *
+ * Checked as a rule rather than skin by skin, because it was a rule the whole
+ * time and nothing enforced it: Beacon's dimmed bar text is a neutral grey,
+ * which is fine on the grey bar every skin had when it was written and which
+ * disappears into Beacon's saturated blue. A skin added next year will fail
+ * this the same way, and now it will fail it here instead of on somebody's
+ * screen.
+ */
+static void test_the_taskbar_stays_readable(void) {
+    printf("A readable taskbar, in every skin\n");
+
+    struct recon_theme_info info;
+    for (int i = 0; recon_theme_at(i, &info); i++) {
+        /* The ones that ship. A skin somebody wrote is theirs to get wrong,
+         * and the fixtures the other tests leave behind are not skins. */
+        if (!info.built_in) {
+            continue;
+        }
+        recon_color bar = recon_theme_color_of(i, RECON_THEME_BAR);
+
+        /*
+         * The colours the clock will actually use, worked out the way it
+         * works them out. Checking the raw roles instead would be checking
+         * the wrong thing: `bar.text` is also the label on a task button, so
+         * a skin whose buttons are pale is *right* to make it dark, and the
+         * clock's answer to that is to pick its own ink rather than to
+         * demand the skin choose between two surfaces.
+         */
+        recon_color ink = recon_color_readable_on(bar,
+            recon_theme_color_of(i, RECON_THEME_BAR_TEXT),
+            recon_theme_color_of(i, RECON_THEME_TITLE_TEXT),
+            recon_theme_color_of(i, RECON_THEME_MENU_TEXT));
+        recon_color quiet = recon_color_mix(ink, bar, 90);
+        recon_color faint = recon_color_readable_on(bar,
+            recon_theme_color_of(i, RECON_THEME_BAR_TEXT_DIM), quiet, quiet);
+
+        int lit = recon_color_luminance(bar);
+        int on = recon_color_luminance(ink);
+        int low = recon_color_luminance(faint);
+
+        int gap_text = on > lit ? on - lit : lit - on;
+        int gap_dim = low > lit ? low - lit : lit - low;
+
+        char what[128];
+        snprintf(what, sizeof(what),
+            "%s: the clock reads on the bar (%d apart)", info.name, gap_text);
+        check(gap_text >= 60, what);
+
+        snprintf(what, sizeof(what),
+            "%s: the date under it reads too (%d apart)", info.name, gap_dim);
+        check(gap_dim >= 45, what);
+
+        /* And the two lines are still told apart, which is the other half of
+         * "dim": an unreadable date fixed by making it the same as the time
+         * would pass the check above and lose the distinction. */
+        snprintf(what, sizeof(what),
+            "%s: the date is quieter than the time", info.name);
+        check(gap_dim < gap_text, what);
+    }
 }
 
 /* --- Tints --- */
@@ -768,6 +855,9 @@ int main(void) {
     test_glass();
     test_tint();
     test_damaged_file();
+    /* Last, because it reads every skin in the list and the damaged-file test
+     * cares about exactly which skins are loaded when it runs. */
+    test_the_taskbar_stays_readable();
 
     recon_theme_finish();
     recon_registry_finish();

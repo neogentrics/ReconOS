@@ -2084,31 +2084,26 @@ static void draw_appearance_themes(struct control_panel *cp,
         int sample_h = ROW_HEIGHT - 10;
         int sample_w = sample_h * 2;
 
-        /*
-         * The same trim recon_button_radius applies, done here because that
-         * one reads the *current* skin and this row is showing another one.
-         * Without it a skin asking for ten would be drawn as a lozenge in the
-         * list and as a gentle curve everywhere else, which makes the list a
-         * worse guide than no list.
-         */
-        int sample_r = recon_theme_metric_of(i, RECON_METRIC_BUTTON_CORNER);
-        int sample_most = (sample_h < sample_w ? sample_h : sample_w) * 3 / 10;
-        if (sample_r > sample_most) {
-            sample_r = sample_most;
-        }
         int sample_x = x + w - 12 - sample_w;
         int sample_y = ry + 5;
 
+        /*
+         * Drawn by the same function that draws every other button, at this
+         * skin's radius rather than the current one's.
+         *
+         * It used to fill a square, bevel the square, and then paint the four
+         * corners back out in a colour it believed was behind them -- which is
+         * BG-142, still living here after being fixed everywhere else. The
+         * square bevel survived in the corner the paint-out did not reach, so
+         * each sample came out rounded on two corners and ragged on the other
+         * two. "If you're gonna round them all, make sure they are actually
+         * rounded" is a picture of a corner drawn by two functions that
+         * disagree about where it is.
+         */
         recon_color face = recon_theme_color_of(i, RECON_THEME_BUTTON);
-        recon_color behind = picked ? row_bg
-            : (i % 2 == 1 ? COLOR_ROW_ALT : COLOR_BG);
-
-        recon_fill_rect(p, sample_x, sample_y, sample_w, sample_h, face);
-        recon_draw_bevel(p, sample_x, sample_y, sample_w, sample_h, false);
-        if (sample_r > 0) {
-            recon_round_rect(p, sample_x, sample_y, sample_w, sample_h,
-                sample_r, behind);
-        }
+        recon_fill_button_radius(p, sample_x, sample_y, sample_w, sample_h,
+            false, face,
+            recon_button_radius_of(i, sample_w, sample_h));
 
         recon_draw_text(p, cp->font, x + 14,
             ry + (ROW_HEIGHT + ascent) / 2 - 2, w / 2, name, ink);
@@ -2166,9 +2161,23 @@ static void draw_appearance_themes(struct control_panel *cp,
         HIT_ACTION_BASE + ACTION_USE_SKIN, have_chosen);
     sbx = draw_button(cp, p, sbx, y, "Customize Skin",
         HIT_ACTION_BASE + ACTION_COPY_SKIN, have_chosen);
-    sbx = draw_button(cp, p, sbx, y, "Edit Colours",
-        HIT_ACTION_BASE + ACTION_EDIT_SKIN,
-        have_chosen && !chosen.built_in);
+    /*
+     * --- Edit Colours, only when there are colours to edit ---
+     *
+     * A built-in skin cannot be changed, so this was drawn greyed out on
+     * eleven of the twelve rows in the list. A permanently disabled button is
+     * not a hint that something is unavailable -- it is a control that has
+     * never once worked, sitting in a row of controls that do, and the reader
+     * has to click it to find out which kind it is.
+     *
+     * Absent instead. "Customize Skin" beside it is how a built-in becomes
+     * one that can be edited, so nothing is lost and there is one fewer thing
+     * on screen doing nothing.
+     */
+    if (have_chosen && !chosen.built_in) {
+        sbx = draw_button(cp, p, sbx, y, "Edit Colours",
+            HIT_ACTION_BASE + ACTION_EDIT_SKIN, true);
+    }
 
     /*
      * Always enabled: this is the one button here that does not act on the

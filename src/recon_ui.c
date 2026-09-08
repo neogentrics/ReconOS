@@ -1790,6 +1790,72 @@ static void bevel_colours(recon_color face, recon_color *light,
     *dark = recon_color_mix(face, RECON_RGB(0x00, 0x00, 0x00), 120);
 }
 
+/* The pixel just outside a rectangle: what the control is sitting on. */
+static recon_color colour_behind(const struct recon_panel *panel, int x, int y,
+        int w, int h) {
+    if (panel == NULL) {
+        return RECON_RGB(0xC0, 0xC0, 0xC0);
+    }
+    const int TRY[][2] = {
+        { x + w / 2, y - 1 },        /* above */
+        { x - 1,     y + h / 2 },    /* left */
+        { x + w / 2, y + h },        /* below */
+        { x + w,     y + h / 2 },    /* right */
+    };
+    for (size_t i = 0; i < sizeof(TRY) / sizeof(TRY[0]); i++) {
+        int sx = TRY[i][0], sy = TRY[i][1];
+        if (sx >= 0 && sy >= 0 && sx < panel->width && sy < panel->height) {
+            return panel->pixels[(size_t)sy * panel->width + sx];
+        }
+    }
+    return RECON_RGB(0xC0, 0xC0, 0xC0);
+}
+
+/*
+ * --- What an outline is for, and what follows from that ---
+ *
+ * An outline exists to separate a control from what is behind it. So how
+ * strong it needs to be is not a property of the control: it is how far apart
+ * the two already are.
+ *
+ * It used to be one thing -- the face mixed toward black -- and that is right
+ * exactly when the two are close. On Glass the Calculator's keys are E8EBF5
+ * on a panel of F0F2F8, eight levels apart, and without the outline the
+ * button has no edge at all (BG-141). On Beacon the taskbar's buttons are
+ * E0E6F2 on a bar of 2959C4 -- a hundred and forty-four levels apart, already
+ * unmistakably separate -- and the same rule put a 777A81 ring round each
+ * one. A neutral grey against a saturated blue does not read as an edge. It
+ * reads as dirt, and it is what "that weird black line on the outer ring"
+ * is a picture of.
+ *
+ * So: when face and background are close, the outline is the shaded tone and
+ * does the whole job. As they separate, it slides toward a shadow of the
+ * background -- present, the right hue, and no longer pretending to be an
+ * edge the button does not need.
+ */
+static recon_color outline_colour(recon_color face, recon_color behind) {
+    recon_color dark = recon_color_mix(face, RECON_RGB(0x00, 0x00, 0x00), 120);
+
+    int gap = recon_color_luminance(face) - recon_color_luminance(behind);
+    if (gap < 0) {
+        gap = -gap;
+    }
+
+    /*
+     * Fully the background's shadow once they are 128 apart -- half the range,
+     * which is well beyond the point where a reader could mistake one for the
+     * other.
+     */
+    int toward = gap * 2;
+    if (toward > 255) {
+        toward = 255;
+    }
+
+    recon_color shadow = recon_color_mix(behind, RECON_RGB(0x00, 0x00, 0x00),
+        40);
+    return recon_color_mix(dark, shadow, (uint8_t)toward);
+}
+
 /*
  * What colour the thing being bevelled is, read from the panel.
  *
@@ -1876,15 +1942,30 @@ void recon_draw_bevel(struct recon_panel *panel, int x, int y, int w, int h,
  * have to be kept in a relationship, which is a relationship somebody will
  * eventually get wrong on a skin they are making at the time.
  */
-int recon_button_radius(int w, int h) {
-    int radius = recon_theme_metric(RECON_METRIC_BUTTON_CORNER);
+/*
+ * The cap lives here and only here.
+ *
+ * It was written twice -- once for the current skin and once in the Appearance
+ * page, which draws a sample button for every *other* skin. Two copies of one
+ * rule is one rule and one bug waiting: the copy is right until the original
+ * changes.
+ */
+static int radius_capped(int radius, int w, int h) {
     if (radius <= 0) {
         return 0;
     }
-
     int shortest = w < h ? w : h;
     int most = shortest * 3 / 10;
     return radius < most ? radius : most;
+}
+
+int recon_button_radius(int w, int h) {
+    return radius_capped(recon_theme_metric(RECON_METRIC_BUTTON_CORNER), w, h);
+}
+
+int recon_button_radius_of(int skin, int w, int h) {
+    return radius_capped(recon_theme_metric_of(skin, RECON_METRIC_BUTTON_CORNER),
+        w, h);
 }
 
 /*
@@ -1985,11 +2066,13 @@ void recon_edge_button(struct recon_panel *panel, int x, int y, int w, int h,
         return;
     }
 
+    recon_color face = bevel_face(panel, x, y, w, h);
     recon_color light, dark;
-    bevel_colours(bevel_face(panel, x, y, w, h), &light, &dark);
+    bevel_colours(face, &light, &dark);
+    recon_color edge = outline_colour(face, colour_behind(panel, x, y, w, h));
     int radius = recon_button_radius(w, h);
 
-    recon_stroke_round_rect(panel, x, y, w, h, radius, dark);
+    recon_stroke_round_rect(panel, x, y, w, h, radius, edge);
 
     if (w > radius * 2 + 4 && h > radius * 2 + 4) {
         recon_color inner = pressed ? dark : light;
@@ -2002,14 +2085,18 @@ void recon_edge_button(struct recon_panel *panel, int x, int y, int w, int h,
 
 void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
         bool pressed, recon_color face) {
+    recon_fill_button_radius(panel, x, y, w, h, pressed, face,
+        recon_button_radius(w, h));
+}
+
+void recon_fill_button_radius(struct recon_panel *panel, int x, int y, int w,
+        int h, bool pressed, recon_color face, int radius) {
     if (panel == NULL || w < 2 || h < 2) {
         return;
     }
 
     recon_color light, dark;
     bevel_colours(face, &light, &dark);
-    int radius = recon_button_radius(w, h);
-
 
 
     /*
@@ -2027,7 +2114,8 @@ void recon_fill_button(struct recon_panel *panel, int x, int y, int w, int h,
      * and the top and left of every key stopped existing. Two edges out of
      * four, which is what "they look incomplete" is a picture of.
      */
-    recon_fill_round_rect_edged(panel, x, y, w, h, radius, face, dark);
+    recon_fill_round_rect_edged(panel, x, y, w, h, radius, face,
+        outline_colour(face, colour_behind(panel, x, y, w, h)));
 
     /*
      * --- The lighting, kept out of the corners ---

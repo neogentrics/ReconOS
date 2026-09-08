@@ -176,35 +176,53 @@ static int role_from_name(const char *name) {
 #define RGB(r, g, b) RECON_RGB(0x##r, 0x##g, 0x##b)
 #define RGBA(r, g, b, a) RECON_RGBA(0x##r, 0x##g, 0x##b, 0x##a)
 
-/* The native look: grey chrome, deep navy titles, oxblood accent. */
+/*
+ * The native look: violet.
+ *
+ * It was grey chrome with navy titles and an oxblood accent, which is a
+ * perfectly good skin and is not this system's. Recon Core is the hub of the
+ * story this thing is named after and the hub is violet -- it is on the
+ * wallpaper, it is the tint the author reaches for, and the one place it was
+ * not was the skin called Recon.
+ *
+ * The greys are not neutral. Each carries a little of the violet, because a
+ * pure mid-grey beside a violet title bar reads as two decisions and a grey
+ * biased toward the accent reads as one.
+ *
+ * The readout stays green on near-black. That is a screen inside the system
+ * rather than part of its chrome, and green on black is the most legible
+ * thing a small monospaced panel can be; making it violet would cost reading
+ * to gain matching.
+ */
 static const recon_color THEME_RECON[] = {
-    RGB(C0,C0,C0), RGB(30,30,30), RGB(20,2A,44), RGB(6A,6A,72),
-    RGB(F0,F0,F0), RGB(F0,F0,F4), RGB(C8,C8,C8), RGB(10,10,10),
+    RGB(C2,BF,C8), RGB(2E,2A,36), RGB(3C,2A,6B), RGB(6E,6A,78),
+    RGB(F0,F0,F0), RGB(F0,F0,F4), RGB(CB,C8,D2), RGB(10,10,10),
 
-    RGB(C0,C0,C0), RGB(10,10,10), RGB(40,40,40), RGB(C8,C8,C8),
-    RGB(A8,A8,B4),
+    RGB(C2,BF,C8), RGB(10,10,10), RGB(42,3E,4A), RGB(CB,C8,D2),
+    RGB(AD,A6,BC),
     RGB(10,10,10),
 
-    RGB(C8,C8,C8), RGB(30,30,30), RGB(10,10,10), RGB(40,40,40),
-    RGB(30,50,90), RGB(FF,FF,FF), RGB(90,90,90),
+    RGB(CB,C8,D2), RGB(2E,2A,36), RGB(10,10,10), RGB(42,3E,4A),
+    RGB(5A,3E,96), RGB(FF,FF,FF), RGB(93,8E,9C),
 
-    RGB(C0,C0,C0), RGB(20,2A,44), RGB(F0,F0,F0), RGBA(00,00,00,99),
+    RGB(C2,BF,C8), RGB(3C,2A,6B), RGB(F0,F0,F0), RGBA(00,00,00,99),
 
-    RGB(FF,FF,FF), RGB(F2,F2,F6), RGB(10,10,10), RGB(30,30,30),
-    RGB(D4,D4,D4), RGB(30,50,90), RGB(FF,FF,FF),
+    RGB(FF,FF,FF), RGB(F4,F2,F8), RGB(10,10,10), RGB(32,30,3A),
+    RGB(D6,D2,DE), RGB(5A,3E,96), RGB(FF,FF,FF),
 
-    RGB(FF,FF,FF), RGB(30,50,90), RGB(10,10,10), RGB(B0,C8,F0),
+    RGB(FF,FF,FF), RGB(5A,3E,96), RGB(10,10,10), RGB(D2,C4,EE),
     RGB(10,10,10),
 
     RGB(0C,10,18), RGB(C8,D4,C8), RGB(7C,C8,7C), RGB(F0,F0,E8),
 
-    RGB(F0,F0,F0), RGBA(00,00,00,C0), RGBA(30,50,90,A0),
+    RGB(F0,F0,F0), RGBA(00,00,00,C0), RGBA(5A,3E,96,A0),
 
     /* Accent and warning were the same oxblood, which made "this is
      * highlighted" and "this is a problem" the same colour for everybody, not
-     * only for someone who cannot separate reds. The warning is brighter and
-     * hotter now, and differs in luminance as well as hue. */
-    RGB(8B,1A,1A), RGB(F4,F4,F4), RGB(D0,42,1B), RGB(1A,3A,8B),
+     * only for someone who cannot separate reds. They are now further apart
+     * than they have ever been: a violet accent against a hot orange warning
+     * differs in hue, in saturation and in luminance at once. */
+    RGB(6A,3F,A0), RGB(F4,F4,F4), RGB(D0,42,1B), RGB(3B,2A,78),
 };
 
 /* The 95-era look: brighter grey, the familiar navy, no softening. */
@@ -337,8 +355,15 @@ static const recon_color THEME_SMOKED[] = {
     /* Title text, inactive, window button, its glyph */
     RGB(DC,E6,F2), RGB(78,86,96), RGB(2A,34,43), RGB(D4,DE,EA),
 
-    /* Bar, its text, dimmed */
-    RGB(1C,22,2C), RGB(DC,E6,F2), RGB(7E,8C,9C),
+    /*
+     * Bar, its text, dimmed.
+     *
+     * The bar is darker than the window frame above it, which it was not: it
+     * was 1C222C against a frame of 1A1E26, so the strip everything else sits
+     * in front of was the *lighter* of the two. On a dark skin the taskbar
+     * should be the floor.
+     */
+    RGB(0E,12,1A), RGB(DC,E6,F2), RGB(8E,9C,AC),
     /* Button, active, text */
     RGB(2A,33,41), RGB(38,44,56), RGB(DC,E6,F2),
 
@@ -1140,9 +1165,9 @@ static const struct gradient_spec GRAD_BEACON[] = {
  * enough that chrome is not perfectly flat, not enough to be a style.
  */
 static const struct gradient_spec GRAD_RECON[] = {
-    { RECON_THEME_TITLE_ACTIVE,   RGB(16,1E,34) },
-    { RECON_THEME_BAR,            RGB(A8,A8,B0) },
-    { RECON_THEME_DIALOG_TITLE,   RGB(16,1E,34) },
+    { RECON_THEME_TITLE_ACTIVE,   RGB(26,1A,48) },
+    { RECON_THEME_BAR,            RGB(AA,A4,B4) },
+    { RECON_THEME_DIALOG_TITLE,   RGB(26,1A,48) },
     { RECON_THEME_ROLE_COUNT, 0 },
 };
 
@@ -1355,7 +1380,7 @@ static const struct {
     /* NULL for a skin that keeps the default frame shape. */
     const struct metric_spec *shape;
 } BUILT_IN[] = {
-    { "Recon", "The native look: grey chrome, navy titles, oxblood accent",
+    { "Recon", "The native look: violet titles on chrome tinted to match",
       THEME_RECON, "Night Sky.png", GRAD_RECON, NULL },
     { "Classic", "Squared-off and high contrast, the 95 era", THEME_CLASSIC,
       "Daybreak.png", NULL, SHAPE_CLASSIC },
