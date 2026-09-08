@@ -3491,8 +3491,30 @@ static void draw_menu(struct recon_shell *shell) {
 
     if (box_w > 40) {
         recon_fill_role(menu, box_x, by, box_w, box_h, RECON_THEME_FIELD);
-        recon_stroke_rect(menu, box_x, by, box_w, box_h,
-            THEME(FIELD_BORDER));
+
+        /*
+         * --- Drawn as the focused field it always is ---
+         *
+         * While this menu is open, every key goes here. Nothing else in the
+         * menu takes typing, so there is no question of which field has it --
+         * and the box was drawn as though it had none: a plain border, a
+         * placeholder, and a caret that appeared only once something had been
+         * typed.
+         *
+         * Which is exactly backwards. The caret is what says "type here", so
+         * showing it only after somebody has typed is showing it to the one
+         * person who no longer needs it. Reported as "I can't click into it to
+         * know that I'm typing -- there's no indicator", and clicking it was
+         * indeed doing nothing, because there was nothing left for a click to
+         * do.
+         *
+         * Two pixels of border in the selection colour, and a caret that is
+         * always there. Both say the same thing at two distances: the border
+         * from across the menu, the caret from close up.
+         */
+        recon_stroke_rect(menu, box_x, by, box_w, box_h, THEME(SELECTION));
+        recon_stroke_rect(menu, box_x + 1, by + 1, box_w - 2, box_h - 2,
+            THEME(SELECTION));
 
         /*
          * A magnifier. A square ring read as a square, so the four corners
@@ -3515,28 +3537,31 @@ static void draw_menu(struct recon_shell *shell) {
 
         int tx = box_x + 22;
         int tw = box_w - 22 - 6;
+        int baseline = by + (box_h + ascent) / 2 - 2;
 
         if (shell->menu_filter[0] != '\0') {
-            recon_draw_text(menu, shell->font, tx,
-                by + (box_h + ascent) / 2 - 2, tw, shell->menu_filter,
-                THEME(FIELD_TEXT));
-
-            /* A caret, because this is a field somebody is typing into and a
-             * field with no caret looks like a label. */
-            int caret = tx + recon_text_width(shell->font, shell->menu_filter);
-            if (caret < box_x + box_w - 4) {
-                recon_fill_rect(menu, caret + 1, by + 4, 1, box_h - 8,
-                    THEME(FIELD_TEXT));
-            }
+            recon_draw_text(menu, shell->font, tx, baseline, tw,
+                shell->menu_filter, THEME(FIELD_TEXT));
         } else {
             /*
              * Dim, not disabled. The disabled ink is the colour of a thing
              * that cannot be used, and this is a box that can -- on a warm
              * skin it came out so faint the box read as switched off.
+             *
+             * After the caret rather than under it, the way a focused empty
+             * field looks anywhere: the caret is where the next letter lands
+             * and the hint is what the letters are for.
              */
-            recon_draw_text(menu, shell->font, tx,
-                by + (box_h + ascent) / 2 - 2, tw, "Search programs",
-                THEME(SURFACE_TEXT_DIM));
+            recon_draw_text(menu, shell->font, tx + 5, baseline, tw - 5,
+                "Search programs", THEME(SURFACE_TEXT_DIM));
+        }
+
+        /* The caret, typed into or not. It is the only thing here that says
+         * the keys are already coming to this box. */
+        int caret = tx + recon_text_width(shell->font, shell->menu_filter);
+        if (caret < box_x + box_w - 4) {
+            recon_fill_rect(menu, caret + 1, by + 4, 1, box_h - 8,
+                THEME(CARET));
         }
 
         recon_hit_add(menu, box_x, by, box_w, box_h, HIT_MENU_SEARCH);

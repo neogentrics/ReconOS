@@ -2575,6 +2575,28 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-158 — The search box only showed a caret once somebody had typed
+
+- **Found in** v0.4.0. **Found by** the author: "I can type in it, but I can't
+  click into it to know that I'm typing. There's no indicator."
+- **What it was** the box drew a plain border, a placeholder, and a caret only
+  when the filter was non-empty. That is exactly backwards. The caret is the
+  thing that says *type here*, so showing it only after somebody has typed is
+  showing it to the one person who no longer needs it -- and clicking the box
+  genuinely did nothing, because the click had nothing left to do: the keys
+  were already going there.
+- The first report was "the search still doesn't do anything when I type",
+  corrected a minute later. Worth keeping both: a control that gives no sign
+  of being live is first read as broken, and only on a second look as working
+  and silent.
+- **Fixed in** v0.4.0. It is drawn as the focused field it always is, because
+  while the menu is open nothing else in it takes typing. Two pixels of border
+  in the selection colour and a caret that is always there -- the border says
+  it from across the menu, the caret from close up. The placeholder moves five
+  pixels right, so an empty box reads the way a focused empty field reads
+  anywhere: the caret is where the next letter lands, the hint is what the
+  letters are for.
+
 ### BG-157 — The "last run did not finish" card reported itself as `(null)`
 
 - **Found in** v0.4.0. **Found by** running `session` over the control socket

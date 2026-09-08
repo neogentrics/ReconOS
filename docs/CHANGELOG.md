@@ -35,6 +35,17 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+**The search box looks like the field it is.** It drew a caret only once
+something had been typed, which is exactly backwards -- the caret is what says
+*type here*, so showing it only afterwards shows it to the one person who no
+longer needs it. Clicking the box did nothing because there was nothing for a
+click to do: while the menu is open, nothing else in it takes typing, so the
+keys were already going there.
+
+It is drawn as the focused field it always is. Two pixels of border in the
+selection colour and a caret that is always present -- the border says it from
+across the menu, the caret from close up.
+
 **A stage with no name says so.** `session` over the control socket reported
 `(null)` after a run that was killed rather than stopped. Two stages had been
 added to the enum and not to the table of names -- the same fault the comment
