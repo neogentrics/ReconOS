@@ -35,6 +35,37 @@ folder of downloads actually looks like -- several sizes of the same picture, a
 and not others, and `-2`/`-3` suffixes where the same file was fetched twice.
 Adding a pack is dropping a folder next to the others and running it.
 
+**The Start menu's search does what the box under it says it does.** The
+tooltip has always read "Programs, places, settings and help", and it looked
+through programs and help. Two of four -- and the missing two are the ones
+people actually go hunting for: nobody forgets where Notepad is, and everybody
+forgets which page the firewall is on.
+
+It now finds **settings** (every Control Panel item, opening straight at that
+page), **places** (the account's folders, opening the Explorer there), **files**
+in those folders, and the help. Typing `fire` puts *Settings: Firewall* at the
+top with the firewall's own icon; typing part of a document's name opens it in
+whatever opens it.
+
+**Order is by how sure the answer is.** Programs, then settings, then places,
+then files, then help -- because the help is the only one of these that matches
+on *body text* rather than on a name. It sat above the files at first, and
+searching `quar` put four help pages above the two files actually called
+`quarterly-notes.txt` and `quarry.png`.
+
+**Six files at most, one level deep.** This runs once per keystroke while
+somebody is typing, so a search that walks the whole filesystem is a menu that
+stops -- and a menu filled with eighteen files is one where the program they
+were reaching for has been pushed off the bottom by its own documents.
+
+**And pressing Enter on a result now opens the result.** There were two ways to
+reach a row and two answers: clicking switched on what kind of thing it was,
+and Enter called "open the application called this" whatever it was -- so Enter
+on a help page asked for an application named `Help: Files`, logged an error and
+did nothing. Invisible for exactly as long as a program was always the first
+match, which is as long as programs and help were the only things that could
+match. One function knows what opening a row means now.
+
 **Beacon comes in olive, and there is a Metallic skin.** That era shipped its
 bright blue with a muted yellow-green alternative and a brushed-metal one, and
 the green is the half people remember choosing. Beacon offers Blue and Olive.

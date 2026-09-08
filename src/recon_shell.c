@@ -360,6 +360,17 @@ enum menu_kind {
     /* A page of the help, offered when what was typed appears in one. The
      * label is the topic's title, which is also how Help is asked for it. */
     MENU_KIND_HELP,
+    /*
+     * A Control Panel page. The label carries a "Settings: " prefix, for the
+     * same reason the help's does: "Network" alone in a list under Notepad
+     * and Calculator reads as a program.
+     */
+    MENU_KIND_SETTING,
+    /* One of the folders the right column lists. `where` is the folder. */
+    MENU_KIND_PLACE,
+    /* A file inside one of them. `where` is which one; the label is the
+     * file's own name, because that is what somebody typed part of. */
+    MENU_KIND_FILE,
 };
 
 struct menu_entry {
@@ -375,6 +386,17 @@ struct menu_entry {
     char label[96];
     char icon[64];
     enum menu_kind kind;
+
+    /*
+     * Which folder a place or a file is in -- a name under the account's own
+     * directory, or "/" for the machine.
+     *
+     * The folder rather than the whole path, and the file's own name in
+     * `label` rather than a path, because the label is what is *shown*: a row
+     * reading /Users/Neogentrics/Documents/notes.txt is a row nobody can
+     * scan. The two are put back together at the moment of opening.
+     */
+    char where[64];
 };
 
 /*
@@ -605,6 +627,81 @@ static void menu_unpin(const char *name) {
     }
 }
 
+/*
+ * --- Files, in the folders that belong to whoever is signed in ---
+ *
+ * Six at most, and one level deep in each of the account's own folders.
+ *
+ * Both of those are on purpose. A search that walks the whole filesystem is a
+ * search that stops the menu for as long as it takes -- this runs while
+ * somebody is typing, once per keystroke -- and a menu that fills with
+ * eighteen files is a menu where the program they were reaching for has been
+ * pushed off the bottom by its own documents. The point of this list is the
+ * *first* row, and everything below the first few rows is only there for the
+ * times the first row was wrong.
+ *
+ * Documents before Desktop and so on, in the order the places are listed,
+ * because that is the order the same folders appear in everywhere else.
+ */
+#define MENU_FILES_MAX 6
+
+static int menu_files(const char *filter, struct menu_entry *out, int max) {
+    if (filter == NULL || filter[0] == '\0' || out == NULL || max <= 0) {
+        return 0;
+    }
+    if (max > MENU_FILES_MAX) {
+        max = MENU_FILES_MAX;
+    }
+
+    int found = 0;
+    for (int p = 0; p < MENU_PLACE_COUNT && found < max; p++) {
+        if (MENU_PLACES[p].kind != PLACE_FOLDER) {
+            continue;
+        }
+        /* Not the machine: "Recon Core" is the whole tree, and searching it
+         * from a keystroke handler is a different feature with a different
+         * cost. */
+        if (strcmp(MENU_PLACES[p].target, "/") == 0) {
+            continue;
+        }
+
+        const char *dir = recon_fs_user_dir(MENU_PLACES[p].target);
+        if (dir == NULL) {
+            continue;
+        }
+
+        struct recon_dirent entries[64];
+        int count = recon_fs_list("/", dir, entries, 64);
+        for (int i = 0; i < count && found < max; i++) {
+            if (!contains_fold(entries[i].name, filter)) {
+                continue;
+            }
+            /*
+             * A name too long to hold is left out rather than cut down. The
+             * label is what the file is asked for by when the row is clicked,
+             * so a shortened one is not a result with a shorter name -- it is
+             * a row that opens nothing. The compiler said so before anything
+             * ran.
+             */
+            size_t length = strlen(entries[i].name);
+            if (length >= sizeof(out[found].label)) {
+                continue;
+            }
+            /* Copied by the length just checked rather than by a formatter,
+             * so the bound is one the compiler can see too. */
+            memcpy(out[found].label, entries[i].name, length + 1);
+            snprintf(out[found].icon, sizeof(out[found].icon), "%s",
+                entries[i].kind == RECON_FILE_DIRECTORY
+                    ? RECON_ICON_FOLDER : recon_props_icon(entries[i].name));
+            out[found].kind = MENU_KIND_FILE;
+            snprintf(out[found].where, sizeof(out[found].where), "%s",
+                MENU_PLACES[p].target);
+            found++;
+        }
+    }
+    return found;
+}
+
 static int menu_apps(bool show_all, const char *filter,
         struct menu_entry *out, int max) {
     struct menu_entry found[MENU_APPS_MAX];
@@ -710,7 +807,65 @@ static int menu_apps(bool show_all, const char *filter,
      * Only while searching, because with nothing typed every page matches and
      * the menu would be the help's table of contents.
      */
-    if (searching && shown < max) {
+    /*
+     * --- Then everything else the box promises ---
+     *
+     * The tooltip under it has always read "Programs, places, settings and
+     * help", and it looked through programs and help. Two of four, and the
+     * missing two are the ones people actually go hunting for: nobody forgets
+     * where Notepad is, and everybody forgets which page the firewall is on.
+     *
+     * The order is the order of how sure the answer is. A program named for
+     * what you typed is almost certainly it. A settings page named for it is
+     * nearly as good. A folder is a place you meant to go. A file is a guess
+     * at what you meant, and there can be a great many of them, so it is
+     * last and it is capped.
+     */
+    if (searching) {
+        for (int i = 0; i < recon_control_panel_item_count() && shown < max;
+                i++) {
+            const char *label = NULL;
+            const char *icon = NULL;
+            if (!recon_control_panel_item_at(i, &label, &icon) ||
+                    !contains_fold(label, filter)) {
+                continue;
+            }
+            snprintf(out[shown].label, sizeof(out[shown].label),
+                "Settings: %s", label);
+            snprintf(out[shown].icon, sizeof(out[shown].icon), "%s",
+                icon != NULL ? icon : RECON_ICON_CONTROL_PANEL);
+            out[shown].kind = MENU_KIND_SETTING;
+            out[shown].where[0] = '\0';
+            shown++;
+        }
+
+        for (int i = 0; i < MENU_PLACE_COUNT && shown < max; i++) {
+            if (MENU_PLACES[i].kind != PLACE_FOLDER ||
+                    !contains_fold(MENU_PLACES[i].label, filter)) {
+                continue;
+            }
+            snprintf(out[shown].label, sizeof(out[shown].label), "%s",
+                MENU_PLACES[i].label);
+            snprintf(out[shown].icon, sizeof(out[shown].icon), "%s",
+                MENU_PLACES[i].icon);
+            out[shown].kind = MENU_KIND_PLACE;
+            snprintf(out[shown].where, sizeof(out[shown].where), "%s",
+                MENU_PLACES[i].target);
+            shown++;
+        }
+
+        shown += menu_files(filter, out + shown, max - shown);
+
+        /*
+         * The help last, because it is the only one of these that matches on
+         * *body text* rather than on a name.
+         *
+         * It used to sit above the files, and searching "quar" put four help
+         * pages -- "How it looks", "Drawing a graph" -- above the two files
+         * actually called quarterly-notes.txt and quarry.png. A page that
+         * mentions the letters somewhere is a worse answer than a file named
+         * for them, every time.
+         */
         char titles[MENU_HELP_MAX][RECON_HELP_TITLE_MAX];
         int help_count = recon_help_search(filter, titles, MENU_HELP_MAX);
 
@@ -725,6 +880,7 @@ static int menu_apps(bool show_all, const char *filter,
             snprintf(out[shown].icon, sizeof(out[shown].icon), "%s",
                 RECON_ICON_HELP);
             out[shown].kind = MENU_KIND_HELP;
+            out[shown].where[0] = '\0';
             shown++;
         }
     }
@@ -5972,6 +6128,84 @@ bool recon_shell_handle_right_click(struct recon_shell *shell, double lx, double
  * driven from the keyboard looks exactly like one being driven from the
  * mouse, and moving the mouse takes over without a fight.
  */
+/*
+ * Open whatever a row in the menu stands for.
+ *
+ * One function because there are two ways to reach a row -- clicking it and
+ * pressing Enter on it -- and they had two answers. The click handler
+ * switched on the kind; Enter called recon_shell_open_named with the label,
+ * whatever the kind was. So pressing Enter on a help result asked the system
+ * to open an application called "Help: Files", which does not exist: an error
+ * in the log and nothing on screen. It was invisible for as long as a program
+ * was always the first match, which is as long as programs were the only
+ * thing besides help that could match.
+ *
+ * The menu is closed first in every case. Quitting never comes back here.
+ */
+static void menu_open_entry(struct recon_shell *shell,
+        const struct menu_entry *entry) {
+    if (shell == NULL || entry == NULL) {
+        return;
+    }
+    recon_shell_close_menu(shell);
+
+    switch (entry->kind) {
+    case MENU_KIND_SHUTDOWN:
+        recon_quit(shell->server);
+        return;
+
+    case MENU_KIND_HELP:
+        recon_shell_open_help_topic(shell, entry->label);
+        return;
+
+    case MENU_KIND_SETTING: {
+        /* Past "Settings: ", which is there to be read rather than to be
+         * looked up -- the Control Panel is asked by the page's own name. */
+        const char *page = strchr(entry->label, ':');
+        page = (page != NULL) ? page + 1 : entry->label;
+        while (*page == ' ') {
+            page++;
+        }
+        if (!recon_control_panel_open_named(shell->server, shell->font,
+                page)) {
+            /* A page that has been renamed since this row was built. The
+             * front page is still the right place to have arrived. */
+            recon_shell_open_named(shell, "Control Panel");
+        }
+        return;
+    }
+
+    case MENU_KIND_PLACE:
+    case MENU_KIND_FILE: {
+        const char *dir = recon_fs_user_dir(entry->where);
+        if (dir == NULL) {
+            return;
+        }
+
+        if (entry->kind == MENU_KIND_PLACE) {
+            recon_shell_open_named(shell, "File Explorer");
+            recon_explorer_open_at(
+                recon_installed_app_existing("File Explorer"), dir);
+            return;
+        }
+
+        /*
+         * A file opens in whatever opens it, exactly as it would from the
+         * desktop or the Explorer -- the search is a faster way to the same
+         * file, not a different way of having it.
+         */
+        char path[RECON_PATH_MAX];
+        snprintf(path, sizeof(path), "%s/%s", dir, entry->label);
+        recon_shell_open_file(shell, path);
+        return;
+    }
+
+    case MENU_KIND_APP:
+        recon_shell_open_named(shell, entry->label);
+        return;
+    }
+}
+
 static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
         uint32_t modifiers) {
     int count = menu_entry_count(shell->menu_show_all, shell->menu_filter);
@@ -6046,8 +6280,7 @@ static bool menu_handle_key(struct recon_shell *shell, uint32_t sym,
         struct menu_entry entry;
         if (menu_entry_at(shell->menu_show_all, shell->menu_filter, at,
                 &entry)) {
-            recon_shell_close_menu(shell);
-            recon_shell_open_named(shell, entry.label);
+            menu_open_entry(shell, &entry);
         }
         return true;
     }
@@ -6728,19 +6961,7 @@ bool recon_shell_handle_click(struct recon_shell *shell, double lx, double ly,
             struct menu_entry entry;
             if (index >= 0 &&
                     menu_entry_at(shell->menu_show_all, shell->menu_filter, index, &entry)) {
-                /* Close the menu first: quitting never returns here. */
-                recon_shell_close_menu(shell);
-                switch (entry.kind) {
-                case MENU_KIND_SHUTDOWN:
-                    recon_quit(shell->server);
-                    break;
-                case MENU_KIND_HELP:
-                    recon_shell_open_help_topic(shell, entry.label);
-                    break;
-                case MENU_KIND_APP:
-                    recon_shell_open_named(shell, entry.label);
-                    break;
-                }
+                menu_open_entry(shell, &entry);
                 return true;
             }
         }

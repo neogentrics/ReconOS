@@ -33,4 +33,17 @@ struct recon_appwin *recon_control_panel_create(struct recon_server *server,
 bool recon_control_panel_open_named(struct recon_server *server,
     struct recon_font *font, const char *item);
 
+/*
+ * Every item the front page offers, so something else can search them.
+ *
+ * The Start menu's box says it looks through "programs, places, settings and
+ * help" and looked through two of those. Settings are the half people
+ * actually go hunting for -- nobody forgets where Notepad is and everybody
+ * forgets which page the firewall is on -- and the only list of them was a
+ * table private to this file.
+ */
+int recon_control_panel_item_count(void);
+bool recon_control_panel_item_at(int index, const char **label,
+    const char **icon);
+
 #endif

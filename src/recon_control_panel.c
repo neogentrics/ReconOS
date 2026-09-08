@@ -323,6 +323,28 @@ static const struct {
 };
 
 /*
+ * The front page's items, for anything outside this file that wants to look
+ * through them. The Start menu's search does.
+ */
+int recon_control_panel_item_count(void) {
+    return PAGE_COUNT;
+}
+
+bool recon_control_panel_item_at(int index, const char **label,
+        const char **icon) {
+    if (index < 0 || index >= PAGE_COUNT) {
+        return false;
+    }
+    if (label != NULL) {
+        *label = PAGES[index].label;
+    }
+    if (icon != NULL) {
+        *icon = PAGES[index].icon;
+    }
+    return true;
+}
+
+/*
  * --- Settings that are not built yet ---
  *
  * These pages are here on purpose, empty of function and honest about it.
