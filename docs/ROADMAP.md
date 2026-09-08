@@ -166,6 +166,60 @@ renders as its markup, consistently. A page that builds itself at run time
 says so and shows nothing, which is an answer. The request behind it was that
 pages be readable, and CSS bought far more of that than a partial engine would.
 
+**And then the Netscape source was suggested, so the argument was replaced
+with measurements.** Netscape 5.0 was released in 1998 under the NPL, a
+licence that explicitly permits combining it with other code, and the tree is
+on disk. What is in it:
+
+| | lines | takeable |
+|---|---|---|
+| `js/src` (SpiderMonkey) | 38,769 | as code -- it is built to be embedded |
+| `lib/layout` | 125,130 | no: 38 of 38 files include `xp.h` |
+| `lib/libstyle` (CSS) | 10,127 | no: welded to `jsapi.h`, this is CSS-as-JavaScript |
+| `lib/libparse` (HTML) | 5,755 | as a reference for the tag table |
+
+The layout engine is the piece that would actually make this a browser, and it
+is not a library -- it is a slab of Communicator. Every file reaches for `xp.h`,
+and past that for `net.h`, `libmocha.h`, `edt.h` (the *editor*), `np.h`
+(plugins), `java.h`. Lifting it means lifting the application around it.
+
+The JavaScript engine is genuinely embeddable -- it ships its own arena
+allocator and dtoa and depends otherwise on NSPR headers. **It is also
+useless here, and that is measurable rather than arguable.** `jsconfig.h` says
+`JS_VERSION 130`: JavaScript 1.3. Its scanner has 61 tokens and not one of
+them is an arrow, a spread, a template literal or an optional chain; `class`
+and `const` are in the table as `TOK_RESERVED`, which is a hard syntax error.
+Against that, gaming.recontowers.com's own front page ships 11,326 bytes of
+inline script using `const` 77 times, arrow functions 55 times, template
+strings 7, spread 4, optional `catch` 2 and optional chaining 4. A 1998 engine
+throws on the first statement of all four scripts. Embedding 38,769 lines to
+run none of them is not a step towards anything.
+
+So the earlier note said "a JavaScript engine is not something I can honestly
+deliver". Having measured it: a *1998* engine is deliverable and worthless,
+and a modern one is what would be needed and is not deliverable this way. The
+conclusion did not change; the reason did, and the reason is the part that
+would have been wrong to leave as a guess.
+
+The tree stays as a reference, which is what it is worth. `lib/layout` is
+twenty-five years of somebody solving line boxes, floats and table widths, and
+reading how they did it is cheaper than deriving it -- which is the next thing
+this viewer actually needs.
+
+**A page drawn in its own colours** — v0.4.7. Asked for as "still has a ways
+to go before I can call this a browser", with a screenshot of a near-black
+site rendered white. The cause was not one thing: `background-color` was parsed
+and then dropped, and underneath that the engine could not read the value --
+pages state their palettes as custom properties now, and that sheet has 157 of
+them, 378 uses of `var()`, and one literal colour in 62 KB.
+
+`var()` resolves, the page's paper is painted, and every colour on the page --
+text, links, list markers, rules, the quotation bar -- is checked against that
+paper rather than the skin's. The readability check was not weakened; it was
+pointed at the surface that is actually underneath. The address bar and the
+status bar stay the skin's, because a page that could repaint them could dress
+itself up as the browser.
+
 **A dark glass skin** — v0.4.5. Noticed while looking at the skin list: every
 see-through skin there was a pale one. Glass is a material rather than a
 brightness, so Smoked is the same material dark -- turned over rather than
