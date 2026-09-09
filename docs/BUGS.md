@@ -2575,6 +2575,94 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-175 — The Help application's change log stopped fourteen versions ago
+
+- **Found in** v0.4.20. **Found by** `git status` after running
+  `scripts/make-help.sh`, which produced fourteen new pages -- so the pages in
+  the tree were what the change log had said at v0.4.5.
+- **What it was** nothing in the code. `assets/help` is generated from
+  `docs/CHANGELOG.md` by a script, and the rule was "run it in the same
+  commit". A rule of that shape holds until somebody is busy, and it stopped
+  holding at `30c1ad4`.
+
+  So the Help application, opened inside a running v0.4.19, described a system
+  that ended at v0.4.5. Everything after -- stylesheets, pictures, tabs,
+  bookmarks, find, tables, package signing -- was absent, and nothing said so.
+- **Why this one is worth a number rather than a commit.** It is the same
+  fault the parser's own header cites as the reason a truncated page has to
+  announce itself: *"a page cut off at four thousand blocks looks exactly like
+  a page that ended"*. A change log that stops looks exactly like a change log
+  that has caught up. The system was telling somebody something that had
+  stopped being true, in the one place they would go to check.
+- **Fixed in** v0.4.20, commit `TBD`. Regenerated, and `scripts/check.sh`
+  gained a fourth pass: it regenerates into a copy, compares, and **puts the
+  tree back exactly as it found it**. The first version of that pass left the
+  regenerated files in place as a favour, which would have made it pass on the
+  second run -- a check that repairs what it is checking is one a build can
+  defeat by running it twice. Confirmed by drifting the change log on purpose
+  and watching it fail, and fail again.
+
+### BG-174 — A three-line box was measured against a line it had made three lines tall
+
+- **Found in** v0.4.20, while forms were being built. **Found by** the first
+  photograph of a form. The `<textarea>` was drawn straight through the row of
+  buttons under it, while the page's own height said the block had ended long
+  before.
+- **What it was** a line carrying a control is made as tall as the control, so
+  the block works out the tallest control first and grows the line to fit. The
+  code that then *placed* each control passed it the grown line height instead
+  of the height of the text. A textarea asks for three text-lines plus padding,
+  so it was measured against a line that already held a textarea: three lines
+  of sixty-five pixels rather than three of nineteen, and it came out about
+  three times too tall.
+- **Why nothing said so.** The height the block reported was correct -- the
+  look-ahead had used the right number. Only the drawing was wrong, so the
+  page laid out to exactly the right length with a box hanging out of one of
+  its blocks. There is no count that moves when this happens.
+- **Fixed in** v0.4.20, commit `TBD`. The text's line height is kept in its own
+  `const` variable and that is what every measurement uses. A control is
+  measured against the text, never against the line it is about to change.
+
+### BG-173 — Working a control with the keyboard let go of it
+
+- **Found in** v0.4.20. **Found by** asking the window where its focus was
+  after each key -- `ui app` reports it -- rather than by reading the picture.
+  The picture showed a ticked box and looked entirely correct.
+- **What it was** pressing a control goes through one function whether a
+  pointer or the space bar did it, and that function begins by taking the
+  caret out of whatever had it. Taking the caret out clears the focus, which
+  is right when the caret is being put down somewhere else and wrong when the
+  thing being pressed is the thing that has the focus.
+
+  So Space ticked the box and then dropped it, and the next Tab started again
+  from the first control on the page. On a form with a checkbox in the middle
+  of it, tabbing through went round in a loop.
+- **Why the picture could not show it.** A ticked checkbox looks the same
+  whether or not it still has the focus ring, at the size a checkbox is drawn.
+  The ring is two pixels outside a fourteen-pixel box.
+- **Fixed in** v0.4.20, commit `TBD`. Working a control focuses it, in one
+  line after the toggle. Which is also what a click should do, and now does.
+
+### BG-172 — A tooltip outlived the button it belonged to
+
+- **Found in** v0.4.20. **Found by** a screen capture of a form being sent:
+  the browser's confirmation strip closes the moment *Send* is pressed, and
+  its tooltip was still sitting there explaining a button that had sent the
+  form and gone.
+- **What it was** [BG-089](#bg-089) was this fault for whole windows -- one
+  opening under a stationary pointer left the tip of the window now behind it
+  drawn over the top -- and the fix was `tip_recheck`, called at the four
+  moments a *window* appears or disappears. A control disappearing when its
+  own window redraws is the same fault one level down, and none of those four
+  moments covers it.
+- **Fixed in** v0.4.20, commit `TBD`. `recon_appwin_refresh` clears and
+  rebuilds its hit regions and then tells the shell, through
+  `recon_shell_contents_changed`. There rather than at the five places that
+  make a control vanish, because "which redraws can strand a tip" is not a
+  question anybody will keep answering correctly -- and the check is cheap: it
+  compares the tip under the pointer with the one showing and returns when
+  they match, which is almost always.
+
 ### BG-171 — Half of a Wikipedia article was the contents of an attribute
 
 - **Found in** v0.4.19. **Found by** a sweep of twelve real sites, looking at

@@ -52,6 +52,7 @@
 #include "recon_codec.h"
 #include "recon_expr.h"
 #include "recon_css.h"
+#include "recon_form.h"
 #include "recon_html.h"
 #include "recon_http.h"
 #include "recon_ico.h"
@@ -570,6 +571,39 @@ static size_t make_html(uint8_t *out, size_t max) {
     return length;
 }
 
+/*
+ * --- A form ---
+ *
+ * The markup this is built from is somebody else's, and so is every value in
+ * it. What comes out the far end is a request this machine sends, so a fault
+ * here is not a crash on a bad page -- it is a bad page deciding what bytes
+ * leave.
+ *
+ * The seed is the HTML5 standard's example form, so a mutation starts from
+ * something with a control of every kind in it rather than from nothing.
+ */
+static size_t make_form(uint8_t *out, size_t max) {
+    static const char PAGE[] =
+        "<form method=\"post\" action=\"/post\">"
+        "<input name=\"custname\" value=\"Ada\">"
+        "<input type=password name=\"pw\">"
+        "<input type=radio name=size value=\"small\">"
+        "<input type=radio name=size value=\"large\" checked>"
+        "<input type=checkbox name=topping value=\"bacon\" checked>"
+        "<input type=hidden name=\"token\" value=\"abc\">"
+        "<select name=\"where\"><option value=\"door\">Door"
+        "<option value=\"desk\" selected>Desk</select>"
+        "<textarea name=\"comments\">note</textarea>"
+        "<button name=\"act\" value=\"order\">Send</button>"
+        "</form>";
+    size_t length = sizeof(PAGE) - 1;
+    if (length > max) {
+        return 0;
+    }
+    memcpy(out, PAGE, length);
+    return length;
+}
+
 static size_t make_expr(uint8_t *out, size_t max) {
     static const char TEXT[] = "3 * sin(x) + (x ^ 2) / (1 - x)";
     size_t length = sizeof(TEXT) - 1;
@@ -578,6 +612,80 @@ static size_t make_expr(uint8_t *out, size_t max) {
     }
     memcpy(out, TEXT, length);
     return length;
+}
+
+/*
+ * Parse whatever this is, then send every form it turned out to have.
+ *
+ * Every control is asked for at each of several states rather than only its
+ * default -- a checkbox that is only ever off never exercises the branch that
+ * sends it, and an option index is exactly the kind of thing a mutated page
+ * can put out of range.
+ */
+static bool feed_form(const uint8_t *bytes, size_t length) {
+    struct recon_html_document *d =
+        recon_html_parse((const char *)bytes, length);
+    if (d == NULL) {
+        return true;                   /* no memory is not a failure */
+    }
+
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = NULL;
+    if (count > 0) {
+        values = calloc((size_t)count, sizeof(*values));
+        if (values == NULL) {
+            recon_html_free(d);
+            return true;
+        }
+    }
+
+    for (int pass = 0; pass < 3; pass++) {
+        for (int i = 0; i < count; i++) {
+            const struct recon_html_field *f = recon_html_field_at(d, i);
+            values[i].text = (pass == 0) ? f->value
+                : (pass == 1 ? "" : "a value with spaces & symbols=1");
+            values[i].on = (pass != 1);
+
+            /*
+             * Deliberately out of range on the last pass. A viewer keeps this
+             * index and a page can change under it -- a reload with fewer
+             * options is the ordinary way it happens -- so reading the option
+             * table with it must be bounded here rather than at every caller.
+             */
+            values[i].chosen = (pass == 2) ? f->option_count + 3 : 0;
+        }
+
+        int forms = recon_html_form_count(d);
+        for (int form = -1; form < forms; form++) {
+            for (int who = -1; who < count && who < 4; who++) {
+                int sent = 0;
+                bool secret = false;
+                char *body = recon_form_body(d, form, who, values, count,
+                    4096, &sent, &secret);
+                if (body != NULL) {
+                    /* What comes back has to be a string, and has to fit. */
+                    if (strlen(body) >= 4096) {
+                        printf("  form body ran past its ceiling\n");
+                        free(body);
+                        free(values);
+                        recon_html_free(d);
+                        return false;
+                    }
+
+                    struct recon_http_url where;
+                    if (recon_http_parse_url("https://example.com/s", NULL,
+                            &where)) {
+                        recon_form_get_address(&where, body);
+                    }
+                    free(body);
+                }
+            }
+        }
+    }
+
+    free(values);
+    recon_html_free(d);
+    return true;
 }
 
 /* --- Running one parser through all of it --- */
@@ -778,6 +886,7 @@ int main(void) {
     sweep("HTML", feed_html, make_html, 0);
     sweep("CSS", feed_css, make_css, 0);
     sweep("Addresses", feed_url, make_url, 0);
+    sweep("Forms", feed_form, make_form, 0);
     sweep("Expressions", feed_expr, make_expr, 0);
 
     printf("\n%d cases, %d failures\n", g_cases, g_failures);

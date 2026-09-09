@@ -45,6 +45,22 @@
 #define ANCHORS_MAX 512
 #define NEST_MAX 32
 
+/*
+ * Forms, controls and choices.
+ *
+ * Ceilings like every other in this file. A page with more forms than this is
+ * not a page with a form on it, and the ones past the ceiling are dropped
+ * rather than the page being refused -- with `truncated` set, so the viewer
+ * can say the page is incomplete instead of letting a form that quietly does
+ * nothing look like a form that is broken.
+ *
+ * OPTIONS_MAX is the large one because one `<select>` of countries is 250 on
+ * its own, and a page with three of those is ordinary.
+ */
+#define FORMS_MAX 64
+#define FIELDS_MAX 512
+#define OPTIONS_MAX 2048
+
 struct recon_html_document {
     char *text;
     size_t text_used;
@@ -102,6 +118,28 @@ struct recon_html_document {
      */
     char sheets[16][1024];
     int sheet_count;
+
+    /*
+     * The forms, their controls, and the choices inside the `<select>`s.
+     *
+     * Three tables rather than a form owning its fields, because a control is
+     * not reliably inside the form it belongs to: HTML lets one sit anywhere
+     * on the page and name its form with a `form=` attribute, and a page that
+     * closes its `<form>` early by accident -- which is most pages that get
+     * this wrong -- puts the rest of its controls after it. A field naming
+     * its form survives both; a form owning a list does not.
+     *
+     * The runs point at the fields by index, so a control appears in the text
+     * exactly where the page put it.
+     */
+    struct recon_html_form *forms;
+    int form_count;
+
+    struct recon_html_field *fields;
+    int field_count;
+
+    struct recon_html_option *options;
+    int option_count;
 };
 
 /* --- Building --- */
@@ -177,6 +215,33 @@ static bool hidden_by_default(const char *tag, size_t length,
     if ((named(tag, length, "dialog") || named(tag, length, "details")) &&
             !has_attribute(attrs, attrs_length, "open")) {
         return true;
+    }
+    return false;
+}
+
+/*
+ * The elements a form is made of.
+ *
+ * These pass through the rule that skips everything inside something hidden,
+ * and they are the only elements that do. A control a stylesheet has put out
+ * of the way is still *part of the form*: every browser there is sends it,
+ * pages hide real fields constantly -- a token, a section marker, the half of
+ * a search form that says which site to search -- and a viewer that dropped
+ * them would send a request the server has never seen the shape of.
+ *
+ * Only the *record* passes. Nothing here is drawn: `emit_field` asks about
+ * hidden itself, so a hidden control contributes a value and no box, which is
+ * what it looks like in a browser.
+ */
+static bool is_form_element(const char *tag, size_t length) {
+    static const char *const FORM[] = {
+        "form", "input", "button", "select", "option", "textarea",
+    };
+    for (size_t i = 0; i < sizeof(FORM) / sizeof(FORM[0]); i++) {
+        size_t n = strlen(FORM[i]);
+        if (n == length && strncasecmp(tag, FORM[i], n) == 0) {
+            return true;
+        }
     }
     return false;
 }
@@ -394,7 +459,103 @@ struct builder {
      */
     bool pending_space;
     bool at_block_start;
+
+    /* --- Forms --- */
+
+    /* The open `<form>`, or -1. Flat rather than a stack: a form inside a
+     * form is not valid HTML and nothing sensible can be done with one. */
+    int form;
+
+    /*
+     * Where text is going instead of into the page, or NULL.
+     *
+     * A `<button>`'s words are its label, an `<option>`'s are its label, and
+     * a `<textarea>`'s are its contents -- in all three the text between the
+     * tags belongs to the control rather than to the page, and a reader that
+     * let it through would print every option of every menu as a paragraph.
+     *
+     * A destination rather than a flag, because the three destinations are
+     * three differently sized buffers and the alternative was three flags and
+     * a switch at the one place text arrives.
+     */
+    char *capture;
+    size_t capture_size;
+    size_t capture_used;
+
+    /* Which control the capture is filling in. One at a time: none of these
+     * three elements may contain another. */
+    int button_at;
+    int option_at;
+    int select_at;
+    int area_at;
 };
+
+/* --- Forms --- */
+
+/*
+ * Take text for a control rather than for the page.
+ *
+ * Whitespace is collapsed on the way in, the same as it is for the page --
+ * a `<button>` written over three indented lines has a label with the
+ * newlines in it otherwise, and it is drawn on one line.
+ */
+static void capture_text(struct builder *b, const char *bytes, size_t length) {
+    for (size_t i = 0; i < length; i++) {
+        char c = bytes[i];
+        if (c == '\n' || c == '\r' || c == '\t') {
+            c = ' ';
+        }
+        if (c == ' ' && (b->capture_used == 0 ||
+                b->capture[b->capture_used - 1] == ' ')) {
+            continue;                      /* no leading or doubled spaces */
+        }
+        if (b->capture_used + 1 >= b->capture_size) {
+            return;                        /* a label longer than its box */
+        }
+        b->capture[b->capture_used++] = c;
+        b->capture[b->capture_used] = '\0';
+    }
+}
+
+/* The trailing space collapsing may have left. */
+static void capture_done(struct builder *b) {
+    if (b->capture != NULL) {
+        while (b->capture_used > 0 && b->capture[b->capture_used - 1] == ' ') {
+            b->capture[--b->capture_used] = '\0';
+        }
+    }
+    b->capture = NULL;
+    b->capture_size = 0;
+    b->capture_used = 0;
+}
+
+static void capture_into(struct builder *b, char *where, size_t size) {
+    b->capture = where;
+    b->capture_size = size;
+    b->capture_used = 0;
+    where[0] = '\0';
+}
+
+/*
+ * Add a control, or -1 when the page has more than this holds.
+ *
+ * The form it belongs to is the open one, which is right for every form that
+ * closes where it opened. A control naming a form explicitly is fixed up by
+ * the caller, which is the one place that has the attributes.
+ */
+static int add_field(struct builder *b, int kind) {
+    if (b->d->field_count >= FIELDS_MAX) {
+        b->d->truncated = true;
+        return -1;
+    }
+    int at = b->d->field_count++;
+    struct recon_html_field *f = &b->d->fields[at];
+    memset(f, 0, sizeof(*f));
+    f->kind = kind;
+    f->form = b->form;
+    f->first_option = b->d->option_count;
+    return at;
+}
 
 static bool add_text(struct builder *b, const char *bytes, size_t length) {
     if (b->d->text_used + length + 1 >= TEXT_MAX) {
@@ -416,7 +577,27 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
      * three of them being right is a page that hides its navigation and keeps
      * the alt text of the icons inside it.
      */
-    if (length == 0 || !b->in_block || b->hidden_at >= 0) {
+    if (length == 0) {
+        return;
+    }
+
+    /*
+     * Text belonging to a control goes to the control.
+     *
+     * Above both tests below it, deliberately. Above `in_block` because a
+     * `<select>` can be the first thing in a document that has not opened a
+     * block yet, and its options would otherwise be dropped -- a menu with no
+     * choices in it. And above the hidden test because an option's words are
+     * *data*: they are what that choice sends when it has no `value` of its
+     * own, so a menu a stylesheet has put out of the way would otherwise send
+     * an empty string for every choice in it.
+     */
+    if (b->capture != NULL) {
+        capture_text(b, bytes, length);
+        return;
+    }
+
+    if (!b->in_block || b->hidden_at >= 0) {
         return;
     }
 
@@ -452,8 +633,14 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
      * column ends and the next begins, so a table of plain text in one style
      * would come back as a single run and could not be laid out at all.
      */
-    if (!b->cell_next && last != NULL && last->style == style &&
-            last->link == b->link &&
+    /*
+     * A control is never merged into, whatever it looks like. Its run is
+     * empty and sits at the end of the text, so every one of the tests below
+     * says yes -- and the first word after a search box would be swallowed
+     * into the box and disappear.
+     */
+    if (!b->cell_next && last != NULL && last->field < 0 &&
+            last->style == style && last->link == b->link &&
             last->has_colour == has_colour && last->colour == colour &&
             last->text + last->length == b->d->text + at) {
         last->length += length;
@@ -471,11 +658,67 @@ static void emit(struct builder *b, const char *bytes, size_t length) {
     run->link = b->link;
     run->has_colour = has_colour;
     run->colour = colour;
+    run->field = -1;
 
     /* Consumed by being written, so a cell with several runs in it marks
      * only the one it starts at. */
     run->starts_cell = b->cell_next;
     b->cell_next = false;
+}
+
+static void open_block(struct builder *b, enum recon_html_block kind,
+    int level);
+
+/*
+ * Put a control into the text, where the page put it.
+ *
+ * A run of its own with no text in it. Nothing else in this file makes an
+ * empty run, and everything that walks runs skips one -- so a viewer that has
+ * not been taught about controls draws exactly what it drew before, which is
+ * the words around them and nothing where they are.
+ */
+static void emit_field(struct builder *b, int field) {
+    struct recon_html_document *d = b->d;
+    if (field < 0 || field >= d->field_count || b->hidden_at >= 0) {
+        return;
+    }
+    /* A hidden control is sent and never drawn, so it gets no run. */
+    if (d->fields[field].kind == RECON_HTML_FIELD_HIDDEN) {
+        return;
+    }
+    if (!b->in_block) {
+        open_block(b, RECON_HTML_PARAGRAPH, 0);
+    }
+    if (!b->in_block || d->run_count >= RUNS_MAX) {
+        d->truncated = true;
+        return;
+    }
+
+    struct recon_html_run *run = &d->runs[d->run_count++];
+    memset(run, 0, sizeof(*run));
+    run->text = d->text + d->text_used;
+    run->length = 0;
+    run->style = b->style;
+    run->link = -1;
+    run->field = field;
+    run->starts_cell = b->cell_next;
+
+    b->cell_next = false;
+    b->at_block_start = false;
+    b->pending_space = false;
+}
+
+/* Finish the `<option>` being read, closed properly or not. */
+static void close_option(struct builder *b) {
+    if (b->option_at < 0) {
+        return;
+    }
+    capture_done(b);
+    struct recon_html_option *o = &b->d->options[b->option_at];
+    if (!o->has_value) {
+        snprintf(o->value, sizeof(o->value), "%s", o->label);
+    }
+    b->option_at = -1;
 }
 
 /*
@@ -957,9 +1200,13 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
     d->runs = calloc(RUNS_MAX, sizeof(*d->runs));
     d->blocks = calloc(BLOCKS_MAX, sizeof(*d->blocks));
     d->links = calloc(LINKS_MAX, sizeof(*d->links));
+    d->forms = calloc(FORMS_MAX, sizeof(*d->forms));
+    d->fields = calloc(FIELDS_MAX, sizeof(*d->fields));
+    d->options = calloc(OPTIONS_MAX, sizeof(*d->options));
 
     if (d->text == NULL || d->runs == NULL || d->blocks == NULL ||
-            d->links == NULL) {
+            d->links == NULL || d->forms == NULL || d->fields == NULL ||
+            d->options == NULL) {
         recon_html_free(d);
         return NULL;
     }
@@ -975,6 +1222,11 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
     b.hidden_at = -1;
     b.hidden_was = -1;
     b.summary_at = -1;
+    b.form = -1;
+    b.button_at = -1;
+    b.option_at = -1;
+    b.select_at = -1;
+    b.area_at = -1;
 
     struct open_tag stack[NEST_MAX];
     int depth = 0;
@@ -1251,9 +1503,15 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
             /*
              * Inside something hidden, only the structure is followed. No
              * text, no blocks, no links -- the page said not to show this.
+             *
+             * Form controls are the exception, for the reason written above
+             * `is_form_element`: what a hidden control contributes is not a
+             * picture, it is a value, and a form missing one of those does
+             * not work.
              */
             if (b.hidden_at >= 0 &&
-                    !named(tag, name_length, "title")) {
+                    !named(tag, name_length, "title") &&
+                    !is_form_element(tag, name_length)) {
                 i = after;
                 continue;
             }
@@ -1346,7 +1604,6 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     named(tag, name_length, "nav") ||
                     named(tag, name_length, "main") ||
                     named(tag, name_length, "table") ||
-                    named(tag, name_length, "form") ||
                     named(tag, name_length, "figure")) {
                 break_block(&b);
                 i = after;
@@ -1514,6 +1771,358 @@ struct recon_html_document *recon_html_parse_styled(const char *html,
                     b.style = was_style;
                     b.link = was_link;
                     open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                }
+                i = after;
+                continue;
+            }
+
+            /*
+             * --- Forms ---
+             *
+             * Every control becomes a field in the document's table and an
+             * empty run where the page put it. Which form it belongs to is
+             * the open one, unless it names another with `form=` -- which is
+             * how a page puts a search box in a header and its form in a
+             * footer, and is worth honouring because the alternative is a box
+             * that types and does nothing.
+             */
+            if (named(tag, name_length, "form")) {
+                /*
+                 * A hidden form is bookkeeping only. Breaking the line here
+                 * would leave an empty paragraph in the middle of a page that
+                 * has been told not to show any of this.
+                 */
+                if (b.hidden_at < 0) {
+                    close_block(&b);
+                }
+                b.form = -1;
+                if (!closing) {
+                    if (d->form_count >= FORMS_MAX) {
+                        d->truncated = true;
+                    } else {
+                        struct recon_html_form *f = &d->forms[d->form_count];
+                        memset(f, 0, sizeof(*f));
+
+                        attribute(attrs, attrs_length, "action", f->action,
+                            sizeof(f->action));
+
+                        /*
+                         * GET unless the page says otherwise, which is what
+                         * HTML itself says. A method this does not recognise
+                         * -- `dialog`, or a typo -- is a GET too: asking is
+                         * the safe half of the pair, and guessing POST from
+                         * something unreadable would send a request nobody
+                         * wrote.
+                         */
+                        char method[16] = "";
+                        f->method = RECON_HTML_GET;
+                        if (attribute(attrs, attrs_length, "method", method,
+                                sizeof(method)) &&
+                                strcasecmp(method, "post") == 0) {
+                            f->method = RECON_HTML_POST;
+                        }
+
+                        /*
+                         * The name, or the id when there is no name. Both,
+                         * because `form=` on a control names either one and a
+                         * page that used the id would otherwise have its
+                         * controls attached to nothing.
+                         */
+                        if (!attribute(attrs, attrs_length, "name", f->name,
+                                sizeof(f->name))) {
+                            attribute(attrs, attrs_length, "id", f->name,
+                                sizeof(f->name));
+                        }
+                        b.form = d->form_count++;
+                    }
+                }
+                if (b.hidden_at < 0) {
+                    open_block(&b, RECON_HTML_PARAGRAPH, 0);
+                }
+                i = after;
+                continue;
+            }
+
+            if (named(tag, name_length, "input")) {
+                /*
+                 * An unrecognised type is a text box.
+                 *
+                 * Not a fallback chosen here -- it is what the HTML standard
+                 * says to do, and it is why `type=email` and `type=search`
+                 * are not in this list. They differ from a text box in what a
+                 * browser validates and which keyboard a telephone offers,
+                 * and this has neither.
+                 */
+                char type[32] = "text";
+                attribute(attrs, attrs_length, "type", type, sizeof(type));
+
+                int kind = RECON_HTML_FIELD_TEXT;
+                bool secret = false;
+                if (strcasecmp(type, "hidden") == 0) {
+                    kind = RECON_HTML_FIELD_HIDDEN;
+                } else if (strcasecmp(type, "checkbox") == 0) {
+                    kind = RECON_HTML_FIELD_CHECKBOX;
+                } else if (strcasecmp(type, "radio") == 0) {
+                    kind = RECON_HTML_FIELD_RADIO;
+                } else if (strcasecmp(type, "submit") == 0 ||
+                        strcasecmp(type, "image") == 0) {
+                    kind = RECON_HTML_FIELD_SUBMIT;
+                } else if (strcasecmp(type, "reset") == 0) {
+                    kind = RECON_HTML_FIELD_RESET;
+                } else if (strcasecmp(type, "button") == 0) {
+                    kind = RECON_HTML_FIELD_BUTTON;
+                } else if (strcasecmp(type, "password") == 0) {
+                    secret = true;
+                }
+
+                int at_field = add_field(&b, kind);
+                if (at_field >= 0) {
+                    struct recon_html_field *f = &d->fields[at_field];
+                    f->secret = secret;
+
+                    attribute(attrs, attrs_length, "name", f->name,
+                        sizeof(f->name));
+                    attribute(attrs, attrs_length, "value", f->value,
+                        sizeof(f->value));
+                    attribute(attrs, attrs_length, "placeholder", f->label,
+                        sizeof(f->label));
+
+                    char belongs[64] = "";
+                    if (attribute(attrs, attrs_length, "form", belongs,
+                            sizeof(belongs)) && belongs[0] != '\0') {
+                        for (int fi = 0; fi < d->form_count; fi++) {
+                            if (strcmp(d->forms[fi].name, belongs) == 0) {
+                                f->form = fi;
+                                break;
+                            }
+                        }
+                    }
+
+                    f->on = has_attribute(attrs, attrs_length, "checked");
+                    f->disabled = has_attribute(attrs, attrs_length,
+                        "disabled");
+                    f->required = has_attribute(attrs, attrs_length,
+                        "required");
+
+                    char size_text[16] = "";
+                    if (attribute(attrs, attrs_length, "size", size_text,
+                            sizeof(size_text))) {
+                        f->width_chars = atoi(size_text);
+                    }
+
+                    /*
+                     * The words on a button that carries none.
+                     *
+                     * `<input type=submit>` with no value is a button that
+                     * says "Submit" in every browser ever written, and a
+                     * blank one here would look like a control this failed to
+                     * read rather than one the page left unlabelled.
+                     */
+                    if (kind == RECON_HTML_FIELD_SUBMIT ||
+                            kind == RECON_HTML_FIELD_RESET ||
+                            kind == RECON_HTML_FIELD_BUTTON) {
+                        snprintf(f->label, sizeof(f->label), "%s",
+                            f->value[0] != '\0' ? f->value
+                            : (kind == RECON_HTML_FIELD_RESET ? "Reset"
+                               : "Submit"));
+                    }
+
+                    flush_space(&b);
+                    emit_field(&b, at_field);
+                }
+                i = after;
+                continue;
+            }
+
+            /*
+             * `<button>` carries its words between its tags rather than in an
+             * attribute, so they are captured the way a `<title>` is: text
+             * arriving while it is open goes to the label instead of to the
+             * page.
+             */
+            if (named(tag, name_length, "button")) {
+                if (!closing) {
+                    char type[32] = "submit";
+                    attribute(attrs, attrs_length, "type", type,
+                        sizeof(type));
+
+                    int kind = RECON_HTML_FIELD_SUBMIT;
+                    if (strcasecmp(type, "reset") == 0) {
+                        kind = RECON_HTML_FIELD_RESET;
+                    } else if (strcasecmp(type, "button") == 0) {
+                        kind = RECON_HTML_FIELD_BUTTON;
+                    }
+
+                    flush_space(&b);
+                    int at_field = add_field(&b, kind);
+                    if (at_field >= 0) {
+                        struct recon_html_field *f = &d->fields[at_field];
+                        attribute(attrs, attrs_length, "name", f->name,
+                            sizeof(f->name));
+                        attribute(attrs, attrs_length, "value", f->value,
+                            sizeof(f->value));
+
+                        char belongs[64] = "";
+                        if (attribute(attrs, attrs_length, "form", belongs,
+                                sizeof(belongs)) && belongs[0] != '\0') {
+                            for (int fi = 0; fi < d->form_count; fi++) {
+                                if (strcmp(d->forms[fi].name, belongs) == 0) {
+                                    f->form = fi;
+                                    break;
+                                }
+                            }
+                        }
+                        f->disabled = has_attribute(attrs, attrs_length,
+                            "disabled");
+                        b.button_at = at_field;
+                        capture_into(&b, f->label, sizeof(f->label));
+                    }
+                } else if (b.button_at >= 0) {
+                    capture_done(&b);
+                    struct recon_html_field *f = &d->fields[b.button_at];
+                    if (f->label[0] == '\0') {
+                        snprintf(f->label, sizeof(f->label), "%s",
+                            f->kind == RECON_HTML_FIELD_RESET ? "Reset"
+                            : "Submit");
+                    }
+                    emit_field(&b, b.button_at);
+                    b.button_at = -1;
+                }
+                i = after;
+                continue;
+            }
+
+            if (named(tag, name_length, "select")) {
+                if (!closing) {
+                    flush_space(&b);
+                    int at_field = add_field(&b, RECON_HTML_FIELD_CHOICE);
+                    if (at_field >= 0) {
+                        struct recon_html_field *f = &d->fields[at_field];
+                        attribute(attrs, attrs_length, "name", f->name,
+                            sizeof(f->name));
+
+                        char belongs[64] = "";
+                        if (attribute(attrs, attrs_length, "form", belongs,
+                                sizeof(belongs)) && belongs[0] != '\0') {
+                            for (int fi = 0; fi < d->form_count; fi++) {
+                                if (strcmp(d->forms[fi].name, belongs) == 0) {
+                                    f->form = fi;
+                                    break;
+                                }
+                            }
+                        }
+                        f->disabled = has_attribute(attrs, attrs_length,
+                            "disabled");
+                        f->required = has_attribute(attrs, attrs_length,
+                            "required");
+                        b.select_at = at_field;
+                    }
+                } else {
+                    close_option(&b);
+                    if (b.select_at >= 0) {
+                        struct recon_html_field *f = &d->fields[b.select_at];
+                        f->option_count = d->option_count - f->first_option;
+
+                        /*
+                         * What it starts out holding.
+                         *
+                         * The option marked `selected`, or the first one --
+                         * because a menu with nothing marked shows its first
+                         * choice and sends it, and a viewer that sent nothing
+                         * there would send a request that reads as "no
+                         * department chosen" to a server that has never seen
+                         * one.
+                         */
+                        int chosen = -1;
+                        for (int o = 0; o < f->option_count; o++) {
+                            if (d->options[f->first_option + o].selected) {
+                                chosen = o;
+                                break;
+                            }
+                        }
+                        if (chosen < 0 && f->option_count > 0) {
+                            chosen = 0;
+                            d->options[f->first_option].selected = true;
+                        }
+                        if (chosen >= 0) {
+                            snprintf(f->value, sizeof(f->value), "%s",
+                                d->options[f->first_option + chosen].value);
+                        }
+                        emit_field(&b, b.select_at);
+                        b.select_at = -1;
+                    }
+                }
+                i = after;
+                continue;
+            }
+
+            /*
+             * An `<option>` closes the one before it whether the page closed
+             * it or not. `<option>A<option>B` is written constantly and is
+             * valid; treating the second as nested would give the first a
+             * label with both in it.
+             */
+            if (named(tag, name_length, "option")) {
+                close_option(&b);
+                if (!closing && b.select_at >= 0) {
+                    if (d->option_count >= OPTIONS_MAX) {
+                        d->truncated = true;
+                    } else {
+                        struct recon_html_option *o =
+                            &d->options[d->option_count];
+                        memset(o, 0, sizeof(*o));
+
+                        o->has_value = attribute(attrs, attrs_length,
+                            "value", o->value, sizeof(o->value));
+                        o->selected = has_attribute(attrs, attrs_length,
+                            "selected");
+                        b.option_at = d->option_count++;
+                        capture_into(&b, o->label, sizeof(o->label));
+                    }
+                }
+                i = after;
+                continue;
+            }
+
+            if (named(tag, name_length, "textarea")) {
+                if (!closing) {
+                    flush_space(&b);
+                    int at_field = add_field(&b, RECON_HTML_FIELD_AREA);
+                    if (at_field >= 0) {
+                        struct recon_html_field *f = &d->fields[at_field];
+                        attribute(attrs, attrs_length, "name", f->name,
+                            sizeof(f->name));
+                        attribute(attrs, attrs_length, "placeholder", f->label,
+                            sizeof(f->label));
+
+                        char belongs[64] = "";
+                        if (attribute(attrs, attrs_length, "form", belongs,
+                                sizeof(belongs)) && belongs[0] != '\0') {
+                            for (int fi = 0; fi < d->form_count; fi++) {
+                                if (strcmp(d->forms[fi].name, belongs) == 0) {
+                                    f->form = fi;
+                                    break;
+                                }
+                            }
+                        }
+                        f->disabled = has_attribute(attrs, attrs_length,
+                            "disabled");
+                        f->required = has_attribute(attrs, attrs_length,
+                            "required");
+
+                        char cols[16] = "";
+                        if (attribute(attrs, attrs_length, "cols", cols,
+                                sizeof(cols))) {
+                            f->width_chars = atoi(cols);
+                        }
+
+                        b.area_at = at_field;
+                        capture_into(&b, f->value, sizeof(f->value));
+                    }
+                } else if (b.area_at >= 0) {
+                    capture_done(&b);
+                    emit_field(&b, b.area_at);
+                    b.area_at = -1;
                 }
                 i = after;
                 continue;
@@ -1806,6 +2415,7 @@ struct recon_html_document *recon_html_plain(const char *text, size_t length) {
             run->length = line;
             run->style = RECON_HTML_MONO;
             run->link = -1;
+            run->field = -1;
             block->run_count = 1;
         }
 
@@ -1826,6 +2436,9 @@ void recon_html_free(struct recon_html_document *document) {
     free(document->runs);
     free(document->blocks);
     free(document->links);
+    free(document->forms);
+    free(document->fields);
+    free(document->options);
     free(document);
 }
 
@@ -1917,6 +2530,47 @@ const char *recon_html_link_at(const struct recon_html_document *document,
         return NULL;
     }
     return document->links[link].href;
+}
+
+/* --- Forms --- */
+
+int recon_html_form_count(const struct recon_html_document *document) {
+    return document != NULL ? document->form_count : 0;
+}
+
+const struct recon_html_form *recon_html_form_at(
+        const struct recon_html_document *document, int index) {
+    if (document == NULL || document->forms == NULL || index < 0 ||
+            index >= document->form_count) {
+        return NULL;
+    }
+    return &document->forms[index];
+}
+
+int recon_html_field_count(const struct recon_html_document *document) {
+    return document != NULL ? document->field_count : 0;
+}
+
+const struct recon_html_field *recon_html_field_at(
+        const struct recon_html_document *document, int index) {
+    if (document == NULL || document->fields == NULL || index < 0 ||
+            index >= document->field_count) {
+        return NULL;
+    }
+    return &document->fields[index];
+}
+
+int recon_html_option_count(const struct recon_html_document *document) {
+    return document != NULL ? document->option_count : 0;
+}
+
+const struct recon_html_option *recon_html_option_at(
+        const struct recon_html_document *document, int index) {
+    if (document == NULL || document->options == NULL || index < 0 ||
+            index >= document->option_count) {
+        return NULL;
+    }
+    return &document->options[index];
 }
 
 bool recon_html_needs_scripting(const struct recon_html_document *document) {

@@ -1344,6 +1344,17 @@ static void tip_recheck(struct recon_shell *shell) {
     tip_track(shell, shell->tip_x, shell->tip_y);
 }
 
+/*
+ * BG-172. See the note in recon_shell.h.
+ *
+ * A thin wrapper on purpose: tip_recheck is static and the reason this exists
+ * is to give recon_appwin a name for the one thing it needs, rather than
+ * making the whole tooltip machinery reachable from outside this file.
+ */
+void recon_shell_contents_changed(struct recon_shell *shell) {
+    tip_recheck(shell);
+}
+
 /* --- Asking the user something --- */
 
 /* The narrowest a dialog gets. It widens for its buttons; see below. */

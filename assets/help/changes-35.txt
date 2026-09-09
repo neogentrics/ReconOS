@@ -1,0 +1,2 @@
+The network, seen but not implemented. ReconOS has no kernel, so it has no
+network stack of its own; it reports the host's, and says so on screen.

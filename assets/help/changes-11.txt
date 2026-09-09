@@ -1,3 +1,52 @@
-Skins can change the shape of a window, not only its colours: the height
-of a title bar, the thickness of its border, how far its corners are rounded,
-and how big its buttons are.
+Joshua added a checkout of mozilla-central alongside the Netscape one, for
+features Netscape did not have. Measured before being used, the same as last
+time: parser/html is 36 C++ files, servo/components/style is 277 Rust
+files, layout/ is C++, and js/src is 825 C++ files. ReconOS is C11. None of
+it is takeable as code, for a different reason than Netscape's -- that tree was
+too old, this one is in two languages this does not build.
+
+The obvious portable thing was the named character reference table: the
+specification has 2,231 and this has 24. So that was measured too, across six
+real pages -- gaming.recontowers.com, recontowers.com, Hacker News, a Wikipedia
+article, gnu.org and LWN. 1,251 named entities used, 100% of them already
+covered. The comment in the table calling its 24 entries "the fraction that
+appears in prose" turned out to be exactly right, and importing the other 2,207
+would have bought nothing.
+
+What the tree was actually worth is the html5lib tree-construction suite --
+1,556 pieces of markup, MIT-licensed plain data, written by people whose
+purpose was to break HTML parsers. Their expected output is a DOM tree and this
+parser deliberately builds none, so the answers cannot be compared. What can be
+checked is everything that must hold whatever the answer is: that it returns,
+that every block's runs are inside the run table, that every link index names a
+link that exists, and that every byte of every run can be read back.
+
+That is 14,204 checks, and it is the first suite in this project written by
+somebody other than whoever wrote the code it tests -- which is the failure
+BG-162 records.
+
+It found a bug on its first run (BG-167). add_rule sets four of a block's
+six fields, and the missing one is source, the index of the block's picture.
+The array is calloced, so the value was not garbage -- it was zero, and zero
+is not "no picture", it is "the picture at link zero". Every <hr> on the web
+claimed to be an image whose address was the page's first link. Nothing acted
+on it, because every reader checks the kind first; it was simply untrue, with
+nothing arranged to notice. Nobody writes a test asking whether a horizontal
+rule has a picture.
+
+And find on page was searching the screen rather than the page (BG-166).
+Shipped last version, and wrong from the start: the match test sat below
+put_word's off-screen early return, so the count was of matches already
+visible. "1 of 2" meant two on this screenful, and searching for a word further
+down found nothing at all. Every test of it had used a word visible in the
+first screenful -- the same fault as BG-162, in a different place. Whether a
+word matches is a fact about the document; everything below that return is
+about the screen. Next now takes you to the match, a third of the way down
+the window rather than at the very edge, and only when it is not already
+visible.
+
+recon_html_run_count and recon_html_link_count exist because the corpus
+test needed to bounds-check an index and there was no way to ask how big the
+tables were.
+
+---

@@ -143,6 +143,52 @@ the word.
 
 ### Asked for, and done
 
+**Forms, and they submit** — v0.4.20. Asked for as "now do the forms in the
+browser and build it out completely", and it was the largest thing the viewer
+was missing: it could draw a search box and could not search with it, which
+makes it a viewer somebody leaves to go and use a browser.
+
+Every control a page can have -- text, password, checkbox, radio, `<select>`,
+`<textarea>`, submit, reset, hidden -- read into the document as a *run* rather
+than as a block, so a control sits in the line where the page put it. "Search
+for [ ] in the menu" is one sentence with a box in the middle of it.
+
+**The header of `recon_html.h` used to say a form could not be submitted,
+because a viewer that could submit one could change something on somebody's
+server.** That reasoning was half right and it was costing the whole of the
+readable web that has a search box on it. What survives of it is the split
+between the two methods, which is a real distinction rather than a caution:
+
+- **A GET is a question.** Everything it says is in the address, the address is
+  the request, and asking twice is asking once twice. It goes when it is asked
+  for.
+- **A POST is a statement.** What it says is not in the address, not in the
+  history, and asking twice may have done the thing twice. So it says how many
+  answers it is about to send, to which host, and whether one of them is a
+  password -- and waits to be told again.
+
+That is one dialogue between somebody meaning to sign in and somebody's first
+click on a page they have not read, and it is the same shape as every other
+confirmation in this system: it names the consequence rather than asking
+whether you are sure.
+
+**A rule this parser had was changed, and the change is written down.** Inside
+something a stylesheet hides, only the structure is followed -- no text, no
+blocks, no links. Form elements are now the one exception, because what a
+hidden control contributes is not a picture, it is a *value*: half the search
+forms on the web carry a hidden field saying which section is being searched,
+and a viewer that dropped them would send a request the server has never seen
+the shape of. Measured on Wikipedia's article for *HTML form*: twenty-six
+controls, of which six belong to its two search forms and twenty are page
+furniture.
+
+**`recon_form.c` is its own file for the reason `recon_url.c` is.** The rules
+about what a form sends decide what leaves the machine, and testing them inside
+the browser meant linking a compositor. Forty-eight checks, written against
+Wikipedia's search form and the HTML5 standard's own example form rather than
+against markup invented for the test -- which is BG-162's lesson, and this is
+the first feature built with it in hand from the start.
+
 **A web viewer that shows real pages** — v0.4.5. Asked for as "make sure all
 webpage types are readable", after the observation that the web application was
 incomplete. Measured first: it already reached the internet -- example.com and

@@ -1086,6 +1086,403 @@ static void test_where_a_tag_ends(void) {
     }
 }
 
+/* --- Forms --- */
+
+/* The control a named field carries, or NULL. */
+static const struct recon_html_field *field_named(
+        const struct recon_html_document *d, const char *name) {
+    for (int i = 0; i < recon_html_field_count(d); i++) {
+        const struct recon_html_field *f = recon_html_field_at(d, i);
+        if (f != NULL && strcmp(f->name, name) == 0) {
+            return f;
+        }
+    }
+    return NULL;
+}
+
+/* How many runs carry a control. */
+static int control_runs(const struct recon_html_document *d) {
+    int n = 0;
+    for (int i = 0; i < recon_html_run_count(d); i++) {
+        const struct recon_html_run *r = recon_html_run_at(d, i);
+        if (r != NULL && r->field >= 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/*
+ * Wikipedia's search form, copied out of the page rather than written here.
+ *
+ * It is the case that matters most: a GET form whose visible control is one
+ * text box, and whose request does not work without the hidden field beside
+ * it. A viewer that drew the box, sent what was typed and dropped
+ * `title=Special:Search` would ask for a page Wikipedia does not serve.
+ */
+static void test_a_real_search_form(void) {
+    printf("a search form is read as a search form\n");
+
+    const char *html =
+        "<form action=\"/w/index.php\" id=\"searchform\">"
+        "<div><input type=\"search\" name=\"search\" "
+        "placeholder=\"Search Wikipedia\" autocapitalize=\"none\">"
+        "<input type=\"hidden\" name=\"title\" value=\"Special:Search\">"
+        "<input type=\"submit\" value=\"Search\">"
+        "</div></form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(recon_html_form_count(d) == 1, "one form");
+    const struct recon_html_form *form = recon_html_form_at(d, 0);
+    check(form != NULL && form->method == RECON_HTML_GET,
+        "a form with no method is a GET");
+    check(form != NULL && strcmp(form->action, "/w/index.php") == 0,
+        "the action is kept exactly as written, unresolved");
+    check(form != NULL && strcmp(form->name, "searchform") == 0,
+        "the id names the form when there is no name");
+
+    check(recon_html_field_count(d) == 3, "three controls");
+
+    const struct recon_html_field *box = field_named(d, "search");
+    check(box != NULL && box->kind == RECON_HTML_FIELD_TEXT,
+        "type=search is a text box, which is what the standard says");
+    check(box != NULL && box->form == 0, "and it belongs to the form");
+    check(box != NULL && strcmp(box->label, "Search Wikipedia") == 0,
+        "the placeholder is what the empty box shows");
+
+    const struct recon_html_field *hidden = field_named(d, "title");
+    check(hidden != NULL && hidden->kind == RECON_HTML_FIELD_HIDDEN,
+        "the hidden field is kept");
+    check(hidden != NULL && strcmp(hidden->value, "Special:Search") == 0,
+        "with its value, which the request does not work without");
+
+    /*
+     * Two drawn, one not. A hidden control has nothing to draw and a run for
+     * it would be a gap in the sentence with nothing in it.
+     */
+    check(control_runs(d) == 2, "the hidden one gets no run; the others do");
+
+    recon_html_free(d);
+}
+
+/*
+ * The HTML5 standard's own example form, which httpbin serves at /forms/post.
+ *
+ * POST, radios sharing a name, checkboxes sharing a name, and a textarea --
+ * every shape at once, and none of it written for this test.
+ */
+static void test_the_standards_example_form(void) {
+    printf("the standard's example form, with every shape in it\n");
+
+    const char *html =
+        "<form method=\"post\" action=\"/post\">"
+        "<p><label>Customer name: <input name=\"custname\"></label></p>"
+        "<p><fieldset><legend>Pizza Size</legend>"
+        "<label><input type=radio name=size value=\"small\"> Small</label>"
+        "<label><input type=radio name=size value=\"medium\" checked> Medium"
+        "</label>"
+        "<label><input type=radio name=size value=\"large\"> Large</label>"
+        "</fieldset></p>"
+        "<p><label>Delivery instructions: "
+        "<textarea name=\"comments\"></textarea></label></p>"
+        "<p><button>Submit order</button></p>"
+        "</form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_form *form = recon_html_form_at(d, 0);
+    check(form != NULL && form->method == RECON_HTML_POST,
+        "method=post is read as a POST");
+
+    check(field_named(d, "custname") != NULL &&
+        field_named(d, "custname")->kind == RECON_HTML_FIELD_TEXT,
+        "an input with no type at all is a text box");
+
+    /*
+     * Three radios with one name. Grouping them is the viewer's job -- what
+     * this has to get right is that all three survive with the same name and
+     * different values, because a parser that merged them would leave a group
+     * that cannot be chosen between.
+     */
+    int radios = 0;
+    int checked = 0;
+    for (int i = 0; i < recon_html_field_count(d); i++) {
+        const struct recon_html_field *f = recon_html_field_at(d, i);
+        if (f->kind == RECON_HTML_FIELD_RADIO &&
+                strcmp(f->name, "size") == 0) {
+            radios++;
+            if (f->on) {
+                checked++;
+            }
+        }
+    }
+    check(radios == 3, "three radios share one name");
+    check(checked == 1, "and exactly one of them is checked");
+
+    const struct recon_html_field *area = field_named(d, "comments");
+    check(area != NULL && area->kind == RECON_HTML_FIELD_AREA,
+        "a textarea is its own kind");
+
+    check(recon_html_field_count(d) == 6, "six controls, and the button is one");
+
+    /* A <button>'s words are between its tags rather than in an attribute. */
+    const struct recon_html_field *last =
+        recon_html_field_at(d, recon_html_field_count(d) - 1);
+    check(last != NULL && last->kind == RECON_HTML_FIELD_SUBMIT,
+        "a button with no type is a submit button");
+    check(last != NULL && strcmp(last->label, "Submit order") == 0,
+        "and its words are what is written between its tags");
+
+    /*
+     * The words around the controls are still the page's. This is the check
+     * that would have caught a capture that never turned itself off.
+     */
+    check(page_says(d, "Customer name:"), "the labels are still page text");
+    check(page_says(d, "Pizza Size"), "and so is the legend");
+    check(!page_says(d, "Submit order"),
+        "but the button's words are the button's, not a paragraph");
+
+    recon_html_free(d);
+}
+
+/*
+ * A menu, its choices, and the three ways a page writes them.
+ */
+static void test_a_menu_and_its_choices(void) {
+    printf("a select carries its options, and they are not page text\n");
+
+    const char *html =
+        "<p>Search in</p>"
+        "<form action=\"/find\">"
+        "<select name=\"where\">"
+        "<option value=\"\">Everywhere</option>"
+        "<option value=\"docs\">Documentation</option>"
+        "<option value=\"news\" selected>News</option>"
+        "<option>Forums</option>"
+        "</select></form>"
+        "<p>and press enter</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_field *menu = field_named(d, "where");
+    check(menu != NULL && menu->kind == RECON_HTML_FIELD_CHOICE,
+        "a select is a choice");
+    check(menu != NULL && menu->option_count == 4, "with four options");
+
+    if (menu != NULL && menu->option_count == 4) {
+        const struct recon_html_option *o0 =
+            recon_html_option_at(d, menu->first_option + 0);
+        const struct recon_html_option *o2 =
+            recon_html_option_at(d, menu->first_option + 2);
+        const struct recon_html_option *o3 =
+            recon_html_option_at(d, menu->first_option + 3);
+
+        check(strcmp(o0->label, "Everywhere") == 0 && o0->value[0] == '\0',
+            "an option written value=\"\" sends nothing, deliberately");
+        check(o2->selected, "the one marked selected is selected");
+        check(strcmp(menu->value, "news") == 0,
+            "and it is what the menu starts out holding");
+        check(strcmp(o3->value, "Forums") == 0,
+            "an option with no value at all sends its own words");
+    }
+
+    /*
+     * The one that matters for reading. A parser that let option labels
+     * through would print every choice of every menu as a paragraph -- which
+     * on a page with a country list is 250 lines nobody asked for.
+     */
+    check(!page_says(d, "Documentation"),
+        "an option's words are the menu's, not the page's");
+    check(page_says(d, "Search in") && page_says(d, "and press enter"),
+        "and the words around it are untouched");
+
+    recon_html_free(d);
+}
+
+/*
+ * `<option>A<option>B` -- no closing tags, which is valid and common.
+ */
+static void test_options_that_are_never_closed(void) {
+    printf("an option closes the one before it\n");
+
+    const char *html =
+        "<form><select name=n>"
+        "<option value=1>One"
+        "<option value=2>Two"
+        "<option value=3>Three"
+        "</select></form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_field *menu = field_named(d, "n");
+    check(menu != NULL && menu->option_count == 3, "three options, not one");
+    if (menu != NULL && menu->option_count == 3) {
+        const struct recon_html_option *first =
+            recon_html_option_at(d, menu->first_option);
+        check(strcmp(first->label, "One") == 0,
+            "and the first one holds only its own words");
+    }
+    check(!page_says(d, "One"), "none of them reached the page");
+
+    recon_html_free(d);
+}
+
+/*
+ * A button that does nothing without script says so by being dead.
+ */
+static void test_a_button_that_needs_script(void) {
+    printf("a button only script could work is drawn, and disabled\n");
+
+    const char *html =
+        "<p>before</p>"
+        "<button type=\"button\" onclick=\"more()\">Show more</button>"
+        "<p>after</p>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_field *f = recon_html_field_at(d, 0);
+    check(f != NULL && f->kind == RECON_HTML_FIELD_BUTTON,
+        "type=button is neither a submit nor a reset");
+    check(f != NULL && strcmp(f->label, "Show more") == 0,
+        "it keeps its words");
+    check(f != NULL && f->form == -1,
+        "and belongs to no form, because it is inside none");
+    check(control_runs(d) == 1, "it is still drawn");
+    check(page_says(d, "before") && page_says(d, "after"),
+        "and the page around it is untouched");
+
+    recon_html_free(d);
+}
+
+/*
+ * A control that names its form rather than sitting inside it.
+ *
+ * How a page puts a search box in a header and its form somewhere else --
+ * and the case where the open-element position is simply the wrong answer.
+ */
+static void test_a_control_that_names_its_form(void) {
+    printf("a control may name the form it belongs to\n");
+
+    const char *html =
+        "<form id=\"hunt\" action=\"/s\" method=\"get\"></form>"
+        "<div><input name=\"q\" form=\"hunt\">"
+        "<input type=submit value=\"Go\" form=\"hunt\"></div>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    const struct recon_html_field *box = field_named(d, "q");
+    check(box != NULL && box->form == 0,
+        "a box outside every form still belongs to the one it names");
+    check(recon_html_field_count(d) == 2 &&
+        recon_html_field_at(d, 1)->form == 0,
+        "and so does the button beside it");
+
+    recon_html_free(d);
+}
+
+/*
+ * A stylesheet that hides a control hides the control, not only its text.
+ *
+ * Wikipedia's page furniture is checkboxes and buttons a stylesheet puts out
+ * of the way; measured on the article for HTML form, twenty of its
+ * twenty-six controls are page furniture rather than a form. Drawing them
+ * would put twenty dead buttons through the middle of the prose.
+ *
+ * The field itself stays. A control a stylesheet has hidden is still sent by
+ * every browser there is, and dropping it would send an incomplete request.
+ */
+static void test_a_hidden_control_is_not_drawn_but_is_kept(void) {
+    printf("a control a stylesheet hides keeps its value and loses its box\n");
+
+    const char *html =
+        "<style>.chrome { display: none }</style>"
+        "<form action=\"/s\">"
+        "<p>Search</p>"
+        "<span class=\"chrome\"><input name=\"token\" value=\"abc\"></span>"
+        "<input name=\"q\">"
+        "</form>";
+
+    struct recon_css_sheet *sheet = recon_css_new();
+    struct recon_html_document *d =
+        recon_html_parse_styled(html, strlen(html), sheet);
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        recon_css_free(sheet);
+        return;
+    }
+
+    check(recon_html_field_count(d) == 2, "both controls are known");
+    const struct recon_html_field *token = field_named(d, "token");
+    check(token != NULL && strcmp(token->value, "abc") == 0,
+        "and the hidden one keeps what it would send");
+    check(control_runs(d) == 1, "but only one of them is drawn");
+
+    recon_html_free(d);
+    recon_css_free(sheet);
+}
+
+/*
+ * A control is a run of its own, in the middle of the words around it.
+ *
+ * The check that a control does not swallow the word after it. Its run is
+ * empty and sits at the end of the text, so every test the run-merging does
+ * says yes -- and the first version of this did merge, which made the word
+ * after every search box disappear.
+ */
+static void test_a_control_does_not_swallow_the_words_beside_it(void) {
+    printf("a control sits between words without eating them\n");
+
+    const char *html =
+        "<form><p>Show <input name=\"n\" value=\"10\"> results per page</p>"
+        "</form>";
+
+    struct recon_html_document *d = recon_html_parse(html, strlen(html));
+    check(d != NULL, "it parses");
+    if (d == NULL) {
+        return;
+    }
+
+    check(page_says(d, "Show"), "the word before the box survives");
+    check(page_says(d, "results per page"),
+        "and so does every word after it");
+    check(control_runs(d) == 1, "with the control between them");
+
+    /* And the empty run is genuinely empty, so nothing draws text from it. */
+    for (int i = 0; i < recon_html_run_count(d); i++) {
+        const struct recon_html_run *r = recon_html_run_at(d, i);
+        if (r->field >= 0) {
+            check(r->length == 0, "a control's run carries no text");
+        }
+    }
+
+    recon_html_free(d);
+}
+
 static void test_nothing_is_refused(void) {
     printf("there is no such thing as HTML this refuses\n");
 
@@ -1130,6 +1527,14 @@ int main(void) {
     test_a_cell_is_not_merged_into_the_one_before_it();
     test_a_table_used_for_layout();
     test_where_a_tag_ends();
+    test_a_real_search_form();
+    test_the_standards_example_form();
+    test_a_menu_and_its_choices();
+    test_options_that_are_never_closed();
+    test_a_button_that_needs_script();
+    test_a_control_that_names_its_form();
+    test_a_hidden_control_is_not_drawn_but_is_kept();
+    test_a_control_does_not_swallow_the_words_beside_it();
     test_nothing_is_refused();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);

@@ -25,6 +25,7 @@
 #include "recon_appwin.h"
 #include "recon_fs.h"
 #include "recon_css.h"
+#include "recon_form.h"
 #include "recon_html.h"
 #include "recon_http.h"
 #include "recon_icons.h"
@@ -145,6 +146,23 @@ static const int HEADING_SIZE[7] = { 0, 26, 22, 19, 17, 16, 15 };
 #define HIT_MARK_BASE (RECON_APPWIN_HIT_USER + 100)    /* BOOKMARKS_MAX */
 #define HIT_HIST_BASE (RECON_APPWIN_HIT_USER + 200)    /* HISTORY_MAX */
 #define HIT_LINK_BASE (RECON_APPWIN_HIT_USER + 1000)
+
+/*
+ * A control on the page, and one row of an open menu.
+ *
+ * Above the links rather than below, because the link range is the one with
+ * no ceiling in practice -- a page may carry two thousand of them -- and
+ * putting anything under it would mean a page with enough links quietly
+ * answering clicks meant for a control. The link branch is a *range* now for
+ * the same reason: it used to be `hit >= HIT_LINK_BASE`, which would have
+ * swallowed every one of these.
+ */
+#define HIT_FIELD_BASE (RECON_APPWIN_HIT_USER + 4000)
+#define HIT_OPTION_BASE (RECON_APPWIN_HIT_USER + 8000)
+
+/* Sending a form, and not sending it, from the confirmation. */
+#define HIT_SEND (RECON_APPWIN_HIT_USER + 13)
+#define HIT_DONT_SEND (RECON_APPWIN_HIT_USER + 14)
 
 /*
  * What is in the toolbar menu.
@@ -347,6 +365,58 @@ struct web_tab {
      * page you have zoomed in to read is a property of that page.
      */
     int zoom;
+
+    /* --- Forms --- */
+
+    /*
+     * The live state of every control, and which one has the caret.
+     *
+     * `editing` is the one editor, moved from control to control as focus
+     * moves, rather than one per field: a page with four hundred inputs would
+     * otherwise carry four hundred editors with a caret and a selection each,
+     * and exactly one of them can ever be in use.
+     */
+    struct web_field *fields;
+    int field_count;
+    int focus;                        /* which control, or -1 */
+    struct recon_edit editing;
+
+    /*
+     * The menu a `<select>` has open, or -1.
+     *
+     * On the tab rather than on the field, because only one can be open and a
+     * flag per field is a flag that can be left set on a control nobody can
+     * see any more.
+     */
+    int menu_field;
+    int menu_scroll;
+
+    /*
+     * A POST waiting to be confirmed.
+     *
+     * `pending_form` is which form, `pending_submitter` which button was
+     * pressed, and `pending_body` what is about to be sent -- built *before*
+     * asking, so what is shown and what is sent are the same bytes rather
+     * than two things assembled separately from the same fields.
+     */
+    int pending_form;
+    int pending_submitter;
+    char *pending_body;
+
+    /*
+     * Where it goes, both ways: as an address to send to, and as words to
+     * show. The words are not re-parsed to get the address back -- a
+     * confirmation that said one thing and sent to another would be the exact
+     * failure this whole dialogue exists to prevent.
+     */
+    struct recon_http_url pending_url;
+    char pending_where[RECON_HTTP_URL_MAX];
+
+    /* What the confirmation says, counted where the body was built. Counting
+     * it again in the drawing would be a second walk over the fields that can
+     * disagree with the first. */
+    int pending_count;
+    bool pending_secret;
 };
 
 /* --- The window, and the chrome around whichever tab is in front --- */
@@ -372,6 +442,56 @@ struct web_bookmark {
 };
 
 /*
+ * --- What somebody has typed into this page ---
+ *
+ * One of these per control in the document, made when the document arrives
+ * and thrown away with it.
+ *
+ * Deliberately *not* in the document. What a page says a box starts out
+ * holding is a fact about the file and does not change; what is in the box
+ * now is a fact about this session, and it has to survive a redraw, a scroll
+ * and a picture arriving -- but not a reload, because a reload is asking the
+ * server for the page again and getting back what it says today.
+ *
+ * Keeping them apart is also what makes Reset a single line: put every one of
+ * these back to what the document says, which is still sitting there.
+ */
+/*
+ * Room for what a page starts a control out holding.
+ *
+ * Larger than `recon_edit` can hold, and that difference is deliberate rather
+ * than an oversight: a hidden token is two hundred characters of base64 that
+ * nobody types into and that has to be sent back byte for byte, while what
+ * somebody can type is whatever the system's text field holds. Focusing a
+ * control whose contents will not fit the editor is refused and said out
+ * loud, because cutting it would change what the form sends and the only
+ * sign would be a request the server rejects.
+ */
+#define FIELD_TEXT_MAX 512
+
+struct web_field {
+    char text[FIELD_TEXT_MAX];        /* a text box or a textarea */
+    bool on;                          /* a checkbox or a radio */
+    int chosen;                       /* which option, for a menu */
+
+    /*
+     * Where it was last drawn, in *screen* coordinates, and whether that was
+     * this frame.
+     *
+     * Kept so the list a menu drops down can be put under the control it
+     * belongs to. Screen rather than page coordinates because that is what
+     * the drawing takes, and converting again at the other end would be the
+     * same sum written twice with two chances to get the scroll wrong.
+     *
+     * `drawn` is cleared at the start of every draw and set by the control
+     * that actually got painted, so a menu left open on a control that has
+     * been scrolled away has nowhere to be and is not drawn.
+     */
+    int x, y, w, h;
+    bool drawn;
+};
+
+/*
  * Which strip of chrome is open below the toolbar.
  *
  * One at a time, and the page moves down to make room, because a bar drawn
@@ -382,6 +502,16 @@ enum web_strip {
     STRIP_NONE = 0,
     STRIP_FIND,
     STRIP_HISTORY,
+
+    /*
+     * A POST, built and waiting to be told to go.
+     *
+     * A strip rather than a dialog, because the page under it is what somebody
+     * has to look at to decide -- a box over the middle of a sign-in form
+     * hides the form being signed in to. The same reasoning as the find bar,
+     * where hiding the thing being searched is the one thing it must not do.
+     */
+    STRIP_SEND,
 };
 
 struct recon_web {
@@ -431,6 +561,79 @@ static void forget_sheets(struct web_tab *w);
 static void go_to(struct web_tab *w, const struct recon_http_url *url,
     bool remember);
 
+/*
+ * Throw away what was typed into the page that is going.
+ *
+ * The live values belong to the document they were typed into. Keeping them
+ * across a load would put the last page's search term in this page's box, and
+ * -- worse -- field 4 of one page is not field 4 of the next.
+ */
+static void fields_free(struct web_tab *t) {
+    free(t->fields);
+    t->fields = NULL;
+    t->field_count = 0;
+    t->focus = -1;
+    t->menu_field = -1;
+    t->menu_scroll = 0;
+    recon_edit_end(&t->editing);
+
+    free(t->pending_body);
+    t->pending_body = NULL;
+    t->pending_form = -1;
+    t->pending_submitter = -1;
+    t->pending_where[0] = '\0';
+}
+
+/*
+ * Start every control at what the document says it holds.
+ *
+ * Also what Reset does, which is why it is one function rather than a loop
+ * written twice: a reset that drifted from the initial state would be a
+ * button that puts a form into a state it was never in.
+ */
+static void fields_reset(struct web_tab *t) {
+    if (t->fields == NULL || t->page == NULL) {
+        return;
+    }
+    for (int i = 0; i < t->field_count; i++) {
+        const struct recon_html_field *d = recon_html_field_at(t->page, i);
+        struct web_field *live = &t->fields[i];
+        memset(live, 0, sizeof(*live));
+        if (d == NULL) {
+            continue;
+        }
+        snprintf(live->text, sizeof(live->text), "%s", d->value);
+        live->on = d->on;
+
+        live->chosen = 0;
+        for (int o = 0; o < d->option_count; o++) {
+            const struct recon_html_option *opt =
+                recon_html_option_at(t->page, d->first_option + o);
+            if (opt != NULL && opt->selected) {
+                live->chosen = o;
+                break;
+            }
+        }
+    }
+}
+
+/* Make room for the controls of the page that has just arrived. */
+static void fields_begin(struct web_tab *t) {
+    fields_free(t);
+    int count = recon_html_field_count(t->page);
+    if (count <= 0) {
+        return;
+    }
+    t->fields = calloc((size_t)count, sizeof(*t->fields));
+    if (t->fields == NULL) {
+        return;                        /* the page still reads; it cannot be
+                                        * typed into, which is the honest
+                                        * result of having no memory */
+    }
+    t->field_count = count;
+    fields_reset(t);
+}
+
 /* Whichever tab is in front. Never NULL: a window with no tabs closes. */
 static struct web_tab *front(struct recon_web *w) {
     if (w->tab_count <= 0) {
@@ -466,6 +669,15 @@ static struct web_tab *tab_new(struct recon_web *w) {
     t->fetching = -1;
     t->zoom = 100;
     t->jump_to = -1;
+
+    /* Nothing has the caret, and nothing is waiting to be sent. Zero means
+     * "control 0" and "form 0" for all three of these, so a tab with no page
+     * in it would start out with its first control focused. */
+    t->focus = -1;
+    t->menu_field = -1;
+    t->pending_form = -1;
+    t->pending_submitter = -1;
+
     snprintf(t->label, sizeof(t->label), "New tab");
 
     w->tabs[w->tab_count++] = t;
@@ -492,6 +704,7 @@ static void tab_free(struct web_tab *t) {
     }
     forget_images(t);
     forget_sheets(t);
+    fields_free(t);
     if (t->page != NULL) {
         recon_html_free(t->page);
     }
@@ -1413,6 +1626,338 @@ static void put_word(struct flow *f, struct recon_font *font, int x, int y,
     (void)is_link;
 }
 
+/* --- Controls --- */
+
+/*
+ * How big a control is drawn.
+ *
+ * Measured, not drawn, so the measuring pass and the drawing pass agree: a
+ * control that came out one width while the page height was worked out and
+ * another while it was painted would put every word after it in a different
+ * place on the second pass, and the page would move under the pointer.
+ *
+ * The page's `size=` is a hint and is bounded at both ends. `size=200` is
+ * written by somebody with a wide screen in mind and would be a box wider
+ * than this window; `size=1` is a box nothing fits in. Neither is refused --
+ * a hint out of range is not an error, it is a hint -- but neither is
+ * obeyed to the point of making the page unreadable.
+ */
+static void field_size(const struct web_tab *t,
+        const struct recon_html_field *d, struct recon_font *font,
+        int line_height, int *out_w, int *out_h) {
+    int em = recon_text_width(font, "0");
+    if (em <= 0) {
+        em = 8;
+    }
+    int box = line_height + 6;
+    int w = 0;
+    int h = box;
+
+    switch (d->kind) {
+    case RECON_HTML_FIELD_CHECKBOX:
+    case RECON_HTML_FIELD_RADIO:
+        w = line_height - 4;
+        if (w < 12) {
+            w = 12;
+        }
+        if (w > 18) {
+            w = 18;
+        }
+        h = w;
+        break;
+
+    case RECON_HTML_FIELD_AREA:
+        w = (d->width_chars > 0 ? d->width_chars : 40) * em;
+        if (w < 120) {
+            w = 120;
+        }
+        if (w > 480) {
+            w = 480;
+        }
+        h = line_height * 3 + 8;
+        break;
+
+    case RECON_HTML_FIELD_SUBMIT:
+    case RECON_HTML_FIELD_RESET:
+    case RECON_HTML_FIELD_BUTTON:
+        w = recon_text_width(font, d->label) + 22;
+        if (w < 44) {
+            w = 44;
+        }
+        if (w > 320) {
+            w = 320;
+        }
+        break;
+
+    case RECON_HTML_FIELD_CHOICE: {
+        /*
+         * As wide as its widest choice, so choosing a different one does not
+         * move the words after it. A menu that resized itself as it was used
+         * would reflow the sentence it sits in on every click.
+         */
+        w = 0;
+        for (int o = 0; o < d->option_count; o++) {
+            const struct recon_html_option *opt =
+                recon_html_option_at(t->page, d->first_option + o);
+            if (opt == NULL) {
+                continue;
+            }
+            int wide = recon_text_width(font, opt->label);
+            if (wide > w) {
+                w = wide;
+            }
+        }
+        w += 30;                       /* the arrow, and room either side */
+        if (w < 60) {
+            w = 60;
+        }
+        if (w > 320) {
+            w = 320;
+        }
+        break;
+    }
+
+    default:
+        w = (d->width_chars > 0 ? d->width_chars : 22) * em;
+        if (w < 60) {
+            w = 60;
+        }
+        if (w > 340) {
+            w = 340;
+        }
+        break;
+    }
+
+    *out_w = w;
+    *out_h = h;
+}
+
+/* What a text control is showing: what is in it, or what it says when empty. */
+static const char *field_shown(const struct web_tab *t, int index,
+        const struct recon_html_field *d, bool *out_is_hint) {
+    const struct web_field *live = &t->fields[index];
+    if (live->text[0] != '\0') {
+        *out_is_hint = false;
+        return live->text;
+    }
+    *out_is_hint = true;
+    return d->label;                   /* the placeholder, or "" */
+}
+
+/*
+ * Draw one control, and register it.
+ *
+ * Everything here is drawn on the *page's* paper rather than the skin's, and
+ * every colour goes through the same readability check the words do. A page
+ * that paints itself near-black gets a control whose border can be seen on
+ * near-black; the alternative is a search box that is genuinely invisible on
+ * about a third of the modern web.
+ */
+static void put_field(struct flow *f, int index, int x, int y, int width,
+        int height) {
+    struct web_tab *t = f->w;
+    if (t->page == NULL || t->fields == NULL || index < 0 ||
+            index >= t->field_count) {
+        return;
+    }
+    const struct recon_html_field *d = recon_html_field_at(t->page, index);
+    if (d == NULL) {
+        return;
+    }
+    struct web_field *live = &t->fields[index];
+
+    live->w = width;
+    live->h = height;
+
+    if (f->panel == NULL) {
+        return;
+    }
+
+    int screen_y = y - f->scroll + f->origin_y;
+    if (screen_y + height < f->clip_top || screen_y > f->clip_bottom) {
+        return;
+    }
+    if (x > f->width) {
+        return;
+    }
+    int screen_x = x + f->origin_x;
+
+    /* On screen, this frame, here. */
+    live->x = screen_x;
+    live->y = screen_y;
+    live->drawn = true;
+
+    struct recon_font *font = recon_font_system(BODY_SIZE * t->zoom / 100);
+    if (font == NULL) {
+        font = f->w->font;
+    }
+
+    recon_color edge = f->rule_ink;
+    recon_color ink = f->text_ink;
+    recon_color inside = recon_color_mix(f->paper, ink, 92);
+    bool focused = (t->focus == index);
+
+    uint32_t id = HIT_FIELD_BASE + (uint32_t)index;
+
+    switch (d->kind) {
+    case RECON_HTML_FIELD_SUBMIT:
+    case RECON_HTML_FIELD_RESET:
+    case RECON_HTML_FIELD_BUTTON: {
+        /*
+         * A button that only script could work is drawn dead, with a tip
+         * saying why. A page whose "Show more" is simply missing looks like
+         * a page this failed to read; one whose button is there and visibly
+         * does nothing says the true thing, which is that there is no script
+         * here to run.
+         */
+        bool inert = (d->kind == RECON_HTML_FIELD_BUTTON);
+        struct recon_widget_button button = {
+            .x = screen_x, .y = screen_y, .w = width, .h = height,
+            .id = id,
+            .label = d->label,
+            .font = font,
+            .behind = f->paper,
+            .look = (d->kind == RECON_HTML_FIELD_SUBMIT && !d->disabled)
+                ? RECON_WIDGET_ACCENT : RECON_WIDGET_PLAIN,
+            .disabled = d->disabled || inert,
+            .tip = inert ? "This button needs JavaScript, which ReconOS's "
+                "viewer does not run" : NULL,
+        };
+        recon_widget_button(f->panel, &button);
+        break;
+    }
+
+    case RECON_HTML_FIELD_CHECKBOX:
+    case RECON_HTML_FIELD_RADIO: {
+        recon_fill_rect(f->panel, screen_x, screen_y, width, height, inside);
+        /* Four sides, drawn as fills: this file has no rectangle outline and
+         * a control with no boundary is a control nobody can find. */
+        recon_fill_rect(f->panel, screen_x, screen_y, width, 1, edge);
+        recon_fill_rect(f->panel, screen_x, screen_y + height - 1, width, 1,
+            edge);
+        recon_fill_rect(f->panel, screen_x, screen_y, 1, height, edge);
+        recon_fill_rect(f->panel, screen_x + width - 1, screen_y, 1, height,
+            edge);
+
+        if (live->on) {
+            /*
+             * A radio gets a dot and a checkbox a solid square, so which kind
+             * it is reads without clicking it -- which matters, because the
+             * two behave differently and nothing else here distinguishes
+             * them.
+             */
+            int inset = (d->kind == RECON_HTML_FIELD_RADIO) ? 4 : 3;
+            recon_fill_rect(f->panel, screen_x + inset, screen_y + inset,
+                width - inset * 2, height - inset * 2, f->link_ink);
+        }
+        if (!d->disabled) {
+            recon_hit_add(f->panel, screen_x, screen_y, width, height, id);
+        }
+        break;
+    }
+
+    case RECON_HTML_FIELD_CHOICE: {
+        recon_fill_rect(f->panel, screen_x, screen_y, width, height, inside);
+        recon_fill_rect(f->panel, screen_x, screen_y, width, 1, edge);
+        recon_fill_rect(f->panel, screen_x, screen_y + height - 1, width, 1,
+            edge);
+        recon_fill_rect(f->panel, screen_x, screen_y, 1, height, edge);
+        recon_fill_rect(f->panel, screen_x + width - 1, screen_y, 1, height,
+            edge);
+
+        const struct recon_html_option *opt = recon_html_option_at(t->page,
+            d->first_option + live->chosen);
+        if (opt != NULL) {
+            recon_draw_text(f->panel, font, screen_x + 6,
+                screen_y + (height + recon_font_ascent(font)) / 2 - 1,
+                width - 26, opt->label, ink);
+        }
+
+        /* The arrow, as three rows narrowing. Drawn rather than typed for the
+         * same reason the padlock is: the face has no glyph for it. */
+        int ax = screen_x + width - 16;
+        int ay = screen_y + height / 2 - 2;
+        for (int r = 0; r < 4; r++) {
+            recon_fill_rect(f->panel, ax + r, ay + r, 9 - r * 2, 1, ink);
+        }
+
+        if (!d->disabled) {
+            recon_hit_add(f->panel, screen_x, screen_y, width, height, id);
+        }
+        break;
+    }
+
+    default: {
+        /*
+         * A text box, drawn by the system's own editor so the caret, the
+         * selection and the masking are the ones every other field in
+         * ReconOS has. The focused one is drawn from the live editor; the
+         * rest from a copy holding their text, which is the same drawing code
+         * either way -- two different pictures for the same control would be
+         * two things to keep in step.
+         */
+        struct recon_edit shown;
+        const struct recon_edit *draw_this;
+        if (focused) {
+            draw_this = &t->editing;
+        } else {
+            memset(&shown, 0, sizeof(shown));
+            bool is_hint = false;
+            const char *text = field_shown(t, index, d, &is_hint);
+            snprintf(shown.text, sizeof(shown.text), "%s",
+                is_hint ? "" : text);
+            shown.length = (int)strlen(shown.text);
+            shown.caret = shown.length;
+            shown.anchor = -1;
+            shown.active = false;
+            shown.masked = d->secret;
+            shown.multiline = (d->kind == RECON_HTML_FIELD_AREA);
+            draw_this = &shown;
+        }
+
+        recon_edit_draw(f->panel, font, screen_x, screen_y, width, height,
+            draw_this);
+
+        /*
+         * The placeholder, when there is nothing in the box.
+         *
+         * Drawn over the editor rather than put into it, because text in the
+         * editor is text that gets sent -- a hint somebody has not replaced
+         * would arrive at the server as their answer.
+         */
+        bool is_hint = false;
+        const char *text = field_shown(t, index, d, &is_hint);
+        if (is_hint && text[0] != '\0' && !focused) {
+            recon_draw_text(f->panel, font, screen_x + 4,
+                screen_y + recon_font_ascent(font) + 3, width - 8, text,
+                recon_color_mix(inside, ink, 45));
+        }
+
+        if (!d->disabled) {
+            recon_hit_add(f->panel, screen_x, screen_y, width, height, id);
+        }
+        break;
+    }
+    }
+
+    /*
+     * The focus ring, drawn last so nothing paints over it.
+     *
+     * Outside the control rather than inside, so it does not eat a row of a
+     * box that is only twenty pixels tall to begin with.
+     */
+    if (focused) {
+        recon_fill_rect(f->panel, screen_x - 2, screen_y - 2, width + 4, 1,
+            f->link_ink);
+        recon_fill_rect(f->panel, screen_x - 2, screen_y + height + 1,
+            width + 4, 1, f->link_ink);
+        recon_fill_rect(f->panel, screen_x - 2, screen_y - 2, 1, height + 4,
+            f->link_ink);
+        recon_fill_rect(f->panel, screen_x + width + 1, screen_y - 2, 1,
+            height + 4, f->link_ink);
+    }
+}
+
 /*
  * --- A line, held until its width is known ---
  *
@@ -1443,6 +1988,18 @@ struct held_word {
     size_t length;
     int x;
     int y;
+
+    /*
+     * The control this is, or -1 for a word.
+     *
+     * Held with the words rather than drawn as it is reached, for the same
+     * reason the words are: a centred line moves, and a search box left at
+     * the position a left-aligned line would have given it is a box sitting
+     * away from the label that names it.
+     */
+    int field;
+    int width;
+    int height;
     unsigned style;
     int link;
     bool has_colour;
@@ -1486,6 +2043,21 @@ static void hold_word(struct line *l, struct recon_font *font, int x, int y,
         .font = font, .text = text, .length = length,
         .x = x, .y = y, .style = style, .link = link,
         .has_colour = has_colour, .colour = colour,
+        .field = -1,
+    };
+}
+
+/* A control, held on the line the same way a word is. */
+static void hold_field(struct line *l, struct recon_font *font, int x, int y,
+        int width, int height, int field) {
+    if (l->word_count >= HELD_WORDS_MAX) {
+        l->full = true;
+        return;
+    }
+    l->words[l->word_count++] = (struct held_word){
+        .font = font, .text = "", .length = 0,
+        .x = x, .y = y, .link = -1,
+        .field = field, .width = width, .height = height,
     };
 }
 
@@ -1572,6 +2144,10 @@ static void flush_line(struct flow *f, struct line *l, int align, int indent,
 
     for (int i = 0; i < l->word_count; i++) {
         const struct held_word *w = &l->words[i];
+        if (w->field >= 0) {
+            put_field(f, w->field, w->x + shift, w->y, w->width, w->height);
+            continue;
+        }
         put_word(f, w->font, w->x + shift, w->y, w->text, w->length,
             w->style, w->link, w->has_colour, w->colour);
     }
@@ -1829,6 +2405,53 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         line_height = size + 4;
     }
 
+    /*
+     * A line carrying a control is as tall as the control.
+     *
+     * Worked out before anything is placed, by looking ahead at this block's
+     * runs, because the height decides where the *next* line starts -- and a
+     * three-line textarea placed on a one-line line is a control drawn over
+     * the paragraph under it. Looking ahead is cheap: it is one pass over the
+     * runs of one block, and only blocks that have a control pay for it.
+     *
+     * **A control is measured against the height of the text, never against
+     * the line it is about to make taller.** Kept in its own variable for
+     * exactly that reason: the first version passed the growing
+     * `line_height` back into the measurement, so a textarea three text-lines
+     * tall was measured against a line that already held a textarea and came
+     * out three times too tall -- a box drawn straight through the buttons
+     * under it, while the page's height said it had ended long before. Found
+     * by looking at the page; nothing about the numbers said anything.
+     */
+    const int text_line_height = line_height;
+
+    if (w->page != NULL && w->fields != NULL) {
+        int tallest = line_height;
+        for (int i = 0; i < b->run_count; i++) {
+            const struct recon_html_run *run =
+                recon_html_run_at(w->page, b->first_run + i);
+            if (run == NULL || run->field < 0) {
+                continue;
+            }
+            const struct recon_html_field *d =
+                recon_html_field_at(w->page, run->field);
+            if (d == NULL) {
+                continue;
+            }
+            int cw = 0;
+            int ch = 0;
+            field_size(w, d, measure_font, text_line_height, &cw, &ch);
+            if (ch > tallest) {
+                tallest = ch;
+            }
+        }
+        /* Two more, so the ring drawn round a focused control has somewhere
+         * to be rather than sitting on the line above it. */
+        if (tallest > line_height) {
+            line_height = tallest + 2;
+        }
+    }
+
     if (marker != NULL && f->panel != NULL) {
         int screen_y = f->height - f->scroll + f->origin_y;
         if (screen_y >= f->clip_top && screen_y <= f->clip_bottom) {
@@ -1896,6 +2519,56 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
         if (b->kind == RECON_HTML_ROW && run->starts_cell) {
             cell_pending = true;
             cell_index++;
+        }
+
+        /*
+         * --- A control, which is placed rather than written ---
+         *
+         * Before the style and the font are worked out, because none of that
+         * applies: what a control looks like is its own business and a page
+         * that made its search box italic is not asking for an italic box.
+         * What it shares with a word is the wrapping, which is why it is
+         * here and not somewhere else.
+         */
+        if (run->field >= 0) {
+            if (w->fields == NULL) {
+                continue;              /* no memory for the live values */
+            }
+            const struct recon_html_field *d =
+                recon_html_field_at(w->page, run->field);
+            if (d == NULL) {
+                continue;
+            }
+
+            struct recon_font *control_font = font_for(0, size);
+            int cw = 0;
+            int ch = 0;
+            field_size(w, d, control_font, text_line_height, &cw, &ch);
+
+            if (anything_on_line && x + cw > f->width) {
+                if (link_from >= 0) {
+                    hold_rule(&held, control_font, link_from, x, y, link_last);
+                    link_from = -1;
+                }
+                flush_line(f, &held, align, indent, x);
+                x = indent;
+                y += line_height;
+                anything_on_line = false;
+            }
+
+            /*
+             * Sat on the line rather than at the top of it. A box the height
+             * of the text plus six drawn from the same top edge as the text
+             * hangs below the baseline and reads as falling off the line.
+             */
+            int drop = (line_height - ch) / 2;
+            if (drop < 0) {
+                drop = 0;
+            }
+            hold_field(&held, control_font, x, y + drop, cw, ch, run->field);
+            x += cw + 4;
+            anything_on_line = true;
+            continue;
         }
 
         unsigned style = run->style;
@@ -2427,6 +3100,167 @@ static void draw_find(struct recon_web *w, struct recon_panel *p,
     recon_widget_button(p, &shut);
 }
 
+/*
+ * --- The list a `<select>` drops down ---
+ *
+ * Drawn after the page and over it, at the control it belongs to, because a
+ * list drawn in the flow would push the paragraph under it down every time
+ * somebody opened one -- and a page that moves when you look at a menu is a
+ * page that has moved by the time you click.
+ *
+ * Long menus scroll rather than growing past the window. A country list is
+ * two hundred and fifty choices and there is no screen that holds them.
+ */
+#define CHOICE_ROW 22
+#define CHOICE_VISIBLE 10
+
+static void draw_choice_menu(struct recon_web *w, struct recon_panel *p,
+        int top, int bottom) {
+    struct web_tab *t = front(w);
+    if (t == NULL || t->page == NULL || t->fields == NULL ||
+            t->menu_field < 0 || t->menu_field >= t->field_count) {
+        return;
+    }
+    const struct web_field *live = &t->fields[t->menu_field];
+    if (!live->drawn) {
+        /* Scrolled out of sight while it was open. Nothing to hang it on, so
+         * the menu closes rather than being drawn somewhere it does not
+         * belong -- which is what it did once, at the top left corner. */
+        t->menu_field = -1;
+        return;
+    }
+    const struct recon_html_field *d =
+        recon_html_field_at(t->page, t->menu_field);
+    if (d == NULL || d->option_count <= 0) {
+        return;
+    }
+
+    int shown = d->option_count;
+    if (shown > CHOICE_VISIBLE) {
+        shown = CHOICE_VISIBLE;
+    }
+    if (t->menu_scroll > d->option_count - shown) {
+        t->menu_scroll = d->option_count - shown;
+    }
+    if (t->menu_scroll < 0) {
+        t->menu_scroll = 0;
+    }
+
+    int mw = live->w;
+    if (mw < 120) {
+        mw = 120;
+    }
+    int mh = shown * CHOICE_ROW + 4;
+    int mx = live->x;
+    int my = live->y + live->h;
+
+    /* Above the control when there is no room below it, which is what every
+     * menu on every system does at the bottom of a screen. */
+    if (my + mh > bottom && live->y - mh >= top) {
+        my = live->y - mh;
+    }
+    if (my + mh > bottom) {
+        my = bottom - mh;
+    }
+    if (my < top) {
+        my = top;
+    }
+
+    recon_fill_rect(p, mx, my, mw, mh, THEME(MENU));
+    recon_fill_rect(p, mx, my, mw, 1, THEME(MENU_BORDER));
+    recon_fill_rect(p, mx, my + mh - 1, mw, 1, THEME(MENU_BORDER));
+    recon_fill_rect(p, mx, my, 1, mh, THEME(MENU_BORDER));
+    recon_fill_rect(p, mx + mw - 1, my, 1, mh, THEME(MENU_BORDER));
+
+    int ascent = recon_font_ascent(w->font);
+    for (int i = 0; i < shown; i++) {
+        int which = t->menu_scroll + i;
+        const struct recon_html_option *opt =
+            recon_html_option_at(t->page, d->first_option + which);
+        if (opt == NULL) {
+            continue;
+        }
+        int ry = my + 2 + i * CHOICE_ROW;
+        uint32_t id = HIT_OPTION_BASE + (uint32_t)which;
+        bool hovered = recon_panel_hot(p) == id;
+
+        if (hovered) {
+            recon_widget_highlight_role(p, mx + 2, ry, mw - 4, CHOICE_ROW,
+                RECON_THEME_MENU_HILITE);
+        }
+        recon_hit_add(p, mx + 2, ry, mw - 4, CHOICE_ROW, id);
+
+        /*
+         * The one in force is marked rather than only highlighted. Highlight
+         * means "the pointer is here" everywhere else in this system, and one
+         * mark meaning two things is a mark that means neither.
+         */
+        recon_color ink = THEME(MENU_TEXT);
+        if (which == t->fields[t->menu_field].chosen) {
+            recon_draw_text(p, w->font, mx + 6, ry + (CHOICE_ROW + ascent) / 2
+                - 1, 12, "\xE2\x80\xA2", ink);
+        }
+        recon_draw_text(p, w->font, mx + 20,
+            ry + (CHOICE_ROW + ascent) / 2 - 1, mw - 26, opt->label, ink);
+    }
+}
+
+/*
+ * --- What is about to be sent, and to whom ---
+ *
+ * The sentence is built where the request is, so the two cannot disagree.
+ * Everything here is a fact about the bytes already assembled: how many
+ * answers, whether one of them is a password, and the host -- the *host*
+ * rather than the whole address, because the host is the part that decides
+ * who receives this and the part somebody can recognise.
+ */
+static void draw_send(struct recon_web *w, struct recon_panel *p,
+        int x, int y, int width) {
+    struct web_tab *t = front(w);
+    recon_fill_rect(p, x, y, width, STRIP_HEIGHT, COLOR_BAR);
+    recon_fill_rect(p, x, y, width, 1, COLOR_RULE);
+
+    int ascent = recon_font_ascent(w->font);
+    recon_color ink = recon_color_readable_on(COLOR_BAR, COLOR_TEXT,
+        THEME(TITLE_TEXT), COLOR_TEXT);
+
+    /*
+     * The *host*, not the whole address.
+     *
+     * The host is who receives this and the part somebody recognises; a path
+     * two thousand characters long would push it off the end of the strip,
+     * and a confirmation whose one important word has been truncated away is
+     * worse than no confirmation at all. The full address is on the status
+     * line under this.
+     */
+    char says[320] = "";
+    if (t != NULL && t->pending_form >= 0) {
+        snprintf(says, sizeof(says), "Send %d answer%s to %s?%s",
+            t->pending_count, t->pending_count == 1 ? "" : "s",
+            t->pending_url.host,
+            t->pending_secret ? "  One of them is a password." : "");
+    }
+
+    /* The two buttons first, so the sentence is clipped rather than them. */
+    struct recon_widget_button no = {
+        .x = x + width - 104, .y = y + 3, .w = 96, .h = STRIP_HEIGHT - 7,
+        .id = HIT_DONT_SEND, .label = "Don't send", .font = w->font,
+        .behind = COLOR_BAR, .text = ink,
+    };
+    recon_widget_button(p, &no);
+
+    struct recon_widget_button go = {
+        .x = x + width - 160, .y = y + 3, .w = 52, .h = STRIP_HEIGHT - 7,
+        .id = HIT_SEND, .label = "Send", .font = w->font,
+        .behind = COLOR_BAR, .look = RECON_WIDGET_ACCENT,
+        .tip = "Send what the status line describes",
+    };
+    recon_widget_button(p, &go);
+
+    recon_draw_text(p, w->font, x + 8, y + (STRIP_HEIGHT + ascent) / 2 - 1,
+        width - 176, says, ink);
+}
+
 /* --- The menu --- */
 
 static void draw_menu(struct recon_web *w, struct recon_panel *p,
@@ -2670,6 +3504,9 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     if (w->strip == STRIP_FIND) {
         bottom -= STRIP_HEIGHT;
         draw_find(w, p, x, status_y - STRIP_HEIGHT, width);
+    } else if (w->strip == STRIP_SEND) {
+        bottom -= STRIP_HEIGHT;
+        draw_send(w, p, x, status_y - STRIP_HEIGHT, width);
     }
 
     if (t != NULL) {
@@ -2783,6 +3620,12 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
         recon_fill_rect(p, x, top, width, bottom - top, f.paper);
     }
 
+    /* Nothing is on screen until this pass puts it there. An open menu
+     * hanging off a control that has scrolled away has nowhere to be. */
+    for (int i = 0; i < t->field_count; i++) {
+        t->fields[i].drawn = false;
+    }
+
     t->content_height = run_flow(&f);
     w->find_count = f.find_seen;
     if (w->find_at >= w->find_count) {
@@ -2857,7 +3700,12 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
             t->content_height);
     }
 
-    /* Last, so it is over the page rather than under it. */
+    /* Both of these are over the page rather than under it. The toolbar's
+     * menu last of all, because it is the one that can be open at the same
+     * time as anything else. */
+    if (t->menu_field >= 0) {
+        draw_choice_menu(w, p, top, bottom);
+    }
     if (w->menu_open) {
         draw_menu(w, p, x, bar_y + BAR_HEIGHT, width);
     }
@@ -3161,6 +4009,454 @@ static void menu_do(struct recon_web *w, int item) {
     }
 }
 
+/* --- Working a form --- */
+
+/*
+ * Whether a control is something somebody can put the caret in.
+ *
+ * A button is pressed, a checkbox is toggled and a menu is opened -- none of
+ * those holds a caret, and Tab landing on one with nothing to type into is
+ * a Tab that appears to have done nothing.
+ */
+static bool field_is_typable(const struct recon_html_field *d) {
+    return d != NULL && !d->disabled &&
+        (d->kind == RECON_HTML_FIELD_TEXT || d->kind == RECON_HTML_FIELD_AREA);
+}
+
+/*
+ * Anything a click can reach, which a Tab must reach too.
+ *
+ * Wider than `field_is_typable` on purpose. A first version stepped only
+ * between text boxes, which reads as working right up until the form has a
+ * checkbox somebody has to agree to -- and then the only way past it is the
+ * pointer. A control a keyboard cannot reach is a control some people cannot
+ * use at all, which is the same argument the accessibility skins are built
+ * on.
+ *
+ * Hidden and script-only controls are out: one has nothing to draw and the
+ * other does nothing when it is reached, and a Tab that appears to have gone
+ * nowhere is worse than one that skips.
+ */
+static bool field_is_reachable(const struct recon_html_field *d) {
+    return d != NULL && !d->disabled &&
+        d->kind != RECON_HTML_FIELD_HIDDEN &&
+        d->kind != RECON_HTML_FIELD_BUTTON;
+}
+
+/*
+ * Take the caret out of whatever has it, keeping what was typed.
+ *
+ * The writing back is the point. The editor is one buffer moved from control
+ * to control, so a focus change that forgot this step would throw away
+ * everything typed into the control being left -- and it would look like the
+ * field had simply reverted, with nothing to say why.
+ */
+static void field_blur(struct web_tab *t) {
+    if (t == NULL || t->fields == NULL || t->focus < 0 ||
+            t->focus >= t->field_count) {
+        t->focus = -1;
+        return;
+    }
+    const struct recon_html_field *d = recon_html_field_at(t->page, t->focus);
+    if (field_is_typable(d)) {
+        snprintf(t->fields[t->focus].text,
+            sizeof(t->fields[t->focus].text), "%s", t->editing.text);
+    }
+    t->focus = -1;
+    recon_edit_end(&t->editing);
+}
+
+/*
+ * Put the caret in a control.
+ *
+ * Refused, out loud, when what the control holds is longer than the system's
+ * text field can carry. Cutting it would change what the form sends and the
+ * only sign would be a request the server rejects for a reason nobody could
+ * see -- so the value stays exactly as the page wrote it, and it is still
+ * sent that way.
+ */
+static bool field_focus_at(struct web_tab *t, int index) {
+    if (t == NULL || t->fields == NULL || t->page == NULL ||
+            index < 0 || index >= t->field_count) {
+        return false;
+    }
+    const struct recon_html_field *d = recon_html_field_at(t->page, index);
+    if (!field_is_reachable(d)) {
+        return false;
+    }
+
+    /*
+     * A checkbox, a radio, a menu or a button takes the focus without taking
+     * a caret. There is nothing to type into it; what it has is a ring round
+     * it and a key that works it.
+     */
+    if (!field_is_typable(d)) {
+        field_blur(t);
+        t->focus = index;
+        return true;
+    }
+
+    if (strlen(t->fields[index].text) >= RECON_EDIT_MAX) {
+        field_blur(t);
+        set_status(t, true,
+            "That field already holds more than %d characters, so it cannot "
+            "be edited here. It is still sent exactly as the page wrote it.",
+            RECON_EDIT_MAX - 1);
+        return false;
+    }
+
+    field_blur(t);
+    recon_edit_begin(&t->editing, t->fields[index].text, false);
+    t->editing.active = true;
+    t->editing.masked = d->secret;
+    t->editing.multiline = (d->kind == RECON_HTML_FIELD_AREA);
+    t->focus = index;
+    return true;
+}
+
+/* The next control a Tab should reach, wrapping, or -1 when there are none. */
+static int field_step(struct web_tab *t, int from, int by) {
+    if (t == NULL || t->page == NULL || t->field_count <= 0) {
+        return -1;
+    }
+    int at = from;
+    for (int tried = 0; tried < t->field_count; tried++) {
+        at += by;
+        if (at >= t->field_count) {
+            at = 0;
+        }
+        if (at < 0) {
+            at = t->field_count - 1;
+        }
+        if (field_is_reachable(recon_html_field_at(t->page, at))) {
+            return at;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Turn a checkbox or a radio on or off.
+ *
+ * A radio turns the rest of its group off. The group is every radio with the
+ * same name *in the same form* -- both halves, because a page with a sign-in
+ * form and a search form can use `name=type` in each, and grouping by name
+ * alone would make choosing in one un-choose in the other.
+ */
+static void field_toggle(struct web_tab *t, int index) {
+    const struct recon_html_field *d = recon_html_field_at(t->page, index);
+    if (d == NULL) {
+        return;
+    }
+    if (d->kind == RECON_HTML_FIELD_CHECKBOX) {
+        t->fields[index].on = !t->fields[index].on;
+        return;
+    }
+    if (d->kind != RECON_HTML_FIELD_RADIO) {
+        return;
+    }
+    for (int i = 0; i < t->field_count; i++) {
+        const struct recon_html_field *other = recon_html_field_at(t->page, i);
+        if (other == NULL || other->kind != RECON_HTML_FIELD_RADIO) {
+            continue;
+        }
+        if (other->form == d->form && strcmp(other->name, d->name) == 0) {
+            t->fields[i].on = (i == index);
+        }
+    }
+}
+
+/*
+ * How much one request may carry.
+ *
+ * The viewer's ceiling rather than recon_form's, because it is a policy about
+ * this program's memory and not a fact about how a form is encoded. Eight
+ * kilobytes is more than any form anybody fills in by hand and small enough
+ * that a page with ten thousand hidden fields cannot decide how much this
+ * allocates.
+ */
+#define FORM_BODY_MAX 8192
+
+/*
+ * Where a form goes.
+ *
+ * An empty action is the page's own address, which is what the standard says
+ * and what a great many search forms rely on. Anything else is resolved
+ * against the page, exactly the way a link is.
+ */
+static bool form_target(struct web_tab *t, const struct recon_html_form *form,
+        struct recon_http_url *out) {
+    if (form->action[0] == '\0') {
+        if (!t->have_url) {
+            return false;
+        }
+        *out = t->url;
+        out->fragment[0] = '\0';
+        return true;
+    }
+    return recon_http_parse_url(form->action,
+        t->have_url ? &t->url : NULL, out);
+}
+
+/*
+ * Send the POST that was described and agreed to.
+ *
+ * The body was built when the button was pressed rather than now, so nothing
+ * that happened while the question was on screen can change what goes. A
+ * field typed into after the confirmation appeared is not in this request,
+ * and that is the point: what was described is what is sent.
+ */
+static void send_pending(struct web_tab *t) {
+    if (t == NULL || t->pending_body == NULL || t->pending_form < 0) {
+        return;
+    }
+    if (t->request != NULL) {
+        recon_http_cancel(t->request);
+        t->request = NULL;
+    }
+
+    char *body = t->pending_body;
+    t->pending_body = NULL;
+    struct recon_http_url where = t->pending_url;
+
+    t->pending_form = -1;
+    t->pending_submitter = -1;
+    if (t->owner != NULL) {
+        t->owner->strip = STRIP_NONE;
+    }
+
+    /*
+     * Not put in the history.
+     *
+     * Back and forward walk a list of addresses and re-ask for them, and an
+     * address is the whole of a GET -- which is why a search can be gone back
+     * to. A POST is not in its address, so an entry for one would be an entry
+     * that either does nothing or silently sends it again. The page that
+     * comes *back* is where this tab now is, and that is what the address bar
+     * will say.
+     */
+    t->loading = true;
+    t->received = 0;
+    set_status(t, false, "Sending to %s...", where.host);
+
+    t->request = recon_http_post(WEB_APPLICATION, &where, NULL, body,
+        strlen(body), &HANDLERS, t);
+    free(body);
+
+    if (t->request == NULL) {
+        t->loading = false;
+        set_status(t, true, "%s", recon_http_last_error());
+    }
+    recon_appwin_refresh(t->win);
+}
+
+/*
+ * Send a form, or ask first.
+ *
+ * The split is the whole of the caution that used to be "no forms at all".
+ * **A GET is a question**: everything it says is in the address, asking twice
+ * is asking once twice, and it is what every search box on the web is. It
+ * goes when it is asked for.
+ *
+ * **A POST is a statement.** What it says is not in the address, it is not in
+ * the history, and asking twice may have done the thing twice. So it says
+ * what it is about to send and to whom, and waits to be told again. One
+ * dialogue between somebody meaning to sign in and somebody's first click on
+ * a page they have not read.
+ */
+static void submit_form(struct web_tab *t, int form, int submitter) {
+    if (t == NULL || t->page == NULL || t->fields == NULL) {
+        return;
+    }
+    if (form < 0 || form >= recon_html_form_count(t->page)) {
+        /*
+         * A control outside every form. It types, it toggles, and there is
+         * nowhere to send it -- said out loud, because a button that does
+         * nothing at all is indistinguishable from one this failed to wire.
+         */
+        set_status(t, true,
+            "That control is not part of any form on this page, so there is "
+            "nowhere to send it.");
+        recon_appwin_refresh(t->win);
+        return;
+    }
+
+    field_blur(t);                     /* what is in the box is what is sent */
+
+    const struct recon_html_form *f = recon_html_form_at(t->page, form);
+    struct recon_http_url where;
+    if (f == NULL || !form_target(t, f, &where)) {
+        set_status(t, true, "This form does not say where to send it.");
+        recon_appwin_refresh(t->win);
+        return;
+    }
+
+    /*
+     * The live values, handed over as a table rather than as this file's own
+     * struct. recon_form does not know what a web_tab is and should not: what
+     * it needs is what each control holds, and that is three fields.
+     */
+    struct recon_form_value *values =
+        calloc((size_t)t->field_count, sizeof(*values));
+    if (values == NULL) {
+        set_status(t, true, "There is not enough memory to send this form.");
+        recon_appwin_refresh(t->win);
+        return;
+    }
+    for (int i = 0; i < t->field_count; i++) {
+        values[i].text = t->fields[i].text;
+        values[i].on = t->fields[i].on;
+        values[i].chosen = t->fields[i].chosen;
+    }
+
+    int count = 0;
+    bool secret = false;
+    char *body = recon_form_body(t->page, form, submitter, values,
+        t->field_count, FORM_BODY_MAX, &count, &secret);
+    free(values);
+
+    if (body == NULL) {
+        set_status(t, true,
+            "This form has more in it than one request can carry, so none of "
+            "it was sent.");
+        recon_appwin_refresh(t->win);
+        return;
+    }
+
+    if (f->method == RECON_HTML_GET) {
+        bool fits = recon_form_get_address(&where, body);
+        free(body);
+        if (!fits) {
+            set_status(t, true,
+                "The address this form would make is longer than an address "
+                "can be, so it was not sent.");
+            recon_appwin_refresh(t->win);
+            return;
+        }
+        go_to(t, &where, true);
+        return;
+    }
+
+    /* A POST. Built, then asked about, then sent -- so what is described and
+     * what goes are the same bytes rather than two assemblies of the same
+     * fields. */
+    free(t->pending_body);
+    t->pending_body = body;
+    t->pending_form = form;
+    t->pending_submitter = submitter;
+    t->pending_url = where;
+    t->pending_count = count;
+    t->pending_secret = secret;
+    recon_http_format_url(&where, t->pending_where,
+        sizeof(t->pending_where));
+
+    if (t->owner != NULL) {
+        t->owner->strip = STRIP_SEND;
+    }
+
+    /*
+     * The strip asks the question and names the host; the status line carries
+     * the whole address underneath it. Two lines because they answer two
+     * questions -- "who is this going to", which is the one that decides, and
+     * "where exactly", which is the one somebody checks.
+     */
+    set_status(t, false, "Nothing has been sent yet. It would go to %s",
+        t->pending_where);
+    recon_appwin_refresh(t->win);
+}
+
+/* Put every control back to what the document says. */
+static void reset_form(struct web_tab *t, int form) {
+    if (t == NULL || t->fields == NULL) {
+        return;
+    }
+    field_blur(t);
+    for (int i = 0; i < t->field_count; i++) {
+        const struct recon_html_field *d = recon_html_field_at(t->page, i);
+        if (d == NULL || d->form != form) {
+            continue;
+        }
+        struct web_field *live = &t->fields[i];
+        snprintf(live->text, sizeof(live->text), "%s", d->value);
+        live->on = d->on;
+        live->chosen = 0;
+        for (int o = 0; o < d->option_count; o++) {
+            const struct recon_html_option *opt =
+                recon_html_option_at(t->page, d->first_option + o);
+            if (opt != NULL && opt->selected) {
+                live->chosen = o;
+                break;
+            }
+        }
+    }
+    set_status(t, false, "The form is back to how the page had it.");
+}
+
+/*
+ * What a click on a control does, which is a different thing per kind.
+ */
+static void field_pressed(struct recon_web *w, struct web_tab *t, int index) {
+    const struct recon_html_field *d = recon_html_field_at(t->page, index);
+    if (d == NULL || d->disabled) {
+        return;
+    }
+
+    /* A click anywhere closes an open menu, including a click on another
+     * control -- which is what a menu does everywhere. */
+    if (t->menu_field >= 0 && t->menu_field != index) {
+        t->menu_field = -1;
+    }
+
+    switch (d->kind) {
+    case RECON_HTML_FIELD_CHECKBOX:
+    case RECON_HTML_FIELD_RADIO:
+        /*
+         * Working a control focuses it, and this is the line that says so.
+         *
+         * `field_blur` is what takes the caret out of whatever had it, and it
+         * clears the focus as part of that -- which is right when the caret
+         * is being put down and wrong here. Without the line after it, Space
+         * on a checkbox ticked the box and then let go of it, so the next Tab
+         * started again from the top of the form. Found by asking the window
+         * where its focus was after each key rather than by reading the
+         * picture, which showed a ticked box and looked correct.
+         */
+        field_blur(t);
+        field_toggle(t, index);
+        t->focus = index;
+        break;
+
+    case RECON_HTML_FIELD_CHOICE:
+        field_blur(t);
+        t->focus = index;
+        t->menu_field = (t->menu_field == index) ? -1 : index;
+        t->menu_scroll = 0;
+        break;
+
+    case RECON_HTML_FIELD_SUBMIT:
+        submit_form(t, d->form, index);
+        break;
+
+    case RECON_HTML_FIELD_RESET:
+        reset_form(t, d->form);
+        break;
+
+    case RECON_HTML_FIELD_BUTTON:
+        /* Drawn dead and explained by its tooltip. Saying it again on a click
+         * is worth it: somebody who clicked has just discovered the button
+         * does nothing and deserves the reason rather than silence. */
+        set_status(t, true,
+            "That button needs JavaScript to do anything, and this viewer "
+            "does not run any.");
+        break;
+
+    default:
+        field_focus_at(t, index);
+        break;
+    }
+    (void)w;
+}
+
 static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
     struct recon_web *w = user;
     struct web_tab *t = front(w);
@@ -3180,6 +4476,16 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
     bool in_menu = (hit >= HIT_MENU_BASE && hit < HIT_MENU_BASE + MENU_COUNT);
     if (w->menu_open && !in_menu && hit != HIT_MENU) {
         w->menu_open = false;
+    }
+
+    /*
+     * And a click that is neither on the open list nor on the control that
+     * opened it closes that list. Without this, choosing nothing leaves a
+     * menu hanging over the page with no way to dismiss it but choosing.
+     */
+    if (t != NULL && t->menu_field >= 0 && hit < HIT_OPTION_BASE &&
+            hit != HIT_FIELD_BASE + (uint32_t)t->menu_field) {
+        t->menu_field = -1;
     }
 
     if (in_menu) {
@@ -3241,7 +4547,70 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
         return true;
     }
 
-    if (hit >= HIT_LINK_BASE) {
+    if (hit == HIT_SEND) {
+        if (t != NULL) {
+            send_pending(t);
+        }
+        return true;
+    }
+
+    if (hit == HIT_DONT_SEND) {
+        if (t != NULL) {
+            /*
+             * Thrown away rather than kept for later. A request that sits
+             * around after somebody has said no is a request that can be sent
+             * by the next thing that touches this tab.
+             */
+            free(t->pending_body);
+            t->pending_body = NULL;
+            t->pending_form = -1;
+            t->pending_submitter = -1;
+            set_status(t, false, "Nothing was sent.");
+        }
+        w->strip = STRIP_NONE;
+        if (t != NULL) {
+            recon_appwin_refresh(t->win);
+        }
+        return true;
+    }
+
+    if (hit >= HIT_OPTION_BASE) {
+        if (t == NULL || t->page == NULL || t->fields == NULL ||
+                t->menu_field < 0) {
+            return true;
+        }
+        int which = (int)(hit - HIT_OPTION_BASE);
+        const struct recon_html_field *d =
+            recon_html_field_at(t->page, t->menu_field);
+        if (d != NULL && which >= 0 && which < d->option_count) {
+            t->fields[t->menu_field].chosen = which;
+        }
+        t->menu_field = -1;
+        recon_appwin_refresh(t->win);
+        return true;
+    }
+
+    if (hit >= HIT_FIELD_BASE) {
+        if (t == NULL || t->page == NULL || t->fields == NULL) {
+            return true;
+        }
+        int index = (int)(hit - HIT_FIELD_BASE);
+        if (index >= 0 && index < t->field_count) {
+            field_pressed(w, t, index);
+        }
+        recon_appwin_refresh(t->win);
+        return true;
+    }
+
+    /*
+     * A range, not a floor. This used to be `hit >= HIT_LINK_BASE`, which was
+     * right while links were the highest thing in the file and is exactly the
+     * hazard the click ladder has been bitten by four times: an id belonging
+     * above the one being tested is answered by the wrong branch and vanishes
+     * without a trace. Every control on every page would have been read as a
+     * link into whatever the arithmetic landed on.
+     */
+    if (hit >= HIT_LINK_BASE && hit < HIT_FIELD_BASE) {
         if (t == NULL || t->page == NULL) {
             return true;
         }
@@ -3500,12 +4869,197 @@ static bool web_key(void *user, xkb_keysym_t sym, uint32_t modifiers) {
         return false;
     }
 
+    /*
+     * --- A control on the page, while it has the caret ---
+     *
+     * Below the chrome and above the scrolling, and both halves of that
+     * matter. Below, because Ctrl+L belongs to the address bar even while a
+     * search box on the page is focused. Above, because Space scrolls the
+     * page and must not while somebody is typing a sentence into it -- which
+     * is the single most obvious way a viewer with forms can be wrong.
+     */
+    if (t->focus >= 0 && t->fields != NULL && t->page != NULL) {
+        const struct recon_html_field *d =
+            recon_html_field_at(t->page, t->focus);
+
+        /*
+         * --- A control with no caret ---
+         *
+         * Handled before the editor is offered the key, because the editor
+         * would take it: Space typed into an inactive editor is still a space
+         * going somewhere nobody can see.
+         */
+        if (d != NULL && !field_is_typable(d) &&
+                sym != XKB_KEY_Tab && sym != XKB_KEY_ISO_Left_Tab) {
+            /* An open menu: move through it, choose, or leave it. */
+            if (t->menu_field == t->focus && t->menu_field >= 0) {
+                int last = d->option_count - 1;
+                switch (sym) {
+                case XKB_KEY_Down:
+                    if (t->fields[t->focus].chosen < last) {
+                        t->fields[t->focus].chosen++;
+                    }
+                    recon_appwin_refresh(t->win);
+                    return true;
+                case XKB_KEY_Up:
+                    if (t->fields[t->focus].chosen > 0) {
+                        t->fields[t->focus].chosen--;
+                    }
+                    recon_appwin_refresh(t->win);
+                    return true;
+                case XKB_KEY_Return:
+                case XKB_KEY_KP_Enter:
+                case XKB_KEY_space:
+                    t->menu_field = -1;
+                    recon_appwin_refresh(t->win);
+                    return true;
+                default:
+                    break;
+                }
+            }
+
+            /*
+             * Space works whatever has the ring, which is what it does
+             * everywhere. Enter does the same on a checkbox or a menu, and
+             * sends the form from a button -- which is the one place the two
+             * keys differ, and they differ the way they do in a browser.
+             */
+            if (sym == XKB_KEY_space || sym == XKB_KEY_Return ||
+                    sym == XKB_KEY_KP_Enter) {
+                field_pressed(w, t, t->focus);
+                recon_appwin_refresh(t->win);
+                return true;
+            }
+
+            /* Up and down on a closed menu change the choice without opening
+             * it, which is how a menu behaves under a keyboard everywhere. */
+            if (d->kind == RECON_HTML_FIELD_CHOICE &&
+                    (sym == XKB_KEY_Down || sym == XKB_KEY_Up)) {
+                int at = t->fields[t->focus].chosen +
+                    (sym == XKB_KEY_Down ? 1 : -1);
+                if (at >= 0 && at < d->option_count) {
+                    t->fields[t->focus].chosen = at;
+                }
+                recon_appwin_refresh(t->win);
+                return true;
+            }
+        }
+
+        /*
+         * Tab moves on, and moving on writes back. Checked before the editor
+         * sees the key: `recon_edit_key` would put a tab character into the
+         * text, and a tab inside a form field is not something anybody means.
+         */
+        if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+            int by = (modifiers & RECON_MOD_SHIFT) != 0 ? -1 : 1;
+            int next = field_step(t, t->focus, by);
+            if (next >= 0) {
+                field_focus_at(t, next);
+            } else {
+                field_blur(t);
+            }
+            recon_appwin_refresh(t->win);
+            return true;
+        }
+
+        if (!field_is_typable(d)) {
+            /* Nothing else here belongs to a control with no caret. Escape
+             * and the scrolling keys fall through to the window. */
+            if (sym == XKB_KEY_Escape) {
+                t->menu_field = -1;
+                t->focus = -1;
+                recon_appwin_refresh(t->win);
+                return true;
+            }
+            goto not_a_field_key;
+        }
+
+        switch (recon_edit_key(&t->editing, sym, modifiers)) {
+        case RECON_EDIT_COMMIT:
+            /*
+             * Enter in a text box sends the form it is in, which is how every
+             * search box on the web is used and is the difference between a
+             * viewer somebody searches with and one they give up on. In a
+             * textarea it is a newline instead -- `multiline` is set on the
+             * editor, so this case is never reached there.
+             */
+            field_blur(t);
+            if (d != NULL) {
+                submit_form(t, d->form, -1);
+            }
+            recon_appwin_refresh(t->win);
+            return true;
+
+        case RECON_EDIT_CANCEL:
+            /*
+             * Escape puts back what the page had rather than only dropping
+             * the caret. Anything else leaves half-typed text in a field
+             * somebody has just backed out of, and it is still what gets
+             * sent.
+             */
+            if (d != NULL) {
+                snprintf(t->fields[t->focus].text,
+                    sizeof(t->fields[t->focus].text), "%s", d->value);
+            }
+            t->focus = -1;
+            recon_edit_end(&t->editing);
+            recon_appwin_refresh(t->win);
+            return true;
+
+        case RECON_EDIT_CHANGED:
+            /* Written back on every keystroke rather than only on blur, so
+             * anything that reads the field between now and then -- a draw, a
+             * submit from a button -- sees what is on screen. */
+            snprintf(t->fields[t->focus].text,
+                sizeof(t->fields[t->focus].text), "%s", t->editing.text);
+            recon_appwin_refresh(t->win);
+            return true;
+
+        case RECON_EDIT_IGNORED:
+            break;
+        }
+    }
+
+not_a_field_key:
+
+    /*
+     * Tab with nothing focused goes to the first control on the page. A page
+     * with a search box that cannot be reached without the pointer is a page
+     * somebody has to stop typing to use.
+     */
+    if (sym == XKB_KEY_Tab && t->fields != NULL && t->field_count > 0 &&
+            !w->address.active && w->strip != STRIP_FIND) {
+        int first = field_step(t, -1, 1);
+        if (first >= 0) {
+            field_focus_at(t, first);
+            recon_appwin_refresh(t->win);
+            return true;
+        }
+    }
+
     int page = t->viewport_height > 40 ? t->viewport_height - 20 : 40;
 
     switch (sym) {
     case XKB_KEY_Escape:
         if (w->menu_open) {
             w->menu_open = false;
+            recon_appwin_refresh(t->win);
+            return true;
+        }
+        if (t->menu_field >= 0) {
+            t->menu_field = -1;
+            recon_appwin_refresh(t->win);
+            return true;
+        }
+        if (w->strip == STRIP_SEND) {
+            /* Escape is "don't send", and it throws the request away for the
+             * same reason the button does. */
+            free(t->pending_body);
+            t->pending_body = NULL;
+            t->pending_form = -1;
+            t->pending_submitter = -1;
+            w->strip = STRIP_NONE;
+            set_status(t, false, "Nothing was sent.");
             recon_appwin_refresh(t->win);
             return true;
         }
@@ -3566,6 +5120,13 @@ static void web_describe(void *user, char *out, size_t size) {
         "  loading: %s\n"
         "  bookmarks: %d%s\n"
         "  find: %s (%d matches, on %d)\n"
+        /*
+         * The form state, which is what the harness reads to check that a key
+         * went where it looked as though it went. Without it the only
+         * evidence is a photograph, and a photograph cannot say which of two
+         * identical-looking boxes has the caret.
+         */
+        "  controls: %d, focus %d, menu %d\n"
         "  typed: %s\n"
         "  status: %s\n",
         w->tab_count, w->active + 1,
@@ -3580,6 +5141,9 @@ static void web_describe(void *user, char *out, size_t size) {
         w->bookmark_count, w->show_bookmarks ? ", bar shown" : "",
         w->strip == STRIP_FIND ? w->find.text : "(closed)",
         w->find_count, w->find_at + 1,
+        (t != NULL) ? t->field_count : 0,
+        (t != NULL) ? t->focus : -1,
+        (t != NULL) ? t->menu_field : -1,
         w->address.text,
         (t != NULL) ? t->status : "");
 
@@ -3630,6 +5194,11 @@ static void show_document(struct web_tab *w, struct recon_html_document *page,
         const char *shown, size_t length) {
     recon_html_free(w->page);
     w->page = page;
+
+    /* The controls of the page that has gone, and then the ones that have
+     * arrived. Before anything else, because a draw between the two would
+     * walk this page's runs against the last page's values. */
+    fields_begin(w);
 
     /*
      * The address bar belongs to the window, and only the tab in front owns

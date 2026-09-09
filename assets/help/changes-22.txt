@@ -1,4 +1,8 @@
-Choose an account, then sign in — two screens rather than one, so nothing
-about how an account signs in is shown before one is chosen.
+Removing an account can keep or delete its files. They are two decisions,
+and only one of them can be undone.
 
-Updates announce themselves on the first start after one.
+The Start menu's power buttons are icons, in the bottom right. The name of
+whichever one you point at appears on the left.
+
+Buttons have rounded corners where the skin asks for them, and the startup
+screen is slower, because it went past faster than it could be read.

@@ -1,4 +1,3 @@
-The first version that was a usable desktop: it sets itself up on first run,
-asks who you are on every run after, and gives that person a desktop of their
-own. A taskbar, a Start menu, windows, a file explorer, a terminal, a task
-manager, Notepad and a calculator.
+Skins can change the shape of a window, not only its colours: the height
+of a title bar, the thickness of its border, how far its corners are rounded,
+and how big its buttons are.

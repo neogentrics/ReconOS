@@ -169,4 +169,64 @@ if [ "$erase_found" = "1" ]; then
 fi
 echo "secrets are erased with recon_secure_erase"
 
+# --- The generated files, against what generates them ---
+#
+# docs/ERRORS.md and the Help application's pages are both written by scripts
+# from a source that is compiled -- include/recon_errors.def and
+# docs/CHANGELOG.md. The rule has always been "run the script in the same
+# commit", and a rule of that shape holds until somebody is busy.
+#
+# It did not hold. The Help pages were last regenerated fourteen versions
+# before this check was added, so the change log inside the running system
+# stopped at v0.4.5 and said nothing about it -- which is precisely the fault
+# recon_html.h cites as the reason a truncated page must announce itself.
+#
+# Checked by regenerating into a copy and comparing. A generated file that has
+# drifted from its source is not a style problem: it is the system telling
+# somebody something that stopped being true.
+echo
+echo "Checking that the generated files match what generates them"
+
+GENERATED_TMP="$(mktemp -d)"
+trap 'rm -rf "$GENERATED_TMP"' EXIT
+
+cp -r "$REPO_DIR/assets/help" "$GENERATED_TMP/help-was"
+cp "$REPO_DIR/docs/ERRORS.md" "$GENERATED_TMP/errors-was.md"
+
+"$REPO_DIR/scripts/make-help.sh" >/dev/null
+"$REPO_DIR/scripts/make-errors.sh" >/dev/null
+
+generated_drift=0
+if ! diff -r -q "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help" >/dev/null; then
+    echo "== assets/help is not what docs/CHANGELOG.md generates"
+    diff -r -q "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help" | head -10
+    generated_drift=1
+fi
+if ! diff -q "$GENERATED_TMP/errors-was.md" "$REPO_DIR/docs/ERRORS.md" >/dev/null; then
+    echo "== docs/ERRORS.md is not what include/recon_errors.def generates"
+    generated_drift=1
+fi
+
+# Put the tree back exactly as it was found, whichever way the comparison went.
+#
+# The first version left the regenerated files in place, on the reasoning that
+# it was doing somebody a favour. It is not: a check that repairs the thing it
+# is checking passes the second time it is run, so a build that ran it twice
+# would report clean on a tree that had drifted. A check exists to say what is
+# true, and changing what is true so that it can say something nicer is the
+# one thing it must not do.
+rm -rf "$REPO_DIR/assets/help"
+cp -r "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help"
+cp "$GENERATED_TMP/errors-was.md" "$REPO_DIR/docs/ERRORS.md"
+
+if [ "$generated_drift" = "1" ]; then
+    echo
+    echo "The generated files have drifted from their sources. Run"
+    echo "scripts/make-help.sh and scripts/make-errors.sh and commit what"
+    echo "changes -- the running system has been telling somebody something"
+    echo "that stopped being true."
+    exit 1
+fi
+echo "the generated files match their sources"
+
 echo "clean"

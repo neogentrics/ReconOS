@@ -28,28 +28,42 @@ help-27.txt	The firewall
 help-28.txt	Reaching this machine from elsewhere
 help-29.txt	When something goes wrong
 help-30.txt	What is not built yet
-changes-01.txt	v0.4.5
-changes-02.txt	v0.4.0
-changes-03.txt	v0.3.0
-changes-04.txt	v0.2.17
-changes-05.txt	v0.2.16
-changes-06.txt	v0.2.15
-changes-07.txt	v0.2.14
-changes-08.txt	v0.2.13
-changes-09.txt	v0.2.12
-changes-10.txt	v0.2.11
-changes-11.txt	v0.2.10
-changes-12.txt	v0.2.9
-changes-13.txt	v0.2.8
-changes-14.txt	v0.2.7
-changes-15.txt	v0.2.6
-changes-16.txt	v0.2.5
-changes-17.txt	v0.2.4
-changes-18.txt	v0.2.3
-changes-19.txt	v0.2.2
-changes-20.txt	v0.2.1
-changes-21.txt	v0.2.0
-changes-22.txt	v0.1.3
-changes-23.txt	v0.1.2
-changes-24.txt	v0.1.1
-changes-25.txt	v0.1.0
+changes-01.txt	v0.4.20 — forms, and they submit
+changes-02.txt	v0.4.19 — a > inside an attribute is not the end of a tag
+changes-03.txt	v0.4.18 — the package module splits, and the stub file goes
+changes-04.txt	v0.4.17 — tables have columns
+changes-05.txt	v0.4.16 — the fuzzer learns about stylesheets and addresses
+changes-06.txt	v0.4.15 — text-align, which needed a line before it could be placed
+changes-07.txt	v0.4.14 — the configuration that ships, built for the first time
+changes-08.txt	v0.4.13 — a package says who made it
+changes-09.txt	v0.4.11 — History and Bookmarks, as pages
+changes-10.txt	v0.4.10 — a link to a place on a page goes there
+changes-11.txt	v0.4.9 — a corpus nobody here wrote
+changes-12.txt	v0.4.8 — the browser gets the rest of a browser
+changes-13.txt	v0.4.7
+changes-14.txt	v0.4.6
+changes-15.txt	v0.4.5
+changes-16.txt	v0.4.0
+changes-17.txt	v0.3.0
+changes-18.txt	v0.2.17
+changes-19.txt	v0.2.16
+changes-20.txt	v0.2.15
+changes-21.txt	v0.2.14
+changes-22.txt	v0.2.13
+changes-23.txt	v0.2.12
+changes-24.txt	v0.2.11
+changes-25.txt	v0.2.10
+changes-26.txt	v0.2.9
+changes-27.txt	v0.2.8
+changes-28.txt	v0.2.7
+changes-29.txt	v0.2.6
+changes-30.txt	v0.2.5
+changes-31.txt	v0.2.4
+changes-32.txt	v0.2.3
+changes-33.txt	v0.2.2
+changes-34.txt	v0.2.1
+changes-35.txt	v0.2.0
+changes-36.txt	v0.1.3
+changes-37.txt	v0.1.2
+changes-38.txt	v0.1.1
+changes-39.txt	v0.1.0

@@ -75,6 +75,21 @@ struct recon_http_request {
 
     int redirects;
     bool finished;
+
+    /*
+     * What is being sent, for a POST, and what it is.
+     *
+     * A copy, so the caller may free theirs the moment the call returns --
+     * this outlives the call by however long the network takes, and a
+     * borrowed buffer would be a use-after-free waiting for a slow server.
+     *
+     * NULL is a GET. One field rather than a method enumeration because there
+     * are exactly two methods here and "is there a body" is the only question
+     * anything below asks.
+     */
+    char *send_body;
+    size_t send_length;
+    char send_type[96];
 };
 
 static void finish(struct recon_http_request *r, bool ok, const char *error);
@@ -328,6 +343,7 @@ static void finish(struct recon_http_request *r, bool ok, const char *error) {
         free(body);
     }
 
+    free(r->send_body);
     free(r);
 }
 
@@ -337,26 +353,54 @@ static void on_opened(void *user, struct recon_net_stream *stream) {
     struct recon_http_request *r = user;
 
     char request[RECON_HTTP_URL_MAX + 512];
-    int written = snprintf(request, sizeof(request),
-        "GET %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: ReconOS\r\n"
-        /* Pictures too, now that the viewer draws them. The weight
-         * says what this is for: a server with a choice should send
-         * the page rather than something else. */
-        "Accept: text/html, text/plain, image/*, */*;q=0.5\r\n"
-        /*
-         * No keep-alive. The body then ends when the connection does, which
-         * removes a pool of idle sockets, a timeout policy, and the class of
-         * bug where the second request on a reused connection reads the tail
-         * of the first.
-         */
-        "Connection: close\r\n"
-        "\r\n",
-        r->url.path, r->url.host);
+    int written;
 
-    if (written < 0 || !recon_net_stream_send(stream, request,
-            (size_t)written)) {
+    if (r->send_body != NULL) {
+        /*
+         * Content-Length rather than chunked. The body is in hand and its
+         * length is known, so announcing it is one line -- and a server that
+         * has been told how much is coming can refuse a request that is too
+         * large before reading it.
+         */
+        written = snprintf(request, sizeof(request),
+            "POST %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "User-Agent: ReconOS\r\n"
+            "Accept: text/html, text/plain, image/*, */*;q=0.5\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n"
+            "\r\n",
+            r->url.path, r->url.host, r->send_type, r->send_length);
+    } else {
+        written = snprintf(request, sizeof(request),
+            "GET %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "User-Agent: ReconOS\r\n"
+            /* Pictures too, now that the viewer draws them. The weight
+             * says what this is for: a server with a choice should send
+             * the page rather than something else. */
+            "Accept: text/html, text/plain, image/*, */*;q=0.5\r\n"
+            /*
+             * No keep-alive. The body then ends when the connection does,
+             * which removes a pool of idle sockets, a timeout policy, and the
+             * class of bug where the second request on a reused connection
+             * reads the tail of the first.
+             */
+            "Connection: close\r\n"
+            "\r\n",
+            r->url.path, r->url.host);
+    }
+
+    if (written < 0 || (size_t)written >= sizeof(request) ||
+            !recon_net_stream_send(stream, request, (size_t)written)) {
+        recon_http_set_error("%s", recon_net_last_error());
+        finish(r, false, recon_http_last_error());
+        return;
+    }
+
+    if (r->send_body != NULL && r->send_length > 0 &&
+            !recon_net_stream_send(stream, r->send_body, r->send_length)) {
         recon_http_set_error("%s", recon_net_last_error());
         finish(r, false, recon_http_last_error());
     }
@@ -515,6 +559,24 @@ static bool follow(struct recon_http_request *r) {
         return false;
     }
 
+    /*
+     * A redirect can turn a POST into a GET, and usually should.
+     *
+     * 303 says so outright. 301 and 302 are specified to keep the method and
+     * are implemented everywhere as though they were 303 -- a page posts an
+     * order and redirects to the receipt, and a client that re-posted would
+     * place the order twice. 307 and 308 exist to mean "again, exactly", and
+     * are the only two where the body crosses.
+     *
+     * Dropped rather than kept and ignored: a body left on the request would
+     * be sent by the *next* redirect if that one were a 307.
+     */
+    if (r->send_body != NULL && r->status != 307 && r->status != 308) {
+        free(r->send_body);
+        r->send_body = NULL;
+        r->send_length = 0;
+    }
+
     r->url = next;
     return begin(r);
 }
@@ -548,6 +610,57 @@ struct recon_http_request *recon_http_get(const char *application,
     return r;
 }
 
+struct recon_http_request *recon_http_post(const char *application,
+        const struct recon_http_url *url, const char *content_type,
+        const char *body, size_t length,
+        const struct recon_http_handlers *handlers, void *user) {
+    if (url == NULL || url->host[0] == '\0') {
+        recon_http_set_error("there is no address to send this to");
+        return NULL;
+    }
+
+    struct recon_http_request *r = calloc(1, sizeof(*r));
+    if (r == NULL) {
+        recon_http_set_error("out of memory");
+        return NULL;
+    }
+
+    snprintf(r->application, sizeof(r->application), "%s",
+        application != NULL ? application : "");
+    r->url = *url;
+    r->user = user;
+    if (handlers != NULL) {
+        r->handlers = *handlers;
+    }
+
+    snprintf(r->send_type, sizeof(r->send_type), "%s",
+        content_type != NULL && content_type[0] != '\0'
+        ? content_type : "application/x-www-form-urlencoded");
+
+    /*
+     * Copied, and one byte longer than it needs to be so it is also a C
+     * string. The length is what is sent; the terminator is so anything that
+     * reads it for a message does not run off the end.
+     */
+    r->send_body = calloc(1, length + 1);
+    if (r->send_body == NULL) {
+        recon_http_set_error("out of memory");
+        free(r);
+        return NULL;
+    }
+    if (length > 0 && body != NULL) {
+        memcpy(r->send_body, body, length);
+    }
+    r->send_length = length;
+
+    if (!begin(r)) {
+        free(r->send_body);
+        free(r);
+        return NULL;
+    }
+    return r;
+}
+
 void recon_http_cancel(struct recon_http_request *request) {
     if (request == NULL) {
         return;
@@ -561,5 +674,6 @@ void recon_http_cancel(struct recon_http_request *request) {
         request->stream = NULL;
     }
     free(request->body);
+    free(request->send_body);
     free(request);
 }

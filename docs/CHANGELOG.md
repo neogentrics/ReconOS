@@ -9,6 +9,85 @@ way for the two to disagree.
 
 ---
 
+## v0.4.20 — forms, and they submit
+
+The viewer could show a search box and could not search with it. That was the
+largest thing missing from it by a distance: a browser you have to leave to go
+and use a browser.
+
+**Every control a page can have.** Text boxes, passwords drawn as dots,
+checkboxes, radios grouped by name, `<select>` with a list that drops down over
+the page, `<textarea>`, submit and reset buttons, and hidden fields that are
+sent and never drawn. A control is a *run* in the document rather than a block
+of its own, so it sits in the line where the page put it -- "Search for [ ] in
+the menu" is one sentence with a box in the middle of it, which is what it is.
+
+**A GET goes; a POST asks first.** That split is the whole of what survives of
+the old rule that a viewer able to submit a form could change something on
+somebody's server. A GET is a question: everything it says is in the address,
+asking twice is asking once twice, and it is what every search box on the web
+is. A POST is a statement -- not in the address, not in the history, and asking
+twice may have done the thing twice -- so it says how many answers it is about
+to send, to which host, and whether one of them is a password, and waits to be
+told again. One dialogue between somebody meaning to sign in and somebody's
+first click on a page they have not read.
+
+**The rules about what is sent are HTML's, and each one has a page that breaks
+without it.** An unchecked box is absent entirely rather than empty. A checked
+box with no value of its own sends `on`. A menu sends its option's *value*, not
+the words shown. Of all the submit buttons on a form, only the one pressed is
+sent, which is how a page tells Save from Delete. Two controls sharing a name
+send twice, in document order, because that is how a page sends a list.
+
+**A control a stylesheet has hidden is still part of the form.** That changed a
+rule this parser already had: inside something hidden, only the structure is
+followed. Form elements are now the one exception, because what a hidden
+control contributes is not a picture, it is a value -- and half the search
+forms on the web carry a hidden field saying which section is being searched.
+Measured on Wikipedia's article for *HTML form*: twenty-six controls, of which
+six are its search forms and twenty are page furniture.
+
+**Every control a pointer can reach, a keyboard reaches too.** Tab moves
+through them, Space works whatever has the ring, Enter in a text box sends the
+form it is in, and Escape puts a field back to what the page had. A first
+version stepped only between text boxes, which reads as working until the form
+has a box somebody has to tick.
+
+**`recon_form.c` is its own file, and that is the point.** These rules decide
+what leaves the machine, and testing them inside the browser meant linking a
+compositor -- the same reason `recon_url.c` was split out of `recon_http.c`.
+Forty-eight checks in `tests/test_form.c`, written against Wikipedia's search
+form and the HTML5 standard's own example form rather than against markup
+invented for the test. The fuzzer now sends every form of every mutated page:
+**9,862 cases**, up from 7,556.
+
+**POST in `recon_http`, and what a redirect does to one.** A 303 becomes a GET
+with no body, and so do 301 and 302 -- they are *specified* to keep the method
+and are implemented everywhere as though they were 303, and a client that
+followed the specification alone would re-post an order to a server that was
+redirecting to a receipt. 307 and 308 exist to say "again, exactly", and are
+the only two where a body crosses a redirect.
+
+**And a fourth pass in `scripts/check.sh`, for a fault that was nobody's
+code.** `assets/help` is generated from this file by a script, and the rule was
+to run it in the same commit -- which held until it did not.
+[BG-175](BUGS.md#bg-175): the Help application inside a running v0.4.19 was
+describing a system that ended at **v0.4.5**, and nothing said so. The check
+regenerates into a copy, compares, and puts the tree back exactly as it found
+it: a check that repairs what it is checking passes the second time it is run.
+
+**Three faults, and how each was found.** [BG-174](BUGS.md#bg-174), a textarea
+drawn three times too tall, straight through the buttons under it -- found in
+the first photograph, and invisible to every number, because the page's height
+was correct and only the drawing was wrong. [BG-173](BUGS.md#bg-173), Space on
+a checkbox ticking it and then letting go of the focus, so the next Tab started
+again from the top of the form -- found by asking the window where its focus
+was after each key, because a ticked box looks the same either way.
+[BG-172](BUGS.md#bg-172), a tooltip left explaining a button that had already
+gone; the same fault as BG-089 one level down, and fixed the same way.
+
+---
+
 ## v0.4.19 — a > inside an attribute is not the end of a tag
 
 A sweep of twelve real sites, looking at *what came back* rather than at

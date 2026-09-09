@@ -32,6 +32,25 @@ void recon_shell_resize(struct recon_shell *shell, int screen_width, int screen_
 void recon_shell_refresh(struct recon_shell *shell);
 
 /*
+ * A window has redrawn itself, so what is under the pointer may have changed
+ * without the pointer moving.
+ *
+ * BG-089 was this for whole windows -- one opening under a stationary cursor
+ * left the tip of the window now behind it drawn over the top. BG-172 is the
+ * same fault one level down: a *control* that goes away when its window
+ * redraws leaves its tip on screen, pointing at nothing. Found on the browser's
+ * "Send" button, whose strip closes the moment it is pressed, so its tip was
+ * still explaining a button that had sent the form and gone.
+ *
+ * Called from recon_appwin_refresh rather than from the four or five places
+ * that make a control disappear, because "which redraws can strand a tip" is
+ * not a question anybody will keep answering correctly, and the check is
+ * cheap: it compares the tip under the pointer with the one showing and
+ * returns when they match, which is almost always.
+ */
+void recon_shell_contents_changed(struct recon_shell *shell);
+
+/*
  * Redraw everything, because the colours changed.
  *
  * Separate from refresh: a refresh redraws what the shell owns, while this

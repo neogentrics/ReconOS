@@ -1,0 +1,2 @@
+Skins can be installed. theme install takes a skin file and adds it to
+the list; theme remove takes it away.

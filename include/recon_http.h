@@ -13,9 +13,16 @@
  * on a reused connection reads the tail of the first. A viewer that fetches a
  * page every few seconds does not need it.
  *
- * No POST, no cookies, no authentication. This reads documents. Anything that
- * changes state on somebody else's server is a decision, and a viewer should
- * not be able to make one by accident.
+ * No cookies, no authentication. A session that survives a page is a thing to
+ * store, expire and scope, and none of that is written here yet -- so a site
+ * that needs one will say you are signed out, which is true.
+ *
+ * **POST is here, and it is deliberately not the same call as GET.** Reading a
+ * document and changing something on somebody else's server are different
+ * acts, and a client where they are the same function with a flag is one where
+ * the difference stops being visible at the call site. The viewer above this
+ * asks before it uses the second one; see recon_html.h for why the split
+ * lives there too.
  *
  * No compression. `Accept-Encoding` is not sent, so servers send plain text.
  * gzip would be a decompressor to write and an attack surface to own for a
@@ -131,6 +138,32 @@ struct recon_http_handlers {
  */
 struct recon_http_request *recon_http_get(const char *application,
     const struct recon_http_url *url,
+    const struct recon_http_handlers *handlers, void *user);
+
+/*
+ * Send something, and read what comes back.
+ *
+ * `body` is copied, so the caller may free it the moment this returns.
+ * `content_type` is what the body is -- "application/x-www-form-urlencoded"
+ * for a form -- and NULL means that, because it is what a form has sent since
+ * 1995 and the only thing above this that posts anything.
+ *
+ * --- What a redirect does to a POST, which is not obvious ---
+ *
+ * A 303 means "the answer is over there", so the follow-up is a GET with no
+ * body. 301 and 302 are *specified* to keep the method and are universally
+ * implemented as though they were 303 -- so that is what happens here, because
+ * a client that follows the specification alone re-posts an order to a server
+ * that was redirecting to a receipt.
+ *
+ * 307 and 308 exist precisely to say "again, exactly as before", so those
+ * repeat the POST with the same body. That is the only case where a body
+ * crosses a redirect, and it is the case where the server has asked for it in
+ * so many words.
+ */
+struct recon_http_request *recon_http_post(const char *application,
+    const struct recon_http_url *url, const char *content_type,
+    const char *body, size_t length,
     const struct recon_http_handlers *handlers, void *user);
 
 /*

@@ -1,27 +1,28 @@
-Errors have codes now. When something goes wrong ReconOS names it —
-VT-A001, VT-G005 — so it can be written down and looked up. errors in
-the Terminal says what a code means, errors log is what has happened on this
-machine, and docs/ERRORS.md is the whole list for when you have a code and
-not a working machine.
+test_malformed swept the ICO, MP4, HTML and expression parsers with
+truncations, single-byte changes and random bytes. It did not sweep the two
+parsers added since -- CSS and addresses -- and both take bytes straight
+off a web server.
 
-Three kinds: STOP (the system cannot continue and shows a screen with the
-code on it), fault (something failed and the rest carried on), and note
-(written down, nothing broke). If a run stops, the next start says so once,
-with the code.
+A stylesheet is as much somebody else's file as the markup is: fetched from
+whatever host the page named, parsed, and then consulted for every element on
+the page. An address is worse in one way -- it is the boundary between their
+bytes and where this machine *connects to*.
 
-A firewall. Control Panel → Firewall, and firewall in the Terminal. It
-decides what ReconOS itself opens and accepts: outgoing allowed, incoming
-blocked, and a list of rules where the first match decides. Nine rules ship —
-the incoming ones written down and switched off, so opening one is a switch
-rather than remembering a port number. It is not the host's firewall and does
-not touch it.
+The CSS feeder does not stop at parsing. It matches the sheet against a
+three-deep element stack, which is the only thing a sheet is for and the path
+where a bad rule actually gets walked -- a sheet that parses without crashing
+and then reads outside itself on the first match is one a parse-only sweep
+calls fine. It also feeds the same bytes to recon_css_inline, which is the
+other way in and does not go through recon_css_add at all.
 
-The startup screen checks the system instead of only counting it. Every
-folder the system needs, the skins, the accounts, the programs, the firewall —
-each line says what it found, and says the code when what it found is wrong.
-Missing folders are rebuilt rather than only reported.
+The address feeder checks what a caller then relies on: that the host and path
+are terminated, that the path begins with the slash every caller assumes, that
+the port is a port, and that no fragment was left in the path -- the path
+is what goes in a request line, and a # in it is a byte sent to a server
+that was never meant to leave the machine.
 
-Remote access, two ways. Over SSH by forwarding the control socket, which
-is encrypted and needs nothing from ReconOS; or over TCP 7420 with a key, which
-is off by default and says plainly that the key crosses the network in the
-clear. The firewall has to allow it either way.
+7,556 cases, no failures, under the address and undefined-behaviour
+sanitizers. Nothing found, which is the ordinary result and is worth having
+run.
+
+---

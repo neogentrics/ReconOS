@@ -1,5 +1,2 @@
-One account at a time, properly. Each account gets its own settings, its
-own folders and its own windows.
-
-A Control Panel with the shape of the whole system in it, including the
-parts that are not built, each saying what has to exist first.
+Notepad can undo, by word rather than by keystroke, and has an Edit menu
+so the shortcuts are findable.

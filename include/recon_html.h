@@ -28,10 +28,25 @@
  * alt text is one that degrades to exactly what it used to be when the picture
  * does not arrive, which is what alt text is for.
  *
- * **No tables or forms.** A table becomes its cells in order, which is wrong
- * for a spreadsheet and right for the tables that are really layout. A form is
- * shown and cannot be submitted -- a viewer that could submit one could change
- * something on somebody's server.
+ * **Forms, and they submit.** This used to say a form was shown and could not
+ * be submitted, on the reasoning that a viewer able to submit one could change
+ * something on somebody's server. That reasoning was half right and it was
+ * costing the whole of the readable web that has a search box on it -- and a
+ * viewer that cannot search is a viewer you leave to go and use a browser.
+ *
+ * What survives of it is the split between the two methods, which is a real
+ * one rather than a caution. **GET is a question**: the parameters go in the
+ * address, the address is the request, and asking twice is asking once twice.
+ * **POST is a statement**: the body is not in the address, it is not in the
+ * history, and asking twice may have done a thing twice. So a GET goes when
+ * it is asked for, and a POST says what it is about to send and to whom, and
+ * waits to be told again. That is one dialogue between somebody meaning to
+ * log in and somebody's first click on a page they have not read.
+ *
+ * This file's share is the reading: which controls a page has, what they are
+ * called, what they start out holding, and which form each belongs to. What
+ * somebody types into one and where it is sent are the viewer's, because they
+ * are facts about a session rather than about a document.
  *
  * Saying all that here rather than in a release note, because the gap between
  * "a viewer for simple pages" and "a browser" is a decade of work and the
@@ -121,10 +136,160 @@ struct recon_html_run {
      * second thing to keep in step with them.
      */
     bool starts_cell;
+
+    /*
+     * Which form control this run *is*, or -1 for the overwhelming majority
+     * of runs, which are text.
+     *
+     * A control is a run rather than a block for the same reason a cell is
+     * not a block: an input sits *in* a line, between words -- "Search for
+     * [____] in [Everything v]" is one sentence with two controls in it, and
+     * giving each its own block would put every field of every form on a line
+     * of its own and lose which words belong to which.
+     *
+     * The run's own text is empty. What is drawn there is a control, and how
+     * wide it is is a question for whoever has the font.
+     */
+    int field;
 };
 
 struct recon_html_link {
     char href[2048];
+};
+
+/* --- Forms --- */
+
+/*
+ * What a control is, which is what decides how it is drawn and what it
+ * contributes when the form is sent.
+ *
+ * Deliberately fewer kinds than HTML has types. `type=email`, `type=search`,
+ * `type=tel`, `type=url` and `type=number` are all a box you type into: they
+ * differ in what a browser *validates* and in which keyboard a telephone
+ * offers, and this has no soft keyboard and refuses to invent validation
+ * rules the server is going to apply anyway. An unknown type is a text box,
+ * which is what the HTML standard itself says to do with one.
+ */
+enum recon_html_field_kind {
+    RECON_HTML_FIELD_TEXT,       /* one line, typed into */
+    RECON_HTML_FIELD_AREA,       /* <textarea>: several lines */
+    RECON_HTML_FIELD_CHECKBOX,
+    RECON_HTML_FIELD_RADIO,
+    RECON_HTML_FIELD_CHOICE,     /* <select>, with options */
+    RECON_HTML_FIELD_SUBMIT,     /* sends the form */
+    RECON_HTML_FIELD_RESET,      /* puts every field back to its default */
+
+    /*
+     * `<button type=button>` and `<input type=button>`, which do nothing at
+     * all without script.
+     *
+     * Kept and drawn rather than dropped, and drawn *disabled*. A page whose
+     * "Show more" button is simply absent looks like a page missing a
+     * feature; one whose button is there and visibly dead says what is
+     * actually true, which is that this viewer runs no script.
+     */
+    RECON_HTML_FIELD_BUTTON,
+
+    /*
+     * `type=hidden`: sent, never drawn.
+     *
+     * Not an oversight and not a courtesy to the page. Half the search forms
+     * on the web carry a hidden token that says which section is being
+     * searched, and a viewer that dropped them would send a request the
+     * server has never seen the like of.
+     */
+    RECON_HTML_FIELD_HIDDEN,
+};
+
+/* GET asks. POST tells. See the note at the top of this file. */
+enum recon_html_method {
+    RECON_HTML_GET,
+    RECON_HTML_POST,
+};
+
+struct recon_html_form {
+    /*
+     * Where it is sent, exactly as the page wrote it and not resolved.
+     *
+     * Unresolved for the same reason the stylesheet list is: this does not
+     * know where the page came from. An empty action means the page's own
+     * address, which the viewer knows and this does not.
+     */
+    char action[2048];
+    int method;                  /* enum recon_html_method */
+
+    /*
+     * The form's name, for a message about what is being sent.
+     *
+     * Not used in the request -- a form's name is not a parameter. It is here
+     * so the confirmation before a POST can say "the sign-in form" rather
+     * than "a form", when the page has bothered to say.
+     */
+    char name[64];
+};
+
+/* One choice inside a `<select>`. */
+struct recon_html_option {
+    char label[96];              /* the words between the tags */
+    char value[192];             /* what is sent */
+    bool selected;
+
+    /*
+     * Whether the page wrote a `value` at all.
+     *
+     * An option with none sends its own words, which is why this is not just
+     * "is the value empty": `<option value="">Any department</option>` sends
+     * an empty value deliberately, and falling back to the label there would
+     * send "Any department" to a server expecting nothing.
+     */
+    bool has_value;
+};
+
+struct recon_html_field {
+    int kind;                    /* enum recon_html_field_kind */
+
+    /*
+     * Which form this belongs to, or -1.
+     *
+     * A control outside any form is real and reasonably common -- pages put
+     * one there for script to read. It is drawn, it can be typed into, and it
+     * is never sent, because there is nowhere to send it.
+     */
+    int form;
+
+    char name[128];
+    char value[256];             /* what it starts out holding */
+
+    /*
+     * What to show when it is empty, or the words on a button.
+     *
+     * One field for both because they are the same thing from the drawing
+     * side: the text that appears in the control when the control has no text
+     * of its own to show.
+     *
+     * The same size as `value`, because a button's words *are* its value when
+     * it has one -- and a label held in a smaller buffer would mean a button
+     * whose face says less than what it sends.
+     */
+    char label[256];
+
+    bool on;                     /* checked, for a checkbox or a radio */
+    bool disabled;
+    bool secret;                 /* type=password, drawn as dots */
+    bool required;
+
+    /*
+     * How wide the page asked for, in characters, or 0.
+     *
+     * Honoured as a hint and bounded by the viewer, because `size=200` on a
+     * page written for a wide screen is a field wider than this window and a
+     * line that runs off the side.
+     */
+    int width_chars;
+
+    /* For a `<select>`: where its options are, in the option table. */
+    int first_option;
+    int option_count;
 };
 
 struct recon_html_block_entry {
@@ -284,6 +449,28 @@ const struct recon_html_run *recon_html_run_at(
 /* The address a link run points at, or NULL. */
 const char *recon_html_link_at(const struct recon_html_document *document,
     int link);
+
+/*
+ * The forms, the controls, and the choices inside a `<select>`.
+ *
+ * Read-only views of the document's own tables. A control's *current* value
+ * is not here and is not this file's: `value` is what the page said it starts
+ * out holding, and what somebody has typed since belongs to whoever is
+ * showing the page. Keeping the live value here would mean a document that
+ * changes as it is read, and every consumer would have to know which of the
+ * two it was looking at.
+ */
+int recon_html_form_count(const struct recon_html_document *document);
+const struct recon_html_form *recon_html_form_at(
+    const struct recon_html_document *document, int index);
+
+int recon_html_field_count(const struct recon_html_document *document);
+const struct recon_html_field *recon_html_field_at(
+    const struct recon_html_document *document, int index);
+
+int recon_html_option_count(const struct recon_html_document *document);
+const struct recon_html_option *recon_html_option_at(
+    const struct recon_html_document *document, int index);
 
 /*
  * True when the page had a <script> in it and almost no text.

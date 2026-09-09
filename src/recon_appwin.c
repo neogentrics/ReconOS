@@ -329,6 +329,16 @@ void recon_appwin_refresh(struct recon_appwin *win) {
     }
 
     recon_panel_commit(win->panel);
+
+    /*
+     * The hit regions were just cleared and rebuilt, so a control the pointer
+     * is resting on may no longer be there -- and its tooltip would carry on
+     * being drawn, pointing at nothing. BG-172.
+     */
+    if (win->server != NULL && win->server->shell != NULL) {
+        recon_shell_contents_changed(win->server->shell);
+    }
+
     recon_damage_all(win->server);
 }
 

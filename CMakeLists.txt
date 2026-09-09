@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.19
+    VERSION 0.4.20
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -218,6 +218,7 @@ add_executable(ReconOS
     src/recon_web.c
     src/recon_http.c
     src/recon_url.c
+    src/recon_form.c
     src/recon_mail.c
     src/recon_smtp.c
     src/recon_smtp_message.c
@@ -670,6 +671,29 @@ target_include_directories(recon_url_tests PRIVATE
 
 add_test(NAME url COMMAND recon_url_tests)
 
+# What a form sends.
+#
+# The same split, one layer up. These rules decide what leaves the machine --
+# which controls contribute, what an unchecked box does, what a menu sends --
+# and every one of them is wrong in one case out of eight without anything
+# looking wrong: a request the server rejects for a reason nobody can see, or
+# one it accepts with an answer missing.
+#
+# recon_form.c opens nothing and draws nothing, which is why this suite links
+# four files instead of the whole compositor.
+add_executable(recon_form_tests
+    tests/test_form.c
+    src/recon_form.c
+    src/recon_html.c
+    src/recon_css.c
+    src/recon_url.c)
+
+target_include_directories(recon_form_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+add_test(NAME form COMMAND recon_form_tests)
+
 # The same parser against markup nobody here wrote.
 #
 # Every other suite in this project was written by whoever wrote the code it
@@ -703,6 +727,9 @@ add_executable(recon_malformed_tests
     # Addresses come off somebody else's page too. recon_url.c opens nothing,
     # which is why it could be added here without dragging in a socket.
     src/recon_url.c
+    # And what a form sends, which is the far end of the same journey: a page
+    # somebody else wrote deciding which bytes this machine puts on the wire.
+    src/recon_form.c
     src/recon_expr.c)
 
 # The ICO decoder is built on stb_image, so this reaches into third_party the

@@ -1,5 +1,33 @@
-A text clipboard. Cut, copy and paste work in Notepad, in every text field
-in the system, and into the Terminal. Before this, text could not be moved
-from one place to another at all.
+The History entry in the menu reported a count in the status bar, which is not
+a history. Both are now pages the browser builds and then reads.
 
-Notepad can select text — with the mouse, or Shift and the arrow keys.
+Not a panel, a dialog or a list widget, because a page is something this
+program already does completely: lay out, scroll, colour to the skin, search
+with the find bar, and -- the part that matters -- make every entry a link
+that already works. A list widget would need its own layout, its own scrolling
+and its own click handling, none of it shared with the three that exist. The
+markup is generated and parsed rather than turned straight into blocks, for
+the same reason: the parser is the one place that decides what a document is.
+
+History is newest first, which is the order somebody looking for where they
+just were wants, and the opposite of the order Back and Forward use. The page
+you are on is marked rather than left as a link to itself.
+
+And it found a bug the moment it was looked at (BG-169). The list said
+https://gaming.recontowers.com/example.com. go_typed was resolving what
+was typed against the page being read -- the same way a link on that page is
+resolved. A link on a page is relative to it; text typed into an address bar
+is not. So once you were on any page at all you could not reach a different
+site by typing its name, only paths on the site you were already on.
+
+It had been there since the address bar existed, and survived because every
+test of it typed into a *fresh* tab, which has no page to be relative to. The
+same shape as the last two bugs: a check written against the one case somebody
+happened to try. A path or a fragment is still resolved against the page --
+"/about" and "#notes" have nowhere else they could mean.
+
+Worth recording how it was found: not by a test and not by reading, but by
+building a screen that shows the data. A list of visited addresses is a thing
+you look at, and a wrong one is obvious the moment it is on screen.
+
+---

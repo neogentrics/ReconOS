@@ -1,0 +1,2 @@
+The registry can be changed from the Control Panel, not only read. Saving
+redraws the system, so a setting takes effect while you watch.

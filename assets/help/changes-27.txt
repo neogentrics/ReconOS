@@ -1,0 +1,3 @@
+Properties tells you what something is: its name, kind, size, where it
+lives and when it last changed. It had been in the menu and greyed out since
+the menus existed.
