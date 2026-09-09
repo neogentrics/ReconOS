@@ -208,6 +208,17 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 			else
 				put_unsigned(va_arg(ap, unsigned), 16, false, 0);
 			break;
+		/* Octal, which exists here for exactly one reason: a file's
+		 * permission bits. They are grouped in threes and every person
+		 * who has ever read one reads them in octal, so printing 0640
+		 * as 416 turns a number somebody can check at a glance into one
+		 * they have to convert first. */
+		case 'o':
+			if (longness)
+				put_unsigned(va_arg(ap, u64), 8, false, 0);
+			else
+				put_unsigned(va_arg(ap, unsigned), 8, false, 0);
+			break;
 		case 'p':
 			raw_puts("0x");
 			put_unsigned((u64)(uintptr_t)va_arg(ap, void *), 16, false,

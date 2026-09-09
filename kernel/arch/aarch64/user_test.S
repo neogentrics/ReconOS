@@ -171,6 +171,20 @@ user_test_facts:
 	cmp	x0, #0
 	b.le	.Lfacts_5
 
+	/* create() handed a kernel address for its path. See the x86_64 copy:
+	 * the pointer check has to happen before anything else, because this is
+	 * the one call that both walks a path and sets permissions. */
+	movz	x0, #0xFFFF, lsl #48
+	movk	x0, #0x8000, lsl #32
+	mov	x1, #8
+	mov	x2, #0x180		/* 0600 */
+	mov	x3, #0
+	mov	x4, #0
+	mov	x8, #8			/* SYS_CREATE */
+	svc	#0
+	cmn	x0, #2			/* SYS_EFAULT, and nothing else will do */
+	b.ne	.Lfacts_6
+
 	mov	x0, #77
 	b	.Lfacts_exit
 .Lfacts_1:
@@ -187,6 +201,9 @@ user_test_facts:
 	b	.Lfacts_exit
 .Lfacts_5:
 	mov	x0, #5
+	b	.Lfacts_exit
+.Lfacts_6:
+	mov	x0, #6
 .Lfacts_exit:
 	mov	x8, #0			/* SYS_EXIT */
 	svc	#0

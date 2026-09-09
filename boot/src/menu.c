@@ -306,6 +306,24 @@ int menu_choose(unsigned seconds,
 	drawing = gfx_available(fb);
 	gfx_report(drawing);
 
+	/* How long this menu intends to wait, said once, before it waits.
+	 *
+	 * Printed for the test rather than for a person, and that is worth
+	 * being honest about. The alternative -- timing the boot from outside
+	 * with the host's clock -- measures firmware startup, emulator
+	 * scheduling and host load as well as the countdown, and it produced a
+	 * spread of four to one across four runs of an unchanged loader. A
+	 * number the loader states about itself has none of that in it.
+	 *
+	 * Two seconds when recovery is the only extra entry, five when there
+	 * are other systems to read: a person who has something to choose
+	 * between needs longer than a person who does not. */
+	print("  menu         : waiting ");
+	print_dec(seconds);
+	print(" s for ");
+	print_dec(entry_count);
+	print(entry_count == 1 ? " entry\n" : " entries\n");
+
 	if (drawing) {
 		const char *labels[MENU_MAX];
 		unsigned i;

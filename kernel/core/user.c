@@ -2,6 +2,7 @@
 #include <recon/kernel/arch.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/random.h>
+#include <recon/kernel/rootfs.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/vm.h>
@@ -197,6 +198,76 @@ static i64 sys_walltime(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	return (i64)time_wall_ns();
 }
 
+/* Creates a file with its permissions already set, in one call.
+ *
+ * One call rather than open-then-chmod, and that is the entire point: see
+ * rootfs.h. Under copy-on-write the create, the contents and the mode are one
+ * transaction, so the file becomes visible only when it is finished, already
+ * carrying the permissions it was asked for. There is no window, not even
+ * across a power cut.
+ *
+ * The path is copied out of user memory before anything is done with it. A
+ * kernel that walked a filesystem through a pointer the caller can still write
+ * to would be re-reading a path that changed after it was checked -- the oldest
+ * shape of privilege bug there is, and one that costs nothing to avoid here
+ * because the path is short.
+ */
+#define CREATE_PATH_MAX 256
+#define CREATE_MAX_BYTES 65536
+
+static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
+		      u64 a5)
+{
+	char kpath[CREATE_PATH_MAX];
+	enum reconfs_status st;
+
+	if (path_len == 0 || path_len >= sizeof(kpath))
+		return SYS_EINVAL;
+
+	if (len > CREATE_MAX_BYTES)
+		return SYS_EINVAL;
+
+	if (!user_range_ok(path, path_len) ||
+	    (len && !user_range_ok(data, len))) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	kmemcpy(kpath, (const void *)(uintptr_t)path, (size_t)path_len);
+	kpath[path_len] = '\0';
+
+	/* Terminated by us, at the length we were given, so a path with an
+	 * embedded zero is short rather than a way to smuggle one string past a
+	 * check and have a different one used. */
+
+	st = rootfs_create_file(kpath, (u32)mode,
+				len ? (const void *)(uintptr_t)data : NULL,
+				(u32)len);
+
+	switch (st) {
+	case RECONFS_OK:
+		return (i64)len;
+
+	/* Each of these means something a caller would act on differently, so
+	 * they are not collapsed into one failure. */
+	case RECONFS_ERR_NOT_MOUNTED:
+		return SYS_ENODEV;
+	case RECONFS_ERR_EXISTS:
+		return SYS_EEXIST;
+	case RECONFS_ERR_NOT_FOUND:
+	case RECONFS_ERR_NOT_DIR:
+		return SYS_ENOENT;
+	case RECONFS_ERR_NAME:
+	case RECONFS_ERR_TOO_DEEP:
+		return SYS_EINVAL;
+	case RECONFS_ERR_NOSPACE:
+	case RECONFS_ERR_TOO_LARGE:
+		return SYS_ENOSPC;
+	default:
+		return SYS_EIO;
+	}
+}
+
 const struct personality personality_recon = {
 	.name = "ReconOS",
 	.table = {
@@ -208,6 +279,7 @@ const struct personality personality_recon = {
 		[SYS_RANDOM]   = sys_random,
 		[SYS_MACHINE]  = sys_machine,
 		[SYS_WALLTIME] = sys_walltime,
+		[SYS_CREATE]   = sys_create,
 	},
 };
 
@@ -318,6 +390,7 @@ bool user_facts_test(void)
 		"SYS_MACHINE returned no size",
 		"SYS_MACHINE filled in the wrong structure version",
 		"SYS_WALLTIME returned nothing positive",
+		"SYS_CREATE accepted a kernel address as a path",
 	};
 
 	u64 exits_before = exits;

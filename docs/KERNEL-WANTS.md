@@ -32,6 +32,28 @@ from here on has the same window, so this gets worse rather than better.
 **What would replace it:** create-with-mode, or an open-then-write where the
 mode is fixed before any content lands.
 
+**Built, 8 September 2026 — the first form, and it closes the window rather
+than narrowing it.** `SYS_CREATE(path, path_len, mode, data, len)` creates the
+file, fills it, and sets its mode inside **one ReconFS transaction**. Copy-on-
+write commits once, so the file becomes visible only when it is finished,
+already carrying the permissions asked for. There is no instant at which it
+exists with the wrong ones — and that holds across a power cut, because the
+intermediate state is not a state the volume can be left in.
+
+Creating a name that already exists is **refused**, not overwritten. A create
+that silently replaces is how running a key-generation routine a second time
+destroys the key that was working.
+
+**What this does not do, said plainly: nothing enforces the mode.** It is
+stored, reported and survives a remount, and no code anywhere consults it
+before reading a file, because the kernel still has no idea who is asking. That
+is the next entry on this list and it is a larger piece.
+
+What is fixed is the window. Every file created from here has correct
+permissions recorded from the first instant it exists, so when enforcement
+arrives it has something true to enforce and no volume written in the meantime
+has to be gone back over.
+
 ---
 
 ## Who somebody is, enforced by something underneath

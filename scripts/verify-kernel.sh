@@ -632,12 +632,26 @@ for a in x86_64 aarch64; do
 	# be green.
 	excl=$(echo "$fs_out" | grep -cE 'the freed-block exclusion was checked at 3 of 3')
 
+	# And create-with-mode, which is asserted *here* because this is the only
+	# run that has a volume for it to work on. Every disk in this rig is
+	# blank, so on any other path the kernel truthfully reports that there is
+	# no filesystem and the test does not run.
+	#
+	# Checked rather than merely printed. The line appears after the
+	# self-test list, so nothing counts it, and a test whose result is
+	# printed and never read is the failure this file has already had once
+	# (BG-143) -- a boot that stopped half way answering every question a
+	# healthy one does.
+	mode=$(echo "$fs_out" | grep -cE 'files carry a mode : pass')
+
 	if [ "$verdict" = "3 of 3 block sizes behaved" ] &&
-	   [ "$sizes" = "3" ] && [ "$commits" = "3" ] && [ "$excl" = "1" ]; then
-		echo "3 block sizes, 15 faults, 3 commits, exclusion 3/3"
+	   [ "$sizes" = "3" ] && [ "$commits" = "3" ] && [ "$excl" = "1" ] &&
+	   [ "$mode" = "1" ]; then
+		echo "3 block sizes, 15 faults, 3 commits, exclusion 3/3, modes kept"
 		passes=$((passes + 1))
 	else
 		echo "FAILED"
+		echo "$fs_out" | grep -aE 'files carry a mode|rootfs:' | sed 's/^/      /'
 		echo "$fs_out" | sed -n '/reconfs:/,$p' | head -20 | sed 's/^/      /'
 		failures=$((failures + 1))
 		FAILED_PATHS+=("reconfs ($a)")

@@ -726,6 +726,7 @@ const char *reconfs_strerror(enum reconfs_status st)
 	case RECONFS_ERR_NOT_FILE:     return "that is not a file";
 	case RECONFS_ERR_NOT_EMPTY:    return "the directory still has things in it";
 	case RECONFS_ERR_TOO_DEEP:     return "the path is deeper than this format goes";
+	case RECONFS_ERR_NOT_MOUNTED:  return "there is no ReconFS volume mounted";
 	}
 	return "unknown";
 }

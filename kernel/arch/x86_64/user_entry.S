@@ -269,6 +269,28 @@ user_test_facts:
 	cmpq	$0, %rax
 	jle	.Lfacts_5
 
+	/* create() handed a kernel address for its path.
+	 *
+	 * The one thing about this call that must be true on every machine,
+	 * including the ones with no filesystem at all: the pointer check
+	 * happens before anything else. A kernel that walked a path through an
+	 * address the caller does not own would do it while creating a file
+	 * whose permissions the caller chose, which is the worst possible
+	 * combination of the two.
+	 *
+	 * The direct map's base, which is every byte of physical memory. Fourth
+	 * argument in R10 rather than RCX, because SYSCALL destroys RCX before
+	 * the kernel sees it. */
+	movabsq	$0xFFFF800000000000, %rdi
+	movq	$8, %rsi
+	movq	$0x180, %rdx		/* 0600 */
+	movq	$0, %r10
+	movq	$0, %r8
+	movq	$8, %rax		/* SYS_CREATE */
+	syscall
+	cmpq	$-2, %rax		/* SYS_EFAULT, and nothing else will do */
+	jne	.Lfacts_6
+
 	movq	$77, %rdi
 	jmp	.Lfacts_exit
 .Lfacts_1:
@@ -285,6 +307,9 @@ user_test_facts:
 	jmp	.Lfacts_exit
 .Lfacts_5:
 	movq	$5, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_6:
+	movq	$6, %rdi
 .Lfacts_exit:
 	movq	$0, %rax		/* SYS_EXIT */
 	syscall

@@ -19,6 +19,7 @@
 #include <recon/kernel/reconfs.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/random.h>
+#include <recon/kernel/rootfs.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/fbcon.h>
@@ -99,6 +100,7 @@ void kmain(void)
 
 	random_print_summary();
 
+
 	/* Last, because it is the one thing that needs everything: pages to map,
 	 * page tables that can express "user may reach this", a fault handler to
 	 * catch the program when it is wrong, a thread to run it in, and a timer
@@ -118,6 +120,13 @@ void kmain(void)
 	 * to be both readable and parseable ends up being neither, and the one
 	 * that gets quietly reformatted is the one under test. */
 	block_print_tables();
+
+	/* After the partitions, not merely after the devices. A ReconFS volume
+	 * lives in a slice, so mounting before the table is read would find
+	 * nothing on every machine that has one -- and report "no filesystem",
+	 * which is the same sentence a machine that genuinely has none prints. */
+	rootfs_init();
+	rootfs_print_summary();
 
 	/* Run at boot rather than in a test harness, because there is no test
 	 * harness that can run a kernel yet, and an allocator that is quietly
@@ -171,6 +180,17 @@ void kmain(void)
 	 * partition table -- a self-test that writes a filesystem over somebody's
 	 * disk is the most destructive thing this kernel could do by accident. */
 	reconfs_run();
+
+	/* After the battery, and this is the only place it can go.
+	 *
+	 * The test needs a ReconFS volume. On a real machine there is one and it
+	 * was mounted at boot; in the verification rig every disk is blank, and
+	 * the only volume that ever exists is the one the battery above just
+	 * formatted. Running this in the self-test list would therefore report
+	 * "no filesystem to test against" on every machine in the rig -- a
+	 * truthful sentence, and a test that never once ran. */
+	rootfs_run();
+
 	reconfs_crash_run();
 	fat32_run();
 	fat32_write_run();

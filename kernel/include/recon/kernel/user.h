@@ -46,6 +46,12 @@ enum {
 	SYS_MACHINE,		/* (buffer, length) -> bytes the kernel would write */
 	SYS_WALLTIME,		/* () -> nanoseconds since 1970 */
 
+	/* (path, path_len, mode, data, len) -> bytes written.
+	 *
+	 * One call rather than create-then-chmod, which is the whole reason it
+	 * exists: the file becomes visible already carrying its permissions. */
+	SYS_CREATE,
+
 	SYS_MAX
 };
 
@@ -64,6 +70,15 @@ enum {
  * may work later. A program told EINVAL by a key generator would report itself
  * broken; a program told this can wait, or explain. */
 #define SYS_EAGAIN    (-4)
+
+/* The rest, each because a caller does something different about it. Collapsing
+ * them into one failure is how "this machine has no filesystem" and "you asked
+ * for a name that is already taken" become the same error message. */
+#define SYS_ENODEV    (-5)	/* no filesystem is mounted */
+#define SYS_EEXIST    (-6)	/* the name is taken, and nothing was replaced */
+#define SYS_ENOENT    (-7)	/* a directory in the path does not exist */
+#define SYS_ENOSPC    (-8)
+#define SYS_EIO       (-9)
 
 /* What the machine is, for a program that cannot read the host's /proc because
  * there is no host.

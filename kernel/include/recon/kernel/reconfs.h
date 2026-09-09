@@ -477,6 +477,15 @@ enum reconfs_status {
 	RECONFS_ERR_NOT_FILE,
 	RECONFS_ERR_NOT_EMPTY,
 	RECONFS_ERR_TOO_DEEP,
+
+	/* There is no filesystem at all, which is not a filesystem error.
+	 *
+	 * Its own value rather than folded into NOT_FOUND, because the two send
+	 * whoever reads them to different places: NOT_FOUND means look at the
+	 * path, and this means the machine has no ReconFS volume mounted -- an
+	 * ordinary state for a machine booted from installation media, and
+	 * nothing a different path would fix. */
+	RECONFS_ERR_NOT_MOUNTED,
 };
 
 /* Passed to the block routines for a block kind that carries no checksum of

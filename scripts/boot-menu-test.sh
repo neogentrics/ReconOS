@@ -204,27 +204,51 @@ time_to_kernel() {
 	echo "$ms"
 }
 
-# Two waits now, not one wait and no wait.
-#
-# Recovery is offered on every machine, so there is no longer a boot with no
-# menu at all: a disk with nothing else on it still gets a two-second pause, and
-# a disk with other systems gets five. This test used to subtract "no menu" from
-# "menu" and expect five seconds; it expected three and got it, which is the
-# subtraction working and the *baseline* having moved.
-#
-# So both are checked. The difference pins them relative to each other, and the
-# floor pins them absolutely -- a difference of three seconds is equally
-# consistent with 5-and-2 and with 33-and-30.
-say "waits five seconds with a menu, two without"
-with=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0 	-drive "file=$W/other.img,format=raw,if=none,id=o0" -device nvme,serial=o,drive=o0)
-alone=$(time_to_kernel 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0)
-diff=$(( with - alone ))
+# The number of seconds the loader says it will wait. Boots, waits for the line,
+# and reads the number out of it -- no host timing anywhere.
+menu_line() {
+	o=$(mktemp)
+	timeout 40 qemu-system-x86_64 -bios "$OVMF" -m 512M -display none 		-serial file:"$o" -no-reboot "$@" >/dev/null 2>&1 &
+	pid=$!
 
-if [ "$diff" -ge 2000 ] && [ "$diff" -le 4500 ] && [ "$alone" -ge 2000 ]; then
-	echo "${diff} ms apart, ${alone} ms alone"
+	n=0
+	while [ "$n" -lt 200 ]; do
+		grep -qa 'menu *: waiting' "$o" 2>/dev/null && break
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.1
+		n=$((n + 1))
+	done
+
+	kill "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+
+	tr -d '\r' < "$o" | sed -n 's/^ *menu *: waiting \([0-9]*\) s .*/\1/p' | head -1
+	rm -f "$o"
+}
+
+# The countdown, taken from what the loader says rather than from the host clock.
+#
+# This used to time the whole boot from outside, twice, and subtract. That
+# measures firmware startup, emulator scheduling and whatever else the host was
+# doing as well as the countdown -- and across four runs of an *unchanged*
+# loader it produced differences of 1164, 3230, 3246 and 5185 ms, of which two
+# fell outside the band it required. A test that fails at random is worse than
+# no test: it teaches whoever sees it red to run it again.
+#
+# So the loader states its own intention, once, before it waits, and this reads
+# that. Deterministic, and it checks the thing the assertion is actually about
+# -- a person with something to choose between gets longer than a person who
+# has only recovery on offer.
+say "waits five seconds with a menu, two without"
+
+with_menu=$(menu_line 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0 	-drive "file=$W/other.img,format=raw,if=none,id=o0" -device nvme,serial=o,drive=o0)
+alone=$(menu_line 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0)
+
+if [ "$with_menu" = "5" ] && [ "$alone" = "2" ]; then
+	echo "five seconds with others, two with only recovery"
 	pass=$((pass + 1))
 else
-	echo "FAILED -- ${diff} ms apart (${with} with others, ${alone} alone)"
+	echo "FAILED -- ${with_menu:-nothing} s with others, ${alone:-nothing} s alone"
 	fail=$((fail + 1))
 fi
 
