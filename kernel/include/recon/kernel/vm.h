@@ -60,6 +60,18 @@
  * not a check in any code, but a bit the processor consults on every access. */
 #define VM_USER   (1u << 5)
 
+/* Write-combining: writes may be gathered and delivered in bursts, but they are
+ * not held in a cache waiting for company.
+ *
+ * For a framebuffer, which is the only thing that wants it. Uncached is correct
+ * and slow -- every pixel is its own bus transaction -- and cached is fast and
+ * wrong, because a write that sits in a cache line is a pixel that does not
+ * appear. Write-combining is the one that is both.
+ *
+ * An architecture that cannot express it falls back to VM_DEVICE, which is
+ * correct and slower rather than fast and wrong. */
+#define VM_WRITE_COMBINE (1u << 6)
+
 /* --- The direct map -----------------------------------------------------
  *
  * All of physical memory at a fixed virtual offset. The offset is per
@@ -93,6 +105,11 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags);
 paddr_t vm_lookup(vaddr_t va);
 
 void vm_print_summary(void);
+
+/* How many times this processor has had to interrupt the others to tell them a
+ * translation changed, and how many of those went unanswered. Silent on an
+ * architecture whose invalidation is broadcast by the hardware. */
+void vm_print_shootdowns(void);
 
 /* Allocates, maps and returns a page of the given size, in one call, because
  * every caller that wants memory wants it mapped. Returns 0 on failure. */

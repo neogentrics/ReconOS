@@ -185,7 +185,35 @@ check_cpus() {
 		return
 	fi
 
-	echo "$n online, least-busy idle thread took ${idle_ticks:-0} ticks"
+	# And, on x86_64 with more than one processor, that changing a mapping
+	# actually told the others.
+	#
+	# `invlpg` reaches the processor that runs it and no other, and there is
+	# no broadcast form -- so every other processor can go on using a
+	# translation this one has just replaced. Not a crash: a read of memory
+	# that is no longer what the page tables say, on a processor that never
+	# faults. Checkpoint 9b created that gap by waking the others.
+	#
+	# Asserted as *sent and answered*, because the two failures are
+	# different: none sent means the mechanism is not running at all, and
+	# some unanswered means a processor is still holding a mapping that no
+	# longer exists.
+	local sent unanswered
+	sent=$(tr -d '\r' < "$log" |
+		sed -n 's/^  shootdowns *: [0-9]* live invalidations, \([0-9]*\) sent.*/\1/p' | head -1)
+	unanswered=$(tr -d '\r' < "$log" |
+		sed -n 's/^  shootdowns *: .*, \([0-9]*\) unanswered$/\1/p' | head -1)
+
+	if [ -n "$sent" ] && [ "$n" -gt 1 ]; then
+		if [ "$sent" -eq 0 ] || [ "${unanswered:-1}" -ne 0 ]; then
+			echo "FAILED -- $sent shootdowns sent, ${unanswered:-?} unanswered"
+			failures=$((failures + 1))
+			FAILED_PATHS+=("$label $n processors, shootdown")
+			return
+		fi
+	fi
+
+	echo "$n online, idle thread took ${idle_ticks:-0} ticks${sent:+, $sent shootdowns}"
 	passes=$((passes + 1))
 }
 

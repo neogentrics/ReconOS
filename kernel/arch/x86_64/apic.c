@@ -184,6 +184,29 @@ void x86_apic_send_startup(u32 target, u8 page)
 	send_command(target, ICR_DELIVERY_STARTUP | ICR_LEVEL_ASSERT | page);
 }
 
+/* Sends a vector to every other processor, and to no one else.
+ *
+ * The destination shorthand does the addressing: bits 18 and 19 set to "all
+ * excluding self" means the message goes to every processor on the bus without
+ * this code having to know how many there are or what their identifiers are.
+ * Enumerating them and sending one at a time would work and would be a list
+ * that can go stale.
+ *
+ * Fixed delivery rather than the special modes, and edge triggered, because
+ * this is an ordinary interrupt that happens to be sent by software. */
+#define ICR_ALL_BUT_SELF	(3u << 18)
+
+void x86_apic_send_ipi_all_but_self(u8 vector)
+{
+	if (!lapic)
+		return;
+
+	/* No destination field to write: the shorthand replaces it. Writing the
+	 * low half is what sends. */
+	apic_write(APIC_ICR_LOW, ICR_ALL_BUT_SELF | ICR_LEVEL_ASSERT | vector);
+	wait_for_delivery();
+}
+
 /* --- the per-processor timer ---------------------------------------------
  *
  * The APIC timer counts down at the bus frequency, which nothing reports. So it

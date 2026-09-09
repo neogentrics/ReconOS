@@ -12,6 +12,9 @@
  * optional and is built first.
  */
 #include "x86_64.h"
+#include <recon/kernel/time.h>
+#include <recon/kernel/lock.h>
+#include <recon/kernel/smp.h>
 
 #include <recon/kernel/vm.h>
 #include <recon/kernel/arch.h>
@@ -27,6 +30,15 @@
 #define PTE_USER      (1ULL << 2)
 #define PTE_PWT       (1ULL << 3)	/* write-through */
 #define PTE_PCD       (1ULL << 4)	/* cache disable */
+
+/* The third selector bit. Together with PCD and PWT it indexes the eight-entry
+ * page attribute table: index = (PAT << 2) | (PCD << 1) | PWT.
+ *
+ * It sits at a different bit for a large page, because bit 7 is what *makes* a
+ * page large. Using the small-page bit on a large mapping would ask for a
+ * different cache type and get a page of the wrong size. */
+#define PTE_PAT_SMALL (1ULL << 7)
+#define PTE_PAT_LARGE (1ULL << 12)
 #define PTE_ACCESSED  (1ULL << 5)
 #define PTE_DIRTY     (1ULL << 6)
 #define PTE_LARGE     (1ULL << 7)	/* this entry *is* the page */
@@ -153,10 +165,60 @@ static u64 *next_level(u64 *table, unsigned index, bool create)
  * invalidating unconditionally would mean five hundred invalidations while
  * building the direct map for no reason at all.
  */
+static unsigned shootdown_timeouts;
+static unsigned shootdowns_sent;
+static unsigned live_invalidations;
+
+static void shoot_down_others(vaddr_t va);
+
 static void invalidate_if_live(u64 entry, vaddr_t va)
 {
-	if (entry & PTE_PRESENT)
-		__asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+	if (!(entry & PTE_PRESENT))
+		return;
+
+	live_invalidations++;
+	__asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+
+	/* And every other processor, which `invlpg` does not reach. */
+	shoot_down_others(va);
+}
+
+/* --- The page attribute table ---------------------------------------------
+ *
+ * Eight entries of three bits, in one model-specific register, saying what each
+ * combination of the three selector bits in a page table entry *means*. The
+ * architecture defines a default layout; this changes exactly one entry.
+ *
+ * Entry four becomes write-combining. Every other entry keeps its architectural
+ * value, so a page table entry written by anything that has not heard of this
+ * behaves exactly as it did -- which matters because the direct map is built
+ * before this runs.
+ *
+ * **Per processor.** The register is not shared, and a secondary that never
+ * programmed it would read entry four as its default, write-back, and cache
+ * writes to a framebuffer. Nothing would fault; the screen would simply stop
+ * being updated by whichever processor drew last.
+ */
+#define MSR_PAT 0x277u
+
+#define PAT_UNCACHEABLE   0x00ull
+#define PAT_WRITE_COMBINE 0x01ull
+#define PAT_WRITE_THROUGH 0x04ull
+#define PAT_WRITE_BACK    0x06ull
+#define PAT_UNCACHED_MINUS 0x07ull
+
+void x86_pat_init(void)
+{
+	u64 pat = PAT_WRITE_BACK			/* 0, unchanged */
+		| (PAT_WRITE_THROUGH   << 8)		/* 1, unchanged */
+		| (PAT_UNCACHED_MINUS  << 16)		/* 2, unchanged */
+		| (PAT_UNCACHEABLE     << 24)		/* 3, unchanged */
+		| (PAT_WRITE_COMBINE   << 32)		/* 4, the one change */
+		| (PAT_WRITE_THROUGH   << 40)		/* 5, unchanged */
+		| (PAT_UNCACHED_MINUS  << 48)		/* 6, unchanged */
+		| (PAT_UNCACHEABLE     << 56);		/* 7, unchanged */
+
+	x86_wrmsr(MSR_PAT, pat);
 }
 
 static u64 leaf_bits(unsigned flags, bool large)
@@ -176,6 +238,14 @@ static u64 leaf_bits(unsigned flags, bool large)
 		bits |= PTE_GLOBAL;
 	if (flags & VM_DEVICE)
 		bits |= PTE_PCD | PTE_PWT;
+	else if (flags & VM_WRITE_COMBINE)
+		/* Entry four: PAT set, PCD and PWT clear. Programmed to
+		 * write-combining by pat_init below -- and *only* by it. The
+		 * architectural default for that entry is write-back, so a
+		 * mapping made before the table is programmed would be cached,
+		 * which for a framebuffer means pixels that never appear. */
+		bits |= large ? PTE_PAT_LARGE : PTE_PAT_SMALL;
+
 	if (large)
 		bits |= PTE_LARGE;
 
@@ -355,15 +425,23 @@ void vm_init(void)
 			panic("vm: could not build the direct map");
 	}
 
-	/* The framebuffer, if there is one, needs to be uncached: it is memory
-	 * on a device across a bus, and a write that sits in a cache line is a
-	 * pixel that does not appear. */
+	/* Before the framebuffer is mapped, and that order is the whole point:
+	 * the entry this asks for defaults to write-back, so a mapping made
+	 * first would be cached. */
+	x86_pat_init();
+
+	/* The framebuffer, if there is one. Write-combining rather than
+	 * uncached: it is memory on a device across a bus, so a write that sits
+	 * in a cache line is a pixel that does not appear -- but uncached makes
+	 * every pixel its own bus transaction, and the console redraws whole
+	 * screens when it scrolls. Combining keeps the writes going out while
+	 * letting them travel together. */
 	if (info->fb.width && info->fb.base) {
 		paddr_t base = PAGE_ALIGN_DOWN(info->fb.base);
 		u64 len = PAGE_ALIGN_UP(info->fb.size + (info->fb.base - base));
 
 		vm_map(DIRECT_MAP_BASE + base, base, len,
-		       VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL);
+		       VM_READ | VM_WRITE | VM_WRITE_COMBINE | VM_GLOBAL);
 	}
 
 	/* Switch. From the instruction after this, the direct map exists and
@@ -412,6 +490,12 @@ void vm_activate_this_cpu(void)
 
 	__asm__ volatile("mov %0, %%cr3"
 			 : : "r"(kernel_pml4_phys) : "memory");
+
+	/* Its own page attribute table. The register is per processor, and a
+	 * secondary that skipped it would read entry four as write-back and
+	 * cache its writes to the framebuffer -- no fault, just a screen that
+	 * stops changing when that processor is the one drawing. */
+	x86_pat_init();
 }
 
 void vm_print_summary(void)
@@ -473,4 +557,110 @@ bool vm_self_test(void)
 
 	pmm_free_page(page);
 	return ok;
+}
+
+/* --- Telling the other processors a translation has changed ---------------
+ *
+ * `invlpg` invalidates the processor that executes it and no other. There is no
+ * broadcast form of it; on x86 the only way to reach the others is to interrupt
+ * them and ask.
+ *
+ * **This is a gap checkpoint 9b created rather than one it found.** With one
+ * processor, unmapping a page and invalidating locally was complete. The moment
+ * the others were woken, every one of them could be holding a cached
+ * translation for an address this processor has just changed -- and it would go
+ * on using it. Not a crash: a read of memory that is no longer what the page
+ * tables say it is, on a processor that never fails.
+ *
+ * The other architecture needs none of this. `tlbi vaae1is` carries an Inner
+ * Shareable suffix, and the hardware broadcasts the invalidation to every
+ * processor in the domain. The same line in two files: one architecture does it
+ * for you and the other does not, which is exactly the kind of difference that
+ * survives review because both look correct.
+ *
+ * --- What this deliberately does not try to be ---
+ *
+ * There is one shootdown at a time, guarded by a lock, and it invalidates one
+ * address. A real implementation batches ranges and tracks which processors
+ * could possibly hold the mapping. Both are optimisations of something that has
+ * to be correct first, and neither changes what a caller sees.
+ */
+
+/* The request in flight, and the count of processors that have honoured it.
+ * Volatile because two processors read and write these and the compiler has no
+ * reason to expect either to change under it. */
+static volatile vaddr_t shootdown_address;
+static volatile unsigned shootdown_acks;
+static struct spinlock shootdown_lock;
+
+/* Runs on every *other* processor, from the interrupt handler. */
+void x86_tlb_shootdown_service(void)
+{
+	__asm__ volatile("invlpg (%0)" : : "r"(shootdown_address) : "memory");
+
+	/* Released, so that the processor waiting on this count cannot see it
+	 * rise before the invalidation above has actually happened. */
+	__atomic_add_fetch(&shootdown_acks, 1, __ATOMIC_RELEASE);
+}
+
+static void shoot_down_others(vaddr_t va)
+{
+	unsigned others = smp_cpus_online();
+	u64 flags;
+	u64 deadline;
+
+	/* Nothing to tell, and this is the common case: one processor, or a
+	 * machine still bringing the others up. */
+	if (others <= 1)
+		return;
+
+	others -= 1;
+
+	flags = spin_lock_irq(&shootdown_lock);
+
+	shootdown_address = va;
+	shootdown_acks = 0;
+
+	/* The address must be visible before the interrupt that asks anybody to
+	 * read it. */
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+
+	shootdowns_sent++;
+	x86_apic_send_ipi_all_but_self(VECTOR_TLB_SHOOTDOWN);
+
+	/* Waited for, because the point of a shootdown is that it has happened
+	 * by the time the caller continues -- a caller that unmaps a page and
+	 * frees it while another processor still has the translation has handed
+	 * that page to somebody else while it is still readable.
+	 *
+	 * Bounded, because a processor that has stopped answering must not take
+	 * the machine with it. The bound is generous: this is a few hundred
+	 * cycles of work on the far side.
+	 */
+	deadline = time_monotonic_ns() + 100ull * 1000 * 1000;	/* 100 ms */
+
+	while (__atomic_load_n(&shootdown_acks, __ATOMIC_ACQUIRE) < others &&
+	       time_monotonic_ns() < deadline)
+		arch_cpu_relax();
+
+	if (__atomic_load_n(&shootdown_acks, __ATOMIC_ACQUIRE) < others)
+		shootdown_timeouts++;
+
+	spin_unlock_irq(&shootdown_lock, flags);
+}
+
+unsigned x86_tlb_shootdown_timeouts(void)
+{
+	return shootdown_timeouts;
+}
+
+unsigned x86_tlb_shootdowns_sent(void)
+{
+	return shootdowns_sent;
+}
+
+void vm_print_shootdowns(void)
+{
+	kprintf("  shootdowns   : %u live invalidations, %u sent, %u unanswered\n",
+		live_invalidations, shootdowns_sent, shootdown_timeouts);
 }

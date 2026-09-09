@@ -210,6 +210,13 @@ void kmain(void)
 		reconfs_layout_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
+
+	/* Printed here rather than beside the memory summary, because the
+	 * interesting invalidations happen *after* it: the user-mode tests map
+	 * three programs at the same address in turn, which is exactly the
+	 * replacement case. Reporting it earlier counted only the ones that
+	 * happened before there was a second processor to tell. */
+	vm_print_shootdowns();
 	user_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every

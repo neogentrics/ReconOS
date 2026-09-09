@@ -101,6 +101,7 @@ u32  x86_apic_id(void);
 void x86_apic_eoi(void);
 void x86_apic_send_init(u32 target);
 void x86_apic_send_startup(u32 target, u8 page);
+void x86_apic_send_ipi_all_but_self(u8 vector);
 void x86_apic_calibrate_timer(void);	/* once, against a clock already trusted */
 void x86_apic_start_timer(void);	/* per processor */
 bool x86_apic_timer_ready(void);
@@ -108,6 +109,7 @@ bool x86_apic_timer_ready(void);
 /* The vectors the APIC raises. Above the sixteen the 8259 occupies, so the two
  * can coexist while there is no I/O APIC to replace it. */
 #define VECTOR_APIC_TIMER	0x40
+#define VECTOR_TLB_SHOOTDOWN	0x41
 #define VECTOR_SPURIOUS		0xFF
 
 /* In smp.c: this processor's kernel index, which is not its APIC identifier. */
@@ -120,6 +122,18 @@ void x86_load_tables_this_cpu(void);
 /* Points the double-fault and NMI gates at this processor's dedicated stacks.
  * Called once the TSS holding those stacks is live, and not before. */
 void x86_arm_fault_stacks(void);
+
+/* In vm.c: honours another processor's request to drop a translation, and how
+ * many such requests have gone unanswered. The count is reported rather than
+ * kept, because a shootdown that timed out means a processor somewhere may
+ * still be using a mapping that no longer exists. */
+/* In vm.c: programs this processor's page attribute table. Must run before any
+ * mapping that asks for write-combining, and on every processor. */
+void x86_pat_init(void);
+
+void x86_tlb_shootdown_service(void);
+unsigned x86_tlb_shootdown_timeouts(void);
+unsigned x86_tlb_shootdowns_sent(void);
 
 /* E820's numbering, which both protocols above borrow. */
 void x86_add_e820_region(u64 base, u64 len, u32 e820_type);

@@ -144,6 +144,7 @@ vector_\n:
 	.endm
 
 	VECTOR 64	/* the local APIC timer: this processor's own tick */
+	VECTOR 65	/* a request to invalidate a translation */
 	VECTOR 255	/* spurious, and it must return without doing anything */
 
 isr_common:

@@ -185,7 +185,16 @@ static u64 leaf_attrs(unsigned flags, bool block)
 
 	a |= ATTR_AF;
 
-	if (flags & VM_DEVICE) {
+	if (flags & (VM_DEVICE | VM_WRITE_COMBINE)) {
+		/* Write-combining falls back to device memory here, and that
+		 * is a deliberate choice rather than an omission.
+		 *
+		 * This architecture can express something close to it -- Normal
+		 * Non-Cacheable, which permits gathering -- but it would need
+		 * another MAIR entry and the only caller is a framebuffer that
+		 * this architecture's firmware does not currently provide one
+		 * of. Falling back is correct and slower; guessing at an
+		 * attribute nothing exercises is neither. */
 		a |= ATTR_IDX(MAIR_DEVICE);
 		/* Device memory is not cacheable, so shareability is
 		 * meaningless for it and left alone. */
@@ -574,4 +583,11 @@ bool vm_self_test(void)
 
 	pmm_free_page(page);
 	return ok;
+}
+
+/* Nothing to report. `tlbi ... is` broadcasts to every processor in the inner
+ * shareable domain in hardware, so there is no message to send, nothing to wait
+ * for, and no way for one to go unanswered. */
+void vm_print_shootdowns(void)
+{
 }

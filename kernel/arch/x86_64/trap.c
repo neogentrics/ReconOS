@@ -115,6 +115,7 @@ extern void irq_15(void);
 
 /* The local APIC's two, which have vectors rather than IRQ numbers. */
 extern void vector_64(void);
+extern void vector_65(void);
 extern void vector_255(void);
 
 static void (*const stubs[32])(void) = {
@@ -220,6 +221,18 @@ void trap_dispatch(struct trap_frame *f)
 	 * unbalances it, and it stops delivering the ones it did send. */
 	if (f->vector == VECTOR_APIC_TIMER) {
 		x86_apic_timer_interrupt();
+		return;
+	}
+
+	/* Another processor has changed a mapping this one may have cached.
+	 *
+	 * Handled before anything else that could take time, because the
+	 * processor that sent it is *waiting* -- and acknowledged to the APIC
+	 * before the acknowledgement to the sender, so that the sender is never
+	 * released while this processor still has an interrupt in service. */
+	if (f->vector == VECTOR_TLB_SHOOTDOWN) {
+		x86_apic_eoi();
+		x86_tlb_shootdown_service();
 		return;
 	}
 
@@ -339,6 +352,7 @@ void trap_init(void)
 		set_gate(32 + i, irq_stubs[i], 0x08);
 
 	set_gate(VECTOR_APIC_TIMER, vector_64, 0x08);
+	set_gate(VECTOR_TLB_SHOOTDOWN, vector_65, 0x08);
 	set_gate(VECTOR_SPURIOUS, vector_255, 0x08);
 
 	idt_ptr.limit = sizeof(idt) - 1;
