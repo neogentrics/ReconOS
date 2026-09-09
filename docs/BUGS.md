@@ -2583,7 +2583,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   `now + LLONG_MAX` is signed overflow -- undefined, and in practice a time in
   the past, so a cookie a server asked to keep for ever would have been dropped
   immediately.
-- **Fixed in** v0.4.21, commit `TBD`. Clamped to four hundred days, which is
+- **Fixed in** v0.4.21, commit `c90c7cd`. Clamped to four hundred days, which is
   not a number chosen here: RFC 6265bis says a user agent must clamp to it and
   browsers do. A bound that had to exist for the arithmetic turning out to be
   the standard's is the happy version of that. `Expires` is clamped the same
@@ -2597,7 +2597,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   fixed buffers, so a name of 200 characters became a different 127-character
   name -- one no server ever set, which would be sent back under that name and
   would never replace the cookie it was meant to be.
-- **Fixed in** v0.4.21, commit `TBD`. Both lengths are checked before either
+- **Fixed in** v0.4.21, commit `c90c7cd`. Both lengths are checked before either
   is copied and an oversized one is refused with a sentence, which is this
   project's rule everywhere else. The copy is a `memcpy` of the measured
   length, so the compiler can see what the check established.
@@ -2617,7 +2617,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   piece that is not a day, not a month and not a year -- and the entire second
   of the three date formats servers send was read as no date at all. RFC 6265
   lists `-` among the characters that *separate* pieces.
-- **Fixed in** v0.4.21, commit `TBD`. The parser says whether it read a date
+- **Fixed in** v0.4.21, commit `c90c7cd`. The parser says whether it read a date
   rather than returning one, and the token is letters, digits and colons.
 - **Why this is the entry worth reading.** Neither fault has a symptom anybody
   would report. A cookie that outlives a sign-out looks exactly like being
