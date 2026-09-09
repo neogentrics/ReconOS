@@ -22,6 +22,7 @@
  * would read a length out of whatever is there and then walk that far, which is
  * how a bad root pointer becomes a fault a hundred kilobytes away.
  */
+#include <recon/kernel/kstring.h>
 #include <recon/kernel/acpi.h>
 
 #include <recon/kernel/console.h>
@@ -261,4 +262,127 @@ void acpi_print_summary(void)
 			t->signature[2], t->signature[3]);
 	}
 	kputs("\n");
+}
+
+/* --- The FADT, and the four questions worth asking it ---------------------
+ *
+ * "Fixed ACPI Description Table", signature FACP, and it is the table that says
+ * where the machine's fixed hardware lives. It is read here for four things,
+ * each of which the kernel currently either cannot do or guesses at:
+ *
+ *   THE DSDT'S ADDRESS. Everything about the machine that is not fixed
+ *   hardware is described in AML bytecode, and this is where it starts.
+ *
+ *   THE POWER MANAGEMENT REGISTERS. Turning the machine off is a write to
+ *   PM1a_CNT, and without this table there is no way to know where that is.
+ *
+ *   THE CENTURY REGISTER. The CMOS clock holds a two-digit year, and time.c
+ *   says so: "a two-digit year and no century register worth trusting". The
+ *   register exists; which CMOS index it is at is *this table's* to say, and
+ *   zero means the machine genuinely has none.
+ *
+ *   WHETHER THERE IS A PS/2 CONTROLLER. Bit 1 of IAPC_BOOT_ARCH. A modern
+ *   machine may have no 8042 at all, and probing for one that is not there is
+ *   how a boot hangs on hardware nobody tested it on -- which is precisely the
+ *   input work this unblocks.
+ *
+ * Fields are read by offset rather than through a struct. The FADT has grown
+ * across six revisions and its later fields sit at offsets a packed struct
+ * would only reproduce if every earlier field were declared exactly right; a
+ * bounds-checked read at a named offset cannot be wrong by one field.
+ */
+
+/* Offsets into the FADT, from the ACPI specification. */
+#define FADT_DSDT		40
+#define FADT_SMI_CMD		48
+#define FADT_ACPI_ENABLE	52
+#define FADT_PM1A_CNT		64
+#define FADT_PM1B_CNT		68
+#define FADT_PM1_CNT_LEN	89
+#define FADT_CENTURY		108
+#define FADT_IAPC_BOOT_ARCH	109
+#define FADT_FLAGS		112
+#define FADT_RESET_REG		116
+#define FADT_RESET_VALUE	128
+#define FADT_X_DSDT		140
+
+#define IAPC_8042_PRESENT	(1u << 1)
+#define IAPC_VGA_NOT_PRESENT	(1u << 2)
+
+static bool fadt_read(const struct acpi_sdt_header *t, unsigned off,
+		      unsigned width, u64 *out)
+{
+	const u8 *p = (const u8 *)t;
+	u64 v = 0;
+	unsigned i;
+
+	/* The bound is the table's own length, which the checksum covered. A
+	 * field past the end is a field this revision does not have, and that
+	 * is an answer rather than an error. */
+	if (off + width > t->length)
+		return false;
+
+	for (i = 0; i < width; i++)
+		v |= (u64)p[off + i] << (i * 8);
+
+	*out = v;
+	return true;
+}
+
+bool acpi_fadt(struct acpi_fadt_facts *out)
+{
+	static const char sig[4] = { 'F', 'A', 'C', 'P' };
+	const struct acpi_sdt_header *t = acpi_find(sig);
+	u64 v;
+
+	if (!t)
+		return false;
+
+	kmemset(out, 0, sizeof(*out));
+
+	/* The 64-bit DSDT pointer where the revision has one, and the 32-bit
+	 * one otherwise. Preferred in that order because a machine with memory
+	 * above four gigabytes can put the DSDT there, and the 32-bit field is
+	 * then zero or truncated. */
+	if (fadt_read(t, FADT_X_DSDT, 8, &v) && v)
+		out->dsdt = (paddr_t)v;
+	else if (fadt_read(t, FADT_DSDT, 4, &v))
+		out->dsdt = (paddr_t)v;
+
+	if (fadt_read(t, FADT_PM1A_CNT, 4, &v))
+		out->pm1a_control = (u32)v;
+	if (fadt_read(t, FADT_PM1B_CNT, 4, &v))
+		out->pm1b_control = (u32)v;
+	if (fadt_read(t, FADT_PM1_CNT_LEN, 1, &v))
+		out->pm1_control_width = (u8)v;
+
+	if (fadt_read(t, FADT_SMI_CMD, 4, &v))
+		out->smi_command = (u32)v;
+	if (fadt_read(t, FADT_ACPI_ENABLE, 1, &v))
+		out->acpi_enable = (u8)v;
+
+	if (fadt_read(t, FADT_CENTURY, 1, &v))
+		out->century_register = (u8)v;
+
+	if (fadt_read(t, FADT_RESET_REG + 4, 8, &v))
+		out->reset_address = v;
+	if (fadt_read(t, FADT_RESET_REG, 1, &v))
+		out->reset_address_space = (u8)v;
+	if (fadt_read(t, FADT_RESET_VALUE, 1, &v))
+		out->reset_value = (u8)v;
+
+	/* IAPC_BOOT_ARCH arrived in revision 2. On an older table the field is
+	 * past the end, and the specification's answer for that case is that
+	 * the legacy devices are all assumed present -- which is the safe
+	 * assumption, because it means looking rather than skipping. */
+	if (fadt_read(t, FADT_IAPC_BOOT_ARCH, 2, &v)) {
+		out->has_8042 = (v & IAPC_8042_PRESENT) != 0;
+		out->has_vga  = (v & IAPC_VGA_NOT_PRESENT) == 0;
+	} else {
+		out->has_8042 = true;
+		out->has_vga  = true;
+	}
+
+	out->present = true;
+	return true;
 }

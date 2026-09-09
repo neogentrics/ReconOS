@@ -117,6 +117,10 @@ unsigned x86_cpu_index(void);
  * started and has neither. */
 void x86_load_tables_this_cpu(void);
 
+/* Points the double-fault and NMI gates at this processor's dedicated stacks.
+ * Called once the TSS holding those stacks is live, and not before. */
+void x86_arm_fault_stacks(void);
+
 /* E820's numbering, which both protocols above borrow. */
 void x86_add_e820_region(u64 base, u64 len, u32 e820_type);
 

@@ -538,6 +538,55 @@ damage tool was given its arguments the wrong way round and damaged nothing. The
 answer each time is the same — **assert that the thing you are measuring
 actually took place**, not merely that no complaint was printed.
 
+### BG-144 — Every UEFI test booted whatever kernel happened to be in the ESP first
+
+- **Found:** 9 September 2026, while fixing a page fault that would not go away
+  no matter how many times the kernel was rebuilt.
+- **Cost:** three debugging runs, and it could have cost far more: the rig would
+  have gone on reporting five boot paths green against a kernel that no longer
+  existed.
+
+`boot/Makefile` built the ESP image from the loader and the kernel:
+
+    $(ESP_IMG): $(EFI) $(KERNEL_ELF)
+
+and got the kernel with a rule that had **no prerequisites at all**:
+
+    $(KERNEL_ELF):
+            $(MAKE) -C ../kernel ARCH=$(ARCH)
+
+To make, a file that exists and has no prerequisites is up to date for ever. So
+the sub-make ran exactly once, when the file did not yet exist, and never again.
+`make -C boot esp` after a kernel change printed *"Nothing to be done for
+'esp'"* and left the image carrying the kernel from whenever it was first built.
+
+**Every UEFI path in the verification rig boots from that image** — reconboot
+under OVMF, GRUB under UEFI, install-then-boot, the boot menu, the install
+medium. All five test a kernel that arrives inside `esp.img`.
+
+**How it presented.** A page fault in new code was found, fixed, and rebuilt --
+and faulted again, identically, three times. What settled it was disassembling
+the reported address: `0xffffffff801253bd` fell in the *middle* of an
+instruction in the binary on disk. An address that is not an instruction
+boundary is not an address in the binary you are looking at, and that is the
+tell -- the machine was running a different kernel.
+
+- **Fixed in:** `boot/Makefile`. The kernel rule now depends on a phony target,
+  so the sub-make is always *asked*; the kernel's own makefile still decides
+  whether anything needs building.
+
+**Worth generalising, and it is the third time in this shape.** BG-133: a
+generated header absent from the dependency file, so creating it rebuilt
+nothing. BG-138: stage 2 outgrew stage 1's read, and the fix was attached to a
+rule `make` alone does not build. Now this. Each time, **a build artefact that
+does not depend on what it contains**, and each time the symptom was a change
+that appeared to have no effect.
+
+The class is worth naming: *if an image embeds a copy of something, the rule
+that builds the image must depend on the thing it copied.* And the diagnostic is
+worth remembering — when a fix appears to do nothing, check that the artefact
+under test contains the fix, before looking at the fix again.
+
 ### BG-139 — Two tests generated a signing key into the source tree and left it there
 
 [#296](https://github.com/neogentrics/ReconOS/issues/296)

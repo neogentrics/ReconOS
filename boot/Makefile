@@ -113,8 +113,27 @@ $(ESP_IMG): $(EFI) $(KERNEL_ELF)
 
 esp: $(ESP_IMG)
 
-$(KERNEL_ELF):
+# The kernel, built by its own makefile, which knows its own dependencies.
+#
+# Forced, and the reason is worth writing down because it cost three debugging
+# runs. This rule used to have *no prerequisites at all*, and to make, a file
+# that exists and has no prerequisites is up to date for ever -- so once
+# esp.img had been built once, changing the kernel rebuilt the kernel and left
+# the ESP carrying the old one.
+#
+# Every UEFI path in the verification rig boots from that image. So a kernel
+# with a fault in it could be fixed, rebuilt, booted, and *still fault*, with
+# the fault address landing in the middle of an instruction in the binary on
+# disk -- which is what finally gave it away. Worse, the rig would have gone
+# on reporting those paths green against a kernel that no longer existed.
+#
+# The sub-make decides whether anything actually needs building; this only
+# guarantees it is asked. (BG-144)
+.PHONY: force-kernel
+force-kernel:
 	$(MAKE) -C ../kernel ARCH=$(ARCH)
+
+$(KERNEL_ELF): force-kernel
 
 run: $(ESP_IMG)
 	$(QEMU) $(MACHINE) $(FIRMWARE) -m 512M \

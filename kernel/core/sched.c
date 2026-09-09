@@ -144,6 +144,14 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
 	t->cpu = -1;		/* not running anywhere */
 	t->idle_for = -1;	/* and not anybody's idle thread */
 
+	/* Its vector registers start as a *captured* image rather than as
+	 * zeros. An all-zero FXSAVE image sets MXCSR to zero, which unmasks
+	 * every floating-point exception, and some zero patterns in its
+	 * reserved bits make the restore itself fault. Copying the state this
+	 * processor is in -- which was initialised when the unit was enabled --
+	 * gives a new thread a defined and legal starting point. */
+	arch_vector_save(t->vector_state);
+
 	t->stack_pointer = arch_thread_stack_init(
 		(u8 *)t->stack_base + THREAD_STACK_PAGES * PAGE_SIZE,
 		entry, arg);
@@ -254,6 +262,18 @@ void sched_switch(void)
 	 * owned by this processor. Another processor that looks at the ring now
 	 * sees the truth. It cannot take `next`, because `next` is already
 	 * marked RUNNING. */
+	/* The vector unit, saved out of the outgoing thread and loaded into the
+	 * incoming one, both by the processor that is leaving.
+	 *
+	 * Eagerly rather than lazily. The lazy trick -- disable the unit, catch
+	 * the first use, swap then -- saves real work on threads that never
+	 * touch it, and it is a second state machine that is wrong only when
+	 * two processors race on the same thread. This is two instructions.
+	 * When there is a reason to make it lazy there will also be a
+	 * measurement saying so. */
+	arch_vector_save(prev->vector_state);
+	arch_vector_restore(next->vector_state);
+
 	spin_unlock(&ring_lock);
 
 	arch_context_switch(&prev->stack_pointer, next->stack_pointer);

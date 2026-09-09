@@ -159,6 +159,36 @@ static void set_gate(unsigned vector, void (*handler)(void), u16 selector)
 	idt[vector].reserved    = 0;
 }
 
+/* --- Stacks for the faults that cannot use the one they arrived on --------
+ *
+ * A double fault means the processor failed while *delivering* a fault, and by
+ * far the most common cause is that the stack it was told to use is unusable --
+ * unmapped, misaligned, or overrun. Pushing a fault frame onto that same stack
+ * to report it fails in exactly the same way, and a fault taken while
+ * delivering a double fault is a triple fault, which is a silent reset.
+ *
+ * So the interrupt stack table exists: an IST index in a gate tells the
+ * processor to load a stack pointer out of the TSS instead of using the current
+ * one. It is the difference between a machine that says what went wrong and a
+ * machine that reboots.
+ *
+ * The TSS field is per-processor and the IDT is shared, which sets the order:
+ * these gates are armed by whichever processor has just filled in its own
+ * stacks, and never before -- a gate naming an IST slot that is still zero
+ * turns the one fault this exists to survive into the one it exists to prevent.
+ */
+#define IST_DOUBLE_FAULT	1	/* one-based, as the gate encodes it */
+#define IST_NMI			2
+
+void x86_arm_fault_stacks(void)
+{
+	set_gate(2, stubs[2], 0x08);
+	idt[2].ist = IST_NMI;
+
+	set_gate(8, stubs[8], 0x08);
+	idt[8].ist = IST_DOUBLE_FAULT;
+}
+
 /* A page fault's error code says what was attempted, and the four bits that
  * matter are worth spelling out rather than printing as a number. */
 static void describe_page_fault(u64 error)

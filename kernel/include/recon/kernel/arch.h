@@ -99,4 +99,29 @@ RK_NORETURN void arch_halt(void);
  * rather than promised in a document. */
 void arch_wait_for_interrupt(void);
 
+/* --- The vector unit ------------------------------------------------------
+ *
+ * Enabled per processor, and saved per thread. Both halves are required
+ * together: a unit that is on and not saved is two threads sharing arithmetic
+ * registers, which corrupts results rather than crashing and does it only when
+ * two threads happen to use them at once.
+ *
+ * `arch_vector_enable` is called by every processor on itself, because the
+ * control registers that turn it on are per-processor. The save and restore
+ * take the 512-byte aligned area on each thread. */
+void arch_vector_enable(void);
+void arch_vector_save(void *area);
+void arch_vector_restore(const void *area);
+
+/* Writes one of ACPI's platform control registers.
+ *
+ * On a PC these are I/O ports, which only one architecture has. Returns false
+ * where there is no such thing, which is how a machine that cannot be powered
+ * off this way says so rather than appearing to succeed.
+ *
+ * The address is the one the FADT gave, and only the I/O-port form is handled:
+ * the specification also allows these registers to be memory-mapped, and a
+ * machine that does that is a machine this returns false for. */
+bool arch_acpi_write_control(u64 address, u16 value);
+
 #endif /* RECON_KERNEL_ARCH_H */

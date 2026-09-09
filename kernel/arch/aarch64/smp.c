@@ -243,4 +243,8 @@ void arch_smp_cpu_init(void)
 	 * it will sit in its idle loop forever, online and uninterruptible. */
 	aarch64_gic_cpu_init();
 	aarch64_timer_cpu_init();
+
+	/* Its own vector unit: CPACR_EL1 is per-processor, and firmware's
+	 * setting of it is not something to rely on. */
+	arch_vector_enable();
 }

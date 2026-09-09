@@ -96,6 +96,25 @@ struct thread {
 	const struct personality *personality;
 
 	char name[THREAD_NAME_MAX];
+
+	/* The vector unit's registers, saved around a switch.
+	 *
+	 * Not decoration and not optional once the unit is enabled: two threads
+	 * that both use vector registers and share them corrupt each other's
+	 * arithmetic, silently, with every line of both programs correct. The
+	 * kernel itself is built without floating point and does not touch
+	 * them; user programs will, and the day one does is the day this has to
+	 * already be here.
+	 *
+	 * 512 bytes covers the baseline on both architectures -- x86_64's
+	 * FXSAVE image, and aarch64's thirty-two 128-bit V registers with their
+	 * two status words. It does **not** cover AVX or SVE, whose state is
+	 * larger and whose size is a runtime question; those units are
+	 * deliberately left disabled rather than enabled and half-saved.
+	 *
+	 * Aligned to sixty-four because the instruction that writes it requires
+	 * alignment and faults rather than working slowly without it. */
+	u8 vector_state[512] RK_ALIGNED(64);
 };
 
 void sched_init(void);

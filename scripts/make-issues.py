@@ -72,7 +72,7 @@ AREA = {
     # free one, which was checked rather than assumed: the offer of "135+" had
     # already been acted on by the time this needed a number.
     137: 'startup', 138: 'startup', 139: 'build', 140: 'storage', 141: 'startup', 142: 'startup',
-    143: 'build',
+    143: 'build', 144: 'build',
 }
 
 

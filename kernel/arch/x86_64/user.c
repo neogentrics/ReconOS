@@ -31,6 +31,9 @@
  * program's stack, at whatever address the user program had chosen.
  */
 #include "x86_64.h"
+#include <recon/kernel/console.h>
+#include <recon/kernel/vm.h>
+#include <recon/kernel/pmm.h>
 
 #include <recon/kernel/user.h>
 #include <recon/kernel/sched.h>
@@ -95,6 +98,41 @@ void arch_user_init(void)
 	 * field zero would instead point the processor at the start of the TSS
 	 * and let it read the structure itself as permissions. */
 	tss[cpu].iomap_base = sizeof(struct tss);
+
+	/* Two stacks this processor can take a fault on when the stack it was
+	 * using is the problem. See x86_arm_fault_stacks in trap.c.
+	 *
+	 * Allocated per processor, because a double fault on two processors at
+	 * once landing on one stack is the same class of failure the shared
+	 * task-state segment had -- and it would arrive in the middle of
+	 * reporting something else that had already gone wrong.
+	 *
+	 * A processor with no memory for them keeps the old behaviour, which is
+	 * a triple fault on a bad stack. Saying so beats a silent reset. */
+	{
+		paddr_t df = pmm_alloc_pages(2);
+		paddr_t nmi = pmm_alloc_pages(2);
+
+		if (df && nmi) {
+			/* The *top*, because the stack grows down. Writing the
+			 * base here gives the processor a stack pointer aimed
+			 * at the rest of memory. */
+			tss[cpu].ist[0] = (u64)(uintptr_t)phys_to_virt(df) +
+					  2 * PAGE_SIZE;
+			tss[cpu].ist[1] = (u64)(uintptr_t)phys_to_virt(nmi) +
+					  2 * PAGE_SIZE;
+
+			x86_arm_fault_stacks();
+		} else {
+			if (df)
+				pmm_free_pages(df, 2);
+			if (nmi)
+				pmm_free_pages(nmi, 2);
+
+			kprintf("  cpu %u: no memory for fault stacks; a bad "
+				"stack will reset the machine\n", cpu);
+		}
+	}
 
 	/* This processor's own slot, not the shared one. See trap.c. */
 	write_tss_descriptor(SEL_TSS_FOR(cpu) / 8, (u64)(uintptr_t)&tss[cpu],

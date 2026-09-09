@@ -377,6 +377,11 @@ void arch_smp_cpu_init(void)
 
 	/* Last, and only now: this is what makes the processor preemptible, and
 	 * everything above had to be in place before the first tick. */
+	/* Its own vector unit. The control registers that enable it are
+	 * per-processor, so a secondary that skipped this would take an
+	 * undefined-instruction fault on the first thread that used one. */
+	arch_vector_enable();
+
 	x86_apic_start_timer();
 
 	/* And interrupts on, which is the line whose absence is hardest to see.

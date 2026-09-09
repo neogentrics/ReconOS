@@ -20,6 +20,9 @@
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/random.h>
 #include <recon/kernel/rootfs.h>
+#include <recon/kernel/smbios.h>
+#include <recon/kernel/power.h>
+#include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/fbcon.h>
@@ -41,6 +44,32 @@ static void banner(void)
 	kputs("\n");
 	kputs("ReconOS kernel " RECONOS_KERNEL_VERSION "\n");
 	kprintf("  architecture : %s\n", arch_name());
+}
+
+/* One word on the kernel command line. The same shape recovery.c uses;
+ * two call sites is not yet a reason to share one. */
+static bool asked_for_poweroff(void)
+{
+	const char *p = boot_info()->cmdline;
+
+	while (p && *p) {
+		const char *k = "poweroff";
+		const char *q = p;
+
+		while (*k && *q == *k) {
+			q++;
+			k++;
+		}
+		if (!*k && (*q == '\0' || *q == ' '))
+			return true;
+
+		while (*p && *p != ' ')
+			p++;
+		while (*p == ' ')
+			p++;
+	}
+
+	return false;
 }
 
 void kmain(void)
@@ -83,6 +112,11 @@ void kmain(void)
 	 * nothing. */
 	/* The scheduler before the timer, so that the first tick has something
 	 * to tick. Started here rather than earlier because it allocates. */
+	/* The vector unit, before the scheduler makes the first thread -- a
+	 * thread's starting register image is captured from this processor, and
+	 * capturing it from a unit that is still disabled would fault. */
+	arch_vector_enable();
+
 	sched_init();
 
 	time_init();
@@ -113,6 +147,15 @@ void kmain(void)
 	block_init();
 	block_print_summary();
 	acpi_print_summary();
+
+	/* What the machine says it is, as opposed to what its processor is. */
+	smbios_init();
+	smbios_print_summary();
+
+	/* The machine's own description of itself, in bytecode. After the fixed
+	 * tables, because the FADT is what says where it is. */
+	aml_init();
+	aml_print_summary();
 
 	/* The machine-readable version of the same thing, for the fixture
 	 * harness to compare against what sgdisk and sfdisk say is on the same
@@ -197,6 +240,15 @@ void kmain(void)
 	recovery_run();
 	install_plan_run();
 	install_execute_run();
+
+	/* Asked for on the command line, and last, because it does not return.
+	 *
+	 * It exists to be *tested*: an emulator told to power off exits, and its
+	 * exit is something a script can assert on. A shutdown path exercised only
+	 * by a person pressing a button is one that rots between the times anybody
+	 * presses it. */
+	if (asked_for_poweroff())
+		power_off_or_say_why();
 
 	kputs("\nNothing else is implemented yet. Idling.\n");
 

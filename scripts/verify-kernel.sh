@@ -241,6 +241,80 @@ check_random() {
 	passes=$((passes + 1))
 }
 
+# --- what the machine says about itself, and being able to switch it off ----
+#
+# Three assertions, and the third is the one that makes the first two mean
+# something. Reading a table and reporting numbers out of it proves the parser
+# ran; it does not prove the parser was *right*. Turning the machine off does:
+# the value written comes out of the vendor's own bytecode, it is different on
+# every chipset, and a wrong one does nothing at all.
+check_acpi() {
+	local log="$WORK/acpi.log"
+
+	printf '%-46s' "  reads the machine's own description"
+
+	timeout "$TIMEOUT" qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF" >"$log" 2>&1
+
+	local aml smbios
+	aml=$(tr -d '\r' < "$log" | sed -n 's/^  aml *: \(.*devices.*\)$/\1/p' | head -1)
+	smbios=$(tr -d '\r' < "$log" | grep -c '^  machine      : ')
+
+	# A partial namespace says so, and saying so must not be mistaken for
+	# success: the parser stops rather than guessing at an opcode it does
+	# not know, and a machine where that happens has devices it never saw.
+	if tr -d '\r' < "$log" | grep -q 'the namespace is partial'; then
+		echo "FAILED -- the AML walk stopped early"
+		tr -d '\r' < "$log" | grep -a '  aml ' | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("acpi")
+		return
+	fi
+
+	if [ -z "$aml" ] || [ "$smbios" -eq 0 ]; then
+		echo "FAILED -- ${aml:-no AML line}, $smbios machine line(s)"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("acpi")
+		return
+	fi
+
+	echo "$aml"
+	passes=$((passes + 1))
+}
+
+check_power_off() {
+	printf '%-46s' "  and can turn the machine off"
+
+	# The whole assertion is in the exit code. `timeout` returns 124 when it
+	# had to kill the guest, and anything else means the guest stopped on
+	# its own -- which, for a kernel whose normal end is an idle loop that
+	# runs for ever, can only be the power-off path.
+	timeout 25 qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF" -append poweroff >"$WORK/off.log" 2>&1
+	local rc=$?
+
+	if [ "$rc" -eq 124 ]; then
+		echo "FAILED -- it was still running when the clock ran out"
+		tr -d '\r' < "$WORK/off.log" | tail -3 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("power off")
+		return
+	fi
+
+	# And it must have got there by the intended route rather than by
+	# falling over: a panic also ends the guest.
+	if tr -d '\r' < "$WORK/off.log" | grep -qE 'kernel fault|PANIC|power:'; then
+		echo "FAILED -- it stopped, but not by powering off"
+		tr -d '\r' < "$WORK/off.log" | tail -4 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("power off")
+		return
+	fi
+
+	echo "the guest stopped itself, exit $rc"
+	passes=$((passes + 1))
+}
+
 # Boots against one partition fixture and compares what the kernel read with
 # what wrote the disk. A different kind of check from the ones above: those
 # count self-tests the kernel ran on itself, and this one holds the kernel's
@@ -513,6 +587,12 @@ check_random "from timing alone (aarch64)" "none on this processor" \
 check_random "from the processor (aarch64)" "[0-9]* words accepted" \
 	qemu-system-aarch64 -M virt -cpu max -m 512M -nographic \
 		-kernel "$ARM_IMG"
+
+echo
+echo "the machine, described"
+
+check_acpi
+check_power_off
 
 echo "partition tables"
 
