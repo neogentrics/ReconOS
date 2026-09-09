@@ -2594,7 +2594,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   a page that ended"*. A change log that stops looks exactly like a change log
   that has caught up. The system was telling somebody something that had
   stopped being true, in the one place they would go to check.
-- **Fixed in** v0.4.20, commit `TBD`. Regenerated, and `scripts/check.sh`
+- **Fixed in** v0.4.20, commit `11f54f7`. Regenerated, and `scripts/check.sh`
   gained a fourth pass: it regenerates into a copy, compares, and **puts the
   tree back exactly as it found it**. The first version of that pass left the
   regenerated files in place as a favour, which would have made it pass on the
@@ -2619,7 +2619,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   look-ahead had used the right number. Only the drawing was wrong, so the
   page laid out to exactly the right length with a box hanging out of one of
   its blocks. There is no count that moves when this happens.
-- **Fixed in** v0.4.20, commit `TBD`. The text's line height is kept in its own
+- **Fixed in** v0.4.20, commit `11f54f7`. The text's line height is kept in its own
   `const` variable and that is what every measurement uses. A control is
   measured against the text, never against the line it is about to change.
 
@@ -2640,7 +2640,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Why the picture could not show it.** A ticked checkbox looks the same
   whether or not it still has the focus ring, at the size a checkbox is drawn.
   The ring is two pixels outside a fourteen-pixel box.
-- **Fixed in** v0.4.20, commit `TBD`. Working a control focuses it, in one
+- **Fixed in** v0.4.20, commit `11f54f7`. Working a control focuses it, in one
   line after the toggle. Which is also what a click should do, and now does.
 
 ### BG-172 — A tooltip outlived the button it belonged to
@@ -2655,7 +2655,7 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   moments a *window* appears or disappears. A control disappearing when its
   own window redraws is the same fault one level down, and none of those four
   moments covers it.
-- **Fixed in** v0.4.20, commit `TBD`. `recon_appwin_refresh` clears and
+- **Fixed in** v0.4.20, commit `11f54f7`. `recon_appwin_refresh` clears and
   rebuilds its hit regions and then tells the shell, through
   `recon_shell_contents_changed`. There rather than at the five places that
   make a control vanish, because "which redraws can strand a tip" is not a
