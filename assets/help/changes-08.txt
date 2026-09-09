@@ -1,81 +1,34 @@
-Installing was trusting whoever handed the folder over. A package brings a
-module, a module is a shared object loaded into this process, and a module in
-this process can do everything ReconOS can do. The allow-list bounds where a
-package may *place a file* and says nothing at all about what its code does
-once running -- it was never meant to.
+Every build ReconOS makes for itself is Debug with no -O. scripts/check.sh
+says so at the top and calls it out as a risk, and scripts/package.sh builds
+Release -- so the thing that ships is the one configuration nothing looks
+at. BG-170 came out of exactly that gap, so the rest of it got the same
+treatment.
 
-This was left on purpose until the keyring had been read, because adding a
-second piece of unattended crypto before the first had been looked at would
-have compounded the debt rather than reduced it. Joshua lifted that.
+An optimised build turns on warnings a debug build cannot produce, because
+-Wformat-truncation needs the optimiser's value-range analysis to see how
+long a string can get. Twenty-two of them fell out, and three were real:
 
-ECDSA over P-256, SHA-256, from mbedTLS. Ed25519 would be the better
-choice and is not available: mbedTLS 2.x has Curve25519 for key agreement
-only, which cannot sign. A correct P-256 signature is worth more than an
-Ed25519 one this would have had to write itself.
+A null reaching %s on the sign-in path. recon_users_login looks the
+account up a second time and did not check the result. It cannot be missing --
+recon_users_check returns false when the lookup fails, and nothing changes
+the account list in between -- but that is an invariant spread across two
+functions and stated nowhere. It is checked now, because the day check grows
+a cache or matches names by a different rule, this becomes a null dereference
+found by somebody failing to sign in.
 
-There is no random per-signature secret. ECDSA's k is the whole of its
-danger -- reuse it under one key for two messages and the private key falls
-out with school algebra, which is how the PlayStation 3's signing key was
-published, and a *biased* k is nearly as bad and much harder to notice.
-mbedTLS is built with MBEDTLS_ECDSA_DETERMINISTIC, so k comes from the key
-and the message by way of HMAC-DRBG (RFC 6979) and there is no randomness that
-can fail quietly and take the key with it. Since that is a property of how the
-library was built and not of this code, recon_sign.c refuses to compile
-without it rather than falling back to the randomised form and being weaker in
-a way nobody would see.
+Nine paths in the Recycle Bin built with snprintf, which truncates. A
+truncated path is not a shortened name for the same file, it is the name of a
+different one -- and these are then removed, restored or written to. None is a
+memory fault; the fault would be a restore that puts a file somewhere else, or
+a purge that removes the wrong note, and neither would ever be traced back to a
+path one byte too long. They go through one helper that refuses.
 
-What a signature covers is a digest list, not the manifest. Signing the
-manifest alone binds the *names* of the files and none of their contents,
-which leaves the module free to be replaced -- and the module is the only file
-that can do anything. So the signed bytes are one line per file, sorted, with
-the manifest first. Sorted because the order a directory hands back its
-entries is not a property of the package, and two machines must build the same
-bytes from the same folder.
+And three more path builds elsewhere -- a theme file, a track the player
+opens, and a path handed to the module loader -- moved to recon_fs_join,
+which was already the right answer and already refuses.
 
-And there is no --force. A check that can be turned off is off on the day
-it matters, and the person who would reach for the flag is exactly the person
-being attacked. Somebody who means to install something unsigned signs it,
-which is one command and is the point.
-
-A machine makes its own key on first run. That is not a weakening -- the
-key is generated locally and its private half is written mode 600 -- and it is
-what makes the refusal actionable. A machine that trusts nothing installs
-nothing, which is correct and is a terrible first experience if the way out is
-a command nobody has a reason to know exists. Now sign always works, and the
-refusal names it.
-
-Three commands: keys lists what the machine trusts and whether it can sign,
-keys make / keys trust / keys distrust change that, and sign <folder>
-puts this machine's name on a package. Distrusting a key stops what it signed
-from *installing*; it does not uninstall what is already there, and says so,
-because that code is already on the disk and pretending otherwise would be
-theatre.
-
-Two suites, and a note about the second. signatures tests what
-recon_sign.c decides rather than what mbedTLS does -- that a changed byte
-stops verifying, that an untrusted key does not count, that a private key
-cannot be added to the trust store, that a key name cannot escape the trust
-directory. One of its checks is load-bearing in a way that is easy to miss:
-signing the same bytes twice must give the same signature, which is the RFC
-6979 property, and is what would notice if the #error above were ever
-removed.
-
-package-signatures tests that the signature covers the module and not only
-the manifest. There was no suite for packages at all before this, which
-meant the install path was the least tested thing in the system.
-
-### And what the keyring review found
-
-Reading outward from recon_keyring.c to what its callers do with what they
-are handed. The keyring itself holds up -- see the commit for the full
-list, but the short version is that every decision in it is the right one and
-recon_from_hex even validates its length, so a truncated nonce is rejected
-rather than zero-padded.
-
-What did not hold is BG-170: two places cleared a secret with memset where
-nothing reads the buffer afterwards, which makes the store dead and lets the
-compiler delete it. It does. scripts/check.sh now fails on any memset of
-something named like a secret, because no test and no sanitizer can see the
-difference.
+Seventeen truncation warnings remain, all of them in code building a string to
+*display* rather than to open. Left rather than silenced, because a warning
+that has been argued with in a comment is worth more than one suppressed.
 
 ---

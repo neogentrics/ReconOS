@@ -6,7 +6,7 @@ somebody else's.**
 [![version](https://img.shields.io/badge/version-0.4.0-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
 [![release](https://img.shields.io/badge/latest_release-v0.4.0-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.0)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-33_suites,_1887_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-34_suites,_1971_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-135-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
@@ -72,7 +72,7 @@ written down as it was hit rather than guessed at in advance.
 | **Skins** | thirteen, in four groups: the standard set, three for colour vision, two for reading, and your own. Glass comes in six colours, Metallic in eight metals, Beacon in blue or olive |
 | **Accounts** | real ones, with roles — enforced by ReconOS inside ReconOS, and honestly labelled as such |
 | **Finds things** | the Start menu's box searches programs, settings, the account's folders, the files in them, and the help — ordered by how sure the answer is |
-| **Tests** | 33 suites, 1,887 checks and 9,862 malformed inputs, no display needed |
+| **Tests** | 34 suites, 1,971 checks and 10,788 malformed inputs, no display needed |
 
 Everything here works and is tested. What is *not* here is listed plainly —
 in the Control Panel itself, page by page, and in
@@ -538,7 +538,10 @@ what both Enter and Escape choose. Clicking outside does not dismiss one.
   asked for, because everything it says is in the address and asking twice is
   asking once twice; a **POST says how many answers it is about to send, to
   which host, and whether one of them is a password, and waits to be told
-  again**. No JavaScript, and the reason is measured rather than argued — see
+  again**. **Cookies**, so a session survives a page — kept only for the host
+  that set it, never sent on a request for a picture or a stylesheet, never
+  written to disk, and listed in full on a page of their own. No JavaScript,
+  and the reason is measured rather than argued — see
   [docs/ROADMAP.md](docs/ROADMAP.md)
 - **Photos** — one picture at a time, fitted to the window and never enlarged
   past its own size, on a dark mat. **Read Text** turns the writing in a picture

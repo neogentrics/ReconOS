@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.20
+    VERSION 0.4.21
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -219,6 +219,7 @@ add_executable(ReconOS
     src/recon_http.c
     src/recon_url.c
     src/recon_form.c
+    src/recon_cookie.c
     src/recon_mail.c
     src/recon_smtp.c
     src/recon_smtp_message.c
@@ -694,6 +695,24 @@ target_include_directories(recon_form_tests PRIVATE
 
 add_test(NAME form COMMAND recon_form_tests)
 
+# Cookies.
+#
+# The third file split out for the same reason, and the one where it matters
+# most: these rules decide what a server is told about somebody on every
+# request they make. A cookie policy that is too generous behaves identically
+# to a correct one until the day it does not, so the refusals are the part that
+# has to be exercised deliberately -- nothing reaches them by accident.
+#
+# recon_cookie.c opens nothing and has no idea what a socket is.
+add_executable(recon_cookie_tests
+    tests/test_cookie.c
+    src/recon_cookie.c)
+
+target_include_directories(recon_cookie_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+add_test(NAME cookies COMMAND recon_cookie_tests)
+
 # The same parser against markup nobody here wrote.
 #
 # Every other suite in this project was written by whoever wrote the code it
@@ -730,6 +749,9 @@ add_executable(recon_malformed_tests
     # And what a form sends, which is the far end of the same journey: a page
     # somebody else wrote deciding which bytes this machine puts on the wire.
     src/recon_form.c
+    # And cookies, where a header somebody else wrote decides what is sent on
+    # every request after it.
+    src/recon_cookie.c
     src/recon_expr.c)
 
 # The ICO decoder is built on stb_image, so this reaches into third_party the

@@ -2575,6 +2575,56 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-178 — A Max-Age longer than a long could hold was added to the clock
+
+- **Found in** v0.4.21. **Found by** the undefined-behaviour sanitizer, on a
+  header the fuzzer made: `Max-Age=99999999999999999999`.
+- **What it was** `atoll` saturates at `LLONG_MAX` rather than failing, and
+  `now + LLONG_MAX` is signed overflow -- undefined, and in practice a time in
+  the past, so a cookie a server asked to keep for ever would have been dropped
+  immediately.
+- **Fixed in** v0.4.21, commit `TBD`. Clamped to four hundred days, which is
+  not a number chosen here: RFC 6265bis says a user agent must clamp to it and
+  browsers do. A bound that had to exist for the arithmetic turning out to be
+  the standard's is the happy version of that. `Expires` is clamped the same
+  way, so a server cannot reach past it by writing the other attribute.
+
+### BG-177 — A cookie name longer than the table holds would have been stored under a different name
+
+- **Found in** v0.4.21. **Found by** `-Wformat-truncation` on the optimised
+  build, which is the third fault that warning has found in this project.
+- **What it was** the name and the value were copied with `snprintf` into
+  fixed buffers, so a name of 200 characters became a different 127-character
+  name -- one no server ever set, which would be sent back under that name and
+  would never replace the cookie it was meant to be.
+- **Fixed in** v0.4.21, commit `TBD`. Both lengths are checked before either
+  is copied and an oversized one is refused with a sentence, which is this
+  project's rule everywhere else. The copy is a `memcpy` of the measured
+  length, so the compiler can see what the check established.
+
+### BG-176 — Epoch zero was both a date and "could not read the date"
+
+- **Found in** v0.4.21, before any of it had run against a server. **Found by**
+  the suite, on the first run.
+- **What it was** the expiry parser returned 0 for a date it could not read,
+  and 0 is a real date: `Thu, 01 Jan 1970 00:00:00 GMT` is epoch zero, and it
+  is **the commonest deletion header on the web** -- it is what a server sends
+  to sign somebody out. So the one header that matters most was read as "no
+  expiry", the cookie was kept, and signing out would have left somebody
+  signed in.
+- **And a second fault in the same parser, found by the same test.** The
+  tokeniser treated `-` as part of a token, so `09-Jun-21` came out as one
+  piece that is not a day, not a month and not a year -- and the entire second
+  of the three date formats servers send was read as no date at all. RFC 6265
+  lists `-` among the characters that *separate* pieces.
+- **Fixed in** v0.4.21, commit `TBD`. The parser says whether it read a date
+  rather than returning one, and the token is letters, digits and colons.
+- **Why this is the entry worth reading.** Neither fault has a symptom anybody
+  would report. A cookie that outlives a sign-out looks exactly like being
+  signed in, and a date format silently ignored looks exactly like a server
+  that did not set an expiry. Both were caught by writing the tests against
+  headers real servers send, before the code had spoken to one.
+
 ### BG-175 — The Help application's change log stopped fourteen versions ago
 
 - **Found in** v0.4.20. **Found by** `git status` after running

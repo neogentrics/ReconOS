@@ -13,9 +13,16 @@
  * on a reused connection reads the tail of the first. A viewer that fetches a
  * page every few seconds does not need it.
  *
- * No cookies, no authentication. A session that survives a page is a thing to
- * store, expire and scope, and none of that is written here yet -- so a site
- * that needs one will say you are signed out, which is true.
+ * No authentication. A site that wants a password in a header rather than in a
+ * form will say you are signed out, which is true.
+ *
+ * **Cookies are optional and are passed in.** Every fetch takes a jar or NULL,
+ * so each call site says in so many words whether that request carries the
+ * session -- and the two that fetch a page's pictures and stylesheets say no.
+ * A subresource request that carries a session is exactly the mechanism that
+ * follows somebody between sites, and making it a *parameter* rather than a
+ * property of the client is what stops it being switched on by accident.
+ * recon_cookie.h has the rest of the policy.
  *
  * **POST is here, and it is deliberately not the same call as GET.** Reading a
  * document and changing something on somebody else's server are different
@@ -42,6 +49,8 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+
+#include "recon_cookie.h"
 
 /*
  * How much of a document is read.
@@ -137,7 +146,7 @@ struct recon_http_handlers {
  * permission -- and then no handler is ever called.
  */
 struct recon_http_request *recon_http_get(const char *application,
-    const struct recon_http_url *url,
+    const struct recon_http_url *url, struct recon_cookie_jar *jar,
     const struct recon_http_handlers *handlers, void *user);
 
 /*
@@ -162,8 +171,8 @@ struct recon_http_request *recon_http_get(const char *application,
  * so many words.
  */
 struct recon_http_request *recon_http_post(const char *application,
-    const struct recon_http_url *url, const char *content_type,
-    const char *body, size_t length,
+    const struct recon_http_url *url, struct recon_cookie_jar *jar,
+    const char *content_type, const char *body, size_t length,
     const struct recon_http_handlers *handlers, void *user);
 
 /*

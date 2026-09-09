@@ -24,6 +24,7 @@
 #include "ReconOS.h"
 #include "recon_appwin.h"
 #include "recon_fs.h"
+#include "recon_cookie.h"
 #include "recon_css.h"
 #include "recon_form.h"
 #include "recon_html.h"
@@ -31,6 +32,8 @@
 #include "recon_icons.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include <time.h>
+
 #include "recon_widget.h"
 #include "recon_web.h"
 
@@ -186,6 +189,8 @@ enum web_menu_item {
     MENU_BOOKMARKS,
     MENU_SEP_3,
     MENU_HISTORY,
+    MENU_COOKIES,
+    MENU_FORGET_COOKIES,
     MENU_SET_HOME,
     MENU_COUNT
 };
@@ -208,6 +213,8 @@ static const struct {
     [MENU_BOOKMARKS]     = { "All bookmarks",      NULL,     false },
     [MENU_SEP_3]         = { NULL,                 NULL,     true  },
     [MENU_HISTORY]       = { "History",            "Ctrl+H", false },
+    [MENU_COOKIES]       = { "Cookies",            NULL,     false },
+    [MENU_FORGET_COOKIES] = { "Forget all cookies", NULL,    false },
     [MENU_SET_HOME]      = { "Set as home page",   NULL,     false },
 };
 
@@ -551,6 +558,20 @@ struct recon_web {
 
     /* The toolbar menu, open or not, and which entry the pointer is on. */
     bool menu_open;
+
+    /*
+     * --- The cookies ---
+     *
+     * One jar for the window, shared by every tab in it, because that is what
+     * a session *is*: signing in on one tab and following a link in another is
+     * one visit to one site. A jar per tab would mean two tabs of the same
+     * site were two different people, which is not what anybody means by
+     * opening a link in a new tab.
+     *
+     * It lives and dies with the window. Nothing is written to disk --
+     * recon_cookie.h says why, and what that waits on.
+     */
+    struct recon_cookie_jar *cookies;
 };
 
 
@@ -971,7 +992,13 @@ static void fetch_next_sheet(struct web_tab *w) {
             w->sheets_done++;
             continue;
         }
-        w->sheet_request = recon_http_get(WEB_APPLICATION, &url,
+        /*
+         * NULL: a stylesheet is fetched without cookies, always. Nothing
+         * needs a session to serve a stylesheet, and a subresource request
+         * that carries one is the mechanism that follows somebody between
+         * sites. See recon_cookie.h.
+         */
+        w->sheet_request = recon_http_get(WEB_APPLICATION, &url, NULL,
             &SHEET_HANDLERS, w);
         if (w->sheet_request == NULL) {
             w->sheets_done++;
@@ -1163,7 +1190,9 @@ static void fetch_next_image(struct web_tab *w) {
             continue;
         }
         w->fetching = i;
-        w->image_request = recon_http_get(WEB_APPLICATION, &url,
+        /* NULL, for the same reason as the stylesheet above: a picture does
+         * not need to know who is looking at it. */
+        w->image_request = recon_http_get(WEB_APPLICATION, &url, NULL,
             &IMAGE_HANDLERS, w);
         if (w->image_request == NULL) {
             /* Refused before it started -- no network permission, or an
@@ -1291,7 +1320,9 @@ static void go_to(struct web_tab *w, const struct recon_http_url *url,
     w->received = 0;
     set_status(w, false, "Asking %s...", url->host);
 
-    w->request = recon_http_get(WEB_APPLICATION, url, &HANDLERS, w);
+    /* The document, which is the one fetch that carries the session. */
+    w->request = recon_http_get(WEB_APPLICATION, url,
+        w->owner != NULL ? w->owner->cookies : NULL, &HANDLERS, w);
     if (w->request == NULL) {
         w->loading = false;
         set_status(w, true, "%s", recon_http_last_error());
@@ -3308,6 +3339,8 @@ static void draw_menu(struct recon_web *w, struct recon_panel *p,
             on = (t != NULL && t->zoom > ZOOM_MIN);
         } else if (i == MENU_ZOOM_RESET) {
             on = (t != NULL && t->zoom != 100);
+        } else if (i == MENU_FORGET_COOKIES) {
+            on = recon_cookie_count(w->cookies) > 0;
         }
 
         /*
@@ -3787,6 +3820,114 @@ static void show_built(struct web_tab *t, const char *html, const char *name) {
     snprintf(t->label, sizeof(t->label), "%s", name);
 }
 
+/*
+ * What is being sent on your behalf, and to whom.
+ *
+ * A page rather than a settings box, for the same reason History and
+ * Bookmarks are pages: it is a list of things about the web, it is read the
+ * way a page is read, and it costs no new window.
+ *
+ * **The values are shown.** A viewer that offers to tell somebody what is
+ * being sent on their behalf and then hides the part that matters is not
+ * telling them anything -- and the whole reason for the page is that a cookie
+ * is otherwise completely invisible.
+ */
+static void show_cookies(struct recon_web *w) {
+    struct web_tab *t = front(w);
+    if (t == NULL) {
+        return;
+    }
+
+    static char html[RECON_COOKIE_MAX * 640 + 2048];
+    size_t used = 0;
+
+    int count = recon_cookie_sweep(w->cookies, time(NULL)) >= 0
+        ? recon_cookie_count(w->cookies) : 0;
+
+    used += (size_t)snprintf(html + used, sizeof(html) - used,
+        "<h1>Cookies</h1>"
+        "<p>What sites have asked this machine to remember, and hand back on "
+        "every visit. %d in all.</p>"
+        "<p>None of it is written to disk: closing this window forgets all of "
+        "it. A cookie is only ever sent back to the host that set it, and "
+        "never on a request for a page's pictures or stylesheets.</p>",
+        count);
+
+    if (count == 0) {
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "<p>Nothing is kept.</p>");
+    } else {
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "<table><tr><th>Site</th><th>Name</th><th>Value</th>"
+            "<th>Path</th><th>Until</th></tr>");
+
+        for (int i = 0; i < count && used + 800 < sizeof(html); i++) {
+            struct recon_cookie_view view;
+            if (!recon_cookie_at(w->cookies, i, &view)) {
+                continue;
+            }
+
+            char host[RECON_COOKIE_HOST_MAX * 2];
+            char name[RECON_COOKIE_NAME_MAX * 2];
+            char value[RECON_COOKIE_VALUE_MAX * 2];
+            char path[RECON_COOKIE_PATH_MAX * 2];
+            escaped(host, sizeof(host), view.host);
+            escaped(name, sizeof(name), view.name);
+            escaped(value, sizeof(value), view.value);
+            escaped(path, sizeof(path), view.path);
+
+            /*
+             * A long value is shown short, and *said* to be short. Cutting it
+             * silently would be the same fault this system refuses everywhere
+             * else -- a page that looks complete and is not.
+             */
+            char shown[192];
+            if (strlen(value) > 96) {
+                snprintf(shown, sizeof(shown), "%.96s... (%zu characters)",
+                    value, strlen(view.value));
+            } else {
+                /* The precision, not a plain %s, because the length is the
+                 * whole point of this branch and a compiler that cannot see
+                 * it warns about a truncation the test above prevents. */
+                snprintf(shown, sizeof(shown), "%.96s", value);
+            }
+
+            char until[96];
+            if (view.expires == 0) {
+                snprintf(until, sizeof(until), "this window closes");
+            } else {
+                long long minutes = ((long long)view.expires -
+                    (long long)time(NULL)) / 60;
+                if (minutes < 60) {
+                    snprintf(until, sizeof(until), "%lld minutes", minutes);
+                } else if (minutes < 60 * 48) {
+                    snprintf(until, sizeof(until), "%lld hours",
+                        minutes / 60);
+                } else {
+                    snprintf(until, sizeof(until), "%lld days",
+                        minutes / (60 * 24));
+                }
+            }
+
+            used += (size_t)snprintf(html + used, sizeof(html) - used,
+                "<tr><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td>"
+                "<td>%s%s</td></tr>",
+                host, view.was_narrowed ? " *" : "",
+                name, shown, path,
+                until, view.secure ? ", https only" : "");
+        }
+
+        used += (size_t)snprintf(html + used, sizeof(html) - used,
+            "</table>"
+            "<p>A site marked * asked for its cookie to be shared with a "
+            "whole family of hosts and was given the one host it is. That is "
+            "narrower than it asked for, never wider.</p>"
+            "<p>The menu forgets all of them.</p>");
+    }
+
+    show_built(t, html, "Cookies");
+}
+
 static void show_history(struct recon_web *w) {
     struct web_tab *t = front(w);
     if (t == NULL) {
@@ -3991,6 +4132,22 @@ static void menu_do(struct recon_web *w, int item) {
     case MENU_HISTORY:
         show_history(w);
         break;
+    case MENU_COOKIES:
+        show_cookies(w);
+        break;
+    case MENU_FORGET_COOKIES: {
+        int gone = recon_cookie_forget_all(w->cookies);
+        if (t != NULL) {
+            /* The number, because "cookies cleared" is a sentence somebody
+             * has to take on trust and "seven forgotten" is not. */
+            set_status(t, false, gone == 1
+                ? "One cookie forgotten. Any site you were signed in to has "
+                  "been signed out of."
+                : "%d cookies forgotten. Any site you were signed in to has "
+                  "been signed out of.", gone);
+        }
+        break;
+    }
     case MENU_BOOKMARKS:
         show_bookmarks_page(w);
         break;
@@ -4239,7 +4396,8 @@ static void send_pending(struct web_tab *t) {
     t->received = 0;
     set_status(t, false, "Sending to %s...", where.host);
 
-    t->request = recon_http_post(WEB_APPLICATION, &where, NULL, body,
+    t->request = recon_http_post(WEB_APPLICATION, &where,
+        t->owner != NULL ? t->owner->cookies : NULL, NULL, body,
         strlen(body), &HANDLERS, t);
     free(body);
 
@@ -5164,6 +5322,13 @@ static void web_destroy(void *user) {
     for (int i = 0; i < w->tab_count; i++) {
         tab_free(w->tabs[i]);
     }
+    /*
+     * After the tabs, not before. Freeing the jar first would leave every
+     * in-flight fetch holding a pointer to it, and `tab_free` is what cancels
+     * those -- so the order here is the whole of why a closed window does not
+     * write cookies into freed memory.
+     */
+    recon_cookie_jar_free(w->cookies);
     free(w);
 }
 
@@ -5385,6 +5550,14 @@ struct recon_appwin *recon_web_create(struct recon_server *server,
 
     bookmarks_load(w);
     w->show_bookmarks = w->bookmark_count > 0;
+
+    /*
+     * The jar. A window with no memory for one still browses -- every fetch
+     * takes NULL and nothing is remembered between pages, which is exactly
+     * how this behaved before cookies existed and is a better answer than
+     * refusing to open.
+     */
+    w->cookies = recon_cookie_jar_new();
 
     w->win = recon_appwin_create(server, font, &WEB_IMPL, w);
     if (w->win == NULL) {

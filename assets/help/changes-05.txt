@@ -1,28 +1,35 @@
-test_malformed swept the ICO, MP4, HTML and expression parsers with
-truncations, single-byte changes and random bytes. It did not sweep the two
-parsers added since -- CSS and addresses -- and both take bytes straight
-off a web server.
+A table was one line per row with the cells run together by spaces. You could
+read it and you could not scan it: "0.4.13 8 September Package signing" is
+three facts with nothing to say where one ends.
 
-A stylesheet is as much somebody else's file as the markup is: fetched from
-whatever host the page named, parsed, and then consulted for every element on
-the page. An address is worse in one way -- it is the boundary between their
-bytes and where this machine *connects to*.
+Two things had to exist first. A row is a block of its own kind, so a
+viewer can tell which blocks belong to one table -- consecutive rows is what a
+table is, once the tags are gone. A cell marks the run it begins at rather
+than being a block itself: a cell that was a block would get its own line,
+which is the one thing a table exists not to do.
 
-The CSS feeder does not stop at parsing. It matches the sheet against a
-three-deep element stack, which is the only thing a sheet is for and the path
-where a bad rule actually gets walked -- a sheet that parses without crashing
-and then reads outside itself on the first match is one a parse-only sweep
-calls fine. It also feeds the same bytes to recon_css_inline, which is the
-other way in and does not go through recon_css_add at all.
+That second one needed a change where it was easy to miss. Runs that look the
+same and sit next to each other are merged into one, which is right everywhere
+else and wrong across a cell boundary -- merging loses the boundary, and the
+boundary is the only thing saying where a column ends. A table of plain
+unstyled text, which is most tables, would have come back as a single run and
+could not have been laid out at all.
 
-The address feeder checks what a caller then relies on: that the host and path
-are terminated, that the path begins with the slash every caller assumes, that
-the port is a port, and that no fragment was left in the path -- the path
-is what goes in a request line, and a # in it is a byte sent to a server
-that was never meant to leave the machine.
+A column's width is a property of the table, not of any row -- it is the
+widest that column gets anywhere -- so it is measured once over every row
+before the first is drawn. A table wider than the window has all its columns
+scaled down together, which keeps their relative widths: the shape survives
+even when the size cannot.
 
-7,556 cases, no failures, under the address and undefined-behaviour
-sanitizers. Nothing found, which is the ordinary result and is worth having
-run.
+<th> records itself as level 1 on the row it is in, which is the field a row
+otherwise has no use for, and that is the whole of what makes the top of a
+table read as a heading rather than as more data.
+
+What this does not do, said plainly: no colspan, no rowspan, no nested
+tables, no borders, and a cell whose text is wider than its share overlaps
+rather than wrapping. Wrapping inside a cell means a row of variable height,
+which means measuring the height before placing the row, which is the whole
+layout problem again one level down. Lining the columns up is most of what a
+table is for and it is the part that can be had honestly.
 
 ---

@@ -1,76 +1,72 @@
-The viewer could show a search box and could not search with it. That was the
-largest thing missing from it by a distance: a browser you have to leave to go
-and use a browser.
+Forms could sign you in and the answer came back with a session the next
+request did not carry. Now it does: signing in on one page and following a link
+on the next is one visit.
 
-Every control a page can have. Text boxes, passwords drawn as dots,
-checkboxes, radios grouped by name, <select> with a list that drops down over
-the page, <textarea>, submit and reset buttons, and hidden fields that are
-sent and never drawn. A control is a *run* in the document rather than a block
-of its own, so it sits in the line where the page put it -- "Search for [ ] in
-the menu" is one sentence with a box in the middle of it, which is what it is.
+A cookie is a piece of somebody else's state kept on your computer and returned
+to them on every visit. That is what makes a session survive a page, and it is
+also the whole mechanism by which browsing is followed around -- the two are
+the same feature, and there is no version of it that is only the first. So
+the interesting content of recon_cookie.h is what it refuses, and none of the
+four is a setting.
 
-A GET goes; a POST asks first. That split is the whole of what survives of
-the old rule that a viewer able to submit a form could change something on
-somebody's server. A GET is a question: everything it says is in the address,
-asking twice is asking once twice, and it is what every search box on the web
-is. A POST is a statement -- not in the address, not in the history, and asking
-twice may have done the thing twice -- so it says how many answers it is about
-to send, to which host, and whether one of them is a password, and waits to be
-told again. One dialogue between somebody meaning to sign in and somebody's
-first click on a page they have not read.
+One: a cookie belongs to the host that set it. The Domain attribute --
+which asks for a cookie to be sent to a whole family of hosts -- is honoured
+only when it names the host itself, and anything wider is *narrowed* to the
+host rather than refused, because narrowing is always safe.
 
-The rules about what is sent are HTML's, and each one has a page that breaks
-without it. An unchecked box is absent entirely rather than empty. A checked
-box with no value of its own sends on. A menu sends its option's *value*, not
-the words shown. Of all the submit buttons on a form, only the one pressed is
-sent, which is how a page tells Save from Delete. Two controls sharing a name
-send twice, in document order, because that is how a page sends a list.
+Honouring it properly means knowing where the registrable part of a name ends,
+that example.co.uk is a site and co.uk is not. That is not derivable from
+the name; it is a list, and a *copy* of that list goes stale in the one
+direction that matters -- a suffix registered after the copy was taken is one
+this would treat as an ordinary domain, so Domain=.something.new would be
+accepted and every site under it would share a cookie. A check that quietly
+weakens as a file ages is worse than one that was never there, because
+nobody is watching it. What the refusal costs is bounded and stated: a cookie
+set on example.com is not sent to www.example.com.
 
-A control a stylesheet has hidden is still part of the form. That changed a
-rule this parser already had: inside something hidden, only the structure is
-followed. Form elements are now the one exception, because what a hidden
-control contributes is not a picture, it is a value -- and half the search
-forms on the web carry a hidden field saying which section is being searched.
-Measured on Wikipedia's article for *HTML form*: twenty-six controls, of which
-six are its search forms and twenty are page furniture.
+Two: only the document carries them. A page's pictures and stylesheets are
+fetched without cookies, always. This is enforced by the *shape of the call* --
+recon_http_get takes the jar as an argument, so every fetch says at its call
+site whether it is carrying the session, and two of the four say no. Proven
+rather than asserted: a test server that counts image requests recorded the
+picture being fetched twice, once before signing in and once after, and the
+second carried nothing while the document beside it carried all three.
 
-Every control a pointer can reach, a keyboard reaches too. Tab moves
-through them, Space works whatever has the ring, Enter in a text box sends the
-form it is in, and Escape puts a field back to what the page had. A first
-version stepped only between text boxes, which reads as working until the form
-has a box somebody has to tick.
+Three: a Secure cookie is never set or sent over an unencrypted
+connection. The same rule, in the same shape, as refusing a redirect from
+https back to http.
 
-recon_form.c is its own file, and that is the point. These rules decide
-what leaves the machine, and testing them inside the browser meant linking a
-compositor -- the same reason recon_url.c was split out of recon_http.c.
-Forty-eight checks in tests/test_form.c, written against Wikipedia's search
-form and the HTML5 standard's own example form rather than against markup
-invented for the test. The fuzzer now sends every form of every mutated page:
-9,862 cases, up from 7,556.
+Four: nothing is written to disk. A stored session cookie is a key to
+somebody's account sitting in a file. The place for a key here is the keyring,
+which holds 512 bytes per secret and has no consent question in front of it
+yet; both are on the list. Until then this says what is true -- signing in
+lasts as long as the window.
 
-POST in recon_http, and what a redirect does to one. A 303 becomes a GET
-with no body, and so do 301 and 302 -- they are *specified* to keep the method
-and are implemented everywhere as though they were 303, and a client that
-followed the specification alone would re-post an order to a server that was
-redirecting to a receipt. 307 and 308 exist to say "again, exactly", and are
-the only two where a body crosses a redirect.
+HttpOnly is recorded and does nothing, because it hides a cookie from script
+and there is no script. SameSite is recorded and does nothing because this
+sends cookies on no cross-site request at all, which is stricter than
+SameSite=Strict and is not a setting.
 
-And a fourth pass in scripts/check.sh, for a fault that was nobody's
-code. assets/help is generated from this file by a script, and the rule was
-to run it in the same commit -- which held until it did not.
-[BG-175](BUGS.md#bg-175): the Help application inside a running v0.4.19 was
-describing a system that ended at v0.4.5, and nothing said so. The check
-regenerates into a copy, compares, and puts the tree back exactly as it found
-it: a check that repairs what it is checking passes the second time it is run.
+A Cookies page, in the menu beside History, listing every site, name,
+value, path and expiry, with the narrowed ones marked -- and one entry that
+forgets them all and says how many went. The values are shown because a viewer
+that offers to tell somebody what is being sent on their behalf and then hides
+the part that matters is not telling them anything.
 
-Three faults, and how each was found. [BG-174](BUGS.md#bg-174), a textarea
-drawn three times too tall, straight through the buttons under it -- found in
-the first photograph, and invisible to every number, because the page's height
-was correct and only the drawing was wrong. [BG-173](BUGS.md#bg-173), Space on
-a checkbox ticking it and then letting go of the focus, so the next Tab started
-again from the top of the form -- found by asking the window where its focus
-was after each key, because a ticked box looks the same either way.
-[BG-172](BUGS.md#bg-172), a tooltip left explaining a button that had already
-gone; the same fault as BG-089 one level down, and fixed the same way.
+Three faults, all found before this had spoken to a server.
+[BG-176](BUGS.md#bg-176) is the one worth reading: the expiry parser returned 0
+for a date it could not read, and 0 is a real date -- Thu, 01 Jan 1970
+00:00:00 GMT is epoch zero and is the commonest deletion header on the
+web. So signing out would have left somebody signed in, and it would have
+looked exactly like being signed in.
+[BG-177](BUGS.md#bg-177), a cookie name too long being stored under a name no
+server ever set, from -Wformat-truncation. [BG-178](BUGS.md#bg-178), a
+Max-Age of twenty digits overflowing the clock, from the sanitizer -- fixed
+by clamping to four hundred days, which RFC 6265bis says a user agent must do
+anyway.
+
+84 checks in tests/test_cookie.c, and the fuzzer sends mutated
+Set-Cookie headers to five hosts and five paths and checks no cookie ever
+reaches a host that did not set one: 10,788 cases, up from 9,862.
 
 ---

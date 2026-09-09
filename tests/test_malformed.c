@@ -52,6 +52,7 @@
 #include "recon_codec.h"
 #include "recon_expr.h"
 #include "recon_css.h"
+#include "recon_cookie.h"
 #include "recon_form.h"
 #include "recon_html.h"
 #include "recon_http.h"
@@ -604,6 +605,28 @@ static size_t make_form(uint8_t *out, size_t max) {
     return length;
 }
 
+/*
+ * --- A cookie ---
+ *
+ * `Set-Cookie` is a header a server writes and this machine keeps and hands
+ * back, so every byte of it is somebody else's and every byte of it decides
+ * what is sent on the next request. The seed carries every attribute at once,
+ * so a mutation starts from something with all of them rather than from
+ * nothing.
+ */
+static size_t make_cookie(uint8_t *out, size_t max) {
+    static const char HEADER[] =
+        "session=abc123; Path=/app; Domain=.example.com; Max-Age=3600; "
+        "Expires=Wed, 09 Jun 2021 10:18:14 GMT; Secure; HttpOnly; "
+        "SameSite=Lax";
+    size_t length = sizeof(HEADER) - 1;
+    if (length > max) {
+        return 0;
+    }
+    memcpy(out, HEADER, length);
+    return length;
+}
+
 static size_t make_expr(uint8_t *out, size_t max) {
     static const char TEXT[] = "3 * sin(x) + (x ^ 2) / (1 - x)";
     size_t length = sizeof(TEXT) - 1;
@@ -685,6 +708,81 @@ static bool feed_form(const uint8_t *bytes, size_t length) {
 
     free(values);
     recon_html_free(d);
+    return true;
+}
+
+/*
+ * Store whatever this is, then ask what would be sent, on several hosts and
+ * paths -- including the ones the header names, which is where a matching
+ * rule that was too generous would show.
+ */
+static bool feed_cookie(const uint8_t *bytes, size_t length) {
+    struct recon_cookie_jar *jar = recon_cookie_jar_new();
+    if (jar == NULL) {
+        return true;
+    }
+
+    /* A string, because a header is one. The bytes may contain a NUL and
+     * that is worth feeding: a parser reading past one has been handed a
+     * shorter header than the caller thinks it gave. */
+    char header[2048];
+    size_t take = length < sizeof(header) - 1 ? length : sizeof(header) - 1;
+    memcpy(header, bytes, take);
+    header[take] = '\0';
+
+    static const char *const HOSTS[] = {
+        "example.com", "www.example.com", "other.example", "co.uk", "",
+    };
+    static const char *const PATHS[] = {
+        "/", "/app", "/app/deep/page.html", "/appliance", "",
+    };
+
+    const time_t now = 1782000000;
+
+    for (size_t h = 0; h < sizeof(HOSTS) / sizeof(HOSTS[0]); h++) {
+        recon_cookie_set(jar, HOSTS[h], PATHS[h % 5], h % 2 == 0, header,
+            now);
+    }
+
+    for (size_t h = 0; h < sizeof(HOSTS) / sizeof(HOSTS[0]); h++) {
+        for (size_t p = 0; p < sizeof(PATHS) / sizeof(PATHS[0]); p++) {
+            char out[4096];
+            size_t used = recon_cookie_header(jar, HOSTS[h], PATHS[p],
+                p % 2 == 0, now, out, sizeof(out));
+            if (used != strlen(out)) {
+                printf("  the cookie header said one length and wrote "
+                    "another\n");
+                recon_cookie_jar_free(jar);
+                return false;
+            }
+        }
+    }
+
+    /*
+     * A cookie is never sent to a host that did not set it. Checked here
+     * rather than only in the suite, because the suite uses headers somebody
+     * wrote and this uses headers nobody did -- and the interesting failure is
+     * a malformed Domain or Path that widens the match.
+     */
+    for (int i = 0; i < recon_cookie_count(jar); i++) {
+        struct recon_cookie_view view;
+        if (!recon_cookie_at(jar, i, &view)) {
+            continue;
+        }
+        char out[4096];
+        recon_cookie_header(jar, "somewhere.else", "/", true, now, out,
+            sizeof(out));
+        if (out[0] != '\0' && strcmp(view.host, "somewhere.else") != 0) {
+            printf("  a cookie reached a host that never set one\n");
+            recon_cookie_jar_free(jar);
+            return false;
+        }
+    }
+
+    recon_cookie_sweep(jar, now + 100000);
+    recon_cookie_forget_host(jar, "example.com");
+    recon_cookie_forget_all(jar);
+    recon_cookie_jar_free(jar);
     return true;
 }
 
@@ -887,6 +985,7 @@ int main(void) {
     sweep("CSS", feed_css, make_css, 0);
     sweep("Addresses", feed_url, make_url, 0);
     sweep("Forms", feed_form, make_form, 0);
+    sweep("Cookies", feed_cookie, make_cookie, 0);
     sweep("Expressions", feed_expr, make_expr, 0);
 
     printf("\n%d cases, %d failures\n", g_cases, g_failures);

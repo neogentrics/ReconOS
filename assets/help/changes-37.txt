@@ -1,2 +1,4 @@
-Setup that looks like it belongs to something, with the Recon Towers mark
-and a picture of each skin. Account pictures.
+Choose an account, then sign in — two screens rather than one, so nothing
+about how an account signs in is shown before one is chosen.
+
+Updates announce themselves on the first start after one.

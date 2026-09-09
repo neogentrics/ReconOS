@@ -24,6 +24,9 @@
 #include <string.h>
 #include <strings.h>
 
+#include <time.h>
+
+#include "recon_cookie.h"
 #include "recon_http.h"
 #include "recon_http_error.h"
 #include "recon_net.h"
@@ -90,6 +93,19 @@ struct recon_http_request {
     char *send_body;
     size_t send_length;
     char send_type[96];
+
+    /*
+     * The jar this request draws from and adds to, or NULL.
+     *
+     * Borrowed, not owned: it belongs to the window and outlives any one
+     * fetch. NULL is a request that carries no session and stores nothing,
+     * which is what every picture and stylesheet on every page gets.
+     */
+    struct recon_cookie_jar *jar;
+
+    /* How many the server set on this response, so the caller can say. */
+    int cookies_set;
+    char cookie_refused[192];
 };
 
 static void finish(struct recon_http_request *r, bool ok, const char *error);
@@ -113,7 +129,14 @@ static const char *header_value(const char *line, const char *name) {
 }
 
 static void read_head(struct recon_http_request *r) {
-    char line[1024];
+    /*
+     * Long enough for a Set-Cookie carrying a signed token, which is the
+     * longest header anybody sends on purpose -- and a *truncated* one of
+     * those is not a shorter cookie, it is a different one. So a line that
+     * does not fit is marked, and a Set-Cookie that was cut is refused rather
+     * than stored.
+     */
+    char line[4096];
     const char *at = r->head;
     bool first = true;
 
@@ -126,8 +149,10 @@ static void read_head(struct recon_http_request *r) {
         if (length == 0) {
             break;                             /* the blank line: head over */
         }
+        bool cut = false;
         if (length >= sizeof(line)) {
             length = sizeof(line) - 1;
+            cut = true;
         }
         memcpy(line, at, length);
         line[length] = '\0';
@@ -157,6 +182,34 @@ static void read_head(struct recon_http_request *r) {
         if (value != NULL && r->kind != BODY_CHUNKED) {
             r->announced = (size_t)strtoull(value, NULL, 10);
             r->kind = BODY_LENGTH;
+            continue;
+        }
+
+        /*
+         * --- What the server asked to be remembered ---
+         *
+         * Applied here rather than when the body finishes, and against the
+         * address this response came from rather than the one first asked
+         * for. Both matter for a sign-in: the cookie arrives on a redirect,
+         * and the redirect is followed by a fresh request that has to carry
+         * it. Waiting for the body would mean the follow-up went without.
+         */
+        value = header_value(line, "Set-Cookie");
+        if (value != NULL) {
+            if (cut) {
+                snprintf(r->cookie_refused, sizeof(r->cookie_refused), "%s",
+                    "a cookie longer than this reads was refused rather than "
+                    "stored half");
+            } else if (r->jar != NULL) {
+                const char *why = recon_cookie_set(r->jar, r->url.host,
+                    r->url.path, r->url.secure, value, time(NULL));
+                if (why != NULL) {
+                    snprintf(r->cookie_refused, sizeof(r->cookie_refused),
+                        "%s", why);
+                } else {
+                    r->cookies_set++;
+                }
+            }
             continue;
         }
 
@@ -352,7 +405,22 @@ static void finish(struct recon_http_request *r, bool ok, const char *error) {
 static void on_opened(void *user, struct recon_net_stream *stream) {
     struct recon_http_request *r = user;
 
-    char request[RECON_HTTP_URL_MAX + 512];
+    /*
+     * The Cookie header, built before the request so its length is known.
+     * Empty when there is nothing to send, and then no header goes at all --
+     * an empty `Cookie:` is a header saying nothing, and some servers treat it
+     * differently from its absence.
+     */
+    char cookies[4096];
+    size_t cookie_length = 0;
+    if (r->jar != NULL) {
+        cookie_length = recon_cookie_header(r->jar, r->url.host, r->url.path,
+            r->url.secure, time(NULL), cookies, sizeof(cookies));
+    } else {
+        cookies[0] = '\0';
+    }
+
+    char request[RECON_HTTP_URL_MAX + 5120];
     int written;
 
     if (r->send_body != NULL) {
@@ -369,9 +437,12 @@ static void on_opened(void *user, struct recon_net_stream *stream) {
             "Accept: text/html, text/plain, image/*, */*;q=0.5\r\n"
             "Content-Type: %s\r\n"
             "Content-Length: %zu\r\n"
+            "%s%s%s"
             "Connection: close\r\n"
             "\r\n",
-            r->url.path, r->url.host, r->send_type, r->send_length);
+            r->url.path, r->url.host, r->send_type, r->send_length,
+            cookie_length > 0 ? "Cookie: " : "", cookies,
+            cookie_length > 0 ? "\r\n" : "");
     } else {
         written = snprintf(request, sizeof(request),
             "GET %s HTTP/1.1\r\n"
@@ -387,9 +458,12 @@ static void on_opened(void *user, struct recon_net_stream *stream) {
              * class of bug where the second request on a reused connection
              * reads the tail of the first.
              */
+            "%s%s%s"
             "Connection: close\r\n"
             "\r\n",
-            r->url.path, r->url.host);
+            r->url.path, r->url.host,
+            cookie_length > 0 ? "Cookie: " : "", cookies,
+            cookie_length > 0 ? "\r\n" : "");
     }
 
     if (written < 0 || (size_t)written >= sizeof(request) ||
@@ -582,7 +656,7 @@ static bool follow(struct recon_http_request *r) {
 }
 
 struct recon_http_request *recon_http_get(const char *application,
-        const struct recon_http_url *url,
+        const struct recon_http_url *url, struct recon_cookie_jar *jar,
         const struct recon_http_handlers *handlers, void *user) {
     if (url == NULL || url->host[0] == '\0') {
         recon_http_set_error("there is no address to fetch");
@@ -598,6 +672,7 @@ struct recon_http_request *recon_http_get(const char *application,
     snprintf(r->application, sizeof(r->application), "%s",
         application != NULL ? application : "");
     r->url = *url;
+    r->jar = jar;
     r->user = user;
     if (handlers != NULL) {
         r->handlers = *handlers;
@@ -611,8 +686,8 @@ struct recon_http_request *recon_http_get(const char *application,
 }
 
 struct recon_http_request *recon_http_post(const char *application,
-        const struct recon_http_url *url, const char *content_type,
-        const char *body, size_t length,
+        const struct recon_http_url *url, struct recon_cookie_jar *jar,
+        const char *content_type, const char *body, size_t length,
         const struct recon_http_handlers *handlers, void *user) {
     if (url == NULL || url->host[0] == '\0') {
         recon_http_set_error("there is no address to send this to");
@@ -628,6 +703,7 @@ struct recon_http_request *recon_http_post(const char *application,
     snprintf(r->application, sizeof(r->application), "%s",
         application != NULL ? application : "");
     r->url = *url;
+    r->jar = jar;
     r->user = user;
     if (handlers != NULL) {
         r->handlers = *handlers;

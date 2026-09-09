@@ -9,6 +9,81 @@ way for the two to disagree.
 
 ---
 
+## v0.4.21 — cookies, and the four things they are not allowed to do
+
+Forms could sign you in and the answer came back with a session the next
+request did not carry. Now it does: signing in on one page and following a link
+on the next is one visit.
+
+A cookie is a piece of somebody else's state kept on your computer and returned
+to them on every visit. That is what makes a session survive a page, and it is
+also the whole mechanism by which browsing is followed around -- **the two are
+the same feature**, and there is no version of it that is only the first. So
+the interesting content of `recon_cookie.h` is what it refuses, and none of the
+four is a setting.
+
+**One: a cookie belongs to the host that set it.** The `Domain` attribute --
+which asks for a cookie to be sent to a whole family of hosts -- is honoured
+only when it names the host itself, and anything wider is *narrowed* to the
+host rather than refused, because narrowing is always safe.
+
+Honouring it properly means knowing where the registrable part of a name ends,
+that `example.co.uk` is a site and `co.uk` is not. That is not derivable from
+the name; it is a list, and a *copy* of that list goes stale in the one
+direction that matters -- a suffix registered after the copy was taken is one
+this would treat as an ordinary domain, so `Domain=.something.new` would be
+accepted and every site under it would share a cookie. **A check that quietly
+weakens as a file ages is worse than one that was never there**, because
+nobody is watching it. What the refusal costs is bounded and stated: a cookie
+set on `example.com` is not sent to `www.example.com`.
+
+**Two: only the document carries them.** A page's pictures and stylesheets are
+fetched without cookies, always. This is enforced by the *shape of the call* --
+`recon_http_get` takes the jar as an argument, so every fetch says at its call
+site whether it is carrying the session, and two of the four say no. Proven
+rather than asserted: a test server that counts image requests recorded the
+picture being fetched twice, once before signing in and once after, and the
+second carried nothing while the document beside it carried all three.
+
+**Three: a `Secure` cookie is never set or sent over an unencrypted
+connection.** The same rule, in the same shape, as refusing a redirect from
+https back to http.
+
+**Four: nothing is written to disk.** A stored session cookie is a key to
+somebody's account sitting in a file. The place for a key here is the keyring,
+which holds 512 bytes per secret and has no consent question in front of it
+yet; both are on the list. Until then this says what is true -- signing in
+lasts as long as the window.
+
+`HttpOnly` is recorded and does nothing, because it hides a cookie from script
+and there is no script. `SameSite` is recorded and does nothing because this
+sends cookies on no cross-site request at all, which is stricter than
+`SameSite=Strict` and is not a setting.
+
+**A Cookies page**, in the menu beside History, listing every site, name,
+**value**, path and expiry, with the narrowed ones marked -- and one entry that
+forgets them all and says how many went. The values are shown because a viewer
+that offers to tell somebody what is being sent on their behalf and then hides
+the part that matters is not telling them anything.
+
+**Three faults, all found before this had spoken to a server.**
+[BG-176](BUGS.md#bg-176) is the one worth reading: the expiry parser returned 0
+for a date it could not read, and 0 is a real date -- `Thu, 01 Jan 1970
+00:00:00 GMT` is epoch zero and is **the commonest deletion header on the
+web**. So signing out would have left somebody signed in, and it would have
+looked exactly like being signed in.
+[BG-177](BUGS.md#bg-177), a cookie name too long being stored under a name no
+server ever set, from `-Wformat-truncation`. [BG-178](BUGS.md#bg-178), a
+`Max-Age` of twenty digits overflowing the clock, from the sanitizer -- fixed
+by clamping to four hundred days, which RFC 6265bis says a user agent must do
+anyway.
+
+**84 checks in `tests/test_cookie.c`**, and the fuzzer sends mutated
+`Set-Cookie` headers to five hosts and five paths and checks no cookie ever
+reaches a host that did not set one: **10,788 cases**, up from 9,862.
+
+---
+
 ## v0.4.20 — forms, and they submit
 
 The viewer could show a search box and could not search with it. That was the

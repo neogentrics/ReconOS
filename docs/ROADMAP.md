@@ -143,6 +143,34 @@ the word.
 
 ### Asked for, and done
 
+**Cookies, and the four things they are not allowed to do** — v0.4.21. Asked
+for as "now do cookies", straight after forms, and it is the thing that was
+left: a form could sign you in and the session did not survive the next link.
+
+The design decision worth recording is the **domain policy**, because it is a
+refusal and refusals are the ones that get quietly relaxed later. A cookie is
+kept under the host that set it. `Domain` is honoured when it names that host
+and is otherwise ignored, which *narrows* rather than widens.
+
+Honouring `Domain` properly needs the Public Suffix List -- knowing that
+`example.co.uk` is a site and `co.uk` is not is not derivable from the name.
+Bundling a copy was considered and rejected: a copy fails **open** as it ages,
+because a suffix registered after the copy was taken is one this would treat as
+an ordinary domain. A safety check that weakens on its own, silently, with
+nobody watching, is worse than not having one -- and this project's rule about
+`-Wformat-truncation` and about `memset` on secrets is the same rule: the
+faults worth fearing here are the ones with no failing behaviour.
+
+What it costs is real and bounded, and is written in the header rather than
+discovered: a cookie set on `example.com` is not sent to `www.example.com`.
+
+**And the rule that pictures do not carry a session is enforced by the shape of
+the call rather than by a policy.** `recon_http_get` takes a jar or NULL, so
+each of the four fetches in the browser says in its own line whether it carries
+the session — and the two that fetch stylesheets and pictures say no. A rule
+written in a comment is one somebody switches off; a parameter is one they have
+to look at.
+
 **Forms, and they submit** — v0.4.20. Asked for as "now do the forms in the
 browser and build it out completely", and it was the largest thing the viewer
 was missing: it could draw a search box and could not search with it, which
