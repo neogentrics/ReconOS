@@ -96,6 +96,14 @@ enum {
 #define SYS_EPERM    (-12)	/* the file is open, and not for that */
 #define SYS_EPIPE    (-13)	/* the other end is gone */
 
+/* The kernel could not get the memory to do it.
+ *
+ * Its own code for the same reason EAGAIN has one: a program told EINVAL
+ * concludes the request was wrong and stops, and this one may well work a
+ * moment later. Collapsing them turns a busy machine into a broken
+ * program. */
+#define SYS_ENOMEM   (-14)
+
 enum reconfs_status;
 
 /* One filesystem status as one system-call status. In one place because which

@@ -24,8 +24,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/sched.h>
 
-static inline void outb(u16 port, u8 v) { __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port)); }
-static inline u8  inb(u16 port) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+/* Port I/O is in x86_64.h, which this already includes. */
 
 /* A short pause between writes to the same 1981 chip. Writing to an unused
  * port is the traditional way to spend a bus cycle. */
@@ -98,6 +97,29 @@ void x86_pic_restore_default(void)
 {
 	outb(PIC1_DATA, 0xFE);
 	outb(PIC2_DATA, 0xFF);
+}
+
+/* One line opened at the 8259, without disturbing the others.
+ *
+ * Read-modify-write rather than a remembered value: the mask is a register
+ * in a chip, and this kernel is not the only thing that has written to it
+ * -- firmware left it in some state and x86_pic_restore_default has its own
+ * opinion. Reading it is one instruction and removes the question. */
+void x86_pic_unmask(unsigned irq)
+{
+	u16 port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
+	u8 bit = (u8)(1u << (irq & 7));
+
+	if (irq >= 16)
+		return;
+
+	outb(port, (u8)(inb(port) & ~bit));
+
+	/* A line on the second chip only arrives if the cascade is open
+	 * too. Forgetting this is the classic way an interrupt above 7
+	 * never appears with every other register correct. */
+	if (irq >= 8)
+		outb(PIC1_DATA, (u8)(inb(PIC1_DATA) & ~(1u << 2)));
 }
 
 void x86_pic_mask_all(void)

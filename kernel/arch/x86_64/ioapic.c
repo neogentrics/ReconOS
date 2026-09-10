@@ -382,6 +382,22 @@ bool arch_irq_self_test(void)
 	return x86_msi_self_test();
 }
 
+bool x86_irq_enable_line(unsigned irq)
+{
+	if (irq >= 16)
+		return false;
+
+	/* The I/O APIC if it took the lines over, the 8259 if it did not.
+	 * Asked rather than assumed, because the take-over is verified at
+	 * boot and can fall back -- and a driver that armed the wrong chip
+	 * would get no interrupts with every register it wrote correct. */
+	if (x86_ioapic_in_use())
+		return x86_ioapic_route_isa(irq, (u8)(32 + irq), 0);
+
+	x86_pic_unmask(irq);
+	return true;
+}
+
 void x86_ioapic_print_summary(void)
 {
 	unsigned i;

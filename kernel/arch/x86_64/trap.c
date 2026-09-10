@@ -21,6 +21,7 @@
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/irq.h>
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
@@ -261,10 +262,22 @@ void trap_dispatch(struct trap_frame *f)
 	 * an interrupt the controller is not told about is the last one it
 	 * ever sends. */
 	if (f->vector >= 32 && f->vector < 48) {
-		if (f->vector == 32)
+		unsigned line = (unsigned)(f->vector - 32);
+
+		if (f->vector == 32) {
 			x86_timer_interrupt();
-		else
-			x86_irq_ack((unsigned)(f->vector - 32));
+			return;
+		}
+
+		/* Whoever claimed this line, and then the controller.
+		 *
+		 * The acknowledgement is here and never inside a handler. A
+		 * handler that forgot would stop every interrupt on the
+		 * machine from that moment, which looks like a freeze with
+		 * nothing on screen -- and it would be one driver's mistake
+		 * taking the whole machine down. */
+		irq_dispatch(line);
+		x86_irq_ack(line);
 		return;
 	}
 

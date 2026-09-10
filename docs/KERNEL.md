@@ -2787,6 +2787,124 @@ everything would pass a test that only asked whether it complained.
 The length check exists *because* its damage test was written first and had
 nothing to catch.
 
+## Somebody touching the machine
+
+Every screen this kernel had ever drawn had been read and not touched. There was
+no keyboard, no mouse, and nothing that turned a keypress into anything -- which
+the audit named as the single item with nothing above it and nothing blocking it.
+
+### An event is a key, not a character
+
+This is the decision the whole subsystem turns on, and getting it the other way
+round is how a kernel ends up owning keyboard layouts.
+
+The hardware says "the key in position 30 went down". What *character* that is
+depends on the layout, the modifiers, the dead-key state, and in some languages
+on the two keys before it. **All of that is data, and none of it is the
+kernel's.** A kernel that hands up characters has to contain a layout table, and
+then a second one, and then a way to choose between them -- and a program that
+wants the *position*, like a game reading WASD which is ZQSD on a French
+keyboard, can never get it back, because the information was thrown away below.
+
+So an event carries a **keycode**: a number naming a physical position, the same
+number for that position on every keyboard. The numbers follow the USB HID usage
+table, which is not a preference -- it is what every keyboard made this century
+actually reports, so a USB driver will hand these up with no translation at all.
+It is the PS/2 driver, the older and stranger one, that does the converting.
+
+### Press, release, and the third one
+
+A held key repeats, because the keyboard's own typematic circuit sends the make
+code again. Those are reported as *repeats* rather than as fresh presses.
+
+Not cosmetic. A text field wants repeats -- holding backspace should delete more
+than one character. A game does not: a repeat is not a new jump. Collapsed into
+"pressed", the two become impossible to tell apart and every program that cares
+has to reconstruct the difference from timing, badly.
+
+### A release with no press
+
+After a dropped event, or for a program that started while a key was already
+held, a release arrives for a press nobody saw.
+
+So held-state is a **bit per key, derived from the events**, and a release of a
+key that was not held is a no-op. A counter here goes negative, wraps, and
+leaves the machine believing shift is held for the rest of the boot.
+
+### The firmware bit that cannot be believed
+
+The FADT has a bit -- `IAPC_BOOT_ARCH` bit 1 -- meaning "this machine has an
+8042". **It cannot be trusted when clear, and that is measured rather than
+suspected:**
+
+| QEMU machine | `IAPC_BOOT_ARCH` | has an 8042 |
+|---|---|---|
+| `-M pc` (i440fx) | `0x0000` | yes |
+| `-M q35` | `0x0002` | yes |
+
+Same hardware, two answers. A kernel that believed the bit has no keyboard on one
+machine and a keyboard on the other, with nothing anywhere saying why.
+
+So presence is established **positively**: the controller is asked to run its own
+self-test and answer `0x55`. A port nothing drives reads back `0xFF`, so "the
+status register looks plausible" proves nothing, but `0x55` is a specific answer
+only an 8042 gives. Every wait is bounded, so probing a machine that genuinely
+has none costs microseconds and cannot hang. The bit still earns its place: it
+says whether finding nothing is worth reporting as a fault or is simply the truth
+about this machine.
+
+### Scancode sets, verified rather than hoped for
+
+A keyboard sends set 2. The controller can translate to set 1 on the way past,
+and a bit in its configuration byte says whether it does. Almost every machine
+boots with translation on, which is why almost every small kernel assumes set 1
+-- and is silently wrong on the machine where it is off, with every key coming
+out as a different key and nothing reporting a fault.
+
+So the configuration byte is written **and read back**. If translation did not
+stick, the driver says so and delivers no keys rather than wrong ones. A keyboard
+that types the wrong letters is worse than one that does not type: the first
+looks like a broken program.
+
+### The order that cost an afternoon
+
+Three things have to happen and the order is the whole of it: **register the
+handler, open the line, then let the device raise interrupts.**
+
+The first version armed the device inside its configuration, before registering.
+The keyboard's own reset and acknowledgement bytes then arrived at a line nobody
+had claimed -- and because nothing read the data port, the controller kept its
+output buffer full. **An 8042 holding a byte nobody has taken raises no further
+interrupts.** Four bytes in, the keyboard was silent for the rest of the boot,
+with every register correctly programmed and every self-test passing.
+
+It was found by counting: the interrupt table reported *four taken on line 1,
+four with nobody to take them*, next to a summary saying the keyboard was
+registered on line 1. Two things that cannot both be true.
+
+### What the handler does
+
+Takes one byte. That is the whole of it.
+
+The controller holds exactly one and the next keypress overwrites it, so the byte
+has to leave the port now, at interrupt level, however busy the machine is.
+Everything after -- the scancode state machine, the queue -- is a thread's job
+and goes to `work_schedule`. This is the first driver in the kernel to use
+deferred work for what it was built for, and the first to ask for an interrupt
+line at all, which is what the I/O APIC work had been waiting for.
+
+Measured end to end, with keystrokes injected through QEMU's monitor:
+
+| sent | scancodes seen | keycode delivered |
+|---|---|---|
+| `a` | `0x1E` then `0x9E` | 4 down, 4 up |
+| `b` | `0x30` then `0xB0` | 5 down, 5 up |
+| up arrow | `0xE0 0x48` then `0xE0 0xC8` | 82 down, 82 up |
+
+The third row is the one worth having: the extended prefix is a separate
+namespace, and `0x1D` is left control on its own and right control after `0xE0`.
+Folding them into one table is how a kernel reports the wrong modifier.
+
 ## When the memory runs out
 
 Everything above the page allocator was built assuming there would be enough.

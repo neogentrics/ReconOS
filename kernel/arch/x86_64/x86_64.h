@@ -31,7 +31,35 @@ extern u64 reconboot_handoff;
  * handled, and what the console reports about the clock. */
 void x86_timer_interrupt(void);
 void x86_apic_timer_interrupt(void);	/* the same tick, on a secondary */
+/* --- Port I/O ---------------------------------------------------------
+ *
+ * Here rather than in each file that needs them. arch.c and time.c each
+ * had their own copy while both included this header, which was harmless
+ * with two and is the beginning of drift with three.
+ */
+static inline void outb(u16 port, u8 value)
+{
+	__asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline u8 inb(u16 port)
+{
+	u8 value;
+
+	__asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+	return value;
+}
+
 void x86_pic_end_of_interrupt(unsigned irq);
+/* Opens an ISA line at whichever controller is actually delivering,
+ * and points it at this kernel's vector for that line.
+ *
+ * One function because the choice is made once, at boot, and a driver
+ * that had to ask which controller is in use would be the second place
+ * that knowledge lived. */
+bool x86_irq_enable_line(unsigned irq);
+
+void x86_pic_unmask(unsigned irq);
 void x86_pic_mask_all(void);
 void x86_pic_restore_default(void);
 

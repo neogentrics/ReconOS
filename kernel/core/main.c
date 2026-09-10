@@ -32,6 +32,8 @@
 #include <recon/kernel/pageage.h>
 #include <recon/kernel/evict.h>
 #include <recon/kernel/bcache.h>
+#include <recon/kernel/irq.h>
+#include <recon/kernel/input.h>
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -175,6 +177,10 @@ void kmain(void)
 	 * scheduler to yield to while the hardware thinks. */
 	block_init();
 	bcache_init();
+
+	/* After the interrupt routing, because the keyboard asks for a
+	 * line -- and it is the first thing in this kernel that ever has. */
+	input_init();
 	block_print_summary();
 	acpi_print_summary();
 
@@ -255,6 +261,10 @@ void kmain(void)
 		page_age_self_test() ? "pass" : "FAIL");
 	kprintf("  a page that came back : %s\n",
 		evict_self_test() ? "pass" : "FAIL");
+	kprintf("  a line somebody wants : %s\n",
+		irq_self_test() ? "pass" : "FAIL");
+	kprintf("  somebody typing      : %s\n",
+		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",
 		bcache_self_test() ? "pass" : "FAIL");
 	kprintf("  what was said, kept : %s\n",
@@ -326,6 +336,8 @@ void kmain(void)
 	page_age_print_summary();
 	evict_print_summary();
 	bcache_print_summary();
+	input_print_summary();
+	irq_print_summary();
 	lock_print_summary();
 	klog_print_summary();
 
