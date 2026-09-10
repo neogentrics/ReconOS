@@ -39,20 +39,20 @@ void arch_user_init(void)
 void arch_thread_switched_in(struct thread *t)
 {
 	/* Nothing, and this is not a stub -- it is a real difference between the
-	  * two architectures.
-	  *
-	  * x86_64 has to be told where a trap from user mode should land, in a
-	  * task-state segment and a per-processor block, and both belong to the
-	  * processor while the stack they name belongs to the thread. That gap
-	  * is what a preemptible system call falls into when the thread is
-	  * rescheduled onto another processor.
-	  *
-	  * Here there is no gap, because there is no second place holding the
-	  * answer. An exception from EL0 switches to SP_EL1, and SP_EL1 *is* the
-	  * kernel stack pointer this processor is using -- which the context
-	  * switch has just set to the incoming thread's own stack. The value is
-	  * right by construction rather than by being copied somewhere in time.
-	  */
+	 * two architectures.
+	 *
+	 * x86_64 has to be told where a trap from user mode should land, in a
+	 * task-state segment and a per-processor block, and both belong to the
+	 * processor while the stack they name belongs to the thread. That gap
+	 * is what a preemptible system call falls into when the thread is
+	 * rescheduled onto another processor.
+	 *
+	 * Here there is no gap, because there is no second place holding the
+	 * answer. An exception from EL0 switches to SP_EL1, and SP_EL1 *is* the
+	 * kernel stack pointer this processor is using -- which the context
+	 * switch has just set to the incoming thread's own stack. The value is
+	 * right by construction rather than by being copied somewhere in time.
+	 */
 	(void)t;
 }
 

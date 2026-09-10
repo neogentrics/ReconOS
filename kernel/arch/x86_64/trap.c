@@ -248,9 +248,9 @@ void trap_dispatch(struct trap_frame *f)
 		return;
 
 	/* A device -- or, so far, only the self-test -- raising an interrupt by
-	  * writing to the local APIC's window. Acknowledged like any other
-	  * interrupt the APIC delivered; there is no controller behind it to
-	  * tell, which is the point of it. */
+	 * writing to the local APIC's window. Acknowledged like any other
+	 * interrupt the APIC delivered; there is no controller behind it to
+	 * tell, which is the point of it. */
 	if (f->vector == VECTOR_MSI) {
 		x86_msi_test_arrivals++;
 		x86_apic_eoi();

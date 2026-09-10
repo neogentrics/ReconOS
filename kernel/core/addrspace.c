@@ -117,14 +117,14 @@ void addrspace_release(struct addrspace *as)
 		as->mapped_bytes = 0;
 
 		/* And the files any of its regions were backed by. Taken out of
-		  * the regions under the lock and released outside it, for the
-		  * same reason the root is: releasing the last reference to a
-		  * file commits it to a disk.
-		  *
-		  * Without this a mapping would hold its file for the life of the
-		  * machine -- and because a slot is reused, the next program to
-		  * get this space would inherit the reference as well. That is
-		  * the same shape as BG-147. */
+		 * the regions under the lock and released outside it, for the
+		 * same reason the root is: releasing the last reference to a
+		 * file commits it to a disk.
+		 *
+		 * Without this a mapping would hold its file for the life of the
+		 * machine -- and because a slot is reused, the next program to
+		 * get this space would inherit the reference as well. That is
+		 * the same shape as BG-147. */
 		{
 			unsigned i;
 
@@ -300,12 +300,12 @@ static bool give_own_page(struct addrspace *as, vaddr_t page,
 		kmemset(phys_to_virt(fresh), 0, PAGE_SIZE);
 
 	/* And then whatever backs it, over the zeroes rather than instead of
-	  * them: the part of the page past the end of the file stays zero, which
-	  * is what a mapping longer than its file has always meant.
-	  *
-	  * Only when this page is being made from nothing. A copy-on-write copy
-	  * takes the page the program was already reading, and re-reading the
-	  * file there would throw away whatever it had written before the copy. */
+	 * them: the part of the page past the end of the file stays zero, which
+	 * is what a mapping longer than its file has always meant.
+	 *
+	 * Only when this page is being made from nothing. A copy-on-write copy
+	 * takes the page the program was already reading, and re-reading the
+	 * file there would throw away whatever it had written before the copy. */
 	if (!replacing && r->file &&
 	    !fill_from_file((struct as_region *)r, page, phys_to_virt(fresh))) {
 		pmm_free_page(fresh);
@@ -379,8 +379,8 @@ bool addrspace_map_file(struct addrspace *as, vaddr_t va, u64 size,
 	u64 irq;
 
 	/* A file that cannot be read or sought cannot back a mapping, and
-	  * finding that out at the first fault would mean a program dying on
-	  * an address rather than being refused a mapping. */
+	 * finding that out at the first fault would mean a program dying on
+	 * an address rather than being refused a mapping. */
 	if (!as || !size || !f || !f->ops->read || !f->ops->seek)
 		return false;
 
@@ -432,8 +432,8 @@ static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
 	spin_unlock_irq(&fill_lock, flags);
 
 	/* A read that failed is a fault. A read that was short is not: the
-	  * rest of the page is already zero, and a file that ended is a file
-	  * that ended. */
+	 * rest of the page is already zero, and a file that ended is a file
+	 * that ended. */
 	return n >= 0;
 }
 
@@ -469,12 +469,12 @@ bool vm_fault_user(vaddr_t addr, bool write)
 
 	if (!have) {
 		/* Absent does not mean never mapped. An entry can name a
-		  * swap slot instead of a page, and this is the only place
-		  * that can tell -- vm_lookup answers zero for both.
-		  *
-		  * Checked before anything else, because every branch below
-		  * would otherwise hand the program a fresh page of zeroes
-		  * over the top of memory it still owns. */
+		 * swap slot instead of a page, and this is the only place
+		 * that can tell -- vm_lookup answers zero for both.
+		 *
+		 * Checked before anything else, because every branch below
+		 * would otherwise hand the program a fresh page of zeroes
+		 * over the top of memory it still owns. */
 		if (vm_swap_slot(page)) {
 			if (evict_fault_in(page, r->flags)) {
 				faults_served++;
@@ -482,17 +482,17 @@ bool vm_fault_user(vaddr_t addr, bool write)
 			}
 
 			/* The page is gone and could not be read back. There
-			  * is nothing to hand over: a zeroed page here is a
-			  * program carrying on with silently corrupted
-			  * memory, which is worse than the fault. */
+			 * is nothing to hand over: a zeroed page here is a
+			 * program carrying on with silently corrupted
+			 * memory, which is worse than the fault. */
 			faults_refused++;
 			return false;
 		}
 
 		/* A file-backed page has contents, so there is nothing to share:
-		  * the shared page of zeroes is the right answer only when zeroes
-		  * are the right answer. Every page here is its own from the first
-		  * touch, read or write. */
+		 * the shared page of zeroes is the right answer only when zeroes
+		 * are the right answer. Every page here is its own from the first
+		 * touch, read or write. */
 		if (r->file)
 			return give_own_page(as, page, r, 0);
 

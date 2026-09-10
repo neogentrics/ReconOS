@@ -117,8 +117,8 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a3, u64 a4, u64 a5)
 		return SYS_EBADF;
 
 	/* "Cannot be written" is answered once, here, rather than by a stub in
-	  * every implementation that cannot -- and it is a different answer from
-	  * a write that was attempted and failed. */
+	 * every implementation that cannot -- and it is a different answer from
+	 * a write that was attempted and failed. */
 	if (!f->ops->write) {
 		file_release(f);
 		return SYS_EPERM;
@@ -165,8 +165,8 @@ static i64 sys_open(u64 path, u64 path_len, u64 flags, u64 mode, u64 a4,
 		return st;
 
 	/* Neither readable nor writable is refused rather than given some
-	  * default. A program that asked for nothing gets to find out it asked
-	  * for nothing. */
+	 * default. A program that asked for nothing gets to find out it asked
+	 * for nothing. */
 	if (!(flags & (OPEN_READ | OPEN_WRITE)))
 		return SYS_EINVAL;
 
@@ -177,9 +177,9 @@ static i64 sys_open(u64 path, u64 path_len, u64 flags, u64 mode, u64 a4,
 	fd = fd_install(caller(), f);
 
 	/* The install took a reference of its own, so this one goes either way.
-	  * On failure that is the last one and the file is closed here -- which
-	  * for a created file means it is never written, which is right: it was
-	  * never handed to anybody. */
+	 * On failure that is the last one and the file is closed here -- which
+	 * for a created file means it is never written, which is right: it was
+	 * never handed to anybody. */
 	file_release(f);
 	return fd;
 }
@@ -187,8 +187,8 @@ static i64 sys_open(u64 path, u64 path_len, u64 flags, u64 mode, u64 a4,
 static i64 sys_close(u64 fd, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	/* The result is returned rather than discarded, and that is not a
-	  * formality: a file written to the mounted volume is committed here,
-	  * so this is the only place its failure can be reported. */
+	 * formality: a file written to the mounted volume is committed here,
+	 * so this is the only place its failure can be reported. */
 	return fd_close(caller(), (int)fd);
 }
 
@@ -210,13 +210,13 @@ static i64 sys_pipe(u64 out, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	fds[1] = fd_install(p, w);
 
 	/* Our own references go either way: the descriptors hold them now, and
-	  * on failure dropping them is what closes the end nobody got. */
+	 * on failure dropping them is what closes the end nobody got. */
 	file_release(r);
 	file_release(w);
 
 	if (fds[0] < 0 || fds[1] < 0) {
 		/* Half a pipe is worse than none: a program handed one end and
-		  * an error has to guess whether to close it. */
+		 * an error has to guess whether to close it. */
 		if (fds[0] >= 0)
 			fd_close(p, fds[0]);
 		if (fds[1] >= 0)
@@ -237,8 +237,8 @@ static i64 sys_seek(u64 fd, u64 offset, u64 from, u64 a3, u64 a4, u64 a5)
 		return SYS_EBADF;
 
 	/* A thing with no position at all -- a console, a pipe -- is a
-	  * different answer from a seek that failed, and the program can tell
-	  * the two apart. */
+	 * different answer from a seek that failed, and the program can tell
+	 * the two apart. */
 	if (!f->ops->seek) {
 		file_release(f);
 		return SYS_EPERM;

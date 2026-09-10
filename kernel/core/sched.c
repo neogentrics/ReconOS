@@ -120,30 +120,30 @@ void sched_init(void)
 	boot->vector_guard = VECTOR_GUARD;
 
 	/* NOT anybody's idle thread, said explicitly because zero does not mean
-	  * that.
-	  *
-	  * `idle_for` is a processor number, and -1 is "no processor" -- so the
-	  * kmemset above left this thread claiming to be processor 0's idle
-	  * thread. Two things followed, and both had been true since the field
-	  * was added. It could only ever be scheduled on processor 0, because
-	  * an idle thread must not be taken by another processor. And **it could
-	  * never block**: wait_sleep refuses an idle thread, since a blocked
-	  * idle thread is a processor that has stopped.
-	  *
-	  * Nothing noticed because nothing on the boot thread had ever waited
-	  * for anything -- the boot path ran to completion and the self-tests
-	  * that use wait queues all create threads of their own. The first
-	  * caller to try was timer_sleep_ns, which reported that a thread could
-	  * not sleep and was right.
-	  *
-	  * Same shape as BG-147: a structure cleared wholesale, and one field
-	  * whose zero is a meaningful and wrong value. */
+	 * that.
+	 *
+	 * `idle_for` is a processor number, and -1 is "no processor" -- so the
+	 * kmemset above left this thread claiming to be processor 0's idle
+	 * thread. Two things followed, and both had been true since the field
+	 * was added. It could only ever be scheduled on processor 0, because
+	 * an idle thread must not be taken by another processor. And **it could
+	 * never block**: wait_sleep refuses an idle thread, since a blocked
+	 * idle thread is a processor that has stopped.
+	 *
+	 * Nothing noticed because nothing on the boot thread had ever waited
+	 * for anything -- the boot path ran to completion and the self-tests
+	 * that use wait queues all create threads of their own. The first
+	 * caller to try was timer_sleep_ns, which reported that a thread could
+	 * not sleep and was right.
+	 *
+	 * Same shape as BG-147: a structure cleared wholesale, and one field
+	 * whose zero is a meaningful and wrong value. */
 	boot->idle_for = -1;
 
 	/* And pinned where it already was. The boot sequence runs on this
-	  * thread and a good deal of it assumes it is processor 0 doing the
-	  * work -- so the pinning that idle_for was providing by accident is
-	  * kept, deliberately, while the inability to block goes away. */
+	 * thread and a good deal of it assumes it is processor 0 doing the
+	 * work -- so the pinning that idle_for was providing by accident is
+	 * kept, deliberately, while the inability to block goes away. */
 	boot->pinned_to = (int)arch_cpu_id();
 	boot->off_cpu = false;	/* it is running, here, now */
 
@@ -320,9 +320,9 @@ static void release_leaving(struct cpu_local *cpu)
 	cpu->leaving = 0;
 
 	/* Only a thread that was still RUNNING becomes runnable again. One
-	  * that blocked is BLOCKED and its waker decides; one that finished is
-	  * FINISHED and the reaper decides. Both still need the flag, because
-	  * both are things another processor may act on. */
+	 * that blocked is BLOCKED and its waker decides; one that finished is
+	 * FINISHED and the reaper decides. Both still need the flag, because
+	 * both are things another processor may act on. */
 	if (gone->state == THREAD_RUNNING) {
 		gone->state = THREAD_READY;
 		gone->cpu = -1;
@@ -356,30 +356,30 @@ static struct thread *pick_next(struct thread *cur, unsigned me)
 		 * which is how a machine with four processors and two threads
 		 * panics while three of them are idle. */
 		/* off_cpu, and not merely READY. A thread that has been
-		  * marked runnable but whose processor has not finished
-		  * leaving it would be resumed from a stack pointer that has
-		  * not been written yet. */
+		 * marked runnable but whose processor has not finished
+		 * leaving it would be resumed from a stack pointer that has
+		 * not been written yet. */
 		if (t->state == THREAD_READY && t->off_cpu &&
 		    (t->idle_for < 0 || t->idle_for == (int)me) &&
 		    (t->pinned_to < 0 || t->pinned_to == (int)me)) {
 			/* AN IDLE THREAD IS THE LAST RESORT, NOT A TURN IN THE
-			  * ROUND.
-			  *
-			  * It used to be neither, because this ring never contained
-			  * an idle thread for the processor doing the picking: the
-			  * boot processor had none, and a secondary spent its whole
-			  * life in one. Giving processor 0 a real idle thread made
-			  * this line wrong without changing it, which is the same
-			  * shape as the TLB shootdown and BG-148.
-			  *
-			  * And it was expensive rather than incorrect, which is why
-			  * every self-test still passed. idle_loop waits for an
-			  * interrupt, so a slice handed to it is not a short slice --
-			  * it is the rest of the tick, doing nothing. Alternating
-			  * between the boot thread and an idle thread roughly halved
-			  * the machine: the seven paths of the verification run that
-			  * write to a disk all timed out, having written correct data
-			  * too slowly. */
+			 * ROUND.
+			 *
+			 * It used to be neither, because this ring never contained
+			 * an idle thread for the processor doing the picking: the
+			 * boot processor had none, and a secondary spent its whole
+			 * life in one. Giving processor 0 a real idle thread made
+			 * this line wrong without changing it, which is the same
+			 * shape as the TLB shootdown and BG-148.
+			 *
+			 * And it was expensive rather than incorrect, which is why
+			 * every self-test still passed. idle_loop waits for an
+			 * interrupt, so a slice handed to it is not a short slice --
+			 * it is the rest of the tick, doing nothing. Alternating
+			 * between the boot thread and an idle thread roughly halved
+			 * the machine: the seven paths of the verification run that
+			 * write to a disk all timed out, having written correct data
+			 * too slowly. */
 			if (t->idle_for >= 0) {
 				if (!fallback)
 					fallback = t;
@@ -392,8 +392,8 @@ static struct thread *pick_next(struct thread *cur, unsigned me)
 	}
 
 	/* Nothing else wanted this processor. If the caller is still
-	  * runnable it keeps it; otherwise the idle thread is what is left,
-	  * which is exactly what it exists for. */
+	 * runnable it keeps it; otherwise the idle thread is what is left,
+	 * which is exactly what it exists for. */
 	if (cur->state == THREAD_RUNNING)
 		return cur;
 
@@ -442,17 +442,17 @@ void sched_switch(void)
 	}
 
 	/* prev is NOT marked READY here, which is the change BG-159 is.
-	  *
-	  * It used to be, and that made the thread available to every other
-	  * processor while this one was still executing on its stack and had
-	  * not yet written its saved stack pointer. It is released instead by
-	  * whoever runs here next, which is the first instant at which it has
-	  * genuinely stopped. */
+	 *
+	 * It used to be, and that made the thread available to every other
+	 * processor while this one was still executing on its stack and had
+	 * not yet written its saved stack pointer. It is released instead by
+	 * whoever runs here next, which is the first instant at which it has
+	 * genuinely stopped. */
 	me->leaving = prev;
 
 	/* The invariant, checked where it can be violated. Only on a switch to
-	  * an idle thread, which on a busy machine is rare and on an idle one is
-	  * a walk of a short ring. */
+	 * an idle thread, which on a busy machine is rare and on an idle one is
+	 * a walk of a short ring. */
 	if (next->idle_for >= 0) {
 		struct thread *t = next->next;
 
@@ -497,10 +497,10 @@ void sched_switch(void)
 	 * When there is a reason to make it lazy there will also be a
 	 * measurement saying so. */
 	/* Everything the machine has to be told about *which thread* is about
-	  * to run here -- the stack a trap from user mode should land on, and
-	  * whatever else the architecture keeps per processor on a thread's
-	  * behalf. Before the switch, because it is this processor being told
-	  * about its next occupant. */
+	 * to run here -- the stack a trap from user mode should land on, and
+	 * whatever else the architecture keeps per processor on a thread's
+	 * behalf. Before the switch, because it is this processor being told
+	 * about its next occupant. */
 	arch_thread_switched_in(next);
 
 	arch_vector_save(prev->vector_state);
@@ -544,16 +544,16 @@ void sched_switch(void)
 	arch_context_switch(&prev->stack_pointer, next->stack_pointer);
 
 	/* Reached as the *incoming* thread, whenever it is next scheduled.
-	  *
-	  * `this_cpu()` is recomputed rather than reusing `me`: a thread
-	  * resumes on whichever processor picked it, which need not be the one
-	  * it left. `me` is the other processor's block, saved in this frame
-	  * when this thread switched away, and using it here would release a
-	  * thread on somebody else's behalf.
-	  *
-	  * Interrupts are still off -- they were off on the way in and the
-	  * switch preserved that -- so the lock is taken without touching
-	  * them. */
+	 *
+	 * `this_cpu()` is recomputed rather than reusing `me`: a thread
+	 * resumes on whichever processor picked it, which need not be the one
+	 * it left. `me` is the other processor's block, saved in this frame
+	 * when this thread switched away, and using it here would release a
+	 * thread on somebody else's behalf.
+	 *
+	 * Interrupts are still off -- they were off on the way in and the
+	 * switch preserved that -- so the lock is taken without touching
+	 * them. */
 	spin_lock(&ring_lock);
 	release_leaving(this_cpu());
 	spin_unlock(&ring_lock);
@@ -648,15 +648,15 @@ static void reap(void)
 
 		do {
 			/* off_cpu, and not merely finished. thread_exit marks a
-			  * thread FINISHED and then switches away, and it is standing
-			  * on the stack about to be freed for the whole of that gap.
-			  * `t != this_cpu()->current` does not cover it, because the
-			  * thread finishing is current on a *different* processor.
-			  *
-			  * That is how this was found: a page freed here was handed
-			  * straight to the allocator's own concurrency test, which
-			  * wrote its marker over a live return address. The panic
-			  * reported a link register of 0xacce5501. */
+			 * thread FINISHED and then switches away, and it is standing
+			 * on the stack about to be freed for the whole of that gap.
+			 * `t != this_cpu()->current` does not cover it, because the
+			 * thread finishing is current on a *different* processor.
+			 *
+			 * That is how this was found: a page freed here was handed
+			 * straight to the allocator's own concurrency test, which
+			 * wrote its marker over a live return address. The panic
+			 * reported a link register of 0xacce5501. */
 			if (t->state == THREAD_FINISHED && t->off_cpu &&
 			    t != this_cpu()->current && !is_boot_thread(t)) {
 				ring_remove(t);
@@ -832,16 +832,16 @@ bool sched_self_test(void)
 	}
 
 	/* And that no processor sat in its idle thread while there was work.
-	  *
-	  * Three threads have just been run to a deadline, so for the whole of
-	  * that window there was something ready on this processor. An idle
-	  * thread scheduled during it is a slice thrown away -- and because
-	  * idle_loop waits for an interrupt, it is not a short slice.
-	  *
-	  * This is here because exactly that happened and every test in this
-	  * file passed anyway: the machine was correct and about half as fast,
-	  * and the only thing that noticed was seven disk paths in the
-	  * verification run timing out. See BG-158. */
+	 *
+	 * Three threads have just been run to a deadline, so for the whole of
+	 * that window there was something ready on this processor. An idle
+	 * thread scheduled during it is a slice thrown away -- and because
+	 * idle_loop waits for an interrupt, it is not a short slice.
+	 *
+	 * This is here because exactly that happened and every test in this
+	 * file passed anyway: the machine was correct and about half as fast,
+	 * and the only thing that noticed was seven disk paths in the
+	 * verification run timing out. See BG-158. */
 	if (idle_over_work != idle_over_work_before) {
 		kprintf("  sched: an idle thread was scheduled %lu time(s) while another thread was ready to run\n",
 			idle_over_work - idle_over_work_before);

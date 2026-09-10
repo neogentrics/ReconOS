@@ -149,13 +149,13 @@ void kmain(void)
 	smp_init();
 
 	/* The worker thread, after the scheduler and after there is somewhere
-	  * for it to sleep. Everything that wants to hand work off to a thread
-	  * -- a timer callback, an interrupt handler -- needs this to exist
-	  * before it runs. */
+	 * for it to sleep. Everything that wants to hand work off to a thread
+	 * -- a timer callback, an interrupt handler -- needs this to exist
+	 * before it runs. */
 	work_init_queue();
 
 	/* And now device interrupts can be pointed somewhere. After the
-	  * processors, because the destination is one of them. */
+	 * processors, because the destination is one of them. */
 	arch_irq_route_init();
 	smp_print_summary();
 	arch_irq_print_summary();
@@ -199,16 +199,16 @@ void kmain(void)
 	rootfs_init();
 
 	/* Which device is swap comes from the command line until the installer
-	  * marks a partition for it -- the same shape as `reconfs=` and
-	  * `durability=`, and for the same reason: this writes over a whole
-	  * device from the first eviction, and picking one by looking at it is
-	  * how a machine destroys its own system volume.
-	  *
-	  * Here, before the self-tests, and not with the other late setup. The
-	  * first version of this ran after them, so the store attached and the
-	  * test that was meant to exercise it had already reported a pass for
-	  * having found nothing to test. A skip that reads as a pass is the
-	  * thing this project keeps having to catch. */
+	 * marks a partition for it -- the same shape as `reconfs=` and
+	 * `durability=`, and for the same reason: this writes over a whole
+	 * device from the first eviction, and picking one by looking at it is
+	 * how a machine destroys its own system volume.
+	 *
+	 * Here, before the self-tests, and not with the other late setup. The
+	 * first version of this ran after them, so the store attached and the
+	 * test that was meant to exercise it had already reported a pass for
+	 * having found nothing to test. A skip that reads as a pass is the
+	 * thing this project keeps having to catch. */
 	swap_init_from_cmdline();
 	rootfs_print_summary();
 
@@ -315,9 +315,9 @@ void kmain(void)
 	ramfs_print_summary();
 
 	/* Here and not beside the block devices, because the store is attached
-	  * after they are found -- printing it there reported "none" on a machine
-	  * that had one, which is a summary describing the moment it was written
-	  * rather than the machine. */
+	 * after they are found -- printing it there reported "none" on a machine
+	 * that had one, which is a summary describing the moment it was written
+	 * rather than the machine. */
 	swap_print_summary();
 	page_age_print_summary();
 	evict_print_summary();

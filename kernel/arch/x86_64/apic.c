@@ -158,9 +158,9 @@ static inline void apic_write(unsigned reg, u32 value)
 bool x86_apic_present(void)
 {
 	/* In x2APIC mode there is no mapping to have made -- the registers are
-	  * MSRs -- so `lapic` stays null on a machine where the APIC is very
-	  * much present. Asking the wrong question here would have made every
-	  * caller believe there was no interrupt controller at all. */
+	 * MSRs -- so `lapic` stays null on a machine where the APIC is very
+	 * much present. Asking the wrong question here would have made every
+	 * caller believe there was no interrupt controller at all. */
 	return x2apic || lapic != 0;
 }
 
@@ -220,30 +220,30 @@ bool x86_apic_init(void)
 	x86_wrmsr(MSR_APIC_BASE, base_msr | APIC_BASE_ENABLE);
 
 	/* And then, if the processor has it, x2APIC.
-	  *
-	  * The order matters: the memory-mapped block above is set up first and
-	  * unconditionally, because the decision below has to be made the same
-	  * way by every processor and a processor that could not make it needs
-	  * the old path working underneath it.
-	  *
-	  * The boot processor decides and the secondaries follow: `x2apic` is
-	  * already true by the time any of them runs this, so they take the
-	  * branch rather than re-deciding. Two processors reaching different
-	  * answers would be a machine whose processors do not agree what their
-	  * own identifiers are.
-	  *
-	  * Firmware may have enabled it already -- that is what the EXTD bit in
-	  * the value just read would say -- and enabling it twice is harmless,
-	  * while going the other way is not possible at all without a reset. */
+	 *
+	 * The order matters: the memory-mapped block above is set up first and
+	 * unconditionally, because the decision below has to be made the same
+	 * way by every processor and a processor that could not make it needs
+	 * the old path working underneath it.
+	 *
+	 * The boot processor decides and the secondaries follow: `x2apic` is
+	 * already true by the time any of them runs this, so they take the
+	 * branch rather than re-deciding. Two processors reaching different
+	 * answers would be a machine whose processors do not agree what their
+	 * own identifiers are.
+	 *
+	 * Firmware may have enabled it already -- that is what the EXTD bit in
+	 * the value just read would say -- and enabling it twice is harmless,
+	 * while going the other way is not possible at all without a reset. */
 	if (x2apic || x2apic_supported()) {
 		u64 want = (base_msr | APIC_BASE_ENABLE | APIC_BASE_X2APIC);
 
 		x86_wrmsr(MSR_APIC_BASE, want);
 
 		/* Read back, because this is a mode switch and believing it
-		  * happened when it did not means every register access after
-		  * this line goes to the wrong place. A processor that refuses
-		  * keeps the memory-mapped path, which still works. */
+		 * happened when it did not means every register access after
+		 * this line goes to the wrong place. A processor that refuses
+		 * keeps the memory-mapped path, which still works. */
 		if (x86_rdmsr(MSR_APIC_BASE) & APIC_BASE_X2APIC)
 			x2apic = true;
 		else if (x2apic)
@@ -259,9 +259,9 @@ bool x86_apic_init(void)
 	apic_write(APIC_SPURIOUS, APIC_SOFTWARE_ENABLE | VECTOR_SPURIOUS);
 
 	/* Said once, by whichever processor gets here first, because which mode
-	  * this machine is in decides how many processors it can address and
-	  * there was previously no way to tell from the outside. Every boot in
-	  * the matrix now states it. */
+	 * this machine is in decides how many processors it can address and
+	 * there was previously no way to tell from the outside. Every boot in
+	 * the matrix now states it. */
 	if (!announced) {
 		announced = true;
 		kprintf("  apic: %s, so processor identifiers are %s\n",
@@ -276,10 +276,10 @@ bool x86_apic_init(void)
 u32 x86_apic_id(void)
 {
 	/* Thirty-two bits in x2APIC mode and eight in the top of the register
-	  * in xAPIC mode. Not a cosmetic difference: shifting an x2APIC
-	  * identifier down by 24 turns processors 0 through 255 into processor
-	  * 0, which is every per-processor lookup in the kernel pointing at one
-	  * slot. */
+	 * in xAPIC mode. Not a cosmetic difference: shifting an x2APIC
+	 * identifier down by 24 turns processors 0 through 255 into processor
+	 * 0, which is every per-processor lookup in the kernel pointing at one
+	 * slot. */
 	if (x2apic)
 		return (u32)x86_rdmsr(x2apic_msr(APIC_ID));
 
@@ -306,10 +306,10 @@ static void wait_for_delivery(void)
 	unsigned spins = 0;
 
 	/* There is nothing to wait for in x2APIC mode: the command is a single
-	  * MSR write, which cannot be half-done, and the delivery-status bit is
-	  * reserved and reads zero. Polling it here would be a loop that always
-	  * exits immediately, which is harmless and is also a lie about what the
-	  * hardware is doing. */
+	 * MSR write, which cannot be half-done, and the delivery-status bit is
+	 * reserved and reads zero. Polling it here would be a loop that always
+	 * exits immediately, which is harmless and is also a lie about what the
+	 * hardware is doing. */
 	if (x2apic)
 		return;
 
@@ -322,16 +322,16 @@ static void send_command(u32 target, u32 command)
 {
 	if (x2apic) {
 		/* One 64-bit write, destination in the high half -- and the
-		  * full 32 bits of it, which is the entire point. */
+		 * full 32 bits of it, which is the entire point. */
 		x86_wrmsr(MSR_X2APIC_ICR,
 				x86_apic_command_word(target, command));
 		return;
 	}
 
 	/* Above 255 there is no way to say who this is for: the destination
-	  * field is eight bits wide. Refused rather than truncated, because a
-	  * truncated destination is a message delivered to the wrong processor
-	  * -- an INIT sent to somebody already running. */
+	 * field is eight bits wide. Refused rather than truncated, because a
+	 * truncated destination is a message delivered to the wrong processor
+	 * -- an INIT sent to somebody already running. */
 	if (target > 0xFFu) {
 		kprintf("  apic: processor 0x%x cannot be addressed without "
 			"x2APIC\n", target);
@@ -339,7 +339,7 @@ static void send_command(u32 target, u32 command)
 	}
 
 	/* Destination first. The low half is what sends, so writing it first
-	  * would send the message to whatever destination was last used. */
+	 * would send the message to whatever destination was last used. */
 	apic_write(APIC_ICR_HIGH, target << 24);
 	apic_write(APIC_ICR_LOW, command);
 	wait_for_delivery();

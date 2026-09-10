@@ -124,9 +124,9 @@ struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 		size_t n = kstrlen(d->name);
 
 		/* The whole name, terminator included, so that "zeroes" does not
-		  * match "zero". Compared as bytes because this kernel has no
-		  * string compare -- and the one place a prefix match would be
-		  * wrong is exactly here. */
+		 * match "zero". Compared as bytes because this kernel has no
+		 * string compare -- and the one place a prefix match would be
+		 * wrong is exactly here. */
 		if (kstrlen(rest) != n || kmemcmp(rest, d->name, n) != 0)
 			continue;
 

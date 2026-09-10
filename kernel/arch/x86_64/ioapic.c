@@ -308,33 +308,33 @@ bool x86_ioapic_take_over(void)
 	routed_through_ioapic = true;
 
 	/* And then check, rather than assume.
-	  *
-	  * Everything above is programmed from tables written by somebody
-	  * else, describing a machine this code has not seen. If any of it is
-	  * wrong the symptom is not an error: it is that the timer interrupt
-	  * stops arriving, and a kernel whose clock has stopped does not get
-	  * as far as reporting anything.
-	  *
-	  * So the tick is watched across the switch, against a clock that does
-	  * not depend on it -- arch_monotonic_ns reads hardware. If it does
-	  * not advance, the 8259 gets its lines back and the machine carries
-	  * on exactly as it did before, having said so.
-	  *
-	  * This is not an off-switch for a check. It is the check: the
-	  * alternative is a machine that hangs at boot on hardware nobody
-	  * here owns, with no output to say why. */
+	 *
+	 * Everything above is programmed from tables written by somebody
+	 * else, describing a machine this code has not seen. If any of it is
+	 * wrong the symptom is not an error: it is that the timer interrupt
+	 * stops arriving, and a kernel whose clock has stopped does not get
+	 * as far as reporting anything.
+	 *
+	 * So the tick is watched across the switch, against a clock that does
+	 * not depend on it -- arch_monotonic_ns reads hardware. If it does
+	 * not advance, the 8259 gets its lines back and the machine carries
+	 * on exactly as it did before, having said so.
+	 *
+	 * This is not an off-switch for a check. It is the check: the
+	 * alternative is a machine that hangs at boot on hardware nobody
+	 * here owns, with no output to say why. */
 	{
 		u64 before = time_ticks();
 		u64 deadline = arch_monotonic_ns() + 200000000ull;
 
 		/* Interrupts on, because the thing being watched for is an
-		  * interrupt. Written as the instruction rather than through
-		  * arch_irq_restore, which takes a whole flags word: the first
-		  * attempt passed 2 for "interrupts on" and the interrupt flag is
-		  * bit 9, so it waited for a tick with interrupts masked, watched
-		  * one never arrive, and reported that the I/O APIC had broken the
-		  * clock. The check was right about what it saw and wrong about
-		  * what it had done. */
+		 * interrupt. Written as the instruction rather than through
+		 * arch_irq_restore, which takes a whole flags word: the first
+		 * attempt passed 2 for "interrupts on" and the interrupt flag is
+		 * bit 9, so it waited for a tick with interrupts masked, watched
+		 * one never arrive, and reported that the I/O APIC had broken the
+		 * clock. The check was right about what it saw and wrong about
+		 * what it had done. */
 		__asm__ volatile("sti");
 
 		while (time_ticks() < before + 2 &&

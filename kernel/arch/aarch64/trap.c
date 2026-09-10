@@ -82,13 +82,13 @@ static const char *abort_reason(unsigned iss)
 	case 0x07: return "translation fault, level 3 (nothing is mapped there)";
 
 	/* The descriptor is valid and its Access Flag is clear.
-	  *
-	  * Three of these four were already named, which is worth recording
-	  * because it was assumed otherwise: this decoder has been able to
-	  * *describe* an access-flag fault since it was written, and nothing
-	  * has ever been able to *answer* one. A named fault is still a dead
-	  * program -- the name goes in the report and then the program ends.
-	  * Level 0 was the one genuinely missing. */
+	 *
+	 * Three of these four were already named, which is worth recording
+	 * because it was assumed otherwise: this decoder has been able to
+	 * *describe* an access-flag fault since it was written, and nothing
+	 * has ever been able to *answer* one. A named fault is still a dead
+	 * program -- the name goes in the report and then the program ends.
+	 * Level 0 was the one genuinely missing. */
 	case 0x08: return "access flag fault, level 0";
 	case 0x09: return "access flag fault, level 1";
 	case 0x0A: return "access flag fault, level 2";

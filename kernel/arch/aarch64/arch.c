@@ -85,13 +85,13 @@ void arch_wait_for_interrupt(void)
 void arch_irq_route_init(void)
 {
 	/* Nothing to move.
-	  *
-	  * The GIC is not two chips with one of them cascaded into the other and
-	  * a single wire out. Its distributor already decides which processor
-	  * each interrupt goes to, and it has done since the controller was
-	  * brought up -- so the thing arch_irq_route_init exists to arrange on
-	  * x86_64 is arranged here by having used the right controller from the
-	  * start. */
+	 *
+	 * The GIC is not two chips with one of them cascaded into the other and
+	 * a single wire out. Its distributor already decides which processor
+	 * each interrupt goes to, and it has done since the controller was
+	 * brought up -- so the thing arch_irq_route_init exists to arrange on
+	 * x86_64 is arranged here by having used the right controller from the
+	 * start. */
 }
 
 bool arch_irq_self_test(void)
@@ -99,20 +99,20 @@ bool arch_irq_self_test(void)
 	unsigned gen = aarch64_gic_generation();
 
 	/* There is no message-signalled interrupt to check here, and saying so
-	  * by returning true would be a test that cannot fail -- which this
-	  * project has been bitten by twice and does not do.
-	  *
-	  * x86_64 needs a check because an MSI is an *encoding*: an address and
-	  * a data word this kernel composes, which can be composed wrongly and
-	  * then silently delivers nothing. The GIC has no equivalent -- an
-	  * interrupt reaches a processor because the distributor was told to
-	  * send it there, not because a message was built correctly.
-	  *
-	  * So what is asserted is the thing that stands in the same place: that
-	  * a controller was actually identified. Zero here is a machine with no
-	  * interrupt controller at all, which would take no timer interrupt and
-	  * schedule nothing -- and gic_detect can return it, so this is a
-	  * question with two possible answers. */
+	 * by returning true would be a test that cannot fail -- which this
+	 * project has been bitten by twice and does not do.
+	 *
+	 * x86_64 needs a check because an MSI is an *encoding*: an address and
+	 * a data word this kernel composes, which can be composed wrongly and
+	 * then silently delivers nothing. The GIC has no equivalent -- an
+	 * interrupt reaches a processor because the distributor was told to
+	 * send it there, not because a message was built correctly.
+	 *
+	 * So what is asserted is the thing that stands in the same place: that
+	 * a controller was actually identified. Zero here is a machine with no
+	 * interrupt controller at all, which would take no timer interrupt and
+	 * schedule nothing -- and gic_detect can return it, so this is a
+	 * question with two possible answers. */
 	if (gen != 2 && gen != 3) {
 		kprintf("  gic: no interrupt controller was identified (generation %u)\n", gen);
 		return false;

@@ -115,14 +115,14 @@ struct process {
 	struct addrspace *space;
 
 	/* What it has open. Indexed by the small numbers programs use, and on
-	  * the process rather than the thread for the same reason the address
-	  * space is: two threads of one program that both write to descriptor
-	  * 1 mean the same open file, and that sharing is what distinguishes a
-	  * thread from a process.
-	  *
-	  * Guarded by a lock in vfs.c, which is also the only place that reads
-	  * it -- an array a caller may index directly is an array whose
-	  * locking is a convention. */
+	 * the process rather than the thread for the same reason the address
+	 * space is: two threads of one program that both write to descriptor
+	 * 1 mean the same open file, and that sharing is what distinguishes a
+	 * thread from a process.
+	 *
+	 * Guarded by a lock in vfs.c, which is also the only place that reads
+	 * it -- an array a caller may index directly is an array whose
+	 * locking is a convention. */
 	struct file *fds[PROCESS_FDS_MAX];
 
 	char name[PROCESS_NAME_MAX];

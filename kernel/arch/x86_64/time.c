@@ -139,20 +139,20 @@ static void pit_start_tick(void)
 	unsigned divisor = PIT_HZ / TIME_TICK_HZ;
 
 	/* Mode 2, a rate generator, and NOT mode 3, a square wave.
-	  *
-	  * This was 0x36 -- mode 3 -- and it worked for as long as the 8259 was
-	  * the only thing listening. A square wave holds its output high for
-	  * half the period and low for the other half, so there are *two*
-	  * transitions per tick; the 8259 as emulated counts one of them and
-	  * the I/O APIC counts both. The first boot with the lines moved across
-	  * ran the whole kernel at 201 Hz against a 100 Hz constant -- every
-	  * sleep half as long as asked, every timer early, and every test that
-	  * counted ticks rather than nanoseconds still passing.
-	  *
-	  * Mode 2 pulses the output low for one input cycle and leaves it high
-	  * the rest of the period: one transition, one interrupt, whichever
-	  * controller is listening. It is what the chip is for and what every
-	  * other kernel uses it in. */
+	 *
+	 * This was 0x36 -- mode 3 -- and it worked for as long as the 8259 was
+	 * the only thing listening. A square wave holds its output high for
+	 * half the period and low for the other half, so there are *two*
+	 * transitions per tick; the 8259 as emulated counts one of them and
+	 * the I/O APIC counts both. The first boot with the lines moved across
+	 * ran the whole kernel at 201 Hz against a 100 Hz constant -- every
+	 * sleep half as long as asked, every timer early, and every test that
+	 * counted ticks rather than nanoseconds still passing.
+	 *
+	 * Mode 2 pulses the output low for one input cycle and leaves it high
+	 * the rest of the period: one transition, one interrupt, whichever
+	 * controller is listening. It is what the chip is for and what every
+	 * other kernel uses it in. */
 	outb(PIT_CMD, 0x34);			/* channel 0, both bytes, rate generator */
 	outb(PIT_CH0, (u8)(divisor & 0xFF));
 	outb(PIT_CH0, (u8)(divisor >> 8));

@@ -24,10 +24,10 @@ void time_tick(void)
 	ticks++;
 
 	/* And the timer wheel, turned by the same processor for the same reason:
-	  * there is one wheel, and a wheel turned by four processors would run
-	  * each slot four times. Everything filed on it therefore fires here, in
-	  * interrupt context on processor 0 -- which is why deferred work exists
-	  * and why timer.h says a callback must not do anything substantial. */
+	 * there is one wheel, and a wheel turned by four processors would run
+	 * each slot four times. Everything filed on it therefore fires here, in
+	 * interrupt context on processor 0 -- which is why deferred work exists
+	 * and why timer.h says a callback must not do anything substantial. */
 	timer_tick();
 }
 
@@ -120,26 +120,26 @@ bool time_self_test(void)
 	 * away, and waiting for it proves only that the timer was already
 	 * running. */
 	/* --- and that it fires at the rate it claims to ---------------------
-	  *
-	  * TIME_TICK_HZ is not a measurement, it is a promise: every timer, every
-	  * sleep and every scheduling slice in the kernel converts nanoseconds to
-	  * ticks with it. If the hardware is actually delivering at some other
-	  * rate, all of that is wrong by the same factor and *nothing counting
-	  * ticks notices* -- every ordering assertion still holds, every timer
-	  * still fires in the right sequence, and every sleep is simply the wrong
-	  * length.
-	  *
-	  * That is not hypothetical. Moving the interrupt lines onto the I/O APIC
-	  * did exactly this: the 8254 was programmed as a square wave, which
-	  * changes its output twice a period, and the new controller counted both
-	  * transitions where the old one counted one. The kernel ran at 201 Hz
-	  * against a 100 Hz constant, and every tick-counting test passed.
-	  *
-	  * Measured against the monotonic clock, which comes from a counter and
-	  * not from this tick. A fifth of a second is long enough to tell 100 from
-	  * 200 and short enough to pay for on every boot; the tolerance is wide
-	  * because a loaded guest genuinely loses ticks, and a factor of two is
-	  * what this is for. */
+	 *
+	 * TIME_TICK_HZ is not a measurement, it is a promise: every timer, every
+	 * sleep and every scheduling slice in the kernel converts nanoseconds to
+	 * ticks with it. If the hardware is actually delivering at some other
+	 * rate, all of that is wrong by the same factor and *nothing counting
+	 * ticks notices* -- every ordering assertion still holds, every timer
+	 * still fires in the right sequence, and every sleep is simply the wrong
+	 * length.
+	 *
+	 * That is not hypothetical. Moving the interrupt lines onto the I/O APIC
+	 * did exactly this: the 8254 was programmed as a square wave, which
+	 * changes its output twice a period, and the new controller counted both
+	 * transitions where the old one counted one. The kernel ran at 201 Hz
+	 * against a 100 Hz constant, and every tick-counting test passed.
+	 *
+	 * Measured against the monotonic clock, which comes from a counter and
+	 * not from this tick. A fifth of a second is long enough to tell 100 from
+	 * 200 and short enough to pay for on every boot; the tolerance is wide
+	 * because a loaded guest genuinely loses ticks, and a factor of two is
+	 * what this is for. */
 	{
 		u64 t0 = time_ticks();
 		u64 n0 = time_monotonic_ns();

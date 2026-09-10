@@ -1149,8 +1149,8 @@ static u64 *leaf_entry_no_present(vaddr_t va)
 		return 0;
 
 	/* The slot, whether or not anything is in it. A swapped page
-	  * has an entry that is deliberately *not* present, so a walk
-	  * that stopped at absent could never find one. */
+	 * has an entry that is deliberately *not* present, so a walk
+	 * that stopped at absent could never find one. */
 	return &pt[i1];
 }
 
@@ -1194,7 +1194,7 @@ bool vm_page_age_is_cheap(void)
 u64 vm_page_age_faults(void)
 {
 	/* None. The processor writes the bit as part of filling a translation,
-	  * so nothing traps and there is nothing to count. */
+	 * so nothing traps and there is nothing to count. */
 	return 0;
 }
 

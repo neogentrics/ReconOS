@@ -186,12 +186,12 @@ enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 		return RECONFS_OK;
 
 	/* A caller that does not want the count gets a place to put it anyway.
-	  *
-	  * This header has promised since it was written that either pointer may
-	  * be null, and `mode` above honours that. `got` did not: it was handed
-	  * straight to reconfs_read_named, which writes through it before it does
-	  * anything else. The first caller to believe the header wrote to address
-	  * zero in kernel mode. (BG-161) */
+	 *
+	 * This header has promised since it was written that either pointer may
+	 * be null, and `mode` above honours that. `got` did not: it was handed
+	 * straight to reconfs_read_named, which writes through it before it does
+	 * anything else. The first caller to believe the header wrote to address
+	 * zero in kernel mode. (BG-161) */
 	{
 		u32 ignored;
 

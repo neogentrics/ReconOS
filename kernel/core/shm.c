@@ -152,19 +152,19 @@ bool shm_attach(struct addrspace *as, vaddr_t at, struct shm *s, unsigned flags)
 		if (!addrspace_map(as, at + (vaddr_t)i * PAGE_SIZE,
 				   s->page[i], PAGE_SIZE, flags | VM_USER)) {
 			/* Half a shared region is worse than none, and there is no
-			  * addrspace_unmap to take the rest back out.
-			  *
-			  * So the contract is stated instead: **a failed attach
-			  * leaves the space with part of the region mapped, and the
-			  * caller must discard that space rather than reuse it.** The
-			  * only way to reach here is the page-table allocation
-			  * failing, and a caller that has just run out of memory
-			  * building a map is not going to carry on with it.
-			  *
-			  * Writing an unmap for a path nothing has ever taken would
-			  * be a function with no tested caller. When something needs
-			  * to detach a live region it will want one for its own sake,
-			  * and this can use it then. */
+			 * addrspace_unmap to take the rest back out.
+			 *
+			 * So the contract is stated instead: **a failed attach
+			 * leaves the space with part of the region mapped, and the
+			 * caller must discard that space rather than reuse it.** The
+			 * only way to reach here is the page-table allocation
+			 * failing, and a caller that has just run out of memory
+			 * building a map is not going to carry on with it.
+			 *
+			 * Writing an unmap for a path nothing has ever taken would
+			 * be a function with no tested caller. When something needs
+			 * to detach a live region it will want one for its own sake,
+			 * and this can use it then. */
 			return false;
 		}
 	}

@@ -81,21 +81,21 @@ void smp_init(void)
 	cpu_count = found ? found : 1;
 
 	/* An idle thread for the boot processor too, and this is new.
-	  *
-	  * The loop below starts at 1 because 1 upward are the processors that
-	  * have to be *started*, and processor 0 quietly inherited a different
-	  * arrangement: the boot thread itself was left marked as processor 0
-	  * idle thread, so there was always something for it to fall back to.
-	  *
-	  * That worked and cost something invisible. An idle thread is not
-	  * allowed to block -- a blocked idle thread is a processor that has
-	  * stopped -- so the boot thread could not wait for anything either,
-	  * and every piece of kernel code that runs on it inherited that. It
-	  * went unnoticed for as long as nothing on the boot path waited.
-	  *
-	  * Now processor 0 has an idle thread of its own like every other
-	  * processor, and the boot thread is an ordinary thread that can sleep.
-	  */
+	 *
+	 * The loop below starts at 1 because 1 upward are the processors that
+	 * have to be *started*, and processor 0 quietly inherited a different
+	 * arrangement: the boot thread itself was left marked as processor 0
+	 * idle thread, so there was always something for it to fall back to.
+	 *
+	 * That worked and cost something invisible. An idle thread is not
+	 * allowed to block -- a blocked idle thread is a processor that has
+	 * stopped -- so the boot thread could not wait for anything either,
+	 * and every piece of kernel code that runs on it inherited that. It
+	 * went unnoticed for as long as nothing on the boot path waited.
+	 *
+	 * Now processor 0 has an idle thread of its own like every other
+	 * processor, and the boot thread is an ordinary thread that can sleep.
+	 */
 	{
 		struct thread *idle = thread_create("idle-000", idle_loop, 0);
 

@@ -90,8 +90,8 @@ void page_age_print_summary(void)
 		sweeps, pages_sampled, pages_touched);
 
 	/* What the measuring itself cost. On a processor with no hardware
-	  * update this is one trap per sampled page, and it is the number that
-	  * decides how often a sweep is affordable. */
+	 * update this is one trap per sampled page, and it is the number that
+	 * decides how often a sweep is affordable. */
 	kprintf("  cost         : %lu fault(s) taken to keep this count\n",
 		vm_page_age_faults());
 

@@ -100,15 +100,15 @@ void arch_user_init(void)
 	tss[cpu].iomap_base = sizeof(struct tss);
 
 	/* This processor's block, parked where the system-call stub's SWAPGS
-	  * will find it. Here rather than in arch_enter_user, which is where it
-	  * used to be: that runs only on a processor that is about to enter user
-	  * mode, so a processor which never did had KERNEL_GS_BASE at zero -- and
-	  * a thread that entered a system call elsewhere and was rescheduled
-	  * onto this one would SWAPGS to a base of zero and take a double fault
-	  * on the first instruction of the entry stub.
-	  *
-	  * It is per-processor and constant, so once is the right number of
-	  * times to write it. */
+	 * will find it. Here rather than in arch_enter_user, which is where it
+	 * used to be: that runs only on a processor that is about to enter user
+	 * mode, so a processor which never did had KERNEL_GS_BASE at zero -- and
+	 * a thread that entered a system call elsewhere and was rescheduled
+	 * onto this one would SWAPGS to a base of zero and take a double fault
+	 * on the first instruction of the entry stub.
+	 *
+	 * It is per-processor and constant, so once is the right number of
+	 * times to write it. */
 	x86_wrmsr(MSR_KERNEL_GS_BASE, (u64)(uintptr_t)&percpu[cpu]);
 	x86_wrmsr(MSR_GS_BASE, 0);
 
@@ -186,9 +186,9 @@ void arch_thread_switched_in(struct thread *t)
 	unsigned cpu = (unsigned)arch_cpu_id();
 
 	/* A thread that has never been to user mode has nowhere for a trap
-	  * from user mode to land, and cannot take one. Leaving the previous
-	  * occupant's values in place is correct: the next thread that *can*
-	  * take one brings its own. */
+	 * from user mode to land, and cannot take one. Leaving the previous
+	 * occupant's values in place is correct: the next thread that *can*
+	 * take one brings its own. */
 	if (cpu >= MAX_CPUS || !t || !t->entry_stack)
 		return;
 
@@ -215,9 +215,9 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top)
 	rsp &= ~0xFULL;
 
 	/* Recorded on the *thread*, and then told to this processor. The
-	  * comment above used to say this would have to move into the context
-	  * switch when processes arrived, and it was right: see
-	  * arch_thread_switched_in. */
+	 * comment above used to say this would have to move into the context
+	 * switch when processes arrived, and it was right: see
+	 * arch_thread_switched_in. */
 	if (sched_current())
 		sched_current()->entry_stack = (void *)(uintptr_t)rsp;
 
@@ -225,10 +225,10 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top)
 	tss[cpu].rsp[0] = rsp;
 
 	/* The SWAPGS invariant -- GS_BASE zero, this processor's block in
-	  * KERNEL_GS_BASE -- is established once per processor in
-	  * arch_user_init and holds everywhere, so there is nothing to set
-	  * here. It used to be set here, which is why a processor that had
-	  * never entered user mode did not have it. */
+	 * KERNEL_GS_BASE -- is established once per processor in
+	 * arch_user_init and holds everywhere, so there is nothing to set
+	 * here. It used to be set here, which is why a processor that had
+	 * never entered user mode did not have it. */
 
 	__asm__ volatile(
 		"cli\n\t"

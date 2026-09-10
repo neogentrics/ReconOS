@@ -34,12 +34,12 @@ void kputc(char c)
 	arch_console_putc(c);
 
 	/* And the ring, which is why this is the only hook it needs:
-	  * everything printed anywhere in this kernel arrives here.
-	  *
-	  * The carriage return above is deliberately not logged. It is
-	  * something a serial terminal needs and not something the kernel
-	  * said, and a log full of them is a log somebody has to strip
-	  * before reading. */
+	 * everything printed anywhere in this kernel arrives here.
+	 *
+	 * The carriage return above is deliberately not logged. It is
+	 * something a serial terminal needs and not something the kernel
+	 * said, and a log full of them is a log somebody has to strip
+	 * before reading. */
 	klog_putc(c);
 
 	/* And the screen, where there is one.

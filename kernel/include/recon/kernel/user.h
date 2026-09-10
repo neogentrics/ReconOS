@@ -55,9 +55,9 @@ enum {
 	SYS_CREATE,
 
 	/* Descriptors. Appended rather than inserted: a call number is a
-	  * promise to every program already built against it, and renumbering
-	  * SYS_WRITE to make room for SYS_OPEN would silently turn every
-	  * existing write into something else. */
+	 * promise to every program already built against it, and renumbering
+	 * SYS_WRITE to make room for SYS_OPEN would silently turn every
+	 * existing write into something else. */
 	SYS_OPEN,		/* (path, path_len, flags, mode) -> fd */
 	SYS_CLOSE,		/* (fd) -> 0, or why not */
 	SYS_READ,		/* (fd, buffer, length) -> bytes read */

@@ -70,22 +70,22 @@ bool swap_attach(struct block_device *dev)
 	}
 
 	/* Claimed, which is this kernel's way of saying out loud that a caller
-	  * means to write over a whole device.
-	  *
-	  * It is worth being precise about what this does and does not check,
-	  * because the name invites the wrong reading. block_claim_raw does not
-	  * ask whether the device carries a filesystem -- it is the mechanism
-	  * for *permitting* a raw write, and the question it makes somebody ask
-	  * is "am I allowed to destroy this disk". Swap answers yes, because
-	  * writing over the whole thing is exactly what it is for.
-	  *
-	  * **Which device is swap is therefore the caller's decision, not this
-	  * function's.** Getting it wrong means a machine that destroys its own
-	  * system volume at the moment it is busiest, so it is not a decision to
-	  * make by guessing: it comes from a partition the installer marked, and
-	  * until the installer marks one it comes from the command line, the
-	  * same way `reconfs=` and `durability=` already do. There is no code
-	  * here that picks a device by looking at it. */
+	 * means to write over a whole device.
+	 *
+	 * It is worth being precise about what this does and does not check,
+	 * because the name invites the wrong reading. block_claim_raw does not
+	 * ask whether the device carries a filesystem -- it is the mechanism
+	 * for *permitting* a raw write, and the question it makes somebody ask
+	 * is "am I allowed to destroy this disk". Swap answers yes, because
+	 * writing over the whole thing is exactly what it is for.
+	 *
+	 * **Which device is swap is therefore the caller's decision, not this
+	 * function's.** Getting it wrong means a machine that destroys its own
+	 * system volume at the moment it is busiest, so it is not a decision to
+	 * make by guessing: it comes from a partition the installer marked, and
+	 * until the installer marks one it comes from the command line, the
+	 * same way `reconfs=` and `durability=` already do. There is no code
+	 * here that picks a device by looking at it. */
 	if (block_claim_raw(dev) != BLOCK_OK) {
 		kprintf("  swap: %s could not be claimed for raw writes\n",
 			dev->name);
@@ -361,9 +361,9 @@ bool swap_self_test(void)
 	}
 
 	/* Slot zero is never handed out, and there is deliberately no check for
-	  * it here: SWAP_NONE *is* zero, so a returned zero was already caught
-	  * above as a write that found nowhere to go. The property is structural
-	  * rather than asserted, and a check for it could not fail. */
+	 * it here: SWAP_NONE *is* zero, so a returned zero was already caught
+	 * above as a write that found nowhere to go. The property is structural
+	 * rather than asserted, and a check for it could not fail. */
 	swap_free(slot[0]);
 	swap_free(slot[2]);
 

@@ -134,20 +134,20 @@ bool arch_identity_self_test(void)
 	}
 
 	/* --- and the x2APIC arithmetic, which no machine here can run -------
-	  *
-	  * x2APIC is what lifts the ceiling from 255 processors to 32 bits of
-	  * them, and it has never executed: QEMU 8.2 does not implement it under
-	  * TCG, and KVM is not reachable from this machine. See the note on the
-	  * `x2apic` flag in apic.c.
-	  *
-	  * Two things about it are arithmetic rather than hardware, and getting
-	  * either wrong is silent: which MSR each register becomes, and where
-	  * the destination sits in the 64-bit command. Both are checked here, so
-	  * that when the mode is finally entered on a real machine the failure
-	  * -- if there is one -- is in the part that needed the hardware.
-	  *
-	  * This does not make x2APIC tested. It makes the untested part
-	  * smaller. */
+	 *
+	 * x2APIC is what lifts the ceiling from 255 processors to 32 bits of
+	 * them, and it has never executed: QEMU 8.2 does not implement it under
+	 * TCG, and KVM is not reachable from this machine. See the note on the
+	 * `x2apic` flag in apic.c.
+	 *
+	 * Two things about it are arithmetic rather than hardware, and getting
+	 * either wrong is silent: which MSR each register becomes, and where
+	 * the destination sits in the 64-bit command. Both are checked here, so
+	 * that when the mode is finally entered on a real machine the failure
+	 * -- if there is one -- is in the part that needed the hardware.
+	 *
+	 * This does not make x2APIC tested. It makes the untested part
+	 * smaller. */
 	if (x86_apic_msr_for(0x020u) != 0x802u ||		/* identifier */
 	    x86_apic_msr_for(0x0B0u) != 0x80Bu ||		/* end of interrupt */
 	    x86_apic_msr_for(0x300u) != 0x830u ||		/* command */
@@ -158,8 +158,8 @@ bool arch_identity_self_test(void)
 	}
 
 	/* The destination is the *high* half of the command. In the low half it
-	  * would be read as delivery mode and vector: an INIT to processor 5
-	  * would become some other message to everybody. */
+	 * would be read as delivery mode and vector: an INIT to processor 5
+	 * would become some other message to everybody. */
 	if (x86_apic_command_word(0x1234u, 0x4500u) !=
 	    ((u64)0x1234u << 32 | 0x4500u)) {
 		kputs("  smp: the x2APIC command word puts the destination in the "
@@ -168,8 +168,8 @@ bool arch_identity_self_test(void)
 	}
 
 	/* And that an identifier a byte cannot hold survives it, which is the
-	  * entire purpose: 300 is an ordinary processor number on a machine with
-	  * two server-size sockets. */
+	 * entire purpose: 300 is an ordinary processor number on a machine with
+	 * two server-size sockets. */
 	if ((u32)(x86_apic_command_word(300u, 0) >> 32) != 300u) {
 		kputs("  smp: a processor above 255 loses its identity in the "
 			"command word\n");

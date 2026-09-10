@@ -1025,8 +1025,8 @@ static u64 *leaf_entry_any(vaddr_t va)
 		return 0;
 
 	/* The slot, valid or not. A swapped page has a descriptor that
-	  * is deliberately invalid, so a walk that stopped at invalid
-	  * could never find one. */
+	 * is deliberately invalid, so a walk that stopped at invalid
+	 * could never find one. */
 	return &l3[i3];
 }
 

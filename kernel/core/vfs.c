@@ -388,9 +388,9 @@ struct file *file_open_path(const char *path, unsigned flags, u32 mode,
 		return NULL;
 
 	/* The rest of the path, after the prefix. A filesystem is handed what it
-	  * owns and never sees where it was mounted, which is what would let the
-	  * same one be mounted twice. The root keeps its leading slash, because
-	  * for it the prefix *is* the slash. */
+	 * owns and never sees where it was mounted, which is what would let the
+	 * same one be mounted twice. The root keeps its leading slash, because
+	 * for it the prefix *is* the slash. */
 	return chosen->open(path + (best > 1 ? best : 0), flags, mode, error);
 }
 

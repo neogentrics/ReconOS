@@ -80,9 +80,9 @@ struct cpu_local {
 	struct thread *idle;		/* what runs here when nothing else will */
 
 	/* The thread that gave up this processor at the last switch, still
-	  * to be released. Read and cleared by whoever runs here next, which
-	  * is the first moment it is true that the outgoing thread has
-	  * actually stopped using its stack. */
+	 * to be released. Read and cleared by whoever runs here next, which
+	 * is the first moment it is true that the outgoing thread has
+	 * actually stopped using its stack. */
 	struct thread *leaving;
 
 	u64 switches;

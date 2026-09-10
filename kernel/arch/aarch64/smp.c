@@ -157,9 +157,9 @@ static u64 pack_affinity(u64 mpidr)
 bool arch_identity_self_test(void)
 {
 	/* Bit 31 is RES1 in MPIDR_EL1 and is set on every real value, which is
-	  * why it is here: an implementation that masked the whole register
-	  * rather than the affinity fields would produce identical rubbish for
-	  * every processor and pass a test built from bare numbers. */
+	 * why it is here: an implementation that masked the whole register
+	 * rather than the affinity fields would produce identical rubbish for
+	 * every processor and pass a test built from bare numbers. */
 	static const u64 machines[] = {
 		/* two sockets, four cores each: Aff1 is the cluster */
 		0x80000000ull, 0x80000001ull, 0x80000002ull, 0x80000003ull,
@@ -167,7 +167,7 @@ bool arch_identity_self_test(void)
 		/* big.LITTLE: two clusters again, and a third at Aff2 */
 		0x80010000ull, 0x80010001ull,
 		/* and one with Aff3 set, which lives at bits 39:32 and is the
-		  * field an implementation is most likely to drop */
+		 * field an implementation is most likely to drop */
 		0x8000000000ull | 0x80000000ull,
 	};
 	const unsigned n = (unsigned)(sizeof(machines) / sizeof(machines[0]));
@@ -185,9 +185,9 @@ bool arch_identity_self_test(void)
 		}
 
 	/* The control. If the old expression does *not* alias on this table
-	  * then the table is not a multi-cluster machine and the rest of this
-	  * test proves nothing -- which is the failure mode that let BG-153
-	  * exist, arriving here as a failure rather than a silent pass. */
+	 * then the table is not a multi-cluster machine and the rest of this
+	 * test proves nothing -- which is the failure mode that let BG-153
+	 * exist, arriving here as a failure rather than a silent pass. */
 	if (old_collisions == 0) {
 		kputs("  smp: the identity table has no aliases under the old "
 			"rule, so it is not testing anything\n");
@@ -201,8 +201,8 @@ bool arch_identity_self_test(void)
 	}
 
 	/* Aff3 specifically, because dropping it is silent: it only matters on
-	  * machines with more than 65536 processors per Aff2 group, and the two
-	  * values below differ in nothing else. */
+	 * machines with more than 65536 processors per Aff2 group, and the two
+	 * values below differ in nothing else. */
 	if (pack_affinity(0x80000000ull) ==
 	    pack_affinity(0x8000000000ull | 0x80000000ull)) {
 		kputs("  smp: affinity level 3 is being dropped\n");
@@ -210,7 +210,7 @@ bool arch_identity_self_test(void)
 	}
 
 	/* And that a packed value is what the hardware would give: Aff0 in the
-	  * low byte and Aff3 in the top one, not merely something unique. */
+	 * low byte and Aff3 in the top one, not merely something unique. */
 	if (pack_affinity(0x80000103ull) != 0x103ull ||
 	    pack_affinity(0x8200000000ull) != 0x82000000ull) {
 		kputs("  smp: affinity fields are not packed where they were "

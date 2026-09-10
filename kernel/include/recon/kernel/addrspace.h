@@ -53,20 +53,20 @@ struct as_region {
 	unsigned flags;		/* what a page faulted in here is mapped with */
 
 	/* What fills a page faulted in here, or null for zeroes.
-	  *
-	  * This is what makes a mapping *file-backed*: the region is still a
-	  * promise that the memory will exist, and now it is also a promise
-	  * about what will be in it. Nothing here knows which filesystem the
-	  * file came from, which is the whole reason it took a VFS before this
-	  * row could be built.
-	  *
-	  * **Private, not shared.** A write to a file-backed page changes the
-	  * page and never the file. Shared mappings -- where a write is a
-	  * write to the file, visible to everybody else who mapped it -- need
-	  * a page cache that two address spaces can point at, and this kernel
-	  * has no such thing yet. Stated rather than discovered, because a
-	  * program that expected its changes to be saved would find out by
-	  * losing them. */
+	 *
+	 * This is what makes a mapping *file-backed*: the region is still a
+	 * promise that the memory will exist, and now it is also a promise
+	 * about what will be in it. Nothing here knows which filesystem the
+	 * file came from, which is the whole reason it took a VFS before this
+	 * row could be built.
+	 *
+	 * **Private, not shared.** A write to a file-backed page changes the
+	 * page and never the file. Shared mappings -- where a write is a
+	 * write to the file, visible to everybody else who mapped it -- need
+	 * a page cache that two address spaces can point at, and this kernel
+	 * has no such thing yet. Stated rather than discovered, because a
+	 * program that expected its changes to be saved would find out by
+	 * losing them. */
 	struct file *file;
 	u64 file_offset;	/* where in the file this region begins */
 	u64 file_len;		/* how much is backed; past it is zeroes */
