@@ -3463,6 +3463,42 @@ would expect from something that is timing out rather than stopping.
   cache was written, which was checked first precisely because the cache was
   the thing that had just changed.
 
+**What has been ruled out**, by instrumenting a copy of the tree rather than by
+reading it. Each of these was a candidate and each is now a fact:
+
+- *shared transport state.* Both devices get their own `slots[]` entry and
+  their own mapped registers: `common` at 0xfe000000 and 0xfe004000, notify and
+  device-config at distinct offsets in each, notify multiplier 4 for both.
+- *shared driver state.* Both reach `virtio_blk_attach` and both complete it,
+  with distinct `struct virtio_blk` and distinct `regs` pointers.
+- *overlapping queue memory.* The two virtqueues and their scratch pages are
+  disjoint and consecutive -- 0x2f000+3 pages and 0x32000 for the first,
+  0x33000+3 pages and 0x36000 for the second. The page allocator is not the
+  problem.
+- *bus mastering.* Set per device, in `pci.c`'s `examine`.
+- *a leaked busy flag.* `device_acquire` was instrumented to report on its very
+  first failed attempt. It never reported: the flag is clear and the acquire
+  succeeds.
+- *the request never being issued.* Both devices complete a read of sector 0
+  under instrumentation.
+
+**What is implicated.** Replacing the `sched_yield()` in `virtio_blk`'s poll
+loop with `arch_cpu_relax()` -- busy-waiting instead of yielding -- moves the
+boot past the point where it had been stopping, through the partition scan of
+the second device and on into the ACPI section. So the fault involves *yielding
+while waiting for this device*, not merely the device being slow.
+
+That also explains the one observation that made no sense on its own: **the
+stall point moves when unrelated code is added.** Adding a `kprintf` to a path
+that is not involved changes where it stops. Something scheduling-shaped, not
+something device-shaped, which is why every device-side hypothesis above came
+back clean.
+
+Left open rather than guessed at. The next step is to find out what
+`sched_yield` returns into here -- the idle thread was changed twice this month
+(BG-155, BG-158) and this is the only place in the kernel that yields while
+holding a device.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because
