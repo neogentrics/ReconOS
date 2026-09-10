@@ -100,8 +100,71 @@ struct thread {
 	 * may run. */
 	int idle_for;
 
+	/* The processor this thread may run on, or -1 for any of them.
+	  *
+	  * Separate from idle_for, which says the same thing for a different
+	  * reason: an idle thread is pinned because taking it would leave its
+	  * processor with nothing it is allowed to run, and a pinned thread is
+	  * pinned because it is doing something that belongs to one processor.
+	  *
+	  * There is one of the latter: the boot thread. It brings up the
+	  * machine, and a good deal of what it touches on the way -- calibrating
+	  * one processor's timer, walking firmware tables, starting the others --
+	  * is written on the assumption that it is processor 0 doing it.
+	  *
+	  * It was already pinned there, by accident: sched_init cleared the
+	  * thread and left idle_for at zero, which reads as processor 0's idle
+	  * thread. That pinned it and also made it unable to ever block, since
+	  * an idle thread must not. Splitting the two fields keeps the property
+	  * that was wanted and drops the one that was not. */
+	int pinned_to;
+
+	/* False from the moment this thread is chosen to run until the
+	  * processor it was running on has actually left it.
+	  *
+	  * READY is not enough to say a thread may be taken, and that was a
+	  * real fault rather than a nicety. sched_switch marked the outgoing
+	  * thread READY *before* arch_context_switch had saved its registers
+	  * and written its stack pointer -- so another processor could pick
+	  * it up in between and resume it from a stale stack pointer, with
+	  * two processors standing on one stack. The same window let the
+	  * reaper free a finished thread's stack while the processor that
+	  * finished it was still executing on it, which is how it was found:
+	  * a page allocator test's marker word turned up in a link register.
+	  *
+	  * A waker has the same problem from the other side. wait_sleep marks
+	  * a thread BLOCKED and then switches away, and a waker on another
+	  * processor can make it READY in that gap.
+	  *
+	  * So the rule is not about who set which state. It is that a thread
+	  * is not available to any processor until the processor it was on
+	  * has finished with it, and this is that fact. */
+	volatile bool off_cpu;
+
+	/* What this thread was actually asked to run, and its argument.
+	  *
+	  * Kept here because every thread now starts in a wrapper rather than at
+	  * its entry point directly: the first thing a new thread must do is
+	  * release the thread that gave up the processor to it, and a thread
+	  * that has never run has no other place to do it. */
+	void (*entry)(void *);
+	void *entry_arg;
+
 	u64 slice_left;
 	u64 ran_ticks;			/* total, for the summary */
+
+	/* The kernel stack a trap from user mode lands on for this thread, or
+	  * zero for a thread that never runs in user mode.
+	  *
+	  * It belongs to the thread and not to the processor, and that is the
+	  * whole point of it being here. It used to be recorded once, into the
+	  * block of whichever processor happened to run arch_enter_user -- and
+	  * a comment in that function said, correctly, that this would have to
+	  * move into the context switch once there was more than one program.
+	  * A system call is preemptible, so a thread can enter one on one
+	  * processor and return from it on another; the processor it returns on
+	  * had the wrong stack recorded, or none at all. */
+	void *entry_stack;
 
 	void *stack_base;
 	size_t stack_pages;
@@ -193,6 +256,9 @@ void thread_start(struct thread *t);
  * the point of the tick. */
 void sched_yield(void);
 
+/* Called by a thread running for the first time, before its entry point. */
+void sched_thread_first_run(void);
+
 /* Ends the calling thread. Called automatically when a thread's function
  * returns, so nothing has to remember to. */
 RK_NORETURN void thread_exit(void);
@@ -227,5 +293,11 @@ void arch_context_switch(void **save_to, void *new_sp);
  * the first switch lands in `entry` with `arg`, and so that returning from
  * `entry` lands in thread_exit(). */
 void *arch_thread_stack_init(void *stack_top, void (*entry)(void *), void *arg);
+
+/* Told to the processor that is about to run `t`: the stack a trap from user
+ * mode lands on, and anything else the architecture keeps per processor that
+ * is really a property of the thread. Called with the run-queue lock held,
+ * immediately before the switch. */
+void arch_thread_switched_in(struct thread *t);
 
 #endif /* RECON_KERNEL_SCHED_H */

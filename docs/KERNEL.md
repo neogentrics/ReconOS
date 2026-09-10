@@ -2338,6 +2338,196 @@ volume. That is the next piece and it changes nothing here — the bytes are the
 same bytes, and the loader does not know where they came from.
 
 
+## Time, deferred work, and where a device interrupt goes
+
+Three rows of the architecture audit said "waits on: wait queues". Wait queues
+landed with checkpoint 18, and nothing went back to them — so this is that,
+plus the interrupt routing they made worth having.
+
+### The timer wheel
+
+The kernel could tell the time and be interrupted by it, and could not *arrange*
+anything. There was no way to say "call this in fifty milliseconds", and no way
+for a thread to sleep: every wait was a spin against a deadline, which burns a
+processor for the whole wait.
+
+`core/timer.c` is a five-level hashed timing wheel — five wheels of 64 slots,
+each counting in units 64 times coarser than the one below, reaching about 124
+days at a hundred ticks a second. A request past that is refused rather than
+clamped, because a clamped timer fires at a time nobody asked for and reports
+success.
+
+The structure is chosen for the operation that actually happens. A list kept in
+expiry order is cheap to check and O(n) to insert, which is the wrong way round:
+timers are inserted and cancelled constantly and almost none of them ever fire,
+because the thing they guard against usually does not happen. A wheel makes
+insertion O(1) by not sorting at all, and *cascades* a timer down into finer
+slots only if it survives long enough to need it.
+
+The test waits about three quarters of a second, and that cost is deliberate: 70
+ticks is past level 0's 64 slots, so that timer can only fire if it is walked
+back down. There is no faster way to test the cascade that is still testing this
+code — driving the wheel by hand from the test would be testing a second
+implementation of the loop.
+
+### Deferred work
+
+An interrupt handler runs with interrupts masked, on a processor that is doing
+nothing else until it finishes. It cannot take a lock somebody might hold and it
+cannot wait. Every real kernel splits a handler in two; this one had not, which
+was tolerable only because no handler did much — and the timer wheel ends that,
+because a timer callback is an interrupt handler that arbitrary code can now ask
+for.
+
+`core/work.c` is one worker thread running items in the order they were queued.
+Not a thread pool: one worker makes two guarantees worth more here than
+throughput, which are that work items cannot race each other and that a slow one
+delays the queue rather than multiplying threads.
+
+**The assertion that matters is not that the work runs, it is where.** An
+implementation that called the function immediately would pass any test that
+only checked it was called — and would be the thing this replaces. So each item
+records which thread ran it and the test requires that to be the worker, with
+the items queued from inside a timer callback, which is real interrupt context.
+
+### The I/O APIC
+
+The 8259 pair has one output and it goes to one processor. That is not how it is
+programmed, it is what the chip is: on a machine with two processors or two
+hundred and eighty-eight, every disk completion and every keypress lands on
+processor 0 and the others cannot be given any of it.
+
+`arch/x86_64/ioapic.c` reads the MADT for I/O APICs and for **interrupt source
+overrides**, which is the part that is not optional. The inputs are not the
+sixteen ISA lines; they are Global System Interrupts, and the firmware is free
+to wire an ISA line to a different one. It usually does: on almost every PC the
+timer arrives on GSI 2, and a kernel that assumes IRQ *n* is GSI *n* masks the
+timer by accident and stops.
+
+The 8259 is masked rather than removed, and the switch is **verified rather than
+assumed**: the tick is watched across it against a clock that does not depend on
+it, and if it does not advance the lines go back and the machine says so. That
+is not an off-switch for a check — it is the check. The alternative is a kernel
+that hangs at boot on hardware nobody here owns with no output to say why. It
+earned its place on the first attempt, catching a mistake in the check itself.
+
+Then it caught a real one. See BG-157: the 8254 was programmed as a square wave,
+which changes its output twice a period, and the new controller counted both
+transitions where the old one counted one. **The kernel ran at 201 Hz against a
+100 Hz constant and every tick-counting test passed** — the ordering of timers
+held, the cascade fired at the right tick, the scheduler preempted. Only a
+comparison against the monotonic counter could see it, and there had never been
+one. There is now.
+
+### Interrupts with no wire
+
+`arch/x86_64/msi.c` composes the address and data a device writes to raise a
+vector on a processor, and programs them into a PCI device's MSI capability. An
+MSI is not special: the range at 0xFEE00000 is claimed by the local APICs and a
+write landing there is decoded as an interrupt, so the address and the data
+*are* the routing — no table in a chip, and no line to share.
+
+It is tested by performing the write, because the write a device does is an
+ordinary memory write and a processor can do the same one. If the vector
+arrives, the encoding is right.
+
+**No driver asks for it yet**, and that is stated rather than implied. Every
+storage driver here polls, and turning MSI on for a device whose driver does not
+expect asynchronous completions would be worse than leaving it off.
+
+### An idle thread is a last resort, not a turn in the round
+
+This is here because it cost a whole verification run and because the shape of it
+is worth more than the fix.
+
+Fixing BG-155 meant giving processor 0 an idle thread of its own. That put an idle
+thread in the run ring **beside a working thread on the same processor for the
+first time** — the boot processor had never had one, and a secondary had nothing
+else to run — and `pick_next` returned the first eligible thread it found. So the
+boot thread and `idle-000` were handed alternate slices.
+
+An idle slice is not a short one. `idle_loop` calls `arch_wait_for_interrupt`, so
+it holds the processor until the next tick, doing nothing. **The machine ran at
+about half speed.**
+
+Twenty-six self-tests passed. Nothing was incorrect: every thread ran, every timer
+fired in the right order, every assertion held. What failed was seven paths of the
+verification matrix, and every one of them writes to a disk — they wrote correct
+data and ran out of time doing it.
+
+The scheduler now counts, and fails on, an idle thread being scheduled while
+another thread on that processor is READY. That is an invariant with a number
+attached rather than a statistic: an idle thread exists so a processor has
+something to do when nothing else will have it, and running one with work waiting
+is the processor doing nothing on purpose.
+
+**The general lesson is the one from BG-157 the same day.** The suite catches
+wrongness. It is blind to slowness, because every assertion in it is about order
+and value and none is about duration. The matrix is what has real timeouts on real
+work, and it is the only thing that saw either of these.
+
+### READY meant two things, and they stopped being the same thing
+
+The scheduler marked a thread READY *before* `arch_context_switch` had saved its
+registers and written its stack pointer. For those few instructions the thread
+was advertised to every other processor while this one was still standing on its
+stack — and a processor that took it would resume from a pointer that had not
+been written.
+
+The comment beside the lock release argued it was safe, and was wrong in a
+precise way: *"prev is READY and owned by nobody, next is RUNNING and owned by
+this processor."* Owned by nobody was exactly the problem. It was still being
+used by this one.
+
+Three paths share it, which is why the fix is an invariant and not three patches.
+`thread_exit` marks a thread FINISHED and then switches away, and the reaper's
+guard — `t != this_cpu()->current` — does not cover a thread that is current on a
+*different* processor. `wait_sleep` marks a thread BLOCKED and then switches away,
+and a waker on another processor can make it READY in that gap. And ordinary
+preemption, above.
+
+**How it was found is worth keeping.** A live kernel stack was freed by the
+reaper, handed straight to the page allocator's own concurrency test, and had a
+marker word written over a return address. The panic reported a link register of
+`0xacce5501` — which is `0xACCE5500 | 1`, the marker racer number one writes into
+every page it is given. A test built for one purpose named a fault in another.
+
+A thread now carries `off_cpu`, and both `pick_next` and the reaper require it.
+It is cleared when the thread is chosen and set by **whoever runs next on that
+processor**, which is the first instant at which the outgoing thread has genuinely
+stopped. A thread running for the first time has no such return point, so every
+thread starts in a small C wrapper that releases its predecessor and then calls
+the entry point — in C rather than in each architecture's assembly trampoline,
+because an agreement between two assembly files is the kind that drifts.
+
+Ten of ten clean where it had been panicking one boot in three.
+
+## Processors: how many, and telling them apart
+
+`MAX_CPUS` was 8, which was the size of the test rig. A current server part is
+two orders of magnitude past that — EPYC reaches 128 cores a socket and 192 on
+Turin, Xeon 128 P-cores or 288 E-cores, and a two-socket board is routinely 256
+to 576 *logical* processors. It is now **256**, and that number has a reason:
+255 is the largest processor an 8-bit APIC identifier can name, so 256 is
+exactly where the xAPIC interrupt controller stops being able to address what it
+can see.
+
+Going past it is x2APIC, which is implemented and **has never executed**: QEMU
+8.2 does not provide it under TCG and KVM is not reachable from this machine.
+What is tested is the arithmetic it depends on. See BG-152, which says plainly
+which half is which.
+
+On aarch64 the identity was MPIDR affinity level 0 — the processor *within its
+cluster*, unique on every machine this kernel had run on and not on a two-socket
+board. It is now a dense index the kernel assigns, carried in TPIDR_EL1. The
+same mistake was in `boot.S`, where it was worse: the test for "am I the boot
+processor" was also the low byte, so core 0 of every cluster would have run
+`kmain` at once on one stack.
+
+**None of this is tested above 32 processors, and the header says so.** The
+capacity is there deliberately, ahead of a machine to prove it on.
+
+
 ## Foreign filesystems, and why FAT32 is not optional
 
 Checkpoint 14 exists for one reason: **the UEFI System Partition is FAT32 by

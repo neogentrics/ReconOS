@@ -41,6 +41,7 @@
 #define BAD_DATA        2	/* the writable segment did not arrive */
 #define BAD_BSS_DIRTY   3	/* .bss was not zero */
 #define BAD_BSS_WRITE   4	/* .bss did not hold what was written to it */
+#define BAD_REGISTERS   5	/* a register arrived holding kernel data */
 
 /* --------------------------------------------------------------------------
  * The read-only half: instructions, and the message.
@@ -52,6 +53,23 @@
 #if defined(__x86_64__)
 
 _start:
+	/* Before anything else: the registers this program was handed.
+	 *
+	 * The kernel clears every general-purpose register before dropping to
+	 * user mode, because otherwise this program's first instruction can
+	 * read kernel stack addresses and pointers into kernel structures.
+	 * The callee-saved ones are checked rather than the argument ones,
+	 * because a kernel that cleared only what it passes arguments in would
+	 * still pass a test that looked at RDI. */
+	movq	%rbx, %rax
+	orq	%r12, %rax
+	orq	%r13, %rax
+	orq	%r14, %rax
+	orq	%r15, %rax
+	orq	%rbp, %rax
+	testq	%rax, %rax
+	jnz	.Lbad_registers
+
 	/* write(1, msg, len). The length comes from the linker rather than
 	 * being counted here, so the two cannot disagree. */
 	movq	$1, %rdi
@@ -89,6 +107,9 @@ _start:
 	jmp	.Lexit
 .Lbad_bss_write:
 	movq	$BAD_BSS_WRITE, %rdi
+	jmp	.Lexit
+.Lbad_registers:
+	movq	$BAD_REGISTERS, %rdi
 .Lexit:
 	movq	$SYS_EXIT, %rax
 	syscall
@@ -101,6 +122,17 @@ _start:
 #elif defined(__aarch64__)
 
 _start:
+	/* See the x86_64 half. The callee-saved registers are checked because
+	 * a kernel that cleared only its argument registers would still pass a
+	 * check that looked at x0 -- and x30, because the link register holds
+	 * a kernel return address. */
+	orr	x9, x19, x20
+	orr	x9, x9, x21
+	orr	x9, x9, x22
+	orr	x9, x9, x29
+	orr	x9, x9, x30
+	cbnz	x9, .Lbad_registers
+
 	mov	x0, #1
 	adrp	x1, msg
 	add	x1, x1, #:lo12:msg
@@ -137,6 +169,9 @@ _start:
 	b	.Lexit
 .Lbad_bss_write:
 	mov	x0, #BAD_BSS_WRITE
+	b	.Lexit
+.Lbad_registers:
+	mov	x0, #BAD_REGISTERS
 .Lexit:
 	mov	x8, #SYS_EXIT
 	svc	#0

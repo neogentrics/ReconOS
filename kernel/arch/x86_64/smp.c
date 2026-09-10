@@ -62,12 +62,7 @@
  * one that silently uses half a machine. */
 #define MADT_APIC_ONLINE_CAPABLE (1u << 1)
 
-struct madt {
-	struct acpi_sdt_header header;
-	u32 local_apic_address;
-	u32 flags;
-	/* entries follow */
-} RK_PACKED;
+/* struct madt now lives in x86_64.h: ioapic.c walks the same table. */
 
 /* Which logical processor each APIC identifier belongs to.
  *
@@ -80,11 +75,118 @@ struct madt {
 static u32 apic_id_for_cpu[MAX_CPUS];
 static bool cpu_map_ready;
 
+/* And the same map read the other way round, because the forward one is read
+ * far more often than it is written.
+ *
+ * x86_cpu_index() is on the path of every this_cpu(), which means every lock
+ * acquisition and every scheduler decision. It used to search apic_id_for_cpu
+ * from the front, which was free when that array had eight entries and is a
+ * 256-iteration scan per lock now that it has 256. Raising the ceiling without
+ * this would have made a bigger machine slower at the thing it does most.
+ *
+ * Entries are the kernel index plus one, so zero means "not a processor we
+ * know about" and the array needs no separate initialisation pass. The size is
+ * a compromise: identifiers below it are answered by one load, and anything
+ * above falls back to the scan -- correct either way, and the scan is then
+ * over a machine large enough that it has earned it. */
+#define APIC_REVERSE_MAP 4096
+static u16 cpu_for_apic_id[APIC_REVERSE_MAP];
+
+static void remember_apic_id(unsigned cpu, u32 id)
+{
+	if (cpu >= MAX_CPUS)
+		return;
+
+	apic_id_for_cpu[cpu] = id;
+
+	if (id < APIC_REVERSE_MAP)
+		cpu_for_apic_id[id] = (u16)(cpu + 1);
+}
+
 /* This processor's kernel index, found by asking its APIC who it is.
  *
  * Called before the APIC exists, by code that runs during early boot, and the
  * answer then is zero -- which is correct, because until the APIC is up there
  * is only one processor running. */
+/* x86_64 has kept APIC identifiers and kernel indices apart since the map was
+ * written -- see apic_id_for_cpu -- so the aliasing BG-153 describes cannot
+ * happen here. What can, and what this checks, is the reverse map going out
+ * of step with the forward one: they are two arrays holding one fact, and the
+ * fast path reads only one of them. */
+bool arch_identity_self_test(void)
+{
+	unsigned i;
+	bool ok = true;
+
+	for (i = 0; i < MAX_CPUS; i++) {
+		u32 id = apic_id_for_cpu[i];
+
+		/* Slot 0 is the only one legitimately holding APIC 0. */
+		if (i && !id)
+			continue;
+
+		if (id < APIC_REVERSE_MAP && cpu_for_apic_id[id] != (u16)(i + 1)) {
+			kprintf("  smp: APIC 0x%x belongs to processor %u but the "
+				"fast map says %u\n", id, i,
+				(unsigned)cpu_for_apic_id[id]);
+			ok = false;
+		}
+	}
+
+	/* --- and the x2APIC arithmetic, which no machine here can run -------
+	  *
+	  * x2APIC is what lifts the ceiling from 255 processors to 32 bits of
+	  * them, and it has never executed: QEMU 8.2 does not implement it under
+	  * TCG, and KVM is not reachable from this machine. See the note on the
+	  * `x2apic` flag in apic.c.
+	  *
+	  * Two things about it are arithmetic rather than hardware, and getting
+	  * either wrong is silent: which MSR each register becomes, and where
+	  * the destination sits in the 64-bit command. Both are checked here, so
+	  * that when the mode is finally entered on a real machine the failure
+	  * -- if there is one -- is in the part that needed the hardware.
+	  *
+	  * This does not make x2APIC tested. It makes the untested part
+	  * smaller. */
+	if (x86_apic_msr_for(0x020u) != 0x802u ||		/* identifier */
+	    x86_apic_msr_for(0x0B0u) != 0x80Bu ||		/* end of interrupt */
+	    x86_apic_msr_for(0x300u) != 0x830u ||		/* command */
+	    x86_apic_msr_for(0x3E0u) != 0x83Eu) {		/* timer divide */
+		kputs("  smp: the x2APIC register numbering is wrong, so every "
+			"access would go to the wrong register\n");
+		ok = false;
+	}
+
+	/* The destination is the *high* half of the command. In the low half it
+	  * would be read as delivery mode and vector: an INIT to processor 5
+	  * would become some other message to everybody. */
+	if (x86_apic_command_word(0x1234u, 0x4500u) !=
+	    ((u64)0x1234u << 32 | 0x4500u)) {
+		kputs("  smp: the x2APIC command word puts the destination in the "
+			"wrong half\n");
+		ok = false;
+	}
+
+	/* And that an identifier a byte cannot hold survives it, which is the
+	  * entire purpose: 300 is an ordinary processor number on a machine with
+	  * two server-size sockets. */
+	if ((u32)(x86_apic_command_word(300u, 0) >> 32) != 300u) {
+		kputs("  smp: a processor above 255 loses its identity in the "
+			"command word\n");
+		ok = false;
+	}
+
+	return ok;
+}
+
+u64 arch_cpu_hw_id(void)
+{
+	if (!x86_apic_present())
+		return 0;
+
+	return x86_apic_id();
+}
+
 unsigned x86_cpu_index(void)
 {
 	u32 id;
@@ -95,9 +197,16 @@ unsigned x86_cpu_index(void)
 
 	id = x86_apic_id();
 
-	for (i = 0; i < MAX_CPUS; i++)
-		if (apic_id_for_cpu[i] == id)
-			return i;
+	if (id < APIC_REVERSE_MAP) {
+		u16 slot = cpu_for_apic_id[id];
+
+		if (slot)
+			return slot - 1u;
+	} else {
+		for (i = 0; i < MAX_CPUS; i++)
+			if (apic_id_for_cpu[i] == id)
+				return i;
+	}
 
 	/* An APIC that is not in the table. Zero is wrong, and so is anything
 	 * else; what matters is that it is in range, because the caller is
@@ -205,7 +314,7 @@ unsigned arch_smp_discover(u64 *ids, unsigned max)
 	 * ticks -- a scheduler running at twice the rate it believes, which
 	 * looks like it works. */
 	if (x86_apic_init()) {
-		apic_id_for_cpu[0] = x86_apic_id();
+		remember_apic_id(0, x86_apic_id());
 		cpu_map_ready = true;
 		x86_apic_calibrate_timer();
 	}
@@ -343,8 +452,7 @@ bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 		((u8 *)phys_to_virt(trampoline_page) +
 		 (x86_trampoline_params - x86_trampoline_start));
 
-	if (cpu < MAX_CPUS)
-		apic_id_for_cpu[cpu] = (u32)id;
+	remember_apic_id(cpu, (u32)id);
 
 	p->cr3   = x86_read_cr3();
 	p->stack = (u64)(uintptr_t)stack_top;

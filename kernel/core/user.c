@@ -588,6 +588,7 @@ bool user_elf_test(void)
 		"the writable segment did not carry the file's bytes",
 		"the .bss it was given was not zero",
 		"the .bss it was given did not keep what it wrote",
+		"a register arrived holding the kernel's data",
 	};
 
 	u64 exits_before  = exits;

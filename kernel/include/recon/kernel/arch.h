@@ -89,6 +89,22 @@ bool arch_irqs_enabled(void);
  * Without it a spinning processor draws as much power as a working one. */
 void arch_cpu_relax(void);
 
+/* Puts device interrupts wherever this machine can best deliver them, once
+ * every processor is running. On x86_64 that means moving the ISA lines off
+ * the 8259 -- which has one output, wired to one processor -- and onto the I/O
+ * APIC, which can name any of them. On aarch64 the interrupt controller
+ * already distributes and there is nothing to move.
+ *
+ * Called after smp_init, because the destination is a processor and there is
+ * no point choosing one before they exist. */
+void arch_irq_route_init(void);
+void arch_irq_print_summary(void);
+
+/* That the machine's way of signalling an interrupt without a wire actually
+ * signals one. On x86_64 that is an MSI written to the local APIC's window.
+ */
+bool arch_irq_self_test(void);
+
 /* --- Control ----------------------------------------------------------- */
 
 /* Stop this CPU forever, with interrupts masked. Used by panic(). */

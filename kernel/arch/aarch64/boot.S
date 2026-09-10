@@ -51,14 +51,40 @@ real_start:
 	 * up are callee-saved, and nothing this file calls is C. */
 	mov	x19, x0
 
-	/* Which core is this? MPIDR_EL1's low byte is the CPU number within its
-	 * cluster. QEMU releases every configured core at the entry point at
-	 * once, so without this, four CPUs race to run the same kernel with the
-	 * same stack. Secondaries sleep until there is an SMP story to wake
-	 * them into. */
+	/* Which core is this? QEMU releases every configured core at the entry
+	 * point at once, so without this, four CPUs race to run the same kernel
+	 * with the same stack. Secondaries sleep until there is an SMP story to
+	 * wake them into.
+	 *
+	 * ALL FOUR AFFINITY LEVELS, not the low byte.
+	 *
+	 * This tested `mpidr & 0xff`, which is affinity level 0 -- the processor
+	 * *within its cluster*. On every machine this kernel had run on there
+	 * was one cluster, so that was unique. On a two-socket board, or on
+	 * anything big.LITTLE, core 0 of every cluster passes a low-byte test:
+	 * several processors would each decide they were the boot processor and
+	 * run kmain at once, on one stack, before a single line of this
+	 * kernel's own SMP code had executed.
+	 *
+	 * Aff0..Aff2 are bits 23:0 and Aff3 is bits 39:32, so the test is that
+	 * every one of them is zero. A machine whose boot processor is not
+	 * affinity zero would park all of them and hang -- visibly, at the very
+	 * first instruction, rather than corrupting a stack and appearing to
+	 * work. Of the two, that is the failure to choose. */
 	mrs	x1, mpidr_el1
-	and	x1, x1, #0xff
-	cbnz	x1, secondary_park
+	and	x2, x1, #0xffffff		/* Aff2:Aff1:Aff0 */
+	lsr	x3, x1, #32
+	and	x3, x3, #0xff		/* Aff3 */
+	orr	x2, x2, x3
+	cbnz	x2, secondary_park
+
+	/* This processor's kernel index, which for the boot processor is zero.
+	 * TPIDR_EL1 is where every processor keeps its own, because MPIDR names
+	 * a position in a topology and the kernel needs a dense array index --
+	 * and because reading a register is what arch_cpu_id() should cost when
+	 * it sits on the path of every lock. Written before any C runs; at reset
+	 * its contents are UNKNOWN. */
+	msr	tpidr_el1, xzr
 
 	/* A stack, at the address it is loaded at rather than the one it is
 	 * linked at. The ABI requires SP to be 16-byte aligned. */
@@ -366,6 +392,9 @@ secondary_high:
 	add	x1, x1, x2
 	ldr	x1, [x1]
 	mov	sp, x1
+
+	/* Its own index, before it runs any C -- arch_cpu_id() reads this. */
+	msr	tpidr_el1, x19
 
 	mov	x0, x19
 	bl	smp_secondary_main

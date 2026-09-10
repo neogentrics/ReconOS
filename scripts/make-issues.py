@@ -73,6 +73,15 @@ AREA = {
     # already been acted on by the time this needed a number.
     137: 'startup', 138: 'startup', 139: 'build', 140: 'storage', 141: 'startup', 142: 'startup',
     143: 'build', 144: 'build',
+    # Checkpoint 19 and 20. Added at the same time as the entries rather than
+    # afterwards, because a number missing from this table gets no area label
+    # and says nothing about it -- AREA.get returns None quietly, which is how
+    # twenty entries came to be filed with only `bug` on them.
+    145: 'kernel', 146: 'kernel', 147: 'kernel', 148: 'kernel',
+    149: 'kernel', 150: 'kernel', 151: 'kernel', 152: 'kernel',
+    153: 'kernel', 154: 'kernel', 155: 'kernel', 156: 'kernel',
+    157: 'kernel', 158: 'kernel', 159: 'kernel',
+    160: 'build',
 }
 
 

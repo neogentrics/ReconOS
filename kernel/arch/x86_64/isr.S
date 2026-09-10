@@ -145,6 +145,7 @@ vector_\n:
 
 	VECTOR 64	/* the local APIC timer: this processor's own tick */
 	VECTOR 65	/* a request to invalidate a translation */
+	VECTOR 66	/* a message-signalled interrupt, for the self-test */
 	VECTOR 255	/* spurious, and it must return without doing anything */
 
 isr_common:

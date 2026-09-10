@@ -1,3 +1,4 @@
+#include <recon/kernel/console.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/smbios.h>
 #include <recon/kernel/arch.h>
@@ -81,15 +82,77 @@ void arch_wait_for_interrupt(void)
 
 /* --- Processors and interrupts -------------------------------------------- */
 
+void arch_irq_route_init(void)
+{
+	/* Nothing to move.
+	  *
+	  * The GIC is not two chips with one of them cascaded into the other and
+	  * a single wire out. Its distributor already decides which processor
+	  * each interrupt goes to, and it has done since the controller was
+	  * brought up -- so the thing arch_irq_route_init exists to arrange on
+	  * x86_64 is arranged here by having used the right controller from the
+	  * start. */
+}
+
+bool arch_irq_self_test(void)
+{
+	unsigned gen = aarch64_gic_generation();
+
+	/* There is no message-signalled interrupt to check here, and saying so
+	  * by returning true would be a test that cannot fail -- which this
+	  * project has been bitten by twice and does not do.
+	  *
+	  * x86_64 needs a check because an MSI is an *encoding*: an address and
+	  * a data word this kernel composes, which can be composed wrongly and
+	  * then silently delivers nothing. The GIC has no equivalent -- an
+	  * interrupt reaches a processor because the distributor was told to
+	  * send it there, not because a message was built correctly.
+	  *
+	  * So what is asserted is the thing that stands in the same place: that
+	  * a controller was actually identified. Zero here is a machine with no
+	  * interrupt controller at all, which would take no timer interrupt and
+	  * schedule nothing -- and gic_detect can return it, so this is a
+	  * question with two possible answers. */
+	if (gen != 2 && gen != 3) {
+		kprintf("  gic: no interrupt controller was identified (generation %u)\n", gen);
+		return false;
+	}
+
+	return true;
+}
+
+void arch_irq_print_summary(void)
+{
+	kputs("  routing      : GIC distributor, which can send an interrupt "
+	      "to any processor\n");
+}
+
 unsigned arch_cpu_id(void)
 {
-	unsigned id = arch_cpu_id_real();
+	u64 id;
 
-	/* Clamped rather than trusted. A machine whose processors are numbered
-	 * beyond what this kernel can hold would otherwise index past the
-	 * per-processor array -- and the failure would be a corrupted neighbour
-	 * rather than an error. smp_init() reports the ones it dropped. */
-	return (id < MAX_CPUS) ? id : 0;
+	/* The kernel's own index, put here by boot.S before this processor ran
+	 * any C. It is deliberately NOT derived from MPIDR.
+	 *
+	 * This used to return `mpidr & 0xFF`, which is affinity level 0 -- the
+	 * processor within its cluster. Every machine this kernel had run on had
+	 * one cluster, so that number was unique; on a two-socket board it is
+	 * not, and processor 0 of cluster 0 and processor 0 of cluster 1 would
+	 * index the same entry of every per-processor array there is: the same
+	 * task state, the same current thread, the same active address space,
+	 * the same idle thread. Nothing would fail until they touched it at the
+	 * same moment.
+	 *
+	 * Folding the higher affinity fields in would have made the value unique
+	 * and would not have made it an index -- MPIDR values are sparse, and a
+	 * second socket may start at a large affinity number. So the identity is
+	 * assigned by discovery, dense by construction, and each processor
+	 * carries its own. */
+	__asm__ volatile("mrs %0, tpidr_el1" : "=r"(id));
+
+	/* Clamped rather than trusted, because the caller is about to index an
+	 * array with it. smp_init() reports the processors it dropped. */
+	return (id < MAX_CPUS) ? (unsigned)id : 0;
 }
 
 u64 arch_irq_save(void)

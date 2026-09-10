@@ -100,7 +100,25 @@ for round in $(seq 1 "$ROUNDS"); do
 	# the marker run could finish. Swept rather than fixed, so the cut lands
 	# in a different place each time -- a single fixed delay tests one
 	# instant, and the instant that matters is the one nobody chose.
-	ms=$(( 900 + (round * 137) % 2200 ))
+	#
+	# MEASURED FROM WHEN THE GUEST STARTS WRITING, NOT FROM WHEN IT STARTS.
+	#
+	# It used to be measured from launch, as `900 + (round * 137) % 2200`,
+	# and the lower end of that window was chosen against the boot time of
+	# the day it was written. Checkpoint 20 added about a second of
+	# self-tests -- the timer wheel's cascade case alone waits seventy ticks
+	# on purpose -- and the early rounds began cutting before the kernel had
+	# even found the disk.
+	#
+	# The harness said so, loudly and correctly: "every round wrote nothing
+	# -- the cut is landing before the disk is found, so this measured
+	# nothing." That is the check doing its job, and re-tuning the constant
+	# would only move the day it next goes stale.
+	#
+	# So the sweep now starts from the line the kernel prints when it begins
+	# writing markers. What is being swept is time spent *writing*, which is
+	# what this test is about; how long the kernel took to get there is not.
+	ms=$(( 60 + (round * 137) % 2200 ))
 
 	# QEMU is launched directly, with nothing wrapped around it.
 	#
@@ -140,6 +158,32 @@ for round in $(seq 1 "$ROUNDS"); do
 	# The cut. SIGKILL rather than SIGTERM: a shutdown would let QEMU flush,
 	# which is exactly the thing being tested and exactly what a power cut
 	# does not do.
+	# Wait for it to reach the disk, then start the clock. Bounded, because
+	# a guest that never gets there must fail this round rather than hang
+	# the run -- and a round that timed out here would otherwise look
+	# exactly like a clean one.
+	started=
+	for _ in $(seq 300); do
+		if grep -q "durability: writing markers" "$OUT/run.log" 2>/dev/null; then
+			started=yes
+			break
+		fi
+		if ! kill -0 "$qemu_pid" 2>/dev/null; then
+			break
+		fi
+		sleep 0.05
+	done
+
+	if [ -z "$started" ]; then
+		echo "round $round: the guest never reached the disk in 15s"
+		kill -9 "$qemu_pid" 2>/dev/null
+		wait "$qemu_pid" 2>/dev/null
+		qemu_pid=
+		# Not counted as checked, which the "only N of M rounds were
+		# checked at all" assertion below turns into a failed run.
+		continue
+	fi
+
 	sleep "$(awk "BEGIN{print $ms/1000}")"
 	kill -9 "$qemu_pid" 2>/dev/null
 

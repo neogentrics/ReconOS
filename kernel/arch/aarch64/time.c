@@ -90,6 +90,14 @@
  * machine is running and every processor needs it. */
 static unsigned gic_version;
 
+/* Which generation the interrupt controller turned out to be, for the portable
+ * side to assert on. Zero means none was found -- which is not a machine that
+ * boots, and is exactly the thing worth checking rather than assuming. */
+unsigned aarch64_gic_generation(void)
+{
+	return gic_version;
+}
+
 /* The CPU interface, on v3, is reached through system registers rather than
  * through memory. Named by their encodings because the assembler in use does
  * not know the newer mnemonics on every target. */

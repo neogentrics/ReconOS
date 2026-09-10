@@ -67,22 +67,118 @@
 #define MSR_APIC_BASE		0x1Bu
 #define APIC_BASE_ENABLE	(1ull << 11)
 
+/* --- x2APIC ---------------------------------------------------------------
+ *
+ * The same local APIC reached through model-specific registers instead of a
+ * page of memory, and the reason to care is not the access method: **in xAPIC
+ * mode a processor identifier is eight bits.** The identifier register holds
+ * eight, and the interrupt command register has eight bits of destination, so
+ * 255 is the highest processor this kernel could ever speak to -- while the
+ * MADT walk in smp.c has always read x2APIC entries and would happily
+ * enumerate a thousand. Found and unable to be started is what a two-socket
+ * server would have hit.
+ *
+ * x2APIC identifiers are 32 bits. The register block becomes MSRs 0x800
+ * upward, one per 16-byte offset of the old block, and the interrupt command
+ * register becomes a single 64-bit write with the destination in the high
+ * half -- which also removes the two-write sequence the old path had to get
+ * in the right order.
+ *
+ * **It cannot be turned off again without resetting the processor.** So the
+ * decision is made once, at boot, from what CPUID reports -- and every
+ * processor makes the same decision, because they must agree: a secondary
+ * left in xAPIC mode would have a different identifier from the one the boot
+ * processor used to start it.
+ */
+#define APIC_BASE_X2APIC	(1ull << 10)
+#define MSR_X2APIC_BASE		0x800u
+#define MSR_X2APIC_ICR		0x830u
+
+/* Off on every machine this has run on, and the reason is worth recording
+ * where somebody reading the code will find it rather than in a commit
+ * message: **QEMU 8.2 does not implement x2APIC under TCG.** Asking for it
+ * with -cpu qemu64,+x2apic produces
+ *
+ *     TCG doesn't support requested feature: CPUID.01H:ECX.x2apic [bit 21]
+ *
+ * and even -cpu max reports the bit clear, which was measured rather than
+ * assumed. KVM would provide it and this machine cannot reach /dev/kvm.
+ *
+ * So every line below that runs only when x2apic is true has never executed.
+ * It is here because the alternative is a kernel that cannot start the
+ * processors on a two-socket server at all, and because the arithmetic it
+ * depends on -- which register becomes which MSR, where the destination sits
+ * in the 64-bit command -- is testable without the hardware and is tested in
+ * arch_identity_self_test. What is untested is whether the mode switch takes
+ * and whether a real processor answers afterwards. */
+static bool x2apic;
+static bool announced;
+
+/* An offset in the memory-mapped block, as the MSR holding the same register.
+ * The block is 16-byte spaced and the MSRs are consecutive, so the mapping is
+ * a shift -- stated here once rather than at each register. */
+static inline u32 x2apic_msr(unsigned reg)
+{
+	return MSR_X2APIC_BASE + (reg >> 4);
+}
+
+/* Both of the above, exposed so they can be tested on a machine that cannot
+ * enter the mode -- see arch_identity_self_test. Neither touches hardware. */
+u32 x86_apic_msr_for(unsigned reg)
+{
+	return x2apic_msr(reg);
+}
+
+u64 x86_apic_command_word(u32 target, u32 command)
+{
+	return ((u64)target << 32) | command;
+}
+
 static volatile u8 *lapic;
 static u32 timer_ticks_per_interval;
 
 static inline u32 apic_read(unsigned reg)
 {
+	if (x2apic)
+		return (u32)x86_rdmsr(x2apic_msr(reg));
+
 	return *(volatile u32 *)(lapic + reg);
 }
 
 static inline void apic_write(unsigned reg, u32 value)
 {
+	if (x2apic) {
+		x86_wrmsr(x2apic_msr(reg), value);
+		return;
+	}
+
 	*(volatile u32 *)(lapic + reg) = value;
 }
 
 bool x86_apic_present(void)
 {
-	return lapic != 0;
+	/* In x2APIC mode there is no mapping to have made -- the registers are
+	  * MSRs -- so `lapic` stays null on a machine where the APIC is very
+	  * much present. Asking the wrong question here would have made every
+	  * caller believe there was no interrupt controller at all. */
+	return x2apic || lapic != 0;
+}
+
+bool x86_apic_is_x2(void)
+{
+	return x2apic;
+}
+
+/* Whether this processor can do x2APIC at all: CPUID leaf 1, ECX bit 21. */
+static bool x2apic_supported(void)
+{
+	u32 a, b, c, d;
+
+	__asm__ volatile("cpuid"
+			: "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+			: "a"(1u), "c"(0u));
+
+	return (c & (1u << 21)) != 0;
 }
 
 /* Maps the APIC and turns it on for the processor that calls it.
@@ -123,6 +219,38 @@ bool x86_apic_init(void)
 	 * ones and every write would go nowhere -- silently. */
 	x86_wrmsr(MSR_APIC_BASE, base_msr | APIC_BASE_ENABLE);
 
+	/* And then, if the processor has it, x2APIC.
+	  *
+	  * The order matters: the memory-mapped block above is set up first and
+	  * unconditionally, because the decision below has to be made the same
+	  * way by every processor and a processor that could not make it needs
+	  * the old path working underneath it.
+	  *
+	  * The boot processor decides and the secondaries follow: `x2apic` is
+	  * already true by the time any of them runs this, so they take the
+	  * branch rather than re-deciding. Two processors reaching different
+	  * answers would be a machine whose processors do not agree what their
+	  * own identifiers are.
+	  *
+	  * Firmware may have enabled it already -- that is what the EXTD bit in
+	  * the value just read would say -- and enabling it twice is harmless,
+	  * while going the other way is not possible at all without a reset. */
+	if (x2apic || x2apic_supported()) {
+		u64 want = (base_msr | APIC_BASE_ENABLE | APIC_BASE_X2APIC);
+
+		x86_wrmsr(MSR_APIC_BASE, want);
+
+		/* Read back, because this is a mode switch and believing it
+		  * happened when it did not means every register access after
+		  * this line goes to the wrong place. A processor that refuses
+		  * keeps the memory-mapped path, which still works. */
+		if (x86_rdmsr(MSR_APIC_BASE) & APIC_BASE_X2APIC)
+			x2apic = true;
+		else if (x2apic)
+			kputs("  apic: this processor would not enter x2APIC mode "
+				"and the others have\n");
+	}
+
 	/* Accept every priority. Firmware sometimes leaves this raised, and a
 	 * raised task priority silently discards interrupts below it -- which
 	 * looks exactly like a timer that was never programmed. */
@@ -130,11 +258,31 @@ bool x86_apic_init(void)
 
 	apic_write(APIC_SPURIOUS, APIC_SOFTWARE_ENABLE | VECTOR_SPURIOUS);
 
+	/* Said once, by whichever processor gets here first, because which mode
+	  * this machine is in decides how many processors it can address and
+	  * there was previously no way to tell from the outside. Every boot in
+	  * the matrix now states it. */
+	if (!announced) {
+		announced = true;
+		kprintf("  apic: %s, so processor identifiers are %s\n",
+			x2apic ? "x2APIC" : "xAPIC",
+			x2apic ? "32-bit, and this path is UNTESTED"
+				: "8-bit (255 processors at most)");
+	}
+
 	return true;
 }
 
 u32 x86_apic_id(void)
 {
+	/* Thirty-two bits in x2APIC mode and eight in the top of the register
+	  * in xAPIC mode. Not a cosmetic difference: shifting an x2APIC
+	  * identifier down by 24 turns processors 0 through 255 into processor
+	  * 0, which is every per-processor lookup in the kernel pointing at one
+	  * slot. */
+	if (x2apic)
+		return (u32)x86_rdmsr(x2apic_msr(APIC_ID));
+
 	if (!lapic)
 		return 0;
 
@@ -157,6 +305,14 @@ static void wait_for_delivery(void)
 {
 	unsigned spins = 0;
 
+	/* There is nothing to wait for in x2APIC mode: the command is a single
+	  * MSR write, which cannot be half-done, and the delivery-status bit is
+	  * reserved and reads zero. Polling it here would be a loop that always
+	  * exits immediately, which is harmless and is also a lie about what the
+	  * hardware is doing. */
+	if (x2apic)
+		return;
+
 	while ((apic_read(APIC_ICR_LOW) & ICR_DELIVERY_PENDING) &&
 	       spins < 1000000)
 		spins++;
@@ -164,8 +320,26 @@ static void wait_for_delivery(void)
 
 static void send_command(u32 target, u32 command)
 {
+	if (x2apic) {
+		/* One 64-bit write, destination in the high half -- and the
+		  * full 32 bits of it, which is the entire point. */
+		x86_wrmsr(MSR_X2APIC_ICR,
+				x86_apic_command_word(target, command));
+		return;
+	}
+
+	/* Above 255 there is no way to say who this is for: the destination
+	  * field is eight bits wide. Refused rather than truncated, because a
+	  * truncated destination is a message delivered to the wrong processor
+	  * -- an INIT sent to somebody already running. */
+	if (target > 0xFFu) {
+		kprintf("  apic: processor 0x%x cannot be addressed without "
+			"x2APIC\n", target);
+		return;
+	}
+
 	/* Destination first. The low half is what sends, so writing it first
-	 * would send the message to whatever destination was last used. */
+	  * would send the message to whatever destination was last used. */
 	apic_write(APIC_ICR_HIGH, target << 24);
 	apic_write(APIC_ICR_LOW, command);
 	wait_for_delivery();

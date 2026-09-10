@@ -2704,9 +2704,8 @@ which is the same shape as BG-143 and the reason this was found by hand.
   that cause, and it is worse than that cause.
 - **Cost:** none observed, and that is not reassurance. A lost page is invisible
   until something writes through a mapping it no longer owns.
-- **Status:** open. Recorded rather than fixed, because fixing it properly is
-  its own change with its own measurements, and doing it inside another one
-  would mean inventing its test coverage in a hurry.
+- **Status:** fixed, 10 September 2026, as its own change with its own
+  measurements — which is why it was recorded rather than fixed inside BG-148.
 
 `core/pmm.c` and `core/heap.c` contain no spinlock, no atomic, and no interrupt
 mask between them. `pmm_alloc_pages` scans a shared bitmap, sets bits in it, and
@@ -2744,11 +2743,36 @@ places that do not look like allocation:
   outside the lock, or every allocation in the machine serialises behind a
   four-kilobyte `memset`; and the order is always heap-then-pages, because
   `kmalloc` calls the page allocator and nothing in `pmm.c` calls the heap.
-- **And the test cannot be "it still boots."** A lost page is silent. The
-  assertion that catches it is allocating every page the machine has, freeing
-  them, and requiring the count back — plus several processors allocating and
-  freeing at once with no page ever handed out twice. Watched to fail with the
-  lock removed, or it is not a test.
+- **Fixed in** `core/pmm.c` and `core/heap.c`, to the design above: one lock
+  each, `spin_lock_irq` everywhere, the page cleared after `mark_used` and
+  outside the lock, and `alloc_large` deliberately left outside the heap lock so
+  the two are never held together.
+
+**And the test was wrong first, which is the part worth keeping.** The
+assertion written for this was four threads allocating a page each, marking it,
+yielding, and requiring the mark to survive — ownership, which is the fault this
+lock prevents. With the lock removed it passed four times out of four. Two
+processors landing on the *same bit* in the same instant is rare enough that
+the test almost never saw it.
+
+What catches an unlocked allocator is not ownership, it is **arithmetic**.
+`bit_set` and `bit_clear` are read-modify-write on a shared byte and
+`free_pages` is a shared counter, so two processors anywhere within the same
+eight pages lose one another's updates. Every racer frees exactly what it took,
+so the free count must come back to where it started, and a drift either way is
+a page leaked or a page handed out twice. The racers were also given a batch of
+eight pages per round rather than one, to widen the window.
+
+That version reported a drift of **exactly twenty pages on every run, locked or
+unlocked** — which was four thread stacks, allocated by `thread_create` and
+freed by the reaper long afterwards, and not a bug at all. The window is now
+opened by a barrier once every racer is running and closed by a second barrier
+before any of them may leave, so only the racing allocations fall inside it.
+
+Measured, rather than claimed: with the lock removed, **five of six boots at
+`-smp 4` fail**; with it in place, eight of eight pass. One unlocked boot in six
+still passes, so it is a detector rather than a proof — and the first version
+passed with the bug present, which is not a test at all.
 
 
 
@@ -2757,7 +2781,7 @@ places that do not look like allocation:
 - **Found:** 10 September 2026, as the part of BG-148 that fixing BG-148 did not
   account for.
 - **Cost:** none yet. It is recorded because the alternative is rediscovering it.
-- **Status:** open.
+- **Status:** open, and probably BG-156 — see below.
 
 The interleaved measurement that confirmed BG-148 also measured the kernel with
 BG-148 fixed, and it is not zero:
@@ -2792,6 +2816,20 @@ shows *running, 40 ticks, 0 calls served* is a scheduler fault; one that shows
 
 
 
+**10 September, later the same day: this is very likely BG-156.** A system call
+entered on one processor and returned on another read the saved user stack
+pointer out of the wrong processor's block, or out of a GS base of zero. The
+symptom is a program that does not finish, at a rate that depends on how often a
+thread happens to be preempted inside a system call — which is exactly the shape
+of "about one in sixty, and it moves with host load".
+
+It is not being closed on that reasoning. After BG-156 was fixed, **sixty
+consecutive boots at `-smp 4` passed with no failure and no panic**, which is
+consistent with it and does not prove it: the previous rate would predict about
+one failure in sixty. This stays open until a longer run says otherwise, because
+closing it on a run that would have been just as likely to be clean by chance is
+how BG-148 got the credit for a fault it had not fixed.
+
 ### BG-151 — Eight processors, on a machine that may have five hundred
 
 - **Found:** 10 September 2026, asked directly: would this run on a two-socket
@@ -2822,13 +2860,22 @@ identifier arrays adding tens of kilobytes more.
   kernel is meant for.
 - **Fixed in** `smp.h`, with the ceiling now stated as what the addressing can
   express rather than as a number somebody picked.
+- **And the lookup had to become O(1) with it.** `x86_cpu_index()` searched
+  `apic_id_for_cpu` from the front, which is free at eight entries and a
+  256-iteration scan per lock acquisition at 256 — it sits on the path of every
+  `this_cpu()`. There is now a reverse map indexed by APIC identifier, so
+  raising the ceiling did not make a bigger machine slower at the thing it does
+  most.
+- **Untested above 32 processors**, and the header says so. No machine with
+  more has run this kernel.
 
 ### BG-152 — Processors above 255 are found and cannot be started
 
 - **Found:** 10 September 2026, reading the interrupt controller while answering
   the same question.
 - **Cost:** none yet. It is the wall a real two-socket server hits.
-- **Status:** open.
+- **Status:** fixed 10 September 2026, and **the fix has never executed.** See
+  below, because that sentence is the whole of what is and is not true here.
 
 The MADT walk already reads **x2APIC entries** (type 9), whose processor
 identifiers are 32 bits, as well as the older 8-bit type 0. So on a machine with
@@ -2849,19 +2896,41 @@ rather than a processor nobody counted. A 240-core machine would report finding
 
 - **Was:** half of an interface. The table parser learned about x2APIC and the
   interrupt controller did not.
-- **What fixing it means:** x2APIC is a set of MSRs rather than a memory-mapped
-  block -- the identifier is read from `IA32_X2APIC_APICID` and the command
-  register is written as a single 64-bit MSR with the full destination in the
-  high half. It is enabled by a bit in `IA32_APIC_BASE` and, once enabled,
-  cannot be turned off without a reset, so the decision is made once at boot
-  from what CPUID reports and what the MADT contains.
+- **Fixed in** `arch/x86_64/apic.c`: the register block becomes MSRs from
+  0x800 upward, the identifier comes from `IA32_X2APIC_APICID` at its full 32
+  bits rather than the top eight of a memory-mapped word, and the interrupt
+  command is one 64-bit MSR write with the whole destination in the high half.
+  It is enabled by a bit in `IA32_APIC_BASE`, once, at boot, from what CPUID
+  reports — and because it cannot be turned off again without resetting the
+  processor, every processor takes the same decision rather than deciding
+  separately. In xAPIC mode a destination above 255 is now **refused with a
+  message** rather than truncated into somebody else's identifier.
+
+**And it is untested, which is stated in the code and not only here.** QEMU 8.2
+does not implement x2APIC under TCG: asking for it produces
+
+```
+TCG doesn't support requested feature: CPUID.01H:ECX.x2apic [bit 21]
+```
+
+and even `-cpu max` reports the bit clear, which was measured rather than
+assumed. KVM would provide it and this machine cannot reach `/dev/kvm`. So every
+line that runs only in x2APIC mode has never been executed.
+
+What *is* tested is the arithmetic those lines depend on, in
+`arch_identity_self_test`: which register offset becomes which MSR, and that the
+destination lands in the high half of the command word and survives being a
+number above 255. Both were watched to fail. That does not make x2APIC tested —
+it makes the untested part smaller, and the untested part is now "does the mode
+switch take, and does a real processor answer afterwards".
 
 ### BG-153 — On a multi-cluster ARM machine, two processors would believe they are the same processor
 
 - **Found:** 10 September 2026, in the same reading. It is the quiet one of the
   three.
 - **Cost:** none yet, and it would not announce itself.
-- **Status:** open.
+- **Status:** fixed 10 September 2026 — and the search for it found a second,
+  worse instance in the boot assembly.
 
 `arch_cpu_id_real()` on aarch64 is:
 
@@ -2886,10 +2955,41 @@ the same moment.
 
 - **Was:** an identity taken from one field of four, correct on every machine
   tested and wrong on the first machine with two clusters.
-- **What fixing it means:** fold affinity levels 1 to 3 into the identity, and
-  map that sparse value to a dense index rather than using it as an array
-  subscript -- MPIDR values are not consecutive and a two-socket machine's
-  second socket may start at a large affinity number.
+- **Fixed in** `arch/aarch64/arch.c`, and **not** by folding the higher
+  affinity fields in. Folding them would have made the value unique without
+  making it an index: MPIDR values are sparse and a second socket may begin at a
+  large affinity number. Instead the identity is the kernel's own dense index,
+  assigned by discovery and carried by each processor in **TPIDR_EL1**, written
+  by `boot.S` before that processor runs any C. It is also one register read,
+  which matters because `arch_cpu_id()` is on the path of every lock.
+  `arch_cpu_affinity()` still packs all four affinity levels — Aff3 lives at
+  bits 39:32 — and is used for PSCI and for reporting, never as a subscript.
+
+- **AND THE SAME MISTAKE WAS IN `boot.S`, where it was worse.** The test that
+  decides which processor is the boot processor was also `mpidr & 0xff`. On a
+  two-socket or big.LITTLE machine, **core 0 of every cluster passes that
+  test**: several processors would each decide they were the boot processor and
+  run `kmain` at once, on one stack, before a single line of this kernel's own
+  SMP code had executed. It now requires all four affinity levels to be zero. A
+  machine whose boot processor is not affinity zero would park every processor
+  and hang — visibly, at the first instruction, rather than corrupting a stack
+  and appearing to work.
+
+- **The test, and what it does not prove.** QEMU's `virt` board numbers its
+  processors 0,1,2,3 whatever topology it is asked for: `-smp 8,sockets=2,cores=4`
+  and `-smp 8,clusters=2,cores=4` both produce flat affinities, measured rather
+  than assumed. So the machine this bug is about cannot be booted here. What is
+  tested is the arithmetic, against MPIDR values written down from the
+  specification — with a control requiring the *old* rule to alias on that table,
+  so the test fails if the table stops describing a multi-cluster machine. It
+  found a real error on its first run: the Aff3 fixtures were shifted a byte too
+  far.
+- **And each processor now says who it thinks it is.** `smp_secondary_main`
+  records `arch_cpu_id()` about itself, and the boot processor checks afterwards
+  that every answer matches the slot it was started into and that no two match
+  each other. The summary prints the machine's identifier beside the kernel's
+  index, because a summary showing only the dense index looks identical on a
+  machine whose identities alias and one whose do not.
 
 ### BG-154 — The page allocator scans, and a terabyte is a billion pages
 
@@ -2926,6 +3026,274 @@ and it is the kind of thing that is far cheaper to design in than to retrofit.
 
 
 ---
+
+
+### BG-155 — The boot thread was processor 0's idle thread, so nothing on the boot path could ever wait
+
+- **Found:** 10 September 2026, by the first piece of kernel code that tried to
+  sleep. `timer_sleep_ns` reported that a thread could not sleep, and it was
+  right.
+- **Cost:** invisible for as long as nothing on the boot path waited for
+  anything, which is exactly how long it lasted.
+- **Status:** fixed.
+
+`sched_init` clears the boot thread with `kmemset` and fills in the fields it
+knows about. `idle_for` is a processor number where **-1 means "nobody's idle
+thread"**, so zeroing it left the boot thread claiming to be processor 0's.
+
+Two things followed from that, and both had been true since the field was added:
+
+- it could only ever be scheduled on processor 0, because an idle thread must
+  not be taken by another processor; and
+- **it could never block.** `wait_sleep` refuses an idle thread, since a blocked
+  idle thread is a processor that has stopped.
+
+Nothing noticed because nothing had tried. The self-tests that use wait queues
+all create threads of their own; the boot path ran straight through. The first
+caller to attempt it was the timer wheel.
+
+- **Was:** a structure cleared wholesale, with one field whose zero is a
+  meaningful and wrong value. Exactly the shape of BG-147.
+- **Fixed in** `core/sched.c` and `core/smp.c`: processor 0 is given a real idle
+  thread like every other processor, and the boot thread becomes an ordinary
+  thread that can sleep.
+- **And the pinning was kept, deliberately.** Removing `idle_for` also removed
+  the accidental pinning, and the boot thread promptly migrated to another
+  processor mid-boot — which broke the identity self-test, and would have been a
+  far worse problem than the one being fixed, since the boot sequence assumes
+  throughout that it is processor 0 doing the work. `struct thread` now has a
+  `pinned_to` field that says so on purpose, separate from `idle_for` because
+  the two are pinned for different reasons.
+
+### BG-156 — A system call entered on one processor and returned on another, and the kernel stack did not travel with it
+
+- **Found:** 10 September 2026, immediately after BG-155 — a double fault at the
+  first instruction of the system-call entry stub, with `%gs` based at zero.
+- **Cost:** a kernel fault on the way out of a system call that had worked. **It
+  is the best candidate so far for BG-150**, the one-boot-in-sixty that had no
+  explanation.
+- **Status:** fixed.
+
+Interrupts are enabled across `syscall_dispatch`, deliberately: a system call
+that cannot be interrupted is a system call a user program can use to stop the
+machine. So a thread can enter one on processor A and be rescheduled onto
+processor B. Two things then break, and **neither of them is per-thread state
+being lost — both are per-*processor* state being used as if it were
+per-thread**:
+
+- `GS_BASE` is a register, one per processor, and it does not travel with the
+  thread. The stub held the kernel's GS across the whole call and read the saved
+  user stack pointer out of `%gs:8` at the end. A processor that had been running
+  kernel threads and never come from user mode has `GS_BASE` at zero, so that
+  read takes a page fault on address 8 — in ring 0, on a double-fault stack.
+- Even with GS right, `%gs:8` is the *other* processor's slot. The user stack
+  pointer was written into processor A's block and read out of processor B's:
+  the program returns standing on some other thread's stack.
+
+And underneath both, a third: `percpu[cpu].kernel_rsp` and `tss[cpu].rsp[0]` —
+where a trap from user mode lands — were recorded **once**, by whichever
+processor ran `arch_enter_user`. A comment in that function said, correctly:
+
+> One thread's stack, recorded once. That is correct for exactly as long as one
+> thread at a time runs in user mode; when processes arrive, this has to move
+> into the context switch.
+
+Processes arrived at checkpoint 19. The comment was right and nothing went back
+to it.
+
+- **Was:** three pieces of per-processor state standing in for something that
+  belongs to a thread, on a path that was made preemptible before there was a
+  second processor to be preempted onto.
+- **Fixed in** `arch/x86_64/user_entry.S`, `arch/x86_64/user.c` and
+  `core/sched.c`. The stub now swaps GS *twice at the top* — per-processor
+  storage is used only for the two instructions where the thread has no stack
+  yet, and the user stack pointer is then carried on the kernel stack, which is
+  the thread's own and travels with it. There is no swap on the way out and no
+  window in which a migration matters. `KERNEL_GS_BASE` is set once per processor
+  in `arch_user_init`, so a processor that never entered user mode has it too.
+  The kernel stack a trap lands on is recorded on the thread and told to the
+  processor by a new `arch_thread_switched_in`, called from the context switch —
+  which is where the comment said it would have to go.
+- **aarch64 does not have this**, and that is worth recording as a difference
+  rather than luck: an exception from EL0 switches to SP_EL1, and SP_EL1 *is* the
+  kernel stack pointer the context switch has just set. There is no second place
+  holding the answer, so there is nothing to get out of step.
+
+### BG-157 — The clock ran at 201 Hz against a constant that said 100, and every test still passed
+
+- **Found:** 10 September 2026, by a 50 ms sleep that took 30 ms — the first
+  assertion in this kernel that had ever compared a tick count to a wall clock.
+- **Cost:** every timer, sleep and scheduling slice wrong by a factor of two,
+  from the moment the interrupt lines moved onto the I/O APIC.
+- **Status:** fixed.
+
+The 8254 was programmed with command `0x36` — **mode 3, a square wave**. A square
+wave holds its output high for half the period and low for the other half, so
+there are *two* transitions per tick. The 8259 as emulated counts one of them.
+The I/O APIC counts both.
+
+So the routing change was correct and the timer was wrong, and the two together
+doubled the tick rate. Mode 2, a rate generator, pulses the output low for a
+single input cycle and leaves it high for the rest: one transition, one
+interrupt, whichever controller is listening. It is what every other kernel uses
+the chip in.
+
+- **Was:** a timer mode that happened to work with the only controller that had
+  ever listened to it.
+- **Fixed in** `arch/x86_64/time.c`, one command byte.
+- **And the reason it needed finding at all is the interesting part.** Every
+  tick-counting assertion still passed: the ordering of timers held, the cascade
+  fired at the right *tick*, the scheduler preempted. `TIME_TICK_HZ` is not a
+  measurement, it is a promise that every nanosecond-to-tick conversion in the
+  kernel relies on, and nothing had ever checked it against a clock that does not
+  come from the tick. `time_self_test` now measures the rate against the
+  monotonic counter and fails if it is out by more than half. Watched to fail by
+  putting `0x36` back: 203 Hz against 100.
+
+
+### BG-158 — An idle thread took its turn in the round robin, and the machine ran at half speed with every test green
+
+- **Found:** 10 September 2026, by the verification matrix — **seven paths failed and
+  every one of them writes to a disk.** They wrote correct data and ran out of
+  time doing it.
+- **Cost:** roughly half the machine, for the length of one matrix run.
+- **Status:** fixed.
+
+Fixing BG-155 meant giving processor 0 an idle thread of its own, because the boot
+thread had been serving as one and therefore could never block. That put an idle
+thread in the run ring **alongside a working thread on the same processor for the
+first time**, and `pick_next` returned the first eligible thread it found.
+
+So the boot thread and `idle-000` were handed alternate slices. And the slice
+handed to the idle thread was not a short one: `idle_loop` calls
+`arch_wait_for_interrupt`, so it holds the processor until the next tick, doing
+nothing. A machine with one processor and real work to do spent about half its
+time stopped.
+
+- **Was:** a scheduler that had never had to decide between work and idleness,
+  because the ring had never contained both for the same processor. The boot
+  processor had no idle thread and a secondary had nothing else. **The line was
+  wrong before it was ever executed**, in the same way the TLB shootdown and
+  BG-148 were: waking the other processors, or in this case giving one an idle
+  thread, made existing code wrong without changing it.
+- **Fixed in** `core/sched.c`: an idle thread is now a *last resort* rather than a
+  turn in the round. It is remembered as a fallback and returned only when nothing
+  else on that processor wants to run.
+
+**And the reason it needed a matrix to find it is the point.** Twenty-six
+self-tests passed. Nothing was incorrect — every thread ran, every timer fired in
+order, every assertion held. The only symptom was *how long things took*, and the
+entire suite is blind to that.
+
+`sched_self_test` now counts, and fails on, an idle thread being scheduled while
+another thread on that processor is READY. It is an invariant with a number
+attached rather than a statistic: an idle thread exists so a processor has
+something to do when nothing else will have it, and running one with work waiting
+is the processor doing nothing on purpose. Watched to fail by restoring the old
+line: four violations in one boot.
+
+Same family as BG-157, found the same day: a fault whose only symptom is time.
+
+
+### BG-159 — A thread was available to every other processor while the one it was leaving was still standing on its stack
+
+- **Found:** 10 September 2026, by the verification matrix, as a kernel panic on
+  aarch64 at four processors — about one boot in three. The link register read
+  back as `0xacce5501`, which is the page allocator's own concurrency-test marker.
+- **Cost:** two processors on one stack, and a freed stack written through. It
+  had been reachable since checkpoint 9b woke the second processor.
+- **Status:** fixed.
+
+`sched_switch` marked the outgoing thread READY **before** calling
+`arch_context_switch`:
+
+```c
+	if (prev->state == THREAD_RUNNING) {
+		prev->state = THREAD_READY;
+		prev->cpu = -1;
+	}
+	...
+	arch_context_switch(&prev->stack_pointer, next->stack_pointer);
+```
+
+`arch_context_switch` is what saves `prev`'s callee-saved registers onto its
+stack and writes `prev->stack_pointer`. So between those two points the thread is
+advertised as runnable and **its saved stack pointer has not been written yet**.
+Another processor picking it up in that window resumes it from a stale pointer,
+with two processors executing on one stack.
+
+The comment beside the lock release argued the opposite, and was wrong in a
+precise way: *"prev is READY and owned by nobody, next is RUNNING and owned by
+this processor"*. `prev` being owned by nobody is exactly the problem — it was
+still being used by this one.
+
+**Three separate paths share the fault, which is why the fix is an invariant
+rather than three fixes:**
+
+- `thread_exit` marks a thread FINISHED and then switches away. The reaper's
+  guard was `t != this_cpu()->current`, which does not cover a thread that is
+  current on a *different* processor — so a live stack was freed, handed to
+  `pmm_concurrent_test`, and had a marker written over a return address. That is
+  the panic above.
+- `wait_sleep` marks a thread BLOCKED and then switches away; a waker on another
+  processor can make it READY inside that gap.
+- The ordinary preemption case above.
+
+- **Was:** "READY" used to mean two things — *this thread wants to run* and *no
+  processor is using it* — and they stopped being the same thing when there was a
+  second processor.
+- **Fixed in** `core/sched.c`, `sched.h` and `smp.h`, as one rule: a thread
+  carries `off_cpu`, and `pick_next` and the reaper both require it. It is cleared
+  when a thread is chosen and set by **whoever runs next on that processor**,
+  which is the first instant at which the outgoing thread has genuinely stopped.
+  `struct cpu_local` carries the thread waiting to be released; `sched_switch`
+  releases it immediately after `arch_context_switch` returns, recomputing
+  `this_cpu()` rather than reusing the pre-switch value, because a thread resumes
+  on whichever processor picked it and not necessarily the one it left.
+- **A thread running for the first time has no such return point**, so every
+  thread now starts in a small C wrapper that releases its predecessor and then
+  calls the entry point. In C rather than in each architecture's assembly
+  trampoline: an agreement between two assembly files is the kind that drifts.
+- **Measured:** the failing configuration went from panicking about one boot in
+  three to 10 of 10 clean, and x86_64 at four processors 12 of 12.
+
+**This is also a better candidate for BG-150 than BG-156 was**, and neither is
+being credited with it. Both are real, both were fixed the same day, and the
+honest position is that the one-in-sixty has not been seen since without a run
+long enough to say so.
+
+### BG-160 — The power-cut harnesses timed their cut from launch, so a slower boot meant they cut before anything had been written
+
+- **Found:** 10 September 2026, by the harness itself, which said exactly what
+  had happened: *"every round wrote nothing — the cut is landing before the disk
+  is found, so this measured nothing. Raise the delay."*
+- **Cost:** none, because it failed loudly rather than passing. That is the whole
+  point of the entry.
+- **Status:** fixed.
+
+`crash-test.sh` swept its cut across `900 + (round * 137) % 2200` milliseconds
+**after QEMU was launched**, and `rename-crash-test.sh` across `1500 + (round *
+211) % 2600`. Both lower bounds were chosen against the boot time of the day they
+were written.
+
+Checkpoint 20 added about a second of self-tests to every boot — the timer
+wheel's cascade case waits seventy ticks on purpose, because that is what it
+takes for a timer filed on the second wheel to be walked down to the first — and
+the early rounds started cutting a guest that had not reached the disk.
+
+- **Was:** a delay measured from the wrong event. What these tests sweep is time
+  spent *writing*; how long the kernel took to get there is not part of the
+  question, and building it into the constant tied the harness to a boot time
+  nobody was watching.
+- **Fixed in** both scripts: each now waits for the line the guest prints when it
+  begins writing, then sweeps from there. The wait is bounded, and a round whose
+  guest never arrives is not counted as checked — which the existing *"only N of
+  M rounds were checked at all"* assertion turns into a failed run rather than a
+  quiet zero.
+- **Re-tuning the constant would have worked**, until the next change to how long
+  a boot takes. This is the third fault recorded in these two files where a
+  harness measured something other than what it claimed; the other two are
+  written up beside the code that caused them.
 
 ## Labels
 

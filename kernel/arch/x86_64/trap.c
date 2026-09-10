@@ -118,6 +118,7 @@ extern void irq_15(void);
 /* The local APIC's two, which have vectors rather than IRQ numbers. */
 extern void vector_64(void);
 extern void vector_65(void);
+extern void vector_66(void);
 extern void vector_255(void);
 
 static void (*const stubs[32])(void) = {
@@ -245,6 +246,16 @@ void trap_dispatch(struct trap_frame *f)
 	if (f->vector == VECTOR_SPURIOUS)
 		return;
 
+	/* A device -- or, so far, only the self-test -- raising an interrupt by
+	  * writing to the local APIC's window. Acknowledged like any other
+	  * interrupt the APIC delivered; there is no controller behind it to
+	  * tell, which is the point of it. */
+	if (f->vector == VECTOR_MSI) {
+		x86_msi_test_arrivals++;
+		x86_apic_eoi();
+		return;
+	}
+
 	/* A hardware interrupt rather than a fault. Handled and acknowledged;
 	 * an interrupt the controller is not told about is the last one it
 	 * ever sends. */
@@ -252,7 +263,7 @@ void trap_dispatch(struct trap_frame *f)
 		if (f->vector == 32)
 			x86_timer_interrupt();
 		else
-			x86_pic_end_of_interrupt((unsigned)(f->vector - 32));
+			x86_irq_ack((unsigned)(f->vector - 32));
 		return;
 	}
 
@@ -403,6 +414,7 @@ void trap_init(void)
 
 	set_gate(VECTOR_APIC_TIMER, vector_64, 0x08);
 	set_gate(VECTOR_TLB_SHOOTDOWN, vector_65, 0x08);
+	set_gate(VECTOR_MSI, vector_66, 0x08);
 	set_gate(VECTOR_SPURIOUS, vector_255, 0x08);
 
 	idt_ptr.limit = sizeof(idt) - 1;

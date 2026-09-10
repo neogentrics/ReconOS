@@ -33,6 +33,8 @@
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
 #include <recon/kernel/time.h>
+#include <recon/kernel/timer.h>
+#include <recon/kernel/work.h>
 #include <recon/kernel/trap.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
@@ -127,6 +129,8 @@ void kmain(void)
 
 	time_init();
 	time_print_summary();
+	timer_print_summary();
+	work_print_summary();
 
 	/* After the clock, because one of its sources is timing jitter and
 	 * there is nothing to measure without one. Before anything that might
@@ -136,7 +140,18 @@ void kmain(void)
 	/* After the timer, because a processor with no tick cannot be preempted
 	 * and the test for that has to have a clock to wait on. */
 	smp_init();
+
+	/* The worker thread, after the scheduler and after there is somewhere
+	  * for it to sleep. Everything that wants to hand work off to a thread
+	  * -- a timer callback, an interrupt handler -- needs this to exist
+	  * before it runs. */
+	work_init_queue();
+
+	/* And now device interrupts can be pointed somewhere. After the
+	  * processors, because the destination is one of them. */
+	arch_irq_route_init();
 	smp_print_summary();
+	arch_irq_print_summary();
 
 	random_print_summary();
 
@@ -196,6 +211,8 @@ void kmain(void)
 		sched_self_test() ? "pass" : "FAIL");
 	kprintf("  locking            : %s\n",
 		lock_self_test() ? "pass" : "FAIL");
+	kprintf("  allocating at once : %s\n",
+		pmm_concurrent_test() ? "pass" : "FAIL");
 	kprintf("  waiting and waking : %s\n",
 		wait_self_test() ? "pass" : "FAIL");
 	kprintf("  processes          : %s\n",
@@ -206,6 +223,14 @@ void kmain(void)
 		elf_self_test() ? "pass" : "FAIL");
 	kprintf("  processors         : %s\n",
 		smp_self_test() ? "pass" : "FAIL");
+	kprintf("  telling them apart : %s\n",
+		arch_identity_self_test() ? "pass" : "FAIL");
+	kprintf("  something later    : %s\n",
+		timer_self_test() ? "pass" : "FAIL");
+	kprintf("  work put off       : %s\n",
+		work_self_test() ? "pass" : "FAIL");
+	kprintf("  an interrupt with no wire : %s\n",
+		arch_irq_self_test() ? "pass" : "FAIL");
 	kprintf("  user mode          : %s\n",
 		user_self_test() ? "pass" : "FAIL");
 	kprintf("  the boundary holds : %s\n",

@@ -14,8 +14,41 @@
  *
  * The invariant SWAPGS depends on, written down because getting it backwards is
  * both easy and silent: while user code runs, GS_BASE is zero and
- * KERNEL_GS_BASE holds this processor's block. One SWAPGS on the way in, one on
- * the way out, and nothing between them may take a second one.
+ * KERNEL_GS_BASE holds this processor's block.
+ *
+ * --- AND WHY BOTH SWAPGS ARE AT THE TOP ---
+ *
+ * This used to swap on the way in and swap back on the way out, holding the
+ * kernel's GS across the whole call and reading the saved user stack pointer
+ * out of GS:8 at the end. That is the ordinary arrangement and it was wrong
+ * here, for a reason that only exists on a kernel with more than one
+ * processor and a preemptible system call.
+ *
+ * Interrupts are enabled across syscall_dispatch, deliberately -- see below.
+ * So the thread can be preempted in the middle of a call and picked up by a
+ * **different processor**. Two things then break at once, and both are
+ * silent until they are not:
+ *
+ *   - GS_BASE is a register, one per processor, and it does not travel with
+ *     the thread. The processor the call returns on has whatever GS_BASE it
+ *     had -- zero, if it has been running kernel threads and never came from
+ *     user mode -- so `movq %gs:8, %rsp` reads address 8 and takes a page
+ *     fault in kernel mode, on the way out of a system call that worked.
+ *
+ *   - Even with GS right, GS:8 is the *other* processor's slot. The user
+ *     stack pointer was written into processor A's block and would be read
+ *     out of processor B's: the program returns standing on some other
+ *     thread's stack.
+ *
+ * The fix is that per-processor storage is only used for the few instructions
+ * where there is no alternative -- before this thread has a stack -- and the
+ * user stack pointer is then carried on the kernel stack, which is the
+ * thread's own and travels with it. GS goes back to the user's immediately
+ * afterwards and the kernel never touches it again, so there is no swap on
+ * the way out and no window at all in which a migration matters.
+ *
+ * The two instructions between the swaps run with interrupts masked, by
+ * SYSCALL itself, through IA32_FMASK.
  */
 
 	.section .text
@@ -28,6 +61,12 @@ x86_syscall_entry:
 	swapgs
 	movq	%rsp, %gs:CPU_USER_RSP
 	movq	%gs:CPU_KERNEL_RSP, %rsp
+
+	/* Off the per-processor block and onto this thread's own stack, which
+	  * is the whole point: from here on nothing this call needs lives
+	  * anywhere that belongs to a processor rather than to the thread. */
+	pushq	%gs:CPU_USER_RSP
+	swapgs
 
 	/* RCX and R11 are not saved because the convention is polite about
 	 * them; they are saved because SYSRET *reads* them. Losing either one
@@ -46,10 +85,11 @@ x86_syscall_entry:
 	pushq	%r8
 	pushq	%r9
 
-	/* Eight pushes, so the stack is still sixteen-byte aligned. The seventh
-	 * C argument goes on the stack and would break that alignment on its
-	 * own, hence the gap pushed with it. */
-	subq	$8, %rsp
+	/* Nine pushes, which leaves the stack eight off sixteen-byte alignment
+	  * -- so the seventh C argument, which goes on the stack, puts it back
+	  * rather than breaking it. It used to be eight pushes and a gap pushed
+	  * alongside the argument; carrying the user stack pointer here is the
+	  * ninth, and it fills that gap exactly. */
 	pushq	%r9			/* a5 */
 
 	/* Shuffle from the system-call convention into the C one. Right to left,
@@ -76,7 +116,7 @@ x86_syscall_entry:
 	call	syscall_dispatch
 	cli
 
-	addq	$16, %rsp		/* the seventh argument and its gap */
+	addq	$8, %rsp		/* the seventh argument */
 
 	popq	%r9
 	popq	%r8
@@ -87,11 +127,15 @@ x86_syscall_entry:
 	popq	%r11
 	popq	%rcx
 
-	/* Back onto the user stack while GS still points at the kernel's block,
-	 * and only then swap it back. The other order reads GS:8 through the
-	 * user program's GS base, which is zero, and loads RSP from address 8. */
-	movq	%gs:CPU_USER_RSP, %rsp
-	swapgs
+	/* Back onto the user stack, taken from where this thread left it rather
+	  * than from whichever processor happens to be running now. GS is
+	  * already the user's -- it was swapped back at the top -- so there is
+	  * nothing left to undo.
+	  *
+	  * Interrupts are off, and must be: between this instruction and SYSRET
+	  * the processor is in ring 0 standing on a user stack, and an interrupt
+	  * taken there would push its frame onto memory the program chose. */
+	popq	%rsp
 	sysretq
 
 /* --- The first program ReconOS runs at a lower privilege level ------------

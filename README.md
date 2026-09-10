@@ -816,10 +816,13 @@ without Linux, and without touching what was already on the disk.
 | **Firmware** | UEFI on both architectures, BIOS on x86_64, and device tree with no firmware at all |
 | **Bootloader** | `reconboot`, ours. UEFI and a 440-byte BIOS stage 1. It verifies the kernel's signature and there is no way to turn that off |
 | **Memory** | Four-level paging, large pages where the processor has them, a direct map, no-execute, TLB shootdown across processors, write-combining for the framebuffer, demand paging and copy-on-write |
-| **Processors** | Verified at 1, 2, 4, 8, 9, 16 and 32. Per-processor timers, real preemption, idle threads that cannot be stolen |
-| **Processes** | A process table, identity, an exit status somebody collects, and an address space each |
+| **Processors** | Verified at 1, 2, 4, 8, 9, 16 and 32. Per-processor timers, real preemption, idle threads that cannot be stolen. Built to hold **256**, with x2APIC so identifiers above 255 can be addressed — **untested above 32**, deliberately ahead of a machine to prove it on |
+| **Interrupts** | I/O APIC on x86_64, so a device interrupt can be sent to any processor rather than only the boot one; GIC v2 and v3 on aarch64. The switch off the 8259 is verified against the clock and reverted if the tick stops. Message-signalled interrupts are composed and programmed; no driver asks for one yet |
+| **Time** | A five-level timer wheel — a callback at a time, or a thread that sleeps without a processor spinning for it — and a worker thread, so an interrupt handler can hand off work it must not do inline |
+| **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
 | **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
 | **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
+| **Allocators** | The physical allocator and the kernel heap are locked, which they were not: the comment saying one processor ran kernel code had outlived its own condition by three checkpoints |
 | **Installer** | Plans first and writes nothing while planning; then partitions, formats, copies and leaves a disk that boots on its own |
 | **Recovery** | The same kernel from the ESP, read-only, offered in the boot menu on every machine |
 
@@ -844,16 +847,18 @@ This is the honest list, and it is the reason the desktop is not on it.
 - **Display.** A framebuffer console on whatever the firmware left. No mode
   setting, no surface for a compositor.
 - **Network.** Nothing at all.
-- **A program from disk.** No ELF loader, so a "user program" is still a byte
-  array compiled into the kernel — it has an address space of its own, but
-  nothing puts a file into one yet.
+- **A program from a volume.** There is an ELF loader, and what it loads is a
+  file the linker built rather than a byte array in the kernel — but there is no
+  path from a *volume* to a program yet, which waits on a virtual filesystem.
 - **IPC.** No pipes, sockets, message queues or signals. They wait on
   descriptors, which wait on a virtual filesystem.
 - **Identity that is enforced.** Files carry a mode and processes carry a user;
   nothing consults either yet. Recorded now so that enforcement, when it
   arrives, has something true to enforce.
-- **Device interrupts on any processor.** No I/O APIC, so every device
-  interrupt lands on the boot processor however many there are.
+- **A device that uses any of the new interrupt routing.** The I/O APIC can send
+  a device interrupt to any processor and MSI can be programmed, and every
+  storage driver still polls. The half that was missing is built; the half that
+  uses it comes with the first driver that wants it.
 - **USB that notices a plug.** Enumerated once at boot; no hot-plug and no hubs.
 
 ### Where to read more

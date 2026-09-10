@@ -13,6 +13,23 @@ static unsigned cpu_count = 1;
 static unsigned dropped;
 static u64 cpu_ids[MAX_CPUS];
 
+/* What each processor says it is, written by that processor about itself.
+ *
+ * This exists because BG-153 was invisible to every test there was. On
+ * aarch64 arch_cpu_id() returned MPIDR affinity level 0 -- the processor
+ * within its cluster -- and on a two-socket or big.LITTLE machine two
+ * processors answer the same number and index the same entry of every
+ * per-processor array in the kernel. Nothing fails until they touch it at the
+ * same moment, and no assertion anywhere would have noticed.
+ *
+ * So each processor writes down who it thinks it is, and the boot processor
+ * checks afterwards that the answers are distinct and that each one matches
+ * the slot that processor was started into. It is cheap and it is the only
+ * thing standing between this kernel and a fault that presents as random
+ * corruption on hardware nobody here owns. */
+static unsigned claimed_id[MAX_CPUS];
+static bool claimed[MAX_CPUS];
+
 /* Set by each secondary once it is running, read by the boot processor while it
  * waits. Volatile because the two are different processors and the compiler has
  * no reason to expect this to change under it. */
@@ -49,6 +66,7 @@ void smp_init(void)
 	}
 
 	cpus[arch_cpu_id()].online = true;
+	cpus[arch_cpu_id()].hw_id = arch_cpu_hw_id();
 
 	found = arch_smp_discover(cpu_ids, MAX_CPUS);
 
@@ -62,9 +80,37 @@ void smp_init(void)
 
 	cpu_count = found ? found : 1;
 
+	/* An idle thread for the boot processor too, and this is new.
+	  *
+	  * The loop below starts at 1 because 1 upward are the processors that
+	  * have to be *started*, and processor 0 quietly inherited a different
+	  * arrangement: the boot thread itself was left marked as processor 0
+	  * idle thread, so there was always something for it to fall back to.
+	  *
+	  * That worked and cost something invisible. An idle thread is not
+	  * allowed to block -- a blocked idle thread is a processor that has
+	  * stopped -- so the boot thread could not wait for anything either,
+	  * and every piece of kernel code that runs on it inherited that. It
+	  * went unnoticed for as long as nothing on the boot path waited.
+	  *
+	  * Now processor 0 has an idle thread of its own like every other
+	  * processor, and the boot thread is an ordinary thread that can sleep.
+	  */
+	{
+		struct thread *idle = thread_create("idle-000", idle_loop, 0);
+
+		if (idle) {
+			idle->idle_for = 0;
+			cpus[0].idle = idle;
+		} else {
+			kputs("  smp: no memory for the boot processor's idle "
+				"thread\n");
+		}
+	}
+
 	for (unsigned i = 1; i < cpu_count; i++) {
-		paddr_t stack = pmm_alloc_pages(4);
-		char name[THREAD_NAME_MAX] = "idle-0";
+	paddr_t stack = pmm_alloc_pages(4);
+		char name[THREAD_NAME_MAX] = "idle-000";
 		struct thread *idle;
 
 		if (!stack) {
@@ -76,7 +122,12 @@ void smp_init(void)
 		 * because the scheduler's structures are guarded by a lock this
 		 * processor already holds the right to take -- and the one being
 		 * started does not yet exist as far as the scheduler knows. */
-		name[5] = (char)('0' + i);
+		/* Three digits, because there can now be 256 of these and
+		' + i' past nine produces a colon, a semicolon and then
+		 * letters. A name is read by a person. */
+		name[5] = (char)('0' + (i / 100) % 10);
+		name[6] = (char)('0' + (i / 10) % 10);
+		name[7] = (char)('0' + i % 10);
 		idle = thread_create(name, idle_loop, 0);
 		if (!idle) {
 			pmm_free_pages(stack, 4);
@@ -130,6 +181,16 @@ void smp_secondary_main(unsigned cpu)
 	 * needs that the boot processor could not do on its behalf. */
 	arch_smp_cpu_init();
 
+	/* Who this processor believes it is, asked of it rather than assumed.
+	 * `cpu` is the slot the boot processor started it into; arch_cpu_id()
+	 * is what every per-processor lookup in the kernel will use from here
+	 * on. They have to be the same number. */
+	if (cpu < MAX_CPUS) {
+		claimed_id[cpu] = arch_cpu_id();
+		cpus[cpu].hw_id = arch_cpu_hw_id();
+		claimed[cpu] = true;
+	}
+
 	cpus[cpu].online = true;
 	__atomic_add_fetch(&online_count, 1, __ATOMIC_RELEASE);
 
@@ -154,15 +215,22 @@ void smp_print_summary(void)
 		kprintf("  WARNING      : at least %u more than this kernel "
 			"can hold\n", dropped);
 
+	/* The machine identifier is printed beside the kernel index because the
+	 * two being different is normal and their being *equal* is a coincidence
+	 * of small machines. A reader who sees 0,1,2,3 against 0x0,0x1,0x100,
+	 * 0x101 can see the topology; one who sees only the left-hand column
+	 * cannot tell an aliased identity from a healthy one. */
 	for (unsigned i = 0; i < cpu_count && i < MAX_CPUS; i++)
-		kprintf("  cpu %u        : %s, %lu ticks, %lu switches\n",
+		kprintf("  cpu %u        : %s, hw 0x%lx, %lu ticks, "
+			"%lu switches\n",
 			i, cpus[i].online ? "online" : "did not start",
-			cpus[i].ticks, cpus[i].switches);
+			cpus[i].hw_id, cpus[i].ticks, cpus[i].switches);
 }
 
 bool smp_self_test(void)
 {
 	bool ok = true;
+	unsigned i, j;
 
 	if (online_count > cpu_count) {
 		kputs("  smp: more processors reported online than were found\n");
@@ -198,6 +266,47 @@ bool smp_self_test(void)
 			      "fired, so nothing can ever preempt it\n");
 			ok = false;
 		}
+	}
+
+	/* --- and that they are all different processors --------------------
+	 *
+	 * Each secondary recorded arch_cpu_id() about itself. Two requirements,
+	 * and the second is the one that catches an aliased identity:
+	 *
+	 *   - every processor agrees with the slot it was started into, so the
+	 *     arrays it indexes are the arrays the boot processor set up for it;
+	 *   - no two agree with each other, which on a machine whose identity
+	 *     came from one affinity field is exactly what would fail.
+	 *
+	 * The boot processor is checked too, and separately: it never passes
+	 * through smp_secondary_main. */
+	claimed_id[0] = arch_cpu_id();
+	claimed[0] = true;
+
+	if (claimed_id[0] != 0) {
+		kprintf("  smp: the boot processor calls itself %u rather than "
+			"0\n", claimed_id[0]);
+		ok = false;
+	}
+
+	for (i = 0; i < cpu_count && i < MAX_CPUS; i++) {
+		if (!claimed[i])
+			continue;
+
+		if (claimed_id[i] != i) {
+			kprintf("  smp: processor started as %u calls itself %u\n",
+				i, claimed_id[i]);
+			ok = false;
+		}
+
+		for (j = 0; j < i; j++)
+			if (claimed[j] && claimed_id[j] == claimed_id[i]) {
+				kprintf("  smp: processors %u and %u both call "
+					"themselves %u, so they share every "
+					"per-processor structure there is\n",
+					j, i, claimed_id[i]);
+				ok = false;
+			}
 	}
 
 	return ok;

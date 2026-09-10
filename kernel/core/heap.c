@@ -1,5 +1,6 @@
 #include <recon/kernel/heap.h>
 #include <recon/kernel/compiler.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/console.h>
@@ -131,18 +132,40 @@ static void *alloc_large(size_t size)
 	return rec->addr;
 }
 
+/* One processor at a time in the free lists. (BG-149)
+ *
+ * The header above this file still says there is one processor running kernel
+ * code "until checkpoint 9" -- and that sentence has been wrong since 9b woke
+ * the others. It is left in place with this note beside it rather than quietly
+ * deleted, because it was a correct decision that expired, and the lesson is
+ * about the expiry rather than the decision.
+ *
+ * Taken with interrupts off, and outside it the page allocator takes its own.
+ * The order is always heap first, then pages: kmalloc calls into pmm and
+ * nothing in pmm calls back here, so there is one direction and no inversion to
+ * reason about. Anything that ever takes both must take them in that order. */
+static struct spinlock heap_lock = SPINLOCK_INIT("heap");
+
 void *kmalloc(size_t size)
 {
 	int cls;
 	struct slab *s;
 	void *obj;
+	u64 flags;
 
 	if (size == 0)
 		return 0;
 
 	cls = class_for(size);
-	if (cls < 0)
+	if (cls < 0) {
+		/* Straight to the page allocator, which has a lock of its own.
+		 * Not taken under this one: holding the heap lock across a
+		 * multi-page allocation blocks every small allocation in the
+		 * machine behind it for no reason. */
 		return alloc_large(size);
+	}
+
+	flags = spin_lock_irq(&heap_lock);
 
 	/* First slab of this class with something free. The list is short in
 	 * practice because a freed-empty slab is returned to the page allocator,
@@ -153,8 +176,10 @@ void *kmalloc(size_t size)
 
 	if (!s) {
 		s = grow_class((unsigned)cls);
-		if (!s)
+		if (!s) {
+			spin_unlock_irq(&heap_lock, flags);
 			return 0;
+		}
 	}
 
 	obj = s->free_list;
@@ -162,6 +187,7 @@ void *kmalloc(size_t size)
 	s->in_use++;
 	bytes_live += s->obj_size;
 
+	spin_unlock_irq(&heap_lock, flags);
 	return obj;
 }
 
@@ -219,6 +245,7 @@ static void free_large(void *ptr)
 void kfree(void *ptr)
 {
 	struct slab *s;
+	u64 flags;
 
 	if (!ptr)
 		return;
@@ -231,6 +258,8 @@ void kfree(void *ptr)
 		free_large(ptr);
 		return;
 	}
+
+	flags = spin_lock_irq(&heap_lock);
 
 	s = (struct slab *)(uintptr_t)((uintptr_t)ptr & ~(uintptr_t)(PAGE_SIZE - 1));
 
@@ -251,6 +280,8 @@ void kfree(void *ptr)
 		if (cls >= 0)
 			release_slab((unsigned)cls, s);
 	}
+
+	spin_unlock_irq(&heap_lock, flags);
 }
 
 void heap_print_summary(void)

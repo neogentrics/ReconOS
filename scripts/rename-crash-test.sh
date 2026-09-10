@@ -126,7 +126,19 @@ for round in $(seq 1 "$ROUNDS"); do
 	# Swept, so the cut lands somewhere different each time. A single fixed
 	# delay tests one instant, and the instant that matters is the one nobody
 	# chose.
-	ms=$(( 1500 + (round * 211) % 2600 ))
+	#
+	# MEASURED FROM WHEN THE GUEST STARTS REPLACING, NOT FROM WHEN IT STARTS.
+	#
+	# It used to be `1500 + (round * 211) % 2600`, measured from launch, with
+	# the lower end chosen against the boot time of the day it was written.
+	# Checkpoint 20 added about a second of self-tests and the early rounds
+	# began cutting before the filesystem had been made, so they cut a guest
+	# that had not written anything yet.
+	#
+	# Re-tuning the constant would work until the next thing that changes how
+	# long a boot takes. What is being swept is time spent *replacing*, and
+	# that is now what is measured.
+	ms=$(( 60 + (round * 211) % 2600 ))
 
 	# QEMU directly, with nothing wrapped around it: `$!` has to be the
 	# emulator. Wrapping it in `timeout` makes `$!` the wrapper, and killing
@@ -149,6 +161,30 @@ for round in $(seq 1 "$ROUNDS"); do
 	fi
 
 	qemu_pid=$!
+
+	# Wait for it to get as far as replacing, then start the clock. Bounded,
+	# because a guest that never gets there has to fail its round rather than
+	# hang the run -- and a round cut before it wrote anything looks exactly
+	# like a clean one.
+	started=
+	for _ in $(seq 300); do
+		if grep -q "reconfs-crash: replacing" "$OUT/run.log" 2>/dev/null; then
+			started=yes
+			break
+		fi
+		if ! kill -0 "$qemu_pid" 2>/dev/null; then
+			break
+		fi
+		sleep 0.05
+	done
+
+	if [ -z "$started" ]; then
+		echo "round $round: the guest never reached the filesystem in 15s"
+		kill -9 "$qemu_pid" 2>/dev/null
+		wait "$qemu_pid" 2>/dev/null
+		qemu_pid=
+		continue
+	fi
 
 	sleep "$(awk "BEGIN{print $ms/1000}")"
 	kill -9 "$qemu_pid" 2>/dev/null

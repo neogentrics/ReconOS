@@ -89,6 +89,42 @@ void x86_pic_end_of_interrupt(unsigned irq)
 	outb(PIC1_CMD, 0x20);
 }
 
+/* Every line masked at both chips. Used when the I/O APIC takes the lines
+ * over: two controllers delivering one line is a duplicate interrupt that the
+ * kernel then acknowledges to only one of them. */
+/* The mask the 8259 is left with at boot: the timer open, everything else
+ * shut. Used to put the lines back when the I/O APIC could not hold them. */
+void x86_pic_restore_default(void)
+{
+	outb(PIC1_DATA, 0xFE);
+	outb(PIC2_DATA, 0xFF);
+}
+
+void x86_pic_mask_all(void)
+{
+	outb(PIC1_DATA, 0xFF);
+	outb(PIC2_DATA, 0xFF);
+}
+
+/* Whichever controller actually delivered it.
+ *
+ * This is the single line that has to change when the routing changes, and it
+ * is worth having in one place rather than at each site: acknowledging to the
+ * 8259 an interrupt the I/O APIC delivered unbalances a chip that is no longer
+ * sending anything, and *failing* to acknowledge the local APIC leaves the
+ * interrupt in service -- after which that processor takes no further
+ * interrupt at or below its priority. Neither says anything; the machine
+ * simply stops getting interrupts. */
+void x86_irq_ack(unsigned irq)
+{
+	if (x86_ioapic_in_use()) {
+		x86_apic_eoi();
+		return;
+	}
+
+	x86_pic_end_of_interrupt(irq);
+}
+
 /* --- The programmable interval timer ------------------------------------- */
 
 #define PIT_CH0   0x40
@@ -102,7 +138,22 @@ static void pit_start_tick(void)
 {
 	unsigned divisor = PIT_HZ / TIME_TICK_HZ;
 
-	outb(PIT_CMD, 0x36);			/* channel 0, both bytes, square wave */
+	/* Mode 2, a rate generator, and NOT mode 3, a square wave.
+	  *
+	  * This was 0x36 -- mode 3 -- and it worked for as long as the 8259 was
+	  * the only thing listening. A square wave holds its output high for
+	  * half the period and low for the other half, so there are *two*
+	  * transitions per tick; the 8259 as emulated counts one of them and
+	  * the I/O APIC counts both. The first boot with the lines moved across
+	  * ran the whole kernel at 201 Hz against a 100 Hz constant -- every
+	  * sleep half as long as asked, every timer early, and every test that
+	  * counted ticks rather than nanoseconds still passing.
+	  *
+	  * Mode 2 pulses the output low for one input cycle and leaves it high
+	  * the rest of the period: one transition, one interrupt, whichever
+	  * controller is listening. It is what the chip is for and what every
+	  * other kernel uses it in. */
+	outb(PIT_CMD, 0x34);			/* channel 0, both bytes, rate generator */
 	outb(PIT_CH0, (u8)(divisor & 0xFF));
 	outb(PIT_CH0, (u8)(divisor >> 8));
 }
@@ -257,7 +308,7 @@ void x86_timer_interrupt(void)
 	 * acknowledgement would never happen. The controller would then send no
 	 * further interrupts, and the machine would freeze on the first
 	 * preemption with everything looking correct. */
-	x86_pic_end_of_interrupt(0);
+	x86_irq_ack(0);
 
 	if (preempt)
 		sched_switch();

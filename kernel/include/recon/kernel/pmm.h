@@ -67,4 +67,10 @@ void pmm_print_summary(void);
  * there is no test harness that can run a kernel yet. */
 bool pmm_self_test(void);
 
+/* Several processors allocating and freeing at once, asserting that no page is
+ * ever handed to two owners. Separate from pmm_self_test because it needs
+ * threads, and because what it proves is different: that one is about counting,
+ * this one is about ownership. (BG-149) */
+bool pmm_concurrent_test(void);
+
 #endif /* RECON_KERNEL_PMM_H */

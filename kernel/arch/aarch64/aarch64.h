@@ -76,11 +76,17 @@ void aarch64_irq(void);
 /* The per-processor halves of the interrupt controller and the timer. Called by
  * the boot processor on itself and by each secondary on itself. */
 void aarch64_gic_cpu_init(void);
+
+/* 2 or 3, or zero if no interrupt controller was found. */
+unsigned aarch64_gic_generation(void);
 void aarch64_timer_cpu_init(void);
 
 /* This processor's own MPIDR-derived number, as opposed to the constant zero
  * arch_cpu_id() returned before there were other processors. */
-unsigned arch_cpu_id_real(void);
+/* This processor's position in the machine: all four MPIDR affinity levels
+ * packed into one value, which is what PSCI is given to start a processor.
+ * Sparse, and never an array index -- arch_cpu_id() is the index. */
+u64 arch_cpu_affinity(void);
 void aarch64_time_print_source(void);
 
 /* Reads the memory and the command line out of a flattened device tree.

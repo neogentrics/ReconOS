@@ -36,6 +36,26 @@ void arch_user_init(void)
 	 * conditional at the call site. */
 }
 
+void arch_thread_switched_in(struct thread *t)
+{
+	/* Nothing, and this is not a stub -- it is a real difference between the
+	  * two architectures.
+	  *
+	  * x86_64 has to be told where a trap from user mode should land, in a
+	  * task-state segment and a per-processor block, and both belong to the
+	  * processor while the stack they name belongs to the thread. That gap
+	  * is what a preemptible system call falls into when the thread is
+	  * rescheduled onto another processor.
+	  *
+	  * Here there is no gap, because there is no second place holding the
+	  * answer. An exception from EL0 switches to SP_EL1, and SP_EL1 *is* the
+	  * kernel stack pointer this processor is using -- which the context
+	  * switch has just set to the incoming thread's own stack. The value is
+	  * right by construction rather than by being copied somewhere in time.
+	  */
+	(void)t;
+}
+
 void arch_enter_user(u64 entry, u64 stack_top)
 {
 	__asm__ volatile(
@@ -43,6 +63,51 @@ void arch_enter_user(u64 entry, u64 stack_top)
 		"msr	elr_el1, %[pc]\n"	/* where it starts */
 		"msr	spsr_el1, %[st]\n"	/* at EL0, with interrupts on */
 		"isb\n"
+	
+	/* Every register the program has no business seeing, zeroed.
+	 *
+	 * Without this a program's first instruction reads whatever the
+	 * kernel last left behind: kernel stack addresses, pointers into
+	 * kernel structures, whatever the last call was holding. None of it
+	 * is secret the way a key is; all of it is the map somebody needs to
+	 * aim at the kernel with.
+	 *
+	 * After the system registers are set, because the operands live in
+	 * some of these -- and x30 included, because the link register holds
+	 * a kernel return address and is as much of a leak as any other.
+	 * SP_EL0 is untouched: it was just given the program's own stack. */
+	"mov	x0, xzr\n"
+	"mov	x1, xzr\n"
+	"mov	x2, xzr\n"
+	"mov	x3, xzr\n"
+	"mov	x4, xzr\n"
+	"mov	x5, xzr\n"
+	"mov	x6, xzr\n"
+	"mov	x7, xzr\n"
+	"mov	x8, xzr\n"
+	"mov	x9, xzr\n"
+	"mov	x10, xzr\n"
+	"mov	x11, xzr\n"
+	"mov	x12, xzr\n"
+	"mov	x13, xzr\n"
+	"mov	x14, xzr\n"
+	"mov	x15, xzr\n"
+	"mov	x16, xzr\n"
+	"mov	x17, xzr\n"
+	"mov	x18, xzr\n"
+	"mov	x19, xzr\n"
+	"mov	x20, xzr\n"
+	"mov	x21, xzr\n"
+	"mov	x22, xzr\n"
+	"mov	x23, xzr\n"
+	"mov	x24, xzr\n"
+	"mov	x25, xzr\n"
+	"mov	x26, xzr\n"
+	"mov	x27, xzr\n"
+	"mov	x28, xzr\n"
+	"mov	x29, xzr\n"
+	"mov	x30, xzr\n"
+	
 		"eret\n"
 		:
 		: [sp] "r"(stack_top), [pc] "r"(entry), [st] "r"(SPSR_EL0T)
