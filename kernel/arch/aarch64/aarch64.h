@@ -79,6 +79,11 @@ void aarch64_gic_cpu_init(void);
 
 /* 2 or 3, or zero if no interrupt controller was found. */
 unsigned aarch64_gic_generation(void);
+
+/* Answers an Access Flag fault by setting the flag. True if it handled it.
+ * Only reachable once something clears a flag, which before page-age
+ * sampling nothing ever did. */
+bool vm_fault_access_flag(vaddr_t va);
 void aarch64_timer_cpu_init(void);
 
 /* This processor's own MPIDR-derived number, as opposed to the constant zero

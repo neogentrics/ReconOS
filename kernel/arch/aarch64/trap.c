@@ -79,6 +79,16 @@ static const char *abort_reason(unsigned iss)
 	case 0x05: return "translation fault, level 1";
 	case 0x06: return "translation fault, level 2";
 	case 0x07: return "translation fault, level 3 (nothing is mapped there)";
+
+	/* The descriptor is valid and its Access Flag is clear.
+	  *
+	  * Three of these four were already named, which is worth recording
+	  * because it was assumed otherwise: this decoder has been able to
+	  * *describe* an access-flag fault since it was written, and nothing
+	  * has ever been able to *answer* one. A named fault is still a dead
+	  * program -- the name goes in the report and then the program ends.
+	  * Level 0 was the one genuinely missing. */
+	case 0x08: return "access flag fault, level 0";
 	case 0x09: return "access flag fault, level 1";
 	case 0x0A: return "access flag fault, level 2";
 	case 0x0B: return "access flag fault, level 3 (the access flag was not set)";
@@ -138,6 +148,15 @@ void trap_dispatch(struct trap_frame *f)
 		if (ec == 0x24 || ec == 0x20) {
 			bool write = (ec == 0x24) && ((f->esr >> 6) & 1);
 
+			/* An access-flag fault is not a fault about memory at
+		  * all -- it is this kernel having asked to be told when
+		  * the page was next touched. Answered first, because
+		  * vm_fault_user would find the address already mapped and
+		  * refuse it as a wild pointer. */
+			if ((iss & 0x3F) >= 0x08 && (iss & 0x3F) <= 0x0B &&
+			    vm_fault_access_flag((vaddr_t)f->far))
+				return;
+
 			if (vm_fault_user((vaddr_t)f->far, write))
 				return;
 		}
@@ -167,6 +186,10 @@ void trap_dispatch(struct trap_frame *f)
 	 */
 	if (ec == 0x25 || ec == 0x21) {
 		bool write = (ec == 0x25) && ((f->esr >> 6) & 1);
+
+		if ((iss & 0x3F) >= 0x08 && (iss & 0x3F) <= 0x0B &&
+		    vm_fault_access_flag((vaddr_t)f->far))
+			return;
 
 		if (f->far < USER_LIMIT && addrspace_active() &&
 			vm_fault_user((vaddr_t)f->far, write))

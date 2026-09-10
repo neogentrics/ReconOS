@@ -23,6 +23,7 @@
 #include "aarch64.h"
 
 #include <recon/kernel/vm.h>
+#include <recon/kernel/pageage.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/boot.h>
@@ -387,6 +388,11 @@ bool vm_unmap(vaddr_t va, u64 size)
 
 	return true;
 }
+
+/* How many pages have been touched for the first time since their flag
+ * was cleared. On a processor with no hardware update this is the cost of
+ * measuring, one trap at a time, and it is reported rather than absorbed. */
+static unsigned access_flag_faults;
 
 paddr_t vm_lookup(vaddr_t va)
 {
@@ -961,4 +967,134 @@ bool vm_self_test(void)
  * for, and no way for one to go unanswered. */
 void vm_print_shootdowns(void)
 {
+}
+
+/* --- how recently a page was touched -------------------------------------
+ *
+ * ATTR_AF has been set on every mapping this kernel has ever made and never
+ * read. Clearing it is how you ask "has this been touched since I last looked",
+ * and on this architecture the answer arrives in a way it does not on x86_64.
+ *
+ * **Before ARMv8.1 there is no hardware update of the Access Flag at all.** A
+ * valid descriptor with AF clear does not quietly get it set on access -- the
+ * access *faults*, with an Access Flag fault, and software sets the bit and
+ * returns. Cortex-A72, which is what the rig runs, is one of those cores.
+ *
+ * That is more accurate than a bit the processor sets when it happens to refill
+ * a translation: a fault is exact, and it happens on the first touch rather than
+ * at some point afterwards. It is also far more expensive -- one trap per page
+ * per sweep -- which is why vm_page_age_is_cheap exists and why a caller is told
+ * the answer rather than left to assume the two architectures cost the same.
+ *
+ * ARMv8.1 and later can do it in hardware, and the field that says so is read
+ * below rather than guessed from the processor's name.
+ */
+static u64 *leaf_entry(vaddr_t va)
+{
+	u64 *l0 = root_for(va);
+	unsigned i0 = (unsigned)((va >> 39) & 0x1FF);
+	unsigned i1 = (unsigned)((va >> 30) & 0x1FF);
+	unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
+	unsigned i3 = (unsigned)((va >> 12) & 0x1FF);
+	u64 *l1, *l2, *l3;
+
+	if (!l0)
+		return 0;
+
+	l1 = next_level(l0, i0, false);
+	if (!l1)
+		return 0;
+
+	/* A block descriptor carries the flag for a whole gigabyte or two
+	 * megabytes. Readable, and a different measurement from the one this is
+	 * for, so it is refused rather than answered at the wrong granularity.
+	 */
+	if ((l1[i1] & 3) == DESC_BLOCK)
+		return 0;
+
+	l2 = next_level(l1, i1, false);
+	if (!l2)
+		return 0;
+
+	if ((l2[i2] & 3) == DESC_BLOCK)
+		return 0;
+
+	l3 = next_level(l2, i2, false);
+	if (!l3 || (l3[i3] & 3) != DESC_PAGE)
+		return 0;
+
+	return &l3[i3];
+}
+
+bool vm_page_touched(vaddr_t va, bool clear)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	bool was;
+
+	if (!entry)
+		return false;
+
+	was = (*entry & ATTR_AF) != 0;
+
+	if (clear && was) {
+		*entry &= ~ATTR_AF;
+		invalidate_if_live(*entry | DESC_PAGE, page);
+	}
+
+	return was;
+}
+
+bool vm_page_age_is_cheap(void)
+{
+	u64 mmfr1;
+
+	/* ID_AA64MMFR1_EL1.HAFDBS, bits 3:0. Zero means the processor does not
+	 * update the flag at all and every sample costs a fault; anything else
+	 * means it does it in hardware.
+	 *
+	 * Read rather than inferred from the processor's name, for the same
+	 * reason checkpoint 3 reads what the chip offers rather than what the
+	 * architecture allows: the two are not the same question, and the
+	 * second one has been wrong here before. */
+	__asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(mmfr1));
+
+	return (mmfr1 & 0xF) != 0;
+}
+
+/* Answers an Access Flag fault by setting the flag.
+ *
+ * Called from the abort path for fault status codes 0x08 to 0x0B, which are the
+ * four levels of "this descriptor is valid and its Access Flag is clear". Before
+ * page-age sampling existed nothing in this kernel ever cleared that flag, so
+ * this fault could not happen and the abort decoder had no name for it -- an
+ * unnamed abort is a panic, so arming the measurement without this would have
+ * turned the first sampled page into a dead machine.
+ *
+ * Returns true if it handled it. The flag is set and the translation
+ * invalidated; the faulting instruction is retried and succeeds.
+ */
+bool vm_fault_access_flag(vaddr_t va)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+
+	if (!entry)
+		return false;
+
+	/* Already set means this was not an access-flag fault after all, and
+	 * answering it would turn a real fault into a silent retry loop. */
+	if (*entry & ATTR_AF)
+		return false;
+
+	*entry |= ATTR_AF;
+	invalidate_if_live(*entry, page);
+
+	access_flag_faults++;
+	return true;
+}
+
+u64 vm_page_age_faults(void)
+{
+	return access_flag_faults;
 }

@@ -18,6 +18,7 @@
 
 #include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
+#include <recon/kernel/pageage.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/cpu.h>
@@ -1095,4 +1096,93 @@ void vm_print_shootdowns(void)
 {
 	kprintf("  shootdowns   : %u live invalidations, %u sent, %u unanswered\n",
 		live_invalidations, shootdowns_sent, shootdown_timeouts);
+}
+
+/* --- how recently a page was touched -------------------------------------
+ *
+ * PTE_ACCESSED has been defined at the top of this file since paging was
+ * written and has never been read. The processor sets it when it fills a TLB
+ * entry for the page; software clears it, waits, and looks again.
+ *
+ * THE INVALIDATION IS NOT OPTIONAL, and leaving it out produces the worst kind
+ * of wrong answer. The processor writes the bit when it *fills* a translation,
+ * not on every access -- so a page whose entry is still cached is touched a
+ * million times and the bit stays clear. Every hot page would report as cold
+ * from the second sweep onward, and an eviction policy built on that would
+ * evict exactly the pages in use.
+ *
+ * It is the same reason vm_map invalidates, and it is here rather than left to
+ * the caller because a caller that forgot would get plausible numbers.
+ */
+static u64 *leaf_entry(vaddr_t va)
+{
+	unsigned i4 = (unsigned)((va >> 39) & 0x1FF);
+	unsigned i3 = (unsigned)((va >> 30) & 0x1FF);
+	unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
+	unsigned i1 = (unsigned)((va >> 12) & 0x1FF);
+
+	u64 *pdpt, *pd, *pt;
+
+	pdpt = next_level(root_for(va), i4, false);
+	if (!pdpt)
+		return 0;
+
+	/* A large page has its accessed bit in the entry that describes it, and
+	 * that entry covers a gigabyte or two megabytes rather than a page. The
+	 * bit is still readable and still means "something in here was
+	 * touched", which is a different measurement from the one this is for
+	 * -- so it is refused rather than silently answered at the wrong
+	 * granularity. Nothing user-facing is mapped with large pages. */
+	if (pdpt[i3] & PTE_LARGE)
+		return 0;
+
+	pd = next_level(pdpt, i3, false);
+	if (!pd)
+		return 0;
+
+	if (pd[i2] & PTE_LARGE)
+		return 0;
+
+	pt = next_level(pd, i2, false);
+	if (!pt || !(pt[i1] & PTE_PRESENT))
+		return 0;
+
+	return &pt[i1];
+}
+
+bool vm_page_touched(vaddr_t va, bool clear)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	bool was;
+
+	if (!entry)
+		return false;
+
+	was = (*entry & PTE_ACCESSED) != 0;
+
+	if (clear && was) {
+		*entry &= ~PTE_ACCESSED;
+
+		/* And the translation goes, on this processor and every other.
+		 * Without it the entry stays cached and the bit is never
+		 * written again. */
+		invalidate_if_live(*entry, page);
+	}
+
+	return was;
+}
+
+bool vm_page_age_is_cheap(void)
+{
+	/* The processor maintains the bit itself. Sampling costs a table walk
+	 * and an invalidation per page, and no faults at all. */
+	return true;
+}
+
+u64 vm_page_age_faults(void)
+{
+	/* None. The processor writes the bit as part of filling a translation,
+	  * so nothing traps and there is nothing to count. */
+	return 0;
 }

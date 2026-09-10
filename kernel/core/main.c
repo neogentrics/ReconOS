@@ -29,6 +29,7 @@
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/shm.h>
 #include <recon/kernel/swap.h>
+#include <recon/kernel/pageage.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -245,6 +246,8 @@ void kmain(void)
 		ramfs_self_test() ? "pass" : "FAIL");
 	kprintf("  somewhere to evict : %s\n",
 		swap_self_test() ? "pass" : "FAIL");
+	kprintf("  which pages are cold : %s\n",
+		page_age_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  refusing a bad program : %s\n",
@@ -307,6 +310,7 @@ void kmain(void)
 	  * that had one, which is a summary describing the moment it was written
 	  * rather than the machine. */
 	swap_print_summary();
+	page_age_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether
