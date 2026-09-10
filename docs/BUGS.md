@@ -3337,6 +3337,36 @@ the early rounds started cutting a guest that had not reached the disk.
   harness measured something other than what it claimed; the other two are
   written up beside the code that caused them.
 
+
+### BG-161 — A header promised that either pointer could be null, and one of them could not
+
+- **Found:** 10 September 2026, by the first caller that took the header at its
+  word — the new VFS, reading a file to check it did not exist yet.
+- **Cost:** a write to address zero in kernel mode, and a panic. Nothing had ever
+  passed null before, so the promise had been untrue and unexercised since it was
+  written.
+- **Status:** fixed.
+
+`rootfs_read_file` says, in its header:
+
+> Reads a whole file, and tells the caller the mode it was created with. **Either
+> pointer may be null.**
+
+`mode` honoured that — it is guarded by `if (mode)`. `got` did not: it was passed
+straight through to `reconfs_read_named`, whose first act is `*got = 0`.
+
+- **Was:** a contract stated in one file and kept in another, where only half of
+  it was ever exercised. The half that worked was the half something used.
+- **Fixed in** `core/rootfs.c`: a local stands in when the caller does not want
+  the count, so the promise is kept where it was made rather than pushed down to
+  a function whose own header never made it.
+- **Why it is worth an entry at all**, being three lines: it is the same shape as
+  BG-149's expired comment and BG-156's predicted one. A header is a claim about
+  behaviour, and a claim nothing checks is a claim that drifts — this one had been
+  wrong since it was written and would have stayed wrong until something believed
+  it. What made it visible immediately was that the believer was in the kernel and
+  crashed; a user program would have got a corrupted answer.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -6,6 +6,7 @@
  * layers down, and nothing here is on a path where thirty-two is limiting.
  */
 #include <recon/kernel/process.h>
+#include <recon/kernel/vfs.h>
 
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
@@ -61,6 +62,18 @@ struct process *process_create(const char *name, u32 parent, u32 uid, u32 gid)
 	}
 
 	spin_unlock_irq(&table_lock, flags);
+
+	/* Its first three descriptors, outside the table lock.
+	  *
+	  * Outside because opening a file takes the descriptor lock and may take
+	  * the heap, and holding the process table across either of those puts
+	  * two locks in an order nothing else in the kernel uses -- which is how
+	  * a deadlock gets built out of two correct pieces. The process is
+	  * already RUNNING and visible here, and that is safe: a process with no
+	  * descriptors yet is a process whose threads have not started. */
+	if (p)
+		fd_open_standard(p);
+
 	return p;
 }
 
@@ -143,7 +156,20 @@ void process_thread_ended(struct thread *t, i64 code)
 	}
 
 	t->process = 0;
-	spin_unlock_irq(&table_lock, flags);
+
+	/* Whether this was the last thread, decided while the lock is held and
+	  * acted on after it is dropped. Closing a descriptor commits to a disk;
+	  * doing that with the process table held would stop every other
+	  * processor in the machine from creating a thread for the length of a
+	  * write to storage. */
+	{
+		struct process *ended = (p && p->state == PROCESS_ENDED) ? p : NULL;
+
+		spin_unlock_irq(&table_lock, flags);
+
+		if (ended)
+			fd_close_all(ended);
+	}
 }
 
 void process_set_space(struct process *p, struct addrspace *as)

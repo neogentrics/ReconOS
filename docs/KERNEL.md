@@ -2338,6 +2338,192 @@ volume. That is the next piece and it changes nothing here — the bytes are the
 same bytes, and the loader does not know where they came from.
 
 
+## A virtual filesystem, and the five rows that were waiting on it
+
+Five rows of the architecture audit said, in one form or another, *waits on:
+descriptors*. Descriptors waited on a virtual filesystem, and the VFS waited on
+nothing — it just had not been written. This is that, and then the four things
+that were behind it.
+
+### What was actually missing
+
+The kernel had files and no way to **hold** one. `rootfs_create_file` takes a
+path and a whole file's contents; `rootfs_read_file` takes a path and gives the
+whole file back. Both are complete operations on a name. Neither is a file you
+can keep, read a piece of, write a bit more to, and hand to something else.
+
+That is what a descriptor is, and almost everything above the filesystem needs
+one. A pipe is two ends of something held open. A program loaded from a volume
+is a file read a piece at a time. A file-backed mapping is a file held while its
+pages are faulted in. **None of those is about ReconFS**, which is why they were
+all stuck behind the same missing piece.
+
+### What makes it a VFS and not ReconFS wearing a hat
+
+`struct file_ops` is four functions — read, write, seek, close — and a pointer to
+private state. Nothing above that line names a filesystem, and the test for that
+is not that it compiles. It is that `sys_read` and `sys_write` contain **no `if`
+about what kind of thing they are talking to**.
+
+There are four implementations now, and they were built in an order chosen to
+keep the interface honest:
+
+- **the console**, which has no filesystem underneath it at all. It went first
+  deliberately: an interface that fits only the thing it was written for is not
+  an interface, and if this one had been shaped around a disk the console would
+  not have fitted through it.
+- **a file on the mounted volume**, which is the case everything was waiting for.
+- **a pipe**, which has no path, no size, no position, and two ends that are not
+  the same kind of thing.
+- **`/dev`**, which is a filesystem with no disk, no blocks, no transaction and
+  no format.
+
+A thing that cannot do one of the four leaves the function **null** rather than
+providing a stub that returns an error. So "you cannot read the console" and
+"you cannot write to the read end of a pipe" are answered by the same line, once,
+above — instead of by a check inside every implementation that might get it wrong
+differently.
+
+The self-test adds a fifth implementation that the kernel has never heard of,
+defined inside the test itself. A `file_ops` that only the code which invented it
+can satisfy is not an interface, and the cheapest way to find that out is to
+write one from outside.
+
+### Descriptors belong to the process
+
+Small numbers, on the process rather than the thread, because two threads of one
+program that both write to descriptor 1 mean the same open file — and that
+sharing is what distinguishes a thread from a process in the first place.
+
+A file is reference-counted and a descriptor is one reference. That is not
+bookkeeping: it is what makes a pipe possible, and the test for it is that
+**closing one of two descriptors must not close the file**. A naive
+implementation fails exactly there, and it fails silently, because a
+use-after-free reads correct-looking memory most of the time. So the test counts
+closes rather than checking a pointer.
+
+`fd_get` takes its reference **under the table lock**, which is the whole reason
+it exists rather than callers reading the array: without it, another thread of
+the same process closing that descriptor between the read and the use would free
+the file while it was being read from.
+
+### Close is where a write fails
+
+ReconFS reads and writes whole files — there is no call that reads from an
+offset — so a descriptor over one holds the contents in memory, and the commit
+happens when the descriptor is closed.
+
+That has a consequence worth stating loudly rather than discovering: **a close
+whose result is thrown away is a write whose result was thrown away.** Every
+caller in the kernel checks it, the header says so, and the test asserts that the
+file is *not* visible before the close — which is what stops somebody later
+"fixing" the close to be a formality.
+
+A file larger than the buffer is **refused at open**, not opened and then found
+to be short. A caller handed part of a file with a success status cannot tell.
+
+### The mount table
+
+Four lines of table, and it is what turns a file interface into a *virtual* one.
+Before it, "open" meant ReconFS and the console was reached by a special case.
+After it, a path is looked up and whatever answers is what the program talks to.
+
+Longest prefix wins, written as a length rather than as an ordering — because a
+table that only works in the order it happens to be written is a table somebody
+will reorder. There is no `mount()` call and no unmounting: this kernel has one
+volume, found at boot, and inventing the calls before something wants them gets
+their arguments wrong.
+
+### Pipes
+
+A ring of bytes, a lock, and two queues of threads. The mechanism is small; the
+four questions at its edges are not, and each has a wrong answer that looks like
+it works:
+
+- a reader with nothing to read **waits**, and does not return zero — zero means
+  the input has ended, and a reader told that while a writer is still running
+  stops early and reports success;
+- a reader waiting when the last writer closes gets zero, because now it really
+  has ended;
+- a writer with nowhere to put bytes waits rather than discarding them, because a
+  pipe that drops bytes under pressure works in every test and loses data on a
+  busy machine;
+- a writer whose readers have all gone gets an error and not a wait, because
+  nothing will ever drain it.
+
+The test starts the reader **first**, and asserts it has not finished before
+anything is written. A reader that returned zero instead of waiting would still
+pass a test that wrote first and read afterwards, because there would be bytes
+waiting either way.
+
+### A program from a volume
+
+The last piece of "a process is a program". The ELF loader made a program a
+*file* rather than a byte array, but the file was still inside the kernel image.
+
+`user_exec_path` opens a descriptor, reads to the end, and hands the result to
+the loader that already existed. Nothing in it knows what filesystem the path
+names — which is the point: the same function will load a program off a pipe or
+out of a devfs without a line changing. It reads in a **loop**, because "read"
+does not promise to give everything asked for in one call, and a loader that
+assumed otherwise would work on a disk and truncate everything else.
+
+The test is the loop closed: the kernel's own program is written onto the volume
+**through a descriptor**, read back **through a descriptor**, and executed. It is
+the first time in this kernel that a file on a disk has become a running process.
+
+### A mapping backed by a file
+
+1.2's last open row, and it needed a VFS rather than more memory management: the
+page tables have been able to fill a page on demand since checkpoint 19, and what
+was missing was anything to fill one *from* that was not zeroes.
+
+A region can now carry a file, an offset and a length. A fault in it allocates a
+page, zeroes it, and reads the file over the top — so the tail past the end of
+what the file backs stays zero, which is exactly what an ELF segment with a
+`.bss` is made of.
+
+**Private, not shared.** A write changes the page and never the file. Shared
+mappings need a page cache two address spaces can point at, and there is no such
+thing here yet; a program that expected its changes to be saved would find out by
+losing them, so it is written down instead.
+
+The one subtlety is that filling a page means *seek then read*, which is one
+operation only if nothing else touches the file in between. Two processors
+faulting on the same mapping would otherwise each read from where the other had
+just seeked to, and each would get a page of somebody else's file with no error
+anywhere. There is a lock.
+
+### Memory two programs can both reach
+
+The other half of IPC, and not a variation on pipes: a pipe is a stream with an
+order and a producer and a consumer; shared memory is a region with no order at
+all, where the only promise is that both programs are looking at the same
+physical pages.
+
+It could not exist before per-process address spaces, because sharing memory
+between processes that share *all* of it is not a mechanism — the audit said
+exactly that. Now that each has a map of its own, the map already knows how to
+point at a physical page, so what had to be built is only the lifetime.
+
+Mapped eagerly rather than on demand, deliberately: the thing being shared is the
+*page*, and a demand-paged region hands each faulter a page of its own unless
+something coordinates them. That coordination is the whole difficulty; mapping up
+front does not have it.
+
+**There is no system call yet, and that is on purpose.** The shape of one —
+named or anonymous, inherited or looked up — is decided by whatever wants it
+first, and a call invented before its caller gets its arguments wrong in a way
+that is expensive to change. The mechanism is here and tested; the call arrives
+with its caller.
+
+### And one fault it found on the way
+
+BG-161: `rootfs_read_file`'s header promised that either output pointer could be
+null. One of them could. The first caller to believe it wrote to address zero in
+kernel mode — a claim that had been wrong since it was written, and unexercised
+because nothing had ever passed null.
+
 ## Time, deferred work, and where a device interrupt goes
 
 Three rows of the architecture audit said "waits on: wait queues". Wait queues

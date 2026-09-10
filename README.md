@@ -822,6 +822,8 @@ without Linux, and without touching what was already on the disk.
 | **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
 | **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
 | **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
+| **Files** | A virtual filesystem: descriptors, a mount table, and four implementations behind one interface — the volume, the console, pipes, and `/dev`. A program is loaded **from a volume**, and a mapping can be filled from a file |
+| **Between programs** | Pipes, with a reader that waits rather than reporting the end of input, and shared memory two address spaces can both reach |
 | **Allocators** | The physical allocator and the kernel heap are locked, which they were not: the comment saying one processor ran kernel code had outlived its own condition by three checkpoints |
 | **Installer** | Plans first and writes nothing while planning; then partitions, formats, copies and leaves a disk that boots on its own |
 | **Recovery** | The same kernel from the ESP, read-only, offered in the boot menu on every machine |
@@ -847,11 +849,12 @@ This is the honest list, and it is the reason the desktop is not on it.
 - **Display.** A framebuffer console on whatever the firmware left. No mode
   setting, no surface for a compositor.
 - **Network.** Nothing at all.
-- **A program from a volume.** There is an ELF loader, and what it loads is a
-  file the linker built rather than a byte array in the kernel — but there is no
-  path from a *volume* to a program yet, which waits on a virtual filesystem.
-- **IPC.** No pipes, sockets, message queues or signals. They wait on
-  descriptors, which wait on a virtual filesystem.
+- **Shared file mappings.** A mapping filled from a file is private: a write
+  changes the page and never the file. Sharing one needs a page cache two
+  address spaces can point at, which does not exist yet.
+- **Signals, sockets and message queues.** Pipes and shared memory exist;
+  signals do not, and neither does anything over a network. Descriptors were
+  what the first two were waiting on and they are here now.
 - **Identity that is enforced.** Files carry a mode and processes carry a user;
   nothing consults either yet. Recorded now so that enforcement, when it
   arrives, has something true to enforce.

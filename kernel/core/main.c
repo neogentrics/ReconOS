@@ -26,6 +26,8 @@
 #include <recon/kernel/power.h>
 #include <recon/kernel/wait.h>
 #include <recon/kernel/process.h>
+#include <recon/kernel/vfs.h>
+#include <recon/kernel/shm.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -217,6 +219,14 @@ void kmain(void)
 		wait_self_test() ? "pass" : "FAIL");
 	kprintf("  processes          : %s\n",
 		process_self_test() ? "pass" : "FAIL");
+	kprintf("  open files         : %s\n",
+		vfs_self_test() ? "pass" : "FAIL");
+	kprintf("  a pipe between two : %s\n",
+		pipe_self_test() ? "pass" : "FAIL");
+	kprintf("  devices as files   : %s\n",
+		devfs_self_test() ? "pass" : "FAIL");
+	kprintf("  memory two can see : %s\n",
+		shm_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  refusing a bad program : %s\n",
@@ -268,6 +278,10 @@ void kmain(void)
 	addrspace_print_summary();
 	user_print_summary();
 	process_print_summary();
+	vfs_print_summary();
+	pipe_print_summary();
+	devfs_print_summary();
+	shm_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether

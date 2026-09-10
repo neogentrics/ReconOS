@@ -59,6 +59,14 @@ to any of them; the switch is verified against the clock and reverted if the
 tick stops, rather than trusted. Message-signalled interrupts are composed and
 programmed, and no driver asks for one yet, which is said rather than implied.
 
+**The kernel has a virtual filesystem.** Programs open things, hold them, read
+and write and seek through them, and close them -- and what is on the other end
+can be a file on the volume, the console, a pipe, or something in `/dev`, with
+nothing above the interface knowing which. That unblocked five things at once:
+pipes between programs, memory two programs can both reach, a mapping filled
+from a file, `/dev/null` and friends, and **a program loaded from a volume**
+rather than from inside the kernel image.
+
 The scheduler also stopped handing a thread to another processor before the one
 it was leaving had finished with it. That had been possible since the second
 processor was woken and showed up as a kernel panic whose link register held a

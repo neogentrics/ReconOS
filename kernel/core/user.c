@@ -4,6 +4,7 @@
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/random.h>
 #include <recon/kernel/rootfs.h>
+#include <recon/kernel/vfs.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/vm.h>
@@ -59,29 +60,193 @@ static i64 sys_exit(u64 code, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	return 0;
 }
 
-static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a3, u64 a4, u64 a5)
+/* The process making this call, or null for a thread that has none. */
+static struct process *caller(void)
 {
-	const char *p;
+	return process_of(sched_current());
+}
 
-	/* One "file" so far, and it is the console. A real descriptor table
-	 * needs files, which need a filesystem. */
-	if (fd != 1 && fd != 2)
+/* THE CHECK THAT MATTERS, in one place for all four descriptor calls.
+ *
+ * Without it a user program hands the kernel any address it likes and the
+ * kernel obligingly reads or writes it -- which is every secret in the machine,
+ * retrieved by asking politely. */
+static bool user_buffer_ok(u64 buf, u64 len)
+{
+	if (user_range_ok(buf, len))
+		return true;
+
+	refusals++;
+	return false;
+}
+
+/* Reads a path out of the caller and terminates it here.
+ *
+ * Terminated by us, at the length we were given, so a path with an embedded
+ * zero is short rather than a way to smuggle one string past a check and have a
+ * different one used. */
+static i64 copy_path(u64 path, u64 path_len, char *out, size_t max)
+{
+	if (path_len == 0 || path_len >= max)
 		return SYS_EINVAL;
 
-	/* THE CHECK THAT MATTERS. Without it a user program hands the kernel any
-	 * address it likes and the kernel obligingly reads it -- which is every
-	 * secret in the machine, retrieved by asking politely. */
-	if (!user_range_ok(buf, len)) {
-		refusals++;
+	if (!user_buffer_ok(path, path_len))
 		return SYS_EFAULT;
+
+	kmemcpy(out, (const void *)(uintptr_t)path, (size_t)path_len);
+	out[path_len] = '\0';
+	return SYS_OK;
+}
+
+/* Every one of the four below has the same shape, and that is the point.
+ *
+ * None of them contains an `if` about what kind of thing the descriptor names.
+ * A console, a file on the mounted volume and a pipe reach exactly the same
+ * lines here -- which is the difference between a virtual filesystem and one
+ * filesystem with a switch statement in front of it. */
+static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a3, u64 a4, u64 a5)
+{
+	struct file *f;
+	i64 n;
+
+	if (!user_buffer_ok(buf, len))
+		return SYS_EFAULT;
+
+	f = fd_get(caller(), (int)fd);
+	if (!f)
+		return SYS_EBADF;
+
+	/* "Cannot be written" is answered once, here, rather than by a stub in
+	  * every implementation that cannot -- and it is a different answer from
+	  * a write that was attempted and failed. */
+	if (!f->ops->write) {
+		file_release(f);
+		return SYS_EPERM;
 	}
 
-	p = (const char *)(uintptr_t)buf;
+	n = f->ops->write(f, (const void *)(uintptr_t)buf, len);
+	vfs_note_write();
+	file_release(f);
+	return n;
+}
 
-	for (u64 i = 0; i < len; i++)
-		kputc(p[i]);
+static i64 sys_read(u64 fd, u64 buf, u64 len, u64 a3, u64 a4, u64 a5)
+{
+	struct file *f;
+	i64 n;
 
-	return (i64)len;
+	if (!user_buffer_ok(buf, len))
+		return SYS_EFAULT;
+
+	f = fd_get(caller(), (int)fd);
+	if (!f)
+		return SYS_EBADF;
+
+	if (!f->ops->read) {
+		file_release(f);
+		return SYS_EPERM;
+	}
+
+	n = f->ops->read(f, (void *)(uintptr_t)buf, len);
+	vfs_note_read();
+	file_release(f);
+	return n;
+}
+
+static i64 sys_open(u64 path, u64 path_len, u64 flags, u64 mode, u64 a4,
+		   u64 a5)
+{
+	char kpath[VFS_PATH_MAX];
+	struct file *f;
+	i64 st = copy_path(path, path_len, kpath, sizeof(kpath));
+	int fd;
+
+	if (st != SYS_OK)
+		return st;
+
+	/* Neither readable nor writable is refused rather than given some
+	  * default. A program that asked for nothing gets to find out it asked
+	  * for nothing. */
+	if (!(flags & (OPEN_READ | OPEN_WRITE)))
+		return SYS_EINVAL;
+
+	f = file_open_path(kpath, (unsigned)flags, (u32)mode, &st);
+	if (!f)
+		return st;
+
+	fd = fd_install(caller(), f);
+
+	/* The install took a reference of its own, so this one goes either way.
+	  * On failure that is the last one and the file is closed here -- which
+	  * for a created file means it is never written, which is right: it was
+	  * never handed to anybody. */
+	file_release(f);
+	return fd;
+}
+
+static i64 sys_close(u64 fd, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	/* The result is returned rather than discarded, and that is not a
+	  * formality: a file written to the mounted volume is committed here,
+	  * so this is the only place its failure can be reported. */
+	return fd_close(caller(), (int)fd);
+}
+
+/* Both ends at once, because a pipe with one end is not a pipe and a program
+ * that had to ask twice could be left holding half of one. */
+static i64 sys_pipe(u64 out, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct file *r = NULL, *w = NULL;
+	struct process *p = caller();
+	int fds[2];
+
+	if (!user_buffer_ok(out, sizeof(fds)))
+		return SYS_EFAULT;
+
+	if (!pipe_create(&r, &w))
+		return SYS_ENOSPC;
+
+	fds[0] = fd_install(p, r);
+	fds[1] = fd_install(p, w);
+
+	/* Our own references go either way: the descriptors hold them now, and
+	  * on failure dropping them is what closes the end nobody got. */
+	file_release(r);
+	file_release(w);
+
+	if (fds[0] < 0 || fds[1] < 0) {
+		/* Half a pipe is worse than none: a program handed one end and
+		  * an error has to guess whether to close it. */
+		if (fds[0] >= 0)
+			fd_close(p, fds[0]);
+		if (fds[1] >= 0)
+			fd_close(p, fds[1]);
+		return SYS_EMFILE;
+	}
+
+	kmemcpy((void *)(uintptr_t)out, fds, sizeof(fds));
+	return SYS_OK;
+}
+
+static i64 sys_seek(u64 fd, u64 offset, u64 from, u64 a3, u64 a4, u64 a5)
+{
+	struct file *f = fd_get(caller(), (int)fd);
+	i64 n;
+
+	if (!f)
+		return SYS_EBADF;
+
+	/* A thing with no position at all -- a console, a pipe -- is a
+	  * different answer from a seek that failed, and the program can tell
+	  * the two apart. */
+	if (!f->ops->seek) {
+		file_release(f);
+		return SYS_EPERM;
+	}
+
+	n = f->ops->seek(f, (i64)offset, (unsigned)from);
+	file_release(f);
+	return n;
 }
 
 static i64 sys_getpid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
@@ -230,6 +395,35 @@ static i64 sys_walltime(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 #define CREATE_PATH_MAX 256
 #define CREATE_MAX_BYTES 65536
 
+/* One filesystem status, as one system-call status.
+ *
+ * Here rather than inside each caller, because the mapping is a decision --
+ * which distinctions a program is allowed to see -- and a decision made in
+ * three places is three decisions. Each of these means something a caller
+ * would act on differently, so they are not collapsed into one failure. */
+i64 user_status_from_reconfs(enum reconfs_status st)
+{
+	switch (st) {
+	case RECONFS_OK:
+		return SYS_OK;
+	case RECONFS_ERR_NOT_MOUNTED:
+		return SYS_ENODEV;
+	case RECONFS_ERR_EXISTS:
+		return SYS_EEXIST;
+	case RECONFS_ERR_NOT_FOUND:
+	case RECONFS_ERR_NOT_DIR:
+		return SYS_ENOENT;
+	case RECONFS_ERR_NAME:
+	case RECONFS_ERR_TOO_DEEP:
+		return SYS_EINVAL;
+	case RECONFS_ERR_NOSPACE:
+	case RECONFS_ERR_TOO_LARGE:
+		return SYS_ENOSPC;
+	default:
+		return SYS_EIO;
+	}
+}
+
 static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 		      u64 a5)
 {
@@ -259,28 +453,10 @@ static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 				len ? (const void *)(uintptr_t)data : NULL,
 				(u32)len);
 
-	switch (st) {
-	case RECONFS_OK:
+	if (st == RECONFS_OK)
 		return (i64)len;
 
-	/* Each of these means something a caller would act on differently, so
-	 * they are not collapsed into one failure. */
-	case RECONFS_ERR_NOT_MOUNTED:
-		return SYS_ENODEV;
-	case RECONFS_ERR_EXISTS:
-		return SYS_EEXIST;
-	case RECONFS_ERR_NOT_FOUND:
-	case RECONFS_ERR_NOT_DIR:
-		return SYS_ENOENT;
-	case RECONFS_ERR_NAME:
-	case RECONFS_ERR_TOO_DEEP:
-		return SYS_EINVAL;
-	case RECONFS_ERR_NOSPACE:
-	case RECONFS_ERR_TOO_LARGE:
-		return SYS_ENOSPC;
-	default:
-		return SYS_EIO;
-	}
+	return user_status_from_reconfs(st);
 }
 
 const struct personality personality_recon = {
@@ -288,6 +464,11 @@ const struct personality personality_recon = {
 	.table = {
 		[SYS_EXIT]   = sys_exit,
 		[SYS_WRITE]  = sys_write,
+		[SYS_OPEN]   = sys_open,
+		[SYS_CLOSE]  = sys_close,
+		[SYS_READ]   = sys_read,
+		[SYS_SEEK]   = sys_seek,
+		[SYS_PIPE]   = sys_pipe,
 		[SYS_GETPID] = sys_getpid,
 		[SYS_TIME]   = sys_time,
 		[SYS_YIELD]  = sys_yield,
@@ -793,4 +974,167 @@ void user_print_summary(void)
 	kprintf("  served       : %lu system calls\n", calls_served);
 	kprintf("  refused      : %lu bad pointers\n", refusals);
 	kprintf("  ended        : %lu programs, for faulting\n", faults);
+}
+
+/* --- a program from a volume ---------------------------------------------
+ *
+ * The last piece of "a process is a program". Until now a program came from a
+ * byte array the kernel was compiled with -- the ELF loader made it a *file*
+ * rather than an array, but the file was still inside the kernel image.
+ *
+ * A path is what makes it somebody else's program. Nothing here knows what
+ * filesystem the path names or how the bytes get read: it opens a descriptor,
+ * reads until the end, and hands the result to the loader that already exists.
+ * That is the whole point of the VFS being underneath it -- the same function
+ * will load a program off a pipe, or out of a devfs, or from whatever comes
+ * next, without a line changing.
+ */
+struct thread *user_exec_path(const char *name, const char *path,
+			      enum elf_result *why, i64 *error)
+{
+	struct file *f;
+	u8 *image;
+	u64 total = 0;
+	struct thread *t;
+
+	*error = SYS_OK;
+	*why = ELF_OK;
+
+	f = file_open_path(path, OPEN_READ, 0, error);
+	if (!f)
+		return NULL;
+
+	if (!f->ops->read) {
+		file_release(f);
+		*error = SYS_EPERM;
+		return NULL;
+	}
+
+	image = kmalloc(USER_EXEC_MAX);
+	if (!image) {
+		file_release(f);
+		*error = SYS_ENOSPC;
+		return NULL;
+	}
+
+	/* Read in a loop rather than in one call, because "read" does not
+	 * promise to give everything asked for in one go -- a pipe certainly
+	 * will not -- and a loader that assumed otherwise would work on a disk
+	 * and truncate everything else. */
+	for (;;) {
+		i64 n = f->ops->read(f, image + total, USER_EXEC_MAX - total);
+
+		if (n < 0) {
+			*error = n;
+			kfree(image);
+			file_release(f);
+			return NULL;
+		}
+
+		if (n == 0)
+			break;
+
+		total += (u64)n;
+
+		if (total == USER_EXEC_MAX) {
+			/* One more byte would not fit, so this file is at
+			 * least this big -- and a program loaded from the
+			 * first N bytes of itself is the shape of fault this
+			 * project keeps refusing to build. */
+			*error = SYS_ENOSPC;
+			kfree(image);
+			file_release(f);
+			return NULL;
+		}
+	}
+
+	file_release(f);
+
+	t = user_elf_create(name, image, total, why);
+
+	/* The loader copies what it needs into the address space, so the image
+	 * is the reader's and goes back now rather than being leaked for the
+	 * life of the program. */
+	kfree(image);
+	return t;
+}
+
+/* Writes the kernel's own program onto the volume, through a descriptor, and
+ * then runs it from there.
+ *
+ * The loop is the assertion. A program that only ever came from an array proves
+ * the loader; a program written out through the file interface, read back
+ * through the file interface and then executed proves that the three things fit
+ * together -- and it is the first time in this kernel that a file on a disk has
+ * become a running process.
+ */
+bool user_exec_path_test(void)
+{
+	static const char path[] = "/hello.elf";
+	struct file *f;
+	i64 err = SYS_OK;
+	enum elf_result why = ELF_OK;
+	u64 exits_before, calls_before, faults_before;
+	struct thread *t;
+	u64 deadline;
+
+	if (!rootfs()) {
+		kputs("  user: no volume to put a program on\n");
+		return true;
+	}
+
+	f = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0755, &err);
+	if (!f) {
+		kprintf("  user: could not create %s (%ld)\n", path,
+			(long)err);
+		return false;
+	}
+
+	if (f->ops->write(f, user_elf_image, user_elf_image_len) !=
+	    (i64)user_elf_image_len) {
+		kputs("  user: writing the program to the volume was short\n");
+		file_release(f);
+		return false;
+	}
+
+	err = file_release(f);
+	if (err != SYS_OK) {
+		kprintf("  user: committing the program failed (%ld)\n",
+			(long)err);
+		return false;
+	}
+
+	exits_before  = exits;
+	calls_before  = calls_served;
+	faults_before = faults;
+
+	t = user_exec_path("hello-from-disk", path, &why, &err);
+	if (!t) {
+		kprintf("  user: could not run %s (%ld%s%s)\n", path,
+			(long)err,
+			why == ELF_OK ? "" : ", ",
+			why == ELF_OK ? "" : elf_why(why));
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  user: the program from the volume never reached its "
+		      "exit call\n");
+		say_how_far_it_got(t, calls_before, faults_before);
+		return false;
+	}
+
+	/* 55 is the program's own success code, chosen because zero is what a
+	 * program that never ran also produces. */
+	if (last_exit_code != 55) {
+		kprintf("  user: the program from the volume exited with %ld "
+			"rather than 55\n", (long)last_exit_code);
+		return false;
+	}
+
+	return true;
 }

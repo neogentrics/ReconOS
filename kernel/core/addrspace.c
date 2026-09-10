@@ -6,6 +6,7 @@
  * layers down.
  */
 #include <recon/kernel/addrspace.h>
+#include <recon/kernel/vfs.h>
 
 #include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
@@ -95,6 +96,9 @@ struct addrspace *addrspace_hold(struct addrspace *as)
 void addrspace_release(struct addrspace *as)
 {
 	paddr_t root = 0;
+	struct file *files[AS_REGIONS_MAX] = { 0 };
+	unsigned file_count = 0;
+	unsigned i;
 	u64 flags;
 
 	if (!as)
@@ -110,9 +114,36 @@ void addrspace_release(struct addrspace *as)
 		root = as->root;
 		as->root = 0;
 		as->mapped_bytes = 0;
+
+		/* And the files any of its regions were backed by. Taken out of
+		  * the regions under the lock and released outside it, for the
+		  * same reason the root is: releasing the last reference to a
+		  * file commits it to a disk.
+		  *
+		  * Without this a mapping would hold its file for the life of the
+		  * machine -- and because a slot is reused, the next program to
+		  * get this space would inherit the reference as well. That is
+		  * the same shape as BG-147. */
+		{
+			unsigned i;
+
+			for (i = 0; i < as->region_count &&
+			     i < AS_REGIONS_MAX; i++) {
+				files[i] = as->regions[i].file;
+				as->regions[i].file = NULL;
+			}
+
+			file_count = as->region_count;
+			if (file_count > AS_REGIONS_MAX)
+				file_count = AS_REGIONS_MAX;
+		}
 	}
 
 	spin_unlock_irq(&table_lock, flags);
+
+	for (i = 0; i < file_count; i++)
+		if (files[i])
+			file_release(files[i]);
 
 	if (root) {
 		/* Nobody can be translating through it: the count reached zero,
@@ -251,6 +282,8 @@ static struct as_region *region_for(struct addrspace *as, vaddr_t addr)
  * does the right thing, and the difference between the two cases stays in the
  * caller where it belongs.
  */
+static bool fill_from_file(struct as_region *r, vaddr_t page, void *into);
+
 static bool give_own_page(struct addrspace *as, vaddr_t page,
 			  const struct as_region *r, paddr_t replacing)
 {
@@ -264,6 +297,19 @@ static bool give_own_page(struct addrspace *as, vaddr_t page,
 			PAGE_SIZE);
 	else
 		kmemset(phys_to_virt(fresh), 0, PAGE_SIZE);
+
+	/* And then whatever backs it, over the zeroes rather than instead of
+	  * them: the part of the page past the end of the file stays zero, which
+	  * is what a mapping longer than its file has always meant.
+	  *
+	  * Only when this page is being made from nothing. A copy-on-write copy
+	  * takes the page the program was already reading, and re-reading the
+	  * file there would throw away whatever it had written before the copy. */
+	if (!replacing && r->file &&
+	    !fill_from_file((struct as_region *)r, page, phys_to_virt(fresh))) {
+		pmm_free_page(fresh);
+		return false;
+	}
 
 	/* vm_map replaces the live entry and invalidates it in the same call,
 	 * which is the ordering that matters here: the shared page has to stop
@@ -302,9 +348,92 @@ bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
 	r->start = va & ~(vaddr_t)(PAGE_SIZE - 1);
 	r->end   = (va + size + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
 	r->flags = flags;
+	r->file  = NULL;
+	r->file_offset = 0;
+	r->file_len = 0;
 
 	arch_irq_restore(irq);
 	return true;
+}
+
+/* One lock for filling a file-backed page.
+ *
+ * A `struct file` has a position, and filling a page means seeking to an
+ * offset and reading -- two operations that are only one operation if nothing
+ * else touches the file in between. Two processors faulting on the same
+ * mapping would otherwise each read from where the other had just seeked to,
+ * and each would get a page of somebody else's file with no error anywhere.
+ *
+ * A lock rather than a read-at-offset call in the interface, because adding
+ * one would mean every implementation growing a function whose only caller is
+ * this. When there is a second caller there will also be a reason.
+ */
+static struct spinlock fill_lock = SPINLOCK_INIT("mmap-fill");
+
+bool addrspace_map_file(struct addrspace *as, vaddr_t va, u64 size,
+			unsigned flags, struct file *f, u64 offset,
+			u64 len)
+{
+	struct as_region *r;
+	u64 irq;
+
+	/* A file that cannot be read or sought cannot back a mapping, and
+	  * finding that out at the first fault would mean a program dying on
+	  * an address rather than being refused a mapping. */
+	if (!as || !size || !f || !f->ops->read || !f->ops->seek)
+		return false;
+
+	irq = arch_irq_save();
+
+	if (as->region_count >= AS_REGIONS_MAX) {
+		arch_irq_restore(irq);
+		return false;
+	}
+
+	r = &as->regions[as->region_count++];
+	r->start = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	r->end   = (va + size + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
+	r->flags = flags;
+	r->file  = file_hold(f);
+	r->file_offset = offset;
+	r->file_len = len;
+
+	arch_irq_restore(irq);
+	return true;
+}
+
+/* Fills one page from the region's file. The page is already allocated and
+ * already zeroed, so a short read is not an error -- it is the tail of a
+ * mapping that reaches past the end of what the file backs, which is exactly
+ * what an ELF segment with a .bss looks like. */
+static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
+{
+	u64 within = (u64)(page - r->start);
+	u64 want = PAGE_SIZE;
+	u64 flags;
+	i64 n;
+
+	if (within >= r->file_len)
+		return true;		/* entirely past the file: zeroes */
+
+	if (r->file_len - within < want)
+		want = r->file_len - within;
+
+	flags = spin_lock_irq(&fill_lock);
+
+	if (r->file->ops->seek(r->file, (i64)(r->file_offset + within),
+				  SEEK_START) < 0) {
+		spin_unlock_irq(&fill_lock, flags);
+		return false;
+	}
+
+	n = r->file->ops->read(r->file, into, want);
+	spin_unlock_irq(&fill_lock, flags);
+
+	/* A read that failed is a fault. A read that was short is not: the
+	  * rest of the page is already zero, and a file that ended is a file
+	  * that ended. */
+	return n >= 0;
 }
 
 bool vm_fault_user(vaddr_t addr, bool write)
@@ -333,6 +462,13 @@ bool vm_fault_user(vaddr_t addr, bool write)
 	have = vm_lookup(page);
 
 	if (!have) {
+		/* A file-backed page has contents, so there is nothing to share:
+		  * the shared page of zeroes is the right answer only when zeroes
+		  * are the right answer. Every page here is its own from the first
+		  * touch, read or write. */
+		if (r->file)
+			return give_own_page(as, page, r, 0);
+
 		if (!write && !(r->flags & VM_WRITE)) {
 			/* A read-only region: the shared page is the whole
 			 * answer and there will never be a copy. */

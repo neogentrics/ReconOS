@@ -54,6 +54,16 @@ enum {
 	 * exists: the file becomes visible already carrying its permissions. */
 	SYS_CREATE,
 
+	/* Descriptors. Appended rather than inserted: a call number is a
+	  * promise to every program already built against it, and renumbering
+	  * SYS_WRITE to make room for SYS_OPEN would silently turn every
+	  * existing write into something else. */
+	SYS_OPEN,		/* (path, path_len, flags, mode) -> fd */
+	SYS_CLOSE,		/* (fd) -> 0, or why not */
+	SYS_READ,		/* (fd, buffer, length) -> bytes read */
+	SYS_SEEK,		/* (fd, offset, from) -> new position */
+	SYS_PIPE,		/* (int fds[2]) -> 0; fds[0] reads, fds[1] writes */
+
 	SYS_MAX
 };
 
@@ -81,6 +91,17 @@ enum {
 #define SYS_ENOENT    (-7)	/* a directory in the path does not exist */
 #define SYS_ENOSPC    (-8)
 #define SYS_EIO       (-9)
+#define SYS_EMFILE   (-10)	/* this process holds as many files as it may */
+#define SYS_EBADF    (-11)	/* that descriptor names nothing */
+#define SYS_EPERM    (-12)	/* the file is open, and not for that */
+#define SYS_EPIPE    (-13)	/* the other end is gone */
+
+enum reconfs_status;
+
+/* One filesystem status as one system-call status. In one place because which
+ * distinctions a program is allowed to see is a decision, and a decision made
+ * in three places is three decisions. */
+i64 user_status_from_reconfs(enum reconfs_status st);	/* the other end is gone */
 
 /* What the machine is, for a program that cannot read the host's /proc because
  * there is no host.
@@ -157,6 +178,21 @@ struct thread *user_elf_create(const char *name, const void *image, u64 len,
 /* Runs the program built alongside the kernel, and requires it to report that
  * its own segments arrived correctly. */
 bool user_elf_test(void);
+
+/* The largest program that can be loaded from a path. Bounded because the
+ * image is read into the kernel's memory before it is parsed, and a file that
+ * does not fit is refused rather than loaded from its first bytes. */
+#define USER_EXEC_MAX (1024u * 1024u)
+
+/* Loads and runs a program named by a path, through the file interface.
+ *
+ * Nothing here knows which filesystem the path names. `*why` says what the ELF
+ * loader objected to, `*error` what the file layer did, and they are separate
+ * because "there is no such file" and "that file is not a program" send whoever
+ * reads them to different places. */
+struct thread *user_exec_path(const char *name, const char *path,
+			      enum elf_result *why, i64 *error);
+bool user_exec_path_test(void);
 
 /* The other half of the same claim, and the more important half: a user program
  * that reaches where it should not is ended, and the kernel is not. */

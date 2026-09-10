@@ -1,5 +1,7 @@
 /* See rootfs.h for what this is for and what it deliberately does not do. */
 #include <recon/kernel/rootfs.h>
+#include <recon/kernel/vfs.h>
+#include <recon/kernel/user.h>
 
 #include <recon/kernel/block.h>
 #include <recon/kernel/console.h>
@@ -183,7 +185,19 @@ enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 	if (!out)
 		return RECONFS_OK;
 
-	return reconfs_read_named(fs, dir, leaf, out, max, got);
+	/* A caller that does not want the count gets a place to put it anyway.
+	  *
+	  * This header has promised since it was written that either pointer may
+	  * be null, and `mode` above honours that. `got` did not: it was handed
+	  * straight to reconfs_read_named, which writes through it before it does
+	  * anything else. The first caller to believe the header wrote to address
+	  * zero in kernel mode. (BG-161) */
+	{
+		u32 ignored;
+
+		return reconfs_read_named(fs, dir, leaf, out, max,
+					  got ? got : &ignored);
+	}
 }
 
 /* --- the self-test --------------------------------------------------------
@@ -296,4 +310,10 @@ void rootfs_run(void)
 
 	kprintf("  files carry a mode : %s\n",
 		rootfs_self_test() ? "pass" : "FAIL");
+	kprintf("  files by descriptor : %s\n",
+		vfs_file_self_test() ? "pass" : "FAIL");
+	kprintf("  a program from a volume : %s\n",
+		user_exec_path_test() ? "pass" : "FAIL");
+	kprintf("  a file, mapped      : %s\n",
+		vfs_mmap_self_test() ? "pass" : "FAIL");
 }
