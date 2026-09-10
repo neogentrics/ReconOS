@@ -1025,7 +1025,7 @@ bool vm_self_test(void)
  * reason to expect either to change under it. */
 static volatile vaddr_t shootdown_address;
 static volatile unsigned shootdown_acks;
-static struct spinlock shootdown_lock;
+static struct spinlock shootdown_lock = SPINLOCK_INIT("shootdown");
 
 /* Runs on every *other* processor, from the interrupt handler. */
 void x86_tlb_shootdown_service(void)

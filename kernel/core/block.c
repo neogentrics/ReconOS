@@ -14,6 +14,7 @@
  * it succeeded.
  */
 #include <recon/kernel/block.h>
+#include <recon/kernel/bcache.h>
 
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -260,6 +261,38 @@ static struct block_device *to_root(struct block_device *dev, u64 *lba)
 	return dev;
 }
 
+/* The identity a caller's request actually names: which disk, and which
+ * block of it. See bcache.h -- a cache keyed on anything else holds two
+ * entries for one sector whenever a partition is involved.
+ *
+ * The bound is checked first, against the device the caller named, in that
+ * device's own coordinates. That is the same order block_read uses and the
+ * order is the safety property: a slice's length is the limit, and checking
+ * after translation would check the whole disk's. */
+enum block_status block_resolve(struct block_device *dev, u64 lba, u32 count,
+				u32 *root_id, u32 *root_generation,
+				u64 *abs_lba)
+{
+	enum block_status s;
+	struct block_device *root;
+
+	if (!dev || !root_id || !root_generation || !abs_lba)
+		return BLOCK_ERR_NO_DEVICE;
+
+	s = check_range(dev, lba, count);
+	if (s != BLOCK_OK)
+		return s;
+
+	root = to_root(dev, &lba);
+	if (!root)
+		return BLOCK_ERR_NO_DEVICE;
+
+	*root_id = root->id;
+	*root_generation = root->generation;
+	*abs_lba = lba;
+	return BLOCK_OK;
+}
+
 enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void *buf)
 {
 	enum block_status s = check_range(dev, lba, count);
@@ -335,6 +368,19 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 	 * reports success. */
 	if (dev->slice_count && !dev->claimed_raw)
 		return BLOCK_ERR_BUSY;
+
+	/* Anything cached for these blocks stops being true here.
+	 *
+	 * Done from inside the block layer rather than left to callers,
+	 * because the callers on this path are the installer and the
+	 * partition writer -- code that uses the raw interface precisely
+	 * because it is not filesystem traffic, and that should not have to
+	 * know a cache exists for the cache to be correct.
+	 *
+	 * Before the transfer, not after: a write that fails halfway leaves
+	 * the disk holding neither the old contents nor the new, and a cache
+	 * that guessed either would be confidently wrong. */
+	bcache_invalidate(dev, lba, count);
 
 	dev = to_root(dev, &lba);
 	if (!dev)
@@ -412,6 +458,11 @@ enum block_status block_discard(struct block_device *dev, u64 lba, u32 count)
 		return BLOCK_ERR_RANGE;
 	if ((u64)count > dev->block_count - lba)
 		return BLOCK_ERR_RANGE;
+
+	/* A discarded block may read back as zeroes or as what it held,
+	 * and the specification permits both -- so whatever is cached for
+	 * it is no longer known to be anything. */
+	bcache_invalidate(dev, lba, count);
 
 	{
 		struct block_device *root = to_root(dev, &lba);
@@ -498,6 +549,11 @@ enum block_status block_claim_raw(struct block_device *dev)
 
 	if (dev->claimed_raw)
 		return BLOCK_ERR_BUSY;
+
+	/* The caller has just said it intends to rewrite this whole disk.
+	 * Every block cached from it is a statement about a disk that is
+	 * about to stop existing. */
+	bcache_invalidate_device(dev);
 
 	dev->claimed_raw = true;
 	return BLOCK_OK;

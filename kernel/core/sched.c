@@ -109,7 +109,10 @@ void sched_init(void)
 {
 	struct thread *boot = &boot_threads[arch_cpu_id()];
 
-	spin_init(&ring_lock, "sched");
+	/* Not re-initialised here: the declaration above already does it,
+	 * and a second spin_init would tell the lock registry this is a
+	 * lock whose lifetime is not the kernel's -- which is how the
+	 * registry keeps stack locks out of itself. */
 
 	kmemset(boot, 0, sizeof(*boot));
 	kstrlcpy(boot->name, "boot", sizeof(boot->name));

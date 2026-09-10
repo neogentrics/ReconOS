@@ -100,7 +100,10 @@ void klog_print_summary(void)
  */
 bool klog_self_test(void)
 {
-	static const char marker[] = "klog-marker-9f3a";
+	/* The newline is part of the marker so that the console does not end
+	 * up with a test's scratch string welded onto the front of the next
+	 * line it prints. Searched for whole, so it is still one thing. */
+	static const char marker[] = "klog-marker-9f3a\n";
 	char back[512];
 	u32 got;
 	u32 i;

@@ -261,6 +261,20 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf);
 enum block_status block_flush(struct block_device *dev);
 
+/* Which disk, and which block of it, a request actually names.
+ *
+ * A partition and the disk it lives on are the same sectors under two
+ * names, and anything holding on to blocks -- a cache, today -- has to be
+ * able to tell that. Exported so there is one implementation of the
+ * translation rather than two that can disagree.
+ *
+ * Checks the bound against `dev` before translating, so a caller cannot use
+ * this to learn the absolute address of a block outside the slice it was
+ * given. */
+enum block_status block_resolve(struct block_device *dev, u64 lba, u32 count,
+				u32 *root_id, u32 *root_generation,
+				u64 *abs_lba);
+
 /* Tells the device that a range of blocks no longer holds anything anyone
  * wants. Advisory in both directions: a device may ignore it, and a caller
  * must never rely on the blocks reading back as anything in particular

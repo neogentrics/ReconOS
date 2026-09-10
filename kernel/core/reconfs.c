@@ -32,6 +32,7 @@
 #include <recon/kernel/reconfs.h>
 
 #include <recon/kernel/block.h>
+#include <recon/kernel/bcache.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/crc32.h>
 #include <recon/kernel/heap.h>
@@ -90,7 +91,15 @@ enum reconfs_status reconfs_read_block(struct reconfs *fs, u64 blk, void *out,
 	if (!sectors_per_block(fs->dev, fs->block_size, &spb))
 		return RECONFS_ERR_DEVICE;
 
-	if (block_read(fs->dev, blk * spb, spb, out) != BLOCK_OK)
+	/* Through the cache. This is the read that happens thousands of
+	 * times -- the superblock on every lookup, the same inode blocks
+	 * on every file -- and the one the block cache exists for.
+	 *
+	 * The checksum below still runs on every read, cached or not. A
+	 * cache that let the check be skipped would turn a verified read
+	 * into an unverified one the second time, which is the wrong way
+	 * round: memory corrupts too. */
+	if (bcache_read(fs->dev, blk * spb, spb, out) != BLOCK_OK)
 		return RECONFS_ERR_IO;
 
 	if (csum_off != RECONFS_NO_CSUM) {
@@ -126,7 +135,10 @@ enum reconfs_status reconfs_write_block(struct reconfs *fs, u64 blk, void *buf,
 		kmemcpy((u8 *)buf + csum_off, &c, sizeof(c));
 	}
 
-	if (block_write(fs->dev, blk * spb, spb, buf) != BLOCK_OK)
+	/* Write-through: the device first, then the cache, so a block
+	 * just written reads back from memory. See bcache.h for why it is
+	 * not write-back. */
+	if (bcache_write(fs->dev, blk * spb, spb, buf) != BLOCK_OK)
 		return RECONFS_ERR_IO;
 
 	return RECONFS_OK;

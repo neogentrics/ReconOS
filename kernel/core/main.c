@@ -31,6 +31,7 @@
 #include <recon/kernel/swap.h>
 #include <recon/kernel/pageage.h>
 #include <recon/kernel/evict.h>
+#include <recon/kernel/bcache.h>
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -173,6 +174,7 @@ void kmain(void)
 	 * a map to reach registers through, a clock to time out against, and a
 	 * scheduler to yield to while the hardware thinks. */
 	block_init();
+	bcache_init();
 	block_print_summary();
 	acpi_print_summary();
 
@@ -253,6 +255,8 @@ void kmain(void)
 		page_age_self_test() ? "pass" : "FAIL");
 	kprintf("  a page that came back : %s\n",
 		evict_self_test() ? "pass" : "FAIL");
+	kprintf("  blocks kept nearby   : %s\n",
+		bcache_self_test() ? "pass" : "FAIL");
 	kprintf("  what was said, kept : %s\n",
 		klog_self_test() ? "pass" : "FAIL");
 	kprintf("  how it got there   : %s\n",
@@ -321,6 +325,8 @@ void kmain(void)
 	swap_print_summary();
 	page_age_print_summary();
 	evict_print_summary();
+	bcache_print_summary();
+	lock_print_summary();
 	klog_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every

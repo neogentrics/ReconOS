@@ -30,7 +30,8 @@ void process_init(void)
 {
 	unsigned i;
 
-	spin_init(&table_lock, "process");
+	/* Not re-initialised here; see the same note in sched.c. The
+	 * declaration above already does it. */
 
 	for (i = 0; i < PROCESS_MAX; i++)
 		table[i].state = PROCESS_FREE;

@@ -3414,6 +3414,55 @@ instructions, one of which announced a refusal.
   several guests at once, which is why it is the thing that found this and the
   quick check is not.
 
+### BG-163 — Two virtio-blk disks on one machine, and every request to them times out
+
+[#402](https://github.com/neogentrics/ReconOS/issues/402)
+
+- **Found:** 10 September 2026, by attaching a second disk while testing the
+  new block cache. Nothing had ever attached two before.
+- **Cost:** a machine that looks hung. It is not hung -- it is making progress
+  at two seconds a request, because that is the driver's timeout and every
+  request is reaching it.
+- **Status:** open.
+
+Measured, on x86_64:
+
+| devices | reaches the self-tests |
+|---|---|
+| one virtio-blk | yes |
+| one NVMe | yes |
+| two NVMe | yes |
+| NVMe + virtio-blk | yes |
+| **two virtio-blk** | **no** |
+
+So it is not "two disks" and not "the second device". It is two instances of
+*this driver*. On aarch64 the same pair over virtio-mmio is fine, which points
+at the PCI transport rather than at virtio_blk itself.
+
+The symptom is not a hang and calling it one would send somebody to the wrong
+place. `virtio_blk`'s `run()` waits two seconds for a request and then returns
+`BLOCK_ERR_TIMEOUT`, deliberately leaking the three descriptors because the
+device may still write into them. So the boot continues, one request every two
+seconds, until the queue runs out of descriptors -- at which point requests
+start failing quickly instead. A 60-second run reached the partition tables; a
+240-second run got no further than the storage probe, which is the variance you
+would expect from something that is timing out rather than stopping.
+
+- **Was:** not yet known. The candidates are the ones this shape usually comes
+  from -- a memory-mapped window that the second device's mapping lands on top
+  of, a notify address computed from the wrong device, or an interrupt both
+  devices are told to use. `struct virtio_blk` and `struct virtio_pci` are both
+  per-device arrays, so it is not the obvious kind of shared state.
+- **Why it was never seen:** the verification matrix attaches exactly one disk
+  on every one of its paths. Eighteen boot paths, six storage configurations,
+  and not one of them has two devices of the same kind. That is the finding
+  behind the finding, and the matrix should gain such a path -- but adding one
+  now would put a red line on a green board for a fault that is already
+  written down here, so it goes in with the fix.
+- **Not a regression.** Reproduced on the tree as it stood before the block
+  cache was written, which was checked first precisely because the cache was
+  the thing that had just changed.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

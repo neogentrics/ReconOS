@@ -122,7 +122,7 @@ static bool used_jitter;
 static unsigned hw_words;
 static u64 jitter_samples;
 
-static struct spinlock pool_lock;
+static struct spinlock pool_lock = SPINLOCK_INIT("random");
 
 /* Enough that guessing the pool is not the cheapest attack on anything built
  * from it. Below this the answer is a refusal rather than a weaker byte. */
