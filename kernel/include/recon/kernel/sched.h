@@ -175,6 +175,19 @@ void sched_init(void);
  * its stack is reclaimed. */
 struct thread *thread_create(const char *name, void (*entry)(void *), void *arg);
 
+/* The same, but not yet runnable. For callers that must set something on the
+ * thread before any processor can pick it up -- which in practice means giving
+ * it a process, because the scheduler reads that to decide which address space
+ * to run it in. Putting a thread in the ring first and setting the field second
+ * is a race against every other processor, and the thread runs with the field
+ * unset when it is lost. (BG-148) */
+struct thread *thread_create_stopped(const char *name, void (*entry)(void *),
+				     void *arg);
+
+/* Hands a stopped thread to the scheduler. From here it may be running on any
+ * processor before this returns. */
+void thread_start(struct thread *t);
+
 /* Gives up the rest of this thread's slice. A thread that has nothing to do
  * should call this rather than spin -- although nothing is obliged to, which is
  * the point of the tick. */

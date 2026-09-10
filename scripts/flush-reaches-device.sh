@@ -29,7 +29,11 @@ set -u
 cd "$(dirname "$0")/.."
 
 ARCH=${1:-x86_64}
-OUT=kernel/build/flush
+
+# Per architecture, because this script is run once for each and the two used to
+# share one image and one trace file. Sequentially that is merely untidy; run at
+# the same time it is two tests writing one another's evidence.
+OUT=kernel/build/flush/$ARCH
 mkdir -p "$OUT"
 
 IMG="$OUT/flush.img"

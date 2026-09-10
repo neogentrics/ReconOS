@@ -27,6 +27,8 @@
 #define RECON_KERNEL_USER_H
 
 #include <recon/kernel/types.h>
+
+#include <recon/kernel/elf.h>
 #include <recon/kernel/compiler.h>
 
 /* The calls themselves. Deliberately few: each one exists because something
@@ -145,6 +147,16 @@ bool user_self_test(void);
  * about whether user mode works at all, and this one is about whether these
  * particular calls do. */
 bool user_facts_test(void);
+
+/* Loads an ELF into an address space of its own and makes a thread to run it.
+ * `why` is filled in when the file is refused, so a caller can say which of the
+ * loader's refusals it met rather than only that it failed. */
+struct thread *user_elf_create(const char *name, const void *image, u64 len,
+			       enum elf_result *why);
+
+/* Runs the program built alongside the kernel, and requires it to report that
+ * its own segments arrived correctly. */
+bool user_elf_test(void);
 
 /* The other half of the same claim, and the more important half: a user program
  * that reaches where it should not is ended, and the kernel is not. */

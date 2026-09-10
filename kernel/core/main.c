@@ -10,6 +10,7 @@
 #include <recon/kernel/boot.h>
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/elf.h>
 #include <recon/kernel/crc32.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/durability.h>
@@ -201,12 +202,16 @@ void kmain(void)
 		process_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
+	kprintf("  refusing a bad program : %s\n",
+		elf_self_test() ? "pass" : "FAIL");
 	kprintf("  processors         : %s\n",
 		smp_self_test() ? "pass" : "FAIL");
 	kprintf("  user mode          : %s\n",
 		user_self_test() ? "pass" : "FAIL");
 	kprintf("  the boundary holds : %s\n",
 		user_boundary_test() ? "pass" : "FAIL");
+	kprintf("  a program from a file : %s\n",
+		user_elf_test() ? "pass" : "FAIL");
 	kprintf("  machine facts      : %s\n",
 		user_facts_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",

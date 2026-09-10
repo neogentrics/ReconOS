@@ -152,6 +152,14 @@ paddr_t arch_smbios_anchor(void)
  * SVE is deliberately not enabled: its register width is a property of the
  * machine, so its state does not fit a fixed area, and enabling it without
  * saving it is the corruption this pairing exists to prevent. */
+/* EM_AARCH64, fixed by the ABI. A number rather than a header constant because
+ * there is no ELF header to include here and inventing one for a single value
+ * is more code than the value. */
+unsigned arch_elf_machine(void)
+{
+	return 183;
+}
+
 void arch_vector_enable(void)
 {
 	u64 cpacr;

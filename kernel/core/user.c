@@ -12,6 +12,7 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/elf.h>
 #include <recon/kernel/kstring.h>
 
 static volatile u64 exits;
@@ -437,14 +438,196 @@ struct thread *user_thread_create(const char *name, const void *code,
 	pmm_free_page(stack_page);
 	stack_page = 0;
 
-	t = thread_create(name, user_thread_start, (void *)(uintptr_t)USER_BASE);
+	t = thread_create_stopped(name, user_thread_start, (void *)(uintptr_t)USER_BASE);
 	if (!t)
 		return 0;
 
 	t->personality = &personality_recon;
 	process_attach(p, t);
 
+	/* Only now may anything else see it. Started before the attach, a
+	 * processor that picked it up would run it with no process and so with
+	 * the kernel's address space, and the program would fault on its own
+	 * first instruction. (BG-148) */
+	thread_start(t);
+
 	return t;
+}
+
+/* A program from a file, rather than from a byte array compiled into us.
+ *
+ * The same shape as `user_thread_create` above and deliberately not folded into
+ * it: that one is handed instructions and puts them at a fixed address, this
+ * one is handed a *file* and does what the file says. The difference is not the
+ * copy, it is who decides the layout -- and merging them would mean one
+ * function with a flag meaning "and also, ignore everything you were told".
+ *
+ * That one will go when the last blob does. It cannot go yet: the blobs test
+ * the system-call boundary from ring 3 and this loader would have to be working
+ * for them to run at all, which is the wrong order to depend in.
+ */
+struct thread *user_elf_create(const char *name, const void *image, u64 len,
+			       enum elf_result *why)
+{
+	struct thread *t;
+	struct process *p;
+	struct addrspace *as;
+	enum elf_result r;
+	u64 entry = 0;
+
+	if (why)
+		*why = ELF_OK;
+
+	p = process_create(name, 0, UID_NOBODY, UID_NOBODY);
+	if (!p) {
+		kprintf("  user: no room in the process table for %s\n", name);
+		return 0;
+	}
+
+	p->personality = &personality_recon;
+
+	as = addrspace_create();
+	if (!as) {
+		kprintf("  user: no address space for %s\n", name);
+		return 0;
+	}
+
+	process_set_space(p, as);
+	addrspace_release(as);
+
+	/* The file decides where its own code and data go, inside the half it
+	 * is allowed to name. Nothing is mapped if any of it is refused. */
+	r = elf_load(as, image, len, &entry);
+	if (r != ELF_OK) {
+		if (why)
+			*why = r;
+		kprintf("  user: %s was refused -- %s\n", name, elf_why(r));
+		return 0;
+	}
+
+	/* The stack is the kernel's business rather than the file's. A program
+	 * that could place its own stack could place it over its own code, and
+	 * an ELF has no way to ask for one anyway -- `PT_GNU_STACK` carries
+	 * permissions, not an address. Reserved rather than mapped, so the
+	 * first push faults it in like any other program's. */
+	if (!addrspace_reserve(as, USER_STACK_TOP - USER_STACK_MAX,
+			       USER_STACK_MAX,
+			       VM_READ | VM_WRITE | VM_USER)) {
+		kprintf("  user: no room to reserve a stack for %s\n", name);
+		return 0;
+	}
+
+	t = thread_create_stopped(name, user_thread_start, (void *)(uintptr_t)entry);
+	if (!t)
+		return 0;
+
+	t->personality = &personality_recon;
+	process_attach(p, t);
+
+	/* Only now may anything else see it. Started before the attach, a
+	 * processor that picked it up would run it with no process and so with
+	 * the kernel's address space, and the program would fault on its own
+	 * first instruction. (BG-148) */
+	thread_start(t);
+
+	return t;
+}
+
+/* --- and the test that runs one ------------------------------------------
+ *
+ * The program checks itself and says which check failed through its exit code,
+ * for the same reason the facts program does: the thing most likely to be wrong
+ * is not reachable from the kernel side. Whether `.bss` arrived zeroed is a
+ * question only the program can answer, because from here the page is
+ * indistinguishable from any other page the loader mapped.
+ *
+ * Success is 55, not 0. The exit code is read out of a field that is zero
+ * before the program runs and zero if it never reached its exit call, so a
+ * test that treats zero as success passes in both of the cases it exists to
+ * catch.
+ */
+/* What to say when a program does not finish.
+ *
+ * "The program never reached its exit call" is true and useless: it is the same
+ * sentence whether the program never ran, ran and faulted, ran and stopped, or
+ * is still running. Those are four different bugs.
+ *
+ * It cost real time on 10 September. A program was dying at its own entry point
+ * and the test reported a timeout -- because `exits` is only incremented by
+ * sys_exit, and a program killed by a fault never gets there. The fault line was
+ * in the log the whole time and nothing in the message pointed at it. (BG-150)
+ */
+static void say_how_far_it_got(const struct thread *t, u64 calls_before,
+			       u64 faults_before)
+{
+	static const char *const state[] = {
+		"ready", "running", "?", "blocked", "?", "finished"
+	};
+
+	if (t)
+		kprintf("  user: it is %s, on processor %d, after %lu tick%s\n",
+			(unsigned)t->state < sizeof(state) / sizeof(state[0])
+				? state[t->state] : "in a state with no name",
+			t->cpu, (unsigned long)t->ran_ticks,
+			t->ran_ticks == 1 ? "" : "s");
+
+	kprintf("  user: %lu system call%s served since it started, and %lu "
+		"program%s ended for faulting\n",
+		(unsigned long)(calls_served - calls_before),
+		calls_served - calls_before == 1 ? "" : "s",
+		(unsigned long)(faults - faults_before),
+		faults - faults_before == 1 ? "" : "s");
+}
+
+bool user_elf_test(void)
+{
+	static const char *const why[] = {
+		"it exited 0, which is not one of its codes -- so it never"
+		" reached its own exit call",			/* 0 */
+		"unused",					/* 1 */
+		"the writable segment did not carry the file's bytes",
+		"the .bss it was given was not zero",
+		"the .bss it was given did not keep what it wrote",
+	};
+
+	u64 exits_before  = exits;
+	u64 calls_before  = calls_served;
+	u64 faults_before = faults;
+	enum elf_result r = ELF_OK;
+	struct thread *t;
+	u64 deadline;
+
+	t = user_elf_create("hello-elf", user_elf_image,
+			    user_elf_image_len, &r);
+	if (!t) {
+		kprintf("  user: could not start the program%s%s\n",
+			r == ELF_OK ? "" : " -- ",
+			r == ELF_OK ? "" : elf_why(r));
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  user: the loaded program never reached its exit "
+		      "call\n");
+		say_how_far_it_got(t, calls_before, faults_before);
+		return false;
+	}
+
+	if (last_exit_code == 55)
+		return true;
+
+	if (last_exit_code > 0 &&
+	    (u64)last_exit_code < sizeof(why) / sizeof(why[0]))
+		kprintf("  user: %s\n", why[last_exit_code]);
+	else
+		kprintf("  user: the loaded program exited with %ld, which is "
+			"not one of its own codes\n", (long)last_exit_code);
+
+	return false;
 }
 
 /* The three calls the desktop asked for, exercised from ring 3.
@@ -513,8 +696,9 @@ bool user_self_test(void)
 	extern const unsigned char user_test_program[];
 	extern const u64 user_test_program_len;
 
-	u64 exits_before = exits;
-	u64 calls_before = calls_served;
+	u64 exits_before  = exits;
+	u64 calls_before  = calls_served;
+	u64 faults_before = faults;
 	struct thread *t;
 	u64 deadline;
 
@@ -530,6 +714,7 @@ bool user_self_test(void)
 
 	if (exits == exits_before) {
 		kputs("  user: the program never reached its exit call\n");
+		say_how_far_it_got(t, calls_before, faults_before);
 		return false;
 	}
 

@@ -23,6 +23,7 @@
 /* PSCI function identifiers. The 64-bit forms, because this kernel is 64-bit
  * and the 32-bit ones take different argument widths. */
 #define PSCI_CPU_ON     0xC4000003u
+#define PSCI_SYSTEM_OFF 0x84000008u
 
 #define PSCI_SUCCESS            0
 #define PSCI_NOT_SUPPORTED      (-1)
@@ -92,6 +93,34 @@ static void psci_probe(void)
 	}
 
 	psci_available = false;
+}
+
+/* Turning the machine off, by the same interface that turns processors on.
+ *
+ * There is no ACPI on a machine booted from a device tree, so the portable
+ * power_off() -- which reads a register out of the FADT and a value out of the
+ * vendor's bytecode -- has nothing to work with and correctly says so. PSCI is
+ * this architecture's answer, and it was already here: the call that wakes a
+ * secondary processor is one function number away from the call that stops the
+ * machine.
+ *
+ * The probe is the SMP one and it has to have run. A machine started with one
+ * processor still probes, because smp_init runs on every boot -- but if that
+ * ever stops being true, this returns false and the caller says the machine
+ * could not be turned off, which is the right failure rather than a hang in an
+ * unprobed call.
+ *
+ * SYSTEM_OFF does not return. Reaching the line after it means firmware
+ * declined, and that is worth reporting rather than spinning on.
+ */
+bool arch_power_off(void)
+{
+	if (!psci_available)
+		return false;
+
+	psci_call(PSCI_SYSTEM_OFF, 0, 0, 0, psci_use_hvc);
+
+	return false;
 }
 
 unsigned arch_cpu_id_real(void)

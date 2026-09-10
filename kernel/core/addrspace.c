@@ -51,9 +51,23 @@ struct addrspace *addrspace_create(void)
 		}
 
 	if (as) {
+		/* The whole slot, not the fields this function happens to know
+		 * about. It used to name three of them, and what it left behind
+		 * was the previous occupant's `regions` -- which are not data.
+		 * A region is *permission to touch an address*: it is what
+		 * vm_fault_user reads to decide whether a fault is demand paging
+		 * or a wild pointer. So a process handed a recycled slot
+		 * inherited the last one's permissions, and a stray pointer got
+		 * a fresh zero page instead of ending the program. (BG-147)
+		 *
+		 * The other two tables of this shape already do it this way:
+		 * thread_create allocates with kzalloc, process_create clears the
+		 * whole entry. This was the one that named fields, which is why
+		 * adding one to the structure was enough to make it wrong. */
+		kmemset(as, 0, sizeof(*as));
+
 		as->root = root;
 		as->refs = 1;
-		as->mapped_bytes = 0;
 	}
 
 	spin_unlock_irq(&table_lock, flags);
@@ -541,6 +555,73 @@ bool addrspace_self_test(void)
 			addrspace_activate(was);
 			arch_irq_restore(irq);
 			addrspace_release(c);
+		}
+	}
+
+	/* --- a slot handed on, and what it must not carry with it -----------
+	 *
+	 * The table is a fixed array and a released space's slot is given to the
+	 * next process that asks. What that next process must not inherit is the
+	 * last one's *regions* -- because a region is not data, it is permission
+	 * to touch an address. `vm_fault_user` consults it to decide whether a
+	 * fault is demand paging or a wild pointer, so an inherited region turns
+	 * one program's mistake into another program's zero page.
+	 *
+	 * Asserted by *behaviour* rather than by reading `region_count`. The
+	 * count being zero is the mechanism; what matters is that the address
+	 * the old space was allowed to touch is refused in the new one, and that
+	 * is the sentence somebody would want to be true.
+	 */
+	{
+		const vaddr_t at = USER_BASE + 0x200000;
+		struct addrspace *first = addrspace_create();
+		struct addrspace *second;
+
+		if (!first) {
+			kputs("  addrspace: no space to test slot reuse with\n");
+			ok = false;
+		} else {
+			addrspace_reserve(first, at, PAGE_SIZE,
+					  VM_READ | VM_WRITE | VM_USER);
+			addrspace_release(first);
+
+			/* The very next create takes the slot just freed, which
+			 * is what makes this a test of reuse rather than of
+			 * allocation. */
+			second = addrspace_create();
+
+			if (!second) {
+				kputs("  addrspace: no second space\n");
+				ok = false;
+			} else {
+				if (second->region_count != 0) {
+					kprintf("  addrspace: a fresh space "
+						"arrived holding %u region(s) "
+						"from whoever had the slot "
+						"before it\n",
+						second->region_count);
+					ok = false;
+				}
+
+				irq = arch_irq_save();
+				was = addrspace_active();
+				addrspace_activate(second);
+
+				/* The old space was allowed to touch this. The
+				 * new one must not be. */
+				if (vm_fault_user(at, false)) {
+					kputs("  addrspace: a new program was "
+					      "given memory at an address only "
+					      "the previous one had asked "
+					      "for\n");
+					ok = false;
+				}
+
+				addrspace_activate(was);
+				arch_irq_restore(irq);
+
+				addrspace_release(second);
+			}
 		}
 	}
 

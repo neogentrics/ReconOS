@@ -110,6 +110,25 @@ void arch_wait_for_interrupt(void);
  * control registers that turn it on are per-processor. The save and restore
  * take the 512-byte aligned area on each thread. */
 void arch_vector_enable(void);
+
+/* The `e_machine` value an ELF must carry to run on this processor.
+ *
+ * Asked rather than written into the loader, because core/ does not name
+ * machines -- and because getting it wrong is not a build error: a kernel that
+ * accepted the other architecture's number would map somebody else's
+ * instructions and jump into them. 62 is x86-64 and 183 is AArch64, and both
+ * are fixed by the ABI rather than by anything here. */
+unsigned arch_elf_machine(void);
+
+/* Turns the machine off by whatever means this architecture has of its own,
+ * and does not return if it works. False means "not mine" -- there is no
+ * architecture-native way here and the caller should try the portable one.
+ *
+ * It exists because power_off() is written against ACPI, which is how an x86
+ * machine is turned off and is simply absent on an ARM machine booted from a
+ * device tree. That kernel could pass every test and then sit there with the
+ * fans running, which is what a person calls broken. */
+bool arch_power_off(void);
 void arch_vector_save(void *area);
 void arch_vector_restore(const void *area);
 

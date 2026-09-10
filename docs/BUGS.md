@@ -2571,6 +2571,360 @@ context switch.
   wrote past the area, on the same boot where every other test passes.
 
 
+
+### BG-147 — A new process inherited the last one's permission to touch addresses
+
+- **Found:** 10 September 2026, by reading `addrspace_create` while looking for
+  something else, and noticing it was the odd one out in a family of three.
+- **Cost:** none observed. It is recorded as a fault rather than a tidy-up
+  because of what it would have cost later.
+
+The address-space table is a fixed array of slots reused as spaces are created
+and destroyed, and `addrspace_create` set only three of a slot's fields:
+
+    if (as) {
+            as->root = root;
+            as->refs = 1;
+            as->mapped_bytes = 0;
+    }
+
+`regions` and `region_count` were left holding whatever the previous occupant of
+that slot had put there.
+
+A region is not data. **A region is permission to touch an address**: it is what
+`vm_fault_user` consults to decide whether a fault on an unmapped page is demand
+paging or a wild pointer. So a process handed a reused slot inherited the
+previous process's permissions — and a pointer into that range, in the new
+program, was answered with a fresh zero page instead of ending the program.
+
+The failure mode is the quiet one. Nothing crashes; a program that reads memory
+it never asked for gets zeroes and carries on, and whether it does depends on
+which slot it was given, which depends on how many processes have ended.
+
+Two further consequences, both of them the same fault seen from another side:
+
+- `region_count` was inherited too, so each reuse of a slot by a program that
+  reserves a stack pushed the count one higher. After eight, `addrspace_reserve`
+  refuses and a program cannot be given a stack at all — a machine that stops
+  being able to run programs after it has run enough of them.
+- A slot that had held a space with regions could not be told apart from a fresh
+  one, so nothing downstream could detect it.
+
+- **Was:** a reused table slot cleared field by field rather than wholesale, in
+  the one place out of three that does it that way. `thread_create` uses
+  `kzalloc`; `process_create` calls `kmemset` over the whole structure;
+  `addrspace_create` named the fields it knew about. Adding a field to the
+  structure was enough to make it wrong, and adding `regions` did.
+- **Fixed in** `core/addrspace.c`: the slot is cleared whole before anything is
+  written into it, the way the other two do it.
+- **And asserted**, because reading the fix is not evidence: the self-test now
+  reserves a region in a space, releases it, creates another, and requires the
+  new one to have no regions and to *refuse* the address the old one was allowed
+  to touch. Watched to fail with the clearing removed.
+
+
+
+### BG-148 — A thread was runnable before it belonged to its process, and address spaces made that fatal
+
+- **Found:** 10 September 2026, while building the ELF loader. A user program
+  began failing about one boot in eight, on two processors, and the failure
+  arrived as *"the program never reached its exit call"* — which is what the
+  kernel says when a program is killed by a fault, because `exits` is only
+  incremented by `sys_exit`.
+- **Cost:** four measurements and two refuted theories. It could have cost far
+  more: it is a program starting in somebody else's address space.
+
+`thread_create` ended by putting the new thread in the run ring, which makes it
+runnable immediately — on this processor and on every other one. Both user-program
+paths then did this:
+
+    t = thread_create(name, user_thread_start, entry);
+    t->personality = &personality_recon;
+    process_attach(p, t);          /* <- and the thread is already running */
+
+A processor that picked the thread up between those two lines ran it with
+`t->process == 0`. The scheduler reads exactly that to decide which address
+space to switch to, found none, and left the kernel's loaded — so the program
+began executing in an address space where its own code is not mapped, and took
+an instruction fault on its first instruction:
+
+    user program fault: page fault at 0x0000000000400000
+      it touched 0x0000000000400000, which is not its to touch
+
+**The ordering was always wrong and had never mattered.** Until 10 September
+every user program lived in the one address space there was, so a thread running
+with no process still had its code mapped and nothing went wrong. Per-process
+address spaces did not introduce this fault; they removed what was hiding it.
+The commit that made it reachable changed neither line.
+
+- **Was:** a thread made schedulable before the caller had finished building it,
+  in an API that offered no way to do otherwise.
+- **Fixed in** `core/sched.c`: `thread_create_stopped` and `thread_start` are
+  separate, and a thread is handed to the scheduler only once it has a process.
+  `thread_create` keeps its name and meaning for the callers that have nothing
+  to set — which is every kernel thread.
+- **Measured, and the first three measurements were worth nothing.** The rate is
+  about one boot in twenty and it moves with how busy the *host* is, so
+  "build A, run forty, build B, run forty" compares two binaries and two
+  afternoons. It produced 5/40, then 1/40, then 0/60, then 0/40 with the bug put
+  back -- four numbers that between them establish nothing.
+
+  What settled it was alternating the two kernels **inside one loop**, sixty
+  rounds each, so both arms met the same conditions:
+
+      A (fixed)        : 1 of 60 failed, 0 entry-point faults
+      B (bug restored) : 4 of 60 failed, 3 entry-point faults
+
+  The count of failures is noisy. The *signature* is not: the fault at
+  `0x400000` is what this mechanism predicts and it appears only in the arm that
+  has the bug.
+
+- **Two other theories were tested against the same reproducer and refuted.**
+  That the deadline was a wall clock outrunning a loaded guest -- a program
+  cannot fault at its own entry point because a clock ran fast. And that
+  `addrspace_activate` confused two spaces sharing a recycled table pointer --
+  changing the comparison moved 35/40 to 36/40, which is noise.
+
+- **It is not all of it.** One boot in sixty still fails with the fix in, with no
+  unexpected fault -- a different mode, recorded as BG-150 rather than folded in
+  here.
+
+**What let it hide, and is worth more than the bug.** Every "N self-tests, all
+pass" row in `scripts/verify-kernel.sh` is a *single-processor* run.
+`check_cpus`, which is the only thing that boots with `-smp`, asserts processor
+counts, idle ticks and shootdowns — and never that the self-tests passed. So a
+self-test that fails only on more than one processor is invisible to the matrix,
+which is the same shape as BG-143 and the reason this was found by hand.
+
+
+
+### BG-149 — The page allocator and the kernel heap have no locking, on a kernel verified at thirty-two processors
+
+- **Found:** 10 September 2026, while looking for the cause of BG-148. It is not
+  that cause, and it is worse than that cause.
+- **Cost:** none observed, and that is not reassurance. A lost page is invisible
+  until something writes through a mapping it no longer owns.
+- **Status:** open. Recorded rather than fixed, because fixing it properly is
+  its own change with its own measurements, and doing it inside another one
+  would mean inventing its test coverage in a hurry.
+
+`core/pmm.c` and `core/heap.c` contain no spinlock, no atomic, and no interrupt
+mask between them. `pmm_alloc_pages` scans a shared bitmap, sets bits in it, and
+advances a shared `search_hint`; `pmm_free_pages` clears bits in the same
+bitmap; the heap keeps slab free-lists the same way one level up. Two processors
+in `pmm_alloc_pages` at once can both find the same clear bit and both claim it
+— **the same page handed to two owners**, which is not a crash, it is two
+subsystems writing over each other indefinitely.
+
+`heap.h` explains itself, and the explanation is the interesting part:
+
+> No locking: there is one CPU running kernel code until checkpoint 9, and a
+> lock invented before the concurrency it guards is a lock in the wrong place.
+
+That was a good decision when it was written and it expired without anybody
+noticing. Checkpoint 9 brought threads; **9b woke every processor**; nothing
+went back to the sentence. It is not a wrong comment — it is a promise with a
+date on it, and nothing in the build or the rig was watching the date.
+
+**What made it reachable is recent.** Not two threads calling `kmalloc`, but two
+places that do not look like allocation:
+
+- Demand paging (9 September) means a user program touching its stack calls
+  `pmm_alloc_page()` **from inside a page-fault handler**, on whichever
+  processor it is running on.
+- The scheduler's reaper frees a finished thread's stack with
+  `pmm_free_pages()` from a *different* thread on a different processor.
+
+- **Was:** a deliberate absence whose stated condition stopped holding three
+  checkpoints ago.
+- **When it is fixed**, three things have to be true and are worth writing down
+  now: the lock must be taken with interrupts off, because it is taken inside a
+  fault handler and a timer interrupt there can preempt into another allocation
+  on the *same* processor; the page must be cleared after `mark_used` and
+  outside the lock, or every allocation in the machine serialises behind a
+  four-kilobyte `memset`; and the order is always heap-then-pages, because
+  `kmalloc` calls the page allocator and nothing in `pmm.c` calls the heap.
+- **And the test cannot be "it still boots."** A lost page is silent. The
+  assertion that catches it is allocating every page the machine has, freeing
+  them, and requiring the count back — plus several processors allocating and
+  freeing at once with no page ever handed out twice. Watched to fail with the
+  lock removed, or it is not a test.
+
+
+
+### BG-150 — About one boot in sixty, a user program does not finish, and nothing says why
+
+- **Found:** 10 September 2026, as the part of BG-148 that fixing BG-148 did not
+  account for.
+- **Cost:** none yet. It is recorded because the alternative is rediscovering it.
+- **Status:** open.
+
+The interleaved measurement that confirmed BG-148 also measured the kernel with
+BG-148 fixed, and it is not zero:
+
+    A (BG-147 and BG-148 fixed) : 1 of 60 failed, 0 entry-point faults
+    B (BG-148 restored)         : 4 of 60 failed, 3 entry-point faults
+
+The three entry-point faults are BG-148 and they are gone. The remaining one is
+a different shape: the program does not reach its exit call, and **no unexpected
+fault is reported** -- so it is not a program being killed, which is what the
+entry race looked like.
+
+Two candidates, neither measured:
+
+- The deadline is two seconds of `time_monotonic_ns()`, which on x86_64 comes
+  from the timestamp counter. Under host load QEMU's counter advances with the
+  *host* while the guest executes far fewer instructions, so two guest-measured
+  seconds can pass with very little guest progress. Every user-mode test in this
+  kernel shares that deadline.
+- Or the thread genuinely is not scheduled, which would be a scheduler fault and
+  a much more serious one.
+
+**The two are indistinguishable from the message the test prints**, which is why
+nothing more is claimed here. What has changed is that the next occurrence will
+say which: a stalled program now reports its thread's state, the processor it is
+on, how many ticks it has had, how many system calls were served while it should
+have been running, and how many programs were ended for faulting. A run that
+shows *running, 40 ticks, 0 calls served* is a scheduler fault; one that shows
+*ready, 0 ticks* is a machine that never got to it.
+
+- **Was:** unknown, and said so rather than folded into the bug next to it.
+
+
+
+### BG-151 — Eight processors, on a machine that may have five hundred
+
+- **Found:** 10 September 2026, asked directly: would this run on a two-socket
+  server board?
+- **Cost:** none yet, because no such machine has run it. On one that did, it
+  would use eight cores of however many are there and say so.
+
+`MAX_CPUS` was 8. It is not a bug in the sense of something behaving wrongly --
+9b's BG-141 already made the shortfall a reported number rather than a silent
+saturation, so a 64-core machine says how many more it found than it can hold.
+It is a bug in the sense that the number was chosen when the largest machine
+this kernel had ever met was a QEMU guest, and modern server parts are two
+orders of magnitude past it: EPYC reaches 128 cores per socket (192 on Turin),
+Xeon 128 P-cores or 288 E-cores, and a dual-socket board is routinely 256 to 576
+*logical* processors.
+
+Raised to **256**, and that number has a reason rather than being the next round
+one up: **255 is the largest processor an 8-bit APIC identifier can name.**
+Going past it is not a bigger array, it is implementing x2APIC -- see BG-152.
+
+The cost of the raise is static memory, and it is worth writing down because it
+is the reason not to simply pick a huge number: `struct thread boot_threads[]`
+is the expensive one at roughly a kilobyte each, so 256 costs about a quarter of
+a megabyte of BSS, with the per-processor blocks, task-state segments and
+identifier arrays adding tens of kilobytes more.
+
+- **Was:** a limit sized to the test rig rather than to the machines the
+  kernel is meant for.
+- **Fixed in** `smp.h`, with the ceiling now stated as what the addressing can
+  express rather than as a number somebody picked.
+
+### BG-152 — Processors above 255 are found and cannot be started
+
+- **Found:** 10 September 2026, reading the interrupt controller while answering
+  the same question.
+- **Cost:** none yet. It is the wall a real two-socket server hits.
+- **Status:** open.
+
+The MADT walk already reads **x2APIC entries** (type 9), whose processor
+identifiers are 32 bits, as well as the older 8-bit type 0. So on a machine with
+more than 255 logical processors this kernel *enumerates them correctly*.
+
+It then cannot address them. `x86_apic_id()` is:
+
+    return apic_read(APIC_ID) >> 24;
+
+which is the 8-bit identifier out of the xAPIC register, and INIT/SIPI go
+through the xAPIC interrupt command register, whose destination field is equally
+8 bits. Anything numbered above 255 can be seen and not spoken to.
+
+The failure is at least honest: 9b made *found* and *online* separate numbers
+precisely so that a processor which does not start is a visible discrepancy
+rather than a processor nobody counted. A 240-core machine would report finding
+240 and starting some smaller number.
+
+- **Was:** half of an interface. The table parser learned about x2APIC and the
+  interrupt controller did not.
+- **What fixing it means:** x2APIC is a set of MSRs rather than a memory-mapped
+  block -- the identifier is read from `IA32_X2APIC_APICID` and the command
+  register is written as a single 64-bit MSR with the full destination in the
+  high half. It is enabled by a bit in `IA32_APIC_BASE` and, once enabled,
+  cannot be turned off without a reset, so the decision is made once at boot
+  from what CPUID reports and what the MADT contains.
+
+### BG-153 — On a multi-cluster ARM machine, two processors would believe they are the same processor
+
+- **Found:** 10 September 2026, in the same reading. It is the quiet one of the
+  three.
+- **Cost:** none yet, and it would not announce itself.
+- **Status:** open.
+
+`arch_cpu_id_real()` on aarch64 is:
+
+    return (unsigned)(mpidr & 0xFF);
+
+which is affinity level 0 -- *the processor within its cluster*. The comment
+above it says exactly that, and says a many-cluster machine needs the higher
+fields folded in.
+
+Every machine this kernel has run on has one cluster, so level 0 is unique. **A
+two-socket ARM server does not have one cluster, and neither does anything
+big.LITTLE.** Processor 0 of cluster 0 and processor 0 of cluster 1 both return
+0, so both index the same entry of every per-processor array in the kernel: the
+same task-state, the same current thread, the same active address space, the
+same idle thread.
+
+That is worse than the x86 limit above, and the difference is worth naming.
+BG-152 produces a machine that runs on fewer processors than it has and reports
+the discrepancy. This produces a machine where **two processors share the state
+that exists to keep them apart**, with nothing failing until they touch it at
+the same moment.
+
+- **Was:** an identity taken from one field of four, correct on every machine
+  tested and wrong on the first machine with two clusters.
+- **What fixing it means:** fold affinity levels 1 to 3 into the identity, and
+  map that sparse value to a dense index rather than using it as an array
+  subscript -- MPIDR values are not consecutive and a two-socket machine's
+  second socket may start at a large affinity number.
+
+### BG-154 — The page allocator scans, and a terabyte is a billion pages
+
+- **Found:** 10 September 2026, working out whether a four-terabyte machine
+  would work.
+- **Cost:** none observed. It is a scaling property rather than a fault.
+- **Status:** open.
+
+Two things about the physical allocator stop being reasonable at server sizes,
+and neither is wrong today:
+
+**The bitmap is one bit per four-kilobyte page.** Four terabytes is a billion
+pages, so the bitmap is 128 MB -- and it is placed as a single contiguous
+allocation out of the firmware's map before anything else exists. Large, and on
+a fragmented map possibly unplaceable.
+
+**`pmm_alloc_pages` is a linear scan.** It starts from a hint and wraps once, so
+the common case is short, but a fragmented billion-page bitmap has a worst case
+of sweeping a billion bits for one page. Bounded, and bounded is not the same as
+fast.
+
+And a third that is neither of those: **there is no NUMA awareness at all.** On
+a two-socket board every allocation is as likely to land on the far socket as
+the near one, and nothing in the allocator, the scheduler or the address space
+code knows there is a difference. That costs latency rather than correctness,
+and it is the kind of thing that is far cheaper to design in than to retrofit.
+
+- **Was:** a design correct for a 512MB guest and asked to describe a machine
+  eight thousand times larger.
+- **Note:** the direct map is *not* a limit here, which is worth recording
+  because it looks like one. It begins at PML4 slot 256 and grows into
+  successive slots as the map requires -- 127 TB of reach -- because it was
+  deliberately placed at the bottom of the kernel half with room above it.
+
+
 ---
 
 ## Labels

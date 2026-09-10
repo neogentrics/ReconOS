@@ -276,6 +276,23 @@ paddr_t arch_smbios_anchor(void)
  * sized by a CPUID query and differs between machines, so the fixed per-thread
  * area here could not hold it. Enabling it anyway would set OSXSAVE -- another
  * promise to save state -- and then not save it. */
+/* EM_X86_64, fixed by the ABI. A number rather than a header constant because
+ * there is no ELF header to include here and inventing one for a single value
+ * is more code than the value. */
+/* Nothing of its own. On this architecture turning the machine off *is* ACPI:
+ * the register is in the FADT and the value is in the vendor's bytecode, and
+ * there is no second mechanism to prefer. Saying so costs one function and
+ * keeps the decision in one place. */
+bool arch_power_off(void)
+{
+	return false;
+}
+
+unsigned arch_elf_machine(void)
+{
+	return 62;
+}
+
 void arch_vector_enable(void)
 {
 	u64 cr0, cr4;

@@ -44,6 +44,16 @@ enum power_result power_off(void)
 	struct acpi_fadt_facts fadt;
 	const struct aml_state *a = aml();
 
+	/* The architecture's own way first, where it has one.
+	 *
+	 * This is not a preference between two equal mechanisms. ACPI is how an
+	 * x86 machine is turned off and is *absent* on an ARM machine booted
+	 * from a device tree -- so without this the kernel passed every test on
+	 * aarch64 and then sat there with the power on, which is what a person
+	 * calls broken. It does not return if it works. */
+	if (arch_power_off())
+		return POWER_REFUSED;
+
 	if (!acpi_fadt(&fadt) || !fadt.pm1a_control)
 		return POWER_NO_REGISTER;
 

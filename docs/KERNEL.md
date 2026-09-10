@@ -2248,6 +2248,96 @@ Until then the harness builds those disks and the loader is proven on them.
 The last one is the checkpoint. The first three are a bootloader; the fourth is
 whether the sentence "there is no way to turn it off" is true.
 
+## The ELF loader — a program from a file
+
+Checkpoint 19 had two halves. Address spaces landed on 10 September; this is the
+other one, and it is what turns "a process has memory of its own" into "a
+process is a *program*".
+
+Before it, a user program was a byte array compiled into the kernel and copied
+to a fixed address. You could not write one, build one, or replace one without
+rebuilding the kernel around it — which means it was not a program in any sense
+somebody outside this repository would use the word.
+
+### It is not the bootloader's ELF reader, and should not be
+
+`boot/src/main.c` has read ELF since checkpoint 4. It is right that these are
+two pieces of code, because they answer different questions.
+
+The bootloader loads **our own kernel**, whose signature it has already checked.
+A field it dislikes means the file is corrupt and the machine should stop; a
+malformed header there is an accident.
+
+The kernel loads **somebody else's program**. Every number in the file is chosen
+by whoever produced it, every one is an input, and a malformed header is the
+ordinary case rather than the exceptional one. So the bootloader reads the
+fields it needs, and the kernel refuses everything it has not been given a
+reason to accept.
+
+### What it refuses, and what each refusal is protecting
+
+| Refused | Because |
+|---|---|
+| A segment not entirely inside the file | Computed as a subtraction, never an addition — `offset + length` near the top of the range wraps and then compares as comfortably inside |
+| A segment outside the user half | The kernel's half is mapped in every address space, so a program that could name an address in it could rewrite the kernel |
+| A segment in the never-mapped first page | That page is what makes a null dereference fault; a file asking to be loaded there is asking for that to stop being true |
+| Two segments claiming the same page | Whichever was mapped second would decide the permissions of a page the first is using |
+| A segment both writable and executable | A program entitled to run its own input |
+| An entry point outside an executable segment | Starting a program on a page it can rewrite |
+| Address and file offset disagreeing modulo a page | Pages are copied whole; anything else needs a partial-page copy, and getting it wrong shifts a program's code by a few bytes — which runs, for a while |
+| `ET_DYN` | A position-independent executable must be relocated, which is a second parser over a second untrusted table whose whole job is writing to addresses the file chooses. There is no caller for it yet |
+| `PT_INTERP` | Refused rather than ignored: a program that asked for a dynamic linker and did not get one would run with its libraries missing |
+
+Two passes, and no page is allocated during the first. A loader that maps as it
+validates leaves a half-built address space behind when it meets the bad field,
+and then the caller has to know how much to undo — so the test requires that a
+refused file leaves the space with **zero bytes mapped**.
+
+### The program it loads is built by the linker
+
+`kernel/user/hello.S` linked against `kernel/user/user.ld`, by the ordinary
+cross linker, into a real ELF with two `PT_LOAD` segments — one R-X, one RW,
+with a page between them because a page cannot have two sets of permissions.
+
+Built rather than hand-written, for the same reason the partition fixtures come
+from `sgdisk` and the FAT32 ones from `mkfs.vfat`: **a loader tested against a
+structure this project also wrote is tested against its own misunderstandings.**
+The linker decides the program headers, including the ones nobody thought to
+arrange.
+
+The program is written to fail if any part of loading were skipped. It prints
+from its read-only segment; it reads a value that is only there if the file's
+bytes were copied rather than the page zeroed; it reads a byte of `.bss`, which
+the file does not contain, and requires it to be zero — catching both a loader
+that stops at `filesz` and one that hands over whatever the page last held; and
+it writes to `.bss` and reads it back.
+
+**It exits 55 on success, not 0.** The exit code is read out of a field that is
+zero before the program runs and zero if it never reached its exit call, so a
+test that treats zero as success passes in both of the cases it exists to catch.
+
+### The seventeen refusals are each watched happening
+
+A loader that answered "refused" to everything would pass a test that only asked
+whether it complained. So each case takes a copy of the real file, changes one
+field, and requires the *specific* refusal for that field — and the last case
+loads the copy unchanged and requires it to be accepted. Without that control,
+every case above it passes on a loader that has simply stopped working.
+
+### What it still does not do
+
+No dynamic linking and no shared objects. No arguments or environment — a
+program is started with an entry point and a stack and nothing else. No
+`PT_GNU_STACK` handling, because the stack's permissions are the kernel's to
+decide and it makes it non-executable regardless. Sections, symbols and
+relocations are not read at all: they are a linker's business, and a loader that
+reads them is reading a table the program does not need it to read.
+
+And the file still arrives from inside the kernel image rather than from a
+volume. That is the next piece and it changes nothing here — the bytes are the
+same bytes, and the loader does not know where they came from.
+
+
 ## Foreign filesystems, and why FAT32 is not optional
 
 Checkpoint 14 exists for one reason: **the UEFI System Partition is FAT32 by

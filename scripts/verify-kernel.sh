@@ -19,7 +19,70 @@ set -u
 
 cd "$(dirname "$0")/.."
 ROOT=$PWD
+# One thing builds this tree at a time. See scripts/quick-check.sh for what
+# happens without this: a run that reports on a mixture of two binaries.
+LOCKFILE=${RECON_TREE_LOCK:-/tmp/reconos-kernel-tree.lock}
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+	echo "Something else is building or booting this tree. Refusing to start:"
+	echo "  a run that shares the tree reports on no kernel in particular."
+	exit 2
+fi
+
 WORK=$(mktemp -d)
+
+# --- running the slow tests at the same time ----------------------------------
+#
+# Most of the hour this takes is seventeen sub-scripts, each of which boots
+# several machines, formats disk images and cuts the power. They are independent
+# processes that share nothing but the built kernel, so they can overlap.
+#
+# TWO THINGS THIS DOES NOT DO, both of which are the same mistake in different
+# clothes -- a check that cannot report a failure.
+#
+# It does not put `check` in the background. `failures=$((failures + 1))` inside
+# a background job runs in a *subshell*, so the increment is discarded when that
+# subshell exits and the run reports green however many paths failed. The work
+# overlaps; the verdicts stay in this shell.
+#
+# And it does not share disk images between jobs. Two boots writing one image
+# produce a result about a machine that never existed. Every sub-script here
+# either makes its own temporary image or writes to a directory of its own --
+# flush-reaches-device.sh did not until today, and was the one that would have
+# collided.
+#
+# Verdicts are consumed in the order they were launched, so the output is the
+# same every run whatever order things finish in. A rig whose output moves is a
+# rig whose diffs are noise.
+JOBS=${JOBS:-4}
+mkdir -p "$WORK/sub"
+
+sub_launch() {
+	local tag=$1; shift
+
+	# Wait for a slot. Capped rather than unbounded: thirteen QEMUs at
+	# 512MB each is six gigabytes of guest, and a machine that starts
+	# swapping measures the swap rather than the kernel.
+	while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n 2>/dev/null || break; done
+
+	(
+		"$@" >"$WORK/sub/$tag.out" 2>&1
+		echo $? >"$WORK/sub/$tag.rc"
+	) &
+}
+
+# Prints what the job printed and exits with what the job exited with, so a
+# caller reads exactly as it did when this was a plain command substitution.
+sub_out() {
+	local tag=$1
+
+	while [ ! -s "$WORK/sub/$tag.rc" ]; do
+		sleep 0.2
+	done
+
+	cat "$WORK/sub/$tag.out"
+	return "$(cat "$WORK/sub/$tag.rc")"
+}
 trap 'rm -rf "$WORK"' EXIT
 
 ONLY=${1:-all}
@@ -211,6 +274,33 @@ check_cpus() {
 			FAILED_PATHS+=("$label $n processors, shootdown")
 			return
 		fi
+	fi
+
+	# And that the self-tests passed, which this did not ask until 10
+	# September 2026.
+	#
+	# Every "N self-tests, all pass" row in this rig is a *single-processor*
+	# run: check() boots with no -smp at all, and this function is the only
+	# thing that ever passes one. It asserted counts, ticks and shootdowns --
+	# so a self-test that fails only on more than one processor was invisible
+	# to the whole matrix.
+	#
+	# BG-148 is what that cost. A user program raced its own process
+	# attachment and started in the kernel's address space, failing about one
+	# boot in eight at two processors, and every path in this rig went on
+	# reporting green because no multi-processor run ever looked at a test
+	# result. The same shape as BG-143: a check that cannot fail is not a
+	# check.
+	local failed_tests
+	failed_tests=$(tr -d '\r' < "$log" | grep -acE ': +FAIL' || true)
+
+	if [ "${failed_tests:-0}" -ne 0 ]; then
+		echo "FAILED -- $n online, and $failed_tests self-test(s) failed"
+		tr -d '\r' < "$log" | grep -aE ': +FAIL|^  [a-z].*: ' |
+			head -10 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label $n processors, self-tests")
+		return
 	fi
 
 	echo "$n online, idle thread took ${idle_ticks:-0} ticks${sent:+, $sent shootdowns}"
@@ -445,6 +535,26 @@ echo "x86_64"
 # ones where the kernel has to place the device's registers itself. Everything
 # else on this architecture arrives with the base address registers already
 # assigned by SeaBIOS or OVMF.
+# --- launch the slow ones now, read their verdicts later ----------------------
+#
+# Everything below that boots a machine of its own starts here and is collected
+# where its result is printed. Nothing between the two depends on them, and the
+# kernel they all use is already built.
+sub_launch crash    bash scripts/crash-test.sh 6 x86_64
+sub_launch rename   bash scripts/rename-crash-test.sh 6 x86_64
+sub_launch beside   bash scripts/beside-others-test.sh x86_64
+sub_launch plan     bash scripts/install-plan-test.sh x86_64
+sub_launch onto     bash scripts/install-onto-test.sh x86_64
+sub_launch e2e      bash scripts/install-then-boot-test.sh
+sub_launch menu     bash scripts/boot-menu-test.sh
+sub_launch sig      bash scripts/signed-kernel-test.sh
+sub_launch rec      bash scripts/recovery-test.sh
+for a in x86_64 aarch64; do
+	sub_launch "flush_$a"    bash scripts/flush-reaches-device.sh "$a"
+	sub_launch "fatread_$a"  bash scripts/fat32-reads-foreign.sh "$a"
+	sub_launch "fatwrite_$a" bash scripts/fat32-writes-foreign.sh "$a"
+done
+
 check_for virtio0 "  PVH, direct kernel load" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
 		"${X64_DISK[@]}"
@@ -662,7 +772,7 @@ echo "durability"
 
 printf '%-46s' "  a flush orders writes, blocks do not tear"
 
-if crash_out=$(bash scripts/crash-test.sh 6 x86_64 2>&1); then
+if crash_out=$(sub_out crash); then
 	echo "$(echo "$crash_out" | grep -oE '[0-9]+ cuts.*')"
 	passes=$((passes + 1))
 else
@@ -675,7 +785,7 @@ fi
 for a in x86_64 aarch64; do
 	printf '%-46s' "  every flush reaches the device ($a)"
 
-	if flush_out=$(bash scripts/flush-reaches-device.sh "$a" 2>&1); then
+	if flush_out=$(sub_out "flush_$a"); then
 		echo "$(echo "$flush_out" | grep -c 'flush commands at the controller') driver(s)"
 		passes=$((passes + 1))
 	else
@@ -775,7 +885,7 @@ done
 
 printf '%-46s' "  a rename survives the power going out"
 
-if rn_out=$(bash scripts/rename-crash-test.sh 6 x86_64 2>&1); then
+if rn_out=$(sub_out rename); then
 	echo "$(echo "$rn_out" | grep -oE '[0-9]+ cuts inside a rename.*')"
 	passes=$((passes + 1))
 else
@@ -794,7 +904,7 @@ printf '%-46s' "  a filesystem beside somebody else's"
 
 # The status is captured rather than read from `$?` inside an elif, where what
 # it refers to depends on how the shell got there.
-beside_out=$(bash scripts/beside-others-test.sh x86_64 2>&1)
+beside_out=$(sub_out beside)
 beside_rc=$?
 
 if [ "$beside_rc" -eq 0 ]; then
@@ -825,7 +935,7 @@ echo "foreign filesystems"
 for a in x86_64 aarch64; do
 	printf '%-46s' "  reads FAT32, and refuses four broken ones ($a)"
 
-	fat_out=$(bash scripts/fat32-reads-foreign.sh "$a" 2>&1)
+	fat_out=$(sub_out "fatread_$a")
 	fat_rc=$?
 
 	if [ "$fat_rc" -eq 0 ]; then
@@ -846,7 +956,7 @@ done
 for a in x86_64 aarch64; do
 	printf '%-46s' "  writes FAT32 that mtools can read ($a)"
 
-	fw_out=$(bash scripts/fat32-writes-foreign.sh "$a" 2>&1)
+	fw_out=$(sub_out "fatwrite_$a")
 	fw_rc=$?
 
 	if [ "$fw_rc" -eq 0 ]; then
@@ -876,7 +986,7 @@ echo "installer"
 
 printf '%-46s' "  plans or refuses seven real layouts"
 
-plan_out=$(bash scripts/install-plan-test.sh x86_64 2>&1)
+plan_out=$(sub_out plan)
 plan_rc=$?
 
 if [ "$plan_rc" -eq 0 ]; then
@@ -898,7 +1008,7 @@ fi
 
 printf '%-46s' "  installs, and the disk's contents survive"
 
-onto_out=$(bash scripts/install-onto-test.sh x86_64 2>&1)
+onto_out=$(sub_out onto)
 onto_rc=$?
 
 if [ "$onto_rc" -eq 0 ]; then
@@ -921,7 +1031,7 @@ fi
 
 printf '%-46s' "  installs from media, and the disk boots"
 
-e2e_out=$(bash scripts/install-then-boot-test.sh 2>&1)
+e2e_out=$(sub_out e2e)
 e2e_rc=$?
 
 if [ "$e2e_rc" -eq 0 ]; then
@@ -944,7 +1054,7 @@ fi
 
 printf '%-46s' "  finds the other systems on the machine"
 
-menu_out=$(bash scripts/boot-menu-test.sh 2>&1)
+menu_out=$(sub_out menu)
 menu_rc=$?
 
 if [ "$menu_rc" -eq 0 ]; then
@@ -974,7 +1084,7 @@ echo "integrity"
 
 printf '%-46s' "  runs a signed kernel, refuses four others"
 
-sig_out=$(bash scripts/signed-kernel-test.sh 2>&1)
+sig_out=$(sub_out sig)
 sig_rc=$?
 
 if [ "$sig_rc" -eq 0 ]; then
@@ -997,7 +1107,7 @@ fi
 
 printf '%-46s' "  recovery finds damage, and touches nothing"
 
-rec_out=$(bash scripts/recovery-test.sh 2>&1)
+rec_out=$(sub_out rec)
 rec_rc=$?
 
 if [ "$rec_rc" -eq 0 ]; then

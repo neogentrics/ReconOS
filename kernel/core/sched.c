@@ -125,7 +125,20 @@ void sched_adopt_idle(struct thread *idle)
 	spin_unlock_irq(&ring_lock, flags);
 }
 
+/* Creates a thread and starts it, which is what almost every caller wants: a
+ * kernel thread has nothing to set on it before it runs. A caller that *does*
+ * -- anything giving the thread a process -- must use thread_create_stopped and
+ * start it once it has. */
 struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
+{
+	struct thread *t = thread_create_stopped(name, entry, arg);
+
+	thread_start(t);
+	return t;
+}
+
+struct thread *thread_create_stopped(const char *name, void (*entry)(void *),
+				     void *arg)
 {
 	struct thread *t = kzalloc(sizeof(*t));
 	paddr_t stack;
@@ -166,14 +179,39 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
 		(u8 *)t->stack_base + THREAD_STACK_PAGES * PAGE_SIZE,
 		entry, arg);
 
-	{
-		u64 flags = spin_lock_irq(&ring_lock);
-
-		ring_insert(t);
-		spin_unlock_irq(&ring_lock, flags);
-	}
-
 	return t;
+}
+
+/* Makes a thread the scheduler's. Separate from creating it, and that
+ * separation is a bug fix rather than tidiness. (BG-148)
+ *
+ * `thread_create` used to end by putting the thread in the ring, which makes it
+ * runnable *immediately* -- on this processor and on every other one. A caller
+ * that then set something on the thread was racing every other processor to do
+ * it, and losing that race meant the thread ran with the field unset.
+ *
+ * The field that mattered was `process`. A user program is created, put in the
+ * ring, and only then attached to the process that owns it; a processor that
+ * picked it up in between ran it with no process, so the scheduler found no
+ * address space for it and left the kernel's loaded -- and the program took an
+ * instruction fault on its own first instruction, because its code is mapped in
+ * a space that was not the one running.
+ *
+ * It was invisible until 10 September because until then every program lived in
+ * the one address space there was, so running with no process still had the
+ * program's code mapped. Address spaces did not introduce this; they removed
+ * what was hiding it.
+ */
+void thread_start(struct thread *t)
+{
+	u64 flags;
+
+	if (!t)
+		return;
+
+	flags = spin_lock_irq(&ring_lock);
+	ring_insert(t);
+	spin_unlock_irq(&ring_lock, flags);
 }
 
 /* The next thread willing to run *here*. The ring lock must be held.
