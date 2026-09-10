@@ -172,6 +172,13 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top);
  * exactly as it does in the kernel. */
 #define USER_BASE       0x0000000000400000ULL
 #define USER_STACK_TOP  0x0000000000800000ULL
+/* How far the stack may grow downwards from USER_STACK_TOP. Reserved, not
+ * allocated: the pages that exist are the ones the program has actually
+ * touched, which is what makes a generous number cheap. Generous is the point
+ * -- a stack limit that is tight is a program that dies for a reason nobody
+ * can see from the fault. */
+#define USER_STACK_MAX  (64 * 1024)
+
 #define USER_LIMIT      0x0000800000000000ULL
 
 #endif /* RECON_KERNEL_USER_H */

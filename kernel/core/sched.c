@@ -1,7 +1,9 @@
 #include <recon/kernel/sched.h>
+#include <recon/kernel/process.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/vm.h>
+#include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/kstring.h>
@@ -27,6 +29,11 @@ static u64 switches;
  * preemption proves the tick is taking execution away from code that did not
  * offer it. A test that counts both together passes on either. */
 static u64 preemptions;
+
+/* Times a thread's vector-state guard was found broken after a save. Zero on
+ * every machine this has ever run on except the one that found BG-146, and
+ * asserted rather than merely printed. */
+static u64 vector_overruns;
 
 /* The thread each processor was already running when it joined the scheduler.
  * Not created but *adopted*: it has a stack and a context already, and the first
@@ -91,6 +98,7 @@ void sched_init(void)
 	boot->state = THREAD_RUNNING;
 	boot->slice_left = SCHED_SLICE_TICKS;
 	boot->cpu = (int)arch_cpu_id();
+	boot->vector_guard = VECTOR_GUARD;
 
 	ring = 0;
 	ring_insert(boot);
@@ -98,6 +106,7 @@ void sched_init(void)
 	next_id = 1;
 	switches = 0;
 	preemptions = 0;
+	vector_overruns = 0;
 }
 
 /* A secondary processor joining. It arrives already running on a stack of its
@@ -137,6 +146,7 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
 	t->stack_base = phys_to_virt(stack);
 	t->stack_pages = THREAD_STACK_PAGES;
 	t->id = next_id++;
+	t->vector_guard = VECTOR_GUARD;
 	t->state = THREAD_READY;
 	t->slice_left = SCHED_SLICE_TICKS;
 	kstrlcpy(t->name, name, sizeof(t->name));
@@ -272,9 +282,42 @@ void sched_switch(void)
 	 * When there is a reason to make it lazy there will also be a
 	 * measurement saying so. */
 	arch_vector_save(prev->vector_state);
+
+	/* And immediately: a save that wrote past its area has just corrupted
+	 * the next field of this thread, and the sooner that is a number
+	 * somebody can read the less it looks like an unrelated bug three
+	 * subsystems away. This is how BG-146 presented -- a user program
+	 * whose process identifier became zero while it ran. */
+	if (prev->vector_guard != VECTOR_GUARD) {
+		vector_overruns++;
+		prev->vector_guard = VECTOR_GUARD;
+	}
+
 	arch_vector_restore(next->vector_state);
 
 	spin_unlock(&ring_lock);
+
+	/* And the map the incoming thread runs in, before the switch rather
+	 * than after: after the switch this code is the other thread, and a
+	 * thread that has already started running in the previous program's
+	 * address space has already been able to read it.
+	 *
+	 * A thread with no process, or a process the kernel made for itself,
+	 * gets the kernel's own map. That is not a detail: an idle thread
+	 * left pointing at the last program's tables would keep them alive
+	 * and reachable on a processor with nothing to run.
+	 *
+	 * Doing it here and not in the architecture's switch keeps one rule
+	 * in one place. The cost when nothing changes is a comparison --
+	 * addrspace_activate returns immediately when the space is already
+	 * the active one, which is every switch between two threads of one
+	 * program and every switch between kernel threads.
+	 */
+	{
+		struct process *np = process_of(next);
+
+		addrspace_activate(np ? np->space : NULL);
+	}
 
 	arch_context_switch(&prev->stack_pointer, next->stack_pointer);
 
@@ -320,6 +363,10 @@ void thread_exit(void)
 
 	dead->state = THREAD_FINISHED;
 	dead->cpu = -1;
+
+	/* Its process, if it has one, is told before the switch -- because
+	 * after the switch this code is not running and there is no later. */
+	process_thread_ended(dead, 0);
 
 	/* The stack cannot be freed here: this code is standing on it. It is
 	 * left for whoever notices the thread is finished, which is the reaper
@@ -522,6 +569,19 @@ bool sched_self_test(void)
 			}
 			t = t->next;
 		} while (t != ring);
+	}
+
+	/* And nothing wrote past its vector area while all that was running.
+	 *
+	 * Asserted rather than printed. This was BG-146: sixteen bytes past the
+	 * end of a 512-byte save area, into the next field of the same
+	 * structure, on one architecture only -- and it had been there since
+	 * the vector unit was enabled. Nothing failed until a field that
+	 * mattered happened to be sitting there. */
+	if (vector_overruns) {
+		kprintf("  sched: %lu context switches wrote past a thread's "
+			"vector save area\n", (unsigned long)vector_overruns);
+		ok = false;
 	}
 
 	return ok;

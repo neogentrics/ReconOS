@@ -148,6 +148,15 @@ unsigned arch_smp_discover(u64 *ids, unsigned max)
 	return count;
 }
 
+/* Nothing to release. Starting a processor here is one call into firmware,
+ * which needs no code of ours in low memory to do it -- and since the stacks
+ * stopped being identity mapped there is nothing of this kernel's below the
+ * kernel at all. Present so that the portable caller does not have to know
+ * which architecture it is on. */
+void arch_smp_bringup_done(void)
+{
+}
+
 bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 {
 	i64 r;
@@ -158,31 +167,29 @@ bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 	if (cpu >= MAX_CPUS)
 		return false;
 
-	/* THE STACK MUST BE A PHYSICAL ADDRESS, AND MUST STAY VALID WHEN THE MMU
-	 * COMES ON.
+	/* THE STACK IS A DIRECT-MAP ADDRESS, AND THIS USED TO BE AN IDENTITY
+	 * MAPPING INSTEAD.
 	 *
-	 * A processor started by PSCI begins with its MMU off, so the direct-map
-	 * address the allocator hands back means nothing to it -- setting the
-	 * stack pointer to one and pushing faults immediately. So it gets the
-	 * physical address.
+	 * The comment that stood here argued that a processor started by PSCI
+	 * begins with its MMU off, so the address must be physical and must stay
+	 * valid across the switch -- and it identity-mapped four pages to make
+	 * one pointer work on both sides. It cost one entry, and one entry was
+	 * not worth an assembly stack switch to avoid.
 	 *
-	 * But a physical address stops meaning anything the instant that
-	 * processor turns its MMU on, because the kernel identity-maps only its
-	 * own image and this stack is not in it. So the stack is identity mapped
-	 * too, and the same pointer is correct on both sides of the switch.
+	 * The argument was wrong about *when*. `secondary_entry` calls
+	 * `mmu_install` before it sets a stack pointer at all, and mmu_install
+	 * keeps its return address in a register and touches no memory -- so the
+	 * processor never uses this stack while its MMU is off. And the boot
+	 * tables already carry the direct map at entry 256, put there so a
+	 * secondary could reach a device before the real tables exist, which
+	 * means a direct-map stack is addressable from the first instruction
+	 * after the switch.
 	 *
-	 * The alternative -- switching stacks immediately after enabling the MMU
-	 * -- means doing it in assembly between two instructions that must not be
-	 * separated, and is not worth avoiding one page table entry for. */
-	{
-		paddr_t phys = virt_to_phys((u8 *)stack_top - 4 * PAGE_SIZE);
-
-		if (!vm_map((vaddr_t)phys, phys, 4 * PAGE_SIZE,
-			    VM_READ | VM_WRITE | VM_GLOBAL))
-			return false;
-
-		secondary_stacks[cpu] = (u64)phys + 4 * PAGE_SIZE;
-	}
+	 * What made the entry worth removing is not that it was unnecessary. It
+	 * is that it was in the half a *process* is meant to own, and every
+	 * mapping down there is one a per-process address space would have to
+	 * carry a copy of. See vm_user_half_report. */
+	secondary_stacks[cpu] = (u64)(uintptr_t)stack_top;
 
 	/* The processor being started has its data cache off, so it reads memory
 	 * directly rather than through this processor's cache -- where the write

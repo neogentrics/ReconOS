@@ -14,6 +14,8 @@
 #include "aarch64.h"
 
 #include <recon/kernel/trap.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/panic.h>
 #include <recon/kernel/user.h>
@@ -121,12 +123,54 @@ void trap_dispatch(struct trap_frame *f)
 	 * and is the first time in this kernel's life that something can go
 	 * wrong without the machine stopping. */
 	if (f->vector >= 8) {
+		/* Before it is a fault, ask whether it is a promise. See the
+		 * x86_64 file: an address the program was told it could use,
+		 * touched for the first time, is demand paging rather than a
+		 * mistake.
+		 *
+		 * Only for an abort, and the write bit is read from the syndrome
+		 * rather than guessed: class 0x24 is a data abort from a lower
+		 * level, 0x20 an instruction abort, and WnR -- bit 6 -- says a
+		 * data abort was caused by a write. An instruction abort is
+		 * never a write, and asking for a writable page to satisfy one
+		 * would hand a program a writable copy of its own code.
+		 */
+		if (ec == 0x24 || ec == 0x20) {
+			bool write = (ec == 0x24) && ((f->esr >> 6) & 1);
+
+			if (vm_fault_user((vaddr_t)f->far, write))
+				return;
+		}
+
 		kprintf("\nuser program fault: %s at %p, touching %p\n",
 			exception_class(ec), (void *)(uintptr_t)f->elr,
 			(void *)(uintptr_t)f->far);
 		kputs("the program is ended; the kernel continues\n");
 		user_note_fault();
 		thread_exit();
+	}
+
+	/* The kernel, touching a program's memory on its behalf.
+	 *
+	 * Class 0x25 is a data abort taken at the current level and 0x21 an
+	 * instruction abort -- the kernel's own faults. A system call writing
+	 * into a buffer the program passed is the kernel dereferencing a user
+	 * address, and once that memory is demand paged the write faults here
+	 * with nothing wrong. Refusing would mean every buffer a program hands
+	 * over has to have been touched by the program first, which is a rule
+	 * nobody could keep and one that fails silently when they do not.
+	 *
+	 * Narrow on purpose, exactly as on x86_64: only while a program's
+	 * address space is active, and vm_fault_user still refuses any address
+	 * that program was not promised. A kernel pointer gone wild into the
+	 * lower half is still a fault and still stops the machine.
+	 */
+	if (ec == 0x25 || ec == 0x21) {
+		bool write = (ec == 0x25) && ((f->esr >> 6) & 1);
+
+		if (f->far < USER_LIMIT && addrspace_active() &&
+			vm_fault_user((vaddr_t)f->far, write))
+			return;
 	}
 
 	if (trap_expecting) {

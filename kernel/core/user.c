@@ -1,4 +1,5 @@
 #include <recon/kernel/user.h>
+#include <recon/kernel/process.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/random.h>
@@ -9,6 +10,7 @@
 #include <recon/kernel/pmm.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/time.h>
+#include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 
@@ -84,6 +86,18 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a3, u64 a4, u64 a5)
 static i64 sys_getpid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	struct thread *t = sched_current();
+
+	/* The *process*, which is what this call has always meant. A thread
+	 * identifier answered here would be a different number for each thread
+	 * of one program, and every caller of getpid wants the program. A
+	 * kernel thread belongs to no process and gets its thread number, which
+	 * is the only honest answer available. */
+	{
+		struct process *p = process_of(t);
+
+		if (p)
+			return (i64)p->id;
+	}
 
 	return t ? (i64)t->id : -1;
 }
@@ -330,6 +344,8 @@ struct thread *user_thread_create(const char *name, const void *code,
 				  size_t code_len)
 {
 	struct thread *t;
+	struct process *p;
+	struct addrspace *as;
 	paddr_t code_page, stack_page;
 
 	if (code_len > PAGE_SIZE)
@@ -342,6 +358,43 @@ struct thread *user_thread_create(const char *name, const void *code,
 
 	kmemcpy(phys_to_virt(code_page), code, code_len);
 
+	/* THE PROCESS AND ITS ADDRESS SPACE COME FIRST, AND THAT ORDER IS THE
+	 * WHOLE OF WHAT CHANGED.
+	 *
+	 * This used to map the program's pages and then create a process to own
+	 * the thread. There was one map, so both programs' pages landed at the
+	 * same addresses in the same tables and the second one loaded sat on top
+	 * of the first -- which is why the process table had to say out loud
+	 * that one program could be live at a time. The mappings now go into a
+	 * space that belongs to this program, so they cannot be that.
+	 *
+	 * Created as `nobody` rather than as the kernel, because a program that
+	 * runs with the most privileged identity by default is the wrong
+	 * direction to fail in -- and nothing yet checks, so the value recorded
+	 * now is the one enforcement will find when it arrives. */
+	p = process_create(name, 0, UID_NOBODY, UID_NOBODY);
+	if (!p) {
+		/* Refused rather than silently unowned: a program with no
+		 * process has no identity, and everything above this line
+		 * assumes one. */
+		kprintf("  user: no room in the process table for %s\n", name);
+		return 0;
+	}
+
+	p->personality = &personality_recon;
+
+	as = addrspace_create();
+	if (!as) {
+		kprintf("  user: no address space for %s\n", name);
+		return 0;
+	}
+
+	/* The process holds the reference from here; this one is handed over
+	 * rather than kept, so that the space lives exactly as long as the
+	 * process does and not one caller longer. */
+	process_set_space(p, as);
+	addrspace_release(as);
+
 	/* The program's own pages, and the only two mapped for it.
 	 *
 	 * VM_USER is what makes them reachable at all from user mode -- and its
@@ -352,19 +405,45 @@ struct thread *user_thread_create(const char *name, const void *code,
 	 * The code is executable and not writable; the stack is writable and not
 	 * executable. Neither is both, which costs nothing here and is the whole
 	 * of what stops a program being talked into running its own input. */
-	if (!vm_map(USER_BASE, code_page, PAGE_SIZE,
-		    VM_READ | VM_EXEC | VM_USER))
+	if (!addrspace_map(as, USER_BASE, code_page, PAGE_SIZE,
+			   VM_READ | VM_EXEC | VM_USER))
 		return 0;
 
-	if (!vm_map(USER_STACK_TOP - PAGE_SIZE, stack_page, PAGE_SIZE,
-		    VM_READ | VM_WRITE | VM_USER))
+	/* THE STACK IS A PROMISE RATHER THAN A MAPPING, AND THAT IS WHY EVERY
+	 * BOOT TESTS DEMAND PAGING.
+	 *
+	 * It used to be one page, mapped before the program ran. Now the whole
+	 * stack region is reserved and nothing is mapped: the program's first
+	 * push faults, the handler sees an address the program was promised,
+	 * gives it a page, and the instruction runs again.
+	 *
+	 * Deliberately not a separate test. A demand-paging path that only some
+	 * test exercises is a path that rots; this one is between every user
+	 * program and its first instruction, so if it breaks, "user mode: pass"
+	 * stops being printed rather than a test nobody ran going quietly red.
+	 *
+	 * Reserved downwards from the top of the user stack, which is what makes
+	 * this stack growth as well as demand paging -- the region is the size
+	 * the stack may reach, and the pages that exist are the ones it has
+	 * actually reached. */
+	if (!addrspace_reserve(as, USER_STACK_TOP - USER_STACK_MAX,
+			       USER_STACK_MAX,
+			       VM_READ | VM_WRITE | VM_USER)) {
+		kprintf("  user: no room to reserve a stack for %s\n", name);
 		return 0;
+	}
+
+	/* The page that was going to be the stack is not needed after all. */
+	pmm_free_page(stack_page);
+	stack_page = 0;
 
 	t = thread_create(name, user_thread_start, (void *)(uintptr_t)USER_BASE);
 	if (!t)
 		return 0;
 
 	t->personality = &personality_recon;
+	process_attach(p, t);
+
 	return t;
 }
 

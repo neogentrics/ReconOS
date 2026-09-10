@@ -283,6 +283,27 @@ void arch_vector_enable(void)
 	__asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
 	cr0 &= ~(1ull << 2);		/* EM off */
 	cr0 |=  (1ull << 1);		/* MP on */
+
+	/* WP: A READ-ONLY PAGE IS READ-ONLY TO THE KERNEL AS WELL.
+	 *
+	 * Without this bit, ring 0 may write through any mapping regardless of
+	 * its read-only bit, and the processor does not object. Nothing in this
+	 * kernel had ever set it: boot.S clears it for four instructions and
+	 * puts back whatever was there, so its value was *whatever firmware
+	 * left behind* -- set under OVMF, which is why boot.S had to clear it
+	 * at all, and clear on the paths that boot with no firmware.
+	 *
+	 * So this was a difference in behaviour between boot paths that no
+	 * test could see, and it became a correctness problem the moment
+	 * copy-on-write existed: a shared page is kept shared by being mapped
+	 * read-only, and a kernel that can write through read-only mappings
+	 * writes into the page every other program is reading. No fault, no
+	 * message, and every page table correct.
+	 *
+	 * Found by the address-space self-test, which reads the shared page
+	 * back after the write and requires it still to be zero. (BG-145)
+	 */
+	cr0 |=  (1ull << 16);		/* WP on */
 	__asm__ volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");
 
 	__asm__ volatile("movq %%cr4, %0" : "=r"(cr4));

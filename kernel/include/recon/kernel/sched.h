@@ -55,8 +55,24 @@ struct personality;
 enum thread_state {
 	THREAD_READY = 0,
 	THREAD_RUNNING,
+
+	/* Waiting for something, and not a candidate for any processor until
+	 * somebody wakes it. Distinct from READY on purpose: a blocked thread
+	 * that the scheduler could still pick is a thread that runs before the
+	 * thing it is waiting for has happened. */
+	THREAD_BLOCKED,
+
 	THREAD_FINISHED,
 };
+
+/* Room for the vector unit's state, plus the control words that go after it.
+ * 512 for x86_64's FXSAVE image or aarch64's thirty-two V registers, and the
+ * rest so that aarch64's FPSR and FPCR have somewhere of their own to go.
+ * A multiple of 64 so the alignment the store instructions want is kept. */
+#define VECTOR_STATE_MAX 576
+
+/* Written after the array and checked after every save. "VECGUARD". */
+#define VECTOR_GUARD 0x5645434755415244ULL
 
 struct thread {
 	/* First, and at a known offset, because the context switch writes it
@@ -106,15 +122,50 @@ struct thread {
 	 * them; user programs will, and the day one does is the day this has to
 	 * already be here.
 	 *
-	 * 512 bytes covers the baseline on both architectures -- x86_64's
-	 * FXSAVE image, and aarch64's thirty-two 128-bit V registers with their
-	 * two status words. It does **not** cover AVX or SVE, whose state is
-	 * larger and whose size is a runtime question; those units are
-	 * deliberately left disabled rather than enabled and half-saved.
+	 * IT WAS 512 BYTES AND THAT WAS SIXTEEN TOO FEW. (BG-146)
+	 *
+	 * The comment that stood here said 512 covered "x86_64's FXSAVE image,
+	 * and aarch64's thirty-two 128-bit V registers with their two status
+	 * words". Thirty-two registers of sixteen bytes *is* 512, so there was
+	 * nothing left for the status words -- and the aarch64 save wrote them
+	 * at byte 512 and 520, into whatever field of this structure came next.
+	 * The sentence asserted the arithmetic it got wrong.
+	 *
+	 * What it overwrote was `process`, sixteen bytes further on, so a user
+	 * program lost its identity the first time it was preempted -- and,
+	 * once processes had address spaces, lost its memory with it and took
+	 * an instruction abort on its own code. x86_64 never showed it: FXSAVE
+	 * writes exactly 512 bytes and not one more.
+	 *
+	 * It does **not** cover AVX or SVE, whose state is larger and whose size
+	 * is a runtime question; those units are deliberately left disabled
+	 * rather than enabled and half-saved.
 	 *
 	 * Aligned to sixty-four because the instruction that writes it requires
 	 * alignment and faults rather than working slowly without it. */
-	u8 vector_state[512] RK_ALIGNED(64);
+	u8 vector_state[VECTOR_STATE_MAX] RK_ALIGNED(64);
+
+	/* And a value that must still be there afterwards.
+	 *
+	 * The bug above was silent for three checkpoints because nothing after
+	 * the array mattered yet. A guard costs one comparison per context
+	 * switch and turns "the next field is wrong for no reason" into a
+	 * counted, reported failure at the moment it happens. */
+	u64 vector_guard;
+
+	/* The next thread on whatever queue this one is waiting on, or null.
+	 * One pointer rather than a list node, because a thread waits for at
+	 * most one thing at a time -- and a thread on two queues would be woken
+	 * twice and run once. */
+	struct thread *wait_next;
+
+	/* The process this thread belongs to, by identifier rather than by
+	 * pointer, and zero for a kernel thread that belongs to none.
+	 *
+	 * An identifier because a process can end while somebody still holds a
+	 * reference to one of its threads, and a stale pointer to a reused slot
+	 * is a thread that appears to belong to a different program. */
+	u32 process;
 };
 
 void sched_init(void);

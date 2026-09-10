@@ -29,7 +29,14 @@ it, installs itself onto a disk beside Windows without disturbing what is
 there, boots the machine it installed, offers the other systems it found, and
 says what is wrong with a machine that will not start.
 
-**272 self-tests across eighteen boot paths**, every format checked against a
+As of 9 September 2026 it also turns the machine off by interpreting the
+vendor's own bytecode, tells the other processors when a translation has
+changed, gives a thread a way to *wait* rather than spin, and gives each process
+an address space of its own -- with memory that appears when it is touched
+rather than when it is promised, and one page of zeroes shared by every
+untouched read in the machine until somebody writes to it.
+
+**379 self-tests across eighteen boot paths**, every format checked against a
 tool that did not write it. The number is what the verification run reports, not
 a total kept by hand: `scripts/verify-kernel.sh` prints it, and it is copied
 here after a green run rather than incremented when a test is added.
@@ -55,9 +62,9 @@ run on this kernel rather than on Linux:
 
 | Missing | Size of the gap |
 |---|---|
-| **Per-process address spaces** | `user_thread_create()` makes threads sharing one address space; the scheduler has no page-table switch |
+| ~~**Per-process address spaces**~~ | **Built, 9 September 2026.** Each process has page tables of its own and the scheduler switches them; the kernel half is shared by copying the top-level entries rather than the tables beneath. Demand paging, stack growth, zero-page sharing and copy-on-write on top |
 | **Process creation and ELF loading** | user code is a blob passed as a pointer. The *bootloader* parses ELF; the kernel does not |
-| **Memory syscalls** | there is no way for a program to ask for memory |
+| **Memory syscalls** | there is no way for a program to *ask* for memory. What an `mmap` would be built on now exists: a region is reserved and its pages appear when touched |
 | **File syscalls, and a namespace** | ReconFS and FAT32 are kernel-internal. No `open`, no paths, no VFS |
 | **A framebuffer driver** | the smallest of these — address, pitch and format already arrive in the boot info, and nothing yet reads them |
 | **Input** | none at all. PS/2 for virtual machines, USB HID for real ones, which needs checkpoint 11b |

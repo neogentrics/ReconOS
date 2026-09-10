@@ -2494,6 +2494,83 @@ between a five-minute diagnosis and a session-long one.
   first — without a signed-in account the restart took the other branch and
   did not crash, which is why the first three gdb runs looked clean.
 
+
+### BG-145 — Whether the kernel could write through a read-only page depended on which firmware booted it
+
+- **Found:** 9 September 2026, by the address-space self-test, on its first run.
+- **Cost:** none yet, and it would have been unbounded: copy-on-write is
+  enforced by mapping a shared page read-only, and this made that enforcement
+  optional on some boot paths and not others.
+
+`CR0.WP` is the bit that makes a read-only page read-only to ring 0 as well.
+Without it, kernel code may write through any mapping regardless of its
+read-only bit, and the processor raises nothing.
+
+Nothing in this kernel ever set it. `arch/x86_64/boot.S` *clears* it for four
+instructions to write one page-table entry and then restores whatever was
+there — so its value was whatever the firmware left behind. Set under OVMF,
+which is the only reason boot.S had to clear it at all. Clear on the paths that
+boot with no firmware, because that is its state after reset.
+
+So two boot paths of the same kernel differed in whether the read-only bit
+meant anything to the kernel, and no test could see the difference, because
+nothing in the kernel had yet relied on it.
+
+Copy-on-write is what made it matter. A page shared between programs is kept
+shared by being mapped read-only; the first write traps and the writer is given
+a copy. With `WP` clear, the kernel's own write does not trap — it goes into the
+page every other program is still reading. No fault, no message, and every page
+table correct.
+
+- **Was:** a control bit that was only ever cleared and restored, never set, so
+  its value was inherited from firmware rather than decided.
+- **Fixed in** `arch_vector_enable`, which already runs on every processor and
+  already sets the other control bits that make a promise to the hardware.
+- **Found by** the address-space self-test reading the shared zero page back
+  after a write and requiring it still to be zero. That assertion exists
+  because the failure it catches produces no other symptom.
+
+### BG-146 — Sixteen bytes past the end of the vector save area, into the next field of the same thread
+
+- **Found:** 9 September 2026, when a user program on aarch64 took an
+  instruction abort on its own code immediately after being preempted.
+- **Cost:** about an hour, and it had been present since the vector unit was
+  enabled in blueprint section 1.1.
+
+`struct thread` held the vector state in `u8 vector_state[512]`, and the comment
+above it said 512 covered *"aarch64's thirty-two 128-bit V registers with their
+two status words"*. Thirty-two registers of sixteen bytes is exactly 512. There
+was nothing left for the status words, and `arch_vector_save` wrote them anyway:
+
+    ((u64 *)area)[64] = fpsr;   /* byte 512 */
+    ((u64 *)area)[65] = fpcr;   /* byte 520 */
+
+Sixteen bytes into whatever field of `struct thread` came next, on every context
+switch. What came next was `wait_next` and then `process`.
+
+x86_64 never showed it. `FXSAVE` writes exactly 512 bytes and not one more, so
+one architecture overran its buffer on every switch and the other never did.
+
+It was silent for three checkpoints because nothing after the array mattered
+yet. It stopped being silent when processes got address spaces: a user program's
+`process` became zero the first time it was preempted, so the scheduler could no
+longer find its process, switched it to the kernel's address space, and the
+program took an instruction abort on its own code — a fault whose address, whose
+class, and whose symptom all pointed at the memory manager rather than at the
+context switch.
+
+- **Was:** a comment asserting the arithmetic the code got wrong, and a buffer
+  sized to the registers rather than to what was written into it.
+- **Fixed in** `sched.h`: `VECTOR_STATE_MAX` is 576 — the registers, the control
+  words, and a multiple of 64 so the alignment the store instructions require is
+  kept.
+- **And a guard**, because the first version of this bug was invisible and the
+  next one would be too. Every thread carries a known value after the array, and
+  the context switch checks it immediately after saving. Watched to fail: with
+  the array put back to 512, the scheduler's self-test reports 45 switches that
+  wrote past the area, on the same boot where every other test passes.
+
+
 ---
 
 ## Labels

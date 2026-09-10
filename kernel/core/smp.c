@@ -111,6 +111,17 @@ void smp_init(void)
 		       time_monotonic_ns() < deadline)
 			arch_cpu_relax();
 	}
+
+	/* Bring-up is over, so whatever it needed in low memory can go.
+	 *
+	 * This is called after the wait and not inside the loop: the scaffolding
+	 * is shared by every processor being started, and taking it away while
+	 * one of them is still walking through it is a processor that vanishes
+	 * with nothing to read afterwards. A processor that never reported still
+	 * gets the full deadline first -- if it arrives late it finds its
+	 * trampoline gone, which is the same outcome as never arriving and is
+	 * the one we already print. */
+	arch_smp_bringup_done();
 }
 
 void smp_secondary_main(unsigned cpu)

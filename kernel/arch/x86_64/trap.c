@@ -18,6 +18,8 @@
 #include <recon/kernel/smp.h>
 
 #include <recon/kernel/trap.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
@@ -265,6 +267,28 @@ void trap_dispatch(struct trap_frame *f)
 	 * sentence is the whole return on this checkpoint -- before it, any
 	 * wrong pointer anywhere stopped the machine. */
 	if ((f->cs & 3) == 3) {
+		/* Before it is a fault, ask whether it is a promise.
+		 *
+		 * A page fault on an address the program was told it could
+		 * use is how demand paging works at all: nothing was mapped,
+		 * the program touched it, and the handler makes it exist and
+		 * lets the instruction run again. Bit 1 of the error code says
+		 * the access was a write, which is what decides between
+		 * sharing the machine's one page of zeroes and handing over a
+		 * page of its own.
+		 *
+		 * Only for exception 14. A protection fault at an address is
+		 * not a missing page, and must not be answered by inventing
+		 * one. */
+		if (f->vector == 14) {
+			u64 want;
+
+			__asm__ volatile("movq %%cr2, %0" : "=r"(want));
+
+			if (vm_fault_user((vaddr_t)want, (f->error & 2) != 0))
+				return;
+		}
+
 		kprintf("\nuser program fault: %s at %p\n",
 			f->vector < 32 ? exception_name[f->vector] : "unknown",
 			(void *)(uintptr_t)f->rip);
@@ -277,6 +301,32 @@ void trap_dispatch(struct trap_frame *f)
 		}
 		user_note_fault();
 		thread_exit();
+	}
+
+	/* The kernel, touching a program's memory on its behalf.
+	 *
+	 * A system call that writes into a buffer the program gave it is the
+	 * kernel dereferencing a user address, and the moment that memory is
+	 * demand paged the write can fault -- in kernel mode, at a user
+	 * address, with nothing wrong. Refusing here would mean every buffer a
+	 * program passes has to be touched by the program first, which is a
+	 * rule nobody could keep and one that fails silently when they do not.
+	 *
+	 * This is deliberately narrow. It only applies while a program's
+	 * address space is the active one, and `vm_fault_user` still refuses
+	 * any address that program was not promised -- so a kernel pointer that
+	 * has gone wild into the lower half is still a fault, and still stops
+	 * the machine with a report. What it must not become is a rule that any
+	 * low address the kernel touches is made to exist on request.
+	 */
+	if (f->vector == 14) {
+		u64 want;
+
+		__asm__ volatile("movq %%cr2, %0" : "=r"(want));
+
+		if (want < USER_LIMIT && addrspace_active() &&
+			vm_fault_user((vaddr_t)want, (f->error & 2) != 0))
+			return;
 	}
 
 	/* Somebody was expecting this. Record it and resume where they said,

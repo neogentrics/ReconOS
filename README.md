@@ -64,9 +64,16 @@ actually was, how it surfaced, who found it, and what was done about it --
 and every entry is also a
 [GitHub issue](https://github.com/neogentrics/ReconOS/issues).
 
-Still early. There is no kernel of its own, and the account roles are
-enforced by ReconOS inside ReconOS rather than by anything underneath it. What is here works and is tested; what
-is not here is listed at the end.
+Still early. The desktop still runs on Linux, and its account roles are
+enforced by ReconOS inside ReconOS rather than by anything underneath it. What
+is here works and is tested; what is not here is listed at the end.
+
+**There is now a kernel of its own**, built alongside the desktop and not yet
+underneath it — see [The kernel](#the-kernel) below. It boots on two
+architectures under three firmwares, on its own bootloader, off its own
+filesystem, installed by its own installer. What it does not have yet is the
+input, display and network drivers a desktop needs, which is exactly the list
+that section ends with.
 
 ## What it looks like
 
@@ -228,8 +235,8 @@ everywhere worth going, a toolbar of icons in groups, and a sidebar that
 separates your own folders from the machine's. It hides the system's own
 bookkeeping from your home folder.
 
-**The network — seen, not implemented.** ReconOS has no kernel, so it has no
-ARP, no IP and no TCP. What it has is `recon_net`, which presents the host's
+**The network — seen, not implemented.** The kernel has no network stack yet
+— no ARP, no IP, no TCP — and the desktop does not run on it in any case. What it has is `recon_net`, which presents the host's
 network in ReconOS's own terms: which interfaces exist, their addresses, the
 gateway, the resolvers, and whether there is a way out. It can resolve a name
 and ask whether a host answers, without freezing the desktop while a dead
@@ -786,6 +793,77 @@ desktop down because a struct grew a field and the ABI number did not; every
 context menu entry in the system silently doing nothing for weeks because
 nothing could press a button without a person there to do it. That last one
 is why ReconOS can drive its own input now.
+
+## The kernel
+
+Phase two, built in parallel with the desktop rather than after it. **Version
+0.0.11**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+
+It is a real kernel and it is not yet a kernel you can run ReconOS on. Both
+halves of that sentence matter, so this section says what exists, and then says
+what does not.
+
+### What it does
+
+A machine with nothing on it, or with Windows or Linux already on it, boots
+ReconOS media, is told where to install, and comes up on its own kernel
+afterwards — on either architecture, under either firmware, without GRUB,
+without Linux, and without touching what was already on the disk.
+
+| | |
+|---|---|
+| **Architectures** | x86_64 and aarch64, one portable core behind a six-function boundary the build enforces |
+| **Firmware** | UEFI on both architectures, BIOS on x86_64, and device tree with no firmware at all |
+| **Bootloader** | `reconboot`, ours. UEFI and a 440-byte BIOS stage 1. It verifies the kernel's signature and there is no way to turn that off |
+| **Memory** | Four-level paging, large pages where the processor has them, a direct map, no-execute, TLB shootdown across processors, write-combining for the framebuffer, demand paging and copy-on-write |
+| **Processors** | Verified at 1, 2, 4, 8, 9, 16 and 32. Per-processor timers, real preemption, idle threads that cannot be stolen |
+| **Processes** | A process table, identity, an exit status somebody collects, and an address space each |
+| **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
+| **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
+| **Installer** | Plans first and writes nothing while planning; then partitions, formats, copies and leaves a disk that boots on its own |
+| **Recovery** | The same kernel from the ESP, read-only, offered in the boot menu on every machine |
+
+### How it is known to work
+
+`scripts/verify-kernel.sh` boots **eighteen paths** on every change — every
+firmware, several processor counts, three disk controllers, two CPU models —
+and runs the kernel's self-tests on each. Every format it writes is checked by
+a tool that did not write it: `sgdisk`, `sfdisk`, `mtools`, and a second
+ReconFS reader written from the specification in another language.
+
+The standing rule is that **a test that has never been seen to fail is not a
+test yet**. Every checker in the tree has been shown a deliberate fault and
+watched to catch it before any pass it reports is believed.
+
+### What it does not have
+
+This is the honest list, and it is the reason the desktop is not on it.
+
+- **Input.** No keyboard, no mouse. Every screen this kernel has drawn has been
+  read and not touched.
+- **Display.** A framebuffer console on whatever the firmware left. No mode
+  setting, no surface for a compositor.
+- **Network.** Nothing at all.
+- **A program from disk.** No ELF loader, so a "user program" is still a byte
+  array compiled into the kernel — it has an address space of its own, but
+  nothing puts a file into one yet.
+- **IPC.** No pipes, sockets, message queues or signals. They wait on
+  descriptors, which wait on a virtual filesystem.
+- **Identity that is enforced.** Files carry a mode and processes carry a user;
+  nothing consults either yet. Recorded now so that enforcement, when it
+  arrives, has something true to enforce.
+- **Device interrupts on any processor.** No I/O APIC, so every device
+  interrupt lands on the boot processor however many there are.
+- **USB that notices a plug.** Enumerated once at boot; no hot-plug and no hubs.
+
+### Where to read more
+
+- [docs/KERNEL.md](docs/KERNEL.md) — the plan, checkpoint by checkpoint.
+- [docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md) — what the desktop has asked the
+  kernel for, ordered by how sharply the gap is felt rather than by difficulty.
+- [docs/BUGS.md](docs/BUGS.md) — every fault, what it actually was, and how it
+  surfaced. The kernel's share is the majority of the register.
+
 
 ## Where this is going
 

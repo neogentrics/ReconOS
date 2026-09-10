@@ -8,6 +8,7 @@
 #include <recon/kernel/acpi.h>
 #include <recon/kernel/block.h>
 #include <recon/kernel/boot.h>
+#include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/crc32.h>
 #include <recon/kernel/cpu.h>
@@ -22,6 +23,8 @@
 #include <recon/kernel/rootfs.h>
 #include <recon/kernel/smbios.h>
 #include <recon/kernel/power.h>
+#include <recon/kernel/wait.h>
+#include <recon/kernel/process.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -87,6 +90,7 @@ void kmain(void)
 
 	vm_init();
 	vm_print_summary();
+	addrspace_init();
 
 	/* The screen, as soon as there is a direct map to reach it through.
 	 *
@@ -117,6 +121,7 @@ void kmain(void)
 	 * capturing it from a unit that is still disabled would fault. */
 	arch_vector_enable();
 
+	process_init();
 	sched_init();
 
 	time_init();
@@ -190,6 +195,12 @@ void kmain(void)
 		sched_self_test() ? "pass" : "FAIL");
 	kprintf("  locking            : %s\n",
 		lock_self_test() ? "pass" : "FAIL");
+	kprintf("  waiting and waking : %s\n",
+		wait_self_test() ? "pass" : "FAIL");
+	kprintf("  processes          : %s\n",
+		process_self_test() ? "pass" : "FAIL");
+	kprintf("  address spaces     : %s\n",
+		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  processors         : %s\n",
 		smp_self_test() ? "pass" : "FAIL");
 	kprintf("  user mode          : %s\n",
@@ -217,7 +228,16 @@ void kmain(void)
 	 * replacement case. Reporting it earlier counted only the ones that
 	 * happened before there was a second processor to tell. */
 	vm_print_shootdowns();
+
+	/* After the user-mode tests, not before: the mappings this is asking
+	 * about are made when a program is loaded, and a report taken earlier
+	 * describes a machine that has never run one. The shootdown counters
+	 * were read too early once for exactly this reason. */
+	vm_fault_print_summary();
+	vm_user_half_report();
+	addrspace_print_summary();
 	user_print_summary();
+	process_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether

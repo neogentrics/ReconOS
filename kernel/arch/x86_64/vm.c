@@ -16,6 +16,7 @@
 #include <recon/kernel/lock.h>
 #include <recon/kernel/smp.h>
 
+#include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
@@ -252,6 +253,36 @@ static u64 leaf_bits(unsigned flags, bool large)
 	return bits;
 }
 
+/* --- whose tables a mapping goes into ------------------------------------
+ *
+ * The kernel's half is one map shared by every processor and every program: it
+ * is the same memory seen from the same addresses no matter who is running.
+ * The half below it is not, once processes have address spaces of their own,
+ * and the difference has to be decided per *address* rather than per call --
+ * because callers do not know or care which half they are in.
+ *
+ * Held per processor rather than as one variable, because two processors run
+ * two different programs at the same instant and there is no single answer to
+ * "which address space is current". This is the same fact that made the
+ * task-state segment per-processor at checkpoint 9b, and the fault it would
+ * cause is quieter: a mapping made into the wrong program's tables.
+ *
+ * Null means the kernel's own, which is what every processor starts with and
+ * what a kernel thread runs in.
+ */
+static u64 *active_user_root[MAX_CPUS];
+
+static u64 *root_for(vaddr_t va)
+{
+	u64 *user;
+
+	if (va >= USER_LIMIT)
+		return kernel_pml4;
+
+	user = active_user_root[arch_cpu_id()];
+	return user ? user : kernel_pml4;
+}
+
 bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 {
 	if ((va | pa | size) & (PAGE_SIZE - 1))
@@ -263,7 +294,7 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 		unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
 		unsigned i1 = (unsigned)((va >> 12) & 0x1FF);
 
-		u64 *pdpt = next_level(kernel_pml4, i4, true);
+		u64 *pdpt = next_level(root_for(va), i4, true);
 		u64 *pd, *pt;
 
 		if (!pdpt)
@@ -313,6 +344,104 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 	return true;
 }
 
+/* Takes a mapping away, and tells the other processors it has gone.
+ *
+ * The kernel has been able to map since checkpoint 5 and never to unmap, which
+ * was honest while every mapping it made was permanent. It is not any more:
+ * the first caller is the trampoline page, which has to stop being mapped in
+ * the half a process is meant to own, and every later one is a process
+ * releasing memory.
+ *
+ * THE ORDER MATTERS AND IT IS THE OPPOSITE OF MAPPING. The entry is cleared
+ * first and the invalidation follows -- a processor that reads the entry
+ * between those two steps sees "not present" and faults, which is the correct
+ * answer arriving early. Invalidating first would leave a window where a
+ * processor could reload the very translation being removed, and then keep it.
+ *
+ * IT REFUSES TO SPLIT A LARGE PAGE. Unmapping four kilobytes out of the middle
+ * of a two-megabyte mapping means allocating a page table, copying five hundred
+ * and twelve entries into it, and swapping it in underneath processors that are
+ * using it -- a different operation with a different set of races, and one no
+ * caller here needs. Refusing is a return of false at a known place; splitting
+ * badly is a fault somewhere else entirely.
+ *
+ * Nothing is freed. The physical page belongs to whoever allocated it and this
+ * has no way to know whether it is still wanted -- the direct map and a process
+ * mapping can point at the same page, and a filesystem cache will one day.
+ */
+bool vm_unmap(vaddr_t va, u64 size)
+{
+	if ((va | size) & (PAGE_SIZE - 1))
+		panic("vm_unmap: unaligned request");
+
+	while (size) {
+		unsigned i4 = (unsigned)((va >> 39) & 0x1FF);
+		unsigned i3 = (unsigned)((va >> 30) & 0x1FF);
+		unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
+		unsigned i1 = (unsigned)((va >> 12) & 0x1FF);
+
+		u64 *pdpt = next_level(root_for(va), i4, false);
+		u64 *pd, *pt;
+		u64 old;
+
+		/* Nothing there is not an error. A caller tearing down a range
+		 * it only partly mapped is doing the right thing, and making
+		 * it track which parts it got to is how a teardown path grows
+		 * a bug that only fires when an earlier step failed. */
+		if (!pdpt) {
+			va += PAGE_SIZE;
+			size -= PAGE_SIZE;
+			continue;
+		}
+
+		if (pdpt[i3] & PTE_PRESENT && pdpt[i3] & PTE_LARGE) {
+			if (size < SIZE_1G || (va & (SIZE_1G - 1)))
+				return false;
+
+			old = pdpt[i3];
+			pdpt[i3] = 0;
+			invalidate_if_live(old, va);
+			mapped_1g--;
+			va += SIZE_1G;
+			size -= SIZE_1G;
+			continue;
+		}
+
+		pd = next_level(pdpt, i3, false);
+		if (!pd) {
+			va += PAGE_SIZE;
+			size -= PAGE_SIZE;
+			continue;
+		}
+
+		if (pd[i2] & PTE_PRESENT && pd[i2] & PTE_LARGE) {
+			if (size < SIZE_2M || (va & (SIZE_2M - 1)))
+				return false;
+
+			old = pd[i2];
+			pd[i2] = 0;
+			invalidate_if_live(old, va);
+			mapped_2m--;
+			va += SIZE_2M;
+			size -= SIZE_2M;
+			continue;
+		}
+
+		pt = next_level(pd, i2, false);
+		if (pt && (pt[i1] & PTE_PRESENT)) {
+			old = pt[i1];
+			pt[i1] = 0;
+			invalidate_if_live(old, va);
+			mapped_4k--;
+		}
+
+		va += PAGE_SIZE;
+		size -= PAGE_SIZE;
+	}
+
+	return true;
+}
+
 paddr_t vm_lookup(vaddr_t va)
 {
 	unsigned i4 = (unsigned)((va >> 39) & 0x1FF);
@@ -322,7 +451,7 @@ paddr_t vm_lookup(vaddr_t va)
 
 	u64 *pdpt, *pd, *pt;
 
-	pdpt = next_level(kernel_pml4, i4, false);
+	pdpt = next_level(root_for(va), i4, false);
 	if (!pdpt)
 		return 0;
 
@@ -498,6 +627,222 @@ void vm_activate_this_cpu(void)
 	x86_pat_init();
 }
 
+/* --- what the kernel has in the half a process is meant to own -------------
+ *
+ * Not "is the map correct". The question is which parts of the *user* half the
+ * kernel keeps something of its own in, because every one of those has to be
+ * accounted for before two processes can have different low halves -- an entry
+ * the kernel needs and a per-process root does not carry is a fault on a
+ * processor that was working a moment earlier.
+ *
+ * It is reported rather than reasoned about because reasoning about it already
+ * produced a confident wrong answer. Two comments in this file said the kernel
+ * image was identity mapped down here; vm_init has said since checkpoint 10,
+ * in its own comment, that it deliberately is not. A walk of the live tables
+ * cannot hold an opinion about which of those is true.
+ */
+struct low_walk {
+	vaddr_t  start;
+	vaddr_t  end;
+	bool     user;
+	bool     open;
+	unsigned runs;
+	unsigned kernel_runs;
+};
+
+static void low_close(struct low_walk *w)
+{
+	if (!w->open)
+		return;
+
+	/* Enough to see the shape, bounded so that a map gone wrong cannot
+	 * fill a serial log with it. */
+	if (w->runs < 8)
+		kprintf("  %s : 0x%lx-0x%lx\n",
+			w->user ? "a program " : "the kernel",
+			(unsigned long)w->start,
+			(unsigned long)(w->end - 1));
+
+	w->runs++;
+	if (!w->user)
+		w->kernel_runs++;
+
+	w->open = false;
+}
+
+static void low_add(struct low_walk *w, vaddr_t va, u64 span, bool user)
+{
+	/* Runs are joined only when they are adjacent *and* owned the same way.
+	 * Two neighbouring ranges with different owners are the whole point of
+	 * this walk and must not be merged into one. */
+	if (w->open && w->user == user && w->end == va) {
+		w->end = va + span;
+		return;
+	}
+
+	low_close(w);
+
+	w->open  = true;
+	w->start = va;
+	w->end   = va + span;
+	w->user  = user;
+}
+
+/* Level 4 is the PML4, level 1 the page table. */
+static void low_level(struct low_walk *w, u64 *table, unsigned level,
+		      vaddr_t base)
+{
+	u64 span = 1ULL << (12 + 9 * (level - 1));
+	unsigned i;
+
+	for (i = 0; i < 512; i++) {
+		u64 e = table[i];
+		vaddr_t va = base + (vaddr_t)i * span;
+
+		/* The top half is the kernel's by architecture and by design.
+		 * Only the half a process is supposed to own is in question. */
+		if (level == 4 && i >= 256)
+			break;
+
+		if (!(e & PTE_PRESENT))
+			continue;
+
+		if (level == 1 || (level < 4 && (e & PTE_LARGE)))
+			low_add(w, va, span, (e & PTE_USER) != 0);
+		else
+			low_level(w, table_at(e & PTE_ADDR_MASK), level - 1, va);
+	}
+}
+
+unsigned vm_user_half_report(void)
+{
+	struct low_walk w;
+
+	kmemset(&w, 0, sizeof(w));
+
+	kprintf("\nThe user half\n");
+	low_level(&w, kernel_pml4, 4, 0);
+	low_close(&w);
+
+	if (!w.runs)
+		kputs("  nothing is mapped below the kernel\n");
+
+	kprintf("  kernel-owned : %u of %u range%s\n",
+		w.kernel_runs, w.runs, w.runs == 1 ? "" : "s");
+
+	return w.kernel_runs;
+}
+
+/* --- an address space of its own -----------------------------------------
+ *
+ * A process address space is one page: a top-level table whose upper half is
+ * the kernel's, entry for entry, and whose lower half is this program's alone.
+ *
+ * THE UPPER HALF IS COPIED, AND COPYING IS WHAT MAKES IT SHARED RATHER THAN
+ * DUPLICATED. What is copied is the 256 entries, each of which is a *pointer*
+ * to the same next-level table the kernel is already using. So a mapping the
+ * kernel makes afterwards -- a driver's registers, more direct map -- appears
+ * in every address space at once, because they are all looking at the same
+ * tables one level down. Copying the entries deeper would give each process a
+ * private snapshot of the kernel that silently stopped matching it, which is
+ * the bug this shape exists to make impossible.
+ *
+ * The kernel's own top-level entries are therefore never rewritten after boot
+ * for the range covered here. Nothing does that today; if something ever needs
+ * to, it has to walk every live address space, and this comment is where
+ * whoever writes it will look.
+ */
+paddr_t arch_as_new_root(void)
+{
+	u64 *root = alloc_table();
+	unsigned i;
+
+	if (!root)
+		return 0;
+
+	/* The top half, shared. The bottom half is left zero: a program with
+	 * nothing mapped yet, rather than a program that inherits whatever the
+	 * last one had. */
+	for (i = 256; i < 512; i++)
+		root[i] = kernel_pml4[i];
+
+	return virt_to_phys(root);
+}
+
+/* Frees the tables the *program* caused to exist, and nothing else.
+ *
+ * Only the lower half is walked. Walking the upper half would free the
+ * kernel's own page tables -- which every other address space and every
+ * processor is still using -- and would do it without any of them noticing
+ * until something wrote to a page that had been handed to somebody else.
+ *
+ * The pages a program's mappings *pointed at* are not freed here either. This
+ * frees page tables; whoever allocated the memory frees the memory, and the
+ * two are not the same list.
+ */
+static void free_lower_tables(u64 *table, unsigned level)
+{
+	unsigned i;
+	unsigned last = (level == 4) ? 256 : 512;
+
+	for (i = 0; i < last; i++) {
+		u64 e = table[i];
+
+		if (!(e & PTE_PRESENT))
+			continue;
+
+		/* A large page is a leaf: it is memory, not a table. */
+		if (level < 4 && (e & PTE_LARGE))
+			continue;
+
+		if (level > 1) {
+			free_lower_tables(table_at(e & PTE_ADDR_MASK), level - 1);
+			pmm_free_page(e & PTE_ADDR_MASK);
+			table_pages--;
+		}
+	}
+}
+
+void arch_as_free_root(paddr_t root)
+{
+	u64 *table;
+
+	if (!root)
+		return;
+
+	table = table_at(root);
+	free_lower_tables(table, 4);
+
+	pmm_free_page(root);
+	table_pages--;
+}
+
+/* Makes an address space the one this processor is translating through.
+ *
+ * Root zero means the kernel's own, which is what a kernel thread runs in and
+ * what every processor starts in.
+ *
+ * The write to CR3 invalidates every non-global translation on this processor
+ * by itself, which is exactly the set that could belong to the outgoing
+ * program -- the kernel's mappings are marked global and survive on purpose,
+ * because reloading them on every switch is the cost this bit exists to avoid.
+ *
+ * Nothing is sent to the other processors and nothing needs to be: they are
+ * translating through their own roots, and a root this one stops using does not
+ * become wrong for anybody else. Tearing an address space *down* is the case
+ * that needs care, and that is why it happens after the last thread using it
+ * has ended rather than when it is switched away from.
+ */
+void arch_as_activate(paddr_t root)
+{
+	unsigned cpu = arch_cpu_id();
+	u64 target = root ? (u64)root : (u64)kernel_pml4_phys;
+
+	active_user_root[cpu] = root ? table_at(root) : NULL;
+
+	__asm__ volatile("mov %0, %%cr3" : : "r"(target) : "memory");
+}
+
 void vm_print_summary(void)
 {
 	kprintf("\nVirtual memory\n");
@@ -552,6 +897,93 @@ bool vm_self_test(void)
 	if (vm_lookup((vaddr_t)(uintptr_t)__kernel_phys_start) != 0) {
 		kputs("  vm: the kernel is still mapped where it was loaded, so "
 		      "the lower half is not free after all\n");
+		ok = false;
+	}
+
+	/* --- taking a mapping away, and proving the processor believes it ---
+	 *
+	 * Two separate claims, and only the second is hard.
+	 *
+	 * The easy one is that the entry is gone from the tables, which
+	 * `vm_lookup` answers by walking them.
+	 *
+	 * The one that matters is that the *translation* is gone, which is a
+	 * different question: a cached translation is consulted before the table
+	 * it came from, so a page table can be perfect and the processor still
+	 * reach the old page. That is exactly the fault checkpoint 10 found,
+	 * where the second user program read the first program's memory through
+	 * tables that were correct.
+	 *
+	 * So this maps a second, differently-filled page at the same address and
+	 * reads it. If the unmap forgot to invalidate, the entry it left behind
+	 * is not present -- so the map that follows sees nothing live, skips its
+	 * own invalidation, and the stale translation survives to answer with the
+	 * *first* page. The read is the assertion; every table involved would
+	 * look right.
+	 */
+	{
+		/* A slot nothing else uses: above the direct map, below the
+		 * kernel image, and never mapped by anything at boot. */
+		const vaddr_t at = 0xFFFF900000000000ULL;
+		paddr_t first = pmm_alloc_page();
+		paddr_t second = pmm_alloc_page();
+
+		if (!first || !second) {
+			kputs("  vm: could not allocate two pages to test "
+			      "unmapping with\n");
+			ok = false;
+		} else {
+			volatile u32 *seen = (volatile u32 *)at;
+
+			*(volatile u32 *)phys_to_virt(first)  = 0x1111FFFFU;
+			*(volatile u32 *)phys_to_virt(second) = 0x2222FFFFU;
+
+			if (!vm_map(at, first, PAGE_SIZE, VM_READ | VM_WRITE) ||
+			    *seen != 0x1111FFFFU) {
+				kputs("  vm: the page it was about to unmap was "
+				      "not readable in the first place\n");
+				ok = false;
+			}
+
+			if (!vm_unmap(at, PAGE_SIZE)) {
+				kputs("  vm: it refused to unmap a four-kilobyte "
+				      "page it had just mapped\n");
+				ok = false;
+			}
+
+			if (vm_lookup(at) != 0) {
+				kputs("  vm: an unmapped address still resolves "
+				      "to a page\n");
+				ok = false;
+			}
+
+			if (!vm_map(at, second, PAGE_SIZE, VM_READ | VM_WRITE)) {
+				kputs("  vm: could not map a second page where "
+				      "the first had been\n");
+				ok = false;
+			} else if (*seen == 0x1111FFFFU) {
+				kputs("  vm: after unmapping and mapping another "
+				      "page, the address still reads the first "
+				      "one -- the translation was never "
+				      "invalidated\n");
+				ok = false;
+			} else if (*seen != 0x2222FFFFU) {
+				kputs("  vm: the address reads neither page\n");
+				ok = false;
+			}
+
+			vm_unmap(at, PAGE_SIZE);
+			pmm_free_page(first);
+			pmm_free_page(second);
+		}
+	}
+
+	/* Unmapping something that was never mapped is not an error. A caller
+	 * unwinding a range it only partly built has to be able to say "take all
+	 * of this away" without tracking how far it got. */
+	if (!vm_unmap(0xFFFF900000000000ULL, PAGE_SIZE)) {
+		kputs("  vm: unmapping an address that was not mapped was "
+		      "reported as a failure\n");
 		ok = false;
 	}
 

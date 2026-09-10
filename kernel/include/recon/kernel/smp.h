@@ -88,6 +88,17 @@ unsigned arch_smp_discover(u64 *ids, unsigned max);
  * written the startup sequence yet. */
 bool arch_smp_start(u64 id, unsigned cpu, void *stack_top);
 
+/* Called once, after every processor that is going to arrive has arrived.
+ * Releases whatever bring-up needed and the running system does not -- which
+ * on x86_64 is a page of real-mode code below one megabyte, and on aarch64 is
+ * nothing, because PSCI does the equivalent inside firmware.
+ *
+ * It exists for a reason beyond tidiness: that trampoline page is mapped in the
+ * half of the address space a *process* is meant to own, and every mapping left
+ * down there is one that every per-process address space would have to carry a
+ * copy of. */
+void arch_smp_bringup_done(void);
+
 /* Brings this processor onto the kernel's page tables, its interrupt
  * controller interface, and its timer. Called by each secondary on itself. */
 void arch_smp_cpu_init(void);

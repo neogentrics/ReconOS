@@ -294,6 +294,35 @@ static bool prepare_trampoline(void)
 	return true;
 }
 
+/* The trampoline has done its work, so it stops being mapped and the page goes
+ * back to the allocator.
+ *
+ * Two reasons, and the second is the one that made it worth doing now. It is a
+ * page of memory that is readable, writable AND executable at a fixed low
+ * address for the life of the machine -- the shape of thing an exploit looks
+ * for. And it is the only mapping this kernel keeps in the half a process is
+ * meant to own, which is what stands between here and giving each process an
+ * address space of its own. `vm_user_half_report` counts it, and the number it
+ * prints is zero once this has run.
+ *
+ * Unmapping before freeing, in that order: a freed page can be handed to
+ * somebody else immediately, and a page that is somebody else's while still
+ * mapped executable at a low address is worse than either problem alone.
+ *
+ * A processor started after this would find nothing to start from. Nothing
+ * does -- processors are started once, here, at boot -- and if hot-plug ever
+ * arrives it re-prepares rather than assuming the page survived.
+ */
+void arch_smp_bringup_done(void)
+{
+	if (!trampoline_page)
+		return;
+
+	vm_unmap((vaddr_t)trampoline_page, PAGE_SIZE);
+	pmm_free_page(trampoline_page);
+	trampoline_page = 0;
+}
+
 bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 {
 	struct trampoline_params *p;
