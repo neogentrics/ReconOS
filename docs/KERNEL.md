@@ -2787,6 +2787,142 @@ everything would pass a test that only asked whether it complained.
 The length check exists *because* its damage test was written first and had
 nothing to catch.
 
+## When the memory runs out
+
+Everything above the page allocator was built assuming there would be enough.
+Demand paging, copy-on-write, one address space per process -- all of it, with
+one answer to running out: fail the allocation. There is now somewhere for pages
+to go, a rule for choosing which, and a cache in front of the disk underneath.
+
+### Swap is a partition, and that is a deadlock argument rather than a preference
+
+The obvious place to put evicted pages is a file on ReconFS. It is the wrong
+place, and the reason is not performance.
+
+ReconFS is copy-on-write, so **writing to a file allocates**. The moment
+eviction runs is precisely the moment there is nothing to allocate from -- so a
+swap file would need memory in order to free memory, and the deeper the machine
+got into pressure the more certain the failure. A partition is a flat array of
+blocks at fixed offsets: slot *n* is always the same place, and writing to it
+allocates nothing.
+
+The cost is that swap has to be told which device it is, the same way `reconfs=`
+and `durability=` are, and for the same reason: this writes over a whole device
+from the first eviction, and picking one by looking at it is how a machine
+destroys its own system volume.
+
+### A swapped page is not an absent one
+
+This is the part that has a wrong answer looking exactly like a right one.
+
+When a page is written out, its page table entry stays where it is with the
+present bit clear, carrying the slot number in bits the hardware ignores plus a
+marker bit saying *this is a slot, not nothing*. Without the marker the fault
+handler cannot tell a page that was written out from a page that was never
+touched -- and it would hand the program a fresh page of zeroes over the top of
+memory it still owns.
+
+Nothing crashes. The program carries on with silently corrupted memory, which is
+worse than the fault. So that check runs **before every other branch** in the
+fault path, and a page that cannot be read back is refused rather than replaced
+with zeroes.
+
+### Which pages are cold is measured
+
+The processor sets an accessed bit when it fills a translation, so a sweep can
+see what has been touched since the last one -- and *clearing* it costs an
+invalidation, or every hot page reports cold for ever.
+
+The two architectures differ in a way that matters. On aarch64 before ARMv8.1
+there is no hardware update at all: a valid descriptor with the access flag
+clear **faults**. So the kernel asks `ID_AA64MMFR1_EL1.HAFDBS` whether the
+hardware maintains it, and says which answer it got rather than assuming either.
+
+Twenty anomalies are enumerated at the top of `core/evict.c` and each is handled
+at the line that names it -- the shared zero page, which must never be written
+out; a space that is not the one the processor is on; a fault on a page that is
+being evicted at that moment. **Every refusal is counted and printed**, because
+a policy that quietly declines to evict looks exactly like one with nothing to
+evict, and the difference is a machine about to run out of memory.
+
+### The block cache, and the aliasing problem that shapes it
+
+ReconFS reads through a cache now. Nothing else does, and that is the design:
+
+- the **partition reader** must see the disk as it is, not as it was;
+- the **installer** is rewriting a disk it has just claimed;
+- **swap** exists to move pages that did not fit in memory, so a cache in front
+  of it keeps in memory the very pages that were evicted for not fitting.
+
+**A partition and the disk it lives on are the same sectors under two names.**
+Block 0 of `virtio0p1` and block 2048 of `virtio0` reach one physical sector, so
+a cache keyed on the name it was handed holds two entries for it -- and a write
+through one name leaves the other holding what used to be there. A filesystem
+reads its own superblock back as the version from before it wrote it.
+
+So the key is the root device and the absolute block, resolved by the same code
+`block_read` already uses. `block_resolve` lives in `core/block.c` rather than in
+the cache for that reason: two implementations of that arithmetic would drift,
+and the day they drifted the aliasing would come back.
+
+The test for it is not that the bytes match. Two entries holding the same stale
+data agree with each other perfectly. It is that a read through the second name
+must **hit**, which can only happen if both resolved to one entry.
+
+### Write-through, and why that is not a compromise
+
+A write goes to the device first and updates the cache only if the device took
+it. No dirty list, no ordered flush, no window in which the only copy of
+somebody's data is in volatile memory.
+
+The cost is real: no write coalescing. The gain is that **every entry is clean,
+always**, and that single property carries the rest:
+
+- the cache can be dropped entirely, at any instant, with no loss -- which is
+  what lets memory pressure reclaim it without reclaim ever having to write to a
+  disk to make progress. On the eviction path that would be the same deadlock the
+  swap partition exists to avoid;
+- `flush_is_durable` keeps meaning what `block.h` says it means. A write-back
+  cache would have quietly added a second volatile layer above the one that
+  header goes to such lengths not to lie about.
+
+Write-back is the right answer once there is a wait queue and a flush that can be
+ordered. It is the wrong answer to reach for first.
+
+### What the locks cost
+
+Every lock counts how often it was taken, how often the taker had to spin, and
+the worst spin it ever suffered. That is the only way to answer *would more
+processors help* with something other than an opinion.
+
+The trap in lock profiling is that **the instrument is made of the thing it
+measures**: a counter shared by every processor is a cache line every processor
+writes, which is exactly the traffic a contended lock produces. A naive profiler
+reports contention it created, and reports most on the locks that were fine.
+
+This avoids it by adding no sharing that is not there already. The counters live
+in the lock, on the cache line `owner` is written to on every acquisition, so the
+line is already being taken exclusively by whoever took the lock. Only the holder
+writes them. And the contention counters are written only when there *was*
+contention, on a path that has already spent thousands of cycles spinning.
+
+Measured on this kernel:
+
+| processors | acquisitions | contended | worst |
+|---|---|---|---|
+| 1 | 789,267 | **0** | -- |
+| 4 | 762,801 | 1,196 | `pmm` 201 spins, `sched` 360 |
+
+The single-processor run is the negative control that makes the other worth
+reading. A counter incremented on every acquisition rather than only on a spin
+would report heavy contention on one processor too, and "every lock is
+contended" is exactly the sort of plausible answer somebody would act on.
+
+Their first run found three things: two locks that had never been given a name,
+two more that were initialised twice in a way that would have kept them out of
+the registry, and an initialiser that named its fields positionally -- so adding
+one turned every static lock in the kernel into a build error.
+
 ## Interrupt controllers on ARM
 
 Both generations. GICv2 up to eight processors, GICv3 above that — which is not
