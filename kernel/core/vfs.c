@@ -359,6 +359,7 @@ struct mount {
 
 static const struct mount mounts[] = {
 	{ "/dev/", devfs_open,   "devfs"  },
+	{ "/tmp/", ramfs_open,   "ramfs"  },
 	{ "/",     reconfs_open, "reconfs" },
 };
 

@@ -185,6 +185,13 @@ void vfs_note_write(void);
  * second implementation written inside the first one proves nothing. */
 struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error);
 void devfs_print_summary(void);
+
+/* Files that live in memory, mounted at /tmp. A flat namespace and no
+ * removal, both stated in ramfs.c rather than discovered. */
+struct file *ramfs_open(const char *rest, unsigned flags, u32 mode,
+			i64 *error);
+void ramfs_print_summary(void);
+bool ramfs_self_test(void);
 bool devfs_self_test(void);
 
 void vfs_print_summary(void);

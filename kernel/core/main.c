@@ -28,6 +28,7 @@
 #include <recon/kernel/process.h>
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/shm.h>
+#include <recon/kernel/swap.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -192,6 +193,19 @@ void kmain(void)
 	 * nothing on every machine that has one -- and report "no filesystem",
 	 * which is the same sentence a machine that genuinely has none prints. */
 	rootfs_init();
+
+	/* Which device is swap comes from the command line until the installer
+	  * marks a partition for it -- the same shape as `reconfs=` and
+	  * `durability=`, and for the same reason: this writes over a whole
+	  * device from the first eviction, and picking one by looking at it is
+	  * how a machine destroys its own system volume.
+	  *
+	  * Here, before the self-tests, and not with the other late setup. The
+	  * first version of this ran after them, so the store attached and the
+	  * test that was meant to exercise it had already reported a pass for
+	  * having found nothing to test. A skip that reads as a pass is the
+	  * thing this project keeps having to catch. */
+	swap_init_from_cmdline();
 	rootfs_print_summary();
 
 	/* Run at boot rather than in a test harness, because there is no test
@@ -227,6 +241,10 @@ void kmain(void)
 		devfs_self_test() ? "pass" : "FAIL");
 	kprintf("  memory two can see : %s\n",
 		shm_self_test() ? "pass" : "FAIL");
+	kprintf("  files in memory    : %s\n",
+		ramfs_self_test() ? "pass" : "FAIL");
+	kprintf("  somewhere to evict : %s\n",
+		swap_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  refusing a bad program : %s\n",
@@ -282,6 +300,13 @@ void kmain(void)
 	pipe_print_summary();
 	devfs_print_summary();
 	shm_print_summary();
+	ramfs_print_summary();
+
+	/* Here and not beside the block devices, because the store is attached
+	  * after they are found -- printing it there reported "none" on a machine
+	  * that had one, which is a summary describing the moment it was written
+	  * rather than the machine. */
+	swap_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether

@@ -807,6 +807,71 @@ done
 # suite is about to rest on exactly this checker being honest.
 
 echo
+echo "swap"
+
+# A store to evict into, on both architectures.
+#
+# This is here rather than left to the self-test battery because the battery
+# runs on machines with no disk, where the swap test reports that it found
+# nothing to test against -- which is honest and is also a pass. A pass for a
+# test that did not run is the exact shape of result this rig exists to stop, so
+# there is a path that gives it a device and then requires it to have used one.
+#
+# The device is a whole disk with nothing on it. Swap writes over everything
+# from the first eviction, and the kernel deliberately does not decide for
+# itself which device that may be -- so the harness says, the same way it says
+# which device is the filesystem.
+for a in x86_64 aarch64; do
+	printf '%-46s' "  a page written somewhere that is not memory ($a)"
+
+	img=$(mktemp)
+	dd if=/dev/zero of="$img" bs=1M count=32 status=none
+
+	if [ "$a" = aarch64 ]; then
+		sw_out=$(timeout -s KILL 90 qemu-system-aarch64 -M virt \
+			-cpu cortex-a72 -m 512M -nographic \
+			-kernel kernel/build/aarch64/reconos-kernel.img \
+			-append "swap=nvme0n1 poweroff" \
+			-drive "file=$img,format=raw,if=none,id=s0" \
+			-device nvme,serial=sw0,drive=s0 2>&1) || true
+	else
+		sw_out=$(timeout -s KILL 90 qemu-system-x86_64 -m 512M \
+			-nographic -no-reboot \
+			-kernel kernel/build/x86_64/reconos-kernel.elf \
+			-append "swap=nvme0n1 poweroff" \
+			-drive "file=$img,format=raw,if=none,id=s0" \
+			-device nvme,serial=sw0,drive=s0 2>&1) || true
+	fi
+
+	rm -f "$img"
+
+	sw_out=$(echo "$sw_out" | sed -e 's/\r$//')
+
+	# Three separate things, and the third is the one that matters.
+	#
+	# That the test passed is not enough: it passes when it finds no store.
+	# That the store was attached is not enough either: it could attach and
+	# then write nothing. So the assertion is that pages were actually
+	# written to it, read back, and the test still passed.
+	sw_pass=$(echo "$sw_out" | grep -c 'somewhere to evict *: pass')
+	sw_used=$(echo "$sw_out" | grep -c 'swap: using ')
+	sw_wrote=$(echo "$sw_out" | grep -cE 'activity *: [1-9][0-9]* written, [1-9][0-9]* read')
+
+	if [ "$sw_pass" -ge 1 ] && [ "$sw_used" -ge 1 ] && \
+	   [ "$sw_wrote" -ge 1 ]; then
+		echo "pages written and read back"
+		passes=$((passes + 1))
+	else
+		echo "FAILED -- pass=$sw_pass attached=$sw_used wrote=$sw_wrote"
+		echo "$sw_out" | grep -aE 'swap|evict' | head -4 |
+			sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("swap ($a)")
+	fi
+done
+
+echo
+
 echo "reconfs"
 
 for a in x86_64 aarch64; do
