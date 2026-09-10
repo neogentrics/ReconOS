@@ -3340,6 +3340,8 @@ the early rounds started cutting a guest that had not reached the disk.
 
 ### BG-161 — A header promised that either pointer could be null, and one of them could not
 
+[#400](https://github.com/neogentrics/ReconOS/issues/400)
+
 - **Found:** 10 September 2026, by the first caller that took the header at its
   word — the new VFS, reading a file to check it did not exist yet.
 - **Cost:** a write to address zero in kernel mode, and a panic. Nothing had ever
