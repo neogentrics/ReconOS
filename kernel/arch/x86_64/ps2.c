@@ -76,11 +76,28 @@
 #define CMD_TEST_PORT1    0xAB
 #define CMD_DISABLE_PORT1 0xAD
 #define CMD_ENABLE_PORT1  0xAE
+#define CMD_WRITE_PORT2   0xD4	/* the next byte goes to the mouse, not the
+				 * keyboard: one data port, two devices */
 
 #define CONFIG_PORT1_IRQ    (1u << 0)
 #define CONFIG_PORT2_IRQ    (1u << 1)
 #define CONFIG_PORT1_CLOCK  (1u << 4)	/* set means the clock is *disabled* */
 #define CONFIG_TRANSLATE    (1u << 6)
+
+#define MOUSE_SET_RATE    0xF3
+#define MOUSE_GET_ID      0xF2
+#define MOUSE_ENABLE      0xF4
+#define MOUSE_RESET       0xFF
+
+/* Bits in the first byte of a movement packet. */
+#define PKT_LEFT          (1u << 0)
+#define PKT_RIGHT         (1u << 1)
+#define PKT_MIDDLE        (1u << 2)
+#define PKT_ALWAYS_ONE    (1u << 3)
+#define PKT_X_SIGN        (1u << 4)
+#define PKT_Y_SIGN        (1u << 5)
+#define PKT_X_OVERFLOW    (1u << 6)
+#define PKT_Y_OVERFLOW    (1u << 7)
 
 #define KBD_SET_SCANCODE  0xF0
 #define KBD_ENABLE_SCAN   0xF4
@@ -88,7 +105,8 @@
 #define KBD_ACK           0xFA
 #define KBD_SELF_TEST_OK  0xAA
 
-#define PS2_IRQ 1
+#define PS2_IRQ       1
+#define PS2_MOUSE_IRQ 12
 
 /* Raw bytes taken by the handler, waiting for the worker.
  *
@@ -98,13 +116,22 @@
  * is not running. */
 #define RAW_BYTES 64
 
-static u8 raw[RAW_BYTES];
+/* Each entry is a byte plus a tag saying which of the two devices sent it.
+ *
+ * One ring rather than two, so the order between them survives: a click and the
+ * movement it happened during arrive interleaved, and two rings drained
+ * separately would let a fast mouse overtake its own button. */
+#define RAW_FROM_MOUSE 0x100
+
+static u16 raw[RAW_BYTES];
 static unsigned raw_head, raw_count;
 static struct spinlock raw_lock = SPINLOCK_INIT("ps2");
 
 static struct work decode_work;
 static bool present, translating, refused;
+static bool mouse_present, mouse_has_wheel;
 static u64 bytes_taken, bytes_lost, keys_made;
+static u64 mouse_bytes, mouse_packets, mouse_resyncs, mouse_overflows;
 
 /* --- talking to the controller -------------------------------------------
  *
@@ -174,6 +201,57 @@ static void flush(void)
 	}
 }
 
+/* --- the mouse, which is the same wire and a different protocol -----------
+ *
+ * Every byte for the mouse is prefixed with a command telling the controller to
+ * pass the next one through to the second port. There is one data port and two
+ * devices on the end of it, and which one answered is in a status bit.
+ */
+static bool mouse_write(u8 c)
+{
+	u8 ack;
+
+	if (!command(CMD_WRITE_PORT2) || !write_data(c))
+		return false;
+
+	/* The acknowledgement is read here rather than left in the buffer. A
+	 * byte nobody takes is a byte the next read mistakes for its own
+	 * answer, and the whole setup sequence then runs one reply out of
+	 * step -- every command appearing to succeed and the mouse ending up
+	 * in a mode nobody asked for. */
+	return read_data(&ack) && ack == KBD_ACK;
+}
+
+static bool mouse_set_rate(u8 rate)
+{
+	return mouse_write(MOUSE_SET_RATE) && mouse_write(rate);
+}
+
+/* Whether this mouse has a wheel.
+ *
+ * There is no bit for it. The only way to ask is a knock: three sample rates in
+ * a particular order, after which a mouse that understands the extension starts
+ * reporting device id 3 instead of 0 -- and sending a fourth byte in every
+ * packet from then on. A mouse that does not understand ignores the sequence
+ * and keeps saying 0, so the knock costs nothing on a plain mouse.
+ *
+ * Getting this wrong is not cosmetic: the packet length changes with the
+ * answer, and a driver reading three bytes from a four-byte mouse is one byte
+ * out for the rest of the boot. */
+static bool mouse_detect_wheel(void)
+{
+	u8 id = 0;
+
+	if (!mouse_set_rate(200) || !mouse_set_rate(100) ||
+	    !mouse_set_rate(80))
+		return false;
+
+	if (!mouse_write(MOUSE_GET_ID) || !read_data(&id))
+		return false;
+
+	return id == 3;
+}
+
 /* --- set 1 to keycodes ----------------------------------------------------
  *
  * The table is the translation, and it is a table rather than arithmetic
@@ -230,6 +308,111 @@ static u8 extended(u8 code)
 	}
 }
 
+/* --- the mouse packet ----------------------------------------------------
+ *
+ * Three bytes, or four with a wheel. Byte 0 is buttons and sign bits, byte 1 is
+ * how far in x, byte 2 how far in y.
+ *
+ * **Bit 3 of byte 0 is always one.** That is the whole of the synchronisation:
+ * the stream has no framing, so a single byte lost or gained leaves the decoder
+ * permanently one out of step -- turning every movement into a different
+ * movement, forever, with nothing reporting a fault. Checking that bit at the
+ * start of each packet is what makes the error self-correcting, and it costs
+ * one comparison.
+ */
+static void decode_mouse(u8 byte)
+{
+	static u8 packet[4];
+	static unsigned have;
+
+	unsigned wanted = mouse_has_wheel ? 4 : 3;
+
+	/* Anomaly: out of step. A first byte without the always-one bit is not
+	 * a first byte, so it is thrown away rather than accepted -- and the
+	 * next byte is tried as a first byte instead. */
+	if (have == 0 && !(byte & PKT_ALWAYS_ONE)) {
+		mouse_resyncs++;
+		return;
+	}
+
+	packet[have++] = byte;
+
+	if (have < wanted)
+		return;
+
+	have = 0;
+	mouse_packets++;
+
+	/* Anomaly: the counters overflowed. The device says so, and what it
+	 * means is that the movement was larger than nine bits could hold --
+	 * so the number in the packet is not how far the hand went. Discarded
+	 * rather than delivered: a pointer that does not move is a worse
+	 * mouse, and a pointer that jumps somewhere the hand never was is a
+	 * broken one. */
+	if (packet[0] & (PKT_X_OVERFLOW | PKT_Y_OVERFLOW)) {
+		mouse_overflows++;
+	} else {
+		/* Nine bits, signed, with the ninth living in byte 0. Written
+		 * as a subtraction rather than a cast: the magnitude is in
+		 * byte 1 and the sign is a separate bit, so what this does is
+		 * take 256 away when that bit is set. Sign-extending the byte
+		 * on its own would be wrong for every movement of more than
+		 * 127. */
+		int dx = (int)packet[1] - ((packet[0] & PKT_X_SIGN) ? 256 : 0);
+		int dy = (int)packet[2] - ((packet[0] & PKT_Y_SIGN) ? 256 : 0);
+
+		/* **Y is negated here and nowhere above.** This device says
+		 * positive is up; screens and USB HID say positive is down.
+		 * Normalising in the driver is the whole point of the line
+		 * above it -- otherwise every reader would have to know which
+		 * kind of mouse is attached. */
+		input_post_motion(REL_X, (i32)dx);
+		input_post_motion(REL_Y, (i32)-dy);
+
+		if (mouse_has_wheel) {
+			/* Four bits, signed, in the low nibble. The upper
+			 * nibble carries the fourth and fifth buttons on some
+			 * mice and is deliberately not read: this driver has
+			 * no name for them, and a number with no name is
+			 * better dropped than delivered as a button that
+			 * exists. */
+			int w = packet[3] & 0x0F;
+
+			if (w > 7)
+				w -= 16;
+
+			input_post_motion(REL_WHEEL, (i32)w);
+		}
+	}
+
+	/* The buttons are a *state*, not an event, so what is reported is the
+	 * change. Held-state lives above this line, so asking it is what turns
+	 * three bits into presses and releases -- and a button already held
+	 * that is still held produces nothing, which is what stops a stationary
+	 * hand generating a press on every packet. */
+	{
+		static const struct {
+			u8  bit;
+			u16 code;
+		} buttons[] = {
+			{ PKT_LEFT,   BTN_LEFT },
+			{ PKT_RIGHT,  BTN_RIGHT },
+			{ PKT_MIDDLE, BTN_MIDDLE },
+		};
+		unsigned i;
+
+		for (i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+			bool down = (packet[0] & buttons[i].bit) != 0;
+
+			if (down == input_key_held(buttons[i].code))
+				continue;
+
+			input_post(buttons[i].code,
+				   down ? INPUT_PRESS : INPUT_RELEASE);
+		}
+	}
+}
+
 /* --- the worker ---------------------------------------------------------- */
 
 static void decode(void *arg)
@@ -246,6 +429,7 @@ static void decode(void *arg)
 
 	for (;;) {
 		u64 flags = spin_lock_irq(&raw_lock);
+		u16 tagged;
 		u8 byte;
 
 		if (!raw_count) {
@@ -253,9 +437,16 @@ static void decode(void *arg)
 			return;
 		}
 
-		byte = raw[(raw_head + RAW_BYTES - raw_count) % RAW_BYTES];
+		tagged = raw[(raw_head + RAW_BYTES - raw_count) % RAW_BYTES];
 		raw_count--;
 		spin_unlock_irq(&raw_lock, flags);
+
+		byte = (u8)(tagged & 0xFF);
+
+		if (tagged & RAW_FROM_MOUSE) {
+			decode_mouse(byte);
+			continue;
+		}
 
 		if (byte == 0xE0) {
 			saw_e0 = true;
@@ -293,25 +484,18 @@ static void decode(void *arg)
 
 /* --- the interrupt -------------------------------------------------------- */
 
-static void ps2_interrupt(void *arg)
+/* Takes the byte and tags it. Shared by both handlers, because which device a
+ * byte came from is a status bit and not a matter of which line was raised --
+ * see the note in ps2_interrupt. */
+static void take_byte(void)
 {
 	u8 status = inb(PS2_STATUS);
-
-	(void)arg;
 
 	if (!(status & STATUS_OUTPUT_FULL))
 		return;
 
-	/* The mouse shares this controller and this port. Its bytes are a
-	 * different protocol entirely, and feeding them to the keyboard state
-	 * machine produces keypresses out of mouse movement. Read and dropped,
-	 * because leaving the byte in the buffer stops the keyboard too. */
-	if (status & STATUS_FROM_MOUSE) {
-		(void)inb(PS2_DATA);
-		return;
-	}
-
 	{
+		u16 tag = (status & STATUS_FROM_MOUSE) ? RAW_FROM_MOUSE : 0;
 		u8 byte = inb(PS2_DATA);
 		u64 flags;
 
@@ -339,14 +523,37 @@ static void ps2_interrupt(void *arg)
 			return;
 		}
 
-		raw[raw_head] = byte;
+		raw[raw_head] = (u16)(byte | tag);
 		raw_head = (raw_head + 1) % RAW_BYTES;
 		raw_count++;
+
+		if (tag)
+			mouse_bytes++;
 
 		spin_unlock_irq(&raw_lock, flags);
 	}
 
 	work_schedule(&decode_work);
+}
+
+/* The keyboard's line.
+ *
+ * It reads whatever is there rather than only keyboard bytes, and tags what it
+ * finds by the status bit. **Which device sent a byte is a property of the
+ * byte, not of the line that was raised** -- and a handler that dropped a mouse
+ * byte because it arrived on the wrong line would leave the output buffer full,
+ * which stops the keyboard as well: an 8042 holding a byte nobody has taken
+ * raises nothing further, for either device. */
+static void ps2_interrupt(void *arg)
+{
+	(void)arg;
+	take_byte();
+}
+
+static void ps2_mouse_interrupt(void *arg)
+{
+	(void)arg;
+	take_byte();
 }
 
 /* --- bringing it up ------------------------------------------------------- */
@@ -460,6 +667,9 @@ static bool arm(void)
 
 	config |= CONFIG_PORT1_IRQ;
 
+	if (mouse_present)
+		config |= CONFIG_PORT2_IRQ;
+
 	return command(CMD_WRITE_CONFIG) && write_data(config);
 }
 
@@ -516,6 +726,39 @@ void arch_input_probe(void)
 		return;
 	}
 
+	/* The mouse, if there is one. Its failure is not the keyboard's: a
+	 * machine with a keyboard and no mouse is ordinary, and refusing the
+	 * keyboard because the second port answered nothing would be the
+	 * strangest possible response to it. */
+	if (command(CMD_ENABLE_PORT2) && mouse_write(MOUSE_RESET)) {
+		u8 reply = 0;
+
+		/* The reset answers twice more: a self-test result and a
+		 * device id. Both are read, because a byte left in the buffer
+		 * is the next read's answer. */
+		if (read_data(&reply) && reply == KBD_SELF_TEST_OK &&
+		    read_data(&reply)) {
+			mouse_has_wheel = mouse_detect_wheel();
+
+			if (mouse_write(MOUSE_ENABLE)) {
+				mouse_present = true;
+
+				if (!irq_register(PS2_MOUSE_IRQ,
+						  ps2_mouse_interrupt, 0,
+						  "ps2-mouse") ||
+				    !x86_irq_enable_line(PS2_MOUSE_IRQ)) {
+					kputs("  ps2: a mouse answered and "
+					      "its line could not be "
+					      "opened\n");
+					mouse_present = false;
+				}
+			}
+		}
+	}
+
+	if (!mouse_present)
+		command(CMD_DISABLE_PORT2);
+
 	if (!arm()) {
 		kputs("  ps2: the controller would not raise interrupts\n");
 		irq_release(PS2_IRQ);
@@ -543,17 +786,41 @@ void arch_input_print(void)
 	 * have touched the machine, so "0 taken" is the honest number and
 	 * reads as a broken keyboard to everybody who sees it. Saying what
 	 * the zero means costs one line and stops the question. */
-	if (!bytes_taken) {
+	if (!bytes_taken)
 		kputs("  scancodes    : none yet -- this is printed before "
 		      "anybody could have typed\n");
-		return;
-	}
-
-	kprintf("  scancodes    : %llu taken, %llu turned into keys\n",
-		(unsigned long long)bytes_taken,
-		(unsigned long long)keys_made);
+	else
+		kprintf("  scancodes    : %llu taken, %llu turned into keys\n",
+			(unsigned long long)bytes_taken,
+			(unsigned long long)keys_made);
 
 	if (bytes_lost)
 		kprintf("  lost         : %llu, because the decoder was not "
 			"running\n", (unsigned long long)bytes_lost);
+
+	if (!mouse_present) {
+		kputs("  mouse        : none on the second port\n");
+		return;
+	}
+
+	kprintf("  mouse        : %s, on line %u\n",
+		mouse_has_wheel ? "with a wheel" : "three buttons, no wheel",
+		(unsigned)PS2_MOUSE_IRQ);
+
+	if (mouse_bytes)
+		kprintf("  packets      : %llu from %llu bytes\n",
+			(unsigned long long)mouse_packets,
+			(unsigned long long)mouse_bytes);
+
+	/* Both are worth seeing and neither is a failure. A resync says a byte
+	 * was lost somewhere; an overflow says the hand moved further in one
+	 * packet than nine bits can describe. Silence about either would leave
+	 * "the pointer sometimes jumps" as an unfalsifiable complaint. */
+	if (mouse_resyncs)
+		kprintf("  resynced     : %llu time(s), after a byte went "
+			"astray\n", (unsigned long long)mouse_resyncs);
+
+	if (mouse_overflows)
+		kprintf("  too fast     : %llu packet(s) discarded for "
+			"overflowing\n", (unsigned long long)mouse_overflows);
 }

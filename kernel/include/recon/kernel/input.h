@@ -78,6 +78,12 @@ enum input_kind {
 	INPUT_RELEASE = 0,
 	INPUT_PRESS   = 1,
 	INPUT_REPEAT  = 2,
+
+	/* Something moved. `code` names an axis and `value` says how far, as a
+	 * signed count in whatever unit the device works in -- which for a
+	 * mouse is a "mickey" and is not a pixel, because how far a pixel is
+	 * depends on a screen this layer has never seen. */
+	INPUT_MOTION  = 3,
 };
 
 /* Keycodes name positions, not letters.
@@ -120,9 +126,49 @@ enum input_kind {
 
 #define KEY_MAX          255
 
+/* Mouse buttons.
+ *
+ * Above the keyboard page rather than inside it, because they are a different
+ * HID usage page and folding them together would mean a keycode and a button
+ * could collide as the tables grow. The numbers follow the same convention
+ * Linux uses, for the same reason the keycodes follow HID: somebody porting a
+ * program should not have to learn a third numbering.
+ *
+ * They are *held* like keys are, and reported with the same press and release
+ * kinds -- a button is a key that happens to be under your hand. */
+#define BTN_LEFT         0x110
+#define BTN_RIGHT        0x111
+#define BTN_MIDDLE       0x112
+
+/* The largest code whose held-state is tracked. Axes are above it and are not
+ * held: an axis has no up or down, only a distance since last time. */
+#define INPUT_HELD_MAX   BTN_MIDDLE
+
+/* Axes, for INPUT_MOTION.
+ *
+ * Relative, always. X and Y are *deltas* and not positions, because a mouse
+ * reports movement and has no idea where the pointer is -- whoever draws the
+ * pointer owns that, and it is the only thing that knows where the edges of
+ * the screen are.
+ *
+ * **Y increases downward**, on every device, and that is a decision rather
+ * than a passthrough: a PS/2 mouse says positive is up and a USB HID mouse
+ * says positive is down. Reporting each as it arrives would mean every reader
+ * had to know which kind of mouse was attached, which is the one thing this
+ * layer exists to prevent. The drivers normalise; nothing above them asks. */
+#define REL_X            0x200
+#define REL_Y            0x201
+#define REL_WHEEL        0x202
+
 struct input_event {
 	u64 when;	/* monotonic nanoseconds, taken when the byte arrived */
-	u16 code;	/* a keycode: which physical key */
+
+	/* How far, for a motion event. Zero for a key or a button, and checked
+	 * to be zero -- a caller that reads `value` on a press should get
+	 * nothing rather than whatever was left in the field. */
+	i32 value;
+
+	u16 code;	/* a keycode, a button, or an axis */
 	u8  kind;	/* enum input_kind */
 	u8  reserved;	/* zero, and checked to be zero, so that adding a field
 			 * later cannot be mistaken for a value somebody set */
@@ -140,6 +186,19 @@ struct input_event {
  * because the whole point of this line is that nothing above it knows what kind
  * of keyboard is attached. */
 void input_post(u16 code, enum input_kind kind);
+
+/* Something moved, by `delta`, along `axis`.
+ *
+ * **Consecutive motion on the same axis is added to the event already
+ * waiting**, rather than appended as a second one. That is safe here and would
+ * not be for anything else on this page: a relative distance is a number you
+ * may sum, and a keypress is not. A mouse dragged across a desk produces
+ * hundreds of packets a second, and without this the queue fills with them and
+ * throws away the keystrokes sitting behind.
+ *
+ * A delta of zero is dropped rather than queued. Some mice report one on every
+ * poll whether or not the hand moved. */
+void input_post_motion(u16 axis, i32 delta);
 
 /* Takes the oldest event. False when there is none -- this does not wait, and a
  * caller that wants to wait uses the descriptor below, where waiting is the

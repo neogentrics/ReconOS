@@ -27,6 +27,16 @@
  * 10. An event with a reserved field somebody set. Zeroed on the way in, so
  *     that a later version giving it a meaning cannot read somebody's stack
  *     rubbish as a value.
+ * 11. A motion event of zero. Dropped: some mice report a packet on every
+ *     poll whether or not the hand moved.
+ * 12. A mouse moving faster than anything reads it. Consecutive motion on one
+ *     axis is added to the event already waiting rather than appended --
+ *     safe only because a relative distance is a number you may sum, and only
+ *     ever against the newest event, so a button pressed between two
+ *     movements still lands between them.
+ * 13. That sum overflowing. Clamped, never wrapped: a saturated delta is a
+ *     pointer that stops at the edge of the screen, and a wrapped one is a
+ *     pointer that jumps to the other side of it.
  */
 #include <recon/kernel/input.h>
 #include <recon/kernel/vfs.h>
@@ -44,13 +54,13 @@ static struct spinlock input_lock = SPINLOCK_INIT("input");
 /* One bit per keycode. A bitmap and not a counter, for the reason in the
  * header: a release with no press must be a no-op, and a counter would go
  * negative and leave the machine believing shift is held for ever. */
-static u8 held[(KEY_MAX + 1 + 7) / 8];
+static u8 held[(INPUT_HELD_MAX + 1 + 7) / 8];
 
-static u64 posted, dropped, delivered, out_of_range;
+static u64 posted, dropped, delivered, out_of_range, merged;
 
 static bool held_test(u16 code)
 {
-	if (code > KEY_MAX)
+	if (code > INPUT_HELD_MAX)
 		return false;
 
 	return (held[code / 8] >> (code % 8)) & 1u;
@@ -58,7 +68,7 @@ static bool held_test(u16 code)
 
 static void held_set(u16 code, bool down)
 {
-	if (code > KEY_MAX) {
+	if (code > INPUT_HELD_MAX) {
 		out_of_range++;		/* anomaly 3 */
 		return;
 	}
@@ -67,6 +77,78 @@ static void held_set(u16 code, bool down)
 		held[code / 8] |= (u8)(1u << (code % 8));
 	else
 		held[code / 8] &= (u8)~(1u << (code % 8));
+}
+
+/* The newest event still waiting, or null when there is none. Lock held. */
+static struct input_event *newest(void)
+{
+	if (!count)
+		return 0;
+
+	return &queue[(head + INPUT_QUEUE - 1) % INPUT_QUEUE];
+}
+
+void input_post_motion(u16 axis, i32 delta)
+{
+	u64 flags;
+	struct input_event *e;
+
+	/* Anomaly 11. Some mice report a packet on every poll whether or not
+	 * the hand moved, and a queue full of zeroes pushes out real events. */
+	if (!delta)
+		return;
+
+	flags = spin_lock_irq(&input_lock);
+
+	/* Anomaly 12: added to the event already waiting, when that is motion
+	 * on this same axis.
+	 *
+	 * Only against the *newest* event, never further back, and that is what
+	 * keeps the order honest: if a button was pressed after the last
+	 * movement then the newest is the button, nothing is merged, and the
+	 * press still lands between the two movements where it happened.
+	 *
+	 * Safe only because the quantity is relative. Deltas of 3 and 4 mean
+	 * the same thing as one of 7. Nothing else on this page may be merged
+	 * like that -- two presses of a key are not one press of it. */
+	e = newest();
+
+	if (e && e->kind == INPUT_MOTION && e->code == axis) {
+		i64 sum = (i64)e->value + delta;
+
+		/* Anomaly 13. Clamped rather than wrapped: a saturated delta is
+		 * a pointer that stops at the edge of the screen, and a wrapped
+		 * one is a pointer that jumps to the other side of it. */
+		if (sum > 0x7FFFFFFF)
+			sum = 0x7FFFFFFF;
+		else if (sum < -0x7FFFFFFF - 1)
+			sum = -0x7FFFFFFF - 1;
+
+		e->value = (i32)sum;
+		e->when = time_monotonic_ns();
+		merged++;
+
+		spin_unlock_irq(&input_lock, flags);
+		return;
+	}
+
+	if (count == INPUT_QUEUE) {
+		count--;
+		dropped++;
+	}
+
+	e = &queue[head];
+	e->when = time_monotonic_ns();
+	e->code = axis;
+	e->kind = (u8)INPUT_MOTION;
+	e->value = delta;
+	e->reserved = 0;
+
+	head = (head + 1) % INPUT_QUEUE;
+	count++;
+	posted++;
+
+	spin_unlock_irq(&input_lock, flags);
 }
 
 void input_post(u16 code, enum input_kind kind)
@@ -100,6 +182,7 @@ void input_post(u16 code, enum input_kind kind)
 	e->when = time_monotonic_ns();
 	e->code = code;
 	e->kind = (u8)kind;
+	e->value = 0;
 	e->reserved = 0;		/* anomaly 10 */
 
 	head = (head + 1) % INPUT_QUEUE;
@@ -213,9 +296,14 @@ void input_print_summary(void)
 		kprintf("  lost         : %llu, because nothing was reading\n",
 			(unsigned long long)dropped);
 
+	if (merged)
+		kprintf("  merged       : %llu motion event(s) added to one "
+			"already waiting\n", (unsigned long long)merged);
+
 	if (out_of_range)
-		kprintf("  out of range : %llu keycode(s) past %u\n",
-			(unsigned long long)out_of_range, (unsigned)KEY_MAX);
+		kprintf("  out of range : %llu code(s) past %u\n",
+			(unsigned long long)out_of_range,
+			(unsigned)INPUT_HELD_MAX);
 }
 
 /* --- the self-test --------------------------------------------------------
@@ -349,6 +437,119 @@ bool input_self_test(void)
 			ok = false;
 		}
 	}
+
+	/* --- motion ------------------------------------------------------
+	 *
+	 * Two claims, and the second is the one with a plausible wrong answer.
+	 */
+	{
+		u64 merged_before = merged;
+
+		input_post_motion(REL_X, 3);
+		input_post_motion(REL_X, 4);
+
+		if (merged == merged_before) {
+			kputs("  input: two movements on one axis were not "
+			      "merged, so a mouse fills the queue and pushes "
+			      "the keystrokes out of it\n");
+			ok = false;
+		}
+
+		if (!input_take(&e)) {
+			kputs("  input: no motion event came back\n");
+			ok = false;
+		} else if (e.kind != INPUT_MOTION || e.code != REL_X) {
+			kprintf("  input: expected motion on REL_X, got kind "
+				"%u code %u\n", e.kind, e.code);
+			ok = false;
+		} else if (e.value != 7) {
+			kprintf("  input: 3 then 4 came back as %d, not 7\n",
+				(int)e.value);
+			ok = false;
+		}
+
+		/* And there is only the one. */
+		if (input_take(&e)) {
+			kputs("  input: the merged movements were also queued "
+			      "separately\n");
+			ok = false;
+			while (input_take(&e))
+				;
+		}
+	}
+
+	/* **The one a naive merge gets wrong.** A button pressed between two
+	 * movements has to stay between them: merging across it would move the
+	 * click to somewhere the hand never was, which is a drag that starts
+	 * in the wrong place and is not something a later layer can repair. */
+	{
+		struct input_event first, mid, last;
+
+		input_post_motion(REL_X, 5);
+		input_post(BTN_LEFT, INPUT_PRESS);
+		input_post_motion(REL_X, 6);
+
+		if (!input_take(&first) || !input_take(&mid) ||
+		    !input_take(&last)) {
+			kputs("  input: a movement, a click and a movement did "
+			      "not come back as three events\n");
+			ok = false;
+		} else if (first.kind != INPUT_MOTION || first.value != 5 ||
+			   mid.kind != INPUT_PRESS || mid.code != BTN_LEFT ||
+			   last.kind != INPUT_MOTION || last.value != 6) {
+			kputs("  input: a click between two movements did not "
+			      "stay between them -- the movements were merged "
+			      "across it, which puts the click where the hand "
+			      "was not\n");
+			ok = false;
+		}
+
+		/* A button is held like a key, and released like one. */
+		if (!input_key_held(BTN_LEFT)) {
+			kputs("  input: a pressed button is not held\n");
+			ok = false;
+		}
+
+		input_post(BTN_LEFT, INPUT_RELEASE);
+		(void)input_take(&e);
+
+		if (input_key_held(BTN_LEFT)) {
+			kputs("  input: a released button is still held\n");
+			ok = false;
+		}
+	}
+
+	/* Motion of nothing is not an event. */
+	{
+		u64 posted_before = posted;
+
+		input_post_motion(REL_Y, 0);
+
+		if (posted != posted_before) {
+			kputs("  input: a movement of zero was queued, so a "
+			      "mouse that reports every poll fills the queue "
+			      "with nothing\n");
+			ok = false;
+		}
+	}
+
+	/* A press carries no value, and is checked to carry none: a reader
+	 * that looked would otherwise get whatever was in the field. */
+	{
+		input_post(KEY_TAB, INPUT_PRESS);
+
+		if (input_take(&e) && e.value != 0) {
+			kprintf("  input: a keypress came back carrying a "
+				"value of %d\n", (int)e.value);
+			ok = false;
+		}
+
+		input_post(KEY_TAB, INPUT_RELEASE);
+		(void)input_take(&e);
+	}
+
+	while (input_take(&e))
+		;
 
 	/* --- the file refuses half an event ----------------------------- */
 	{
