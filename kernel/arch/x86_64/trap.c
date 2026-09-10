@@ -21,6 +21,7 @@
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/backtrace.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
 #include <recon/kernel/user.h>
@@ -433,4 +434,36 @@ void trap_init(void)
 void x86_load_tables_this_cpu(void)
 {
 	x86_load_tables(&gdt_ptr, &idt_ptr);
+}
+
+/* --- walking the stack ----------------------------------------------------
+ *
+ * The System V ABI's frame layout, which `-fno-omit-frame-pointer` guarantees:
+ * a function pushes the caller's RBP and sets RBP to point at it, so [RBP] is
+ * the caller's frame pointer and [RBP+8] is the return address into the caller.
+ *
+ * Nothing here validates anything. That is deliberate and it is the division of
+ * labour the header describes: the *rules* about which frames may be followed
+ * are the same on both architectures and live in one place, and this only knows
+ * the layout. A second copy of the validation here would be a second copy to
+ * get wrong.
+ */
+u64 arch_frame_pointer(void)
+{
+	u64 rbp;
+
+	__asm__ volatile("movq %%rbp, %0" : "=r"(rbp));
+	return rbp;
+}
+
+bool arch_frame_step(u64 frame, u64 *next, u64 *return_address)
+{
+	const u64 *f = (const u64 *)(uintptr_t)frame;
+
+	if (!frame || !next || !return_address)
+		return false;
+
+	*next = f[0];
+	*return_address = f[1];
+	return true;
 }

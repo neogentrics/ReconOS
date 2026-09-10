@@ -30,6 +30,9 @@
 #include <recon/kernel/shm.h>
 #include <recon/kernel/swap.h>
 #include <recon/kernel/pageage.h>
+#include <recon/kernel/evict.h>
+#include <recon/kernel/backtrace.h>
+#include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
@@ -248,6 +251,12 @@ void kmain(void)
 		swap_self_test() ? "pass" : "FAIL");
 	kprintf("  which pages are cold : %s\n",
 		page_age_self_test() ? "pass" : "FAIL");
+	kprintf("  a page that came back : %s\n",
+		evict_self_test() ? "pass" : "FAIL");
+	kprintf("  what was said, kept : %s\n",
+		klog_self_test() ? "pass" : "FAIL");
+	kprintf("  how it got there   : %s\n",
+		backtrace_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  refusing a bad program : %s\n",
@@ -311,6 +320,8 @@ void kmain(void)
 	  * rather than the machine. */
 	swap_print_summary();
 	page_age_print_summary();
+	evict_print_summary();
+	klog_print_summary();
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether

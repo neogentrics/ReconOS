@@ -78,9 +78,34 @@ enum power_result power_off(void)
 					   SLP_EN)))
 		return POWER_UNSUPPORTED;
 
-	/* The write does not return on a machine that obeys it. Reaching here
-	 * means the machine declined, which is a fact worth reporting rather
-	 * than a reason to spin. */
+	/* And then it waits, which this did not do and needed to.
+	  *
+	  * The comment here used to say that the write does not return on a
+	  * machine that obeys it, so reaching the next line meant the machine
+	  * had declined. That is true of the *instruction* and not of the
+	  * machine: the write completes and the processor carries on, and the
+	  * transition happens somewhere between one instruction and the next.
+	  * How many instructions fit in that gap is a property of the hardware
+	  * and, under emulation, of how busy the host is.
+	  *
+	  * So a loaded machine reported that its firmware had refused to turn
+	  * off while it was in the middle of turning off. Found by the
+	  * verification run, which boots four guests at once, and never by a
+	  * boot on its own -- eight of eight of those were clean. Same family
+	  * as BG-160: a timing assumption that held until the machine got
+	  * busier. (BG-162)
+	  *
+	  * A fifth of a second, against a clock that does not depend on the
+	  * tick. Long enough that no real machine is still deciding, short
+	  * enough that one which genuinely cannot turn itself off still says
+	  * so while somebody is watching. */
+	{
+		u64 deadline = arch_monotonic_ns() + 200000000ull;
+
+		while (arch_monotonic_ns() < deadline)
+			arch_cpu_relax();
+	}
+
 	return POWER_REFUSED;
 }
 

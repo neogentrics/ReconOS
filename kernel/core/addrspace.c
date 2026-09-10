@@ -7,6 +7,7 @@
  */
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/evict.h>
 
 #include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
@@ -436,6 +437,11 @@ static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
 	return n >= 0;
 }
 
+paddr_t addrspace_zero_page(void)
+{
+	return zero_page;
+}
+
 bool vm_fault_user(vaddr_t addr, bool write)
 {
 	struct addrspace *as = addrspace_active();
@@ -462,6 +468,27 @@ bool vm_fault_user(vaddr_t addr, bool write)
 	have = vm_lookup(page);
 
 	if (!have) {
+		/* Absent does not mean never mapped. An entry can name a
+		  * swap slot instead of a page, and this is the only place
+		  * that can tell -- vm_lookup answers zero for both.
+		  *
+		  * Checked before anything else, because every branch below
+		  * would otherwise hand the program a fresh page of zeroes
+		  * over the top of memory it still owns. */
+		if (vm_swap_slot(page)) {
+			if (evict_fault_in(page, r->flags)) {
+				faults_served++;
+				return true;
+			}
+
+			/* The page is gone and could not be read back. There
+			  * is nothing to hand over: a zeroed page here is a
+			  * program carrying on with silently corrupted
+			  * memory, which is worse than the fault. */
+			faults_refused++;
+			return false;
+		}
+
 		/* A file-backed page has contents, so there is nothing to share:
 		  * the shared page of zeroes is the right answer only when zeroes
 		  * are the right answer. Every page here is its own from the first

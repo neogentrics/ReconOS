@@ -24,6 +24,7 @@
 
 #include <recon/kernel/vm.h>
 #include <recon/kernel/pageage.h>
+#include <recon/kernel/evict.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/boot.h>
@@ -989,7 +990,7 @@ void vm_print_shootdowns(void)
  * ARMv8.1 and later can do it in hardware, and the field that says so is read
  * below rather than guessed from the processor's name.
  */
-static u64 *leaf_entry(vaddr_t va)
+static u64 *leaf_entry_any(vaddr_t va)
 {
 	u64 *l0 = root_for(va);
 	unsigned i0 = (unsigned)((va >> 39) & 0x1FF);
@@ -1020,10 +1021,20 @@ static u64 *leaf_entry(vaddr_t va)
 		return 0;
 
 	l3 = next_level(l2, i2, false);
-	if (!l3 || (l3[i3] & 3) != DESC_PAGE)
+	if (!l3)
 		return 0;
 
+	/* The slot, valid or not. A swapped page has a descriptor that
+	  * is deliberately invalid, so a walk that stopped at invalid
+	  * could never find one. */
 	return &l3[i3];
+}
+
+static u64 *leaf_entry(vaddr_t va)
+{
+	u64 *entry = leaf_entry_any(va);
+
+	return (entry && (*entry & 3) == DESC_PAGE) ? entry : 0;
 }
 
 bool vm_page_touched(vaddr_t va, bool clear)
@@ -1097,4 +1108,61 @@ bool vm_fault_access_flag(vaddr_t va)
 u64 vm_page_age_faults(void)
 {
 	return access_flag_faults;
+}
+
+/* --- a descriptor that names a swap slot instead of a page ----------------
+ *
+ * The same idea as x86_64 and the same reasoning: a descriptor whose low two
+ * bits are 0b00 is invalid, the processor reads nothing else in it, and every
+ * other bit is software's.
+ *
+ * Bit 2 is the marker, which is inside the field the architecture reserves for
+ * software use in an invalid descriptor. The slot goes at bit 12 upward.
+ */
+#define DESC_SWAPPED   (1ULL << 2)
+#define DESC_SLOT_SHIFT 12
+
+bool vm_swap_out(vaddr_t va, u32 slot)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	u64 old;
+
+	if (!entry || !slot)
+		return false;
+
+	old = *entry;
+
+	if ((old & 3) != DESC_PAGE)
+		return false;
+
+	*entry = ((u64)slot << DESC_SLOT_SHIFT) | DESC_SWAPPED;
+
+	/* invalidate_if_live is given the *old* descriptor, because what it
+	 * decides from is whether there was a live translation to remove -- and
+	 * the new one is deliberately not live. */
+	invalidate_if_live(old, page);
+	return true;
+}
+
+u32 vm_swap_slot(vaddr_t va)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry_any(page);
+	u64 value;
+
+	if (!entry)
+		return 0;
+
+	value = *entry;
+
+	/* A valid descriptor carrying the marker is one of the impossible
+	 * states. Answered as "not swapped", which leaves the page alone. */
+	if ((value & 3) != 0)
+		return 0;
+
+	if (!(value & DESC_SWAPPED))
+		return 0;
+
+	return (u32)(value >> DESC_SLOT_SHIFT);
 }

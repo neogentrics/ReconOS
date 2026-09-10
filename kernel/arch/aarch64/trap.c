@@ -17,6 +17,7 @@
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/backtrace.h>
 #include <recon/kernel/panic.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/sched.h>
@@ -281,4 +282,32 @@ void trap_init(void)
 		"msr vbar_el1, %0\n"
 		"isb\n"
 		: : "r"((u64)(uintptr_t)exception_vectors) : "memory");
+}
+
+/* --- walking the stack ----------------------------------------------------
+ *
+ * The AArch64 procedure call standard puts the frame record at the address in
+ * x29: the caller's x29 first, then the caller's x30, which is the return
+ * address. The same two words in the same order as x86_64 -- which is an
+ * agreement between two ABIs rather than a rule, so each architecture states it
+ * for itself rather than one of them being written as "the same as the other".
+ */
+u64 arch_frame_pointer(void)
+{
+	u64 fp;
+
+	__asm__ volatile("mov %0, x29" : "=r"(fp));
+	return fp;
+}
+
+bool arch_frame_step(u64 frame, u64 *next, u64 *return_address)
+{
+	const u64 *f = (const u64 *)(uintptr_t)frame;
+
+	if (!frame || !next || !return_address)
+		return false;
+
+	*next = f[0];
+	*return_address = f[1];
+	return true;
 }

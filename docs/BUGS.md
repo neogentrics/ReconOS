@@ -3369,6 +3369,51 @@ straight through to `reconfs_read_named`, whose first act is `*got = 0`.
   it. What made it visible immediately was that the believer was in the kernel and
   crashed; a user program would have got a corrupted answer.
 
+### BG-162 — Power-off declared the machine had refused, while the machine was in the middle of obeying
+
+[#401](https://github.com/neogentrics/ReconOS/issues/401)
+
+- **Found:** 10 September 2026, by the verification matrix — one path, "power
+  off", on a run where four guests were booting at once. The same path had
+  passed every previous matrix and passes eight times out of eight when it is
+  the only thing running.
+- **Cost:** a red matrix on a green tree, and a kernel that reports a false fact
+  about the machine it is on.
+- **Status:** fixed.
+
+The guest printed `power: the machine was told to turn off and did not`, and
+then powered off anyway. The harness reads that line as a failure, correctly:
+the kernel had said the shutdown was refused.
+
+`power.c` wrote the shutdown control register and then returned `POWER_REFUSED`,
+under a comment asserting that the write does not return on a machine that
+obeys. That is true of the **instruction** and not of the **machine**. The store
+retires as soon as the write is accepted; the shutdown it triggers is carried
+out by the platform, asynchronously, and the processor keeps executing until it
+is stopped. On an idle host that gap is too short to measure. With four guests
+competing for the host's processors it is long enough to run the next dozen
+instructions, one of which announced a refusal.
+
+- **Was:** a comment that described the semantics of a store rather than the
+  behaviour of the device behind it, and code that trusted the comment. The
+  kernel treated "I am still running" as proof of "it did not happen", when the
+  only thing it proves is that the answer has not arrived yet.
+- **Fixed in** `core/power.c`: after the write, a bounded wait of 200 ms against
+  `arch_monotonic_ns()` before `POWER_REFUSED` is returned. Bounded rather than
+  infinite, because a machine that genuinely will not turn off must still be
+  reported and not hung on — the fact is worth having, it just has to be true.
+- **Measured, not assumed.** Removing the wait and running thirty-two guests
+  eight at a time reproduced the refusal three times; restoring it and running
+  thirty-two more reproduced it none. A fix for a nine-percent flake that is
+  only ever watched to pass is not a fix that has been tested: eight clean runs
+  happen by chance nearly half the time with the fault fully present.
+- **Family:** the third fault this month whose only symptom was *timing* —
+  BG-157 and BG-158 cost duration with the whole suite green, and BG-160 was the
+  same harness cutting power before the guest had spoken. Each was invisible to
+  a test that asks only whether the right things happened. The matrix runs
+  several guests at once, which is why it is the thing that found this and the
+  quick check is not.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

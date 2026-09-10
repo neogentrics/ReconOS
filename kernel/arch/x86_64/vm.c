@@ -19,6 +19,7 @@
 #include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/pageage.h>
+#include <recon/kernel/evict.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/cpu.h>
@@ -1114,7 +1115,7 @@ void vm_print_shootdowns(void)
  * It is the same reason vm_map invalidates, and it is here rather than left to
  * the caller because a caller that forgot would get plausible numbers.
  */
-static u64 *leaf_entry(vaddr_t va)
+static u64 *leaf_entry_no_present(vaddr_t va)
 {
 	unsigned i4 = (unsigned)((va >> 39) & 0x1FF);
 	unsigned i3 = (unsigned)((va >> 30) & 0x1FF);
@@ -1144,10 +1145,20 @@ static u64 *leaf_entry(vaddr_t va)
 		return 0;
 
 	pt = next_level(pd, i2, false);
-	if (!pt || !(pt[i1] & PTE_PRESENT))
+	if (!pt)
 		return 0;
 
+	/* The slot, whether or not anything is in it. A swapped page
+	  * has an entry that is deliberately *not* present, so a walk
+	  * that stopped at absent could never find one. */
 	return &pt[i1];
+}
+
+static u64 *leaf_entry(vaddr_t va)
+{
+	u64 *entry = leaf_entry_no_present(va);
+
+	return (entry && (*entry & PTE_PRESENT)) ? entry : 0;
 }
 
 bool vm_page_touched(vaddr_t va, bool clear)
@@ -1185,4 +1196,74 @@ u64 vm_page_age_faults(void)
 	/* None. The processor writes the bit as part of filling a translation,
 	  * so nothing traps and there is nothing to count. */
 	return 0;
+}
+
+/* --- an entry that names a swap slot instead of a page --------------------
+ *
+ * A page-table entry with the present bit clear is ignored by the processor
+ * entirely -- every other bit in it is software's. That is what makes swapping
+ * possible without a second table: the entry stays where it is and stops being a
+ * mapping, while still saying where the page went.
+ *
+ * The encoding puts the slot at bit 12 and upward, where a physical address
+ * would have been, and sets bit 1 as the marker. Bit 1 is the writable bit when
+ * an entry is present and means nothing when it is not.
+ *
+ * The marker matters for one specific reason: an entry of *zero* is the ordinary
+ * "nothing was ever here" case, and a slot number alone at bit 12 could not be
+ * told from it if the slot were zero. The store never hands out slot zero, so
+ * either check would do -- and having both means the two conditions have to
+ * disagree before anything is misread, rather than one of them being load
+ * bearing on its own.
+ */
+#define PTE_SWAPPED   (1ULL << 1)
+#define PTE_SLOT_SHIFT 12
+
+bool vm_swap_out(vaddr_t va, u32 slot)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	u64 old;
+
+	/* leaf_entry refuses a large page and a missing table, which is what
+	 * keeps this off anything that is not an ordinary user page. */
+	if (!entry || !slot)
+		return false;
+
+	old = *entry;
+
+	if (!(old & PTE_PRESENT))
+		return false;
+
+	*entry = ((u64)slot << PTE_SLOT_SHIFT) | PTE_SWAPPED;
+
+	/* The translation goes now, not later. A processor still holding the old
+	 * entry writes into a page that is about to be handed to somebody else,
+	 * and the write lands nowhere anybody will look. */
+	invalidate_if_live(old, page);
+	return true;
+}
+
+u32 vm_swap_slot(vaddr_t va)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry_no_present(page);
+	u64 value;
+
+	if (!entry)
+		return 0;
+
+	value = *entry;
+
+	/* Both conditions, and they must agree. An entry that is present and
+	 * carries the marker is one of the states that should be impossible --
+	 * see evict.h -- and answering it either way would be worse than
+	 * answering "not swapped" and leaving the page alone. */
+	if (value & PTE_PRESENT)
+		return 0;
+
+	if (!(value & PTE_SWAPPED))
+		return 0;
+
+	return (u32)(value >> PTE_SLOT_SHIFT);
 }

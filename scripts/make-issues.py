@@ -83,6 +83,7 @@ AREA = {
     157: 'kernel', 158: 'kernel', 159: 'kernel',
     160: 'build',
     161: 'storage',
+    162: 'kernel',
 }
 
 

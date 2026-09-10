@@ -153,6 +153,14 @@ bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
  * machine points at, and only a write has to be given a page of its own. */
 bool vm_fault_user(vaddr_t addr, bool write);
 
+/* The one page of zeroes every untouched readable page points at.
+ *
+ * Exposed so that eviction can refuse to swap it out. Evicting it would
+ * write out the zeroes half the machine is reading and hand one program a
+ * private copy while the rest kept pointing at a page that no longer
+ * exists. */
+paddr_t addrspace_zero_page(void);
+
 void vm_fault_print_summary(void);
 
 unsigned addrspace_count(void);
