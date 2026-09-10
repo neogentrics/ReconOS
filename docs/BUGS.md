@@ -350,6 +350,8 @@ broken says nothing about the work.
 
 ### BG-140 — The block self-test would write to a stranger's partition, and only ever on a stranger's machine
 
+[#379](https://github.com/neogentrics/ReconOS/issues/379)
+
 - **Found:** 8 September 2026, booting the real install medium off a physical
   USB stick in preparation for checkpoint 17 — the first boot where the kernel
   could see a partitioned disk it did not create.
@@ -405,6 +407,8 @@ shape to look for is not a wrong branch. It is a fallback whose precondition is
 
 ### BG-141 — A processor count that saturates, and states the shortfall as a fact
 
+[#380](https://github.com/neogentrics/ReconOS/issues/380)
+
 - **Found:** 8 September 2026, sweeping processor counts on aarch64 while
   finishing checkpoint 9b on the other architecture.
 - **Cost:** nothing. No machine in the rig has more than sixteen processors, and
@@ -451,6 +455,8 @@ the transfer-event residue in `xhci.c`, where the distinction was built in
 deliberately for exactly this reason.
 
 ### BG-142 — The scheduler's own test hung one boot in three, on a counter that `volatile` did not protect
+
+[#381](https://github.com/neogentrics/ReconOS/issues/381)
 
 - **Found:** 8 September 2026, sweeping processor counts on x86_64 after
   checkpoint 9b started the secondaries.
@@ -499,6 +505,8 @@ reported in, and fails.
 
 ### BG-143 — The rig reported a boot that stopped half way as a boot that passed
 
+[#382](https://github.com/neogentrics/ReconOS/issues/382)
+
 - **Found:** 8 September 2026, immediately after BG-142, by asking why a hang
   that happened on one boot in three had never turned the matrix red.
 - **Cost:** nothing yet. It is the reason BG-142 could have shipped.
@@ -539,6 +547,8 @@ answer each time is the same — **assert that the thing you are measuring
 actually took place**, not merely that no complaint was printed.
 
 ### BG-144 — Every UEFI test booted whatever kernel happened to be in the ESP first
+
+[#383](https://github.com/neogentrics/ReconOS/issues/383)
 
 - **Found:** 9 September 2026, while fixing a page fault that would not go away
   no matter how many times the kernel was rebuilt.
@@ -2497,6 +2507,8 @@ between a five-minute diagnosis and a session-long one.
 
 ### BG-145 — Whether the kernel could write through a read-only page depended on which firmware booted it
 
+[#384](https://github.com/neogentrics/ReconOS/issues/384)
+
 - **Found:** 9 September 2026, by the address-space self-test, on its first run.
 - **Cost:** none yet, and it would have been unbounded: copy-on-write is
   enforced by mapping a shared page read-only, and this made that enforcement
@@ -2531,6 +2543,8 @@ table correct.
   because the failure it catches produces no other symptom.
 
 ### BG-146 — Sixteen bytes past the end of the vector save area, into the next field of the same thread
+
+[#385](https://github.com/neogentrics/ReconOS/issues/385)
 
 - **Found:** 9 September 2026, when a user program on aarch64 took an
   instruction abort on its own code immediately after being preempted.
@@ -2573,6 +2587,8 @@ context switch.
 
 
 ### BG-147 — A new process inherited the last one's permission to touch addresses
+
+[#386](https://github.com/neogentrics/ReconOS/issues/386)
 
 - **Found:** 10 September 2026, by reading `addrspace_create` while looking for
   something else, and noticing it was the odd one out in a family of three.
@@ -2625,6 +2641,8 @@ Two further consequences, both of them the same fault seen from another side:
 
 
 ### BG-148 — A thread was runnable before it belonged to its process, and address spaces made that fatal
+
+[#387](https://github.com/neogentrics/ReconOS/issues/387)
 
 - **Found:** 10 September 2026, while building the ELF loader. A user program
   began failing about one boot in eight, on two processors, and the failure
@@ -2699,6 +2717,8 @@ which is the same shape as BG-143 and the reason this was found by hand.
 
 
 ### BG-149 — The page allocator and the kernel heap have no locking, on a kernel verified at thirty-two processors
+
+[#388](https://github.com/neogentrics/ReconOS/issues/388)
 
 - **Found:** 10 September 2026, while looking for the cause of BG-148. It is not
   that cause, and it is worse than that cause.
@@ -2778,6 +2798,8 @@ passed with the bug present, which is not a test at all.
 
 ### BG-150 — About one boot in sixty, a user program does not finish, and nothing says why
 
+[#389](https://github.com/neogentrics/ReconOS/issues/389)
+
 - **Found:** 10 September 2026, as the part of BG-148 that fixing BG-148 did not
   account for.
 - **Cost:** none yet. It is recorded because the alternative is rediscovering it.
@@ -2832,6 +2854,8 @@ how BG-148 got the credit for a fault it had not fixed.
 
 ### BG-151 — Eight processors, on a machine that may have five hundred
 
+[#390](https://github.com/neogentrics/ReconOS/issues/390)
+
 - **Found:** 10 September 2026, asked directly: would this run on a two-socket
   server board?
 - **Cost:** none yet, because no such machine has run it. On one that did, it
@@ -2870,6 +2894,8 @@ identifier arrays adding tens of kilobytes more.
   more has run this kernel.
 
 ### BG-152 — Processors above 255 are found and cannot be started
+
+[#391](https://github.com/neogentrics/ReconOS/issues/391)
 
 - **Found:** 10 September 2026, reading the interrupt controller while answering
   the same question.
@@ -2925,6 +2951,8 @@ it makes the untested part smaller, and the untested part is now "does the mode
 switch take, and does a real processor answer afterwards".
 
 ### BG-153 — On a multi-cluster ARM machine, two processors would believe they are the same processor
+
+[#392](https://github.com/neogentrics/ReconOS/issues/392)
 
 - **Found:** 10 September 2026, in the same reading. It is the quiet one of the
   three.
@@ -2993,6 +3021,8 @@ the same moment.
 
 ### BG-154 — The page allocator scans, and a terabyte is a billion pages
 
+[#393](https://github.com/neogentrics/ReconOS/issues/393)
+
 - **Found:** 10 September 2026, working out whether a four-terabyte machine
   would work.
 - **Cost:** none observed. It is a scaling property rather than a fault.
@@ -3030,6 +3060,8 @@ and it is the kind of thing that is far cheaper to design in than to retrofit.
 
 ### BG-155 — The boot thread was processor 0's idle thread, so nothing on the boot path could ever wait
 
+[#394](https://github.com/neogentrics/ReconOS/issues/394)
+
 - **Found:** 10 September 2026, by the first piece of kernel code that tried to
   sleep. `timer_sleep_ns` reported that a thread could not sleep, and it was
   right.
@@ -3066,6 +3098,8 @@ caller to attempt it was the timer wheel.
   the two are pinned for different reasons.
 
 ### BG-156 — A system call entered on one processor and returned on another, and the kernel stack did not travel with it
+
+[#395](https://github.com/neogentrics/ReconOS/issues/395)
 
 - **Found:** 10 September 2026, immediately after BG-155 — a double fault at the
   first instruction of the system-call entry stub, with `%gs` based at zero.
@@ -3121,6 +3155,8 @@ to it.
 
 ### BG-157 — The clock ran at 201 Hz against a constant that said 100, and every test still passed
 
+[#396](https://github.com/neogentrics/ReconOS/issues/396)
+
 - **Found:** 10 September 2026, by a 50 ms sleep that took 30 ms — the first
   assertion in this kernel that had ever compared a tick count to a wall clock.
 - **Cost:** every timer, sleep and scheduling slice wrong by a factor of two,
@@ -3152,6 +3188,8 @@ the chip in.
 
 
 ### BG-158 — An idle thread took its turn in the round robin, and the machine ran at half speed with every test green
+
+[#397](https://github.com/neogentrics/ReconOS/issues/397)
 
 - **Found:** 10 September 2026, by the verification matrix — **seven paths failed and
   every one of them writes to a disk.** They wrote correct data and ran out of
@@ -3196,6 +3234,8 @@ Same family as BG-157, found the same day: a fault whose only symptom is time.
 
 
 ### BG-159 — A thread was available to every other processor while the one it was leaving was still standing on its stack
+
+[#398](https://github.com/neogentrics/ReconOS/issues/398)
 
 - **Found:** 10 September 2026, by the verification matrix, as a kernel panic on
   aarch64 at four processors — about one boot in three. The link register read
@@ -3263,6 +3303,8 @@ honest position is that the one-in-sixty has not been seen since without a run
 long enough to say so.
 
 ### BG-160 — The power-cut harnesses timed their cut from launch, so a slower boot meant they cut before anything had been written
+
+[#399](https://github.com/neogentrics/ReconOS/issues/399)
 
 - **Found:** 10 September 2026, by the harness itself, which said exactly what
   had happened: *"every round wrote nothing — the cut is landing before the disk
