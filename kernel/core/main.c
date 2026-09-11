@@ -160,6 +160,10 @@ void kmain(void)
 	 * before it runs. */
 	work_init_queue();
 
+	/* And the reaper that hands work to it. After the worker
+	 * exists, and before anything is allowed to finish. */
+	sched_reaper_init();
+
 	/* And now device interrupts can be pointed somewhere. After the
 	 * processors, because the destination is one of them. */
 	arch_irq_route_init();
@@ -290,6 +294,8 @@ void kmain(void)
 		klog_self_test() ? "pass" : "FAIL");
 	kprintf("  how it got there   : %s\n",
 		backtrace_self_test() ? "pass" : "FAIL");
+	kprintf("  nothing is kept for nobody : %s\n",
+		process_reaping_self_test() ? "pass" : "FAIL");
 	kprintf("  address spaces     : %s\n",
 		addrspace_self_test() ? "pass" : "FAIL");
 	kprintf("  refusing a bad program : %s\n",

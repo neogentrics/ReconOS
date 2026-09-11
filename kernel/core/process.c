@@ -6,6 +6,8 @@
  * layers down, and nothing here is on a path where thirty-two is limiting.
  */
 #include <recon/kernel/process.h>
+#include <recon/kernel/work.h>
+#include <recon/kernel/pmm.h>
 #include <recon/kernel/identity.h>
 #include <recon/kernel/vfs.h>
 
@@ -19,6 +21,15 @@
 
 static struct process table[PROCESS_MAX];
 static struct spinlock table_lock = SPINLOCK_INIT("process");
+
+static u64 abandoned;
+
+
+u64 process_abandoned_reaped(void)
+{
+	return abandoned;
+}
+
 
 /* Never reused, and never zero.
  *
@@ -119,6 +130,8 @@ void process_attach(struct process *p, struct thread *t)
 
 	t->process = p->id;
 	p->threads++;
+	p->unreaped++;
+	t->counted_by = p->id;
 
 	spin_unlock_irq(&table_lock, flags);
 }
@@ -191,6 +204,48 @@ void process_set_space(struct process *p, struct addrspace *as)
 	flags = spin_lock_irq(&table_lock);
 	p->space = addrspace_hold(as);
 	spin_unlock_irq(&table_lock, flags);
+}
+
+void process_expect_status(struct process *p)
+{
+	if (p)
+		p->status_wanted = true;
+}
+
+void process_thread_reaped(struct thread *t)
+{
+	/* By id, and by the link that survives ending. `process_of` reads
+	 * `t->process`, which process_thread_ended has already cleared by the
+	 * time anything reaches here -- measured, on a run where every one of
+	 * twenty-three reaped threads reported no process at all. */
+	struct process *p = t ? process_by_id(t->counted_by) : NULL;
+	struct addrspace *space = NULL;
+	u64 flags;
+
+	if (!p)
+		return;
+
+	flags = spin_lock_irq(&table_lock);
+
+	if (p->unreaped)
+		p->unreaped--;
+
+	/* Every thread that ever ran this process has now been freed, so
+	 * nothing is standing on its address space and nothing will look at its
+	 * exit status. Both go. */
+	if (p->unreaped == 0 && p->state == PROCESS_ENDED &&
+	    !p->status_wanted) {
+		space = p->space;
+		p->space = NULL;
+		p->state = PROCESS_FREE;
+		abandoned++;
+	}
+
+	spin_unlock_irq(&table_lock, flags);
+
+	/* Outside the lock: releasing the last reference walks and frees page
+	 * tables, and this lock is taken on the scheduler's path. */
+	addrspace_release(space);
 }
 
 bool process_reap(u32 id, i64 *code)
@@ -303,9 +358,88 @@ static void quiet_thread(void *arg)
 	__atomic_add_fetch(&test_started, 1, __ATOMIC_RELEASE);
 }
 
+/* --- that nothing is kept for nobody ---------------------------------------
+ *
+ * Two things at once, because they fail together and separately either one
+ * looks fine: the table slot comes back, **and** the pages do. A reaper that
+ * frees the slot and leaks the space is a machine that runs out of memory
+ * while reporting plenty of room for processes.
+ *
+ * Bounded rather than immediate. The reap happens on the worker thread, after
+ * the dying thread is off every processor -- so "not yet" and "not ever" are
+ * different answers and a test that asserted straight away would be asking
+ * the first while meaning the second. That distinction is what BG-164 and
+ * BG-165 were both about.
+ */
+bool process_reaping_self_test(void)
+{
+	unsigned slots_before = process_count();
+	size_t pages_before;
+	struct process *p;
+	struct thread *t;
+	u64 deadline;
+
+	p = process_create("abandoned", 0, UID_NOBODY, UID_NOBODY);
+
+	if (!p) {
+		kputs("  process: no slot to abandon\n");
+		return false;
+	}
+
+	/* Deliberately *not* process_expect_status: the whole question is what
+	 * happens to a process nobody asked to keep, which is every process
+	 * this kernel has ever made outside its own tests. */
+	t = thread_create_stopped("abandoned", quiet_thread, 0);
+
+	if (!t) {
+		kputs("  process: no thread to abandon\n");
+		return false;
+	}
+
+	pages_before = pmm_free_page_count();
+
+	process_attach(p, t);
+	thread_start(t);
+
+	deadline = time_monotonic_ns() + 2000000000ull;
+
+	while (process_count() > slots_before &&
+	       time_monotonic_ns() < deadline) {
+		work_drain();
+		sched_yield();
+	}
+
+	if (process_count() != slots_before) {
+		kprintf("  process: a process nobody will collect was still "
+			"holding a slot two seconds after it ended -- %u in "
+			"use, %u before it\n",
+			process_count(), slots_before);
+		return false;
+	}
+
+	/* And the memory with it. Its stack is the bulk of it, and a slot
+	 * returned without the pages is the half-fix that reads as a whole
+	 * one. */
+	if (pmm_free_page_count() < (size_t)pages_before) {
+		kprintf("  process: the slot came back and %lu page(s) did "
+			"not\n",
+			(unsigned long)(pages_before - pmm_free_page_count()));
+		return false;
+	}
+
+	return true;
+}
+
 bool process_self_test(void)
 {
 	struct process *p = process_create("test", 0, UID_NOBODY, UID_NOBODY);
+
+	/* This test is the collector, so it says so. Without it the
+	 * reaper takes the process the moment its last thread is
+	 * freed -- which is the new behaviour working correctly, on
+	 * the one process in the machine about to be asked a
+	 * question. */
+	process_expect_status(p);
 	struct thread *a, *b;
 	i64 code = 0;
 	bool ok = true;

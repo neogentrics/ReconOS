@@ -105,6 +105,14 @@ struct process {
 	 * working; one made as anybody else starts with none. */
 	u64 caps;
 
+	/* Threads attached to it that the scheduler has not yet freed. Not the
+	 * same as `threads`, which falls to zero while the last one is still
+	 * running -- see process_thread_reaped. */
+	unsigned unreaped;
+
+	/* Whether somebody said they would collect the exit status. */
+	bool status_wanted;
+
 	unsigned threads;		/* how many are still alive */
 	i64 exit_code;
 
@@ -154,11 +162,39 @@ void process_thread_ended(struct thread *t, i64 code);
 
 struct process *process_by_id(u32 id);
 unsigned process_count(void);
+
+/* How many processes were reaped because nobody was going to collect them.
+ * Zero on a kernel that has stopped running its reaper. */
+u64 process_abandoned_reaped(void);
 struct process *process_at(unsigned index);
 
 /* Collects an ended process's exit status and frees its slot. Returns false if
  * there is no such process or it has not ended. */
 bool process_reap(u32 id, i64 *code);
+
+/* Says that somebody intends to collect this process's exit status, so it must
+ * be kept until they do.
+ *
+ * The default is that nobody will, and that is the honest default: nothing in
+ * this kernel reads a process's exit status except the tests that ask for it.
+ * A status kept for a collector who does not exist is a table slot and an
+ * address space held for the life of the machine, which is what BG-183 was.
+ *
+ * Opt-in rather than inferred from the parent. Every process here is made with
+ * a parent of zero, so "has a live parent" would reap everything including the
+ * ones a test is about to ask about -- and the thing that wants the answer is
+ * the thing that should have to say so. */
+void process_expect_status(struct process *p);
+
+/* Called by the scheduler's reaper as it frees a thread, **after** that thread
+ * is off every processor.
+ *
+ * This is what makes reaping a process safe, and the ordinary thread count
+ * cannot do it: that drops to zero inside `thread_exit`, while the last thread
+ * is still standing on a kernel stack reached through the very page tables
+ * being freed. A process is not reapable until every thread that ran it has
+ * itself been reaped -- the same shape as `off_cpu` in BG-159, one level up. */
+void process_thread_reaped(struct thread *t);
 
 /* Gives a process an address space, and takes a reference to it. The process
  * holds that reference until it is reaped, which is why an ended process's
@@ -168,5 +204,8 @@ void process_set_space(struct process *p, struct addrspace *as);
 
 void process_print_summary(void);
 bool process_self_test(void);
+
+/* That a process nobody will collect gives back its slot and its pages. */
+bool process_reaping_self_test(void);
 
 #endif /* RECON_KERNEL_PROCESS_H */

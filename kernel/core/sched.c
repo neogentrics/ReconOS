@@ -1,4 +1,5 @@
 #include <recon/kernel/sched.h>
+#include <recon/kernel/work.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/pmm.h>
@@ -596,6 +597,24 @@ bool sched_tick(void)
 	return false;
 }
 
+/* Defined below, beside the walk it does. */
+static void reap(void);
+
+static u64 reaped_threads;
+
+u64 sched_threads_reaped(void)
+{
+	return reaped_threads;
+}
+
+static struct work reaper_work;
+
+static void run_the_reaper(void *arg)
+{
+	(void)arg;
+	reap();
+}
+
 void thread_exit(void)
 {
 	struct thread *dead = this_cpu()->current;
@@ -608,8 +627,20 @@ void thread_exit(void)
 	process_thread_ended(dead, 0);
 
 	/* The stack cannot be freed here: this code is standing on it. It is
-	 * left for whoever notices the thread is finished, which is the reaper
-	 * below -- run from another thread, on another stack. */
+	 * left for the reaper below, run from another thread on another stack.
+	 *
+	 * **And something has to ask it to run.** That sentence used to end
+	 * "left for whoever notices the thread is finished", and nobody
+	 * noticed: `reap` had exactly one caller in the whole kernel and it was
+	 * a self-test. Every thread stack and every ended process was held for
+	 * the life of the machine. (BG-183)
+	 *
+	 * Deferred rather than done here, because here is the one place it
+	 * cannot be done. The worker refuses a second queueing while the first
+	 * is still pending, which is exactly right: one pending reap collects
+	 * however many threads have died by the time it runs. */
+	work_schedule(&reaper_work);
+
 	sched_switch();
 
 	panic("sched: a finished thread was scheduled again");
@@ -638,16 +669,28 @@ static bool is_boot_thread(const struct thread *t)
 
 static void reap(void)
 {
-	bool removed;
+	for (;;) {
+		struct thread *victim = NULL;
+		struct thread *t, *start;
+		u64 flags;
 
-	do {
-		struct thread *t = ring;
-		struct thread *start = ring;
+		/* Under the ring lock, which it did not used to take.
+		 *
+		 * That was safe for exactly as long as this only ran from a
+		 * test, on a quiet machine, with nothing else touching the
+		 * ring. Running it from the worker thread -- which is the fix
+		 * for BG-183 -- makes it concurrent with every scheduling
+		 * decision on every processor, and an unlocked walk of a list
+		 * somebody else is splicing is a pointer into freed memory. */
+		flags = spin_lock_irq(&ring_lock);
 
-		removed = false;
+		t = ring;
+		start = ring;
 
-		if (!t)
+		if (!t) {
+			spin_unlock_irq(&ring_lock, flags);
 			return;
+		}
 
 		do {
 			/* off_cpu, and not merely finished. thread_exit marks a
@@ -663,15 +706,34 @@ static void reap(void)
 			if (t->state == THREAD_FINISHED && t->off_cpu &&
 			    t != this_cpu()->current && !is_boot_thread(t)) {
 				ring_remove(t);
-				pmm_free_pages(virt_to_phys(t->stack_base),
-					       t->stack_pages);
-				kfree(t);
-				removed = true;
+				victim = t;
 				break;
 			}
 			t = t->next;
 		} while (t != start);
-	} while (removed);
+
+		spin_unlock_irq(&ring_lock, flags);
+
+		if (!victim)
+			return;
+
+		/* Freed outside the lock. Releasing a thread can release the
+		 * last reference to an address space, which walks and frees
+		 * page tables -- and this lock is taken on every scheduling
+		 * decision the machine makes. */
+		process_thread_reaped(victim);
+
+		pmm_free_pages(virt_to_phys(victim->stack_base),
+			       victim->stack_pages);
+		kfree(victim);
+
+		reaped_threads++;
+	}
+}
+
+void sched_reaper_init(void)
+{
+	work_init(&reaper_work, run_the_reaper, NULL);
 }
 
 void sched_print_summary(void)

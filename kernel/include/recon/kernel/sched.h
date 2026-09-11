@@ -229,6 +229,19 @@ struct thread {
 	 * reference to one of its threads, and a stale pointer to a reused slot
 	 * is a thread that appears to belong to a different program. */
 	u32 process;
+
+	/* Who is still accounting for this thread, which is *not* the same
+	 * fact as the line above and is why there are two.
+	 *
+	 * `process` means "the process this thread is running as", and it
+	 * correctly becomes nothing the moment the thread ends -- a finished
+	 * thread is not running as anybody. This one means "the process that
+	 * cannot be reaped until this thread has been", and it has to outlive
+	 * the first by exactly the window between ending and being freed.
+	 *
+	 * They shared a field once, and the reaper found every thread already
+	 * detached and reaped no process at all. */
+	u32 counted_by;
 };
 
 void sched_init(void);
@@ -277,6 +290,14 @@ struct thread *sched_current(void);
 /* A secondary processor joining the scheduler, adopting the idle thread that
  * was made for it in advance. Called once, by that processor, on itself. */
 void sched_adopt_idle(struct thread *idle);
+
+/* Arms the deferred reaper. After the worker thread exists, and before
+ * anything is allowed to finish. */
+void sched_reaper_init(void);
+
+/* How many finished threads have actually been freed. Zero on a kernel whose
+ * reaper is never asked to run, which is what BG-183 was. */
+u64 sched_threads_reaped(void);
 
 void sched_print_summary(void);
 bool sched_self_test(void);

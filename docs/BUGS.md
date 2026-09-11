@@ -3682,7 +3682,7 @@ the aarch64 copy.
 - **Cost:** a process table that fills, and every ended program's memory held
   for the life of the machine. Measured at **8 of 32 slots used on an ordinary
   boot**, all of them `ended` with no threads.
-- **Status:** open. It needs a decision rather than a patch.
+- **Status:** fixed.
 
 **The instrument corrected the diagnosis, and would not have if it counted one
 number instead of two.** Having fixed BG-182, the same probe still showed
@@ -3717,6 +3717,62 @@ Every one of those holds an address space, and every space holds its pages.
 - **Not a regression.** Nothing has ever reaped; the table is large enough that
   a boot which runs a handful of programs has never exhausted it, which is
   exactly why it went unseen. The number was printed on every boot.
+
+**The cause was simpler and worse than the entry above guessed.** It is not
+that reaping needed a policy. `reap()` — which frees finished threads' stacks,
+and which is correct — had **exactly one caller in the whole kernel, and it was
+a self-test**. `process_reap` had two, both in another self-test. Both reapers
+were written, both work, and nothing ever ran them.
+
+`thread_exit` said so, in the same shape as BG-182 one file over:
+
+> The stack cannot be freed here: this code is standing on it. It is left for
+> **whoever notices** the thread is finished.
+
+Nobody noticed. That is twice in two days that a comment delegated to a
+collaborator who was never created.
+
+- **Now:** `thread_exit` schedules deferred work that runs the reaper. Deferred
+  because here is the one place it cannot be done, and the worker refuses a
+  second queueing while the first is pending — so one pending reap collects
+  however many threads have died by the time it runs.
+- **`reap` now takes the ring lock, which it never did.** That was safe for
+  exactly as long as it only ran from a test on a quiet machine. Running it
+  from the worker makes it concurrent with every scheduling decision on every
+  processor, and an unlocked walk of a list somebody else is splicing is a
+  pointer into freed memory. Victims are taken under the lock and freed
+  outside it, because freeing one can release an address space and walking
+  page tables with the scheduler's lock held stops the machine.
+- **A process is reaped when the last thread that ran it has itself been
+  reaped**, which is not the same as when its last thread *ended*. The thread
+  count drops to zero inside `thread_exit`, while that thread is still standing
+  on a kernel stack reached through the very page tables being freed. The same
+  shape as `off_cpu` in BG-159, one level up.
+- **Keeping a status is opt-in.** `process_expect_status` says somebody will
+  collect; the default is that nobody will, which is the honest default because
+  nothing in this kernel reads a process's exit status except the test that
+  asks. Not inferred from the parent: every process here is made with a parent
+  of zero, so "has a live parent" would reap the one process a test is about to
+  ask about.
+
+**And one measurement corrected the fix twice.** After the first version,
+pages-per-run went from twelve to seven and the table still showed eight slots
+in use. A counter said `threads=23 processes=0`: the thread half worked and the
+process half never fired once. A second counter said `calls=23 noproc=23` —
+every reaped thread had no process by the time the reaper saw it, because
+`process_thread_ended` clears `t->process`, correctly, when the thread stops
+running as anybody.
+
+- **Was:** the reaper looked up the process through `t->process`, which means
+  *the process this thread is running as* and is nothing by then.
+- **Now:** `t->counted_by`, set at attach and never cleared, which means *the
+  process that cannot be reaped until this thread has been*. Two different
+  facts that had been sharing a field.
+- **Measured, same program three times:** twelve pages lost per run before,
+  **zero** after, and the process table goes from eight slots in use to one.
+  Watched failing: with the reaper never asked to run, the test reports "a
+  process nobody will collect was still holding a slot two seconds after it
+  ended".
 
 ### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
 
