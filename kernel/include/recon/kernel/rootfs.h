@@ -70,6 +70,14 @@ enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 
 /* Reads a whole file, and tells the caller the mode it was created with. Either
  * pointer may be null. */
+/* The owner and group of a file, without reading it.
+ *
+ * Separate from rootfs_read_file because the caller that needs this needs it
+ * *before* deciding whether to read at all -- asking for the contents and then
+ * checking whether it was allowed to have them is not a permission check. */
+enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
+				    u32 *gid);
+
 enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 				     u32 *got, u32 *mode);
 

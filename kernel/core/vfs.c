@@ -1,4 +1,5 @@
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/identity.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/rootfs.h>
 #include <recon/kernel/heap.h>
@@ -290,6 +291,31 @@ static struct file *reconfs_open(const char *path, unsigned flags, u32 mode,
 
 	kstrlcpy(d->path, path, sizeof(d->path));
 	d->mode = mode;
+
+	/* **Asked before anything is read.**
+	 *
+	 * A file that exists is looked at first: its mode, its owner and its
+	 * group, and whether whoever is running may do what they asked for.
+	 * Reading the contents and *then* checking is not a permission check --
+	 * the bytes are already in the kernel and one mistake later they are in
+	 * the program.
+	 *
+	 * A file being created has no owner yet, so there is nothing to ask
+	 * about; it gets the mode the caller passed and belongs to whoever made
+	 * it. Directories above it are not consulted, which identity.h says out
+	 * loud rather than leaving to be assumed. */
+	if (!(flags & OPEN_CREATE)) {
+		u32 fmode = 0, fuid = UID_KERNEL, fgid = UID_KERNEL;
+
+		if (rootfs_owner_of(path, &fmode, &fuid, &fgid) == RECONFS_OK &&
+		    !identity_may(fmode, fuid, fgid,
+				  identity_want_from_open(flags))) {
+			kfree(d->data);
+			kfree(d);
+			*error = SYS_EPERM;
+			return NULL;
+		}
+	}
 	d->capacity = VFS_FILE_MAX;
 
 	d->data = kmalloc(d->capacity);

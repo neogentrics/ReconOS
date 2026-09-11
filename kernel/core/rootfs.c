@@ -138,6 +138,64 @@ abort:
 	return st;
 }
 
+/* The inode's own fields, read once.
+ *
+ * rootfs_read_file already loads the inode when a caller wants the mode, so
+ * this is the same walk with the other two fields taken out of it as well --
+ * not a second way of finding a file, which would be a second way of being
+ * wrong about where one is. */
+enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
+				    u32 *gid)
+{
+	struct reconfs *fs = rootfs();
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	struct reconfs_inode *inode;
+	enum reconfs_status st;
+	u64 dir, child = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	dir = chain.dirs[chain.count - 1];
+
+	st = reconfs_lookup(fs, dir, leaf, &child);
+	if (st != RECONFS_OK)
+		return st;
+	if (!child)
+		return RECONFS_ERR_NOT_FOUND;
+
+	inode = kzalloc(fs->block_size);
+	if (!inode)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_read_block(fs, child, inode,
+				RK_OFFSETOF(struct reconfs_inode, checksum));
+
+	if (st == RECONFS_OK) {
+		/* Each guarded, because this header follows the same rule the
+		 * one above it does and BG-161 is what happens when it does
+		 * not: a promise that a pointer may be null, kept for one of
+		 * them and not the other. */
+		if (mode)
+			*mode = inode->mode;
+		if (uid)
+			*uid = inode->uid;
+		if (gid)
+			*gid = inode->gid;
+	}
+
+	kfree(inode);
+	return st;
+}
+
 enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 				     u32 *got, u32 *mode)
 {

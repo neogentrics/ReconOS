@@ -34,6 +34,7 @@
 #include <recon/kernel/bcache.h>
 #include <recon/kernel/irq.h>
 #include <recon/kernel/input.h>
+#include <recon/kernel/identity.h>
 #include <recon/kernel/xhci.h>	/* the USB keyboard's decoder test */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
@@ -264,6 +265,8 @@ void kmain(void)
 		evict_self_test() ? "pass" : "FAIL");
 	kprintf("  a line somebody wants : %s\n",
 		irq_self_test() ? "pass" : "FAIL");
+	kprintf("  who may, and who may not : %s\n",
+		identity_self_test() ? "pass" : "FAIL");
 	kprintf("  a report is a state  : %s\n",
 		usb_hid_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
@@ -365,6 +368,17 @@ void kmain(void)
 	 * "no filesystem to test against" on every machine in the rig -- a
 	 * truthful sentence, and a test that never once ran. */
 	rootfs_run();
+
+	/* After rootfs_run, because it needs a file to be refused and
+	 * there is no filesystem until then. */
+	identity_run();
+
+	/* After it, not before: the counts are zero until something has been
+	 * checked, and a summary printed first reports a permission system
+	 * that has never been consulted -- which is what this row of the
+	 * audit said for months and is exactly the wrong thing to keep
+	 * printing once it is no longer true. */
+	identity_print_summary();
 
 	reconfs_crash_run();
 	fat32_run();
