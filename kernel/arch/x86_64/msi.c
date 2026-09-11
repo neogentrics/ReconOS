@@ -26,12 +26,18 @@
  * an ordinary memory write and a processor can do the same one. If the vector
  * arrives, the encoding is right.
  *
- * What is not here is a driver that uses it. Every storage driver in this
- * kernel polls, which is why none of them has ever needed an interrupt at all.
- * Turning MSI on for a device whose driver does not expect completions to
- * arrive asynchronously would be worse than leaving it off. So this is the
- * half that was missing, ready for the half that comes with the first driver
- * that wants it.
+ * What was not here, until 11 September, was a driver that uses it -- and the
+ * driver that arrived does not use *this*. Every device this kernel enumerates
+ * offers MSI-X and not MSI, so `x86_msi_enable` below still has no caller, and
+ * the code a driver actually reaches is `x86_msix_enable` further down.
+ *
+ * That is worth saying plainly rather than quietly deleting. This file was
+ * written against the wrong capability, was tested, passed, and would have gone
+ * on passing forever: a driver wired to the call above would have compiled,
+ * run, returned false and changed nothing. It is kept because the encoding it
+ * composes is shared with MSI-X and its self-test is what proves that encoding
+ * is right -- but as a *path a device takes* it is unexercised, and an
+ * unexercised path is one that does not work.
  */
 #include "x86_64.h"
 

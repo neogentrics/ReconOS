@@ -595,8 +595,13 @@ struct thread *user_thread_create(const char *name, const void *code,
 	 *
 	 * Created as `nobody` rather than as the kernel, because a program that
 	 * runs with the most privileged identity by default is the wrong
-	 * direction to fail in -- and nothing yet checks, so the value recorded
-	 * now is the one enforcement will find when it arrives. */
+	 * direction to fail in.
+	 *
+	 * That used to end "and nothing yet checks, so the value recorded now is
+	 * the one enforcement will find when it arrives." Enforcement arrived on
+	 * 11 September, and this is now the identity a program is actually
+	 * refused files as -- and, since a process that is not the kernel starts
+	 * with no capabilities, the reason a test program cannot drop one. */
 	p = process_create(name, 0, UID_NOBODY, UID_NOBODY);
 	if (!p) {
 		/* Refused rather than silently unowned: a program with no

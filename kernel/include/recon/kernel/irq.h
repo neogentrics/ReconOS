@@ -4,8 +4,10 @@
  * to *route* them to any processor since the I/O APIC landed. What it has never
  * had is anywhere to put a handler: `trap.c` acknowledged every line and
  * returned, because the timer was the only device that wanted one and it was
- * wired in by hand. The audit's note on MSI says the same thing from the other
- * side -- "no driver asks for either yet" -- and this is what a driver asks.
+ * wired in by hand. The audit's note on MSI used to say the same thing from the
+ * other side -- "no driver asks for either yet" -- and this is what a driver
+ * asks with. Both halves have callers now: the PS/2 keyboard takes a line, and
+ * virtio-blk takes a vector out of the block further down.
  *
  * --- What a handler may do ---
  *

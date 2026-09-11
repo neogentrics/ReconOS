@@ -229,10 +229,16 @@ static bool collect_or_wait(struct virtio_blk *b, u16 *head)
 
 /* Runs one request to completion.
  *
- * Polls rather than waits, because the scheduler has no way to block yet. The
- * loop yields, so the machine is not wedged while a disk thinks, but it does
- * burn this thread's slice. When there is a wait queue this function is where
- * it goes, and nothing above it changes. */
+ * It waits now. The comment here used to read "polls rather than waits, because
+ * the scheduler has no way to block yet ... when there is a wait queue this
+ * function is where it goes, and nothing above it changes" -- and that turned
+ * out to be exactly right about *where*, and wrong about *nothing*: the loop
+ * below had to collect and sleep under one acquisition of the lock, which the
+ * polling version had no reason to care about.
+ *
+ * The two-second limit is still enforced here against the monotonic clock, and
+ * deliberately not by the deadline the sleep uses. A device that goes silent
+ * fails after two seconds whether or not it had an interrupt to offer. */
 static enum block_status run(struct virtio_blk *b, u32 type, u64 sector,
 			     paddr_t data, u32 data_len, bool device_writes)
 {
