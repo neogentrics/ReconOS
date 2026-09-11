@@ -6,6 +6,7 @@
  * layers down.
  */
 #include <recon/kernel/addrspace.h>
+#include <recon/kernel/wait.h>
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/evict.h>
 
@@ -369,7 +370,27 @@ bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
  * one would mean every implementation growing a function whose only caller is
  * this. When there is a second caller there will also be a reason.
  */
-static struct spinlock fill_lock = SPINLOCK_INIT("mmap-fill");
+/* A *mutex*, and it used to be a spinlock.
+ *
+ * It is held across `seek` then `read` on the file backing a mapping, which is
+ * the pair that has to be one operation -- two processors faulting on the same
+ * mapping would otherwise each read from where the other had just seeked to.
+ * That much is unchanged.
+ *
+ * What changed is underneath: storage drivers used to poll a request to
+ * completion, so the read came back without ever giving up the processor. They
+ * sleep now. A spinlock held across a sleep is held with interrupts off by a
+ * thread that is not running, and the second thread to fault on a file-backed
+ * page waits for it for ever.
+ *
+ * It never wedged in testing and would not: the emulated disk answers before
+ * the driver needs to pause -- two sleeps in an entire boot -- and a single
+ * fault at a time cannot contend with itself. That is the shape of a fault
+ * that waits for slower hardware to find it.
+ *
+ * `mutex_lock` falls back to spinning when nothing can sleep, which is what
+ * early boot needs and what this used to do always. */
+static struct mutex fill_lock;
 
 bool addrspace_map_file(struct addrspace *as, vaddr_t va, u64 size,
 			unsigned flags, struct file *f, u64 offset,
@@ -411,7 +432,6 @@ static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
 {
 	u64 within = (u64)(page - r->start);
 	u64 want = PAGE_SIZE;
-	u64 flags;
 	i64 n;
 
 	if (within >= r->file_len)
@@ -420,16 +440,16 @@ static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
 	if (r->file_len - within < want)
 		want = r->file_len - within;
 
-	flags = spin_lock_irq(&fill_lock);
+	mutex_lock(&fill_lock);
 
 	if (r->file->ops->seek(r->file, (i64)(r->file_offset + within),
 				  SEEK_START) < 0) {
-		spin_unlock_irq(&fill_lock, flags);
+		mutex_unlock(&fill_lock);
 		return false;
 	}
 
 	n = r->file->ops->read(r->file, into, want);
-	spin_unlock_irq(&fill_lock, flags);
+	mutex_unlock(&fill_lock);
 
 	/* A read that failed is a fault. A read that was short is not: the
 	 * rest of the page is already zero, and a file that ended is a file
@@ -558,6 +578,10 @@ void vm_fault_print_summary(void)
  * allocation that fails there has no good answer. */
 void addrspace_init(void)
 {
+	/* Named, so the lock summary shows it as something other than a
+	 * question mark. A zeroed mutex already works without this. */
+	mutex_init(&fill_lock, "mmap-fill");
+
 	zero_page = pmm_alloc_page();
 	if (!zero_page)
 		panic("addrspace: no page for the shared zeroes");
