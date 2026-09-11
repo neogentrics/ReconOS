@@ -3546,6 +3546,63 @@ which is why it appeared on the day the host was busiest.
   happen*). Every one was invisible to a suite that asks only whether the right
   things happened.
 
+### BG-165 — The process test raced the very threads it was pretending to end
+
+[#404](https://github.com/neogentrics/ReconOS/issues/404)
+
+- **Found:** 10 September 2026, by the verification matrix on the aarch64
+  sixteen-processor path. Every smaller machine passed.
+- **Cost:** a red board, and a *misleading* one: the failure said the kernel
+  ended a process when its first thread finished and reported the wrong exit
+  status. The kernel does neither. Neutering the real bookkeeping produces
+  **the same two messages**, so the run was accusing the kernel of exactly the
+  fault it does not have.
+- **Status:** fixed.
+
+`process_self_test` drives the bookkeeping by hand: it calls
+`process_thread_ended` itself, once per thread, and checks that the process
+ends on the *second* call and not the first, with the status it passed.
+
+The threads it drove were made with `thread_create`, **which makes a thread
+runnable the instant it exists**. `quiet_thread` returns immediately, and
+`thread_exit` then calls `process_thread_ended` for it with a status of zero.
+
+So the threads were ending themselves, in a race with a test pretending to end
+them. At one to eight processors the test won. At sixteen there are fifteen
+idle processors waiting to pick up anything runnable, and they did:
+
+```
+  process: it ended when its first thread did, not its last
+  process: it exited with 7 and reported 0
+```
+
+Both are true statements about what the test observed. The process really had
+already ended -- because both of its threads really had finished -- and the
+status really was the zero `thread_exit` passes rather than the seven the test
+passes.
+
+- **Was:** a test that created live threads and then treated them as inert
+  props. `thread_create_stopped` exists for exactly this shape and its header
+  says so under BG-148: *"putting a thread in the ring first and setting the
+  field second is a race against every other processor"*. The field here was
+  "whether the test has finished looking at it".
+- **Fixed in** `core/process.c`: the threads are created stopped, so they
+  cannot run until the bookkeeping has been checked, and **started afterwards**
+  so that nothing leaks -- their exits then find a process that has already
+  ended and reaped, which `process_thread_ended` correctly ignores.
+- **And a counter that proved nothing now proves something.** `test_started`
+  was incremented by the threads and read by nobody. The test now waits on it,
+  with a bound, which is what says the two threads really ran and really
+  finished rather than sitting stopped for ever as a stack nothing will free.
+- **Watched to fail**: with the thread count zeroed on the first exit, the test
+  reports both original messages again. Six runs at sixteen processors pass
+  with the fix and the failing path failed the run without it.
+- **Family:** the second in a day, after BG-164, where the matrix was right to
+  go red and wrong about why -- and both were instruments rather than machines.
+  The difference from BG-157 and BG-158 is worth keeping: those were real
+  faults with timing as their only symptom, and these two were correct kernels
+  with tests that could not tell *not yet* from *not ever*.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

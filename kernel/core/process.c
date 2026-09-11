@@ -13,6 +13,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/lock.h>
 #include <recon/kernel/sched.h>
+#include <recon/kernel/time.h>	/* the bounded wait below */
 #include <recon/kernel/user.h>
 
 static struct process table[PROCESS_MAX];
@@ -315,8 +316,31 @@ bool process_self_test(void)
 
 	test_started = 0;
 
-	a = thread_create("proc-a", quiet_thread, 0);
-	b = thread_create("proc-b", quiet_thread, 0);
+	/* **Stopped, and that is the whole of BG-165.**
+	 *
+	 * This test drives the bookkeeping by hand: it calls
+	 * process_thread_ended itself, once per thread, and checks that the
+	 * process ends on the second call and not the first.
+	 *
+	 * A thread made with thread_create is runnable the instant it exists.
+	 * `quiet_thread` returns immediately, and thread_exit calls
+	 * process_thread_ended for it -- with a status of zero. So the threads
+	 * were ending themselves, in a race with the test pretending to end
+	 * them, and at sixteen processors there are fifteen idle ones waiting
+	 * to pick them up.
+	 *
+	 * When they won, both the assertions below failed and said exactly
+	 * what had happened: the process had *already* ended by the time the
+	 * test ended its "first" thread, and its status was the zero
+	 * thread_exit passes rather than the seven this test passes.
+	 *
+	 * Created stopped, they cannot run until this is finished with them.
+	 * The header on thread_create_stopped already warned about the shape
+	 * of this -- a thread in the ring before the field that describes it
+	 * is set (BG-148) -- and this was the same mistake with the field
+	 * being "whether the test has finished looking". */
+	a = thread_create_stopped("proc-a", quiet_thread, 0);
+	b = thread_create_stopped("proc-b", quiet_thread, 0);
 
 	if (!a || !b) {
 		kputs("  process: could not create its threads\n");
@@ -356,6 +380,45 @@ bool process_self_test(void)
 		kprintf("  process: it exited with 7 and reported %ld\n",
 			(long)code);
 		ok = false;
+	}
+
+	/* --- and now they are allowed to run --------------------------------
+	 *
+	 * Started only now, with the bookkeeping already checked. Their exits
+	 * find a process that has ended and reaped, so process_thread_ended
+	 * looks for a RUNNING process with that id, finds none, and does
+	 * nothing -- which is why starting them here is safe rather than a
+	 * second ending.
+	 *
+	 * They are started at all because a stopped thread that is never
+	 * started is a stack and a structure nobody will ever free. A test
+	 * that leaks two threads per boot is a test that makes the leak it
+	 * would otherwise catch.
+	 *
+	 * And `test_started` finally means something. It was being written by
+	 * quiet_thread and read by nothing -- a counter that proved the threads
+	 * had run, consulted by nobody. Waiting for it here is what says they
+	 * really ran and really finished, with a bound, because "not yet" and
+	 * "not ever" are different answers (BG-164). */
+	thread_start(a);
+	thread_start(b);
+
+	{
+		u64 deadline = time_monotonic_ns() + 500000000ull;
+
+		while (__atomic_load_n(&test_started, __ATOMIC_ACQUIRE) < 2) {
+			if (time_monotonic_ns() > deadline) {
+				kprintf("  process: only %u of its two threads "
+					"ever ran, so the other is a stack "
+					"nothing will free\n",
+					__atomic_load_n(&test_started,
+							__ATOMIC_ACQUIRE));
+				ok = false;
+				break;
+			}
+
+			sched_yield();
+		}
 	}
 
 	/* Collected twice is refused: a status is delivered once, and a second
