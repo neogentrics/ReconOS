@@ -3423,7 +3423,7 @@ instructions, one of which announced a refusal.
 - **Cost:** a machine that looks hung. It is not hung -- it is making progress
   at two seconds a request, because that is the driver's timeout and every
   request is reaching it.
-- **Status:** open.
+- **Status:** fixed.
 
 Measured, on x86_64:
 
@@ -3494,10 +3494,149 @@ that is not involved changes where it stops. Something scheduling-shaped, not
 something device-shaped, which is why every device-side hypothesis above came
 back clean.
 
-Left open rather than guessed at. The next step is to find out what
-`sched_yield` returns into here -- the idle thread was changed twice this month
-(BG-155, BG-158) and this is the only place in the kernel that yields while
-holding a device.
+**It was not the yield.** The answer, found on 10 September while building MSI-X
+for the same driver, is the *legacy interrupt line*, and the evidence is one
+kernel with one line changed between runs:
+
+| INTx | completions | two virtio-blk disks |
+|---|---|---|
+| asserted | polled | **stalls in `block_init`** |
+| disabled | polled | boots |
+| disabled | by MSI-X | boots |
+
+The middle row is the one that settles it. No message-signalled interrupt is
+involved, the polling loop and its `sched_yield` are untouched, and the machine
+boots.
+
+**The device was behaving correctly and so was the kernel.** On completion a
+virtio-pci device sets its interrupt status bit and asserts its line, and the
+line stays asserted until a driver reads that byte to acknowledge it. No driver
+here ever reads it -- this kernel polls the used ring, which tells it everything
+it needs and leaves the acknowledgement undone. A level-triggered line that is
+asserted and never acknowledged does not fire once. It is stuck on.
+
+**And the machine had been saying so on every single boot.** The interrupt
+summary of a perfectly ordinary one-disk run:
+
+```
+  11 (nobody)     1770000 taken, 1770000 with nobody to take them
+```
+
+One million seven hundred and seventy thousand interrupts on a line no driver
+claims, printed in the boot summary since the day that summary was written, on
+a path the matrix runs eighteen times. Nobody read the number. The same line
+after the fix is absent entirely, and the lock counter on the same boot goes
+from 703,505 acquisitions to 1,801,182 -- the machine had been spending well
+over half of itself in an interrupt nobody wanted.
+
+Why one disk survived it and two did not is the ordinary arithmetic of a
+storm: with one device the processor still got enough time between interrupts
+to make progress, and with two it did not. That is also why *the stall point
+moved when unrelated code was added*, which was the observation that made no
+sense on its own -- timing-sensitive, because it was a race against a storm.
+
+- **Was:** `virtio_pci_probe` left the device's legacy interrupt line enabled,
+  on a kernel with no INTx handler at all.
+- **Now:** `PCI_COMMAND_INTX_DISABLE` is set as the device is claimed. Not a
+  workaround for the unacknowledged line -- a device whose interrupt nothing
+  services should not be asserting one, and the command register is where that
+  is said. The day a driver here wants INTx it turns it back on and reads the
+  status byte.
+- **Deliberately in probe, not in the MSI-X path**, where it was first written.
+  A machine with no MSI-X would otherwise still stall, and that is most of the
+  reason to put a fix at the layer the fault is in rather than at the layer it
+  was noticed from.
+- **Six candidates were eliminated before this one**, each by instrumenting a
+  copy of the tree, and every one of them came back clean -- because every one
+  of them was about the *device*, and the fault was about the *line*. The
+  seventh candidate, `sched_yield`, was implicated by a real experiment that
+  pointed in a real direction and still named the wrong thing: busy-waiting
+  helped because it kept the processor in the loop between interrupts, not
+  because yielding was broken.
+- **The matrix still attaches one disk on every path.** Two-of-a-kind goes in
+  with this, which is the finding behind the finding and the only reason it
+  took until September to see.
+
+### BG-179 — The interrupt summary counted devices before the bus had been walked
+
+- **Found:** 10 September 2026, while deciding whether to wire a driver to MSI.
+  The boot summary said `MSI : 0 device(s) can signal by memory write`, which
+  would have meant there was nothing to wire it to.
+- **Cost:** nearly the wrong decision. The plan was to skip message-signalled
+  interrupts on the grounds that no device here has them.
+- **Status:** fixed.
+
+`arch_irq_print_summary()` is called from `main()` at line 166. `block_init()`,
+which walks the PCI bus, is called at line 184. The count was of
+`pci_device_count()`, which is zero until the latter has run.
+
+So the sentence had been printing `0` on every boot this kernel has ever made,
+and it was not a fact about the hardware. It was a fact about *when it was
+printed*. Called eighteen lines later, the same function on the same machine
+says `4 device(s) ... 3 of them by MSI-X`.
+
+- **How it was caught:** by not believing it. The summary said zero and QEMU's
+  `info pci` showed the virtio disk with a 4KB BAR1, which is where a
+  transitional virtio device keeps its MSI-X table. Two instruments disagreeing
+  is a result, and the disagreement was the bug.
+- **Was:** a device fact printed beside the processors, before there were any
+  devices.
+- **Now:** `arch_irq_print_device_summary()`, called after `block_init`.
+  Separate from the routing summary because the two are true at different
+  moments -- which is the whole of the fault, so it is the whole of the fix.
+- **Family:** BG-157, BG-158, BG-160, BG-162 and now this -- five faults this
+  month whose only symptom was *when* something happened rather than what.
+
+### BG-180 — "Can signal by memory write" was implemented as "has MSI"
+
+- **Found:** 10 September 2026, immediately after BG-179 made the number
+  visible for the first time.
+- **Cost:** none yet, because nothing had ever read the number.
+- **Status:** fixed.
+
+`x86_msi_capable_devices` counted capability `0x05`. The sentence it fed said
+"can signal by memory write" -- which is also true of every device with
+capability `0x11`, MSI-X, and no MSI.
+
+On this machine that is not an edge case. It is both disks: the only two
+devices that actually do it. The count said two (an ethernet controller and an
+AHCI controller, neither of which this kernel drives by interrupt) and omitted
+the two that matter.
+
+- **Was:** a count of one mechanism under a heading naming the category.
+- **Now:** either capability counts, with the MSI-X subtotal printed beside it,
+  so the sentence and the number say the same thing.
+- **Lesson, which is the same one twice:** both this and BG-179 are a *reported
+  number that nobody had ever had a reason to check*. It went unnoticed for as
+  long as nothing depended on it, and was wrong in two independent ways the
+  moment something did.
+
+### BG-181 — The vector self-test assumed it was the only thing holding a vector
+
+- **Found:** 10 September 2026, the first time a real driver claimed a vector.
+- **Cost:** one red line on an otherwise green boot, and thirty seconds of
+  suspecting the driver.
+- **Status:** fixed.
+
+The allocator's self-test claimed vectors in a loop and asserted that all
+sixteen were free. That was true on the day it was written, when nothing in the
+kernel used one. `virtio-blk` then asked for one -- correctly, which is what the
+allocator is *for* -- and the test failed:
+
+```
+  irq: only 15 of 16 vectors could be claimed
+```
+
+- **Was:** an assertion about a quantity that no longer belonged to the test.
+- **Now:** it claims until refused, and asserts what was actually worth
+  asserting: that they run out, that running out is reported rather than
+  papered over, and that giving them back makes them available again. None of
+  those depends on who else is holding one.
+- **The pattern:** a test that passes only while it is the sole user of a shared
+  resource is a test with an expiry date, and the date is the day the thing it
+  tests gets its first real caller. It is the second test this week to fail
+  because the kernel got *better* -- after BG-165, where a race was cured and
+  the test that had been watching it went red.
 
 ### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
 

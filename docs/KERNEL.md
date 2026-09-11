@@ -2808,6 +2808,221 @@ everything would pass a test that only asked whether it complained.
 The length check exists *because* its damage test was written first and had
 nothing to catch.
 
+## Who may, and who may not
+
+Files have carried a mode, a uid and a gid since the filesystem was written, and
+**nothing had ever read them**. The audit carried that sentence unchanged for
+months. The desktop's own notes call it the largest honest gap in the system: a
+standard account cannot install a program because the Control Panel declines to,
+not because anything stops it.
+
+### The policy is in one place
+
+Every filesystem knows facts the policy does not — where an inode lives, what a
+device node means, whether a pipe has ends. None of them decides *policy*. They
+supply the mode, the owner and the group; the answer comes from `core/identity.c`.
+
+That is not tidiness. A decision made in three filesystems is three decisions,
+and the day they disagree is the day a file is readable through one path and not
+another.
+
+### The first matching class decides
+
+A mode has three sets of bits: owner, group, other. The tempting reading is *may
+they do it under any of the classes they belong to* — an or. It is wrong, and it
+is wrong in the direction that grants access.
+
+Mode `0004` on a file you own says **the owner may not read it**, and everybody
+else may. The digits are owner, group, other in that order, so this is `0` for
+the owner and `4` for everyone else — a strange thing to write, a perfectly legal
+one, and how a file is hidden from its owner while staying readable to a service.
+Under an or, the owner reads it.
+
+So the classes are tried in order and the first one that *matches* answers,
+whether the answer is yes or no. **A later class cannot grant what an earlier one
+refused.**
+
+That case is what the self-test is built around, and it caught an error on its
+first run — mine. The trap had been written as `0604`, which grants the owner
+read and write, because the digits are owner-first. The code was right; the test
+was not.
+
+### The kernel is not subject to it
+
+A thread with no process is the kernel, and it may do anything. Not an oversight:
+the check exists to constrain *programs*, and the kernel is the thing enforcing
+it. A kernel that had to ask permission to read its own filesystem would need an
+identity of its own to ask with — a second account that can do everything, which
+is the thing this prevents, wearing a hat.
+
+### Capabilities, which are the answer to that
+
+"Root may do everything" is a blunt instrument, and the answer is to name the
+powers and hold them separately.
+
+**They are dropped, never gained**, and that is the whole of the safety property.
+A process may take a capability out of its own set, and there is no call that
+puts one back — not *no call yet*, because a set that can be regained protects
+nothing: anything that could re-take a power is a power that was never given up.
+
+What that buys is worth having. An installer holds `CAP_RAW_DISK` while it writes
+a partition table and drops it the moment it is done, and every bug in everything
+it does afterwards — a corrupted path, a wild pointer, a hostile file it was
+asked to copy — cannot reach a disk. **The window in which the power exists is
+the window the programmer chose, not the lifetime of the program.**
+
+Three of them, because this kernel has three privileged acts:
+
+| Capability | What it guards |
+|---|---|
+| `CAP_FILE_OVERRIDE` | Ignoring the permission bits |
+| `CAP_RAW_DISK` | `block_claim_raw` — which calls itself *a declaration of intent to destroy a disk*, and until now nothing asked who was declaring it |
+| `CAP_SHUTDOWN` | Stopping the machine |
+
+A capability nothing checks is a promise nothing keeps, so the list is exactly
+the acts that exist. The day something needs a fourth, the name will be chosen by
+whatever needs it.
+
+`capable()` requires **every** capability asked for, not any of them — the
+tempting `(held & caps) != 0` grants a caller that asked for two powers on the
+strength of one.
+
+### Proof, rather than a mechanism
+
+A pure policy is easy to test and proves nothing about whether anything consults
+it. So a real process running as **uid 1000** opens a real `0600` file owned by
+the kernel, and is refused.
+
+Two ordering traps on the way, both the one swap fell into: the check had to move
+after `rootfs_run`, because no filesystem exists when the self-tests run; and the
+summary after the check, because otherwise it prints `0 allowed, 0 refused` and
+describes a permission system nobody consults.
+
+Under a control that forces the policy to say yes, the pure test reports `FAIL`
+and the enforcement check reports `LET IN`.
+
+**Not checked, and said out loud** in the header and in the boot summary:
+directory traversal — reaching `/a/b/file` does not require the right to traverse
+`/a` — and set-user-id.
+
+## A driver can ask for an interrupt of its own
+
+An ISA line is a wire and there are sixteen of them. A message-signalled
+interrupt has no wire at all: the device writes a value to an address, the local
+APIC decodes the write as an interrupt, and **the number is the whole of the
+routing**.
+
+So a driver that wants one does not ask for a line, it asks for a number nobody
+else is using — and until now there was exactly one such number, `VECTOR_MSI`,
+and it belonged to the self-test. The audit named this as one of three cheap
+things worth doing: *a vector allocator, so a driver can ask for an MSI rather
+than being handed the one number the self-test uses.*
+
+Sixteen of them, at `0x50` to `0x5F`, because each is an assembly stub in the
+image whether it is claimed or not — and sixteen is more devices than this kernel
+has ever had. They are written out rather than generated: inside a `.macro` body
+the `.irp` iterator and the macro's own parameter are spelled the same way, and
+the assembler resolves it to the wrong one.
+
+The claim being **exclusive** is what the self-test is built around. Two drivers
+handed one vector is two drivers taking each other's interrupts, which is exactly
+the fault the xHCI event ring had — and running out is reported rather than
+papered over.
+
+This is the blocker under 1.4's MSI row, whose own text says *the missing half is
+a driver*. The half that was missing before that is now built.
+
+## A disk that says when it is finished
+
+The vector allocator above is the half a driver needs. This is the driver.
+
+### The flavour that is actually offered
+
+`x86_msi_enable` had been written, tested, and pointed at capability `0x05`.
+Every device on this machine that has an interrupt-without-a-wire has capability
+`0x11` instead — **MSI-X** — and the two are not the same register set.
+
+MSI keeps the address and the data in configuration space, which is why it
+allows one message per device. MSI-X keeps them in a *table in the device's own
+memory*: up to 2048 messages, each with its own address and its own vector, so a
+device with eight queues can aim eight interrupts at eight processors.
+
+Wiring the disk driver to `x86_msi_enable` would have compiled, run, returned
+`false`, and changed nothing. Every test would have passed. That is the shape of
+bug this project keeps finding: not a wrong answer, **an answer to a question
+nothing asked.**
+
+It was caught by not believing a summary line — see [BG-179](BUGS.md), where the
+number that said there was nothing to wire up turned out to have been printed
+before the bus was walked.
+
+### The order of four stores
+
+An entry is sixteen bytes: address, address-high, data, and a control word whose
+bit 0 masks it. They are written masked, and **unmasked last, as a separate
+store**. An interrupt raised between the address and the data carries half of
+each configuration, which is a vector nothing has a handler for — so there must
+be no instant at which a live entry is half-written.
+
+Two off-by-ones are sitting in the capability, and both would work on most
+devices:
+
+- the size field holds **the count minus one**, so a device with one message
+  reports zero. Read as a count, it writes one entry past the end of the table.
+- the table pointer's **low three bits name a BAR** and the rest is an offset.
+  Masked the wrong way round, the offset is a little too large in a register
+  that is usually the right one anyway — so it works on a device whose table
+  starts at zero and corrupts one whose table does not.
+
+### The driver still polls, on purpose
+
+The handler counts the arrival and returns. It does not touch the queue: the
+thread that submitted the request is still in `run()` with the ring in its
+hands, and a second party collecting from it needs a lock this driver does not
+have yet.
+
+That is a smaller step than it sounds and it is the right one. Counting answers
+the only question an interrupt path has at this stage — **does it arrive at
+all** — and every later question is then asked of a mechanism known to work
+rather than of one merely written. The alternative is to build the whole stack
+and debug it at once with no idea which layer is silent.
+
+### Which is exactly why the test has to be adversarial
+
+A silent interrupt looks identical to a working one while something else is also
+polling. If the vector were misconfigured, the table written at the wrong
+offset, or the device never told which message to use, every disk operation in
+this kernel would keep working and nothing would say a word.
+
+So a real process does a real read of sector 0 and asserts the counter moved.
+Not "an interrupt can be delivered" — the MSI self-test already shows that by
+writing one by hand — but that *this device*, told about *this vector*, raises
+it when it finishes work it was actually given.
+
+Two negative controls, and they failed differently, which is the useful part:
+
+- **not telling the device its vector.** The test *passed* — because the
+  read-back guard caught it. That register is one of the very few in virtio that
+  answers: a device that cannot take a vector writes `NO_VECTOR` back and
+  carries on working, so a driver that writes and does not look has silently
+  returned to polling while believing otherwise. The driver reported it and fell
+  back. A control that finds a guard rather than a failure is still a result.
+- **leaving the entry masked.** The device accepts the vector, raises it, and
+  nothing is delivered. The test failed, naming the device and what it did:
+  *virtio0 was given a message vector and finished a request without raising
+  it.*
+
+### And then the summary was worth reading
+
+Asking for an interrupt meant switching off the legacy one, because a device
+must not assert both. That turned out to fix [BG-163](BUGS.md) — two virtio
+disks on one machine crawling at one request every two seconds — which had six
+candidates eliminated and a seventh implicated, and was none of them.
+
+The line no driver claimed had been taking **1,770,000 interrupts on an ordinary
+one-disk boot**, printed in the boot summary on a path the matrix runs eighteen
+times. The machine had been saying it all along.
+
 ## Somebody touching the machine
 
 Every screen this kernel had ever drawn had been read and not touched. There was
