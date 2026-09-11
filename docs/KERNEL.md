@@ -14,29 +14,50 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.11`. The number says what works. What works: it boots four ways across two
-architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, hands pages of it out, runs on page tables it
-built itself, allocates memory by the byte, says where and why it faulted
-instead of resetting, keeps two clocks, services a hundred interrupts a second,
-runs threads and takes execution away from them, and is started by a bootloader
-we wrote — which refuses to start it if it is not signed.
+`0.1.0`. The number says what works, and **the first digit moved because what
+works changed in kind rather than in amount**: this is the first version of this
+kernel that a person can type into, and the first that survives running out of
+memory.
 
-It also reads and writes disks over four drivers, reads every partition layout
-it has been shown, has a filesystem of its own that survives the power going
-out, reads and writes FAT32 well enough that somebody else's tools agree with
-it, installs itself onto a disk beside Windows without disturbing what is
-there, boots the machine it installed, offers the other systems it found, and
-says what is wrong with a machine that will not start.
+Before it, the answer to exhaustion was to fail the allocation, and every screen
+it had ever drawn had been read and not touched.
 
-As of 9 September 2026 it also turns the machine off by interpreting the
-vendor's own bytecode, tells the other processors when a translation has
-changed, gives a thread a way to *wait* rather than spin, and gives each process
-an address space of its own -- with memory that appears when it is touched
-rather than when it is promised, and one page of zeroes shared by every
-untouched read in the machine until somebody writes to it.
+What works: it boots four ways across two architectures, knows which firmware is
+underneath it, knows what the processor can do, knows what memory exists, hands
+pages of it out, runs on page tables it built itself, allocates memory by the
+byte, says where and why it faulted instead of resetting, keeps two clocks,
+services a hundred interrupts a second, runs threads and takes execution away
+from them, and is started by a bootloader we wrote — which refuses to start it if
+it is not signed.
 
-**379 self-tests across eighteen boot paths**, every format checked against a
+It reads and writes disks over four drivers, reads every partition layout it has
+been shown, has a filesystem of its own that survives the power going out, reads
+and writes FAT32 well enough that somebody else's tools agree with it, installs
+itself onto a disk beside Windows without disturbing what is there, boots the
+machine it installed, offers the other systems it found, and says what is wrong
+with a machine that will not start.
+
+It turns the machine off by interpreting the vendor's own bytecode, tells the
+other processors when a translation has changed, gives a thread a way to *wait*
+rather than spin, and gives each process an address space of its own — with
+memory that appears when it is touched rather than when it is promised, and one
+page of zeroes shared by every untouched read in the machine until somebody
+writes to it.
+
+And, as of 10 September 2026, the four things that earned the bump:
+
+- **It has a filesystem you reach by name.** `open`, a path, a descriptor —
+  which five separate rows of the audit were waiting on.
+- **It survives memory pressure.** Pages it has not needed lately go to a swap
+  partition and come back when they are touched, and a block cache keeps the
+  disk it reads from cheap.
+- **It can be typed into.** A keyboard and a mouse on the 8042, and both of them
+  again over USB — which is the only input aarch64 can have, since that
+  architecture has never had an 8042 to talk to.
+- **It reads the permission bits it has always stored.** A process running as
+  somebody other than the kernel is refused a file it may not open.
+
+**759 self-tests across eighteen boot paths**, every format checked against a
 tool that did not write it. The number is what the verification run reports, not
 a total kept by hand: `scripts/verify-kernel.sh` prints it, and it is copied
 here after a green run rather than incremented when a test is added.
