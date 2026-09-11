@@ -20,7 +20,27 @@
 #define PAGECACHE_MAX 64
 
 struct entry {
-	u64 id;			/* what the filesystem calls this file */
+	/* **Which filesystem**, and then what it calls the file. Both, because
+	 * one is not a key.
+	 *
+	 * Each filesystem numbers its own files from its own space and has
+	 * every right to: ramfs answers with a slot, so small integers, and the
+	 * volume answers with a dossier, which starts small too. Keyed on the
+	 * number alone, ramfs slot 10 and volume dossier 10 are the same entry
+	 * -- and the cache hands one file's pages to the other.
+	 *
+	 * That is not hypothetical. It is what happened the first time the
+	 * eviction test flooded the table: enough ramfs files to reach slot 10,
+	 * and a volume file that had been reading correctly all along came back
+	 * holding somebody else's bytes. The header above this file warns about
+	 * exactly this shape, using the block cache's partition-and-disk as the
+	 * example, and the warning was written before the mistake was made.
+	 *
+	 * The ops pointer is the filesystem: one static table per filesystem,
+	 * for the life of the machine. */
+	const struct file_ops *fs;
+
+	u64 id;			/* what that filesystem calls this file */
 	u64 offset;		/* page-aligned, into the file */
 	paddr_t page;
 	unsigned refs;		/* mappings holding it */
@@ -38,6 +58,11 @@ struct entry {
 	 * more: the rest is padding this put there, and returning it would
 	 * grow the file to a page boundary every time anybody mapped it. */
 	u32 bytes;
+
+	/* Looked at since the hand last passed. Cleared rather than evicted on
+	 * the first pass, which is what stops a page that is being used in a
+	 * loop from being taken because it happened to be next. */
+	bool referenced;
 
 	/* A reference to the file, so the page can be put back without the
 	 * mapping that dirtied it still being around to ask.
@@ -58,40 +83,105 @@ static struct spinlock lock = SPINLOCK_INIT("pagecache");
 static struct mutex fill;
 
 static u64 hits, misses, refills, full, unnamed, forgotten, stale_kept;
-static u64 written_back, write_failed;
+static u64 written_back, write_failed, evictions, all_held;
 
 void pagecache_init(void)
 {
 	mutex_init(&fill, "pagecache-fill");
 }
 
-static struct entry *find(u64 id, u64 offset)
+static struct entry *find(const struct file_ops *fs, u64 id, u64 offset)
 {
 	unsigned i;
 
 	for (i = 0; i < PAGECACHE_MAX; i++)
 		if (entries[i].valid && !entries[i].stale &&
-		    entries[i].id == id && entries[i].offset == offset)
+		    entries[i].fs == fs && entries[i].id == id &&
+		    entries[i].offset == offset)
 			return &entries[i];
 
 	return NULL;
 }
 
-static struct entry *spare(void)
+/* Defined below, beside the write it does. */
+static bool write_back(struct file *f, u64 offset, paddr_t page,
+                       u32 bytes);
+
+/* Where the clock hand is. Static, because the point of a clock is that it
+ * carries on from where it stopped -- restarting at zero every time would give
+ * the entries at the front of the table a second chance for ever and the ones
+ * at the back none at all. */
+static unsigned hand;
+
+/* A slot to fill, taking one back if there is no free one.
+ *
+ * **The safety property is the whole of this: an entry with a reference is
+ * never taken.** A reference means a page table somewhere points at that page,
+ * so evicting it would hand one program's file to whoever allocated next --
+ * and the failure would not look like a cache bug, it would look like memory
+ * corruption in an unrelated program.
+ *
+ * That is exactly why this could not be written until teardown started
+ * maintaining the count. `refs == 0` is now a real statement about the page
+ * tables of the whole machine rather than a hopeful one.
+ *
+ * Second chance, like the block cache's: an entry looked at since the hand last
+ * passed gets its bit cleared and is left alone, so a page being used in a loop
+ * is not taken merely because it was next. The caller holds the lock, and takes
+ * the file reference away to release outside it.
+ */
+static struct entry *spare(struct file **release)
 {
 	unsigned i;
+
+	*release = NULL;
 
 	for (i = 0; i < PAGECACHE_MAX; i++)
 		if (!entries[i].valid)
 			return &entries[i];
 
-	/* Nothing free. An entry nobody is holding could be taken -- that is
-	 * eviction, and it is the next thing this wants. It is not here yet
-	 * because taking a page back needs certainty that every mapping of it
-	 * has gone, and the only thing that could say so is the reference
-	 * count below, which teardown has only just started maintaining. A
-	 * cache that evicted a page somebody still had mapped would hand one
-	 * program's file to another. */
+	/* Two passes at most: the first clears the bits of everything it
+	 * passes, so the second finds a victim unless every entry is held --
+	 * which is a cache entirely in use, and an honest no. */
+	for (i = 0; i < PAGECACHE_MAX * 2; i++) {
+		struct entry *e = &entries[hand];
+
+		hand = (hand + 1) % PAGECACHE_MAX;
+
+		if (e->refs)
+			continue;
+
+		if (e->referenced) {
+			e->referenced = false;
+			continue;
+		}
+
+		/* Nobody holds it and nobody has asked for it since the hand
+		 * last came round. A dirty page at zero references should not
+		 * exist -- the last put writes it back -- but freeing one
+		 * without looking would be trusting that rather than checking
+		 * it. */
+		if (e->dirty && e->owner)
+			write_back(e->owner, e->offset, e->page, e->bytes);
+
+		*release = e->owner;
+
+		pmm_free_page(e->page);
+
+		e->valid = false;
+		e->stale = false;
+		e->dirty = false;
+		e->referenced = false;
+		e->page = 0;
+		e->owner = NULL;
+		e->fs = NULL;
+		e->id = 0;
+
+		evictions++;
+		return e;
+	}
+
+	all_held++;
 	return NULL;
 }
 
@@ -119,6 +209,7 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 	u64 id;
 	u64 flags;
 	i64 n;
+	struct file *evicted_owner = NULL;
 
 	if (!f || !f->ops || !f->ops->identity)
 		return 0;
@@ -134,10 +225,11 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 	}
 
 	flags = spin_lock_irq(&lock);
-	e = find(id, offset);
+	e = find(f->ops, id, offset);
 
 	if (e) {
 		e->refs++;
+		e->referenced = true;
 		page = e->page;
 		hits++;
 		spin_unlock_irq(&lock, flags);
@@ -181,7 +273,7 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 	/* Somebody may have filled it while this was reading. Theirs wins --
 	 * not because it is better but because a second entry for one page of
 	 * one file is the aliasing this exists to prevent. */
-	e = find(id, offset);
+	e = find(f->ops, id, offset);
 
 	if (e) {
 		e->refs++;
@@ -191,7 +283,7 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 		return e->page;
 	}
 
-	e = spare();
+	e = spare(&evicted_owner);
 
 	if (!e) {
 		full++;
@@ -200,6 +292,7 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 		return 0;
 	}
 
+	e->fs = f->ops;
 	e->id = id;
 	e->offset = offset;
 	e->page = page;
@@ -211,10 +304,17 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 	 * back can never dirty a page here, so keeping it open would be a
 	 * reference nothing would ever read. */
 	e->owner = f->ops->write_at ? file_hold(f) : NULL;
+	e->referenced = true;
 
 	misses++;
 
 	spin_unlock_irq(&lock, flags);
+
+	/* Outside the lock: the last reference to a file commits it, which
+	 * reaches a disk. */
+	if (evicted_owner)
+		file_release(evicted_owner);
+
 	return page;
 }
 
@@ -302,10 +402,16 @@ bool pagecache_mark_shared(paddr_t page)
 	return ok;
 }
 
-void pagecache_forget(u64 id)
+void pagecache_forget(struct file *f)
 {
 	unsigned i;
+	u64 id;
 	u64 flags;
+
+	if (!f || !f->ops || !f->ops->identity)
+		return;
+
+	id = f->ops->identity(f);
 
 	if (!id)
 		return;
@@ -313,7 +419,11 @@ void pagecache_forget(u64 id)
 	flags = spin_lock_irq(&lock);
 
 	for (i = 0; i < PAGECACHE_MAX; i++) {
-		if (!entries[i].valid || entries[i].id != id)
+		/* The filesystem as well as the number, for the same reason
+		 * `find` needs both: forgetting by number alone would drop
+		 * another filesystem's file that happens to share it. */
+		if (!entries[i].valid || entries[i].fs != f->ops ||
+		    entries[i].id != id)
 			continue;
 
 		if (entries[i].refs) {
@@ -326,6 +436,8 @@ void pagecache_forget(u64 id)
 			pmm_free_page(entries[i].page);
 			entries[i].valid = false;
 			entries[i].page = 0;
+			entries[i].fs = NULL;
+			entries[i].id = 0;
 			forgotten++;
 		}
 	}
@@ -510,7 +622,7 @@ void pagecache_run(void)
 	if (before)
 		pagecache_put(before);
 
-	pagecache_forget(id);
+	pagecache_forget(f);
 
 	after = f ? pagecache_get(f, 0) : 0;
 
@@ -537,6 +649,132 @@ void pagecache_run(void)
 	kprintf("  a file can be forgotten : %s\n", ok ? "pass" : "FAIL");
 }
 
+/* --- that it makes room, and never out of a page somebody holds ------------
+ *
+ * Two claims, and the second is the one worth the code:
+ *
+ *   asking for more pages than the table has keeps working -- otherwise the
+ *     cache stops being a cache the moment a machine is busy;
+ *   and a page with a reference is never taken -- otherwise a program is
+ *     reading a file through memory that has been handed to somebody else,
+ *     which does not present as a cache bug. It presents as corruption
+ *     somewhere unrelated.
+ *
+ * The second is checked by holding one page across the whole flood and asking
+ * for it again at the end. If eviction ignored references, the held key would
+ * have been taken and re-read into a *different* page -- so the assertion is on
+ * the address, which is the only thing that changes. The contents would match
+ * either way.
+ */
+bool pagecache_eviction_self_test(void)
+{
+	struct file *f;
+	paddr_t held, again;
+	unsigned i, made = 0;
+	u64 before = evictions;
+	i64 err = 0;
+	bool ok = true;
+
+	f = file_open_path("/tmp/evict-test", OPEN_WRITE | OPEN_CREATE,
+			   0600, &err);
+
+	if (!f) {
+		kprintf("  pagecache: no file to flood with (%ld)\n",
+			(long)err);
+		return false;
+	}
+
+	f->ops->write(f, "held", 4);
+	file_release(f);
+
+	f = file_open_path("/tmp/evict-test", OPEN_READ, 0, &err);
+
+	if (!f) {
+		kputs("  pagecache: could not reopen the file\n");
+		return false;
+	}
+
+	held = pagecache_get(f, 0);
+
+	if (!held) {
+		kputs("  pagecache: nothing to hold\n");
+		file_release(f);
+		return false;
+	}
+
+	/* More distinct keys than the table has entries, and spread over
+	 * several files because one is not enough: a file here holds 64KB, so
+	 * sixteen pages, and seeking past that is refused. The first version of
+	 * this flooded one file and reported "only 16 of 72 asks found room" --
+	 * which was the test running out of file, not the cache running out of
+	 * room.
+	 *
+	 * Offsets past the end of a file are still keys: the read comes back
+	 * short, the rest of the page is zero, and the entry is as real as any
+	 * other. */
+	for (i = 0; i < 8 && ok; i++) {
+		char name[32];
+		struct file *g;
+		unsigned k;
+
+		kstrlcpy(name, "/tmp/evict-0", sizeof(name));
+		name[11] = (char)('0' + i);
+
+		g = file_open_path(name, OPEN_WRITE | OPEN_CREATE, 0600, &err);
+
+		if (g) {
+			g->ops->write(g, "x", 1);
+			file_release(g);
+		}
+
+		g = file_open_path(name, OPEN_READ, 0, &err);
+
+		if (!g)
+			continue;
+
+		for (k = 0; k < 10; k++) {
+			paddr_t p = pagecache_get(g, (u64)k * PAGE_SIZE);
+
+			if (p) {
+				made++;
+				pagecache_put(p);
+			}
+		}
+
+		file_release(g);
+	}
+
+	if (made < PAGECACHE_MAX) {
+		kprintf("  pagecache: only %u of 80 asks found room, so the "
+			"cache stopped making any\n", made);
+		ok = false;
+	}
+
+	if (evictions == before) {
+		kputs("  pagecache: the table was flooded and nothing was "
+		      "ever taken back\n");
+		ok = false;
+	}
+
+	/* The held one is still the held one. */
+	again = pagecache_get(f, 0);
+
+	if (again != held) {
+		kprintf("  pagecache: a page that was still held was taken "
+			"anyway -- it was %p and came back %p\n",
+			(void *)(uintptr_t)held, (void *)(uintptr_t)again);
+		ok = false;
+	}
+
+	if (again)
+		pagecache_put(again);
+
+	pagecache_put(held);
+	file_release(f);
+
+	return ok;
+}
+
 void pagecache_print_summary(void)
 {
 	unsigned i, used = 0, held = 0;
@@ -558,9 +796,14 @@ void pagecache_print_summary(void)
 		kprintf("  raced        : %lu read a page somebody else had "
 			"finished first\n", (unsigned long)refills);
 
-	if (full)
+	if (evictions)
+		kprintf("  evicted      : %lu page(s) taken back to make "
+			"room\n", (unsigned long)evictions);
+
+	if (full || all_held)
 		kprintf("  full         : %lu fault(s) filled a private page "
-			"because there was no room\n", (unsigned long)full);
+			"because every entry was still held\n",
+			(unsigned long)full);
 
 	if (unnamed)
 		kprintf("  unnamed      : %lu fault(s) on a file whose "

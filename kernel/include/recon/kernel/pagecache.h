@@ -77,7 +77,7 @@ bool pagecache_owns(paddr_t page);
  * what it mapped, which is the only answer that does not pull memory out from
  * under a running program.
  */
-void pagecache_forget(u64 id);
+void pagecache_forget(struct file *f);
 
 /* Says a shared mapping has this page writable, so what is in it may no longer
  * be what the file holds. Put back when the last mapping lets go.
@@ -92,6 +92,10 @@ void pagecache_init(void);
 
 void pagecache_print_summary(void);
 bool pagecache_self_test(void);
+
+/* That the cache makes room when it runs out, and never out of a page some
+ * mapping still points at. */
+bool pagecache_eviction_self_test(void);
 
 /* That a rewritten file is not served from the copy taken before it. Needs a
  * mounted volume, so it runs after rootfs_run rather than with the rest. */

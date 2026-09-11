@@ -272,7 +272,7 @@ static i64 disk_close(struct file *f)
 		 * changed nothing, and throwing away good pages because a
 		 * commit did not happen is a slower machine for no reason. */
 		if (d->dossier && r == RECONFS_OK)
-			pagecache_forget(d->dossier);
+			pagecache_forget(f);
 	}
 
 	kfree(d->data);

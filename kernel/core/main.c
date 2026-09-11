@@ -328,6 +328,8 @@ void kmain(void)
 		vfs_list_self_test() ? "pass" : "FAIL");
 	kprintf("  one copy, shared   : %s\n",
 		pagecache_self_test() ? "pass" : "FAIL");
+	kprintf("  room is made       : %s\n",
+		pagecache_eviction_self_test() ? "pass" : "FAIL");
 	kprintf("  a clean handoff    : %s\n",
 		boot_handoff_registers_clear(0, 0) ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
