@@ -102,6 +102,17 @@ void irq_release_vector(u8 vector);
  * a vector arriving with nobody to take it is worth counting. */
 bool irq_dispatch_vector(u8 vector);
 
+/* How many requests for a vector have been refused, and how many of those were
+ * somebody proving on purpose that they run out.
+ *
+ * The self-test exhausts the block deliberately -- that is the assertion worth
+ * making about an allocator -- so without the second number the boot summary
+ * reports two refusals on a machine where nothing went wrong, on every boot.
+ * A number that is never zero is a number a reader stops seeing, which is how
+ * the one that mattered would be missed. */
+u64 irq_vector_refusals(void);
+void irq_note_expected_refusals(u64 n);
+
 /* How many times each line has fired, and how many arrived with nobody to take
  * them. The second number is the interesting one. */
 void irq_print_summary(void);

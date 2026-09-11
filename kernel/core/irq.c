@@ -94,6 +94,19 @@ bool irq_dispatch(unsigned line)
  */
 static struct line vectors[IRQ_VECTOR_COUNT];
 static u64 vectors_exhausted;
+static u64 vectors_exhausted_expected;
+
+u64 irq_vector_refusals(void)
+{
+	return vectors_exhausted;
+}
+
+void irq_note_expected_refusals(u64 n)
+{
+	/* Added rather than assigned: the caller reports what it caused, and a
+	 * second caller later must not erase the first one's. */
+	vectors_exhausted_expected += n;
+}
 
 u8 irq_claim_vector(void (*fn)(void *), void *arg, const char *name)
 {
@@ -213,10 +226,18 @@ void irq_print_summary(void)
 		kprintf("\n");
 	}
 
-	if (vectors_exhausted)
-		kprintf("  and %llu driver(s) asked for a vector when there "
-			"were none left\n",
-			(unsigned long long)vectors_exhausted);
+	if (vectors_exhausted) {
+		u64 real = vectors_exhausted - vectors_exhausted_expected;
+
+		/* Only the refusals nobody arranged are worth a line that
+		 * sounds like a problem. */
+		if (real)
+			kprintf("  and %llu request(s) for a vector found "
+				"none left\n", (unsigned long long)real);
+		else
+			kprintf("  every refusal of a vector so far was the "
+				"self-test proving they run out\n");
+	}
 
 	if (!any)
 		kputs("  none claimed, none seen\n");
@@ -328,6 +349,7 @@ bool irq_self_test(void)
 		u8 v, again;
 		u8 held[IRQ_VECTOR_COUNT];
 		unsigned n = 0, i;
+		u64 refusals_before = irq_vector_refusals();
 
 		ran = 0;
 
@@ -438,6 +460,14 @@ bool irq_self_test(void)
 			      "found somebody\n");
 			ok = false;
 		}
+
+		/* Counted rather than assumed. How many refusals this causes
+		 * depends on how many vectors a driver was already holding
+		 * when it ran, so a constant here would be right on one
+		 * machine and wrong on the next -- and wrong in the direction
+		 * that hides a real one. */
+		irq_note_expected_refusals(irq_vector_refusals()
+					   - refusals_before);
 	}
 
 	/* Out of range, both ends. */
