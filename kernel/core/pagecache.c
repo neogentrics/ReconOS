@@ -29,6 +29,24 @@ struct entry {
 	/* The file changed after this was read. Nothing new is served from it
 	 * and it goes when the last mapping does -- see pagecache_forget. */
 	bool stale;
+
+	/* Somebody has mapped this writably and shared, so the page may hold
+	 * something the file does not. */
+	bool dirty;
+
+	/* How much of the page the file actually backs. Written back and no
+	 * more: the rest is padding this put there, and returning it would
+	 * grow the file to a page boundary every time anybody mapped it. */
+	u32 bytes;
+
+	/* A reference to the file, so the page can be put back without the
+	 * mapping that dirtied it still being around to ask.
+	 *
+	 * This pins the file open for as long as the page is cached, which is
+	 * a real cost and the reason it is only taken for entries that can be
+	 * written back at all. A cache that held every file it had ever read
+	 * would be a machine that never closes anything. */
+	struct file *owner;
 };
 
 static struct entry entries[PAGECACHE_MAX];
@@ -40,6 +58,7 @@ static struct spinlock lock = SPINLOCK_INIT("pagecache");
 static struct mutex fill;
 
 static u64 hits, misses, refills, full, unnamed, forgotten, stale_kept;
+static u64 written_back, write_failed;
 
 void pagecache_init(void)
 {
@@ -74,6 +93,23 @@ static struct entry *spare(void)
 	 * cache that evicted a page somebody still had mapped would hand one
 	 * program's file to another. */
 	return NULL;
+}
+
+/* Puts a dirty page back, and says whether it got there.
+ *
+ * The caller holds nothing: writing can sleep, and the table lock must not be
+ * held across it. Everything this needs is copied out first.
+ */
+static bool write_back(struct file *f, u64 offset, paddr_t page, u32 bytes)
+{
+	i64 n;
+
+	if (!f || !f->ops || !f->ops->write_at || !bytes)
+		return false;
+
+	n = f->ops->write_at(f, offset, phys_to_virt(page), bytes);
+
+	return n == (i64)bytes;
 }
 
 paddr_t pagecache_get(struct file *f, u64 offset)
@@ -169,6 +205,13 @@ paddr_t pagecache_get(struct file *f, u64 offset)
 	e->page = page;
 	e->refs = 1;
 	e->valid = true;
+	e->bytes = (u32)n;
+
+	/* Held only where it could be used. A file with no way to take a write
+	 * back can never dirty a page here, so keeping it open would be a
+	 * reference nothing would ever read. */
+	e->owner = f->ops->write_at ? file_hold(f) : NULL;
+
 	misses++;
 
 	spin_unlock_irq(&lock, flags);
@@ -179,6 +222,10 @@ void pagecache_put(paddr_t page)
 {
 	unsigned i;
 	u64 flags;
+	struct file *back_file = NULL;
+	u64 back_off = 0;
+	paddr_t back_page = 0;
+	u32 back_bytes = 0;
 
 	if (!page)
 		return;
@@ -189,6 +236,17 @@ void pagecache_put(paddr_t page)
 		if (entries[i].valid && entries[i].page == page) {
 			if (entries[i].refs)
 				entries[i].refs--;
+
+			/* The last mapping has gone and the page may hold
+			 * something the file does not. Copied out here and
+			 * written after the lock, because writing can sleep. */
+			if (!entries[i].refs && entries[i].dirty) {
+				back_file = entries[i].owner;
+				back_off = entries[i].offset;
+				back_page = entries[i].page;
+				back_bytes = entries[i].bytes;
+				entries[i].dirty = false;
+			}
 
 			/* A stale entry is only being kept for the mappings
 			 * that still point at it. When the last one lets go
@@ -208,6 +266,40 @@ void pagecache_put(paddr_t page)
 	 * mapping of it should find it rather than read it again -- which is
 	 * the whole point. Zero means "may be evicted", not "is empty". */
 	spin_unlock_irq(&lock, flags);
+
+	if (back_file) {
+		if (write_back(back_file, back_off, back_page, back_bytes))
+			written_back++;
+		else
+			write_failed++;
+	}
+}
+
+bool pagecache_mark_shared(paddr_t page)
+{
+	unsigned i;
+	u64 flags;
+	bool ok = false;
+
+	if (!page)
+		return false;
+
+	flags = spin_lock_irq(&lock);
+
+	for (i = 0; i < PAGECACHE_MAX; i++)
+		if (entries[i].valid && entries[i].page == page) {
+			/* Only where the promise can be kept. Saying yes here
+			 * for a file that cannot take the write back is how a
+			 * program's changes get accepted and lost. */
+			if (entries[i].owner) {
+				entries[i].dirty = true;
+				ok = true;
+			}
+			break;
+		}
+
+	spin_unlock_irq(&lock, flags);
+	return ok;
 }
 
 void pagecache_forget(u64 id)
@@ -473,6 +565,11 @@ void pagecache_print_summary(void)
 	if (unnamed)
 		kprintf("  unnamed      : %lu fault(s) on a file whose "
 			"filesystem cannot name it\n", (unsigned long)unnamed);
+
+	if (written_back || write_failed)
+		kprintf("  written back : %lu shared page(s) put back into "
+			"their file%s\n", (unsigned long)written_back,
+			write_failed ? ", and some could not be" : "");
 
 	if (forgotten || stale_kept)
 		kprintf("  rewritten    : %lu page(s) dropped because the file "

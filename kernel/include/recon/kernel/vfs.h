@@ -107,6 +107,22 @@ struct file_ops {
 	 */
 	u64 (*identity)(struct file *f);
 
+	/* Puts `len` bytes back at `offset`, without a position and without a
+	 * later commit.
+	 *
+	 * Its **presence is the promise** that a write through a shared mapping
+	 * reaches the file, and that is why it is a separate operation rather
+	 * than a use of `write`: every filesystem here has `write`, and on the
+	 * volume a write is buffered until the close, where the commit answers
+	 * ERR_EXISTS and changes nothing. A shared mapping there would take
+	 * writes and lose them, which is worse than not offering one.
+	 *
+	 * So a filesystem that cannot keep the promise does not implement this,
+	 * and a shared writable mapping of its files is refused rather than
+	 * accepted and quietly dropped. */
+	i64 (*write_at)(struct file *f, u64 offset, const void *in, u64 len);
+
+
 	/* For the summary and for tests: what kind of thing this is. Not used
 	 * to decide anything. */
 	const char *name;

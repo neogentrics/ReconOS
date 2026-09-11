@@ -422,6 +422,7 @@ bool addrspace_map_file(struct addrspace *as, vaddr_t va, u64 size,
 	r->file  = file_hold(f);
 	r->file_offset = offset;
 	r->file_len = len;
+	r->shared = false;
 
 	arch_irq_restore(irq);
 	return true;
@@ -458,6 +459,33 @@ static bool fill_from_file(struct as_region *r, vaddr_t page, void *into)
 	 * rest of the page is already zero, and a file that ended is a file
 	 * that ended. */
 	return n >= 0;
+}
+
+bool addrspace_map_file_shared(struct addrspace *as, vaddr_t va, u64 size,
+			       unsigned flags, struct file *f, u64 offset,
+			       u64 len)
+{
+	unsigned i;
+
+	/* Asked before anything is mapped, because the answer decides whether
+	 * there should be a mapping at all. */
+	if (!f || !f->ops || !f->ops->write_at)
+		return false;
+
+	if (!addrspace_map_file(as, va, size, flags, f, offset, len))
+		return false;
+
+	/* The region exists now; say what kind it is. Found by the address it
+	 * was just given rather than returned from the call above, because
+	 * changing that signature would touch every caller for the benefit of
+	 * one. */
+	for (i = 0; i < as->region_count; i++)
+		if (as->regions[i].start == va) {
+			as->regions[i].shared = true;
+			return true;
+		}
+
+	return false;
 }
 
 paddr_t addrspace_zero_page(void)
@@ -557,8 +585,31 @@ bool vm_fault_user(vaddr_t addr, bool write)
 						       + (u64)(page - r->start));
 
 			if (shared) {
-				if (!vm_map(page, shared, PAGE_SIZE,
-					    (r->flags & ~VM_WRITE) | VM_USER)) {
+				/* A shared region keeps the cache's page and
+				 * writes through it, so it is mapped writable
+				 * at once -- there is no copy to wait for, and
+				 * leaving VM_WRITE off would trap on the first
+				 * write and be answered with the copy this
+				 * exists to avoid.
+				 *
+				 * The mark is what makes the page get put back
+				 * afterwards, and it is checked: a file that
+				 * cannot take a write back should have been
+				 * refused at map time, and a mapping that got
+				 * this far anyway must not silently keep
+				 * writes nobody will read. */
+				unsigned how = r->flags | VM_USER;
+
+				if (r->shared && !pagecache_mark_shared(shared)) {
+					pagecache_put(shared);
+					faults_refused++;
+					return false;
+				}
+
+				if (!r->shared)
+					how &= ~VM_WRITE;
+
+				if (!vm_map(page, shared, PAGE_SIZE, how)) {
 					pagecache_put(shared);
 					return false;
 				}
@@ -867,6 +918,133 @@ void addrspace_run(void)
 		two_spaces_share_a_file_page("/shared-map") ? "pass" : "FAIL");
 }
 
+/* --- a shared mapping, which is the point of the cache ---------------------
+ *
+ * Three claims, and each fails differently:
+ *
+ *   the two spaces see one page -- otherwise nothing is shared at all;
+ *   a write through one is visible through the other *without* a second
+ *     fault -- otherwise it is a private copy wearing the word shared;
+ *   and the file holds it afterwards -- otherwise the writes were accepted
+ *     and lost, which is the failure worth refusing a mapping to avoid.
+ *
+ * The third is checked by reading the file through an ordinary descriptor,
+ * not by asking the cache. Asking the cache would be asking the thing under
+ * test whether it worked.
+ */
+static bool a_shared_mapping_is_shared(void)
+{
+	const vaddr_t at = USER_BASE + 0x80000;
+	const char *path = "/tmp/shared-write";
+	struct addrspace *one = NULL, *two = NULL, *was;
+	struct file *fa = NULL, *fb = NULL, *check = NULL;
+	volatile char *seen;
+	char back[8];
+	i64 err = 0;
+	u64 irq;
+	bool ok = true;
+
+	fa = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0600, &err);
+
+	if (!fa) {
+		kprintf("  addrspace: no file to share writably (%ld)\n",
+			(long)err);
+		return false;
+	}
+
+	fa->ops->write(fa, "before", 6);
+	file_release(fa);
+
+	fa = file_open_path(path, OPEN_READ | OPEN_WRITE, 0, &err);
+	fb = file_open_path(path, OPEN_READ | OPEN_WRITE, 0, &err);
+	one = addrspace_create();
+	two = addrspace_create();
+
+	if (!fa || !fb || !one || !two) {
+		kputs("  addrspace: could not set up a shared mapping\n");
+		ok = false;
+		goto out;
+	}
+
+	if (!addrspace_map_file_shared(one, at, PAGE_SIZE,
+				       VM_READ | VM_WRITE | VM_USER,
+				       fa, 0, 6) ||
+	    !addrspace_map_file_shared(two, at, PAGE_SIZE,
+				       VM_READ | VM_WRITE | VM_USER,
+				       fb, 0, 6)) {
+		kputs("  addrspace: a shared mapping of a ramfs file was "
+		      "refused\n");
+		ok = false;
+		goto out;
+	}
+
+	irq = arch_irq_save();
+	was = addrspace_active();
+
+	/* Written in the first space. */
+	addrspace_activate(one);
+
+	if (!vm_fault_user(at, true)) {
+		ok = false;
+	} else {
+		seen = (volatile char *)at;
+		seen[0] = 'A';
+	}
+
+	/* And read in the second, which faults for the first time here. The
+	 * write above happened before this mapping existed, which is the
+	 * ordinary case and the one that would fail if each space filled its
+	 * own page. */
+	addrspace_activate(two);
+
+	if (ok && vm_fault_user(at, false)) {
+		seen = (volatile char *)at;
+
+		if (seen[0] != 'A') {
+			kprintf("  addrspace: a write through one shared "
+				"mapping was not visible through the other "
+				"(saw '%c')\n", seen[0]);
+			ok = false;
+		}
+	} else if (ok) {
+		kputs("  addrspace: the second shared mapping did not fault "
+		      "in\n");
+		ok = false;
+	}
+
+	addrspace_activate(was);
+	arch_irq_restore(irq);
+
+out:
+	/* Let go of both, which is what puts the page back into the file. */
+	if (one)
+		addrspace_release(one);
+	if (two)
+		addrspace_release(two);
+	if (fa)
+		file_release(fa);
+	if (fb)
+		file_release(fb);
+
+	if (ok) {
+		check = file_open_path(path, OPEN_READ, 0, &err);
+
+		if (!check || check->ops->read(check, back, 6) != 6) {
+			kputs("  addrspace: could not read the file back\n");
+			ok = false;
+		} else if (back[0] != 'A') {
+			kprintf("  addrspace: the shared write never reached "
+				"the file (it still reads '%c')\n", back[0]);
+			ok = false;
+		}
+
+		if (check)
+			file_release(check);
+	}
+
+	return ok;
+}
+
 bool addrspace_self_test(void)
 {
 	struct addrspace *a = addrspace_create();
@@ -1089,6 +1267,9 @@ bool addrspace_self_test(void)
 	 * self-tests run at 300, so a check for it here would find nothing and
 	 * report a pass. The permission check learned this the same way. */
 	if (ok && !two_spaces_share_a_file_page("/tmp/shared-map"))
+		ok = false;
+
+	if (ok && !a_shared_mapping_is_shared())
 		ok = false;
 
 done:

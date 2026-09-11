@@ -70,6 +70,15 @@ struct as_region {
 	struct file *file;
 	u64 file_offset;	/* where in the file this region begins */
 	u64 file_len;		/* how much is backed; past it is zeroes */
+
+	/* Whether a write here is a write to the file, seen by everybody else
+	 * who mapped it.
+	 *
+	 * False is the older behaviour and still the default: the page is
+	 * shared for reading and copied the moment anybody writes, so the file
+	 * never changes. True skips the copy -- the mapping keeps the cache's
+	 * page, writable, for as long as it holds it. */
+	bool shared;
 };
 
 struct addrspace {
@@ -139,6 +148,22 @@ bool addrspace_map(struct addrspace *as, vaddr_t va, paddr_t pa, u64 size,
 bool addrspace_map_file(struct addrspace *as, vaddr_t va, u64 size,
 			unsigned flags, struct file *f, u64 offset,
 			u64 len);
+
+/* The same, but writes go to the file and are seen by every other mapping of
+ * it.
+ *
+ * **Refused** for a file whose filesystem cannot take a write back -- see
+ * `write_at` in vfs.h. That is the whole reason this is a separate call rather
+ * than a flag with a default: a shared mapping that accepts writes and drops
+ * them is worse than not offering one, and the refusal happens here, once, at
+ * the point where something can still be done about it.
+ *
+ * On the volume that means refused today. A file there is buffered until its
+ * close and the close cannot replace an existing name, so there is nothing to
+ * write back through. */
+bool addrspace_map_file_shared(struct addrspace *as, vaddr_t va, u64 size,
+			       unsigned flags, struct file *f, u64 offset,
+			       u64 len);
 
 bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
 		       unsigned flags);

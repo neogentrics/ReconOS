@@ -161,12 +161,14 @@ static i64 ram_seek(struct file *f, i64 offset, unsigned from)
  * file on the volume, where the close is the write. */
 /* Defined below, beside the reasoning for it. */
 static u64 ramfs_identity(struct file *f);
+static i64 ramfs_write_at(struct file *f, u64 offset, const void *in, u64 len);
 
 static const struct file_ops ram_ops = {
 	.read  = ram_read,
 	.write = ram_write,
 	.seek  = ram_seek,
 	.identity = ramfs_identity,
+	.write_at = ramfs_write_at,
 	.name  = "ramfs",
 };
 
@@ -246,6 +248,42 @@ struct file *ramfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
  * written down as a decision rather than an omission. So a slot is a file, for
  * ever, and two opens of one name find the same slot.
  */
+/* A file here *is* memory, so putting bytes back is a copy and nothing else
+ * has to happen afterwards. That is the whole reason ramfs can offer a shared
+ * writable mapping and the volume cannot: there is no commit to fail.
+ *
+ * The length is not extended. A shared mapping is a window onto what the file
+ * already holds, and a page of it reaching past the end is padding the cache
+ * put there -- writing that back would grow the file to a page boundary every
+ * time anybody mapped it. */
+static i64 ramfs_write_at(struct file *f, u64 offset, const void *in, u64 len)
+{
+	struct ram_file *r = f ? f->private : NULL;
+	u64 flags;
+
+	if (!r)
+		return SYS_EBADF;
+
+	if (offset >= RAMFS_BYTES_MAX)
+		return SYS_ENOSPC;
+
+	if (len > RAMFS_BYTES_MAX - offset)
+		len = RAMFS_BYTES_MAX - offset;
+
+	flags = spin_lock_irq(&ramfs_lock);
+
+	if (offset > r->len)
+		len = 0;		/* past the end: nothing to put back */
+	else if (len > r->len - offset)
+		len = r->len - offset;
+
+	if (len)
+		kmemcpy(r->data + offset, in, (size_t)len);
+
+	spin_unlock_irq(&ramfs_lock, flags);
+	return (i64)len;
+}
+
 static u64 ramfs_identity(struct file *f)
 {
 	struct ram_file *rf = f ? f->private : NULL;

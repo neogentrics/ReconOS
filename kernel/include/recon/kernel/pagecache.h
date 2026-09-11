@@ -79,6 +79,14 @@ bool pagecache_owns(paddr_t page);
  */
 void pagecache_forget(u64 id);
 
+/* Says a shared mapping has this page writable, so what is in it may no longer
+ * be what the file holds. Put back when the last mapping lets go.
+ *
+ * False if the page is not the cache's, or if the file it came from cannot
+ * take a write back -- which is the caller's signal to refuse the mapping
+ * rather than accept one whose writes go nowhere. */
+bool pagecache_mark_shared(paddr_t page);
+
 /* Names the fill lock, so it reads as something in the lock summary. */
 void pagecache_init(void);
 
