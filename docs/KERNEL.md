@@ -3023,6 +3023,128 @@ The line no driver claimed had been taking **1,770,000 interrupts on an ordinary
 one-disk boot**, printed in the boot summary on a path the matrix runs eighteen
 times. The machine had been saying it all along.
 
+## A sleep that gives up
+
+`wait_sleep` waits for ever, and for a thread waiting on another thread that is
+right: if the signal never comes the program is wrong, and hanging is honest.
+For a thread waiting on **hardware** it is wrong. A disk that never answers is
+not a bug in this kernel, it is a disk, and a driver that waits for ever on one
+turns a broken device into a machine that stops with nothing on the screen.
+
+So every such caller polled instead — burning a slice per look, and unable to
+have more than one request outstanding, because the only way it knew a request
+had finished was that it went and looked.
+
+### Why the caller owns the deadline
+
+The obvious interface is `wait_sleep_timeout(q, lock, flags, ns)`, with the
+timer on the stack. `timer_sleep_ns` does exactly that and is correct — because
+it drops its lock **and restores interrupts** before waiting out a callback that
+lost the cancel race.
+
+A deadline sleep cannot. It has to return the way `wait_sleep` does — lock held,
+interrupts still off — so if the tick belongs to this processor, a spin waiting
+for that callback is waiting for something that **cannot run**. It would be a
+deadlock that appears only when the timer fires in the same instant as the
+wakeup, on the processor that owns the tick.
+
+Putting the timer in the caller's own structure removes the question rather than
+answering it. A callback that fires late points at something that is still
+there, so there is nothing to wait for — and this kernel has already paid once
+for a pointer to a stack frame that had gone, in the lock registry.
+
+### And why there is a generation number
+
+`timer_cancel` can lose, so a disarmed deadline may still fire. As a flag, that
+late callback would mark a structure whose *next* request has already started,
+and that request would time out immediately — leaking the descriptors its device
+still owns, for a timeout belonging to the request before it.
+
+So the callback records **which arming it belongs to**, and only the current one
+counts. A stale one writes a number nobody is looking at.
+
+Both halves were watched failing. A plain flag reports *a freshly armed deadline
+says it has already run out, so the arming before it leaked*; a deadline that
+expires at once reports *a 100ms deadline ran out after 20143 ns*.
+
+### The disk stops looking
+
+`virtio-blk` waits now. **The two-second limit on a request is unchanged** and
+still a comparison against the monotonic clock — the deadline only stops a sleep
+lasting for ever, so the loop gets to look at that clock again. A device that
+goes silent still fails after two seconds whether or not it had an interrupt to
+offer.
+
+The counters are not decoration. Had `wait_sleep` always returned false, the
+driver would have yielded every time, behaved exactly as before, and **passed
+every test** — so it reports what it actually did. That caught two things.
+
+The counter could not fire at all, because it read the deadline *after*
+disarming, and disarming retires the arming. The control built to make it fire
+is what exposed it.
+
+Then, fixed, it immediately reported **one sleep in two ending on the clock
+rather than on the device** — a lost wakeup, which I had introduced by tidying.
+Collecting under the lock, releasing it, and taking it again to sleep leaves a
+window in which the handler runs against a queue nobody is on yet. Collect and
+sleep are one acquisition now, which is what `wait.h` said all along: *the
+condition is tested and the thread is queued under the same lock the waker must
+take to signal.*
+
+| | sleeps ending on the clock |
+|---|---|
+| two acquisitions | **1 of 2** |
+| one acquisition | 0 of 2 |
+| handler wakes nobody *(control)* | 2 of 2, and says so |
+
+Under that last control every test still passes, which is the entire argument
+for counting.
+
+## Four calls, so a program can reach its own identity
+
+`capability_drop` had exactly one caller in this kernel: its own self-test.
+
+The whole argument for having capabilities is that an installer holds
+`CAP_RAW_DISK` while it writes a partition table and gives it up the moment it
+is done — and **no installer could**, because nothing outside the kernel could
+reach the call. The mechanism landed and was inert.
+
+The same gap on the other half. The kernel started refusing files based on uid,
+and a program had no way to find out *as whom* it was running. A process refused
+a file could not tell "I am the wrong user" from "the file is not there" — which
+is the difference between asking somebody to log in and reporting a bug.
+
+`SYS_GETUID`, `SYS_GETGID`, `SYS_GETCAPS`, `SYS_DROPCAP`. Appended rather than
+inserted, because a call number is a promise to every program already built
+against it.
+
+**`SYS_DROPCAP` answers with what is still held.** That is what makes it
+testable — the effect of the call is visible in the call's own answer rather
+than only in a later one. There is deliberately no argument that makes it grant
+anything, and that is not an omission to be filled in later: a set that can be
+regained protects nothing.
+
+Unknown bits are dropped rather than refused. A process cannot hold what does
+not exist, so the effect is nothing, and refusing would mean a program built
+against a later kernel failing here instead of simply giving up a power this one
+does not have.
+
+### Tested against the layer below, not against a constant
+
+Each call is compared with the kernel function beside it, in the same thread, in
+the process that already holds everything. A constant would prove the file
+agrees with itself; what is worth proving is that **the two layers agree**,
+because the layer a program sees is the one that has to be right.
+
+Both halves watched failing: a `DROPCAP` that returns without dropping reports
+*a drop nothing outside the kernel can actually perform*, and a `GETCAPS` that
+answers a set it does not hold reports the two disagreeing.
+
+Dispatched directly rather than trapped from ring 3, **and the comment says so**.
+These four take no pointers, so there is no user address to get wrong, and the
+entry path is a table lookup that does not know one number from another. "Tested"
+and "tested from user mode" are different claims, and this is the weaker one.
+
 ## Somebody touching the machine
 
 Every screen this kernel had ever drawn had been read and not touched. There was
