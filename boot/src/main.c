@@ -433,13 +433,52 @@ static void *read_kernel(UINTN *size_out)
  * The pages are claimed from the firmware first. Without that, the kernel would
  * be written into memory UEFI still believes is free, and UEFI is still running
  * at this point. */
+/* Whether a range sits inside the image, without adding two numbers that can
+ * wrap.
+ *
+ * `off + len <= size` is the obvious form and it is wrong: both come out of the
+ * file, and a length near the top of the range makes the sum small and the
+ * comparison comfortable. Every check below is a subtraction for that reason --
+ * the same rule the kernel's own ELF loader states and follows. */
+static BOOLEAN inside(uint64_t off, uint64_t len, UINTN size)
+{
+	return off <= (uint64_t)size && len <= (uint64_t)size - off;
+}
+
 static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 {
 	struct elf64_header *eh = image;
 	uint64_t lowest = ~0ULL, highest = 0;
+	uint64_t table;
 
 	if (image_size < sizeof(*eh) || eh->magic != ELF_MAGIC)
 		fail("recognising the kernel as an ELF", EFI_LOAD_ERROR);
+
+	/* --- the fields that say where the other fields are -----------------
+	 *
+	 * This reader used to check the image size once, against the header,
+	 * and then trust every number in it. The argument for that was written
+	 * down and was reasonable: this loads *our* kernel, whose signature has
+	 * already been checked, so a field it dislikes means the file is
+	 * corrupt and the machine should stop.
+	 *
+	 * The premise is what failed. `verify_kernel` returns TRUE outright in
+	 * a build with no key compiled in -- which is the default, and how
+	 * every machine in the verification run boots. In those builds nothing
+	 * has been checked when this runs, and "our kernel" means "whatever is
+	 * on the EFI system partition".
+	 *
+	 * The caveat about a keyless build was recorded. It said that such a
+	 * loader will not refuse an unsigned kernel. It did not say that the
+	 * parser would trust every field in one. (BG-185)
+	 */
+	if (eh->phentsize < sizeof(struct elf64_phdr))
+		fail("reading the kernel's program headers", EFI_LOAD_ERROR);
+
+	table = (uint64_t)eh->phnum * eh->phentsize;
+
+	if (!inside(eh->phoff, table, image_size))
+		fail("reading the kernel's program headers", EFI_LOAD_ERROR);
 
 	for (unsigned i = 0; i < eh->phnum; i++) {
 		struct elf64_phdr *ph = (struct elf64_phdr *)
@@ -447,6 +486,22 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 
 		if (ph->type != PT_LOAD || ph->memsz == 0)
 			continue;
+
+		/* More in the file than in memory is not a segment: the copy
+		 * below would read past what was loaded, and the zeroing after
+		 * it subtracts one from the other and would wrap. */
+		if (ph->filesz > ph->memsz)
+			fail("reading a kernel segment", EFI_LOAD_ERROR);
+
+		/* What it claims to occupy in the file has to be in the file. */
+		if (!inside(ph->offset, ph->filesz, image_size))
+			fail("reading a kernel segment", EFI_LOAD_ERROR);
+
+		/* And where it lands must not wrap off the end of the address
+		 * space, which would make `highest` small and the allocation
+		 * below far too little for the copy that follows. */
+		if (ph->memsz > ~0ULL - ph->paddr)
+			fail("placing a kernel segment", EFI_LOAD_ERROR);
 
 		if (ph->paddr < lowest)
 			lowest = ph->paddr;
