@@ -318,6 +318,8 @@ void kmain(void)
 		virtio_blk_self_test() ? "pass" : "FAIL");
 	kprintf("  what is in there   : %s\n",
 		vfs_list_self_test() ? "pass" : "FAIL");
+	kprintf("  a clean handoff    : %s\n",
+		boot_handoff_registers_clear(0, 0) ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
 		crc32_self_test() ? "pass" : "FAIL");
 	kprintf("  randomness         : %s\n",

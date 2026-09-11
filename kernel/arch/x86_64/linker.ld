@@ -77,6 +77,18 @@ SECTIONS
 		boot_scratch_info     = .; . += 8;
 		boot_scratch_magic    = .; . += 8;
 
+		/* Where the registers the loader handed over are recorded,
+		 * before anything here has touched one.
+		 *
+		 * Uninitialised like the words above, and read back against a
+		 * **magic word** rather than a flag, because nothing clears
+		 * this region -- a flag that had to start at zero would be
+		 * trusting memory no one has cleared, on the one path where
+		 * being wrong means testing registers that were never
+		 * captured. */
+		boot_handoff_regs = .; . += 8 * 16;
+		boot_handoff_mark = .; . += 8;
+
 		/* Back onto a page boundary before the tables. A page table
 		 * whose address is not page-aligned is not a page table: the
 		 * processor ignores the low twelve bits of every pointer to

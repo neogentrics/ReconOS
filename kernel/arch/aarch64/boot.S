@@ -148,6 +148,47 @@ secondary_entry:
 reconboot_entry:
 	/* x0 = struct reconboot *. Both ABIs agree on this architecture, so
 	   there is nothing to reconcile the way there is on x86_64. */
+
+	/* --- what the loader handed over, before anything here changes it ---
+	 *
+	 * Straight into the kernel's own data, which x86_64 cannot do: there
+	 * the capture has to live beside the page tables at a low address and
+	 * be carried up afterwards, because the identity mapping that reaches
+	 * it is torn down. Here `adrp` is PC-relative, so the same instruction
+	 * names the physical address before the MMU is on and the virtual one
+	 * after -- the distance between the code and the data is the same
+	 * either way.
+	 *
+	 * x0 is absent because it carries the handoff. x1 is absent because it
+	 * is spent naming where to put the others -- there is no store to an
+	 * address that does not first put the address in a register. x16 is
+	 * absent because it holds the entry point being jumped to. The check
+	 * in C reports how many it covers rather than implying it covers
+	 * everything.
+	 */
+	adrp	x1, handoff_saved
+	add	x1, x1, #:lo12:handoff_saved
+	stp	x2, x3, [x1, #0]
+	stp	x4, x5, [x1, #16]
+	stp	x6, x7, [x1, #32]
+	stp	x8, x9, [x1, #48]
+	stp	x10, x11, [x1, #64]
+	stp	x12, x13, [x1, #80]
+	stp	x14, x15, [x1, #96]
+	stp	x17, x18, [x1, #112]
+	stp	x19, x20, [x1, #128]
+	stp	x21, x22, [x1, #144]
+	stp	x23, x24, [x1, #160]
+	stp	x25, x26, [x1, #176]
+	stp	x27, x28, [x1, #192]
+	stp	x29, x30, [x1, #208]
+
+	movz	x2, #0x5245, lsl #48
+	movk	x2, #0x434F, lsl #32
+	movk	x2, #0x4E52, lsl #16
+	movk	x2, #0x4547			/* "RECONREG" */
+	str	x2, [x1, #224]
+
 	mov	x19, x0
 
 	adrp	x1, __stack_top
@@ -410,6 +451,16 @@ secondary_high:
 	.global reconboot_handoff
 reconboot_handoff:
 	.quad	0
+
+	/* Twenty-eight registers and the mark. In .data rather than beside the
+	 * page tables because this architecture can reach it either way, and
+	 * initialised because a section with bytes in the file arrives as those
+	 * bytes -- though the mark is what is actually trusted, since nothing
+	 * here depends on anyone having cleared anything. */
+	.align 8
+	.global handoff_saved
+handoff_saved:
+	.fill	29, 8, 0
 
 /* --- ReconBoot header ---------------------------------------------------
  *

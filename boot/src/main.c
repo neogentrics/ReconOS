@@ -715,7 +715,105 @@ static void exit_and_jump(struct reconboot *bi, uint64_t entry)
 	 * declared System V because the kernel is the thing that has to live
 	 * with it afterwards. On aarch64 both ABIs pass the first argument in
 	 * x0 and there is nothing to reconcile. */
+	/* --- and every register the kernel did not ask for is cleared -------
+	 *
+	 * A plain call hands over whatever happened to be lying around:
+	 * firmware pointers, buffer addresses, and -- because the signature
+	 * check runs a few lines above this -- the leftovers of an RSA
+	 * verification and a SHA-256. None of it is secret the way a private
+	 * key is, and that is not the argument. The argument is that a kernel
+	 * which accidentally reads one of them works on the firmware it was
+	 * written against and fails on the next, and the failure arrives as a
+	 * machine that will not boot with no console to say why.
+	 *
+	 * Clearing them turns that latent bug into an immediate one, which is
+	 * the only kind worth having on a boot path.
+	 *
+	 * **One register cannot be cleared**, and it is the one holding the
+	 * address being jumped to. Naming a target without a register to hold
+	 * it is not something either architecture offers here, so it keeps the
+	 * kernel's own entry point -- a number the kernel already knows, and
+	 * the only leftover this hands over. The kernel checks every other one
+	 * and says which it cannot.
+	 */
+#if defined(__x86_64__)
+	{
+		register uint64_t arg __asm__("rdi") =
+			(uint64_t)(uintptr_t)bi;
+		register uint64_t tgt __asm__("rax") = entry;
+
+		/* Nothing is declared clobbered because nothing runs
+		 * afterwards: this jump does not return, so the compiler has
+		 * no register state to preserve across it. Declaring the
+		 * clobbers would be more honest and is not possible -- several
+		 * of these are the ones it would use to honour the
+		 * declaration. */
+		__asm__ volatile(
+			"xorl %%ebx, %%ebx\n"
+			"xorl %%ecx, %%ecx\n"
+			"xorl %%edx, %%edx\n"
+			"xorl %%esi, %%esi\n"
+			"xorl %%ebp, %%ebp\n"
+			"xorl %%r8d, %%r8d\n"
+			"xorl %%r9d, %%r9d\n"
+			"xorl %%r10d, %%r10d\n"
+			"xorl %%r11d, %%r11d\n"
+			"xorl %%r12d, %%r12d\n"
+			"xorl %%r13d, %%r13d\n"
+			"xorl %%r14d, %%r14d\n"
+			"xorl %%r15d, %%r15d\n"
+			"jmpq *%%rax"
+			:
+			: "r"(arg), "r"(tgt)
+			: "memory");
+	}
+#elif defined(__aarch64__)
+	{
+		register uint64_t arg __asm__("x0") =
+			(uint64_t)(uintptr_t)bi;
+
+		/* x16 is the intra-procedure-call scratch register, which is
+		 * exactly what a jump through a register is meant to use. */
+		register uint64_t tgt __asm__("x16") = entry;
+
+		__asm__ volatile(
+			"mov x1, #0\n"
+			"mov x2, #0\n"
+			"mov x3, #0\n"
+			"mov x4, #0\n"
+			"mov x5, #0\n"
+			"mov x6, #0\n"
+			"mov x7, #0\n"
+			"mov x8, #0\n"
+			"mov x9, #0\n"
+			"mov x10, #0\n"
+			"mov x11, #0\n"
+			"mov x12, #0\n"
+			"mov x13, #0\n"
+			"mov x14, #0\n"
+			"mov x15, #0\n"
+			"mov x17, #0\n"
+			"mov x18, #0\n"
+			"mov x19, #0\n"
+			"mov x20, #0\n"
+			"mov x21, #0\n"
+			"mov x22, #0\n"
+			"mov x23, #0\n"
+			"mov x24, #0\n"
+			"mov x25, #0\n"
+			"mov x26, #0\n"
+			"mov x27, #0\n"
+			"mov x28, #0\n"
+			"mov x29, #0\n"
+			"mov x30, #0\n"
+			"br x16"
+			:
+			: "r"(arg), "r"(tgt)
+			: "memory");
+	}
+#else
 	((kernel_entry_fn)(uintptr_t)entry)(bi);
+#endif
 
 	/* Not reached. If it is, there is nothing left to report it with. */
 	for (;;)
