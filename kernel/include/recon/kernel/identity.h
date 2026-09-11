@@ -128,6 +128,82 @@ enum access_want identity_want_from_open(unsigned open_flags);
  * mounted volume, which is made later in the boot. */
 void identity_run(void);
 
+/* --- Capabilities ---------------------------------------------------------
+ *
+ * The answer to the paragraph above: `UID_KERNEL` may do everything, and that
+ * is a blunt instrument. A capability is one of those powers, named and held
+ * separately, so that a program can be allowed to do the one privileged thing
+ * it needs and nothing else.
+ *
+ * --- They are dropped, never gained ---
+ *
+ * **This is the whole of the safety property.** A process may take a
+ * capability out of its own set, and there is no call that puts one back. Not
+ * "no call yet" -- there is nowhere for one to go, because a set that can be
+ * regained protects nothing: anything that could re-take a power is a power
+ * that was never given up.
+ *
+ * What that buys is the thing worth having. An installer holds `CAP_RAW_DISK`
+ * while it writes a partition table and drops it the moment it is done, and a
+ * bug in everything it does afterwards -- a corrupted path, a wild pointer, a
+ * hostile file it was asked to copy -- cannot reach a disk. The window in which
+ * the power exists is the window the programmer chose, not the lifetime of the
+ * program.
+ *
+ * --- Only the ones something needs ---
+ *
+ * Three, because this kernel has three privileged acts and no more. The
+ * temptation is to write the list a grown system ends up with; a capability
+ * nothing checks is a promise nothing keeps, and the day something does need it
+ * the name will be chosen by whoever needs it rather than guessed at here.
+ *
+ * --- How a process gets them ---
+ *
+ * From its parent, never more. A process made with `UID_KERNEL` starts with all
+ * three, which is what keeps every existing caller working; one made with any
+ * other identity starts with none. That is deliberately the same rule as
+ * before, expressed in a form that can now be narrowed -- the point is not that
+ * root has fewer powers today, it is that root can *give them up* and that
+ * anything checking now asks a question with a real answer.
+ *
+ * The kernel itself -- a thread with no process at all -- holds everything, for
+ * the reason in the paragraph above: it is the thing doing the enforcing.
+ */
+
+/* Ignore the permission bits on a file. What `uid == UID_KERNEL` used to mean
+ * on its own, now separable from the identity that usually carries it. */
+#define CAP_FILE_OVERRIDE  (1ull << 0)
+
+/* Claim a whole disk and write over it. `block_claim_raw` calls itself a
+ * declaration of intent to destroy a disk, and until now nothing asked who was
+ * declaring it. */
+#define CAP_RAW_DISK       (1ull << 1)
+
+/* Stop the machine. */
+#define CAP_SHUTDOWN       (1ull << 2)
+
+#define CAP_ALL (CAP_FILE_OVERRIDE | CAP_RAW_DISK | CAP_SHUTDOWN)
+
+/* Whether whoever is running holds every one of `caps`.
+ *
+ * Every one, not any: a caller asking for two powers needs both, and being
+ * handed a yes because it held one of them is how a check becomes decoration.
+ */
+bool capable(u64 caps);
+
+/* Gives them up, for the life of this process. There is no matching grant --
+ * see the note above, which is the reason rather than an omission. */
+void capability_drop(u64 caps);
+
+/* What the running process still holds, for the summary and for a program that
+ * wants to know what it has left. */
+u64 capability_held(void);
+
+/* The name of a single capability, for saying which one was missing. Null for
+ * anything that is not exactly one of them, because "CAP_RAW_DISK|CAP_SHUTDOWN"
+ * is not a name and a caller printing it would be inventing one. */
+const char *capability_name(u64 cap);
+
 void identity_print_summary(void);
 bool identity_self_test(void);
 

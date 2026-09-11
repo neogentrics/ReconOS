@@ -6,6 +6,7 @@
  * layers down, and nothing here is on a path where thirty-two is limiting.
  */
 #include <recon/kernel/process.h>
+#include <recon/kernel/identity.h>
 #include <recon/kernel/vfs.h>
 
 #include <recon/kernel/addrspace.h>
@@ -58,6 +59,12 @@ struct process *process_create(const char *name, u32 parent, u32 uid, u32 gid)
 		p->parent = parent;
 		p->uid    = uid;
 		p->gid    = gid;
+
+	/* Everything for the kernel, nothing for anybody else. Deliberately
+	 * the rule that was already in force, written down somewhere it can
+	 * now be narrowed -- the point is not that root has fewer powers
+	 * today, it is that root can give them up. */
+		p->caps   = (uid == UID_KERNEL) ? CAP_ALL : 0;
 		p->personality = &personality_recon;
 
 		kstrlcpy(p->name, name ? name : "unnamed", sizeof(p->name));

@@ -67,6 +67,41 @@ void irq_release(unsigned line);
  * is a live-lock the machine cannot escape. */
 bool irq_dispatch(unsigned line);
 
+/* --- vectors, which are what a device without a wire has ------------------
+ *
+ * An ISA line is a wire, and there are sixteen of them. A message-signalled
+ * interrupt has no wire at all: the device writes a value to an address, the
+ * local APIC decodes the write as an interrupt, and **the number is the whole
+ * of the routing**. So a driver that wants one does not ask for a line, it asks
+ * for a number nobody else is using.
+ *
+ * Until now there was exactly one such number, `VECTOR_MSI`, and it belonged to
+ * the self-test. The audit named this as one of the three cheap things worth
+ * doing: *a vector allocator, so a driver can ask for an MSI rather than being
+ * handed the one number the self-test uses.* This is that.
+ *
+ * Sixteen of them, at 0x50 to 0x5F, because each one is an assembly stub in the
+ * image whether it is claimed or not. Running out is reported rather than
+ * papered over -- a driver handed a vector somebody else holds would take
+ * another device's completions, which is the fault the xHCI event ring had.
+ */
+#define IRQ_VECTOR_FIRST 0x50
+#define IRQ_VECTOR_COUNT 16
+
+/* Claims a free vector and installs a handler on it. Returns the vector, or
+ * zero when they are all taken -- zero being a vector no device may use, so it
+ * is unambiguous as a failure. */
+u8 irq_claim_vector(void (*fn)(void *), void *arg, const char *name);
+
+/* Gives one back. A device that goes away holding a vector is a vector nothing
+ * can reuse and a handler that will run with a stale argument. */
+void irq_release_vector(u8 vector);
+
+/* Called by the architecture's dispatch for a vector in the block above, before
+ * it acknowledges. Same shape as irq_dispatch, and false for the same reason:
+ * a vector arriving with nobody to take it is worth counting. */
+bool irq_dispatch_vector(u8 vector);
+
 /* How many times each line has fired, and how many arrived with nobody to take
  * them. The second number is the interesting one. */
 void irq_print_summary(void);

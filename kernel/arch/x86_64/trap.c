@@ -121,6 +121,14 @@ extern void irq_15(void);
 extern void vector_64(void);
 extern void vector_65(void);
 extern void vector_66(void);
+extern void vector_80(void); extern void vector_81(void);
+extern void vector_82(void); extern void vector_83(void);
+extern void vector_84(void); extern void vector_85(void);
+extern void vector_86(void); extern void vector_87(void);
+extern void vector_88(void); extern void vector_89(void);
+extern void vector_90(void); extern void vector_91(void);
+extern void vector_92(void); extern void vector_93(void);
+extern void vector_94(void); extern void vector_95(void);
 extern void vector_255(void);
 
 static void (*const stubs[32])(void) = {
@@ -254,6 +262,17 @@ void trap_dispatch(struct trap_frame *f)
 	 * tell, which is the point of it. */
 	if (f->vector == VECTOR_MSI) {
 		x86_msi_test_arrivals++;
+		x86_apic_eoi();
+		return;
+	}
+
+	/* A vector a driver claimed. No controller to acknowledge -- that is
+	 * what a message-signalled interrupt *is* -- so the local APIC is told
+	 * and nothing else. Acknowledged after the handler, and never inside
+	 * it, for the same reason the ISA lines are. */
+	if (f->vector >= IRQ_VECTOR_FIRST &&
+	    f->vector < IRQ_VECTOR_FIRST + IRQ_VECTOR_COUNT) {
+		irq_dispatch_vector((u8)f->vector);
 		x86_apic_eoi();
 		return;
 	}
@@ -429,6 +448,23 @@ void trap_init(void)
 	set_gate(VECTOR_APIC_TIMER, vector_64, 0x08);
 	set_gate(VECTOR_TLB_SHOOTDOWN, vector_65, 0x08);
 	set_gate(VECTOR_MSI, vector_66, 0x08);
+
+	/* The block a driver may claim from. Installed together, because a gate
+	 * that is missing for a vector something was handed is a general
+	 * protection fault the first time the device speaks. */
+	{
+		static void (*const claimable[IRQ_VECTOR_COUNT])(void) = {
+			vector_80, vector_81, vector_82, vector_83,
+			vector_84, vector_85, vector_86, vector_87,
+			vector_88, vector_89, vector_90, vector_91,
+			vector_92, vector_93, vector_94, vector_95,
+		};
+		unsigned i;
+
+		for (i = 0; i < IRQ_VECTOR_COUNT; i++)
+			set_gate((u8)(IRQ_VECTOR_FIRST + i), claimable[i],
+				 0x08);
+	}
 	set_gate(VECTOR_SPURIOUS, vector_255, 0x08);
 
 	idt_ptr.limit = sizeof(idt) - 1;

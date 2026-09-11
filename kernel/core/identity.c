@@ -11,6 +11,11 @@
 
 static u64 allowed, refused;
 
+/* How many capabilities have been given up. Here with the other counters
+ * rather than beside the code that increments it, because the summary that
+ * prints it comes earlier in this file than that code does. */
+static u64 drops;
+
 static struct process *asking(void)
 {
 	struct thread *t = this_cpu()->current;
@@ -77,7 +82,14 @@ bool identity_may_as(u32 uid, u32 gid, u32 mode, u32 owner, u32 group,
 
 bool identity_may(u32 mode, u32 owner, u32 group, enum access_want want)
 {
-	bool ok = identity_may_as(identity_uid(), identity_gid(), mode, owner,
+	/* The override is a *capability* here, where identity_may_as has it as
+	 * a uid. That is the difference between the two: the pure one answers
+	 * "would this identity be allowed by these bits", and this one answers
+	 * "may whoever is running do it" -- which a process holding
+	 * CAP_FILE_OVERRIDE may, and a process that has dropped it may not,
+	 * whatever its uid. */
+	bool ok = capable(CAP_FILE_OVERRIDE) ||
+		  identity_may_as(identity_uid(), identity_gid(), mode, owner,
 				  group, want);
 
 	if (ok)
@@ -114,9 +126,205 @@ void identity_print_summary(void)
 	kprintf("  running as   : uid %u, gid %u\n", identity_uid(),
 		identity_gid());
 
+	{
+		u64 held = capability_held();
+		static const u64 all[] = { CAP_FILE_OVERRIDE, CAP_RAW_DISK,
+					   CAP_SHUTDOWN };
+		unsigned i;
+
+		kputs("  holding      :");
+
+		for (i = 0; i < sizeof(all) / sizeof(all[0]); i++)
+			if (held & all[i])
+				kprintf(" %s", capability_name(all[i]));
+
+		if (!held)
+			kputs(" nothing");
+
+		kprintf("  (%llu dropped so far)\n",
+			(unsigned long long)drops);
+	}
+
 	/* The gap, stated where somebody reading the summary will see it. */
 	kputs("  not checked  : the directories above a path, and set-user-id"
 	      "\n");
+}
+
+/* --- Capabilities ---------------------------------------------------------
+ *
+ * See identity.h: dropped, never gained, and the kernel holds everything.
+ */
+u64 capability_held(void)
+{
+	struct process *p = asking();
+
+	/* No process is the kernel, which holds everything. Same rule as the
+	 * identity above it and for the same reason: it is the thing doing the
+	 * enforcing. */
+	return p ? p->caps : CAP_ALL;
+}
+
+bool capable(u64 caps)
+{
+	/* Every one, not any. `(held & caps) != 0` is the tempting form and it
+	 * grants a caller that asked for two powers on the strength of one. */
+	return (capability_held() & caps) == caps;
+}
+
+void capability_drop(u64 caps)
+{
+	struct process *p = asking();
+
+	/* The kernel cannot drop anything, because there is nowhere to record
+	 * it: its capabilities are the absence of a process, not a field. That
+	 * is worth knowing rather than silently doing nothing -- a kernel
+	 * thread that tried this would believe it had given something up. */
+	if (!p)
+		return;
+
+	p->caps &= ~caps;
+	drops++;
+}
+
+const char *capability_name(u64 cap)
+{
+	switch (cap) {
+	case CAP_FILE_OVERRIDE: return "file-override";
+	case CAP_RAW_DISK:      return "raw-disk";
+	case CAP_SHUTDOWN:      return "shutdown";
+	default:                return 0;
+	}
+}
+
+/* --- the capability self-test ---------------------------------------------
+ *
+ * Run in a process of its own, because the question "what do I hold" is asked
+ * of whoever is running and cannot be asked on somebody else's behalf -- the
+ * same reason the enforcement check needs a thread.
+ *
+ * The two claims worth testing are the two that make a capability worth having:
+ *
+ *   - **dropping one leaves the others.** A drop that cleared the set would
+ *     pass any test that only checked the dropped power was gone;
+ *   - **a drop is permanent.** There is no grant, so the test that matters is
+ *     that nothing puts it back -- including creating a child, which is how a
+ *     dropped power usually comes back in systems that get this wrong.
+ */
+static volatile int cap_answer;
+
+static void capability_thread(void *arg)
+{
+	volatile int *out = arg;
+	int result = 1;		/* 1 is a pass; anything else names the fault */
+
+	/* This process was made with uid 0, so it starts with everything. */
+	if (!capable(CAP_RAW_DISK) || !capable(CAP_SHUTDOWN) ||
+	    !capable(CAP_FILE_OVERRIDE))
+		result = 2;
+
+	/* Two at once must need both. */
+	if (result == 1 && !capable(CAP_RAW_DISK | CAP_SHUTDOWN))
+		result = 3;
+
+	capability_drop(CAP_RAW_DISK);
+
+	if (result == 1 && capable(CAP_RAW_DISK))
+		result = 4;
+
+	/* The others are untouched. */
+	if (result == 1 && (!capable(CAP_SHUTDOWN) ||
+			    !capable(CAP_FILE_OVERRIDE)))
+		result = 5;
+
+	/* And asking for the pair now fails, because one half is gone --
+	 * which is the "every one, not any" rule doing its job. */
+	if (result == 1 && capable(CAP_RAW_DISK | CAP_SHUTDOWN))
+		result = 6;
+
+	/* Dropping something already dropped is not an error and does not
+	 * bring it back. */
+	capability_drop(CAP_RAW_DISK);
+
+	if (result == 1 && capable(CAP_RAW_DISK))
+		result = 7;
+
+	*out = result;
+}
+
+static bool capability_self_test(void)
+{
+	struct process *p;
+	struct thread *t;
+	u64 deadline;
+
+	cap_answer = 0;
+
+	p = process_create("caps", 0, UID_KERNEL, UID_KERNEL);
+	t = p ? thread_create_stopped("caps", capability_thread,
+				      (void *)&cap_answer) : NULL;
+
+	if (!p || !t) {
+		kputs("  identity: could not make a process to hold "
+		      "capabilities\n");
+		return false;
+	}
+
+	process_attach(p, t);
+	thread_start(t);
+
+	deadline = time_monotonic_ns() + 2000000000ull;
+
+	while (!cap_answer && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	switch (cap_answer) {
+	case 1:
+		break;
+	case 0:
+		kputs("  identity: the capability thread never answered\n");
+		return false;
+	case 2:
+		kputs("  identity: a process made as the kernel did not start "
+		      "with every capability, so existing callers lose powers "
+		      "they had\n");
+		return false;
+	case 3:
+		kputs("  identity: asking for two capabilities at once failed "
+		      "while holding both\n");
+		return false;
+	case 4:
+		kputs("  identity: a dropped capability was still held -- a "
+		      "drop that does not drop is a power nobody can give "
+		      "up\n");
+		return false;
+	case 5:
+		kputs("  identity: dropping one capability took the others "
+		      "with it\n");
+		return false;
+	case 6:
+		kputs("  identity: asking for two capabilities succeeded while "
+		      "holding only one, so the check grants on any rather "
+		      "than all\n");
+		return false;
+	case 7:
+		kputs("  identity: dropping a capability twice brought it "
+		      "back\n");
+		return false;
+	default:
+		kprintf("  identity: the capability thread said %d\n",
+			cap_answer);
+		return false;
+	}
+
+	/* And the kernel itself still holds everything, which is what keeps
+	 * every caller that predates this working. */
+	if (!capable(CAP_ALL)) {
+		kputs("  identity: the kernel does not hold every capability, "
+		      "so it cannot enforce what it cannot do\n");
+		return false;
+	}
+
+	return true;
 }
 
 /* --- the self-test --------------------------------------------------------
@@ -273,6 +481,10 @@ bool identity_self_test(void)
 		kputs("  identity: opening for both did not ask for both\n");
 		ok = false;
 	}
+
+	/* --- the capabilities, in a process of their own ---------------- */
+	if (!capability_self_test())
+		ok = false;
 
 	/* --- and the kernel really is what is running these tests ------- */
 	if (identity_uid() != UID_KERNEL) {

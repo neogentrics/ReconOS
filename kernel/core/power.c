@@ -28,6 +28,7 @@
  * will be a shutdown that hangs, and this paragraph is where to start.
  */
 #include <recon/kernel/power.h>
+#include <recon/kernel/identity.h>
 
 #include <recon/kernel/acpi.h>
 #include <recon/kernel/aml.h>
@@ -41,6 +42,15 @@
 
 enum power_result power_off(void)
 {
+	/* Stopping the machine is a privileged act, and now there is somewhere
+	 * to ask. The kernel holds this; a program has to have been given it.
+	 *
+	 * Its own result rather than a generic refusal, so that a caller which
+	 * was not allowed can tell that apart from a machine that declined --
+	 * the distinction BG-162 was about. */
+	if (!capable(CAP_SHUTDOWN))
+		return POWER_REFUSED;
+
 	struct acpi_fadt_facts fadt;
 	const struct aml_state *a = aml();
 

@@ -85,6 +85,85 @@ bool irq_dispatch(unsigned line)
 	return true;
 }
 
+/* --- vectors ---------------------------------------------------------------
+ *
+ * The same table shape as the lines above, and deliberately not the same array:
+ * a line is identified by a small number that means a wire, and a vector by a
+ * number that means itself. Sharing one array would make `irq_register(1, ...)`
+ * and a vector of 1 the same entry, which they are not.
+ */
+static struct line vectors[IRQ_VECTOR_COUNT];
+static u64 vectors_exhausted;
+
+u8 irq_claim_vector(void (*fn)(void *), void *arg, const char *name)
+{
+	u64 flags;
+	unsigned i;
+	u8 got = 0;
+
+	if (!fn)
+		return 0;
+
+	flags = arch_irq_save();
+
+	for (i = 0; i < IRQ_VECTOR_COUNT; i++) {
+		if (vectors[i].fn)
+			continue;
+
+		vectors[i].fn = fn;
+		vectors[i].arg = arg;
+		vectors[i].name = name;
+		got = (u8)(IRQ_VECTOR_FIRST + i);
+		break;
+	}
+
+	if (!got)
+		vectors_exhausted++;
+
+	arch_irq_restore(flags);
+
+	if (!got)
+		kprintf("irq: no free vector for %s; all %u are taken\n",
+			name ? name : "?", (unsigned)IRQ_VECTOR_COUNT);
+
+	return got;
+}
+
+void irq_release_vector(u8 vector)
+{
+	unsigned i = (unsigned)vector - IRQ_VECTOR_FIRST;
+	u64 flags;
+
+	if (vector < IRQ_VECTOR_FIRST || i >= IRQ_VECTOR_COUNT)
+		return;
+
+	flags = arch_irq_save();
+	vectors[i].fn = 0;
+	vectors[i].arg = 0;
+	vectors[i].name = 0;
+	arch_irq_restore(flags);
+}
+
+bool irq_dispatch_vector(u8 vector)
+{
+	unsigned i = (unsigned)vector - IRQ_VECTOR_FIRST;
+	struct line *l;
+
+	if (vector < IRQ_VECTOR_FIRST || i >= IRQ_VECTOR_COUNT)
+		return false;
+
+	l = &vectors[i];
+	l->taken++;
+
+	if (!l->fn) {
+		l->unclaimed++;
+		return false;
+	}
+
+	l->fn(l->arg);
+	return true;
+}
+
 void irq_print_summary(void)
 {
 	unsigned i;
@@ -114,6 +193,30 @@ void irq_print_summary(void)
 
 		kprintf("\n");
 	}
+
+	for (i = 0; i < IRQ_VECTOR_COUNT; i++) {
+		struct line *l = &vectors[i];
+
+		if (!l->taken && !l->fn)
+			continue;
+
+		any = true;
+		kprintf("  %02x %-12s %llu taken",
+			(unsigned)(IRQ_VECTOR_FIRST + i),
+			l->name ? l->name : "(nobody)",
+			(unsigned long long)l->taken);
+
+		if (l->unclaimed)
+			kprintf(", %llu with nobody to take them",
+				(unsigned long long)l->unclaimed);
+
+		kprintf("\n");
+	}
+
+	if (vectors_exhausted)
+		kprintf("  and %llu driver(s) asked for a vector when there "
+			"were none left\n",
+			(unsigned long long)vectors_exhausted);
 
 	if (!any)
 		kputs("  none claimed, none seen\n");
@@ -210,6 +313,131 @@ bool irq_self_test(void)
 	if (first_ran != 1) {
 		kputs("  irq: a released handler ran\n");
 		ok = false;
+	}
+
+	/* --- the vectors ------------------------------------------------
+	 *
+	 * A line is a wire and there are sixteen of them whether anybody wants
+	 * one or not. A vector is handed out, which means it can be handed out
+	 * *twice* -- and a driver sharing a vector with another takes its
+	 * completions, which is exactly the fault the xHCI event ring had. So
+	 * the claim being exclusive is the thing worth checking.
+	 */
+	{
+		static unsigned ran;
+		u8 v, again;
+		u8 held[IRQ_VECTOR_COUNT];
+		unsigned n = 0, i;
+
+		ran = 0;
+
+		v = irq_claim_vector(count_first, &ran, "test-vector");
+
+		if (!v) {
+			kputs("  irq: no vector could be claimed at all\n");
+			return false;
+		}
+
+		if (v < IRQ_VECTOR_FIRST ||
+		    v >= IRQ_VECTOR_FIRST + IRQ_VECTOR_COUNT) {
+			kprintf("  irq: claimed vector 0x%x, which is outside "
+				"the block\n", v);
+			ok = false;
+		}
+
+		/* The next claim must be a *different* number. Two drivers on
+		 * one vector is two drivers reading each other's interrupts. */
+		again = irq_claim_vector(count_second, &ran, "test-vector-2");
+
+		if (again == v) {
+			kputs("  irq: two drivers were handed the same "
+			      "vector, so each would take the other's "
+			      "interrupts\n");
+			ok = false;
+		}
+
+		if (again)
+			irq_release_vector(again);
+
+		if (!irq_dispatch_vector(v)) {
+			kputs("  irq: dispatching a claimed vector said "
+			      "nobody wanted it\n");
+			ok = false;
+		}
+
+		if (ran != 1) {
+			kprintf("  irq: the vector handler ran %u times, not "
+				"once\n", ran);
+			ok = false;
+		}
+
+		irq_release_vector(v);
+
+		if (irq_dispatch_vector(v)) {
+			kputs("  irq: a released vector still says somebody "
+			      "wants it\n");
+			ok = false;
+		}
+
+		/* And running out says so rather than handing back a number
+		 * that is already somebody's.
+		 *
+		 * Claimed until refused, rather than expecting sixteen. This
+		 * test was written when nothing else in the kernel used a
+		 * vector, so it asserted that all sixteen were free -- and the
+		 * first driver ever to ask for one made it fail, having done
+		 * nothing wrong.
+		 *
+		 * What was worth asserting was never the number. It is that
+		 * they run out, that running out is reported rather than
+		 * papered over, and that giving them back makes them available
+		 * again. None of those depends on who else is holding one,
+		 * which is what makes this version still true tomorrow.
+		 */
+		for (i = 0; i < IRQ_VECTOR_COUNT; i++) {
+			u8 got = irq_claim_vector(count_first, &ran,
+						  "until-they-run-out");
+
+			if (!got)
+				break;
+
+			held[n++] = got;
+		}
+
+		if (!n) {
+			kputs("  irq: not one vector was free\n");
+			ok = false;
+		}
+
+		if (irq_claim_vector(count_first, &ran, "one-too-many")) {
+			kputs("  irq: a vector was handed out when they were "
+			      "all taken\n");
+			ok = false;
+		}
+
+		for (i = 0; i < n; i++)
+			irq_release_vector(held[i]);
+
+		/* Given back, they can be claimed again -- otherwise a device
+		 * that comes and goes exhausts them. */
+		v = irq_claim_vector(count_first, &ran, "after-release");
+
+		if (!v) {
+			kputs("  irq: every vector was released and none "
+			      "could be claimed again\n");
+			ok = false;
+		} else {
+			irq_release_vector(v);
+		}
+
+		/* Out of the block, both ends. */
+		if (irq_dispatch_vector(IRQ_VECTOR_FIRST - 1) ||
+		    irq_dispatch_vector(IRQ_VECTOR_FIRST +
+					IRQ_VECTOR_COUNT)) {
+			kputs("  irq: dispatching outside the vector block "
+			      "found somebody\n");
+			ok = false;
+		}
 	}
 
 	/* Out of range, both ends. */

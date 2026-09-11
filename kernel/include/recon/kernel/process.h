@@ -97,6 +97,14 @@ struct process {
 	u32 uid;
 	u32 gid;
 
+	/* What privileged things this process may still do.
+	 *
+	 * Set when the process is made and only ever narrowed -- see
+	 * identity.h. A process made as the kernel starts with all of them,
+	 * which is what keeps every caller that predates capabilities
+	 * working; one made as anybody else starts with none. */
+	u64 caps;
+
 	unsigned threads;		/* how many are still alive */
 	i64 exit_code;
 

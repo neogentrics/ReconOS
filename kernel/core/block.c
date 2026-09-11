@@ -14,6 +14,7 @@
  * it succeeded.
  */
 #include <recon/kernel/block.h>
+#include <recon/kernel/identity.h>
 #include <recon/kernel/bcache.h>
 
 #include <recon/kernel/console.h>
@@ -538,6 +539,19 @@ enum block_status block_claim_raw(struct block_device *dev)
 {
 	if (!dev || !dev->present)
 		return BLOCK_ERR_NO_DEVICE;
+
+	/* **Who is declaring it.**
+	 *
+	 * This function's own comment calls a claim a declaration of intent to
+	 * destroy a disk, asked once, out loud, at the top of an install. Until
+	 * capabilities existed there was nothing to ask -- every caller was the
+	 * kernel and the question had one answer.
+	 *
+	 * Now an installer can hold this power while it writes a partition
+	 * table and drop it the moment it is done, and every bug in everything
+	 * it does afterwards is a bug that cannot reach a disk. */
+	if (!capable(CAP_RAW_DISK))
+		return BLOCK_ERR_READ_ONLY;
 
 	/* A slice is already a bounded view; claiming one would mean nothing,
 	 * and allowing it would let a caller believe it had claimed the disk. */
