@@ -34,6 +34,7 @@
 #include <recon/kernel/bcache.h>
 #include <recon/kernel/irq.h>
 #include <recon/kernel/input.h>
+#include <recon/kernel/xhci.h>	/* the USB keyboard's decoder test */
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
@@ -263,6 +264,8 @@ void kmain(void)
 		evict_self_test() ? "pass" : "FAIL");
 	kprintf("  a line somebody wants : %s\n",
 		irq_self_test() ? "pass" : "FAIL");
+	kprintf("  a report is a state  : %s\n",
+		usb_hid_self_test() ? "pass" : "FAIL");
 	kprintf("  somebody typing      : %s\n",
 		input_self_test() ? "pass" : "FAIL");
 	kprintf("  blocks kept nearby   : %s\n",

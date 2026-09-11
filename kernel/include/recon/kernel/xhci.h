@@ -231,5 +231,6 @@ bool xhci_transfer_poll(struct xhci *x, struct usb_device *ud, u32 *transferred,
 bool usb_hid_attach(struct xhci *x, struct usb_device *ud);
 unsigned usb_hid_count(void);
 void usb_hid_print_summary(void);
+bool usb_hid_self_test(void);
 
 #endif /* RECON_KERNEL_XHCI_H */

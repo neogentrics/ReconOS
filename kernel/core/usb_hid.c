@@ -396,3 +396,177 @@ void usb_hid_print_summary(void)
 			"protocol promises\n",
 			(unsigned long long)short_reports);
 }
+
+/* --- the self-test --------------------------------------------------------
+ *
+ * No hardware is touched, and none needs to be. The part of this driver with
+ * somewhere to go wrong is the *decoding* -- turning a report that says which
+ * keys are held into the events of keys going down and coming up -- and that is
+ * a pure function of two reports. Synthetic ones exercise it exactly.
+ *
+ * What is deliberately **not** covered: anything involving the controller. A
+ * test that needed a USB keyboard attached would report a failure on every
+ * machine that has none, which is most of them and all of the rig. The
+ * enumeration, the endpoint configuration and the transfers are exercised by
+ * the machine having a device or not, and say so either way in the summary.
+ *
+ * The checks below are chosen for having a wrong answer that still looks like a
+ * working keyboard:
+ *
+ *   - a held key must produce **one** press, not one per report. A USB keyboard
+ *     repeats its report; a driver that posted a press each time would type
+ *     hundreds of characters from one keystroke;
+ *   - a rollover must produce **nothing**. Six ones is "too many keys to name
+ *     them", and read as a key list it is the letter A six times;
+ *   - a release must arrive **before** the press in the same report, because a
+ *     reader building a chord from these needs the order the person did it in.
+ */
+static bool feed(struct hid *h, u8 mods, u8 k0, u8 k1)
+{
+	u8 report[8];
+
+	kmemset(report, 0, sizeof(report));
+	report[0] = mods;
+	report[2] = k0;
+	report[3] = k1;
+
+	decode_keyboard(h, report);
+	return true;
+}
+
+static unsigned drain(void)
+{
+	struct input_event e;
+	unsigned n = 0;
+
+	while (input_take(&e))
+		n++;
+
+	return n;
+}
+
+bool usb_hid_self_test(void)
+{
+	struct hid h;
+	struct input_event e;
+	bool ok = true;
+
+	kmemset(&h, 0, sizeof(h));
+	h.is_mouse = false;
+	h.have_last = false;
+
+	drain();
+
+	/* --- a key goes down ------------------------------------------- */
+	feed(&h, 0, KEY_A, 0);
+
+	if (!input_take(&e)) {
+		kputs("  usbhid: a key in a report produced no event\n");
+		return false;
+	}
+
+	if (e.code != KEY_A || e.kind != INPUT_PRESS) {
+		kprintf("  usbhid: expected a press of %u, got code %u "
+			"kind %u\n", (unsigned)KEY_A, e.code, e.kind);
+		ok = false;
+	}
+
+	/* --- and stays down, silently ----------------------------------- */
+	feed(&h, 0, KEY_A, 0);
+
+	if (drain()) {
+		kputs("  usbhid: a key still held produced another event -- a "
+		      "USB keyboard repeats its report, so one keystroke would "
+		      "type for as long as it is held\n");
+		ok = false;
+	}
+
+	/* --- rollover says nothing -------------------------------------- */
+	{
+		u8 roll[8];
+
+		kmemset(roll, 0, sizeof(roll));
+		roll[2] = roll[3] = roll[4] = 1;
+		roll[5] = roll[6] = roll[7] = 1;
+
+		decode_keyboard(&h, roll);
+
+		if (drain()) {
+			kputs("  usbhid: a rollover report produced events -- "
+			      "six ones means too many keys to name, and read "
+			      "as a key list it is the letter A six times\n");
+			ok = false;
+		}
+
+		/* And it did not disturb what was held: the keys really are
+		 * still down, and the device will say so properly as soon as
+		 * one is let go. */
+		if (!h.have_last || h.last[2] != KEY_A) {
+			kputs("  usbhid: a rollover overwrote the state, so "
+			      "every key would appear to be released\n");
+			ok = false;
+		}
+	}
+
+	/* --- released --------------------------------------------------- */
+	feed(&h, 0, 0, 0);
+
+	if (!input_take(&e) || e.code != KEY_A || e.kind != INPUT_RELEASE) {
+		kputs("  usbhid: letting a key go did not release it\n");
+		ok = false;
+	}
+
+	drain();
+
+	/* --- a modifier is a bit, not a keycode ------------------------- */
+	feed(&h, 1u << 1, 0, 0);		/* left shift */
+
+	if (!input_take(&e) || e.code != KEY_LEFTSHIFT ||
+	    e.kind != INPUT_PRESS) {
+		kprintf("  usbhid: bit 1 of the modifier byte is not left "
+			"shift (%u)\n", (unsigned)KEY_LEFTSHIFT);
+		ok = false;
+	}
+
+	feed(&h, 0, 0, 0);
+	drain();
+
+	/* --- one let go and one pressed, in that order ------------------ */
+	feed(&h, 0, KEY_A, 0);
+	drain();
+
+	feed(&h, 0, KEY_TAB, 0);
+
+	{
+		struct input_event first, second;
+
+		if (!input_take(&first) || !input_take(&second)) {
+			kputs("  usbhid: swapping one key for another did not "
+			      "produce two events\n");
+			ok = false;
+		} else if (first.kind != INPUT_RELEASE || first.code != KEY_A ||
+			   second.kind != INPUT_PRESS ||
+			   second.code != KEY_TAB) {
+			kputs("  usbhid: a key let go and a key pressed in one "
+			      "report did not arrive released-first, so a "
+			      "reader cannot tell which order they happened "
+			      "in\n");
+			ok = false;
+		}
+	}
+
+	feed(&h, 0, 0, 0);
+	drain();
+
+	/* --- the codes that are not keys -------------------------------- */
+	feed(&h, 0, 2, 3);		/* POSTFail and ErrorUndefined */
+
+	if (drain()) {
+		kputs("  usbhid: an error code in the key list was posted as a "
+		      "keypress nobody made\n");
+		ok = false;
+	}
+
+	drain();
+	return ok;
+}
