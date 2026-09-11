@@ -174,6 +174,15 @@ paddr_t addrspace_zero_page(void);
  * Asked in one place so there is one place to change. */
 bool addrspace_page_is_shared(paddr_t pa);
 
+/* Gives one leaf page back, whatever kind it turns out to be: nothing for the
+ * shared zeroes, a reference for a page of a file, and the allocator for a
+ * page the space owned outright.
+ *
+ * The predicate above answers "is this mine to free"; this does the thing. A
+ * teardown walk finds physical addresses in page tables and has no way to tell
+ * them apart, so the telling apart happens here, once. */
+void addrspace_release_page(paddr_t pa);
+
 void vm_fault_print_summary(void);
 
 unsigned addrspace_count(void);

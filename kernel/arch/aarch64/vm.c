@@ -788,8 +788,12 @@ static void free_tables(u64 *table, unsigned level)
 			free_tables(table_at(e & ADDR_MASK), level - 1);
 			pmm_free_page(e & ADDR_MASK);
 			table_pages--;
-		} else if (!addrspace_page_is_shared(e & ADDR_MASK)) {
-			pmm_free_page(e & ADDR_MASK);
+		} else {
+			/* Whatever kind of page it is. A leaf here may be the
+			 * machine's shared zeroes, a page of a file somebody
+			 * else still has mapped, or this space's own -- and a
+			 * page table entry looks identical for all three. */
+			addrspace_release_page(e & ADDR_MASK);
 			leaves_freed++;
 		}
 	}

@@ -159,10 +159,14 @@ static i64 ram_seek(struct file *f, i64 offset, unsigned from)
 /* Nothing to commit and nothing to free: the contents are the file, and the file
  * outlives every descriptor of it. That is the difference between this and a
  * file on the volume, where the close is the write. */
+/* Defined below, beside the reasoning for it. */
+static u64 ramfs_identity(struct file *f);
+
 static const struct file_ops ram_ops = {
 	.read  = ram_read,
 	.write = ram_write,
 	.seek  = ram_seek,
+	.identity = ramfs_identity,
 	.name  = "ramfs",
 };
 
@@ -232,6 +236,24 @@ struct file *ramfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 	spin_unlock_irq(&ramfs_lock, lock);
 
 	return file_new_external(&ram_ops, flags, r);
+}
+
+/* The slot, plus one so that it is never zero.
+ *
+ * Stable for the life of the machine, which is the property the cache needs
+ * and which this filesystem happens to guarantee for free: a name here, once
+ * made, is never removed -- see the header, where the absence of removal is
+ * written down as a decision rather than an omission. So a slot is a file, for
+ * ever, and two opens of one name find the same slot.
+ */
+static u64 ramfs_identity(struct file *f)
+{
+	struct ram_file *rf = f ? f->private : NULL;
+
+	if (!rf)
+		return 0;
+
+	return (u64)(rf - files) + 1;
 }
 
 i64 ramfs_list(const char *rest, char *names, u64 names_len, unsigned *count)

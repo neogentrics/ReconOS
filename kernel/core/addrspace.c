@@ -6,6 +6,7 @@
  * layers down.
  */
 #include <recon/kernel/addrspace.h>
+#include <recon/kernel/pagecache.h>
 #include <recon/kernel/wait.h>
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/evict.h>
@@ -260,6 +261,7 @@ static paddr_t zero_page;
 
 static unsigned faults_served;		/* addresses made to exist */
 static unsigned zero_shares;		/* answered with the shared page */
+static unsigned file_shares;		/* answered with a page of a file */
 static unsigned zero_copies;		/* and then written to, so copied */
 static unsigned faults_refused;		/* never the program's to touch */
 
@@ -464,7 +466,28 @@ paddr_t addrspace_zero_page(void)
 
 bool addrspace_page_is_shared(paddr_t pa)
 {
-	return pa && pa == zero_page;
+	return pa && (pa == zero_page || pagecache_owns(pa));
+}
+
+void addrspace_release_page(paddr_t pa)
+{
+	if (!pa)
+		return;
+
+	/* The machine's one page of zeroes. Never freed and never counted:
+	 * every address space points at it. */
+	if (pa == zero_page)
+		return;
+
+	/* A page of a file that other mappings may still hold. Handed back to
+	 * the cache rather than to the allocator -- the cache decides when
+	 * nobody is left, which is a question the page tables cannot answer. */
+	if (pagecache_owns(pa)) {
+		pagecache_put(pa);
+		return;
+	}
+
+	pmm_free_page(pa);
 }
 
 bool vm_fault_user(vaddr_t addr, bool write)
@@ -514,12 +537,38 @@ bool vm_fault_user(vaddr_t addr, bool write)
 			return false;
 		}
 
-		/* A file-backed page has contents, so there is nothing to share:
-		 * the shared page of zeroes is the right answer only when zeroes
-		 * are the right answer. Every page here is its own from the first
-		 * touch, read or write. */
-		if (r->file)
+		if (r->file) {
+			/* One copy of this page of this file, for everybody who
+			 * has it mapped.
+			 *
+			 * Mapped read-only even in a writable region, which is
+			 * the same trick the shared zeroes use: the write traps
+			 * and the trap is answered with a copy. So a private
+			 * mapping still sees its own writes and the file is
+			 * still untouched -- what changes is that the *reading*
+			 * of it is shared, and a program that only reads never
+			 * gets a copy at all.
+			 *
+			 * Zero means this file cannot be named or the cache is
+			 * full, and the answer then is what it always was. */
+			paddr_t shared = pagecache_get(r->file,
+						       r->file_offset
+						       + (u64)(page - r->start));
+
+			if (shared) {
+				if (!vm_map(page, shared, PAGE_SIZE,
+					    (r->flags & ~VM_WRITE) | VM_USER)) {
+					pagecache_put(shared);
+					return false;
+				}
+
+				file_shares++;
+				faults_served++;
+				return true;
+			}
+
 			return give_own_page(as, page, r, 0);
+		}
 
 		if (!write && !(r->flags & VM_WRITE)) {
 			/* A read-only region: the shared page is the whole
@@ -557,8 +606,24 @@ bool vm_fault_user(vaddr_t addr, bool write)
 	 * copy half of copy-on-write and the answer is a page of its own. If it
 	 * is not, the program is writing to memory that is genuinely read-only
 	 * -- its own code, for instance -- and that is a fault. */
-	if (write && have == zero_page && (r->flags & VM_WRITE))
-		return give_own_page(as, page, r, zero_page);
+	/* Written to a page that is read-only because somebody else has it too.
+	 * The copy half of copy-on-write, and it is the same answer whether the
+	 * page was the shared zeroes or a page of a file -- which is the whole
+	 * reason the cache could be added without changing this shape.
+	 *
+	 * A cached page also loses a reference here: this space stops pointing
+	 * at it the moment give_own_page maps the copy over the top. */
+	if (write && (r->flags & VM_WRITE) && addrspace_page_is_shared(have)) {
+		bool cached = pagecache_owns(have);
+
+		if (!give_own_page(as, page, r, have))
+			return false;
+
+		if (cached)
+			pagecache_put(have);
+
+		return true;
+	}
 
 	faults_refused++;
 	return false;
@@ -674,6 +739,111 @@ static bool space_gives_pages_back(void)
 	}
 
 	return true;
+}
+
+/* --- that the fault path actually shares -----------------------------------
+ *
+ * `pagecache_self_test` proves the cache hands the same page to two opens. It
+ * does not prove anything *uses* it, and the difference is the whole lesson of
+ * the MSI capability earlier today: a call that returns without doing anything
+ * passes every test that does not look.
+ *
+ * So this goes through the fault path, in two real address spaces, and asks
+ * the page tables afterwards what they are pointing at. If the two answers are
+ * different physical pages, nothing is being shared no matter what the cache
+ * says.
+ *
+ * Against /tmp, because ramfs is the filesystem that can name a file. The
+ * volume cannot yet -- see the note on `identity` -- so this is also the
+ * boundary of what is covered, stated rather than left to be assumed.
+ */
+static bool two_spaces_share_a_file_page(void)
+{
+	const vaddr_t at = USER_BASE + 0x40000;
+	struct addrspace *one = NULL, *two = NULL, *was;
+	struct file *fa = NULL, *fb = NULL;
+	paddr_t pa = 0, pb = 0;
+	u64 before = file_shares;
+	i64 err = 0;
+	u64 irq;
+	bool ok = true;
+
+	fa = file_open_path("/tmp/shared-map", OPEN_WRITE | OPEN_CREATE,
+			    0600, &err);
+
+	if (!fa) {
+		kprintf("  addrspace: no file to share (%ld)\n", (long)err);
+		return false;
+	}
+
+	fa->ops->write(fa, "one page, two spaces", 20);
+	file_release(fa);
+
+	fa = file_open_path("/tmp/shared-map", OPEN_READ, 0, &err);
+	fb = file_open_path("/tmp/shared-map", OPEN_READ, 0, &err);
+	one = addrspace_create();
+	two = addrspace_create();
+
+	if (!fa || !fb || !one || !two) {
+		kputs("  addrspace: could not set up two mappings\n");
+		ok = false;
+		goto out;
+	}
+
+	if (!addrspace_map_file(one, at, PAGE_SIZE,
+				VM_READ | VM_WRITE | VM_USER, fa, 0, 20) ||
+	    !addrspace_map_file(two, at, PAGE_SIZE,
+				VM_READ | VM_WRITE | VM_USER, fb, 0, 20)) {
+		kputs("  addrspace: could not map the file twice\n");
+		ok = false;
+		goto out;
+	}
+
+	irq = arch_irq_save();
+	was = addrspace_active();
+
+	addrspace_activate(one);
+	if (vm_fault_user(at, false))
+		pa = vm_lookup(at);
+
+	addrspace_activate(two);
+	if (vm_fault_user(at, false))
+		pb = vm_lookup(at);
+
+	addrspace_activate(was);
+	arch_irq_restore(irq);
+
+	if (!pa || !pb) {
+		kputs("  addrspace: a file-backed page did not fault in\n");
+		ok = false;
+	} else if (pa != pb) {
+		kprintf("  addrspace: two spaces mapping one file landed on "
+			"different pages (%p and %p), so the cache is built "
+			"and nothing goes through it\n",
+			(void *)(uintptr_t)pa, (void *)(uintptr_t)pb);
+		ok = false;
+	}
+
+	/* And it was the cache that answered, not a private fill that happened
+	 * to reuse an address. */
+	if (ok && file_shares - before < 2) {
+		kprintf("  addrspace: two faults on a cached file produced %lu "
+			"shared page(s)\n",
+			(unsigned long)(file_shares - before));
+		ok = false;
+	}
+
+out:
+	if (one)
+		addrspace_release(one);
+	if (two)
+		addrspace_release(two);
+	if (fa)
+		file_release(fa);
+	if (fb)
+		file_release(fb);
+
+	return ok;
 }
 
 bool addrspace_self_test(void)
@@ -890,6 +1060,9 @@ bool addrspace_self_test(void)
 	}
 
 	if (ok && !space_gives_pages_back())
+		ok = false;
+
+	if (ok && !two_spaces_share_a_file_page())
 		ok = false;
 
 done:

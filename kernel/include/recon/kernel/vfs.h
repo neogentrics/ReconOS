@@ -92,6 +92,21 @@ struct file_ops {
 	 */
 	i64 (*close)(struct file *f);
 
+	/* What this file *is*, as a number two different opens agree on, or
+	 * zero for "cannot say".
+	 *
+	 * Only the page cache asks, and only so that two mappings of one file
+	 * share its pages instead of each reading their own copy. A pointer
+	 * will not do: open twice and there are two of them.
+	 *
+	 * Zero is the honest answer for most things here and is not a failure
+	 * -- a console has no identity, a pipe has no contents to share, and a
+	 * filesystem whose names move underneath it should say zero rather
+	 * than a number that will later mean something else. Saying zero costs
+	 * a private page per fault, which is what every mapping used to get.
+	 */
+	u64 (*identity)(struct file *f);
+
 	/* For the summary and for tests: what kind of thing this is. Not used
 	 * to decide anything. */
 	const char *name;

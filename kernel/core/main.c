@@ -33,6 +33,7 @@
 #include <recon/kernel/pageage.h>
 #include <recon/kernel/evict.h>
 #include <recon/kernel/bcache.h>
+#include <recon/kernel/pagecache.h>
 #include <recon/kernel/irq.h>
 #include <recon/kernel/input.h>
 #include <recon/kernel/identity.h>
@@ -184,6 +185,7 @@ void kmain(void)
 	 * scheduler to yield to while the hardware thinks. */
 	block_init();
 	bcache_init();
+	pagecache_init();
 
 	/* After the interrupt routing, because the keyboard asks for a
 	 * line -- and it is the first thing in this kernel that ever has. */
@@ -324,6 +326,8 @@ void kmain(void)
 		virtio_blk_self_test() ? "pass" : "FAIL");
 	kprintf("  what is in there   : %s\n",
 		vfs_list_self_test() ? "pass" : "FAIL");
+	kprintf("  one copy, shared   : %s\n",
+		pagecache_self_test() ? "pass" : "FAIL");
 	kprintf("  a clean handoff    : %s\n",
 		boot_handoff_registers_clear(0, 0) ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
@@ -367,6 +371,7 @@ void kmain(void)
 	page_age_print_summary();
 	evict_print_summary();
 	bcache_print_summary();
+	pagecache_print_summary();
 	input_print_summary();
 	irq_print_summary();
 	lock_print_summary();
