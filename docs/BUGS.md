@@ -3820,6 +3820,68 @@ The volume file had been reading correctly all boot. It started reading a
   are in the table at once. The test that found it was not written to look for
   it.
 
+### BG-186 -- The block layer counted every transfer and printed the number nowhere, so an I/O rewrite lost them silently
+
+- **Found:** 11 September 2026, while restoring a cache invalidation that the
+  same rewrite had dropped.
+- **Cost:** none to a running machine. The cost was to every future diagnosis:
+  the one number that says how much work reached the disk had been unreadable
+  since the block layer was written.
+- **Status:** fixed.
+
+`reads`, `writes`, `blocks_read` and `blocks_written` were incremented on every
+transfer, reset by `block_init`, and **read by nothing**. Not printed in the
+storage summary, not exposed through a call, not asserted by a test. Four
+file-scope counters, written and never observed.
+
+`-Werror` had no complaint to make, and it was right not to: a static that is
+assigned is used as far as the compiler is concerned. The variable is live. The
+*statistic* is not.
+
+### How it surfaced
+
+The I/O scheduler replaced the bodies of `block_read` and `block_write`
+wholesale rather than editing them, and the new bodies did not carry the
+increments across. Three things went with them in the same edit:
+
+| dropped | noticed by |
+|---|---|
+| `bcache_invalidate(dev, lba, count)` | `blocks kept nearby : FAIL`, same boot |
+| `dev->slice_count && !dev->claimed_raw` refusal | nothing |
+| the four counters | nothing |
+
+One of three. The cache invalidation had a test watching it and failed loudly
+within a minute. The refusal that stops a write to a partitioned disk from
+landing in the middle of somebody's filesystem had no test, and neither did the
+counters, and both would have stayed gone.
+
+**The counters are the smaller loss and the more instructive one.** A missing
+safety check can at least be found by reading the code, and this one was --
+because the cache failure sent somebody to `git show HEAD:kernel/core/block.c`
+to compare. Nothing sends anybody to compare a number that is never displayed.
+
+### Fixed by printing it
+
+`block_print_traffic()` runs beside the cache summary, late, after the machine
+has done its work. It reports transfers and blocks in each direction, and per
+device the queue depth the new scheduler saw:
+
+```
+Block traffic
+  transfers    : 12 read, 4 written, 1 flushed
+  blocks       : 137 read, 80 written
+  virtio0      : 16 queued, 0 put in order
+```
+
+Twelve reads plus four writes is sixteen transfers, and sixteen is what the
+queue saw. That cross-check is now visible on every boot, and it is exactly the
+line that would have gone to zero.
+
+`0 put in order` is not a fault. On a boot with one caller the queue never holds
+two requests -- the first arrival finds the device idle and services itself --
+and the scheduler saying so is more useful than a number that implies it did
+work it did not do.
+
 ### BG-185 — The loader's ELF reader trusted a signature check that the default build does not perform
 
 - **Found:** 11 September 2026, reading reconboot while the verification run

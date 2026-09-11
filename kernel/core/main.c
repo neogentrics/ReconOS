@@ -322,6 +322,8 @@ void kmain(void)
 		user_facts_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",
 		block_self_test() ? "pass" : "FAIL");
+	kprintf("  requests in order  : %s\n",
+		block_queue_test() ? "pass" : "FAIL");
 	kprintf("  a disk that speaks up : %s\n",
 		virtio_blk_self_test() ? "pass" : "FAIL");
 	kprintf("  what is in there   : %s\n",
@@ -372,6 +374,7 @@ void kmain(void)
 	swap_print_summary();
 	page_age_print_summary();
 	evict_print_summary();
+	block_print_traffic();
 	bcache_print_summary();
 	pagecache_print_summary();
 	input_print_summary();

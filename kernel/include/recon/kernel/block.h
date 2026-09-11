@@ -37,6 +37,8 @@
 #define RECON_KERNEL_BLOCK_H
 
 #include <recon/kernel/types.h>
+#include <recon/kernel/wait.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/pmm.h>
 
 #define BLOCK_NAME_MAX 24
@@ -97,6 +99,25 @@ struct block_device;
  * survivable has to be able to say "and mean it". Leaving flush out would make
  * every ordering guarantee above this line a fiction, so it is here from the
  * first driver rather than added once something has already been lost. */
+/* One thing somebody wants done to a disk.
+ *
+ * On the requester's own stack, because it lives exactly as long as the wait
+ * for it -- and an allocation here would be a read that fails when memory is
+ * short, which is when reads matter most. The same argument that put swap on a
+ * partition.
+ */
+struct block_request {
+	struct block_request *next;
+
+	u64 lba;
+	u32 count;
+	void *buf;			/* const for a write; see submit */
+	bool write;
+
+	volatile bool done;
+	volatile enum block_status status;
+};
+
 struct block_ops {
 	enum block_status (*read)(struct block_device *dev, u64 lba,
 				  u32 count, void *buf);
@@ -200,6 +221,20 @@ struct block_device {
 	 * because every driver polls with sched_yield() and a spinlock held
 	 * across a yield is a deadlock. */
 	volatile int busy;
+
+	/* --- what is waiting, and who is serving it ---------------------
+	 *
+	 * Requests queue here rather than fighting over `busy`, and whoever
+	 * arrives at an idle device becomes the one that drains them -- see
+	 * block.c. There is no worker thread: a thread that is already waiting
+	 * for a disk is the right thread to drive it.
+	 */
+	struct block_request *queue;	/* in the order the head will take them */
+	struct wait_queue waiters;
+	struct spinlock queue_lock;
+	bool serving;
+
+	u64 queued, merged, reordered;
 
 	/* --- Slices ------------------------------------------------------
 	 *
@@ -327,6 +362,13 @@ enum block_status block_check_layout(const struct block_device *dev,
 void block_init(void);
 void block_print_summary(void);
 bool block_self_test(void);
+
+/* That the queue comes out in an order, and that a device which says it does
+ * not need one is left alone. Runs against a device that is not there, so it
+ * needs no disk and reports the same thing on every machine. */
+bool block_queue_test(void);
+
+void block_print_traffic(void);
 
 /* What the partition reader prints, and what the fixture harness compares
  * against: the scheme, how many slices, and one line of geometry each. Kept

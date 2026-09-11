@@ -14,6 +14,7 @@
  * it succeeded.
  */
 #include <recon/kernel/block.h>
+#include <recon/kernel/wait.h>
 #include <recon/kernel/identity.h>
 #include <recon/kernel/bcache.h>
 
@@ -234,6 +235,190 @@ static void device_release(struct block_device *dev)
 	__atomic_clear(&dev->busy, __ATOMIC_RELEASE);
 }
 
+/* --- the scheduler ---------------------------------------------------------
+ *
+ * Requests used to fight over `busy`: whoever won the race went first, and the
+ * head moved wherever the winner happened to want. That is not an ordering, it
+ * is the absence of one, and on anything with a seek it is the difference
+ * between a sweep and a scramble.
+ *
+ * --- No worker thread, and that is the design rather than a shortcut ---
+ *
+ * A thread that wants a disk is already going to wait for one, so it is the
+ * right thread to drive it. Whoever arrives at an idle device becomes the
+ * **servicer**: it takes requests off the queue in order and issues them,
+ * including ones that arrive while it is working, and wakes each owner as it
+ * finishes. Everybody else inserts and sleeps.
+ *
+ * That matters most where it is least visible. With one caller -- which is
+ * every read during early boot, before there is a scheduler to sleep on -- the
+ * caller finds the device idle, services its own request, and the whole
+ * mechanism costs one list insertion. There is no thread to have started and
+ * nothing to fall back to.
+ *
+ * --- What the order is ---
+ *
+ * Sorted by block, one way. A disk's head is a physical thing and the cost of
+ * a request is mostly the distance from the last one, so a sweep beats
+ * arrival order. On a device that says `seek_is_free` the sort is skipped:
+ * ordering costs a little and buys nothing, and pretending otherwise would be
+ * a scheduler that is sure it is helping.
+ */
+static void queue_insert(struct block_device *dev, struct block_request *r)
+{
+	struct block_request **at = &dev->queue;
+
+	if (!dev->seek_is_free)
+		while (*at && (*at)->lba <= r->lba)
+			at = &(*at)->next;
+	else
+		while (*at)
+			at = &(*at)->next;
+
+	if (*at)
+		dev->reordered++;
+
+	r->next = *at;
+	*at = r;
+	dev->queued++;
+}
+
+/* Issues one request, splitting it if the device has an opinion about how much
+ * it will take at once. */
+static enum block_status issue(struct block_device *dev,
+			       struct block_request *r)
+{
+	enum block_status s = BLOCK_OK;
+	u64 lba = r->lba;
+	u32 count = r->count;
+	u8 *buf = r->buf;
+
+	/* Still taken, even though the queue already admits one servicer at a
+	 * time. `busy` is not this function's lock -- block_flush takes it too,
+	 * and a flush that overlaps a transfer is asking the driver to commit
+	 * something it is in the middle of writing. Held across the split
+	 * rather than per chunk, because a half-issued request is not a state
+	 * anybody else should be allowed to see. */
+	device_acquire(dev);
+
+	while (count) {
+		u32 chunk = count;
+
+		if (dev->max_blocks_per_request &&
+		    chunk > dev->max_blocks_per_request)
+			chunk = dev->max_blocks_per_request;
+
+		s = r->write ? dev->ops->write(dev, lba, chunk, buf)
+			     : dev->ops->read(dev, lba, chunk, buf);
+
+		if (s != BLOCK_OK) {
+			device_release(dev);
+			return s;
+		}
+
+		/* Counted per chunk rather than per request, which is what the
+		 * old bodies did and is the more honest number: a request the
+		 * device made the kernel deliver in four pieces cost four
+		 * transfers, and a statistic that says one is hiding the very
+		 * thing max_blocks_per_request exists to describe. */
+		if (r->write) {
+			writes++;
+			blocks_written += chunk;
+		} else {
+			reads++;
+			blocks_read += chunk;
+		}
+
+		lba += chunk;
+		buf += (u64)chunk * dev->block_size;
+		count -= chunk;
+	}
+
+	device_release(dev);
+	return s;
+}
+
+/* Queues one request and does not return until it is done.
+ *
+ * The request is on the caller's stack and must stay there until `done` is
+ * set, which is why nothing here returns early on a failed wait.
+ */
+static enum block_status submit(struct block_device *dev,
+				struct block_request *r)
+{
+	u64 flags;
+	bool mine;
+
+	r->next = NULL;
+	r->done = false;
+	r->status = BLOCK_OK;
+
+	flags = spin_lock_irq(&dev->queue_lock);
+	queue_insert(dev, r);
+
+	/* Nobody is driving the device, so this thread is. */
+	mine = !dev->serving;
+
+	if (mine)
+		dev->serving = true;
+
+	spin_unlock_irq(&dev->queue_lock, flags);
+
+	if (!mine) {
+		/* Somebody else is working through the queue and will get to
+		 * this one. Waited for under the same lock the servicer wakes
+		 * under, so a completion between the test and the sleep cannot
+		 * be lost. */
+		flags = spin_lock_irq(&dev->queue_lock);
+
+		while (!r->done)
+			if (!wait_sleep(&dev->waiters, &dev->queue_lock, flags))
+				break;		/* nothing here can sleep */
+
+		spin_unlock_irq(&dev->queue_lock, flags);
+
+		/* Could not sleep -- early boot, or an idle thread. Spinning
+		 * is all that is left, and the servicer is another thread that
+		 * is running. */
+		while (!r->done)
+			sched_yield();
+
+		return r->status;
+	}
+
+	for (;;) {
+		struct block_request *next;
+		enum block_status s;
+
+		flags = spin_lock_irq(&dev->queue_lock);
+		next = dev->queue;
+
+		if (!next) {
+			/* Nothing left. Stop serving *under the lock*, so a
+			 * request arriving at this instant either gets on the
+			 * queue before this and is taken, or finds the device
+			 * idle and drives itself. There is no gap where a
+			 * request is queued and nobody is coming. */
+			dev->serving = false;
+			spin_unlock_irq(&dev->queue_lock, flags);
+			break;
+		}
+
+		dev->queue = next->next;
+		spin_unlock_irq(&dev->queue_lock, flags);
+
+		s = issue(dev, next);
+
+		flags = spin_lock_irq(&dev->queue_lock);
+		next->status = s;
+		next->done = true;
+		wait_wake_all(&dev->waiters);
+		spin_unlock_irq(&dev->queue_lock, flags);
+	}
+
+	return r->status;
+}
+
 /* Translates a request on a slice into one on the disk underneath it.
  *
  * Walked to the root rather than assuming one level, so that a volume nested
@@ -297,6 +482,7 @@ enum block_status block_resolve(struct block_device *dev, u64 lba, u32 count,
 enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void *buf)
 {
 	enum block_status s = check_range(dev, lba, count);
+	struct block_request r;
 
 	if (s != BLOCK_OK || count == 0)
 		return s;
@@ -308,41 +494,23 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 	if (!dev)
 		return BLOCK_ERR_NO_DEVICE;
 
-	device_acquire(dev);
+	/* Queued rather than issued. The splitting the old body did here has
+	 * moved into `issue`, which is where the request finally reaches the
+	 * driver -- the arithmetic is the same and there is now one place that
+	 * does it for reads and writes both. */
+	r.lba = lba;
+	r.count = count;
+	r.buf = buf;
+	r.write = false;
 
-	/* Split, if the device has an opinion about how much it can take at
-	 * once. Done here rather than in each driver: the arithmetic is the
-	 * same everywhere and getting it wrong means a short read that reports
-	 * success, which is silent data loss rather than an error. */
-	while (count) {
-		u32 chunk = count;
-
-		if (dev->max_blocks_per_request &&
-		    chunk > dev->max_blocks_per_request)
-			chunk = dev->max_blocks_per_request;
-
-		s = dev->ops->read(dev, lba, chunk, buf);
-		if (s != BLOCK_OK) {
-			device_release(dev);
-			return s;
-		}
-
-		reads++;
-		blocks_read += chunk;
-
-		lba   += chunk;
-		count -= chunk;
-		buf    = (u8 *)buf + (size_t)chunk * dev->block_size;
-	}
-
-	device_release(dev);
-	return BLOCK_OK;
+	return submit(dev, &r);
 }
 
 enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf)
 {
 	enum block_status s = check_range(dev, lba, count);
+	struct block_request r;
 
 	if (s != BLOCK_OK || count == 0)
 		return s;
@@ -380,38 +548,29 @@ enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 	 *
 	 * Before the transfer, not after: a write that fails halfway leaves
 	 * the disk holding neither the old contents nor the new, and a cache
-	 * that guessed either would be confidently wrong. */
+	 * that guessed either would be confidently wrong.
+	 *
+	 * In the caller's own coordinates, and before to_root, because that is
+	 * how the cache is keyed -- the partition-and-disk aliasing the cache
+	 * already handles is handled by telling it what the caller said, not
+	 * what the caller meant. Dropping this line is what a queue rewrite did
+	 * without noticing, and the only thing that noticed was a test. */
 	bcache_invalidate(dev, lba, count);
 
 	dev = to_root(dev, &lba);
 	if (!dev)
 		return BLOCK_ERR_NO_DEVICE;
 
-	device_acquire(dev);
+	/* The cast is the one place const is given up, and it is given up
+	 * because a request carries one pointer for both directions. `issue`
+	 * hands it to the driver's write, which takes a const pointer again --
+	 * so nothing between here and the device writes through it. */
+	r.lba = lba;
+	r.count = count;
+	r.buf = (void *)(uintptr_t)buf;
+	r.write = true;
 
-	while (count) {
-		u32 chunk = count;
-
-		if (dev->max_blocks_per_request &&
-		    chunk > dev->max_blocks_per_request)
-			chunk = dev->max_blocks_per_request;
-
-		s = dev->ops->write(dev, lba, chunk, buf);
-		if (s != BLOCK_OK) {
-			device_release(dev);
-			return s;
-		}
-
-		writes++;
-		blocks_written += chunk;
-
-		lba   += chunk;
-		count -= chunk;
-		buf    = (const u8 *)buf + (size_t)chunk * dev->block_size;
-	}
-
-	device_release(dev);
-	return BLOCK_OK;
+	return submit(dev, &r);
 }
 
 /* Tells the device a range of blocks holds nothing anyone wants.
@@ -901,6 +1060,143 @@ static bool neighbour_untouched(struct block_device *slice, u8 *scratch, u8 *kee
 	}
 
 	return true;
+}
+
+/* --- that the queue is actually in an order ---------------------------------
+ *
+ * Against a device that is not there, and deliberately.
+ *
+ * The obvious test -- several threads asking for descending blocks and an
+ * assertion that the driver saw them ascending -- cannot be written honestly,
+ * because it only holds when the threads happen to overlap. With one caller the
+ * queue never holds more than one request: the first arrival finds the device
+ * idle, services itself, and leaves. That is the design working, and a test
+ * that depended on losing that race would pass or fail by timing and tell
+ * nobody anything either way.
+ *
+ * So the ordering is tested where the ordering lives. queue_insert is a pure
+ * function of a list and a request; give it the worst arrival order there is --
+ * strictly descending -- and the queue it produces is either sorted or it is
+ * not. No threads, no timing, and it fails the same way on every machine.
+ *
+ * The control is the half that makes it a measurement. A device that says
+ * seek_is_free must come out in arrival order, and if it does not, then the
+ * sort is not being chosen -- it is just happening, and the flag that is
+ * supposed to turn it off does nothing.
+ */
+static bool queue_is_sorted(struct block_device *dev, bool expect_sorted)
+{
+	/* Descending, so that every single insertion has to walk past nothing
+	 * and land at the head. Ascending arrival would produce a sorted queue
+	 * even from an implementation that only ever appends. */
+	static struct block_request r[6];
+	const u64 arrival[6] = { 500, 90, 4000, 12, 70, 1 };
+	struct block_request *p;
+	u64 last = 0;
+	unsigned seen = 0;
+
+	dev->queue = NULL;
+	dev->queued = 0;
+	dev->reordered = 0;
+
+	for (unsigned i = 0; i < 6; i++) {
+		r[i].lba = arrival[i];
+		r[i].count = 1;
+		r[i].next = NULL;
+		queue_insert(dev, &r[i]);
+	}
+
+	for (p = dev->queue; p; p = p->next) {
+		if (seen && expect_sorted && p->lba < last)
+			return false;
+
+		/* The control's assertion, and it is the stronger one: arrival
+		 * order is a single sequence, so this cannot be satisfied by
+		 * accident the way "sorted" sometimes can. */
+		if (!expect_sorted && p->lba != arrival[seen])
+			return false;
+
+		last = p->lba;
+		seen++;
+	}
+
+	if (seen != 6 || dev->queued != 6)
+		return false;
+
+	/* An insertion that landed in front of something already queued. Zero
+	 * here with six descending arrivals would mean the list came out sorted
+	 * without anything ever being put in order, which is not a thing that
+	 * can happen -- so this catches a queue that was sorted by the test
+	 * rather than by the code. */
+	if (expect_sorted && !dev->reordered)
+		return false;
+
+	return true;
+}
+
+bool block_queue_test(void)
+{
+	struct block_device dev;
+	bool ok = true;
+
+	kmemset(&dev, 0, sizeof(dev));
+
+	dev.seek_is_free = false;
+	if (!queue_is_sorted(&dev, true)) {
+		kputs("  block: requests came off the queue in the order they "
+		      "arrived, not the order the head wants them\n");
+		ok = false;
+	}
+
+	dev.seek_is_free = true;
+	if (!queue_is_sorted(&dev, false)) {
+		kputs("  block: a device that says seeking is free was sorted "
+		      "anyway, so the sort is not a decision\n");
+		ok = false;
+	}
+
+	return ok;
+}
+
+/* Read by nothing until today, which is the whole reason this is here.
+ *
+ * The counters have been incremented since the block layer was written and
+ * printed nowhere, so the one thing that could have caught an I/O path quietly
+ * losing them -- a rewrite that replaced two function bodies wholesale, say --
+ * was a number nobody could see. They were in fact lost exactly that way, and
+ * what noticed was a cache test failing for an unrelated reason.
+ *
+ * Printed late, beside the cache, because printed early it describes a machine
+ * that has not done any work yet.
+ */
+void block_print_traffic(void)
+{
+	kprintf("\nBlock traffic\n");
+	kprintf("  transfers    : %llu read, %llu written, %llu flushed\n",
+		(unsigned long long)reads, (unsigned long long)writes,
+		(unsigned long long)flushes);
+	kprintf("  blocks       : %llu read, %llu written\n",
+		(unsigned long long)blocks_read,
+		(unsigned long long)blocks_written);
+
+	for (unsigned i = 0; i < device_count; i++) {
+		const struct block_device *d = &devices[i];
+
+		if (!d->queued)
+			continue;
+
+		/* Per device, because the interesting number is the share that
+		 * had to be put in front of something -- a queue that never
+		 * reorders is one that is never deep, and that is a fact about
+		 * this machine's traffic rather than about the scheduler. */
+		kprintf("  %s", d->name);
+		for (size_t pad = kstrlen(d->name); pad < 12; pad++)
+			kputc(' ');
+		kprintf(" : %llu queued, %llu put in order%s\n",
+			(unsigned long long)d->queued,
+			(unsigned long long)d->reordered,
+			d->seek_is_free ? " (seeking is free, so none)" : "");
+	}
 }
 
 bool block_self_test(void)
