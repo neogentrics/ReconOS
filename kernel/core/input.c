@@ -39,6 +39,7 @@
  *     pointer that jumps to the other side of it.
  */
 #include <recon/kernel/input.h>
+#include <recon/kernel/xhci.h>
 #include <recon/kernel/vfs.h>
 #include <recon/kernel/user.h>	/* the SYS_ error numbers */
 #include <recon/kernel/lock.h>
@@ -285,6 +286,10 @@ void input_print_summary(void)
 	kprintf("\nInput\n");
 
 	arch_input_print();
+
+	/* And whatever came in over USB, which is the same on both
+	 * architectures and so is not the architecture's to print. */
+	usb_hid_print_summary();
 
 	kprintf("  events       : %llu posted, %llu read, %llu waiting\n",
 		(unsigned long long)posted, (unsigned long long)delivered,

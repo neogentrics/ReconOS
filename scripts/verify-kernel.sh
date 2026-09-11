@@ -83,7 +83,43 @@ sub_out() {
 	cat "$WORK/sub/$tag.out"
 	return "$(cat "$WORK/sub/$tag.rc")"
 }
-trap 'rm -rf "$WORK"' EXIT
+# --- what a failing run leaves behind -----------------------------------------
+#
+# The work directory used to be deleted unconditionally, and with it every
+# guest's serial output. What survived was the summary line -- "1 self-test(s)
+# failed" -- which says that something went wrong and not *what*.
+#
+# That cost a real diagnosis: BG-164 turned this run red on the eight-processor
+# path, and the only way to find out which check had failed was to reproduce the
+# load by hand afterwards and hope. The output naming it had been written,
+# printed, and thrown away.
+#
+# So a run that fails keeps its logs and says where they are. A run that passes
+# still cleans up, because a green run's output is of no interest to anybody and
+# leaving a directory per run behind is its own kind of mess.
+KEEP=${KEEP:-$HOME/reconos-verify-failures}
+
+keep_the_evidence() {
+	rc=$?
+
+	if [ "$rc" != 0 ] && [ -d "$WORK" ]; then
+		stamp=$(date +%Y%m%d-%H%M%S)
+		mkdir -p "$KEEP"
+
+		if cp -r "$WORK" "$KEEP/$stamp" 2>/dev/null; then
+			echo
+			echo "The output of every guest in this run is in"
+			echo "  $KEEP/$stamp"
+			echo "which is kept because the run failed. A passing run"
+			echo "deletes it."
+		fi
+	fi
+
+	rm -rf "$WORK"
+	exit "$rc"
+}
+
+trap keep_the_evidence EXIT
 
 ONLY=${1:-all}
 TIMEOUT=${TIMEOUT:-45}

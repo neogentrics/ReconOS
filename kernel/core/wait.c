@@ -133,6 +133,23 @@ unsigned wait_queue_length(const struct wait_queue *q)
 
 /* --- a lock that sleeps --------------------------------------------------- */
 
+/* Names a mutex, so its guard shows up as something in the lock summary
+ * rather than as a question mark.
+ *
+ * A mutex whose fields are all zero already works -- the guard is free, the
+ * queue is empty and there is no owner -- which is why nothing needed this
+ * before. What zero does not give it is a name, and the moment locks started
+ * reporting what they cost, every mutex in the kernel became an unnamed row.
+ *
+ * Optional, and a mutex that is never named still works. */
+void mutex_init(struct mutex *m, const char *name)
+{
+	spin_init(&m->guard, name);
+	m->waiters.head = 0;
+	m->waiters.tail = 0;
+	m->owner = 0;
+}
+
 void mutex_lock(struct mutex *m)
 {
 	u64 flags = spin_lock_irq(&m->guard);

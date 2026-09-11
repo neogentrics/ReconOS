@@ -103,6 +103,12 @@
 static struct xhci controllers[XHCI_MAX];
 static unsigned controller_count;
 
+/* Transfer completions that belonged to another endpoint. Not an error and
+ * not rare: an abandoned transfer completes eventually. Counted because a
+ * number here climbing fast means something is timing out that should not.
+ */
+static u64 foreign_events;
+
 /* --- register access -------------------------------------------------------
  *
  * Every one of these is a device register, so every access is volatile and none
@@ -378,12 +384,17 @@ static void doorbell(struct xhci *x, unsigned slot, u32 target)
  * dequeue pointer written back afterwards is how the controller learns it may
  * overwrite what we have seen.
  */
-static bool next_event(struct xhci *x, struct trb *out, unsigned ms)
+/* One event if the controller has posted one, without waiting.
+ *
+ * Split out of next_event so that a caller can drain the ring without
+ * committing to a wait -- which is what routing completions to the endpoint
+ * they belong to needs, and what lets a poller ask about several devices
+ * without blocking on any one of them. */
+static bool poll_event(struct xhci *x, struct trb *out)
 {
 	volatile struct trb *ring = x->event;
-	u64 deadline = time_monotonic_ns() + (u64)ms * 1000000ULL;
 
-	for (;;) {
+	{
 		volatile struct trb *e = &ring[x->event_index];
 		u32 control = e->control;
 
@@ -408,12 +419,61 @@ static bool next_event(struct xhci *x, struct trb *out, unsigned ms)
 				  sizeof(struct trb)) | (1ULL << 3));
 			return true;
 		}
+	}
+
+	return false;
+}
+
+static bool next_event(struct xhci *x, struct trb *out, unsigned ms)
+{
+	u64 deadline = time_monotonic_ns() + (u64)ms * 1000000ULL;
+
+	for (;;) {
+		if (poll_event(x, out))
+			return true;
 
 		if (time_monotonic_ns() > deadline)
 			return false;
 
 		sched_yield();
 	}
+}
+
+/* Puts a completion in the mailbox of the device it belongs to.
+ *
+ * A transfer event names its slot and its endpoint. Finding the device by slot
+ * is what makes the ring shareable at all: without it, every waiter takes the
+ * first completion it sees and calls it its own. */
+static void route_completion(struct xhci *x, const struct trb *e)
+{
+	unsigned slot = (e->control >> 24) & 0xFF;
+	unsigned code = (e->status >> 24) & 0xFF;
+	unsigned i;
+
+	for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+		struct usb_device *ud = &x->devices[i];
+
+		/* Zero is what an unused entry holds, so a slot of zero must
+		 * not match one. No transfer event should carry it -- but an
+		 * event that did would otherwise be filed against every device
+		 * that does not exist, and the first one to be plugged in
+		 * later would start with somebody else's completion waiting. */
+		if (!ud->slot || ud->slot != slot)
+			continue;
+
+		/* The residue, not the count: a transfer event reports how many
+		 * bytes were *not* moved, so a short read is a success with a
+		 * number attached rather than a failure. The length is not
+		 * known here, so the residue is kept and the waiter subtracts
+		 * it from what it asked for. */
+		ud->completion_bytes = e->status & 0xFFFFFF;
+		ud->completion_ok = (code == COMP_SUCCESS ||
+				     code == COMP_SHORT_PACKET);
+		ud->have_completion = true;
+		return;
+	}
+
+	foreign_events++;
 }
 
 /* Puts one command on the command ring and waits for its completion.
@@ -843,10 +903,25 @@ static bool read_interface(struct usb_device *ud, const u8 *buf, unsigned len)
 				if (address & 0x80) {
 					ud->in_ep     = address;
 					ud->in_packet = packet;
+					ud->in_is_interrupt = false;
 				} else {
 					ud->out_ep     = address;
 					ud->out_packet = packet;
 				}
+			} else if ((attrs & 0x03) == 3 &&
+				   (address & 0x80) && !ud->in_ep) {
+				/* An interrupt IN endpoint, which is how every
+				 * keyboard and mouse reports. Taken only when
+				 * no bulk IN was found, so a device offering
+				 * both -- some card readers do -- still looks
+				 * like the storage device it is.
+				 *
+				 * The interval is the seventh byte and is an
+				 * exponent, not a count of milliseconds. */
+				ud->in_ep     = address;
+				ud->in_packet = packet;
+				ud->in_is_interrupt = true;
+				ud->in_interval = (dlen >= 7) ? buf[at + 6] : 1;
 			}
 		}
 
@@ -877,17 +952,26 @@ static bool configure_endpoints(struct xhci *x, struct usb_device *ud)
 	unsigned in_dci, out_dci, last;
 	u32 *sc, *ep;
 
-	if (!ud->in_ep || !ud->out_ep)
+	/* An IN endpoint is required; an OUT one is not.
+	 *
+	 * A disk needs both, because a command goes out and its data comes
+	 * back. A keyboard has only the IN one and would have been refused
+	 * here -- which is how a device that works perfectly ends up reported
+	 * as "would not configure". */
+	if (!ud->in_ep)
 		return false;
 
 	in_dci  = dci_for(ud->in_ep);
-	out_dci = dci_for(ud->out_ep);
+	out_dci = ud->out_ep ? dci_for(ud->out_ep) : 0;
 	last    = in_dci > out_dci ? in_dci : out_dci;
 
 	kmemset(input, 0, PAGE_SIZE);
 
 	add |= 1u << in_dci;
-	add |= 1u << out_dci;
+
+	if (out_dci)
+		add |= 1u << out_dci;
+
 	((u32 *)input)[1] = add;
 
 	/* The slot context is copied forward from the device context and its
@@ -899,18 +983,26 @@ static bool configure_endpoints(struct xhci *x, struct usb_device *ud)
 	sc[0] = (sc[0] & ~(0x1Fu << 27)) | ((u32)last << 27);
 
 	ep = ep_ctx(x, input, in_dci);
-	ep[1] = (6u << 3) |				/* bulk in */
+
+	/* Type 7 is interrupt in, type 6 is bulk in. The only other difference
+	 * is the interval, which lives in the top byte of the first word and
+	 * says how often the controller should ask -- meaningless for bulk,
+	 * where it asks whenever there is room. */
+	ep[0] = ud->in_is_interrupt ? ((u32)ud->in_interval << 16) : 0;
+	ep[1] = (ud->in_is_interrupt ? (7u << 3) : (6u << 3)) |
 		((u32)ud->in_packet << 16) |
 		(3u << 1);				/* error count */
 	((u64 *)ep)[1] = ud->in.phys | ud->in.cycle;
 	ep[4] = ud->in_packet;				/* average TRB length */
 
-	ep = ep_ctx(x, input, out_dci);
-	ep[1] = (2u << 3) |				/* bulk out */
-		((u32)ud->out_packet << 16) |
-		(3u << 1);
-	((u64 *)ep)[1] = ud->out.phys | ud->out.cycle;
-	ep[4] = ud->out_packet;
+	if (out_dci) {
+		ep = ep_ctx(x, input, out_dci);
+		ep[1] = (2u << 3) |			/* bulk out */
+			((u32)ud->out_packet << 16) |
+			(3u << 1);
+		((u64 *)ep)[1] = ud->out.phys | ud->out.cycle;
+		ep[4] = ud->out_packet;
+	}
 
 	if (!command(x, ud->input_phys, 0,
 		     TRB_TYPE(TRB_CONFIGURE_ENDPOINT) | ((u32)ud->slot << 24),
@@ -973,12 +1065,17 @@ bool xhci_bulk_transfer(struct xhci *x, struct usb_device *ud, bool in,
 	u32 packet  = in ? ud->in_packet : ud->out_packet;
 	paddr_t phys = buf ? virt_to_phys(buf) : 0;
 	u32 done = 0;
-	struct trb e;
+	bool ok;
 
 	if (!ud->configured || !address)
 		return false;
 	if (length && !phys)
 		return false;
+
+	/* One at a time on this controller. See the note on transfer_lock: two
+	 * transfers in flight would each take the other's completion off the
+	 * shared event ring and report somebody else's byte count. */
+	mutex_lock(&x->transfer_lock);
 
 	/* One TRB per run of bytes that does not cross a 64 KiB boundary.
 	 *
@@ -1016,24 +1113,100 @@ bool xhci_bulk_transfer(struct xhci *x, struct usb_device *ud, bool in,
 
 	doorbell(x, ud->slot, dci_for(address));
 
-	for (;;) {
-		unsigned code;
+	{
+		u64 deadline = time_monotonic_ns() + 5000ULL * 1000000ULL;
 
-		if (!next_event(x, &e, 5000))
-			return false;
+		ok = false;
 
-		if (TRB_TYPE_OF(e.control) != TRB_TRANSFER_EVENT)
-			continue;
+		for (;;) {
+			struct trb ev;
 
-		/* The residue, not the count: a transfer event reports how many
-		 * bytes were *not* moved, so a short read arrives as a success
-		 * with a number attached rather than as a failure. */
-		if (transferred)
-			*transferred = length - (e.status & 0xFFFFFF);
+			if (ud->have_completion) {
+				ud->have_completion = false;
+				ok = ud->completion_ok;
 
-		code = (e.status >> 24) & 0xFF;
-		return code == COMP_SUCCESS || code == COMP_SHORT_PACKET;
+				if (transferred)
+					*transferred = length -
+						ud->completion_bytes;
+				break;
+			}
+
+			if (poll_event(x, &ev)) {
+				if (TRB_TYPE_OF(ev.control) ==
+				    TRB_TRANSFER_EVENT)
+					route_completion(x, &ev);
+				continue;
+			}
+
+			if (time_monotonic_ns() > deadline)
+				break;
+
+			/* The lock is dropped across the wait, never held
+			 * over it. A mutex held while yielding would stop
+			 * every other endpoint on this controller for as long
+			 * as one device took to answer -- which for a keyboard
+			 * nobody is touching is for ever. */
+			mutex_unlock(&x->transfer_lock);
+			sched_yield();
+			mutex_lock(&x->transfer_lock);
+		}
 	}
+
+	mutex_unlock(&x->transfer_lock);
+	return ok;
+}
+
+/* --- queued, and asked about later ---------------------------------------- */
+
+bool xhci_transfer_queue(struct xhci *x, struct usb_device *ud, void *buf,
+			 u32 length)
+{
+	paddr_t phys = buf ? virt_to_phys(buf) : 0;
+
+	if (!ud->configured || !ud->in_ep || (length && !phys))
+		return false;
+
+	mutex_lock(&x->transfer_lock);
+
+	ring_push(&ud->in, phys, length, TRB_TYPE(TRB_NORMAL) | (1u << 5));
+	doorbell(x, ud->slot, dci_for(ud->in_ep));
+
+	mutex_unlock(&x->transfer_lock);
+	return true;
+}
+
+bool xhci_transfer_poll(struct xhci *x, struct usb_device *ud, u32 *transferred,
+			bool *ok)
+{
+	struct trb ev;
+	bool got = false;
+
+	mutex_lock(&x->transfer_lock);
+
+	/* Drain whatever is there first, so that asking about one device also
+	 * delivers every other device its own. A poller that only looked for
+	 * its own completion would leave the others' on the ring until it
+	 * filled. */
+	while (poll_event(x, &ev))
+		if (TRB_TYPE_OF(ev.control) == TRB_TRANSFER_EVENT)
+			route_completion(x, &ev);
+
+	if (ud->have_completion) {
+		ud->have_completion = false;
+
+		if (ok)
+			*ok = ud->completion_ok;
+
+		/* The residue is what the event carried; the caller knows what
+		 * it asked for and does the subtraction. */
+		if (transferred)
+			*transferred = ud->completion_bytes;
+
+		got = true;
+	}
+
+	mutex_unlock(&x->transfer_lock);
+	return got;
 }
 
 unsigned xhci_ports_connected(struct xhci *x)
@@ -1069,6 +1242,11 @@ bool xhci_attach(const struct pci_device *d)
 
 	x = &controllers[controller_count];
 	kmemset(x, 0, sizeof(*x));
+
+	/* Named so it appears in the lock summary as itself rather than as a
+	 * question mark. A zeroed mutex already works; what zero does not give
+	 * it is a name. */
+	mutex_init(&x->transfer_lock, "xhci");
 
 	base = (paddr_t)d->bar[0];
 
@@ -1161,7 +1339,12 @@ bool xhci_attach(const struct pci_device *d)
 			ud->usb_class, ud->usb_subclass, ud->usb_protocol,
 			ud->max_packet);
 
-		if (ud->configured)
+		if (ud->configured && ud->in_is_interrupt)
+			kprintf("  usb%u         : interrupt in %02x (%u byte), "
+				"interval %u\n",
+				x->device_count - 1, ud->in_ep, ud->in_packet,
+				ud->in_interval);
+		else if (ud->configured)
 			kprintf("  usb%u         : bulk in %02x (%u byte), "
 				"bulk out %02x (%u byte)\n",
 				x->device_count - 1, ud->in_ep, ud->in_packet,
@@ -1170,7 +1353,10 @@ bool xhci_attach(const struct pci_device *d)
 		/* Offered to the one class driver there is. It refuses
 		 * anything that is not SCSI over Bulk-Only Transport, which is
 		 * most of what gets plugged into a machine. */
+		/* Offered to each class driver in turn. Each refuses anything
+		 * that is not its own, which is most of what gets plugged in. */
 		usb_storage_attach(x, ud);
+		usb_hid_attach(x, ud);
 	}
 
 	x->ports_enabled = enabled;

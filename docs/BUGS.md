@@ -3499,6 +3499,53 @@ Left open rather than guessed at. The next step is to find out what
 (BG-155, BG-158) and this is the only place in the kernel that yields while
 holding a device.
 
+### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
+
+[#403](https://github.com/neogentrics/ReconOS/issues/403)
+
+- **Found:** 10 September 2026, by the verification matrix going red on the
+  eight-processor path with one self-test failed — on a kernel where nothing
+  was wrong.
+- **Cost:** a red board on a green tree, and the worse cost behind it: a matrix
+  that fails at random is a matrix people stop believing.
+- **Status:** fixed.
+
+The scheduler's self-test called `reap()` once and then asserted that no thread
+in the ring was still `THREAD_FINISHED`.
+
+`reap` will not free a thread until `off_cpu` says the processor it was running
+on has finished with it. **That is BG-159's fix**, and it is what stops a stack
+being handed to the page allocator while another processor is still standing on
+it -- the fault whose panic reported a link register of `0xacce5501`. The flag
+is set by *that* processor, on its way out of the context switch, afterwards.
+
+So a thread can be finished and not yet reapable, and the assertion was asking
+one processor to have already done something another one owed it.
+
+On an idle machine the gap is too short to see. Measured at eight processors
+with six guests at once: **two runs in twelve failed before the change, three in
+twelve on the commit before that, and none in twelve after it.** The rate does
+not depend on what the kernel is doing; it depends on how loaded the host is,
+which is why it appeared on the day the host was busiest.
+
+- **Was:** a test that could not tell *not yet* from *not ever*. The thing being
+  waited for is another processor reaching the end of a context switch, and
+  nothing in the assertion gave it the chance.
+- **Fixed in** `core/sched.c`: the check reaps and re-checks against a bounded
+  deadline of half a second, yielding between passes -- yielding rather than
+  spinning, because what it waits for is another processor making progress, and
+  spinning is this one refusing to let it.
+- **The assertion still means what it meant.** A stack that genuinely leaks is
+  never reaped, so it is still there when the deadline passes. Watched to fail:
+  with `reap` neutered it reports *a finished thread was still not reaped half a
+  second later*.
+- **Family:** the fourth this month whose only symptom was timing -- BG-157 (a
+  clock at twice its stated rate with every tick-counting test green), BG-158
+  (an idle thread halving the machine with twenty-six self-tests passing),
+  BG-160 and BG-162 (a harness and a kernel each mistaking *slow* for *did not
+  happen*). Every one was invisible to a suite that asks only whether the right
+  things happened.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -804,21 +804,65 @@ bool sched_self_test(void)
 			ok = false;
 		}
 
-	reap();
-
 	/* And every finished thread's stack came back. A scheduler that leaks a
-	 * stack per thread is a machine that dies after a few thousand of them. */
+	 * stack per thread is a machine that dies after a few thousand of them.
+	 *
+	 * **Waited for, with a bound, rather than demanded at once** -- and the
+	 * difference is BG-164, which turned the verification run red on a
+	 * kernel that was behaving correctly.
+	 *
+	 * `reap` will not free a thread until `off_cpu` says the processor it
+	 * was running on has finished with it, which is BG-159's fix and is
+	 * what stops a stack being handed to the page allocator while another
+	 * processor is still standing on it. That flag is set by *that*
+	 * processor, afterwards. So a thread can be finished and not yet
+	 * reapable, and calling reap once and asserting immediately is asking
+	 * one processor to have already done something another one owes it.
+	 *
+	 * On an idle machine the gap is too short to see. At eight processors
+	 * under load it opened often enough to fail two runs in twelve, on a
+	 * kernel where nothing was wrong.
+	 *
+	 * The assertion still means what it meant: a stack that genuinely
+	 * leaks is never reaped, so it is still here when the deadline passes.
+	 * What changed is that "not yet" and "not ever" stopped being the same
+	 * answer. */
 	{
-		struct thread *t = ring;
+		u64 deadline = time_monotonic_ns() + 500000000ull;
+		bool waiting = true;
 
-		if (t) do {
-			if (t->state == THREAD_FINISHED) {
-				kputs("  sched: a finished thread was not reaped\n");
+		while (waiting) {
+			struct thread *t;
+
+			reap();
+
+			waiting = false;
+			t = ring;
+
+			if (t) do {
+				if (t->state == THREAD_FINISHED) {
+					waiting = true;
+					break;
+				}
+				t = t->next;
+			} while (t != ring);
+
+			if (!waiting)
+				break;
+
+			if (time_monotonic_ns() > deadline) {
+				kputs("  sched: a finished thread was still "
+				      "not reaped half a second later\n");
 				ok = false;
 				break;
 			}
-			t = t->next;
-		} while (t != ring);
+
+			/* Yielded rather than spun: what is being waited for is
+			 * another processor reaching the end of a context
+			 * switch, and spinning here is a processor refusing to
+			 * let that happen on its own. */
+			sched_yield();
+		}
 	}
 
 	/* And nothing wrote past its vector area while all that was running.

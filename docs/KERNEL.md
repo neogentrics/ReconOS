@@ -2905,6 +2905,155 @@ The third row is the one worth having: the extended prefix is a separate
 namespace, and `0x1D` is left control on its own and right control after `0xE0`.
 Folding them into one table is how a kernel reports the wrong modifier.
 
+### A mouse, and what an event has to carry for one
+
+The input core only knew about keys, and a mouse does not produce keys. An
+event gained a signed **value** and a fourth kind, `INPUT_MOTION`, naming an
+axis and a distance.
+
+Relative, always. A mouse reports *movement* and has no idea where the pointer
+is -- whoever draws the pointer owns that, and is the only thing that knows
+where the edges of the screen are.
+
+**Y increases downward on every device**, and that is a decision rather than a
+passthrough. A PS/2 mouse says positive is up; a USB HID mouse says positive is
+down. Reporting each as it arrives would mean every reader had to know which
+kind of mouse was attached, which is the one thing this layer exists to
+prevent. The two drivers normalise in opposite directions and nothing above
+them asks.
+
+### Merging movements, and the one case that must not be merged
+
+A hand dragged across a desk produces hundreds of packets a second. Without
+help they fill the two-hundred-event queue and push the keystrokes out of it.
+
+So consecutive motion on one axis is **added to the event already waiting**
+rather than appended. That is safe only because the quantity is relative --
+deltas of 3 and 4 mean the same thing as one of 7 -- and nothing else on the
+queue may be treated that way: two presses of a key are not one press of it.
+
+And only ever against the **newest** event. If a button was pressed after the
+last movement then the newest is the button, nothing merges, and the press
+stays between the two movements where it happened. Merging across it would put
+the click somewhere the hand never was -- a drag that starts in the wrong place,
+which no later layer can repair. The self-test checks exactly that case.
+
+The sum clamps rather than wraps. A saturated delta is a pointer that stops at
+the edge of the screen; a wrapped one jumps to the other side of it.
+
+### One byte of framing
+
+A PS/2 mouse packet is three bytes, or four with a wheel, and **bit 3 of the
+first is always one**. That bit is the entire synchronisation.
+
+The stream has no other framing, so a single byte lost or gained leaves the
+decoder permanently one out of step: every movement becomes a different
+movement, forever, with nothing reporting a fault. Checking the bit at the
+start of each packet makes the error self-correcting for the price of one
+comparison, and resyncs are counted -- otherwise "the pointer sometimes jumps"
+is a complaint nobody can check.
+
+The wheel is found by **knocking**: three sample rates in a particular order,
+after which a mouse that understands the extension starts reporting device id 3
+and sending a fourth byte in every packet. There is no bit to ask. Getting it
+wrong is not cosmetic, because the packet *length* changes with the answer.
+
+## USB keyboards and mice
+
+This is what gives aarch64 any input at all. The 8042 is an ISA chip from 1984
+and ARM machines have neither the bus nor the chip, so that architecture had a
+keyboard driver it could never use.
+
+### The boot protocol is not a shortcut
+
+A HID device describes its own reports in a *report descriptor*: a small stack
+language saying which bits mean which usages. Parsing it properly is real work,
+and a kernel that gets it wrong reads somebody's mouse as a joystick.
+
+The **boot protocol** exists precisely so something small does not have to. A
+device reporting subclass 1 promises a fixed layout -- eight bytes for a
+keyboard, three or four for a mouse -- and `SET_PROTOCOL(0)` asks for it. It
+exists so a BIOS can run a keyboard before an operating system loads, which is
+exactly this kernel's position.
+
+What it costs is written down rather than discovered: six keys at a time, no
+media keys, three buttons. Past that is a report-descriptor parser, which is
+its own piece of work.
+
+**A boot keyboard reports HID usage ids, which are exactly the keycodes this
+kernel's input layer uses.** There is no translation in the USB driver at all.
+That is the payoff from choosing those numbers when the PS/2 driver was
+written, and it is why the older, stranger device is the one that converts.
+
+### A report is a state, not an event
+
+A PS/2 keyboard sends make and break codes: the events themselves. A USB
+keyboard sends **which keys are held right now**, over and over.
+
+So the driver keeps the previous report and compares. A keycode in the new one
+and not the old is a press; in the old and not the new is a release; in both is
+nothing -- which is what stops a held key generating a press on every poll.
+
+Two consequences worth stating. **There are no repeats from USB**: the
+typematic repeat a PS/2 keyboard generates in hardware does not exist, because
+the device just keeps saying the key is down. Whatever wants repeats makes them
+from the press and the clock, and that is a policy belonging with whoever knows
+what is being typed into.
+
+And a report of six ones is **ErrorRollOver** -- more keys held than the device
+can name -- not a list of keys. Treating it as one presses the letter A six
+times.
+
+### The completion that belonged to somebody else
+
+The event ring is shared by every endpoint on a controller, and this driver
+read it by taking the next event and assuming it was the one it was waiting
+for. That held while transfers only happened during enumeration: one device at
+a time, from one thread.
+
+It stopped holding the moment a keyboard and a mouse were both polled. A
+transfer that times out is abandoned by its waiter and **not cancelled in the
+controller**, so its completion arrives later and the next waiter takes it.
+
+The symptom was a mouse reporting four bytes of nothing over and over while the
+button presses went missing -- every transfer succeeding, with somebody else's
+answer. Before that, the very first "report" this driver ever saw was
+`09 02 16 00`, which is a configuration descriptor still sitting in the buffer
+from enumeration, decoded as a mouse with a button down and a jump of 22.
+
+Two fixes, and both are about not inventing input:
+
+- a completion is **routed to the endpoint it names**, into that device's own
+  mailbox, rather than taken by whoever is waiting;
+- the buffer is **cleared before every read**, so a transfer that reports bytes
+  it did not move reads as zeroes -- nothing held, nowhere moved -- rather than
+  as whatever was there. Whatever was there is always something that looks like
+  input.
+
+### Every device outstanding at once
+
+Asking each device in turn and waiting for its answer means a keypress waits
+behind however long the mouse takes to be moved, which for a mouse nobody is
+touching is for ever.
+
+An interrupt endpoint is *meant* to be left outstanding: the controller
+completes it when the device has something to say. So one transfer is queued on
+every device at once, and the poller asks each in turn without blocking on any.
+Reading events for one device delivers the others theirs, which is why none of
+them starves.
+
+Measured, with a keyboard and a mouse on one emulated controller:
+
+| sent | report | meaning |
+|---|---|---|
+| `mouse_move 7 3` | `00 07 03 00` | x +7, y +3 |
+| `mouse_button 1` | `01 00 00 00` | left down |
+| `mouse_button 0` | `00 00 00 00` | left up |
+| `sendkey b` | `00 00 05 00` | keycode 5, which is `b` |
+| `mouse_move -4 -2` | `00 fc fe 00` | x -4, y -2 |
+
+The same on aarch64, where it is the only input there is.
+
 ## When the memory runs out
 
 Everything above the page allocator was built assuming there would be enough.

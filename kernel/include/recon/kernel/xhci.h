@@ -14,6 +14,7 @@
 #define RECON_KERNEL_XHCI_H
 
 #include <recon/kernel/types.h>
+#include <recon/kernel/wait.h>	/* the transfer mutex below */
 
 struct pci_device;
 
@@ -77,6 +78,33 @@ struct usb_device {
 
 	u8  in_ep, out_ep;	/* endpoint addresses; zero means not found */
 	u16 in_packet, out_packet;
+
+	/* Whether the IN endpoint is an interrupt one rather than bulk.
+	 *
+	 * They differ in the endpoint *context* -- a type field and an interval
+	 * -- and in nothing else this driver does: the transfer ring, the TRBs
+	 * and the doorbell are identical, which is why one transfer function
+	 * serves both. Getting the type wrong is not a refusal; the controller
+	 * accepts the configuration and then schedules the endpoint under the
+	 * wrong rules. */
+	bool in_is_interrupt;
+
+	/* A completion that arrived while somebody else was waiting.
+	 *
+	 * The event ring is shared by every endpoint on the controller, and
+	 * only one thread reads it at a time. Whoever reads an event that is
+	 * not theirs leaves it here for whoever it *is* for, rather than
+	 * dropping it -- dropping it loses a keypress, and taking it as their
+	 * own reports somebody else's byte count as their transfer's result. */
+	bool have_completion;
+	bool completion_ok;
+	u32  completion_bytes;
+
+	/* How often the controller should ask, as the exponent the descriptor
+	 * carries. Meaningless for a bulk endpoint, which is asked whenever
+	 * there is room. */
+	u8  in_interval;
+
 	bool configured;
 };
 
@@ -114,6 +142,24 @@ struct xhci {
 	 * HCCPARAMS1. Reading this wrong puts every field at half its offset
 	 * and produces a device context full of plausible nonsense. */
 	bool context_64;
+
+	/* One transfer at a time on this controller.
+	 *
+	 * The event ring is shared by every endpoint, and this driver reads it
+	 * by taking the next event and assuming it is the one it was waiting
+	 * for. That was true while transfers only happened during enumeration,
+	 * one at a time, from one thread. It stopped being true the moment a
+	 * keyboard started polling in the background while a filesystem read a
+	 * disk -- each would take the other\'s completion and conclude its own
+	 * transfer had finished, with a byte count belonging to somebody else.
+	 *
+	 * A sleeping mutex and not a spinlock: the wait for a transfer yields,
+	 * and a spinlock held across a yield is the deadlock lock.h describes.
+	 *
+	 * The honest fix is an event ring read by one consumer that routes each
+	 * event to whoever was waiting for that slot and endpoint. This is the
+	 * small version of that, and it is correct rather than fast. */
+	struct mutex transfer_lock;
 
 	struct usb_device devices[XHCI_MAX_SLOTS];
 	unsigned device_count;
@@ -163,5 +209,27 @@ bool xhci_control_transfer(struct xhci *x, struct usb_device *ud,
  * not an error -- most of what is plugged into a machine is not a disk. */
 bool usb_storage_attach(struct xhci *x, struct usb_device *ud);
 unsigned usb_storage_count(void);
+
+/* Queues a transfer on this device's IN endpoint without waiting for it.
+ *
+ * For an interrupt endpoint, which stays outstanding until the device has
+ * something to say. A caller polls with xhci_transfer_poll below. */
+bool xhci_transfer_queue(struct xhci *x, struct usb_device *ud, void *buf,
+			 u32 length);
+
+/* Whether a queued transfer on this device has finished, without waiting.
+ *
+ * Reads whatever the controller has posted and routes each completion to the
+ * device it belongs to, so calling this for one device also delivers the others
+ * theirs. That is why a caller with several devices may poll them in any order
+ * and none of them starves. */
+bool xhci_transfer_poll(struct xhci *x, struct usb_device *ud, u32 *transferred,
+			bool *ok);
+
+/* Claims a device if it is a keyboard or a mouse speaking the HID boot
+ * protocol. False for anything else, which is not an error. */
+bool usb_hid_attach(struct xhci *x, struct usb_device *ud);
+unsigned usb_hid_count(void);
+void usb_hid_print_summary(void);
 
 #endif /* RECON_KERNEL_XHCI_H */

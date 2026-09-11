@@ -84,6 +84,10 @@ struct mutex {
 	struct thread *owner;		/* null when free */
 };
 
+/* Optional: names the guard so it appears in the lock summary as something
+ * other than a question mark. A zeroed mutex already works without it. */
+void mutex_init(struct mutex *m, const char *name);
+
 void mutex_lock(struct mutex *m);
 void mutex_unlock(struct mutex *m);
 bool mutex_held(const struct mutex *m);
