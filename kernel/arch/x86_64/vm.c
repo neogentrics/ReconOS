@@ -18,6 +18,7 @@
 
 #include <recon/kernel/user.h>
 #include <recon/kernel/vm.h>
+#include <recon/kernel/addrspace.h>
 #include <recon/kernel/pageage.h>
 #include <recon/kernel/evict.h>
 #include <recon/kernel/arch.h>
@@ -778,10 +779,28 @@ paddr_t arch_as_new_root(void)
  * processor is still using -- and would do it without any of them noticing
  * until something wrote to a page that had been handed to somebody else.
  *
- * The pages a program's mappings *pointed at* are not freed here either. This
- * frees page tables; whoever allocated the memory frees the memory, and the
- * two are not the same list.
+ * **The pages a program's mappings pointed at are freed here too**, and that
+ * sentence used to read the other way round -- "this frees tables; whoever
+ * allocated the memory frees the memory, and the two are not the same list."
+ * There was no other list. A program's code, stack and every page it faulted
+ * in were never given back: measured at exactly twelve pages per program, the
+ * same twelve every time, on a machine that is supposed to launch
+ * applications. (BG-182)
+ *
+ * Only the user half is walked -- the loop stops at 256 entries at the top
+ * level -- so the kernel's own mappings are not reachable from here, which is
+ * what makes freeing leaves safe at all.
+ *
+ * A page that somebody else is also using is left alone. Today that is the
+ * shared page of zeroes, mapped into every space in the machine.
  */
+static u64 leaves_freed;
+
+u64 vm_leaves_freed(void)
+{
+	return leaves_freed;
+}
+
 static void free_lower_tables(u64 *table, unsigned level)
 {
 	unsigned i;
@@ -793,7 +812,10 @@ static void free_lower_tables(u64 *table, unsigned level)
 		if (!(e & PTE_PRESENT))
 			continue;
 
-		/* A large page is a leaf: it is memory, not a table. */
+		/* A large page is a leaf: it is memory, not a table. Left
+		 * alone rather than freed, because nothing maps one into a
+		 * user space and a page allocator handed the first page of a
+		 * two-megabyte block would give out the other 511 as well. */
 		if (level < 4 && (e & PTE_LARGE))
 			continue;
 
@@ -801,6 +823,9 @@ static void free_lower_tables(u64 *table, unsigned level)
 			free_lower_tables(table_at(e & PTE_ADDR_MASK), level - 1);
 			pmm_free_page(e & PTE_ADDR_MASK);
 			table_pages--;
+		} else if (!addrspace_page_is_shared(e & PTE_ADDR_MASK)) {
+			pmm_free_page(e & PTE_ADDR_MASK);
+			leaves_freed++;
 		}
 	}
 }

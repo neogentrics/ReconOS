@@ -23,6 +23,7 @@
 #include "aarch64.h"
 
 #include <recon/kernel/vm.h>
+#include <recon/kernel/addrspace.h>
 #include <recon/kernel/pageage.h>
 #include <recon/kernel/evict.h>
 #include <recon/kernel/arch.h>
@@ -752,9 +753,21 @@ paddr_t arch_as_new_root(void)
 	return virt_to_phys(root);
 }
 
-/* Frees the page tables a program's mappings caused to exist. Not the pages
- * they pointed at: this frees tables, and whoever allocated the memory frees
- * the memory. */
+/* Frees the page tables a program's mappings caused to exist, **and the pages
+ * they pointed at**.
+ *
+ * That second half used to be a sentence saying the opposite -- "not the pages
+ * they pointed at: whoever allocated the memory frees the memory" -- and there
+ * was nobody else. See BG-182 and the longer note in the x86_64 copy.
+ *
+ * A page shared with other spaces is left alone: today the page of zeroes. */
+static u64 leaves_freed;
+
+u64 vm_leaves_freed(void)
+{
+	return leaves_freed;
+}
+
 static void free_tables(u64 *table, unsigned level)
 {
 	unsigned i;
@@ -765,7 +778,9 @@ static void free_tables(u64 *table, unsigned level)
 		if ((e & 3) == DESC_INVALID)
 			continue;
 
-		/* A block is a leaf -- memory, not a table. */
+		/* A block is a leaf -- memory, not a table. Left alone: see
+		 * the x86_64 copy for why a large mapping is not a page to
+		 * hand back. */
 		if (level < 4 && (e & 3) == DESC_BLOCK)
 			continue;
 
@@ -773,6 +788,9 @@ static void free_tables(u64 *table, unsigned level)
 			free_tables(table_at(e & ADDR_MASK), level - 1);
 			pmm_free_page(e & ADDR_MASK);
 			table_pages--;
+		} else if (!addrspace_page_is_shared(e & ADDR_MASK)) {
+			pmm_free_page(e & ADDR_MASK);
+			leaves_freed++;
 		}
 	}
 }

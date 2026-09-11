@@ -161,6 +161,19 @@ bool vm_fault_user(vaddr_t addr, bool write);
  * exists. */
 paddr_t addrspace_zero_page(void);
 
+/* Whether a physical page is shared by more than the space being torn down,
+ * and so must not be handed back when that space goes.
+ *
+ * Today that is exactly the shared page of zeroes, which is mapped into every
+ * address space in the machine -- freeing it would hand the one page every
+ * program reads to whoever allocated next.
+ *
+ * It is a function rather than a comparison because it is about to have a
+ * second answer: a page cache two spaces can point at is the next thing on
+ * this list, and the question "is this mine to free" is the one it changes.
+ * Asked in one place so there is one place to change. */
+bool addrspace_page_is_shared(paddr_t pa);
+
 void vm_fault_print_summary(void);
 
 unsigned addrspace_count(void);

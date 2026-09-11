@@ -442,6 +442,11 @@ paddr_t addrspace_zero_page(void)
 	return zero_page;
 }
 
+bool addrspace_page_is_shared(paddr_t pa)
+{
+	return pa && pa == zero_page;
+}
+
 bool vm_fault_user(vaddr_t addr, bool write)
 {
 	struct addrspace *as = addrspace_active();
@@ -575,6 +580,78 @@ void addrspace_init(void)
  * fault checkpoint 10 found one level down, and it is invisible to anything
  * except reading the memory.
  */
+/* --- that a space gives its pages back ------------------------------------
+ *
+ * Counting the whole round trip -- before the space exists, after it is gone --
+ * rather than only the leaves, because the leaves are not the only thing
+ * allocated and a test that watched one number could be satisfied by the wrong
+ * one moving.
+ *
+ * The pages arrive by faulting, which is how a real program's arrive. Written
+ * to rather than read, so each fault produces a page of its own instead of the
+ * shared zeroes: a test that read would map one page eight times and then prove
+ * that freeing nothing loses nothing.
+ */
+static bool space_gives_pages_back(void)
+{
+	const unsigned n = 8;
+	size_t before, after;
+	struct addrspace *as, *was;
+	u64 irq;
+	unsigned i;
+	bool ok = true;
+
+	before = pmm_free_page_count();
+
+	as = addrspace_create();
+
+	if (!as) {
+		kputs("  addrspace: no space to fill and let go\n");
+		return false;
+	}
+
+	if (!addrspace_reserve(as, USER_BASE, (u64)n * PAGE_SIZE,
+			       VM_READ | VM_WRITE | VM_USER)) {
+		kputs("  addrspace: could not reserve a range to fill\n");
+		addrspace_release(as);
+		return false;
+	}
+
+	irq = arch_irq_save();
+	was = addrspace_active();
+	addrspace_activate(as);
+
+	for (i = 0; i < n; i++)
+		if (!vm_fault_user(USER_BASE + (vaddr_t)i * PAGE_SIZE, true))
+			ok = false;
+
+	addrspace_activate(was);
+	arch_irq_restore(irq);
+
+	if (!ok) {
+		kputs("  addrspace: a page could not be faulted in\n");
+		addrspace_release(as);
+		return false;
+	}
+
+	addrspace_release(as);
+
+	after = pmm_free_page_count();
+
+	/* Exactly back, not approximately. A space that returns most of its
+	 * pages is a machine that runs out more slowly, which is the same
+	 * machine. */
+	if (after != before) {
+		kprintf("  addrspace: %lu page(s) did not come back when a "
+			"space was torn down -- a program's memory is held "
+			"for the life of the machine\n",
+			(unsigned long)(before - after));
+		return false;
+	}
+
+	return true;
+}
+
 bool addrspace_self_test(void)
 {
 	struct addrspace *a = addrspace_create();
@@ -787,6 +864,9 @@ bool addrspace_self_test(void)
 			}
 		}
 	}
+
+	if (ok && !space_gives_pages_back())
+		ok = false;
 
 done:
 	if (pa)

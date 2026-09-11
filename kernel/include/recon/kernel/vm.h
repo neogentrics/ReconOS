@@ -149,4 +149,8 @@ void vm_print_shootdowns(void);
  * every caller that wants memory wants it mapped. Returns 0 on failure. */
 bool vm_self_test(void);
 
+/* How many of a program's own pages have been handed back on teardown. Zero
+ * on a kernel that has forgotten to again. */
+u64 vm_leaves_freed(void);
+
 #endif /* RECON_KERNEL_VM_H */

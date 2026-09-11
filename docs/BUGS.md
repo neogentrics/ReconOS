@@ -3638,6 +3638,86 @@ allocator is *for* -- and the test failed:
   because the kernel got *better* -- after BG-165, where a race was cured and
   the test that had been watching it went red.
 
+### BG-182 — Tearing down an address space freed its page tables and not its pages
+
+- **Found:** 11 September 2026, while working out whether a page cache could
+  safely put shared pages into a program's map. The question was "who frees a
+  mapped page", and the answer turned out to be nobody.
+- **Cost:** every page a program ever touched, for the life of the machine.
+- **Status:** fixed.
+
+`free_lower_tables` walks a dying space and frees the tables. Its own comment
+said what it did not do:
+
+> The pages a program's mappings *pointed at* are not freed here either. This
+> frees page tables; whoever allocated the memory frees the memory, and the two
+> are not the same list.
+
+**There was no other list.** Nothing anywhere freed a program's code page, its
+stack, or any page it faulted in. The same sentence, in the same shape, sat in
+the aarch64 copy.
+
+- **Was:** a comment describing a division of responsibility with only one
+  side.
+- **Now:** the leaves are freed with the tables. Only the user half is walked
+  — the top-level loop stops at 256 entries — so the kernel's own mappings are
+  not reachable from here, which is what makes freeing leaves safe at all. A
+  page shared with other spaces is left alone, which today means the shared
+  page of zeroes: freeing that would hand the one page every program reads to
+  whoever allocated next. The question is asked through
+  `addrspace_page_is_shared` rather than compared inline, because it is about
+  to have a second answer.
+- **The test is the whole round trip**: free pages counted before the space
+  exists and after it is gone, with the pages arriving by *fault* the way a
+  real program's do, and *written* rather than read so each one is its own
+  rather than eight references to the shared zeroes. Watched failing: the
+  control reports `8 page(s) did not come back`, which is exactly the number
+  faulted in.
+
+### BG-183 — A process that ends is never reaped, so it keeps its slot and its memory
+
+- **Found:** 11 September 2026, immediately after BG-182 and by the same
+  measurement — which is the interesting part, because the measurement is what
+  said the first fix had not worked.
+- **Cost:** a process table that fills, and every ended program's memory held
+  for the life of the machine. Measured at **8 of 32 slots used on an ordinary
+  boot**, all of them `ended` with no threads.
+- **Status:** open. It needs a decision rather than a patch.
+
+**The instrument corrected the diagnosis, and would not have if it counted one
+number instead of two.** Having fixed BG-182, the same probe still showed
+exactly twelve pages lost per program run — and a counter printed beside it
+showed the new code had freed eleven leaves in the entire boot. The fix was
+running and had almost nothing to do.
+
+The reason is that `addrspace_release` is reached from `process_reap`, and
+nothing reaps. A process ends, records its exit status for somebody to collect,
+and waits for a collector that never comes:
+
+```
+Processes
+  table        : 8 of 32 in use
+  facts        : id 7, parent 0, uid 65534, 0 threads, ended
+  facts        : id 8, parent 0, uid 65534, 0 threads, ended
+  facts        : id 9, parent 0, uid 65534, 0 threads, ended
+```
+
+Every one of those holds an address space, and every space holds its pages.
+
+- **Was:** believed to be the same fault as BG-182. It is not, and BG-182's fix
+  is necessary without being sufficient — a space that is never released cannot
+  be released correctly.
+- **Why it is not simply "reap on exit":** the exit status is the thing being
+  kept, and something has to be allowed to read it. The kernel's own tests read
+  a program's exit code after its thread has ended, so an immediate reap would
+  destroy the answer before the question. A process whose parent is the kernel
+  has no one who will ever call wait, and that — not "ended" — is the condition
+  that makes reaping safe. Writing that down rather than guessing at it is why
+  this is open.
+- **Not a regression.** Nothing has ever reaped; the table is large enough that
+  a boot which runs a handful of programs has never exhausted it, which is
+  exactly why it went unseen. The number was printed on every boot.
+
 ### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
 
 [#403](https://github.com/neogentrics/ReconOS/issues/403)
