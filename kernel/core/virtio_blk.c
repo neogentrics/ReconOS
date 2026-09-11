@@ -31,6 +31,7 @@
 #include <recon/kernel/vm.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/sched.h>
+#include <recon/kernel/wait.h>
 
 /* Request types. */
 #define VIRTIO_BLK_T_IN     0	/* device -> memory */
@@ -83,10 +84,29 @@ struct virtio_blk {
 	 * is a hang that appears only with optimisation on. */
 	bool interrupting;
 	volatile unsigned arrivals;
+
+	/* What a waiting thread waits on, and the lock that closes the gap
+	 * between deciding to wait and waiting. The handler must take this lock
+	 * to wake, which is what makes the wakeup impossible to lose. */
+	struct spinlock lock;
+	struct wait_queue waiters;
+	struct wait_deadline deadline;
 };
 
 static struct virtio_blk devices[VIRTIO_BLK_MAX];
 static unsigned device_count;
+
+/* How every pause in this driver was actually spent.
+ *
+ * Without these the change that made this driver wait is unfalsifiable: if no
+ * thread could ever block, `pause_for_completion` would fall back to yielding
+ * every time, the driver would behave exactly as it did before, and every test
+ * would still pass. A count is the difference between a driver that waits and
+ * a driver that was *edited* to wait. */
+static u64 pauses_slept;
+static u64 pauses_yielded;
+static u64 pauses_unblockable;
+static u64 pauses_timed_out;
 
 /* The device saying it has finished something.
  *
@@ -106,8 +126,105 @@ static unsigned device_count;
 static void blk_interrupt(void *arg)
 {
 	struct virtio_blk *b = arg;
+	u64 flags = spin_lock_irq(&b->lock);
 
 	b->arrivals++;
+
+	/* All of them rather than one. Several threads may be waiting on this
+	 * device, each for a different request, and this interrupt does not say
+	 * whose completion arrived -- it says *a* completion did. Waking one
+	 * would be choosing a thread at random and telling it to look, while
+	 * the thread whose request actually finished stays asleep.
+	 *
+	 * Still nothing here touches the queue. Collecting from interrupt
+	 * context would mean this handler and every waiting thread contending
+	 * for the ring, and the thread has to look anyway when it wakes -- a
+	 * woken thread is one that has been told to look again, not one whose
+	 * condition is known true. */
+	wait_wake_all(&b->waiters);
+
+	spin_unlock_irq(&b->lock, flags);
+}
+
+/* Collects one completion, sleeping until the device says there is one.
+ *
+ * The collect and the sleep are under **one** acquisition of the lock, and
+ * that is not tidiness -- it is the whole correctness argument. Written as two
+ * functions, with the caller collecting under the lock, releasing it, and this
+ * one taking it again to sleep, there is a window between them: a completion
+ * landing there runs the handler against a queue nobody is on yet, the wake
+ * goes nowhere, and the thread sleeps out its full deadline for a request that
+ * had already finished.
+ *
+ * That is not hypothetical. It is what this driver did on its first run, and
+ * the counter below is what caught it -- one sleep in two ending on the clock
+ * rather than on the device, on a machine where every request succeeded and
+ * every test passed.
+ *
+ * The two-second limit on a request is *not* enforced here, deliberately. It
+ * stays where it has always been, a comparison against the monotonic clock in
+ * the caller's loop. This only stops a sleep lasting for ever, so that the
+ * caller gets to look at that clock again -- which means the timeout this
+ * driver has always had is unchanged, and a device that goes silent still
+ * fails after two seconds whether or not it had an interrupt to offer.
+ */
+static bool collect_or_wait(struct virtio_blk *b, u16 *head)
+{
+	u64 flags;
+	bool collected, armed = false, slept = false, timed_out = false;
+
+	/* Armed before the lock is taken, because arming files a timer whose
+	 * callback wants that same lock. */
+	if (b->interrupting)
+		armed = wait_deadline_arm(&b->deadline, &b->waiters, &b->lock,
+					  50000000ull);	/* 50 ms */
+
+	flags = spin_lock_irq(&b->lock);
+
+	collected = virtqueue_collect(&b->q, head, 0);
+
+	if (collected)
+		virtqueue_release(&b->q, *head);
+	else if (armed && !wait_deadline_passed(&b->deadline))
+		slept = wait_sleep(&b->waiters, &b->lock, flags);
+
+	/* Read under the lock, and before the disarm below. Disarming retires
+	 * the arming -- which is what makes a late callback harmless, and also
+	 * makes this question unanswerable, because there is no longer a
+	 * current arming for the answer to be about. Asked afterwards it reads
+	 * false for ever, which is how this counter spent its first run:
+	 * unable to fire, on a control built to make it fire. */
+	if (slept)
+		timed_out = wait_deadline_passed(&b->deadline);
+
+	spin_unlock_irq(&b->lock, flags);
+
+	if (armed)
+		wait_deadline_disarm(&b->deadline);
+
+	if (collected)
+		return true;
+
+	if (slept) {
+		pauses_slept++;
+
+		if (timed_out)
+			pauses_timed_out++;
+	} else {
+		/* Nothing to sleep on, or nothing that could sleep -- the idle
+		 * thread, or no thread at all, which is the ordinary case early
+		 * in boot when the disk is read before there is a scheduler to
+		 * hand the processor to. Yielding is what this driver did
+		 * before any of this existed, and it still works. */
+		if (armed)
+			pauses_unblockable++;
+		else
+			pauses_yielded++;
+
+		sched_yield();
+	}
+
+	return false;
 }
 
 /* Runs one request to completion.
@@ -163,10 +280,8 @@ static enum block_status run(struct virtio_blk *b, u32 type, u64 sector,
 	for (;;) {
 		u16 done;
 
-		if (virtqueue_collect(&b->q, &done, 0)) {
-			virtqueue_release(&b->q, done);
+		if (collect_or_wait(b, &done))
 			break;
-		}
 
 		if (time_monotonic_ns() > deadline) {
 			/* The descriptors are deliberately *not* released. The
@@ -176,8 +291,6 @@ static enum block_status run(struct virtio_blk *b, u32 type, u64 sector,
 			 * is the cheap, correct answer. */
 			return BLOCK_ERR_TIMEOUT;
 		}
-
-		sched_yield();
 	}
 
 	switch (*b->status) {
@@ -266,6 +379,7 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 	b = &devices[device_count];
 	kmemset(b, 0, sizeof(*b));
 	b->dev = *probed;
+	spin_init(&b->lock, "virtio-blk");
 
 	if (!virtio_begin(&b->dev, (1ULL << VIRTIO_BLK_F_FLUSH)
 				 | (1ULL << VIRTIO_BLK_F_RO)))
@@ -390,6 +504,47 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 unsigned virtio_blk_count(void)
 {
 	return device_count;
+}
+
+void virtio_blk_print_summary(void)
+{
+	unsigned i, interrupting = 0;
+
+	if (!device_count)
+		return;
+
+	for (i = 0; i < device_count; i++)
+		if (devices[i].interrupting)
+			interrupting++;
+
+	kprintf("  virtio-blk   : %u disk(s), %u told when a request "
+		"finishes\n", device_count, interrupting);
+
+	/* Said plainly, including the case where it never happened. A driver
+	 * that waits on paper and yields in practice reads identically in every
+	 * other line of this boot. */
+	kprintf("  pauses       : %llu slept, %llu yielded",
+		(unsigned long long)pauses_slept,
+		(unsigned long long)pauses_yielded);
+
+	if (pauses_timed_out)
+		kprintf(", %llu of the sleeps ending on the clock rather than "
+			"on the device",
+			(unsigned long long)pauses_timed_out);
+
+	if (pauses_unblockable)
+		kprintf(", %llu with no thread that could block",
+			(unsigned long long)pauses_unblockable);
+
+	kprintf("\n");
+
+	if (pauses_slept && pauses_timed_out == pauses_slept)
+		kputs("  and every one of those woke on its own deadline, so "
+		      "nothing was ever woken by the device\n");
+
+	if (interrupting && !pauses_slept)
+		kputs("  and not one of them was waited for, so every "
+		      "completion beat the thread to it\n");
 }
 
 /* --- that the interrupt actually arrives ----------------------------------

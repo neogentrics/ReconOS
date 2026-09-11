@@ -90,6 +90,82 @@ bool wait_sleep(struct wait_queue *q, struct spinlock *lock, u64 flags)
 	return true;
 }
 
+/* --- the deadline --------------------------------------------------------- */
+
+static void deadline_reached(void *arg)
+{
+	struct wait_deadline *d = arg;
+	u64 flags;
+
+	/* Under the caller's own lock, because the thing being changed is read
+	 * in the same breath as the condition it competes with. Without it this
+	 * is the lost wakeup with extra steps: the sleeper tests "not expired",
+	 * this sets expired, and the sleeper then queues itself and waits for a
+	 * wake that has already been delivered. */
+	flags = spin_lock_irq(d->lock);
+
+	d->expired_at = d->armed_for;
+
+	/* All of them, not one. Several threads may be waiting on one device,
+	 * and the deadline has passed for every one of them -- waking a single
+	 * waiter would leave the rest asleep on a clock that has already run
+	 * out and will not be restarted. */
+	wait_wake_all(d->q);
+
+	spin_unlock_irq(d->lock, flags);
+}
+
+bool wait_deadline_arm(struct wait_deadline *d, struct wait_queue *q,
+		       struct spinlock *lock, u64 ns)
+{
+	if (!d || !q || !lock)
+		return false;
+
+	/* A new arming, which is what makes any callback still in flight from
+	 * the previous one harmless: it will write a generation that is no
+	 * longer the current one. */
+	d->generation++;
+	d->q = q;
+	d->lock = lock;
+
+	timer_init(&d->timer, deadline_reached, d);
+
+	if (!timer_start(&d->timer, ns))
+		return false;
+
+	/* After the timer is filed, never before. Set first, it would name an
+	 * arming that then failed to start -- and a caller looking at a
+	 * deadline nothing is going to reach would wait for ever while
+	 * believing it had a clock. */
+	d->armed_for = d->generation;
+	return true;
+}
+
+bool wait_deadline_passed(const struct wait_deadline *d)
+{
+	/* Not "did a callback run". A callback from the arming before this one
+	 * ran out of time for a request that is already finished. */
+	return d && d->armed_for == d->generation &&
+	       d->expired_at == d->generation;
+}
+
+void wait_deadline_disarm(struct wait_deadline *d)
+{
+	if (!d)
+		return;
+
+	/* The result is deliberately ignored, and that is the whole point of
+	 * the generation number. It says whether this call is what stopped the
+	 * callback from running -- which matters enormously to a caller whose
+	 * timer points at a stack frame, and not at all to one whose timer
+	 * points at itself. */
+	timer_cancel(&d->timer);
+
+	/* And the arming is retired, so a callback that fires after this
+	 * returns writes a number that is no longer current. */
+	d->armed_for = d->generation + 1;
+}
+
 /* Takes a thread off the queue and makes it runnable.
  *
  * Not a context switch: the woken thread runs when the scheduler next picks it,
@@ -285,6 +361,124 @@ static bool wait_for(volatile unsigned *counter, unsigned target, u64 ns)
 	return __atomic_load_n(counter, __ATOMIC_ACQUIRE) >= target;
 }
 
+/* --- the deadline's own test ---------------------------------------------
+ *
+ * A deadline that never fires and a deadline that fires immediately both look
+ * like "the call returned". So every assertion here is about *when*, measured
+ * against a clock that does not depend on the thing being tested, or about
+ * *which arming* -- never about the call having come back.
+ */
+static struct spinlock deadline_lock = SPINLOCK_INIT("deadline-test");
+static struct wait_queue deadline_queue;
+static struct wait_deadline deadline_under_test;
+
+static void signal_the_queue(void *arg)
+{
+	u64 flags = spin_lock_irq(&deadline_lock);
+
+	*(volatile bool *)arg = true;
+	wait_wake_all(&deadline_queue);
+
+	spin_unlock_irq(&deadline_lock, flags);
+}
+
+/* Sleeps until the flag is set or the deadline passes. Returns the elapsed
+ * nanoseconds, and reports through `gave_up` which of the two ended it. */
+static u64 sleep_until(volatile bool *flag, bool *gave_up)
+{
+	u64 started = time_monotonic_ns();
+	u64 flags;
+	bool slept = true;
+
+	flags = spin_lock_irq(&deadline_lock);
+
+	while (!*flag && !wait_deadline_passed(&deadline_under_test) && slept)
+		slept = wait_sleep(&deadline_queue, &deadline_lock, flags);
+
+	*gave_up = wait_deadline_passed(&deadline_under_test) && !*flag;
+
+	spin_unlock_irq(&deadline_lock, flags);
+
+	return time_monotonic_ns() - started;
+}
+
+static bool deadline_self_test(void)
+{
+	volatile bool flag = false;
+	struct timer signaller;
+	bool gave_up = false;
+	bool ok = true;
+	u64 took;
+
+	/* --- it gives up, and not before it said it would ---------------- */
+	if (!wait_deadline_arm(&deadline_under_test, &deadline_queue,
+			       &deadline_lock, 100000000ull)) {	/* 100 ms */
+		kputs("  wait: a 100ms deadline could not be armed\n");
+		return false;
+	}
+
+	took = sleep_until(&flag, &gave_up);
+	wait_deadline_disarm(&deadline_under_test);
+
+	if (!gave_up) {
+		kputs("  wait: a deadline nobody signalled did not run out\n");
+		ok = false;
+	}
+
+	/* The half that matters. A deadline that expires the instant it is
+	 * armed ends every wait correctly and waits for nothing -- which is a
+	 * driver that reports every disk broken, and a test that only checked
+	 * "it gave up" would call it a pass. */
+	if (took < 90000000ull) {
+		kprintf("  wait: a 100ms deadline ran out after %llu ns\n",
+			(unsigned long long)took);
+		ok = false;
+	}
+
+	/* --- an arming that ran out does not poison the next one --------- */
+	if (!wait_deadline_arm(&deadline_under_test, &deadline_queue,
+			       &deadline_lock, 2000000000ull)) {
+		kputs("  wait: a 2s deadline could not be armed\n");
+		return false;
+	}
+
+	if (wait_deadline_passed(&deadline_under_test)) {
+		kputs("  wait: a freshly armed deadline says it has already "
+		      "run out, so the arming before it leaked\n");
+		ok = false;
+	}
+
+	/* --- and it does not give up when it is signalled ---------------- */
+	flag = false;
+	timer_init(&signaller, signal_the_queue, (void *)&flag);
+
+	if (!timer_start(&signaller, 50000000ull)) {	/* 50 ms */
+		kputs("  wait: the signaller could not be started\n");
+		wait_deadline_disarm(&deadline_under_test);
+		return false;
+	}
+
+	took = sleep_until(&flag, &gave_up);
+	wait_deadline_disarm(&deadline_under_test);
+
+	if (gave_up) {
+		kputs("  wait: a signal arrived well inside the deadline and "
+		      "the sleeper gave up anyway\n");
+		ok = false;
+	}
+
+	/* Woken by the signal rather than by the clock, which is the same
+	 * distinction again: had it slept the full two seconds and then
+	 * noticed the flag, every assertion above would still hold. */
+	if (took > 1000000000ull) {
+		kprintf("  wait: a signal at 50ms was not acted on for "
+			"%llu ns\n", (unsigned long long)took);
+		ok = false;
+	}
+
+	return ok;
+}
+
 bool wait_self_test(void)
 {
 	unsigned i, queued = 0;
@@ -359,6 +553,10 @@ bool wait_self_test(void)
 			test_sem.count);
 		ok = false;
 	}
+
+	/* --- and a sleep that gives up ----------------------------------- */
+	if (!deadline_self_test())
+		ok = false;
 
 	return ok;
 }

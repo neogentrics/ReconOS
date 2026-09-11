@@ -196,6 +196,7 @@ void kmain(void)
 	 * the zero was believed. Facts about devices are printed after the
 	 * devices exist. */
 	arch_irq_print_device_summary();
+	virtio_blk_print_summary();
 	acpi_print_summary();
 
 	/* What the machine says it is, as opposed to what its processor is. */

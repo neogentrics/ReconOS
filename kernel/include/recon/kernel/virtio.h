@@ -229,6 +229,9 @@ unsigned virtio_blk_count(void);
  * saying so, when no device here has one. */
 bool virtio_blk_self_test(void);
 
+/* What the disks are, and how their waiting actually went. */
+void virtio_blk_print_summary(void);
+
 /* Walks the handshake as far as FEATURES_OK, negotiating `wanted` on top of
  * VIRTIO_F_VERSION_1. Leaves DRIVER_OK unset: the driver still has to set its
  * queues up, and a device told the driver is ready before its queues exist is

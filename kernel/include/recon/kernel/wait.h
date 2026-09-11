@@ -30,6 +30,7 @@
 #define RECON_KERNEL_WAIT_H
 
 #include <recon/kernel/lock.h>
+#include <recon/kernel/timer.h>
 #include <recon/kernel/types.h>
 
 struct thread;
@@ -56,6 +57,83 @@ struct wait_queue {
  * else for its processor to run. A caller that ignores that has a processor
  * that has stopped. */
 bool wait_sleep(struct wait_queue *q, struct spinlock *lock, u64 flags);
+
+/* --- a sleep that gives up -------------------------------------------------
+ *
+ * `wait_sleep` waits for ever, and for a thread waiting on another thread that
+ * is the right answer: if the signal never comes, the program is wrong and
+ * hanging is the honest outcome. For a thread waiting on **hardware** it is the
+ * wrong answer. A disk that never answers is not a bug in this kernel, it is a
+ * disk, and a driver that waits for ever on one turns a broken device into a
+ * machine that stops with nothing on the screen.
+ *
+ * So every such caller has polled instead -- burning a slice per look, and
+ * unable to have more than one request outstanding, because the only way it
+ * knows a request finished is that it went and looked.
+ *
+ * --- Why the caller owns this and it is not a parameter ---
+ *
+ * The obvious interface is `wait_sleep_timeout(q, lock, flags, ns)`, with the
+ * timer on the stack. `timer_sleep_ns` does exactly that and is correct,
+ * because it drops its lock **and restores interrupts** before waiting out a
+ * callback that lost the cancel race.
+ *
+ * A deadline sleep cannot. It has to return the way `wait_sleep` does -- lock
+ * held, interrupts still off -- so if the tick belongs to this processor, a
+ * spin waiting for that callback is waiting for something that cannot run. It
+ * would be a deadlock that appears only when the timer fires in the same
+ * instant as the wakeup, on the processor that owns the tick.
+ *
+ * Putting the timer in the caller's own structure removes the question rather
+ * than answering it. A callback that fires late points at something that is
+ * still there, so nothing has to be waited for -- and this kernel has already
+ * paid once for a pointer to a stack frame that had gone, in the lock registry.
+ *
+ * --- And why there is a generation number ---
+ *
+ * `timer_cancel` can lose, which means a disarmed deadline may still fire. If
+ * "expired" were a flag, that late callback would set it on a structure whose
+ * next request has already started, and that request would time out
+ * immediately -- leaking the descriptors its device still owns, for a timeout
+ * that belongs to the request before it.
+ *
+ * So the callback records *which* arming it belongs to, and only the current
+ * one counts. A stale one writes a number nobody is looking at.
+ */
+struct wait_deadline {
+	struct timer timer;
+
+	struct wait_queue *q;
+	struct spinlock *lock;
+
+	u32 generation;		/* arming n */
+	u32 armed_for;		/* which arming the live timer belongs to */
+	u32 expired_at;		/* which arming last ran out of time */
+};
+
+/* Starts the clock. `q` and `lock` are the caller's own, and the callback takes
+ * that lock -- so it must be the lock the condition is tested under, or the
+ * wakeup races the sleep exactly as it would without one.
+ *
+ * Must not be called with `lock` held: the arming is not the waiting, and a
+ * timer filed under the lock it will later want is a needless way to be woken
+ * by your own deadline while you hold it.
+ *
+ * False if the delay is beyond the timer wheel's reach, in which case nothing
+ * is armed and the caller has no deadline -- which is worth handling rather
+ * than ignoring, since a caller that ignores it waits for ever. */
+bool wait_deadline_arm(struct wait_deadline *d, struct wait_queue *q,
+		       struct spinlock *lock, u64 ns);
+
+/* Whether *this* arming has run out. Safe to read under the caller's lock,
+ * which is where it should be read: it is set by the callback holding that
+ * lock, and tested in the same loop as the condition. */
+bool wait_deadline_passed(const struct wait_deadline *d);
+
+/* Stops the clock. Cheap, and safe whether or not the timer has fired -- there
+ * is deliberately nothing to wait for. Must be called with `lock` not held,
+ * for the same reason as arming. */
+void wait_deadline_disarm(struct wait_deadline *d);
 
 /* Wakes one waiter, or all of them. Safe to call with none waiting, which is
  * the common case and not an error: a signal with no waiter is a signal
