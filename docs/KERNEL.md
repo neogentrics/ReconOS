@@ -3145,6 +3145,118 @@ These four take no pointers, so there is no user address to get wrong, and the
 entry path is a table lookup that does not know one number from another. "Tested"
 and "tested from user mode" are different claims, and this is the weaker one.
 
+## One copy of a file's page
+
+A file-backed mapping used to fill every page privately: each fault allocated a
+page, zeroed it, and read the file over the top. Two programs mapping one file
+got two copies of every page; a program mapping it twice got two more. Nothing
+was wrong with any of them, and the machine held four copies of something that
+had not changed.
+
+### The mechanism already existed, with one entry
+
+**The shared page of zeroes is a page cache whose key is "zeroes".** It is
+mapped read-only into every address space in the machine, a write to it traps,
+and the handler answers by copying it into a page of the writer's own.
+
+That is copy-on-write, and a page cache is the same three moves with a key on
+the front — which is why the fault path barely changed. `have == zero_page`
+became *is this a page somebody else is also using*, and the copy that already
+happened for zeroes now happens for file contents.
+
+### The key is what the filesystem calls the file
+
+A `struct file *` will not do. Open twice and there are two of them, and keying
+on the pointer would give the two mappings separate entries and share nothing —
+which is precisely the aliasing the block cache was bitten by, where a partition
+and its disk were the same sectors under two names.
+
+So a filesystem says what a file *is*, and a filesystem that cannot answer
+stably says zero. Zero is not a failure: it means *fill this the old way*, and
+the old way still works.
+
+**ramfs can answer** because it never removes a name — a slot there is a file
+for the life of the machine. Its header wrote that down as a *decision* rather
+than an omission, and it turns out to be exactly the property a cache key needs.
+
+**And so can the volume**, which I first said it could not. The reasoning was
+right about the block — an inode moves under copy-on-write and its number can be
+reused — and wrong about the conclusion. ReconFS already carries a **dossier**,
+and its own comment states the two properties: *stable across rewrites; never
+reused*. It exists because a child records its parent as a dossier rather than a
+block; recording the block would mean that adding one file to a directory
+stranded every child's back-reference, and fixing those would move them in turn.
+The property that makes the filesystem usable is the one that makes it
+cacheable.
+
+### A stable key is what makes invalidation necessary
+
+Worth naming as a trade rather than treating as an afterthought. Keyed on
+something that *moved* when the file changed, a rewrite produced a new key and
+the old pages were simply never asked for again — invalidation by accident, and
+a cache that misses every time anybody writes. A dossier survives the rewrite,
+so the cache has to be told.
+
+Pages somebody still has mapped are not taken away. The entry goes **stale**,
+nothing new is served from it, and the page goes back when the last mapping lets
+go. A mapping made before the write keeps seeing what it mapped, which is the
+only answer that does not pull memory out from under a running program.
+
+**The test for this was wrong before the code was.** Written the obvious way —
+write "first", rewrite as "second", read back — it reported reading "first",
+which looks exactly like a cache serving stale pages. It was not: the commit
+answered `ERR_EXISTS` and the file was never rewritten, because **this kernel
+cannot overwrite a file**. So the wiring is real and has no caller that can fire
+it yet; the test checks the mechanism instead, and asserts on the *page* rather
+than the contents, since the bytes are identical either way.
+
+## A write one program can see in another
+
+1.2 said shared mappings were *refused rather than faked*. They are offered now
+where the promise can be kept, and still refused where it cannot.
+
+Three things have to hold, and the third decides the shape of the other two: the
+two spaces must land on one page, the page must be mapped writable rather than
+copied on the first write, and what is in it has to reach the file afterwards.
+**A mapping that does the first two and not the third accepts a program's
+changes and loses them** — worse than not offering one.
+
+So the capability follows the filesystem's ability, through an operation whose
+*presence is the promise*. `write_at` puts bytes back at an offset with no
+position and no later commit, and it is deliberately separate from `write`:
+every filesystem here has `write`, and on the volume a write is buffered until a
+close that refuses. ramfs implements it — a file there is memory, so there is no
+commit to fail. The volume does not, so a shared mapping of its files is
+**refused at map time**, once, where something can still be done about it.
+
+The cache holds a reference to the file for entries that can be written back,
+which pins it open while the page is cached. A real cost, and the reason the
+reference is only taken where it could ever be used.
+
+## The memory a program used to keep for ever
+
+Building the cache meant asking who frees a mapped page. Two faults came out of
+that question, and the second was found by the measurement refusing to agree the
+first fix had worked.
+
+**[BG-182](BUGS.md)** — tearing down an address space freed the page tables and
+not the pages they pointed at. `free_lower_tables` said so itself: *whoever
+allocated the memory frees the memory, and the two are not the same list*. There
+was no other list.
+
+**[BG-183](BUGS.md)** — and even fixed, twelve pages still went per program,
+while a counter showed the new code had freed eleven leaves in the entire boot.
+`reap()`, which frees finished threads' stacks and which is *correct*, had
+exactly one caller in the whole kernel and it was a self-test. `process_reap`
+had two, both in another. **Both reapers were written, both work, and nothing
+ever ran them.** `thread_exit` had said so: the stack is *left for whoever
+notices the thread is finished*.
+
+Twice in two days a comment delegated to a collaborator who was never created.
+
+Measured, the same program three times: **twelve pages lost per run before, none
+after**, and the process table goes from eight slots in use to one.
+
 ## Somebody touching the machine
 
 Every screen this kernel had ever drawn had been read and not touched. There was

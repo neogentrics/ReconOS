@@ -3774,6 +3774,116 @@ running as anybody.
   process nobody will collect was still holding a slot two seconds after it
   ended".
 
+### BG-184 — The page cache asked which file and not which filesystem, so two of them were the same file
+
+- **Found:** 11 September 2026, by the eviction test, on its first run that
+  managed to fill the table.
+- **Cost:** a file on the volume read back holding a file from `/tmp`. Caught
+  the same hour it was written and never pushed.
+- **Status:** fixed.
+
+The cache is keyed on what a filesystem calls a file. Each one numbers its own
+files from its own space and has every right to: **ramfs answers with a slot**,
+so small integers from one, and **the volume answers with a dossier**, which
+also starts small.
+
+Keyed on that number alone, ramfs slot 10 and volume dossier 10 are the same
+entry.
+
+**It needed the table to be full to appear at all.** Until eviction existed,
+nothing ever created enough entries to reach a colliding number -- so the first
+test that flooded the cache is the thing that found it, and it found it
+immediately:
+
+```
+  one copy, from the volume : pass
+  pagecache: the cached page is not what was written
+  a file can be forgotten : FAIL
+```
+
+The volume file had been reading correctly all boot. It started reading a
+`/tmp` file the moment the flood reached slot 10.
+
+- **Was:** `find(id, offset)`, and `pagecache_forget(id)` with it -- which would
+  also have dropped another filesystem's pages that happened to share a number.
+- **Now:** the key is `(filesystem, id, offset)`, where the filesystem is the
+  `file_ops` pointer: one static table per filesystem, for the life of the
+  machine.
+- **The file warns about this in its own header**, using the block cache's
+  partition-and-disk as the example -- *a partition and its disk are the same
+  sectors under two names* -- and the warning was written before the mistake was
+  made. Knowing the shape of a fault is not the same as noticing you have just
+  built one.
+- **Why the earlier tests could not see it:** every one of them used a single
+  filesystem. Two mappings of one file, a rewrite, a shared write -- all of them
+  correct, all of them blind to a key that is only wrong when two filesystems
+  are in the table at once. The test that found it was not written to look for
+  it.
+
+### BG-185 — The loader's ELF reader trusted a signature check that the default build does not perform
+
+- **Found:** 11 September 2026, reading reconboot while the verification run
+  held the tree.
+- **Cost:** a one-byte change to a file on the EFI system partition faults the
+  firmware before the kernel starts. Nothing had ever pointed it at a file that
+  was not ours.
+- **Status:** fixed.
+
+`load_kernel` checked the image size **once**, against the ELF header, and then
+trusted every number in it: the program-header offset, count and entry size; the
+file offset and length of each segment; and the difference between a segment's
+size in the file and its size in memory.
+
+**The argument for that was written down and was reasonable.** The kernel's own
+ELF loader says it plainly, by way of contrast with this one:
+
+> Deliberately not the bootloader's reader, and that is the whole design. The
+> bootloader loads our own kernel, whose signature it has already checked, so a
+> field it dislikes means the file is corrupt and the machine should stop.
+
+**The premise is what failed.** `verify_kernel` returns `TRUE` outright when
+compiled without a key — which is the default, and how every machine in the
+verification run boots: *"signature : not checked (this loader was built without
+a key)"*. In those builds nothing has been checked when the parser runs, and
+"our kernel" means whatever is on the partition.
+
+The caveat about a keyless build *was* recorded. It said such a loader will not
+refuse an unsigned kernel. It did not say the parser would trust every field in
+one.
+
+### Measured, on the same corrupt file
+
+Setting one segment's `filesz` to `memsz + 1` makes `memsz - filesz` underflow,
+and the loader zeroes from that segment onward until it runs out of mapped
+memory:
+
+```
+!!!! X64 Exception Type - 0E(#PF - Page-Fault)  CPU Apic ID - 00000000 !!!!
+!!!! Can't find image information. !!!!
+```
+
+With the checks in place, the same file is refused before anything is written:
+
+```
+reconboot: reading a kernel segment failed
+```
+
+- **Was:** one bounds check, on the header, and none after it.
+- **Now:** the program-header table must lie inside the image; `phentsize` must
+  be at least a header; each segment's file range must lie inside the image;
+  `filesz` may not exceed `memsz`; and a segment's placement may not wrap the
+  address space. **Every one is a subtraction**, because `offset + length` wraps
+  and then compares as comfortably inside — the same rule `elf.c` states and
+  follows.
+- **A second corruption was tried first and was not fatal**, which is worth
+  recording: pointing `phoff` past the end made the loader read unmapped-adjacent
+  memory, find nothing shaped like a `PT_LOAD`, and stop with "finding anything
+  to load in the kernel". An out-of-bounds read that happened to be survivable.
+  The fault was real either way; only the second input showed it.
+- **Family:** a safety property resting on a build option nobody re-checked.
+  The same shape as the comment promising one processor "until checkpoint 9",
+  which stayed true only until it was not.
+
 ### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
 
 [#403](https://github.com/neogentrics/ReconOS/issues/403)
