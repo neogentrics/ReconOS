@@ -3603,6 +3603,63 @@ passes.
   faults with timing as their only symptom, and these two were correct kernels
   with tests that could not tell *not yet* from *not ever*.
 
+### BG-166 — The signature tests rewrite the tree every other test builds from
+
+[#405](https://github.com/neogentrics/ReconOS/issues/405)
+
+- **Found:** 10 September 2026. The verification run came back with **seven**
+  failures across the install, boot-menu and USB-medium sections, and not one
+  of them mentioned a signature.
+- **Cost:** an hour, and a diagnosis that started in entirely the wrong place.
+  The kernel was correct throughout.
+- **Status:** fixed.
+
+Both signing tests write a public key into `boot/src/signing_key.h` and rebuild
+the bootloader around it. That is not incidental: the key is **compiled into**
+the loader on purpose, because a key read from the same volume as the thing it
+verifies is not a check at all.
+
+It makes them the only tests here that change what every other test builds
+from. The loader they leave behind refuses any kernel that is not signed, and
+the install and menu tests do not sign theirs -- so run beside them, those
+tests boot a medium whose loader declines to start the kernel on it.
+
+**The symptom is nothing like the cause.** The install fails, the target is
+left empty, and the *next* check reports:
+
+```
+init :: non DOS media
+Cannot initialize '::'
+```
+
+which is mtools being asked to read a filesystem nobody ever wrote. Three
+tests fail, and none of them says the word signature. The script even carries a
+comment about this exact message meaning something else -- a stale constant --
+written the last time it appeared for a different reason.
+
+- **Was:** `sub_launch sig` in the same concurrent batch as `e2e`, `menu` and
+  `rec`, under a comment reading *"nothing between the two depends on them, and
+  the kernel they all use is already built"*. The kernel was indeed already
+  built. The **loader** was not, and three of those tests rebuild it.
+- **Why it was rare, and then permanent.** As a race it usually resolves the
+  other way. But the key is removed by an EXIT trap, and **a SIGKILL does not
+  run traps** -- so a run killed rather than stopped leaves the key behind, and
+  every run afterwards fails the same three sections until somebody deletes the
+  file. That is how it was found: a run was killed with `-9`, and the next one
+  failed seven checks.
+- **Fixed in** `scripts/verify-kernel.sh`: both signing tests run **first and
+  serially**, before the concurrent batch starts. Afterwards the key is removed
+  and the loader rebuilt without one -- unconditionally, because a test that
+  failed did not run its trap either. Everything launched after that point gets
+  the loader it expects.
+- **Confirmed by removing the orphaned key and rebuilding the loader**: the
+  install test went from `0 of 5` to `5 of 5` with no change to any kernel
+  source.
+- **Worth generalising.** Every other sub-test writes only into its own
+  `mktemp` directory. These two write into the source tree, and the rig had no
+  rule that said they must not -- so the parallelism that makes the run fast
+  was silently unsafe for exactly two of its thirteen jobs.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

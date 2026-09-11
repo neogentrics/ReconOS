@@ -572,6 +572,44 @@ echo "x86_64"
 # else on this architecture arrives with the base address registers already
 # assigned by SeaBIOS or OVMF.
 # --- launch the slow ones now, read their verdicts later ----------------------
+# --- the two that rewrite the tree, run alone and first ----------------------
+#
+# Both signing tests put a public key in `boot/src/signing_key.h` and rebuild
+# the bootloader around it, because the key is *compiled in* -- which is the
+# whole point of it, and is why they cannot simply be handed a file.
+#
+# **That makes them the only tests here that change what every other test
+# builds from.** The loader they leave behind refuses any kernel that is not
+# signed, and the install and menu tests do not sign theirs. Run beside them,
+# those tests boot a medium whose loader declines to start the kernel on it.
+#
+# The symptom is nothing like the cause. The install fails, the target ends up
+# empty, and the next check reports `init :: non DOS media` -- mtools being
+# asked to read a filesystem that was never written. Three tests fail and none
+# of them names a signature.
+#
+# It went unnoticed because it is a race that usually resolves the other way,
+# and because a killed run makes it permanent: the key is removed by an EXIT
+# trap, and a SIGKILL does not run traps. A run stopped that way leaves the key
+# behind and every run afterwards fails the same three tests until somebody
+# deletes it.
+#
+# So they go first, serially, and the loader is put back to a keyless build
+# before anything else is started. (BG-166)
+rm -f boot/src/signing_key.h
+
+printf '%-46s' "  the signature tests, run on their own"
+sig_out=$(sh scripts/signed-kernel-test.sh 2>&1); sig_rc=$?
+bsig_out=$(sh scripts/bios-signed-test.sh 2>&1); bsig_rc=$?
+echo "done; their results are reported below"
+
+# Whatever they left, removed -- including after a failure, which does not run
+# their traps either. Then the loader is rebuilt without a key, so that every
+# test after this point gets the one it expects.
+rm -f boot/src/signing_key.h
+rm -f boot/build/x86_64/main.o boot/build/x86_64/BOOTX64.EFI
+make -C boot ARCH=x86_64 >/dev/null 2>&1 || true
+
 #
 # Everything below that boots a machine of its own starts here and is collected
 # where its result is printed. Nothing between the two depends on them, and the
@@ -583,7 +621,6 @@ sub_launch plan     bash scripts/install-plan-test.sh x86_64
 sub_launch onto     bash scripts/install-onto-test.sh x86_64
 sub_launch e2e      bash scripts/install-then-boot-test.sh
 sub_launch menu     bash scripts/boot-menu-test.sh
-sub_launch sig      bash scripts/signed-kernel-test.sh
 sub_launch rec      bash scripts/recovery-test.sh
 for a in x86_64 aarch64; do
 	sub_launch "flush_$a"    bash scripts/flush-reaches-device.sh "$a"
@@ -1185,9 +1222,7 @@ echo "integrity"
 
 printf '%-46s' "  runs a signed kernel, refuses four others"
 
-sig_out=$(sub_out sig)
-sig_rc=$?
-
+# Captured before the batch started; see the note up there for why.
 if [ "$sig_rc" -eq 0 ]; then
 	echo "$(echo "$sig_out" | grep -oE '[0-9]+ of [0-9]+: ran the signed.*' | head -1)"
 	passes=$((passes + 1))
@@ -1352,9 +1387,7 @@ fi
 
 printf '%-46s' "  the BIOS path refuses an unsigned kernel"
 
-bsig_out=$(sh scripts/bios-signed-test.sh 2>&1)
-bsig_rc=$?
-
+# Captured before the batch started, for the same reason.
 if [ "$bsig_rc" -eq 0 ]; then
 	echo "$(echo "$bsig_out" | grep -oE '[0-9]+ of [0-9]+: the BIOS path.*' | head -1)"
 	passes=$((passes + 1))
