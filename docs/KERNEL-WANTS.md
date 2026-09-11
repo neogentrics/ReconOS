@@ -72,6 +72,32 @@ that knows about both.
 **What would replace it:** an identity the kernel enforces, so that "this
 account may not do that" is true even when the thing asking is not ReconOS.
 
+**Built, 11 September 2026.** A process running as uid 1000 is refused a `0600`
+file owned by the kernel, and the refusal comes from the kernel rather than from
+anything asking itself. The policy lives in one place — three filesystems
+deciding would be three decisions, and the day they disagree is the day a file is
+readable through one path and not another.
+
+The rule is **first matching class decides**, not an or across the classes a
+caller belongs to: mode `0004` means the owner may *not* read it and everybody
+else may. Under an or, the owner reads it.
+
+**And a program can ask.** `SYS_GETUID` and `SYS_GETGID`, because a process
+refused a file could otherwise not tell "I am the wrong user" from "the file is
+not there" — which is the difference between asking somebody to log in and
+reporting a bug.
+
+**Capabilities came with it**, and they are the part that matters for an
+installer: `CAP_FILE_OVERRIDE`, `CAP_RAW_DISK` and `CAP_SHUTDOWN`, held and then
+**dropped, never regained**. `SYS_DROPCAP` answers with what is still held, and
+there is deliberately no call that grants — a set that can be regained protects
+nothing. So a privileged step can hold a power for the window it needs and give
+it up, and every bug after that cannot reach a disk.
+
+**Not built, and said plainly:** directory traversal is not checked — reaching
+`/a/b/file` does not require the right to traverse `/a` — and neither is
+set-user-id.
+
 ---
 
 ## Processes
@@ -203,6 +229,20 @@ authentication at all.
 It is a good mechanism. It is also entirely borrowed, and it is the thing that
 will need replacing first when the host goes away — before anything about the
 network port matters, because this is the path everything local uses.
+
+**The kernel half exists as of 11 September 2026**, and the desktop half does
+not, so this entry stays open rather than being ticked.
+
+What the borrowed mechanism actually does is ask the filesystem *who opened
+this*, and both halves of that answer are now available without a host: files
+carry an owner the kernel enforces, and `SYS_GETUID` tells a program what it is
+running as. That is enough to build the same proof natively — a socket whose
+node only its owner may open, and a server that asks the kernel rather than
+asking itself.
+
+It is worth saying which part is still missing: the kernel has no sockets at
+all, so there is nothing yet to apply this to. See 1.3's IPC row in the audit —
+pipes and shared memory are built, sockets are not.
 
 ---
 
