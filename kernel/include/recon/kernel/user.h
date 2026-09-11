@@ -64,6 +64,31 @@ enum {
 	SYS_SEEK,		/* (fd, offset, from) -> new position */
 	SYS_PIPE,		/* (int fds[2]) -> 0; fds[0] reads, fds[1] writes */
 
+	/* Who is asking, and what it is still allowed to do.
+	 *
+	 * These exist because the kernel started enforcing permissions and a
+	 * program had no way to find out *as whom*. A process refused a file
+	 * could not tell "I am the wrong user" from "the file is not there",
+	 * which is the difference between asking somebody to log in and
+	 * reporting a bug. */
+	SYS_GETUID,		/* () -> the user this process runs as */
+	SYS_GETGID,		/* () -> its group */
+
+	/* And the half without which capabilities are inert.
+	 *
+	 * `capability_drop` had exactly one caller in this kernel -- its own
+	 * self-test. The entire argument for having capabilities is that a
+	 * program holds a power for the window it needs it and gives it up
+	 * afterwards, and no program could, because there was no way to ask.
+	 *
+	 * DROPCAP returns what is *still held*, which is what makes it
+	 * testable: the effect of the call is visible in the call's own answer
+	 * rather than only in a later one. It can never widen a set -- there is
+	 * no grant, and adding one later would undo the only property this is
+	 * for. */
+	SYS_GETCAPS,		/* () -> the privileged things it may still do */
+	SYS_DROPCAP,		/* (caps) -> what is still held afterwards */
+
 	SYS_MAX
 };
 

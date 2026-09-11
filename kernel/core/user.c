@@ -1,4 +1,5 @@
 #include <recon/kernel/user.h>
+#include <recon/kernel/identity.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/cpu.h>
@@ -378,6 +379,44 @@ static i64 sys_walltime(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	return (i64)time_wall_ns();
 }
 
+static i64 sys_getuid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return (i64)identity_uid();
+}
+
+static i64 sys_getgid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return (i64)identity_gid();
+}
+
+/* What this process may still do.
+ *
+ * Returned as a positive number, which works because there are three
+ * capabilities and room for sixty-two. The day there are more than will fit
+ * below the sign bit this needs a buffer instead, because a negative return is
+ * an error by the convention every call here follows -- said here rather than
+ * discovered by whoever adds the sixty-third. */
+static i64 sys_getcaps(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return (i64)capability_held();
+}
+
+static i64 sys_dropcap(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	/* Bits this kernel has never heard of are dropped too, and that is
+	 * deliberate rather than sloppy: a process cannot hold what does not
+	 * exist, so the effect is nothing, and refusing would mean a program
+	 * built against a later kernel failing here instead of simply giving up
+	 * a power this one does not have.
+	 *
+	 * There is no argument that makes this grant anything. That is not an
+	 * omission to be fixed when somebody needs it -- a set that can be
+	 * regained protects nothing. */
+	capability_drop(a0);
+
+	return (i64)capability_held();
+}
+
 /* Creates a file with its permissions already set, in one call.
  *
  * One call rather than open-then-chmod, and that is the entire point: see
@@ -476,6 +515,10 @@ const struct personality personality_recon = {
 		[SYS_MACHINE]  = sys_machine,
 		[SYS_WALLTIME] = sys_walltime,
 		[SYS_CREATE]   = sys_create,
+		[SYS_GETUID]   = sys_getuid,
+		[SYS_GETGID]   = sys_getgid,
+		[SYS_GETCAPS]  = sys_getcaps,
+		[SYS_DROPCAP]  = sys_dropcap,
 	},
 };
 

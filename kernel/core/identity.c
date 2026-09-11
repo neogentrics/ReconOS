@@ -248,6 +248,72 @@ static void capability_thread(void *arg)
 	if (result == 1 && capable(CAP_RAW_DISK))
 		result = 7;
 
+	/* --- and the same answers through the system-call layer -----------
+	 *
+	 * Which is the only way a program can reach any of this. Until these
+	 * calls existed `capability_drop` had exactly one caller in the whole
+	 * kernel -- the lines above -- so every property proved here was a
+	 * property of a mechanism nothing could use.
+	 *
+	 * Each answer is compared against the kernel call beside it rather than
+	 * against a constant. A constant would prove this file agrees with
+	 * itself; what is worth proving is that the two layers agree, because
+	 * the layer a program sees is the one that has to be right.
+	 *
+	 * Dispatched directly rather than through a trap from ring 3. These
+	 * four take no pointers, so there is no user address to get wrong, and
+	 * the entry path is a table lookup that does not know one number from
+	 * another -- which the programs in user_entry.S already exercise. Said
+	 * out loud because "tested" and "tested from user mode" are different
+	 * claims and this is the weaker one.
+	 */
+	if (result == 1 &&
+	    syscall_dispatch(SYS_GETCAPS, 0, 0, 0, 0, 0, 0) !=
+	    (i64)capability_held())
+		result = 8;
+
+	if (result == 1 &&
+	    syscall_dispatch(SYS_GETUID, 0, 0, 0, 0, 0, 0) !=
+	    (i64)identity_uid())
+		result = 9;
+
+	if (result == 1 &&
+	    syscall_dispatch(SYS_GETGID, 0, 0, 0, 0, 0, 0) !=
+	    (i64)identity_gid())
+		result = 10;
+
+	/* A drop through the call must narrow, and must answer with what is
+	 * left -- the return is the whole reason a program can check that it
+	 * worked without a second call. */
+	{
+		i64 left = syscall_dispatch(SYS_DROPCAP, CAP_SHUTDOWN,
+					    0, 0, 0, 0, 0);
+
+		if (result == 1 && left != (i64)capability_held())
+			result = 11;
+
+		if (result == 1 && capable(CAP_SHUTDOWN))
+			result = 12;
+	}
+
+	/* And it cannot be made to give anything back. Dropping nothing is the
+	 * closest thing to a grant the interface has, and it must be a
+	 * no-op -- if this ever answers with more than it was asked, the one
+	 * property capabilities exist for is gone. */
+	if (result == 1 &&
+	    syscall_dispatch(SYS_DROPCAP, 0, 0, 0, 0, 0, 0) !=
+	    (i64)capability_held())
+		result = 13;
+
+	{
+		u64 before = capability_held();
+
+		if (result == 1 &&
+		    (u64)syscall_dispatch(SYS_DROPCAP, 0, 0, 0, 0, 0, 0)
+		    & ~before)
+			result = 14;
+	}
+
 	*out = result;
 }
 
@@ -300,6 +366,36 @@ static bool capability_self_test(void)
 	case 5:
 		kputs("  identity: dropping one capability took the others "
 		      "with it\n");
+		return false;
+	case 8:
+		kputs("  identity: SYS_GETCAPS and capability_held disagree, "
+		      "so a program is told something the kernel does not "
+		      "believe\n");
+		return false;
+	case 9:
+		kputs("  identity: SYS_GETUID does not answer the uid the "
+		      "kernel enforces against\n");
+		return false;
+	case 10:
+		kputs("  identity: SYS_GETGID does not answer the gid the "
+		      "kernel enforces against\n");
+		return false;
+	case 11:
+		kputs("  identity: SYS_DROPCAP answered with a set that is "
+		      "not what the process holds afterwards\n");
+		return false;
+	case 12:
+		kputs("  identity: SYS_DROPCAP returned, and the capability "
+		      "was still held -- a drop nothing outside the kernel "
+		      "can actually perform\n");
+		return false;
+	case 13:
+		kputs("  identity: SYS_DROPCAP asked to drop nothing did not "
+		      "answer with the set that is held\n");
+		return false;
+	case 14:
+		kputs("  identity: SYS_DROPCAP handed back a capability that "
+		      "was not held going in, which is a grant\n");
 		return false;
 	case 6:
 		kputs("  identity: asking for two capabilities succeeded while "
