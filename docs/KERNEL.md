@@ -3660,6 +3660,102 @@ two more that were initialised twice in a way that would have kept them out of
 the registry, and an initialiser that named its fields positionally -- so adding
 one turned every static lock in the kernel into a build error.
 
+## The order requests reach the disk in
+
+Before this, requests fought over one atomic. Whoever won `busy` went first and
+the head moved wherever the winner happened to want -- which is not an ordering
+but the absence of one, and on anything with a seek it is the difference between
+a sweep and a scramble.
+
+They queue now, sorted by block, one direction.
+
+### There is no worker thread, and that is the design
+
+A thread that wants a disk is already going to wait for one, so it is the right
+thread to drive it. Whoever arrives at an idle device becomes the **servicer**:
+it takes requests off the queue in order and issues them -- including ones that
+arrive while it is working -- and wakes each owner as it finishes. Everybody else
+inserts and sleeps.
+
+That matters most where it is least visible. With one caller, which is every
+read during early boot, before there is a scheduler to sleep on, the caller
+finds the device idle, services its own request, and the whole mechanism costs
+one list insertion. There is no thread to have started and nothing to fall back
+to.
+
+Stopping is done under the lock. A servicer that finds the queue empty clears
+`serving` before releasing it, so a request arriving at that instant either gets
+on the queue before the check and is taken, or finds the device idle and drives
+itself. There is no gap in which a request is queued and nobody is coming.
+
+The request lives on the requester's stack, for the reason swap lives on a
+partition: an allocation here is a read that fails when memory is short, which
+is when reads matter most. Nothing returns early on a failed wait, because the
+request has to stay on that stack until it is done.
+
+### A device that says seeking is free is not sorted
+
+Ordering costs a little and buys nothing there, and pretending otherwise would
+be a scheduler that is sure it is helping.
+
+### The test is deliberately not the obvious one
+
+Several threads asking for descending blocks, and an assertion that the driver
+saw them ascending, **cannot be written honestly.** It only holds when the
+threads overlap, and with one caller the queue never holds two requests. A test
+that depended on losing that race would pass or fail by timing and tell nobody
+anything either way.
+
+So the ordering is tested where the ordering lives. `queue_insert` is a pure
+function of a list and a request. Give it the worst arrival order there is --
+strictly descending, so every insertion has to land in front of something -- and
+the queue is either sorted or it is not: no threads, no timing, the same answer
+on every machine. The `reordered` counter is asserted too, because a queue that
+came out sorted with nothing ever put in order was sorted by the test.
+
+Both halves were watched failing under a control. Removing the sort gives
+*"requests came off the queue in the order they arrived, not the order the head
+wants them"*; forcing it on regardless of the flag gives *"a device that says
+seeking is free was sorted anyway, so the sort is not a decision"*.
+
+### What replacing two function bodies took with it
+
+Three things, and only one had a test watching it:
+
+| dropped | noticed by |
+|---|---|
+| `bcache_invalidate(dev, lba, count)` | `blocks kept nearby : FAIL`, the same boot |
+| the refusal to write through a partitioned disk | nothing |
+| the four transfer counters | nothing, and nothing could |
+
+The last is [BG-186](BUGS.md): `reads`, `writes`, `blocks_read` and
+`blocks_written` had been incremented since the block layer was written and
+**printed nowhere.** `-Werror` had no complaint to make and was right not to --
+a static that is assigned is used. The variable was live; the statistic was not.
+
+`block_print_traffic()` prints them now, beside the cache summary, late enough
+to describe a machine that has done some work:
+
+```
+Block traffic
+  transfers    : 12 read, 4 written, 1 flushed
+  blocks       : 137 read, 80 written
+  virtio0      : 16 queued, 0 put in order
+```
+
+Twelve reads plus four writes is sixteen transfers, and sixteen is what the
+queue saw. That cross-check is visible on every boot now, and it is exactly the
+line that would have read zero.
+
+`0 put in order` is not a fault. On a one-caller boot the queue never holds two
+requests, and a scheduler saying so is more useful than a number implying work
+it did not do.
+
+`issue` still takes `busy` across the split. The queue admits one servicer at a
+time, but `busy` is not the queue's lock: `block_flush` takes it too, and a flush
+overlapping a transfer asks the driver to commit something it is in the middle
+of writing.
+
 ## Interrupt controllers on ARM
 
 Both generations. GICv2 up to eight processors, GICv3 above that — which is not
