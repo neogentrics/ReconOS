@@ -152,6 +152,64 @@ void rootfs_print_summary(void)
 
 /* --- creating ------------------------------------------------------------- */
 
+enum reconfs_status rootfs_replace_file(const char *path, const void *data,
+					u32 len)
+{
+	struct reconfs *fs = rootfs();
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 dir = 0, new_root = 0, existing = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	if (len && !data)
+		return RECONFS_ERR_NAME;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	/* It has to be there. A replace that created what it could not find
+	 * would be a create with a different name, and the difference between
+	 * them is the only reason both exist. */
+	if (reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+			   &existing) != RECONFS_OK || !existing)
+		return RECONFS_ERR_NOT_FOUND;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	/* One transaction, so there is no instant at which the file holds half
+	 * of each version. The old contents are what anybody reading sees until
+	 * the commit, and the new ones the moment after it -- which is the
+	 * property a power cut in the middle of this depends on. */
+	st = reconfs_write_named(txn, fs, chain.dirs[chain.count - 1], leaf,
+				 data, len, &dir);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort:
+	reconfs_txn_abort(txn);
+	return st;
+}
+
 enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 				       const void *data, u32 len)
 {

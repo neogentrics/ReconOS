@@ -54,6 +54,19 @@ struct process;
 #define OPEN_WRITE	(1u << 1)
 #define OPEN_CREATE	(1u << 2)	/* it must not already exist */
 
+/* The opposite, and a separate flag rather than a relaxation of the one above.
+ *
+ * `OPEN_CREATE` means *it must not already exist*, and that is a promise worth
+ * keeping: a create that silently overwrites is how running a key-generation
+ * routine a second time destroys the key that was working. Making it replace
+ * when the name happens to be taken would turn a guarantee into a default, and
+ * the test that noticed is the one asserting the guarantee.
+ *
+ * So replacing is its own request. The file must already exist -- this is not
+ * "create or replace", because a caller that would accept either has to decide
+ * which it meant. */
+#define OPEN_REPLACE	(1u << 3)	/* it must exist, and its contents go */
+
 /* Where a seek is measured from. */
 #define SEEK_START	0
 #define SEEK_HERE	1

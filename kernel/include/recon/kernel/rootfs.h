@@ -71,6 +71,30 @@ struct reconfs *rootfs(void);
  * The directories in the path must already exist. Making them implicitly would
  * mean a typo in a path silently building a tree.
  */
+/* Replaces everything a file holds, keeping the file.
+ *
+ * **Separate from `rootfs_create_file`, and that is the whole point.** Create
+ * refuses a name that exists, for a reason worth keeping: a create that
+ * silently overwrites is how running a key-generation routine a second time
+ * destroys the key that was working. This is the call that says *yes, replace
+ * it*, and a caller has to mean it -- the same shape as `block_claim_raw`,
+ * which describes itself as a declaration of intent to destroy a disk.
+ *
+ * Refused if the name does not exist. This replaces; it does not create, and a
+ * caller that wanted either has to decide which.
+ *
+ * **The file keeps its dossier**, because it is the same file. That is what
+ * makes it possible to say the contents changed and mean it -- under a block
+ * number the object would simply become a different one, and nothing holding
+ * the old number would ever learn anything. It is also why the page cache has
+ * to be told, and this is the call that tells it.
+ *
+ * Whole-file, like the write underneath it: there is no way to change part of
+ * a file, and under copy-on-write a partial write is barely cheaper anyway.
+ */
+enum reconfs_status rootfs_replace_file(const char *path, const void *data,
+					u32 len);
+
 enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 				       const void *data, u32 len);
 

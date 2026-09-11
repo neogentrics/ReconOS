@@ -258,8 +258,22 @@ static i64 disk_close(struct file *f)
 	i64 st = SYS_OK;
 
 	if (d->dirty) {
+		/* Replace if it was already there when this was opened, create
+		 * if it was not.
+		 *
+		 * Decided by the dossier, which is exactly the question being
+		 * asked: a file that had one at open is a file that existed.
+		 * And the two are separate calls on purpose -- create refuses
+		 * to overwrite, because a create that silently replaces is how
+		 * running a key-generation routine twice destroys the key that
+		 * was working. Something has to choose, and this is the layer
+		 * that knows which the caller meant: it opened a name that was
+		 * already there. */
 		enum reconfs_status r =
-			rootfs_create_file(d->path, d->mode, d->data, d->len);
+			(f->flags & OPEN_REPLACE)
+			? rootfs_replace_file(d->path, d->data, d->len)
+			: rootfs_create_file(d->path, d->mode, d->data,
+					     d->len);
 
 		st = user_status_from_reconfs(r);
 
@@ -327,6 +341,16 @@ static struct file *reconfs_open(const char *path, unsigned flags, u32 mode,
 	 * been mapped by anybody. */
 	if (rootfs_owner_of(path, 0, 0, 0, &d->dossier) != RECONFS_OK)
 		d->dossier = 0;
+
+	/* Said now rather than at the close. A program that asked to replace a
+	 * file which is not there has made a mistake it can still do something
+	 * about; told two hundred lines later, when it has already written its
+	 * contents into a buffer, it cannot. */
+	if ((flags & OPEN_REPLACE) && !d->dossier) {
+		kfree(d);
+		*error = SYS_ENOENT;
+		return NULL;
+	}
 
 
 	/* **Asked before anything is read.**

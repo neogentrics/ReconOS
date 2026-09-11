@@ -5,6 +5,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/lock.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/rootfs.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/wait.h>
@@ -555,38 +556,29 @@ bool pagecache_self_test(void)
 	return ok;
 }
 
-/* --- and that being told a file changed actually drops it -----------------
+/* --- and that a rewritten file is not served from the copy before it -------
  *
  * The half a stable key makes necessary. Under a key that moved when the file
- * did, a rewrite was invalidation by accident; a dossier survives the rewrite,
- * so a cache that was never told would go on handing out the contents from
- * before it.
+ * did, a rewrite was invalidation by accident; a dossier survives it, so the
+ * cache has to be told -- and if it were not, every check would still pass
+ * while the pages handed out were the ones from before the write.
  *
- * **This tests the mechanism and not the path to it, and the difference is
- * worth stating.** `pagecache_forget` is called from the commit in
- * `disk_close` -- and that commit cannot currently replace an existing file:
- * `rootfs_create_file` answers `ERR_EXISTS` and changes nothing. So the wiring
- * is real and the caller cannot yet fire it, which was found by writing this
- * test the obvious way and watching a file rewritten as "second" read back as
- * "first". The cache was right; the test was wrong.
- *
- * What is checked here is that forgetting *works*, so that the day a file can
- * be overwritten the only new thing is the overwriting.
- *
- * The assertion is on the **page**, not the contents. The file does not change,
- * so the bytes are the same either way -- and a test that compared them would
- * pass whether or not anything had been dropped. A different physical page is
- * the only visible difference between a cache that re-read and one that did
- * not.
+ * **This could not be tested through a real rewrite until today.** The first
+ * attempt was written the obvious way and reported a file rewritten as
+ * "second" reading back as "first", which looks exactly like stale pages. It
+ * was not: `rootfs_create_file` answered ERR_EXISTS and the file was never
+ * rewritten. The cache was right and the test was wrong. Replacing a file is
+ * its own call now, asked for with its own flag, so the obvious way is finally
+ * the correct one.
  */
 void pagecache_run(void)
 {
 	const char *path = "/rewritten";
 	struct file *f;
 	paddr_t before = 0, after = 0;
-	u64 id = 0;
 	i64 err = 0;
 	bool ok = true;
+	char seen[8];
 
 	if (!rootfs())
 		return;
@@ -596,12 +588,6 @@ void pagecache_run(void)
 	if (f) {
 		f->ops->write(f, "first", 5);
 		file_release(f);
-	}
-
-	if (rootfs_owner_of(path, 0, 0, 0, &id) != RECONFS_OK || !id) {
-		kputs("  pagecache: the volume could not name the file it "
-		      "just made\n");
-		return;
 	}
 
 	f = file_open_path(path, OPEN_READ, 0, &err);
@@ -616,29 +602,48 @@ void pagecache_run(void)
 		ok = false;
 	}
 
-	/* Let go first, so the entry has no mappings and can be dropped
-	 * outright rather than kept stale. Both paths matter; this is the one
-	 * with a visible answer. */
 	if (before)
 		pagecache_put(before);
+	if (f)
+		file_release(f);
 
-	pagecache_forget(f);
+	/* A real rewrite, through the ordinary path a program would use. The
+	 * close is the commit, and the commit is where the cache is told. */
+	f = file_open_path(path, OPEN_WRITE | OPEN_REPLACE, 0, &err);
 
+	if (!f) {
+		kprintf("  pagecache: the file could not be reopened to "
+			"replace it (%ld)\n", (long)err);
+		ok = false;
+	} else {
+		f->ops->write(f, "second", 6);
+
+		if (file_release(f) != SYS_OK) {
+			kputs("  pagecache: replacing the file failed\n");
+			ok = false;
+		}
+	}
+
+	f = file_open_path(path, OPEN_READ, 0, &err);
 	after = f ? pagecache_get(f, 0) : 0;
 
 	if (ok && !after) {
-		kputs("  pagecache: nothing came back after the file was "
-		      "forgotten\n");
+		kputs("  pagecache: nothing came back after the rewrite\n");
 		ok = false;
-	} else if (ok && after == before) {
-		kprintf("  pagecache: the same page came back after the file "
-			"was forgotten (%p), so nothing was dropped\n",
-			(void *)(uintptr_t)before);
-		ok = false;
-	} else if (ok && kmemcmp(phys_to_virt(after), "first", 5) != 0) {
-		kputs("  pagecache: the page read again does not hold what "
-		      "the file does\n");
-		ok = false;
+	} else if (ok) {
+		kmemcpy(seen, phys_to_virt(after), 6);
+		seen[6] = 0;
+
+		/* The contents, which is the assertion that matters now that a
+		 * rewrite is real: a cache that was never told would hand back
+		 * the page it read before the write, and it would look
+		 * perfectly healthy doing it. */
+		if (kmemcmp(seen, "second", 6) != 0) {
+			kprintf("  pagecache: a file rewritten as \"second\" "
+				"reads back as \"%s\" -- the cache was never "
+				"told it changed\n", seen);
+			ok = false;
+		}
 	}
 
 	if (after)
@@ -646,7 +651,7 @@ void pagecache_run(void)
 	if (f)
 		file_release(f);
 
-	kprintf("  a file can be forgotten : %s\n", ok ? "pass" : "FAIL");
+	kprintf("  a rewrite is noticed : %s\n", ok ? "pass" : "FAIL");
 }
 
 /* --- that it makes room, and never out of a page somebody holds ------------
