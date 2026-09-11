@@ -28,6 +28,7 @@
 #include <recon/kernel/virtio.h>
 #include <recon/kernel/pci.h>
 
+#include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/vm.h>
@@ -57,6 +58,7 @@
 #define COMMON_DEVICE_STATUS         0x14
 #define COMMON_QUEUE_SELECT          0x16
 #define COMMON_QUEUE_SIZE            0x18
+#define COMMON_QUEUE_MSIX_VECTOR     0x1A
 #define COMMON_QUEUE_ENABLE          0x1C
 #define COMMON_QUEUE_NOTIFY_OFF      0x1E
 #define COMMON_QUEUE_DESC            0x20
@@ -65,7 +67,13 @@
 
 #define VIRTIO_PCI_MAX 4
 
+/* What the device writes back when it could not take a vector. Not an error
+ * code: it is the value that means "no message", and a device that ran out of
+ * them returns it rather than refusing. */
+#define VIRTIO_MSI_NO_VECTOR 0xFFFF
+
 struct virtio_pci {
+	const struct pci_device *pci;	/* for its interrupt capability */
 	volatile u8 *common;
 	volatile u8 *notify;
 	volatile u8 *device_cfg;
@@ -91,6 +99,47 @@ static void w64(volatile u8 *p, u32 off, u64 v)
 	 * it is not guaranteed to be seen as one. */
 	w32(p, off, (u32)v);
 	w32(p, off + 4, (u32)(v >> 32));
+}
+
+static bool pci_request_interrupt(struct virtio_device *v, u16 index,
+				  void (*fn)(void *), void *arg,
+				  const char *name)
+{
+	struct virtio_pci *p = v->regs;
+	u16 back;
+
+	if (!p->pci)
+		return false;
+
+	/* Entry zero. One message, because this driver has one queue; a device
+	 * with several would ask for one each and the numbering would matter. */
+	if (!arch_pci_request_interrupt(p->pci, 0, fn, arg, name))
+		return false;
+
+	/* And now the device is told which message this queue uses.
+	 *
+	 * After the machine is ready to receive it, never before: the registers
+	 * above are what make the interrupt land somewhere, and a device told
+	 * to signal into an unconfigured table signals into whatever the table
+	 * happened to contain.
+	 */
+	w16(p->common, COMMON_QUEUE_SELECT, index);
+	w16(p->common, COMMON_QUEUE_MSIX_VECTOR, 0);
+
+	/* Read back, because this is one of the very few registers in virtio
+	 * that answers. A device that could not take the vector puts
+	 * NO_VECTOR here and carries on working -- so a driver that writes and
+	 * does not look has quietly gone back to interrupts that never come,
+	 * while believing it has them. */
+	back = r16(p->common, COMMON_QUEUE_MSIX_VECTOR);
+
+	if (back == VIRTIO_MSI_NO_VECTOR) {
+		kputs("virtio-pci: the device would not take a message vector "
+		      "for its queue, so it is still polled\n");
+		return false;
+	}
+
+	return true;
 }
 
 static u32 pci_get_features(struct virtio_device *v, u32 select)
@@ -183,6 +232,7 @@ static const struct virtio_transport pci_transport = {
 	.queue_size   = pci_queue_size,
 	.notify       = pci_notify,
 	.config_read  = pci_config_read,
+	.request_interrupt = pci_request_interrupt,
 };
 
 /* Maps a base address register so its contents can be reached, and returns a
@@ -193,30 +243,6 @@ static const struct virtio_transport pci_transport = {
  * deliberately not memory. So it is mapped here, as device memory, in the
  * direct map -- the low half of the address space belongs to user programs
  * since checkpoint 10 and there is nothing down there to use. */
-static volatile u8 *map_bar(const struct pci_device *d, u8 bar, u32 offset, u32 len)
-{
-	paddr_t base, page;
-	u64 span;
-	vaddr_t va;
-
-	if (bar >= 6 || d->bar_is_io[bar] || !d->bar_size[bar] || !d->bar[bar])
-		return 0;
-
-	if ((u64)offset + len > d->bar_size[bar])
-		return 0;
-
-	base = (paddr_t)d->bar[bar];
-	page = PAGE_ALIGN_DOWN(base);
-	span = PAGE_ALIGN_UP((base - page) + d->bar_size[bar]);
-	va   = (vaddr_t)(uintptr_t)phys_to_virt(page);
-
-	if (!vm_lookup(va) &&
-	    !vm_map(va, page, span, VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
-		return 0;
-
-	return (volatile u8 *)phys_to_virt(base) + offset;
-}
-
 /* Looks at one PCI function and says whether a virtio device this kernel can
  * drive is there.
  *
@@ -262,6 +288,34 @@ bool virtio_pci_probe(const struct pci_device *d, struct virtio_device *out)
 
 	p = &slots[slot_count];
 	kmemset(p, 0, sizeof(*p));
+	p->pci = d;
+
+	/* And the legacy interrupt line is switched off before anything else.
+	 *
+	 * This is the fix for two virtio disks on one machine crawling at one
+	 * request every two seconds -- the driver's timeout, reached every
+	 * time. The suspect had been the yield in the polling loop. It was not:
+	 * with one line changed and everything else identical, two disks stall
+	 * with INTx asserted and boot without it, whether or not a message
+	 * vector is also in use.
+	 *
+	 * What the device does is correct. On completion it sets the interrupt
+	 * status bit and asserts its line, and the line stays asserted until a
+	 * driver reads that byte to acknowledge. **No driver here ever reads
+	 * it** -- this kernel polls the used ring instead, which tells it
+	 * everything it needs and leaves the acknowledgement undone. A
+	 * level-triggered line that is asserted and never acknowledged does not
+	 * fire once; it is simply *stuck on*.
+	 *
+	 * Turning it off is not a workaround for that. A device whose interrupt
+	 * nothing services should not be asserting one, and saying so in the
+	 * command register is how that is said. The day a driver here wants
+	 * INTx, it turns it back on and reads the status byte -- which is the
+	 * same day that becomes a supported way to run, rather than today's
+	 * accident of leaving a wire pulled.
+	 */
+	pci_write16(d, PCI_COMMAND,
+		    (u16)(pci_read16(d, PCI_COMMAND) | PCI_COMMAND_INTX_DISABLE));
 
 	/* Walk the capability chain for the four parts. Each capability names a
 	 * base address register and an offset in it, and the same id appears
@@ -277,15 +331,15 @@ bool virtio_pci_probe(const struct pci_device *d, struct virtio_device *out)
 
 		switch (kind) {
 		case VIRTIO_PCI_CAP_COMMON_CFG:
-			p->common = map_bar(d, bar, off, len);
+			p->common = pci_map_bar(d, bar, off, len);
 			break;
 		case VIRTIO_PCI_CAP_NOTIFY_CFG:
-			p->notify = map_bar(d, bar, off, len);
+			p->notify = pci_map_bar(d, bar, off, len);
 			p->notify_multiplier =
 				pci_read32(d, (u8)(cap + VCAP_NOTIFY_MULTIPLIER));
 			break;
 		case VIRTIO_PCI_CAP_DEVICE_CFG:
-			p->device_cfg = map_bar(d, bar, off, len);
+			p->device_cfg = pci_map_bar(d, bar, off, len);
 			break;
 		default:
 			break;	/* the interrupt status byte, which nothing polls */

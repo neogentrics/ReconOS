@@ -105,8 +105,9 @@ void x86_msi_compose(u8 vector, u32 destination, u64 *address, u32 *data);
  * False if the device has no such capability, which is not an error. */
 bool x86_msi_enable(const struct pci_device *d, u8 vector, u32 destination);
 
-unsigned x86_msi_capable_devices(bool *any_msix);
-void x86_msi_print_summary(void);
+unsigned x86_msi_capable_devices(unsigned *msix_out);
+bool x86_msix_enable(const struct pci_device *d, unsigned entry, u8 vector,
+		     u32 destination);
 bool x86_msi_self_test(void);
 
 extern volatile unsigned x86_msi_test_arrivals;

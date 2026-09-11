@@ -37,6 +37,7 @@
 
 #include <recon/kernel/console.h>
 #include <recon/kernel/pci.h>
+#include <recon/kernel/irq.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/arch.h>
@@ -129,37 +130,214 @@ bool x86_msi_enable(const struct pci_device *d, u8 vector, u32 destination)
 	return true;
 }
 
-unsigned x86_msi_capable_devices(bool *any_msix)
-{
-	unsigned i, n = 0;
+/* --- MSI-X, which is the one devices actually offer ------------------------
+ *
+ * MSI puts the address and the data in configuration space, which is why it
+ * allows one message per device and at most 32 vectors that have to be
+ * consecutive. MSI-X puts them in a *table in the device's memory*, which
+ * removes both limits: up to 2048 messages, each with its own address and its
+ * own vector, so a device with eight queues can aim eight different interrupts
+ * at eight different processors.
+ *
+ * It is also, empirically, what is actually there. The virtio disk this kernel
+ * boots from publishes capability 0x11 and not 0x05 -- so a driver wired to
+ * `x86_msi_enable` above would have compiled, run, returned false and changed
+ * nothing. That is the shape of bug this project keeps finding: not a wrong
+ * answer, an answer to a question nothing asked.
+ *
+ * Each entry is sixteen bytes: address, address-high, data, and a control word
+ * whose bit 0 masks it.
+ */
+#define MSIX_CONTROL		0x02
+#define MSIX_TABLE		0x04
 
-	if (any_msix)
-		*any_msix = false;
+#define MSIX_CONTROL_SIZE	0x07FFu	/* entries, minus one */
+#define MSIX_CONTROL_MASK	(1u << 14)	/* mask every entry at once */
+#define MSIX_CONTROL_ENABLE	(1u << 15)
+
+#define MSIX_ENTRY_BYTES	16
+#define MSIX_ENTRY_ADDR_LOW	0x00
+#define MSIX_ENTRY_ADDR_HIGH	0x04
+#define MSIX_ENTRY_DATA		0x08
+#define MSIX_ENTRY_CONTROL	0x0C
+#define MSIX_ENTRY_MASKED	(1u << 0)
+
+static void table_write(volatile u8 *t, u32 off, u32 v)
+{
+	*(volatile u32 *)(t + off) = v;
+}
+
+/* Points one entry of a device's MSI-X table at a vector on a processor.
+ *
+ * False when the device has no MSI-X capability, when it has fewer entries than
+ * the one asked for, or when the table's own memory could not be reached. None
+ * of those is an error here: each means this device interrupts some other way
+ * and its driver should expect it there.
+ */
+bool x86_msix_enable(const struct pci_device *d, unsigned entry, u8 vector,
+		     u32 destination)
+{
+	u8 cap = pci_find_capability(d, PCI_CAP_MSIX, 0);
+	volatile u8 *slot;
+	u64 address;
+	u32 data, where;
+	u16 control;
+
+	if (!cap)
+		return false;
+
+	control = pci_read16(d, (u8)(cap + MSIX_CONTROL));
+
+	/* The field holds the count minus one, so a device with a single
+	 * message reports zero. Reading it as the count is an off-by-one that
+	 * writes one entry past the end of the table. */
+	if (entry > (unsigned)(control & MSIX_CONTROL_SIZE))
+		return false;
+
+	/* Where the table is: the low three bits name a base address register
+	 * and the rest is a byte offset into it. Masking the wrong way round
+	 * gives an offset three bits too large, in a register that is usually
+	 * the right one anyway -- so it would work on a device whose table
+	 * starts at zero and corrupt one whose table does not. */
+	where = pci_read32(d, (u8)(cap + MSIX_TABLE));
+
+	slot = pci_map_bar(d, (u8)(where & 0x7), (where & ~0x7u)
+			   + (u32)entry * MSIX_ENTRY_BYTES, MSIX_ENTRY_BYTES);
+
+	if (!slot)
+		return false;
+
+	x86_msi_compose(vector, destination, &address, &data);
+
+	/* Masked while it is written, unmasked last.
+	 *
+	 * The same hazard `x86_msi_enable` disables the device for, and the
+	 * reason it is per-entry here: an interrupt raised between the address
+	 * being written and the data being written carries half of each
+	 * configuration, which is a vector nothing has a handler for. The
+	 * unmask is a separate store *after* the other three precisely so that
+	 * there is no instant at which a live entry is half-written. */
+	table_write(slot, MSIX_ENTRY_CONTROL, MSIX_ENTRY_MASKED);
+	table_write(slot, MSIX_ENTRY_ADDR_LOW, (u32)address);
+	table_write(slot, MSIX_ENTRY_ADDR_HIGH, (u32)(address >> 32));
+	table_write(slot, MSIX_ENTRY_DATA, data);
+	table_write(slot, MSIX_ENTRY_CONTROL, 0);
+
+	/* And the legacy wire is switched off. A device using MSI-X must not
+	 * also assert INTx, and one that does is an interrupt arriving on a
+	 * shared line whose handler list does not include this driver.
+	 *
+	 * Done here as well as wherever the driver did it, because this is the
+	 * function that makes the statement true: after this returns the device
+	 * signals by message, and a caller that had left the line alone would
+	 * be asserting both. */
+	pci_write16(d, PCI_COMMAND,
+		    (u16)(pci_read16(d, PCI_COMMAND) | PCI_COMMAND_INTX_DISABLE));
+
+	/* Function mask cleared in the same write that enables: leaving it set
+	 * is a device that is configured, enabled, and silent. */
+	control = (u16)((control | MSIX_CONTROL_ENABLE) & ~MSIX_CONTROL_MASK);
+	pci_write16(d, (u8)(cap + MSIX_CONTROL), control);
+
+	return true;
+}
+
+/* --- what a driver actually calls -----------------------------------------
+ *
+ * Arch-neutral, because a driver that asks for an interrupt should not have to
+ * know which machine it is on: `virtio_blk_attach` is the same file on both
+ * architectures and one of them has no PCI at all.
+ *
+ * The vector is claimed here rather than by the caller, because the caller has
+ * nothing useful to do with the number. What it wants is "my handler runs when
+ * this device speaks", and the number is an implementation detail of how that
+ * is arranged on this machine.
+ */
+bool arch_pci_request_interrupt(const struct pci_device *d, unsigned entry,
+				void (*fn)(void *), void *arg, const char *name)
+{
+	u8 vector;
+
+	if (!d || !fn)
+		return false;
+
+	/* No local APIC is nothing to decode the write, so the message would
+	 * land in memory and stay there. */
+	if (!x86_apic_present())
+		return false;
+
+	/* Plain MSI is deliberately not tried.
+	 *
+	 * It is implemented above and it is tested, but no device this kernel
+	 * has ever enumerated offers MSI without also offering MSI-X -- so a
+	 * fallback to it here would be a branch that never runs, and a branch
+	 * that never runs is one that does not work. It goes in beside the
+	 * first device that needs it. */
+	if (!pci_find_capability(d, PCI_CAP_MSIX, 0))
+		return false;
+
+	vector = irq_claim_vector(fn, arg, name);
+
+	if (!vector)
+		return false;
+
+	if (!x86_msix_enable(d, entry, vector, x86_apic_id())) {
+		/* Given back rather than leaked. Sixteen is not many, and a
+		 * driver that probes several devices and fails on each would
+		 * otherwise exhaust them before reaching the one that works. */
+		irq_release_vector(vector);
+		return false;
+	}
+
+	return true;
+}
+
+/* How many devices can raise an interrupt without a wire, and how many of them
+ * do it the way that is actually offered.
+ *
+ * This used to count capability 0x05 alone and report the total as "devices
+ * that can signal by memory write" -- which left out every device with MSI-X
+ * and no MSI, and on this machine that is both disks: the only two devices that
+ * actually do it. The sentence was broader than the count, and the count was
+ * the one people believed.
+ */
+unsigned x86_msi_capable_devices(unsigned *msix_out)
+{
+	unsigned i, n = 0, msix = 0;
 
 	for (i = 0; i < pci_device_count(); i++) {
 		struct pci_device *d = pci_device_at(i);
+		bool has_msix;
 
 		if (!d)
 			continue;
 
-		if (pci_find_capability(d, PCI_CAP_MSI, 0))
-			n++;
+		has_msix = pci_find_capability(d, PCI_CAP_MSIX, 0) != 0;
 
-		if (any_msix && pci_find_capability(d, PCI_CAP_MSIX, 0))
-			*any_msix = true;
+		if (has_msix)
+			msix++;
+
+		/* Either mechanism counts. A device offering both is one
+		 * device, not two -- which is why this is an or and not two
+		 * additions. */
+		if (has_msix || pci_find_capability(d, PCI_CAP_MSI, 0))
+			n++;
 	}
+
+	if (msix_out)
+		*msix_out = msix;
 
 	return n;
 }
 
-void x86_msi_print_summary(void)
+void arch_irq_print_device_summary(void)
 {
-	bool msix = false;
+	unsigned msix = 0;
 	unsigned n = x86_msi_capable_devices(&msix);
 
-	kprintf("  MSI          : %u device(s) can signal by memory write%s; "
-		"no driver asks for it yet\n", n,
-		msix ? ", and at least one has MSI-X" : "");
+	kprintf("  signalling   : %u device(s) can raise an interrupt by "
+		"writing to memory, %u of them by MSI-X\n", n, msix);
+
 }
 
 /* --- the self-test --------------------------------------------------------

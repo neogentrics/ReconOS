@@ -27,6 +27,7 @@
 
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/pmm.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/sched.h>
@@ -74,10 +75,40 @@ struct virtio_blk {
 
 	struct block_device *bdev;
 	bool in_use;
+
+	/* Whether this device was given a message vector, and how many times it
+	 * has used it. Volatile because the only writer is an interrupt
+	 * handler and every reader is a thread -- without it the compiler is
+	 * entitled to hoist the read out of the loop that waits for it, which
+	 * is a hang that appears only with optimisation on. */
+	bool interrupting;
+	volatile unsigned arrivals;
 };
 
 static struct virtio_blk devices[VIRTIO_BLK_MAX];
 static unsigned device_count;
+
+/* The device saying it has finished something.
+ *
+ * Deliberately does not touch the queue. The thread that submitted the request
+ * is in run() below with the ring in its hands, and a second party collecting
+ * from it would need a lock this driver does not have yet -- so this counts the
+ * arrival and returns.
+ *
+ * That is a smaller thing than it sounds, and it is the right first step.
+ * Counting is enough to answer the only question an interrupt path has at this
+ * stage: *does it arrive at all*. Every other question -- whether waiting beats
+ * polling, whether a completion can be collected from here -- is asked of a
+ * mechanism that is known to work, rather than of one that is merely written.
+ * The alternative is to build all of it and then debug the whole stack at once
+ * with no idea which layer is silent.
+ */
+static void blk_interrupt(void *arg)
+{
+	struct virtio_blk *b = arg;
+
+	b->arrivals++;
+}
 
 /* Runs one request to completion.
  *
@@ -289,6 +320,21 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 	b->header = phys_to_virt(b->scratch_phys);
 	b->status = (volatile u8 *)b->header + sizeof(*b->header);
 
+	/* Ask for completions to be signalled rather than looked for.
+	 *
+	 * Before DRIVER_OK, because after it the device may already be using
+	 * the queue -- and a device that completes a request while its vector
+	 * is half-configured raises an interrupt into a table entry nothing
+	 * owns.
+	 *
+	 * False is not a failure and is not reported as one. It means this
+	 * machine, this transport or this device has no way to signal, and the
+	 * polling below is what happens then -- which is what happened before
+	 * this call existed. */
+	if (b->dev.t->request_interrupt)
+		b->interrupting = b->dev.t->request_interrupt(
+			&b->dev, 0, blk_interrupt, b, "virtio-blk");
+
 	/* The device may start using the queues the instant this is set, so it
 	 * is the last thing that happens. */
 	virtio_ready(&b->dev);
@@ -344,4 +390,82 @@ bool virtio_blk_attach(const struct virtio_device *probed)
 unsigned virtio_blk_count(void)
 {
 	return device_count;
+}
+
+/* --- that the interrupt actually arrives ----------------------------------
+ *
+ * The whole of the difficulty with an interrupt path is that a silent one looks
+ * exactly like a working one as long as something else is also polling. This
+ * driver still polls, on purpose -- so if the vector were misconfigured, the
+ * table entry written to the wrong offset, or the device never told which
+ * message to use, every disk operation in this kernel would keep working and
+ * nothing would say a word.
+ *
+ * So the test does a real read and asserts the counter moved. Not "an interrupt
+ * can be delivered", which msi_self_test already shows by writing one by hand:
+ * that *this device*, told about *this vector*, raises it when it finishes work
+ * it was actually given.
+ */
+bool virtio_blk_self_test(void)
+{
+	unsigned i;
+	bool found = false;
+
+	for (i = 0; i < device_count; i++) {
+		struct virtio_blk *b = &devices[i];
+		paddr_t scratch;
+		unsigned before;
+		enum block_status st;
+
+		if (!b->in_use || !b->interrupting)
+			continue;
+
+		found = true;
+
+		/* A page, because the request needs a physical address and the
+		 * device writes a whole sector into it. */
+		scratch = pmm_alloc_page();
+
+		if (!scratch) {
+			kputs("  virtio-blk: no page to read a sector "
+			      "into\n");
+			return false;
+		}
+
+		before = b->arrivals;
+
+		st = run(b, VIRTIO_BLK_T_IN, 0, scratch, VIRTIO_BLK_SECTOR,
+			 true);
+
+		pmm_free_page(scratch);
+
+		if (st != BLOCK_OK) {
+			kprintf("  virtio-blk: reading sector 0 of virtio%u "
+				"failed (%d)\n", i, (int)st);
+			return false;
+		}
+
+		/* The read completed, so the device certainly finished the
+		 * request. If the counter did not move, the completion was
+		 * seen by the polling loop and the interrupt was not raised --
+		 * which is the failure this test exists for, and the one that
+		 * is otherwise invisible. */
+		if (b->arrivals == before) {
+			kprintf("  virtio-blk: virtio%u was given a message "
+				"vector and finished a request without "
+				"raising it\n", i);
+			return false;
+		}
+	}
+
+	if (!found) {
+		/* Nothing asked for an interrupt: no PCI, no MSI-X, or no disk.
+		 * Said out loud rather than passing quietly, because a test
+		 * that reports success without having run is the thing this
+		 * project has been bitten by and does not do. */
+		kputs("  virtio-blk: no device here signals by message, so "
+		      "there was nothing to check\n");
+	}
+
+	return true;
 }

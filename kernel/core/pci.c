@@ -79,6 +79,34 @@ u8 pci_find_capability(const struct pci_device *d, u8 id, u8 from)
 	return 0;
 }
 
+volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
+			 u32 len)
+{
+	paddr_t base, page;
+	u64 span;
+	vaddr_t va;
+
+	if (bar >= 6 || d->bar_is_io[bar] || !d->bar_size[bar] || !d->bar[bar])
+		return 0;
+
+	if ((u64)offset + len > d->bar_size[bar])
+		return 0;
+
+	base = (paddr_t)d->bar[bar];
+	page = PAGE_ALIGN_DOWN(base);
+	span = PAGE_ALIGN_UP((base - page) + d->bar_size[bar]);
+	va   = (vaddr_t)(uintptr_t)phys_to_virt(page);
+
+	/* Mapped once. A second driver asking for a window in the same BAR --
+	 * which is exactly what happens when a device's registers and its
+	 * interrupt table share one -- finds it already there. */
+	if (!vm_lookup(va) &&
+	    !vm_map(va, page, span, VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
+		return 0;
+
+	return (volatile u8 *)phys_to_virt(base) + offset;
+}
+
 /* Sizing a base address register.
  *
  * There is no register that says how much space a device wants. The way to find

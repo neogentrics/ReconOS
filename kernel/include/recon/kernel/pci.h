@@ -53,6 +53,8 @@
 #define PCI_COMMAND_MEMORY  0x0002
 #define PCI_COMMAND_MASTER  0x0004	/* may read and write main memory itself */
 
+#define PCI_COMMAND_INTX_DISABLE 0x0400	/* stop pulling the legacy wire */
+
 #define PCI_STATUS_CAP_LIST 0x0010
 
 #define PCI_MAX_DEVICES 32
@@ -95,6 +97,19 @@ struct pci_device *pci_device_at(unsigned index);
  * capabilities that differ only in a field inside them. So this takes a
  * starting point rather than returning "the" capability. */
 u8 pci_find_capability(const struct pci_device *d, u8 id, u8 from);
+
+/* Maps a window inside one of a device's memory base address registers.
+ *
+ * Every driver that reaches a device through memory needs this, and each one
+ * had been carrying its own copy. One implementation rather than several,
+ * because the way two would eventually disagree is one of them mapping a page
+ * the other has already mapped with different permissions -- and the symptom
+ * of that is a fault in a driver that did nothing wrong.
+ *
+ * Returns null for an I/O-space register, a register the firmware never
+ * assigned, or a window that runs past the end of the one asked for. */
+volatile u8 *pci_map_bar(const struct pci_device *d, u8 bar, u32 offset,
+			 u32 len);
 
 void pci_print_summary(void);
 

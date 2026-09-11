@@ -100,10 +100,33 @@ void arch_cpu_relax(void);
 void arch_irq_route_init(void);
 void arch_irq_print_summary(void);
 
+/* The part of that summary which is about devices, and therefore cannot be
+ * printed until the buses have been walked. Separate from the above because
+ * the two are true at different moments, not because they are about different
+ * things. */
+void arch_irq_print_device_summary(void);
+
 /* That the machine's way of signalling an interrupt without a wire actually
  * signals one. On x86_64 that is an MSI written to the local APIC's window.
  */
 bool arch_irq_self_test(void);
+
+struct pci_device;
+
+/* Asks this machine to deliver one PCI device's interrupt to a handler.
+ *
+ * `entry` is which of the device's messages -- a device with several queues has
+ * several, numbered by the device rather than by this kernel.
+ *
+ * False means the machine or the device has no way to do it, which is not a
+ * failure: it means that device signals the old way, and a driver that gets
+ * false should carry on polling rather than wait for something that will not
+ * come. There is deliberately no call to give one back, because nothing in
+ * this kernel detaches a driver yet -- when something does, this is where the
+ * other half goes. */
+bool arch_pci_request_interrupt(const struct pci_device *d, unsigned entry,
+				void (*fn)(void *), void *arg,
+				const char *name);
 
 /* --- Control ----------------------------------------------------------- */
 

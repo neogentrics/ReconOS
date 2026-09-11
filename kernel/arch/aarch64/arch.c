@@ -121,6 +121,27 @@ bool arch_irq_self_test(void)
 	return true;
 }
 
+void arch_irq_print_device_summary(void)
+{
+	/* Nothing. The devices here are memory-mapped and their interrupts are
+	 * wires the device tree already named, which the routing line above has
+	 * said. A line reading "0 devices" would imply a mechanism exists here
+	 * that nothing is using. */
+}
+
+bool arch_pci_request_interrupt(const struct pci_device *d, unsigned entry,
+				void (*fn)(void *), void *arg,
+				const char *name)
+{
+	/* There is no PCI on the machine this kernel boots on aarch64: the
+	 * virtio devices are memory-mapped and their interrupts are wires the
+	 * device tree already named. So this is not "not implemented yet", it
+	 * is "the question does not arise here" -- and false is the honest
+	 * answer, which leaves the driver polling as it already was. */
+	(void)d; (void)entry; (void)fn; (void)arg; (void)name;
+	return false;
+}
+
 void arch_irq_print_summary(void)
 {
 	kputs("  routing      : GIC distributor, which can send an interrupt "

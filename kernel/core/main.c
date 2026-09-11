@@ -7,6 +7,7 @@
 #include <recon/kernel/arch.h>
 #include <recon/kernel/acpi.h>
 #include <recon/kernel/block.h>
+#include <recon/kernel/virtio.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
@@ -184,6 +185,17 @@ void kmain(void)
 	 * line -- and it is the first thing in this kernel that ever has. */
 	input_init();
 	block_print_summary();
+
+	/* What the devices can do about interrupts, printed here rather than
+	 * beside the processors.
+	 *
+	 * It used to be part of arch_irq_print_summary, which runs before
+	 * block_init -- so it counted the PCI devices that can signal by memory
+	 * write at a point where the PCI bus had not been walked and there were
+	 * none. It reported zero on every boot this kernel has ever made, and
+	 * the zero was believed. Facts about devices are printed after the
+	 * devices exist. */
+	arch_irq_print_device_summary();
 	acpi_print_summary();
 
 	/* What the machine says it is, as opposed to what its processor is. */
@@ -301,6 +313,8 @@ void kmain(void)
 		user_facts_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",
 		block_self_test() ? "pass" : "FAIL");
+	kprintf("  a disk that speaks up : %s\n",
+		virtio_blk_self_test() ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
 		crc32_self_test() ? "pass" : "FAIL");
 	kprintf("  randomness         : %s\n",

@@ -374,7 +374,6 @@ void arch_irq_route_init(void)
 void arch_irq_print_summary(void)
 {
 	x86_ioapic_print_summary();
-	x86_msi_print_summary();
 }
 
 bool arch_irq_self_test(void)
