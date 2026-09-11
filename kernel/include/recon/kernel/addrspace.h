@@ -189,4 +189,8 @@ unsigned addrspace_count(void);
 void addrspace_print_summary(void);
 bool addrspace_self_test(void);
 
+/* The part of that test which needs a mounted volume, so it cannot run with
+ * the rest: nothing has formatted one by then. Called after rootfs_run. */
+void addrspace_run(void);
+
 #endif /* RECON_KERNEL_ADDRSPACE_H */

@@ -1,4 +1,5 @@
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/pagecache.h>
 #include <recon/kernel/identity.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/rootfs.h>
@@ -166,6 +167,15 @@ static struct file *file_open_empty(void)
 
 struct disk_file {
 	char path[VFS_PATH_MAX];
+
+	/* What the filesystem calls this object, resolved once when it is
+	 * opened rather than on every fault: the page cache asks for it per
+	 * page, and walking a path down from the root to answer would make
+	 * reading a mapped file slower than not caching it at all.
+	 *
+	 * Zero for a file that did not exist yet -- one being created has no
+	 * dossier until it is committed, and nothing can have mapped it. */
+	u64 dossier;
 	u8 *data;
 	u32 len;		/* how much is valid */
 	u32 capacity;
@@ -235,6 +245,13 @@ static i64 disk_seek(struct file *f, i64 offset, unsigned from)
 	return (i64)f->pos;
 }
 
+static u64 disk_identity(struct file *f)
+{
+	struct disk_file *d = f ? f->private : NULL;
+
+	return d ? d->dossier : 0;
+}
+
 static i64 disk_close(struct file *f)
 {
 	struct disk_file *d = f->private;
@@ -245,6 +262,17 @@ static i64 disk_close(struct file *f)
 			rootfs_create_file(d->path, d->mode, d->data, d->len);
 
 		st = user_status_from_reconfs(r);
+
+		/* The contents changed and the name for them did not, which is
+		 * the whole reason a dossier can be a cache key and the whole
+		 * reason the cache has to be told. Under a block number this
+		 * line would be unnecessary and the cache would be useless.
+		 *
+		 * After the commit rather than before: a write that failed
+		 * changed nothing, and throwing away good pages because a
+		 * commit did not happen is a slower machine for no reason. */
+		if (d->dossier && r == RECONFS_OK)
+			pagecache_forget(d->dossier);
 	}
 
 	kfree(d->data);
@@ -257,6 +285,7 @@ static const struct file_ops disk_ops = {
 	.write = disk_write,
 	.seek  = disk_seek,
 	.close = disk_close,
+	.identity = disk_identity,
 	.name  = "reconfs",
 };
 
@@ -292,6 +321,14 @@ static struct file *reconfs_open(const char *path, unsigned flags, u32 mode,
 	kstrlcpy(d->path, path, sizeof(d->path));
 	d->mode = mode;
 
+	/* Resolved once, here, because the page cache asks per page and a walk
+	 * from the root on every fault would cost more than the copying it
+	 * saves. Zero for a file that does not exist yet, which cannot have
+	 * been mapped by anybody. */
+	if (rootfs_owner_of(path, 0, 0, 0, &d->dossier) != RECONFS_OK)
+		d->dossier = 0;
+
+
 	/* **Asked before anything is read.**
 	 *
 	 * A file that exists is looked at first: its mode, its owner and its
@@ -307,7 +344,7 @@ static struct file *reconfs_open(const char *path, unsigned flags, u32 mode,
 	if (!(flags & OPEN_CREATE)) {
 		u32 fmode = 0, fuid = UID_KERNEL, fgid = UID_KERNEL;
 
-		if (rootfs_owner_of(path, &fmode, &fuid, &fgid) == RECONFS_OK &&
+		if (rootfs_owner_of(path, &fmode, &fuid, &fgid, 0) == RECONFS_OK &&
 		    !identity_may(fmode, fuid, fgid,
 				  identity_want_from_open(flags))) {
 			kfree(d->data);
@@ -408,7 +445,7 @@ static i64 reconfs_list_path(const char *rest, char *names, u64 names_len,
 	if (!rootfs())
 		return SYS_ENODEV;
 
-	if (rootfs_owner_of(rest, &mode, &uid, &gid) == RECONFS_OK &&
+	if (rootfs_owner_of(rest, &mode, &uid, &gid, 0) == RECONFS_OK &&
 	    !identity_may(mode, uid, gid, ACCESS_READ))
 		return SYS_EPERM;
 

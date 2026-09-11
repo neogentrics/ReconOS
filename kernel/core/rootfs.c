@@ -231,7 +231,7 @@ abort:
  * not a second way of finding a file, which would be a second way of being
  * wrong about where one is. */
 enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
-				    u32 *gid)
+				    u32 *gid, u64 *dossier)
 {
 	struct reconfs *fs = rootfs();
 	struct reconfs_path chain;
@@ -276,6 +276,8 @@ enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
 			*uid = inode->uid;
 		if (gid)
 			*gid = inode->gid;
+		if (dossier)
+			*dossier = inode->dossier;
 	}
 
 	kfree(inode);

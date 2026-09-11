@@ -9,6 +9,7 @@
 #include <recon/kernel/pagecache.h>
 #include <recon/kernel/wait.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/rootfs.h>
 #include <recon/kernel/evict.h>
 
 #include <recon/kernel/arch.h>
@@ -757,7 +758,7 @@ static bool space_gives_pages_back(void)
  * volume cannot yet -- see the note on `identity` -- so this is also the
  * boundary of what is covered, stated rather than left to be assumed.
  */
-static bool two_spaces_share_a_file_page(void)
+static bool two_spaces_share_a_file_page(const char *path)
 {
 	const vaddr_t at = USER_BASE + 0x40000;
 	struct addrspace *one = NULL, *two = NULL, *was;
@@ -768,19 +769,23 @@ static bool two_spaces_share_a_file_page(void)
 	u64 irq;
 	bool ok = true;
 
-	fa = file_open_path("/tmp/shared-map", OPEN_WRITE | OPEN_CREATE,
-			    0600, &err);
+	fa = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0600, &err);
 
 	if (!fa) {
-		kprintf("  addrspace: no file to share (%ld)\n", (long)err);
+		kprintf("  addrspace: no file to share at %s (%ld)\n",
+			path, (long)err);
 		return false;
 	}
 
 	fa->ops->write(fa, "one page, two spaces", 20);
 	file_release(fa);
 
-	fa = file_open_path("/tmp/shared-map", OPEN_READ, 0, &err);
-	fb = file_open_path("/tmp/shared-map", OPEN_READ, 0, &err);
+	/* Opened *after* the close above, which is the part that matters for a
+	 * file on the volume: it has no dossier until it has been committed,
+	 * and a descriptor taken before that names nothing the cache can key
+	 * on. The two opens here are the ones a program would make. */
+	fa = file_open_path(path, OPEN_READ, 0, &err);
+	fb = file_open_path(path, OPEN_READ, 0, &err);
 	one = addrspace_create();
 	two = addrspace_create();
 
@@ -817,9 +822,9 @@ static bool two_spaces_share_a_file_page(void)
 		kputs("  addrspace: a file-backed page did not fault in\n");
 		ok = false;
 	} else if (pa != pb) {
-		kprintf("  addrspace: two spaces mapping one file landed on "
+		kprintf("  addrspace: two spaces mapping %s landed on "
 			"different pages (%p and %p), so the cache is built "
-			"and nothing goes through it\n",
+			"and nothing goes through it\n", path,
 			(void *)(uintptr_t)pa, (void *)(uintptr_t)pb);
 		ok = false;
 	}
@@ -827,8 +832,8 @@ static bool two_spaces_share_a_file_page(void)
 	/* And it was the cache that answered, not a private fill that happened
 	 * to reuse an address. */
 	if (ok && file_shares - before < 2) {
-		kprintf("  addrspace: two faults on a cached file produced %lu "
-			"shared page(s)\n",
+		kprintf("  addrspace: two faults on %s produced %lu shared "
+			"page(s)\n", path,
 			(unsigned long)(file_shares - before));
 		ok = false;
 	}
@@ -844,6 +849,22 @@ out:
 		file_release(fb);
 
 	return ok;
+}
+
+/* The half that needs a volume, run after there is one.
+ *
+ * Separate from the self-test above rather than folded into it, because a
+ * check that quietly does not run is worse than one that is not written: it
+ * reports a pass for a thing nobody looked at. That is the shape of the
+ * ordering fault `identity_run` exists to avoid, one file over.
+ */
+void addrspace_run(void)
+{
+	if (!rootfs())
+		return;		/* the ordinary machine; nothing to check */
+
+	kprintf("  one copy, from the volume : %s\n",
+		two_spaces_share_a_file_page("/shared-map") ? "pass" : "FAIL");
 }
 
 bool addrspace_self_test(void)
@@ -1062,7 +1083,12 @@ bool addrspace_self_test(void)
 	if (ok && !space_gives_pages_back())
 		ok = false;
 
-	if (ok && !two_spaces_share_a_file_page())
+	/* ramfs here, and the volume in addrspace_run below -- not because the
+	 * two are different tests but because there is no volume yet. The
+	 * filesystem battery formats one at line 390 of main.c and the
+	 * self-tests run at 300, so a check for it here would find nothing and
+	 * report a pass. The permission check learned this the same way. */
+	if (ok && !two_spaces_share_a_file_page("/tmp/shared-map"))
 		ok = false;
 
 done:

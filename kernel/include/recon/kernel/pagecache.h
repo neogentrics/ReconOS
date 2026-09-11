@@ -59,10 +59,34 @@ void pagecache_put(paddr_t page);
  * found in a page table, because a cached page is somebody else's too. */
 bool pagecache_owns(paddr_t page);
 
+/* Says that everything cached for this file is out of date.
+ *
+ * **A stable identity is what makes this necessary**, and it is worth being
+ * clear about the trade rather than treating it as an afterthought. Keyed on
+ * something that moved when the file changed -- a block number under
+ * copy-on-write -- a rewrite produced a new key and the old pages were simply
+ * never asked for again. That is invalidation by accident, and it comes with a
+ * cache that misses every time anybody writes anything.
+ *
+ * A dossier survives the rewrite, which is exactly why it can be a key and
+ * exactly why the cache now has to be told.
+ *
+ * Pages somebody still has mapped are not taken away: an entry goes *stale*,
+ * so nothing new is served from it, and the page goes back to the allocator
+ * when the last mapping lets go. A mapping made before the write keeps seeing
+ * what it mapped, which is the only answer that does not pull memory out from
+ * under a running program.
+ */
+void pagecache_forget(u64 id);
+
 /* Names the fill lock, so it reads as something in the lock summary. */
 void pagecache_init(void);
 
 void pagecache_print_summary(void);
 bool pagecache_self_test(void);
+
+/* That a rewritten file is not served from the copy taken before it. Needs a
+ * mounted volume, so it runs after rootfs_run rather than with the rest. */
+void pagecache_run(void);
 
 #endif /* RECON_KERNEL_PAGECACHE_H */

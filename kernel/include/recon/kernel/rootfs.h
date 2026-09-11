@@ -81,8 +81,14 @@ enum reconfs_status rootfs_create_file(const char *path, u32 mode,
  * Separate from rootfs_read_file because the caller that needs this needs it
  * *before* deciding whether to read at all -- asking for the contents and then
  * checking whether it was allowed to have them is not a permission check. */
+/* `dossier` receives the number that names this object for as long as the
+ * volume exists: allocated once, never reused, and unchanged when the object
+ * moves -- which under copy-on-write it does on every write. That is what makes
+ * it the only thing here a page cache can use as a key. A block number would be
+ * a new key after every rewrite, which sounds like free invalidation and is
+ * really a cache that never hits. */
 enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
-				    u32 *gid);
+				    u32 *gid, u64 *dossier);
 
 enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 				     u32 *got, u32 *mode);

@@ -403,6 +403,12 @@ void kmain(void)
 	 * there is no filesystem until then. */
 	identity_run();
 
+	/* And the page cache against a file on that volume, for the same reason
+	 * identity_run is here: the volume does not exist when the self-tests
+	 * run. */
+	addrspace_run();
+	pagecache_run();
+
 	/* After it, not before: the counts are zero until something has been
 	 * checked, and a summary printed first reports a permission system
 	 * that has never been consulted -- which is what this row of the

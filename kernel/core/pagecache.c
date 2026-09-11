@@ -5,6 +5,7 @@
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/lock.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/rootfs.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/wait.h>
 
@@ -24,6 +25,10 @@ struct entry {
 	paddr_t page;
 	unsigned refs;		/* mappings holding it */
 	bool valid;
+
+	/* The file changed after this was read. Nothing new is served from it
+	 * and it goes when the last mapping does -- see pagecache_forget. */
+	bool stale;
 };
 
 static struct entry entries[PAGECACHE_MAX];
@@ -34,7 +39,7 @@ static struct spinlock lock = SPINLOCK_INIT("pagecache");
  * spinlock held across a sleep is held by a thread that is not running. */
 static struct mutex fill;
 
-static u64 hits, misses, refills, full, unnamed;
+static u64 hits, misses, refills, full, unnamed, forgotten, stale_kept;
 
 void pagecache_init(void)
 {
@@ -46,8 +51,8 @@ static struct entry *find(u64 id, u64 offset)
 	unsigned i;
 
 	for (i = 0; i < PAGECACHE_MAX; i++)
-		if (entries[i].valid && entries[i].id == id &&
-		    entries[i].offset == offset)
+		if (entries[i].valid && !entries[i].stale &&
+		    entries[i].id == id && entries[i].offset == offset)
 			return &entries[i];
 
 	return NULL;
@@ -184,13 +189,55 @@ void pagecache_put(paddr_t page)
 		if (entries[i].valid && entries[i].page == page) {
 			if (entries[i].refs)
 				entries[i].refs--;
+
+			/* A stale entry is only being kept for the mappings
+			 * that still point at it. When the last one lets go
+			 * there is nothing left to keep. */
+			if (!entries[i].refs && entries[i].stale) {
+				pmm_free_page(entries[i].page);
+				entries[i].valid = false;
+				entries[i].stale = false;
+				entries[i].page = 0;
+				forgotten++;
+			}
 			break;
 		}
 
-	/* The entry stays valid at zero references. It is still the right
-	 * contents for that page of that file, and the next mapping of it
-	 * should find it rather than read it again -- which is the whole
-	 * point. Zero means "may be evicted", not "is empty". */
+	/* An entry that is not stale stays valid at zero references. It is
+	 * still the right contents for that page of that file, and the next
+	 * mapping of it should find it rather than read it again -- which is
+	 * the whole point. Zero means "may be evicted", not "is empty". */
+	spin_unlock_irq(&lock, flags);
+}
+
+void pagecache_forget(u64 id)
+{
+	unsigned i;
+	u64 flags;
+
+	if (!id)
+		return;
+
+	flags = spin_lock_irq(&lock);
+
+	for (i = 0; i < PAGECACHE_MAX; i++) {
+		if (!entries[i].valid || entries[i].id != id)
+			continue;
+
+		if (entries[i].refs) {
+			/* Somebody has it mapped. Marked rather than taken:
+			 * pulling the page would leave a program reading
+			 * memory that had been handed to somebody else. */
+			entries[i].stale = true;
+			stale_kept++;
+		} else {
+			pmm_free_page(entries[i].page);
+			entries[i].valid = false;
+			entries[i].page = 0;
+			forgotten++;
+		}
+	}
+
 	spin_unlock_irq(&lock, flags);
 }
 
@@ -304,6 +351,100 @@ bool pagecache_self_test(void)
 	return ok;
 }
 
+/* --- and that being told a file changed actually drops it -----------------
+ *
+ * The half a stable key makes necessary. Under a key that moved when the file
+ * did, a rewrite was invalidation by accident; a dossier survives the rewrite,
+ * so a cache that was never told would go on handing out the contents from
+ * before it.
+ *
+ * **This tests the mechanism and not the path to it, and the difference is
+ * worth stating.** `pagecache_forget` is called from the commit in
+ * `disk_close` -- and that commit cannot currently replace an existing file:
+ * `rootfs_create_file` answers `ERR_EXISTS` and changes nothing. So the wiring
+ * is real and the caller cannot yet fire it, which was found by writing this
+ * test the obvious way and watching a file rewritten as "second" read back as
+ * "first". The cache was right; the test was wrong.
+ *
+ * What is checked here is that forgetting *works*, so that the day a file can
+ * be overwritten the only new thing is the overwriting.
+ *
+ * The assertion is on the **page**, not the contents. The file does not change,
+ * so the bytes are the same either way -- and a test that compared them would
+ * pass whether or not anything had been dropped. A different physical page is
+ * the only visible difference between a cache that re-read and one that did
+ * not.
+ */
+void pagecache_run(void)
+{
+	const char *path = "/rewritten";
+	struct file *f;
+	paddr_t before = 0, after = 0;
+	u64 id = 0;
+	i64 err = 0;
+	bool ok = true;
+
+	if (!rootfs())
+		return;
+
+	f = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0600, &err);
+
+	if (f) {
+		f->ops->write(f, "first", 5);
+		file_release(f);
+	}
+
+	if (rootfs_owner_of(path, 0, 0, 0, &id) != RECONFS_OK || !id) {
+		kputs("  pagecache: the volume could not name the file it "
+		      "just made\n");
+		return;
+	}
+
+	f = file_open_path(path, OPEN_READ, 0, &err);
+	before = f ? pagecache_get(f, 0) : 0;
+
+	if (!before) {
+		kputs("  pagecache: the file was not cached at all\n");
+		ok = false;
+	} else if (kmemcmp(phys_to_virt(before), "first", 5) != 0) {
+		kputs("  pagecache: the cached page is not what was "
+		      "written\n");
+		ok = false;
+	}
+
+	/* Let go first, so the entry has no mappings and can be dropped
+	 * outright rather than kept stale. Both paths matter; this is the one
+	 * with a visible answer. */
+	if (before)
+		pagecache_put(before);
+
+	pagecache_forget(id);
+
+	after = f ? pagecache_get(f, 0) : 0;
+
+	if (ok && !after) {
+		kputs("  pagecache: nothing came back after the file was "
+		      "forgotten\n");
+		ok = false;
+	} else if (ok && after == before) {
+		kprintf("  pagecache: the same page came back after the file "
+			"was forgotten (%p), so nothing was dropped\n",
+			(void *)(uintptr_t)before);
+		ok = false;
+	} else if (ok && kmemcmp(phys_to_virt(after), "first", 5) != 0) {
+		kputs("  pagecache: the page read again does not hold what "
+		      "the file does\n");
+		ok = false;
+	}
+
+	if (after)
+		pagecache_put(after);
+	if (f)
+		file_release(f);
+
+	kprintf("  a file can be forgotten : %s\n", ok ? "pass" : "FAIL");
+}
+
 void pagecache_print_summary(void)
 {
 	unsigned i, used = 0, held = 0;
@@ -332,4 +473,10 @@ void pagecache_print_summary(void)
 	if (unnamed)
 		kprintf("  unnamed      : %lu fault(s) on a file whose "
 			"filesystem cannot name it\n", (unsigned long)unnamed);
+
+	if (forgotten || stale_kept)
+		kprintf("  rewritten    : %lu page(s) dropped because the file "
+			"changed, %lu kept for mappings that still hold "
+			"them\n",
+			(unsigned long)forgotten, (unsigned long)stale_kept);
 }
