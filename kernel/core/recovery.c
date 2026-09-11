@@ -41,26 +41,7 @@
 
 static bool asked_for(const char *word)
 {
-	const char *p = boot_info()->cmdline;
-
-	while (p && *p) {
-		const char *k = word;
-		const char *q = p;
-
-		while (*k && *q == *k) {
-			q++;
-			k++;
-		}
-		if (!*k && (*q == '\0' || *q == ' '))
-			return true;
-
-		while (*p && *p != ' ')
-			p++;
-		while (*p == ' ')
-			p++;
-	}
-
-	return false;
+	return boot_cmdline_has(word);
 }
 
 static void print_size(u64 blocks, u32 block_size)

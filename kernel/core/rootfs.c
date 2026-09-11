@@ -4,11 +4,35 @@
 #include <recon/kernel/user.h>
 
 #include <recon/kernel/block.h>
+#include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/kstring.h>
 
 static struct reconfs the_root;
+
+/* Whether anything is allowed to change this volume.
+ *
+ * **Recovery promises to look and not touch, and nothing enforced it.** The
+ * promise was kept by every caller happening not to write, which is not the
+ * same thing -- and it stopped being true the moment a self-test could replace
+ * a file. The recovery harness hashes the disk either side of a recovery boot
+ * and caught it; nothing else in the matrix would have, because every other
+ * check asks whether the right thing happened rather than whether anything
+ * happened that should not have.
+ *
+ * Enforced here rather than by each caller checking first, because a rule every
+ * caller has to remember is a rule the next caller forgets. This is the one
+ * place a change to the volume can begin, so it is the one place worth
+ * guarding.
+ *
+ * Cleaning up after the write would not have been enough, and that is worth
+ * stating because it is the obvious fix. ReconFS is copy-on-write: a file
+ * created and then deleted still allocates blocks and still moves the root, so
+ * the disk differs even where the tree does not. Nothing but *not writing*
+ * keeps a byte-for-byte promise.
+ */
+static bool read_only;
 static bool mounted;
 
 /* Which device it came from, for the summary. A machine with several ReconFS
@@ -23,6 +47,10 @@ struct reconfs *rootfs(void)
 void rootfs_init(void)
 {
 	unsigned i;
+
+	/* Asked once, here. Whether this is a recovery boot is a property of
+	 * the boot, not of the request being made. */
+	read_only = boot_cmdline_has("recovery");
 
 	for (i = 0; i < block_device_count(); i++) {
 		struct block_device *d = block_device_at(i);
@@ -152,10 +180,90 @@ void rootfs_print_summary(void)
 
 /* --- creating ------------------------------------------------------------- */
 
+/* Takes a name off the volume.
+ *
+ * Third call built on the same three moves -- walk, act, rebuild the path --
+ * and, like the second, it exists because `reconfs` could already do this and
+ * nothing above it ever asked. `reconfs_remove` has been there since the
+ * filesystem was written.
+ *
+ * **Added for the self-tests, and that is worth saying plainly.** Five tests
+ * create a file on the volume and none of them took it away again, so the
+ * second boot against one disk found every name already taken and reported
+ * five failures that were nothing to do with the code under test. The block
+ * layer has had the rule since it was written -- *a test that leaves the disk
+ * modified is a test that can only be run once* -- and restores every byte it
+ * borrows. This is what lets the layer above keep the same promise.
+ *
+ * The alternative was to let those tests *tolerate* a name that already exists
+ * by replacing it, which needs nothing new at all. It was rejected because it
+ * quietly changes what they assert: `files carry a mode` is a claim about a
+ * file that was **created**, and on the second boot it would no longer be
+ * testing creation. Removing keeps every boot a first boot.
+ */
+bool rootfs_is_read_only(void)
+{
+	return read_only;
+}
+
+enum reconfs_status rootfs_remove_file(const char *path)
+{
+	struct reconfs *fs = rootfs();
+
+	if (read_only)
+		return RECONFS_ERR_READ_ONLY;
+
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 dir = 0, new_root = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	/* Not looked up first, unlike replace. `reconfs_remove` answers
+	 * NOT_FOUND itself, and a lookup here would be a second answer to the
+	 * same question with a window between them -- the check and the act
+	 * belong in one transaction or they are not one decision. */
+	st = reconfs_remove(txn, fs, chain.dirs[chain.count - 1], leaf, &dir);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort:
+	reconfs_txn_abort(txn);
+	return st;
+}
+
 enum reconfs_status rootfs_replace_file(const char *path, const void *data,
 					u32 len)
 {
 	struct reconfs *fs = rootfs();
+
+	if (read_only)
+		return RECONFS_ERR_READ_ONLY;
+
 	struct reconfs_txn *txn;
 	struct reconfs_path chain;
 	char leaf[RECONFS_NAME_MAX + 1];
@@ -213,6 +321,9 @@ abort:
 enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 				       const void *data, u32 len)
 {
+	if (read_only)
+		return RECONFS_ERR_READ_ONLY;
+
 	struct reconfs *fs = rootfs();
 	struct reconfs_txn *txn;
 	struct reconfs_path chain;
@@ -509,6 +620,19 @@ void rootfs_run(void)
 
 	if (!rootfs()) {
 		kputs("  files carry a mode : no volume on this machine\n");
+		return;
+	}
+
+	/* All four of these create a file, and on a recovery boot the volume
+	 * refuses. That refusal is the guard working, not a fault, so they are
+	 * not run rather than run and reported failed.
+	 *
+	 * Said out loud rather than skipped in silence. A test that quietly
+	 * does nothing prints the same thing as a test that passed, which is
+	 * the whole of BG-187. */
+	if (rootfs_is_read_only()) {
+		kputs("  the volume tests : not run, this is a recovery boot "
+		      "and the volume is read-only\n");
 		return;
 	}
 

@@ -92,6 +92,23 @@ struct reconfs *rootfs(void);
  * Whole-file, like the write underneath it: there is no way to change part of
  * a file, and under copy-on-write a partial write is barely cheaper anyway.
  */
+/* Whether this boot may change the volume at all.
+ *
+ * False on a recovery boot. A test that writes should ask and say it is
+ * skipping rather than try and report a failure -- the refusal is the feature.
+ */
+bool rootfs_is_read_only(void);
+
+/* Takes a name off the volume, in one commit.
+ *
+ * Answers RECONFS_ERR_NOT_FOUND if it is not there, and refuses a directory
+ * that still has entries rather than recursing -- a recursive delete is a
+ * decision for a layer that knows whether the user meant it.
+ *
+ * The blocks are released rather than erased. Anything that needs an erase
+ * which is really an erase has to say so. */
+enum reconfs_status rootfs_remove_file(const char *path);
+
 enum reconfs_status rootfs_replace_file(const char *path, const void *data,
 					u32 len);
 

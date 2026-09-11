@@ -583,6 +583,16 @@ void pagecache_run(void)
 	if (!rootfs())
 		return;
 
+	/* Writes on every boot, by design -- it has to rewrite a file to prove
+	 * the cache noticed. That is exactly what a recovery boot must not do,
+	 * and this test writing during recovery is what the recovery harness
+	 * caught by hashing the disk. */
+	if (rootfs_is_read_only()) {
+		kputs("  a rewrite is noticed : not run, the volume is "
+		      "read-only on a recovery boot\n");
+		return;
+	}
+
 	f = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0600, &err);
 
 	if (f) {

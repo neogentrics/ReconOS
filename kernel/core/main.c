@@ -66,30 +66,15 @@ static void banner(void)
 	kprintf("  architecture : %s\n", arch_name());
 }
 
-/* One word on the kernel command line. The same shape recovery.c uses;
- * two call sites is not yet a reason to share one. */
+/* Was `poweroff` asked for?
+ *
+ * The parser this carried now lives in boot.c. The comment here said *two call
+ * sites is not yet a reason to share one*, which was a fair call at two and
+ * stopped being one at three -- the volume has to know whether this is a
+ * recovery boot. */
 static bool asked_for_poweroff(void)
 {
-	const char *p = boot_info()->cmdline;
-
-	while (p && *p) {
-		const char *k = "poweroff";
-		const char *q = p;
-
-		while (*k && *q == *k) {
-			q++;
-			k++;
-		}
-		if (!*k && (*q == '\0' || *q == ' '))
-			return true;
-
-		while (*p && *p != ' ')
-			p++;
-		while (*p == ' ')
-			p++;
-	}
-
-	return false;
+	return boot_cmdline_has("poweroff");
 }
 
 void kmain(void)

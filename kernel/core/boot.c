@@ -4,6 +4,45 @@
 
 static struct boot_info info;
 
+/* Is this word on the kernel command line?
+ *
+ * Whole words only: `recovery` must not match `recoveryzzz`, and a word is
+ * ended by a space or the end of the line.
+ *
+ * There were two copies of this before, in main.c and recovery.c, under a
+ * comment saying *two call sites is not yet a reason to share one*. That was a
+ * fair call at two. There is a third now -- the volume has to know whether this
+ * boot is a recovery boot -- and a third copy of a parser is how two of them
+ * quietly stop agreeing.
+ */
+bool boot_cmdline_has(const char *word)
+{
+	const char *p = boot_info()->cmdline;
+
+	if (!word || !*word)
+		return false;
+
+	while (p && *p) {
+		const char *k = word;
+		const char *q = p;
+
+		while (*k && *q == *k) {
+			q++;
+			k++;
+		}
+
+		if (!*k && (*q == '\0' || *q == ' '))
+			return true;
+
+		while (*p && *p != ' ')
+			p++;
+		while (*p == ' ')
+			p++;
+	}
+
+	return false;
+}
+
 struct boot_info *boot_info(void)
 {
 	return &info;

@@ -3820,6 +3820,176 @@ The volume file had been reading correctly all boot. It started reading a
   are in the table at once. The test that found it was not written to look for
   it.
 
+### BG-188 -- Recovery wrote to the volume it was inspecting, and the read-only promise was never enforced
+
+- **Found:** 11 September 2026, by matrix 22. The only failing path in a
+  nineteen-path run.
+- **Cost:** a recovery boot modified the disk it was asked to examine. On a
+  machine that will not start -- the one situation recovery exists for -- that
+  is a write to a filesystem somebody is hoping to get their data back from.
+- **Status:** fixed.
+
+`scripts/recovery-test.sh` installs onto a disk, boots recovery, damages a
+volume, **hashes the disk**, boots recovery again, and requires the hash to be
+identical:
+
+```
+recovery wrote nothing    CHANGED -- recovery is supposed to look, not touch
+1 of 5 failed
+```
+
+### What wrote
+
+`pagecache_run()` is called from `main()` **before** `recovery_run()`. The
+page-cache invalidation test creates `/rewritten`, reopens it with
+`OPEN_REPLACE`, and writes `"second"` -- unconditionally, on every boot,
+including a recovery boot.
+
+The test could not do that until the same day. Before `OPEN_REPLACE` existed it
+called `rootfs_create_file`, which answered `ERR_EXISTS` on the second boot and
+wrote nothing. **The old test passed by being unable to do the thing it claimed
+to test.** Making it work made it write.
+
+### The part worth keeping
+
+The write is the symptom. The fault is that **recovery's promise was never
+enforced** -- `recovery.c` opens by stating that a recovery environment must not
+depend on the thing it repairs, and nothing anywhere stopped a caller changing
+the volume. It held for weeks because every caller happened not to write, which
+is not the same as being unable to.
+
+That is this project's recurring shape: correct behaviour resting on a premise
+nobody was checking. A comment promising one processor until checkpoint 9; a
+signature check compiled out; reapers with no callers; counters printed nowhere.
+
+### Why cleaning up after the test would not have fixed it
+
+The obvious repair is to have the test delete what it wrote. It does not work,
+and the reason is worth writing down: **ReconFS is copy-on-write.** A file
+created and then removed still allocates blocks and still moves the root, so the
+disk differs even where the directory tree does not. Nothing but *not writing*
+keeps a byte-for-byte promise.
+
+### Fixed at the boundary, not in the callers
+
+`rootfs_init` asks once whether this is a recovery boot, and
+`rootfs_create_file`, `rootfs_replace_file` and `rootfs_remove_file` answer
+`RECONFS_ERR_READ_ONLY` when it is. One place, because a rule every caller has
+to remember is a rule the next caller forgets.
+
+The tests that write ask `rootfs_is_read_only()` and say they are not running,
+rather than meeting the refusal and reporting a failure -- the refusal is the
+feature. Said out loud rather than skipped in silence, which is
+[BG-187](#bg-187).
+
+### It also removed a third copy of a parser
+
+`main.c` and `recovery.c` each carried their own word-matcher for the kernel
+command line, under a comment reading *two call sites is not yet a reason to
+share one*. That was a fair call at two. The volume needing to know whether this
+is a recovery boot made three, so `boot_cmdline_has()` now lives in `boot.c` and
+all three use it.
+
+### Measured
+
+```
+reports a healthy machine as healthy        both ReconOS volumes sound
+the damage tool actually damaged something  block 17: reachable but not allocated
+recovery names the damaged volume           DAMAGED -- reachable from the root but not all
+and still calls the other volume sound      discriminating, not alarming
+recovery wrote nothing                      the disk is byte for byte
+
+5 of 5: found the damage, kept its hands off the disk
+```
+
+### BG-187 -- Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+
+- **Found:** 11 September 2026, from a stale disk image left behind by an
+  earlier run of `try-disk.sh`.
+- **Cost:** none yet, and that is the problem. The page-cache invalidation test
+  -- written the same day, and the entire point of the commit before it -- has
+  never run in a verification matrix.
+- **Status:** open. The assertion is written and syntax-checked; it lands with
+  the fix.
+
+`scripts/verify-kernel.sh` gives every boot path sixty-four megabytes of zeroes,
+deliberately and with the reason written down:
+
+> A fresh one per run. The block self-test restores every byte it borrows, so
+> reusing an image would work -- and a test whose correctness depends on the
+> previous run having tidied up is a test that hides the first failure to do so.
+
+That reasoning is right about the block layer and wrong about everything above
+it. **A disk of zeroes has no ReconFS volume on it**, so five tests that need one
+never run:
+
+| test | what it reports with no volume |
+|---|---|
+| `files carry a mode` | `no volume on this machine` |
+| `files by descriptor` | `vfs: no volume on this machine to open a file on` |
+| `a program from a volume` | skipped |
+| `a file, mapped` | skipped |
+| `a rewrite is noticed` | skipped |
+
+None of them fails. The boot reads green, and the run's total counts them.
+
+**A skipped test and a passing test look identical in a total.** That is BG-186
+one level up: there, four counters were incremented and displayed nowhere; here
+five tests are displayed and never run. Both are measurements that exist without
+being observed, and the second kind is worse, because it looks like evidence.
+
+### Where it does run, and where it is thrown away
+
+`install-then-boot-test.sh` installs onto a blank disk and then boots the result
+**twice** -- once under OVMF, once under SeaBIOS -- to prove the installer wrote
+both paths. Those are the only two boots anywhere with a ReconFS volume mounted,
+and the second is the only place in the entire matrix where **a volume that has
+already been written to is mounted again**.
+
+Both boots are captured in full. `$boot` is grepped for `ReconOS kernel` and
+`nvme0n1p3`; `$bios_boot` for `ReconOS kernel` and `firmware : BIOS`. Neither is
+ever asked whether its self-tests passed. The evidence was being generated and
+discarded in the same script.
+
+### Measured
+
+The stale image that surfaced it produced all five at once:
+
+```
+  rootfs: could not create the test file (17)
+  files carry a mode : FAIL
+  vfs: the file existed before it was closed, so the close is not what commits it
+  files by descriptor : FAIL
+  user: committing the program failed (-6)
+  a program from a volume : FAIL
+  a file, mapped      : FAIL
+  pagecache: the cached page is not what was written
+  a rewrite is noticed : FAIL
+```
+
+Status 17 is `RECONFS_ERR_EXISTS`. The first boot created those files, the second
+found them already there, and nothing put them back. The **same source file**
+that catches this for the block layer states the rule:
+
+> Put it back, and only then report. A test that leaves the disk modified is a
+> test that can only be run once.
+
+`block_self_test` borrows blocks and restores them. The tests above it do not,
+and until now nothing was in a position to notice.
+
+### Two faults, and the fix is only the first
+
+1. **The two volume boots are not asked about their self-tests.** One helper,
+   called twice, failing loudly and naming what failed. It also refuses a boot
+   that printed *no* self-tests at all -- a kernel that stopped early greps the
+   same as a kernel with nothing wrong, which is the failure this whole helper
+   exists to make visible.
+2. **The volume tests are not idempotent.** They will go red the moment the
+   first fault is fixed, which is the point: the assertion has to be watched
+   failing before it is worth anything. Making each of them put back what it
+   wrote is its own change and does not belong in the same commit as the
+   assertion that proves it is needed.
+
 ### BG-186 -- The block layer counted every transfer and printed the number nowhere, so an I/O rewrite lost them silently
 
 - **Found:** 11 September 2026, while restoring a cache invalidation that the

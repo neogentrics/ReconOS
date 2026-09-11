@@ -15,7 +15,35 @@
 #   make check-portable       fail if core/ has learned about a machine
 #   make clean
 
-VERSION := 0.1.0
+# What works, not what is planned.
+#
+# **A patch per bug fixed.** BG-187 and BG-188 take this to 0.1.7; the six
+# before them -- BG-163, 182, 183, 184, 185, 186 -- are why it is not 0.1.1.
+# The number sat at 0.1.0 through all of them and twenty-five commits, not
+# because anything forbade a bump but because nothing asked for one. That is
+# the same failure as a counter nobody prints: it is only correct while
+# somebody remembers.
+#
+# **0.2.0 is not reached until sections 1.1 to 1.9 of the blueprint audit are
+# all built.** Joshua's rule, and a better one than "a minor when it gains a
+# capability" -- that version was a judgement call about what counts as big,
+# made by whoever happened to be bumping the number. This one is a fact about
+# the audit that anybody can check.
+#
+# Eleven rows stand in the way as of 11 September, plus the four things section
+# 1.8 states in prose: IPC (signals, sockets, message queues), the HPET and
+# timer wheel, Block I/O finishing verification, ext2/4 and the pseudo
+# filesystems, USB host controllers, I2C/SPI, self-relocation, video, embedded
+# filesystems, initrd, and the whole of the network stack.
+#
+# 0.1.0 was raised from 0.0.11 on the older argument -- the kernel had stopped
+# fixing things and started gaining them -- and a patch number that only ever
+# goes up is a version that has stopped saying anything. That reasoning still
+# explains 0.1.0; it is not what decides 0.2.0.
+#
+# Written here rather than in a document because this is the line that has to
+# change, and a rule kept anywhere else is a rule read after the fact.
+VERSION := 0.1.7
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

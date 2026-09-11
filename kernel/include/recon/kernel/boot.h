@@ -106,6 +106,9 @@ bool reconboot_parse(paddr_t handoff);
 /* The one copy. Written only by arch/ during early init. */
 struct boot_info *boot_info(void);
 
+/* Whether a whole word appears on the kernel command line. */
+bool boot_cmdline_has(const char *word);
+
 /* --- Used by arch/ while translating -------------------------------------- */
 
 void boot_info_reset(const char *protocol, enum boot_firmware firmware);
