@@ -531,6 +531,12 @@ ARM_IMG=$ROOT/kernel/build/aarch64/reconos-kernel.img
 DISK=$WORK/disk.img
 dd if=/dev/zero of="$DISK" bs=1M count=64 status=none
 
+# A second one, for the path that attaches two disks at once. Its own file, not
+# the same one twice: two devices backed by one image is a test of QEMU's
+# locking rather than of this kernel.
+DISK2=$WORK/disk2.img
+dd if=/dev/zero of="$DISK2" bs=1M count=64 status=none
+
 # force-legacy=false asks QEMU for virtio 1.0 on its memory-mapped bus, which
 # still defaults to the pre-1.0 draft. That draft is a different protocol
 # wearing the same name -- guest-endian configuration space, a queue set up by
@@ -638,6 +644,25 @@ check_for virtio0 "  PVH, -cpu max" \
 
 check "  PVH, no disk attached" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
+# Two disks of the *same kind*, which no path here had ever attached.
+#
+# Eighteen boot paths and six storage configurations, and every one of them had
+# exactly one disk of each sort -- so BG-163 lived for as long as it did not
+# because it was subtle but because nothing ever asked. It presented as a
+# machine crawling through its boot at one request every two seconds, on a
+# kernel and a device that were both behaving correctly, and the cause was a
+# legacy interrupt line nothing acknowledged.
+#
+# virtio1 rather than virtio0 is the string checked: virtio0 appears whenever
+# the first disk attaches, which it did throughout the fault. The second one is
+# the one that was never reached.
+check_for virtio1 "  PVH, two disks of one kind" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		-drive "file=$DISK,format=raw,if=none,id=d0" \
+		-device virtio-blk-pci,drive=d0 \
+		-drive "file=$DISK2,format=raw,if=none,id=d1" \
+		-device virtio-blk-pci,drive=d1
 
 # The controller real hardware has, rather than the one a hypervisor offers.
 # Worth a path of its own because almost nothing about it is shared with virtio:
