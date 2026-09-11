@@ -47,6 +47,92 @@ void rootfs_init(void)
 	}
 }
 
+enum reconfs_status rootfs_list(const char *path, char *names, u64 names_len,
+				u64 *needed, unsigned *count)
+{
+	struct reconfs *fs = rootfs();
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 dir, child = 0;
+	unsigned n = 0;
+	u64 *blocks;
+	char *scratch;
+
+	if (needed)
+		*needed = 0;
+	if (count)
+		*count = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	/* The root is the one path with no leaf: its parent chain ends at it.
+	 * Every other path names something inside the directory the chain ends
+	 * at, and that something has to be looked up before it can be read. */
+	if (!leaf[0]) {
+		dir = chain.count ? chain.dirs[chain.count - 1]
+				  : fs->root_inode;
+	} else {
+		if (chain.count == 0)
+			return RECONFS_ERR_NAME;
+
+		st = reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+				    &child);
+		if (st != RECONFS_OK)
+			return st;
+		if (!child)
+			return RECONFS_ERR_NOT_FOUND;
+
+		dir = child;
+	}
+
+	/* Read into our own buffers and copy out only if it all fits.
+	 * `reconfs_list` refuses a directory larger than the buffers it is
+	 * given, so asking it with the caller's size would turn "your buffer is
+	 * small" into "this directory cannot be read" -- and the caller could
+	 * not tell those apart, which is the whole reason it wants a size back.
+	 */
+	scratch = kzalloc(RECONFS_LIST_BYTES);
+	blocks  = kzalloc(RECONFS_LIST_MAX * sizeof(*blocks));
+
+	if (!scratch || !blocks) {
+		kfree(scratch);
+		kfree(blocks);
+		return RECONFS_ERR_NOMEM;
+	}
+
+	st = reconfs_list(fs, dir, scratch, RECONFS_LIST_BYTES,
+			  blocks, RECONFS_LIST_MAX, &n);
+
+	if (st == RECONFS_OK) {
+		u64 used = 0;
+		unsigned i;
+
+		for (i = 0; i < n; i++)
+			used += kstrlen(scratch + used) + 1;
+
+		if (needed)
+			*needed = used;
+
+		if (names && used <= names_len) {
+			kmemcpy(names, scratch, used);
+
+			if (count)
+				*count = n;
+		}
+	}
+
+	kfree(scratch);
+	kfree(blocks);
+
+	return st;
+}
+
 void rootfs_print_summary(void)
 {
 	kprintf("\nFilesystem\n");

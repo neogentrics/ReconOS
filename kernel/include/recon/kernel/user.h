@@ -89,6 +89,18 @@ enum {
 	SYS_GETCAPS,		/* () -> the privileged things it may still do */
 	SYS_DROPCAP,		/* (caps) -> what is still held afterwards */
 
+	/* (path, path_len, buffer, length) -> bytes a whole listing needs.
+	 *
+	 * The names come back NUL-terminated and back to back, and the answer
+	 * is the size of the *whole* listing whether or not it fitted -- so a
+	 * caller compares it with what it offered, and a bigger number means
+	 * nothing was written and says how much to come back with. Asking with
+	 * a length of zero is how a program finds out the size.
+	 *
+	 * Whole or nothing, rather than as much as fits: a caller handed the
+	 * first half of a directory alongside a success has no way to know. */
+	SYS_LIST,
+
 	SYS_MAX
 };
 

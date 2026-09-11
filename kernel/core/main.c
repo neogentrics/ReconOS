@@ -316,6 +316,8 @@ void kmain(void)
 		block_self_test() ? "pass" : "FAIL");
 	kprintf("  a disk that speaks up : %s\n",
 		virtio_blk_self_test() ? "pass" : "FAIL");
+	kprintf("  what is in there   : %s\n",
+		vfs_list_self_test() ? "pass" : "FAIL");
 	kprintf("  checksums          : %s\n",
 		crc32_self_test() ? "pass" : "FAIL");
 	kprintf("  randomness         : %s\n",

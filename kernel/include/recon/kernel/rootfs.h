@@ -49,6 +49,12 @@
  * blank and a machine booted from installation media has not got one yet -- so
  * this is not a failure, and every call below reports that there is no
  * filesystem rather than pretending. */
+/* How much of a directory this kernel will read in one go. Generous enough
+ * that nothing here has ever reached it, and a bound rather than no bound
+ * because the alternative is an allocation sized by whatever is on the disk. */
+#define RECONFS_LIST_MAX   256
+#define RECONFS_LIST_BYTES 8192
+
 void rootfs_init(void);
 
 /* The mounted volume, or null. Callers must check: "there is no filesystem" and
@@ -80,6 +86,18 @@ enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
 
 enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 				     u32 *got, u32 *mode);
+
+/* Every name directly inside a directory on the mounted volume.
+ *
+ * `names` receives them NUL-terminated and back to back, and `*needed` the
+ * bytes a whole listing takes -- whether or not it fitted. Nothing is written
+ * unless all of it fits, which is `reconfs_list`'s rule carried up: half a
+ * directory reported as a whole one is a caller that cannot tell.
+ *
+ * The permission check is the caller's, not this function's: this is the layer
+ * that knows where a directory is, and identity is decided in one place. */
+enum reconfs_status rootfs_list(const char *path, char *names, u64 names_len,
+				u64 *needed, unsigned *count);
 
 void rootfs_print_summary(void);
 bool rootfs_self_test(void);

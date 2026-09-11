@@ -53,6 +53,26 @@ static struct ram_file files[RAMFS_FILES_MAX];
 static struct spinlock ramfs_lock = SPINLOCK_INIT("ramfs");
 static u64 created, bytes_held;
 
+/* One name into the caller's buffer, and the running total either way.
+ *
+ * The total is kept whether or not there is room, because the total *is* the
+ * answer when there is not: a caller that offered nothing is asking how much to
+ * offer. Writing only while it fits, and counting always, is what lets one walk
+ * serve both questions. */
+static void emit(const char *name, char *names, u64 names_len, u64 *needed,
+		 unsigned *count)
+{
+	size_t n = kstrlen(name) + 1;
+
+	if (names && *needed + n <= names_len)
+		kmemcpy(names + *needed, name, n);
+
+	*needed += n;
+
+	if (count)
+		(*count)++;
+}
+
 /* The caller holds the lock. */
 static struct ram_file *find(const char *name)
 {
@@ -212,6 +232,34 @@ struct file *ramfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 	spin_unlock_irq(&ramfs_lock, lock);
 
 	return file_new_external(&ram_ops, flags, r);
+}
+
+i64 ramfs_list(const char *rest, char *names, u64 names_len, unsigned *count)
+{
+	u64 needed = 0;
+	unsigned i;
+	u64 flags;
+
+	/* Flat, so the mount point is the only directory there is -- and a name
+	 * here may contain a slash, which is why `/tmp/a/b` is a file rather
+	 * than something inside `/tmp/a`. See the header: the absence of
+	 * directories is a decision, and this is what it looks like from the
+	 * outside. */
+	if (rest && rest[0])
+		return SYS_ENOENT;
+
+	flags = spin_lock_irq(&ramfs_lock);
+
+	for (i = 0; i < RAMFS_FILES_MAX; i++)
+		if (files[i].used)
+			emit(files[i].name, names, names_len, &needed, count);
+
+	spin_unlock_irq(&ramfs_lock, flags);
+
+	if (needed > names_len && count)
+		*count = 0;
+
+	return (i64)needed;
 }
 
 void ramfs_print_summary(void)

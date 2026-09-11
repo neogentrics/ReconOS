@@ -178,24 +178,61 @@ bool pipe_create(struct file **read_end, struct file **write_end);
 void pipe_print_summary(void);
 bool pipe_self_test(void);
 
+/* --- listing ---------------------------------------------------------------
+ *
+ * Every name directly inside a directory, written into `names` NUL-terminated
+ * and back to back.
+ *
+ * **Whole listing or nothing**, which is the shape `reconfs_list` already chose
+ * and for the reason it gives: a caller handed the first half of a directory
+ * with a success status has no way to know. So the return is always the number
+ * of bytes a complete listing needs, and the caller compares it against the
+ * buffer it offered -- more than that means nothing was written and the answer
+ * is how much to come back with. Asking with a length of zero is therefore how
+ * a caller finds out the size, and costs nothing but the walk.
+ *
+ * Negative is an error, by the same convention as everything else here.
+ *
+ * --- Names, and not yet anything else ---
+ *
+ * Not the kind, not the size, not the owner -- and that is a decision rather
+ * than an oversight. `reconfs_list` is the call with the guarantee that matters
+ * (a listing taken in one step cannot observe a change part-way through) and it
+ * reports names and inode blocks. Types live in the directory entries it walks
+ * past. Getting them out means either widening that call or reading each inode
+ * afterwards, and the second gives up exactly the property that made the first
+ * one worth using.
+ *
+ * A kind byte per entry is the obvious next field and the first caller that
+ * needs to tell a folder from a file is what should decide its shape. */
+i64 file_list_path(const char *path, char *names, u64 names_len,
+		   unsigned *count);
+
 void vfs_note_read(void);
 void vfs_note_write(void);
 
 /* The devices filesystem: /dev, with no disk under it. Its own file because a
  * second implementation written inside the first one proves nothing. */
 struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error);
+i64 devfs_list(const char *rest, char *names, u64 names_len,
+		unsigned *count);
 void devfs_print_summary(void);
 
 /* Files that live in memory, mounted at /tmp. A flat namespace and no
  * removal, both stated in ramfs.c rather than discovered. */
 struct file *ramfs_open(const char *rest, unsigned flags, u32 mode,
 			i64 *error);
+i64 ramfs_list(const char *rest, char *names, u64 names_len,
+		unsigned *count);
 void ramfs_print_summary(void);
 bool ramfs_self_test(void);
 bool devfs_self_test(void);
 
 void vfs_print_summary(void);
 bool vfs_self_test(void);
+
+/* That a listing is whole or absent, and never half. */
+bool vfs_list_self_test(void);
 
 /* The same interface over the mounted volume. Separate because it needs a
  * formatted disk, which most machines in the rig do not have until the

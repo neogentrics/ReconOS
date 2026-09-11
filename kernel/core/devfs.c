@@ -93,6 +93,38 @@ static const struct file_ops random_ops = {
 
 /* --- the filesystem ------------------------------------------------------- */
 
+/* One name into the caller's buffer, and the running total either way.
+ *
+ * The total is kept whether or not there is room, because the total *is* the
+ * answer when there is not: a caller that offered nothing is asking how much to
+ * offer. Writing only while it fits, and counting always, is what lets one walk
+ * serve both questions. */
+static void emit(const char *name, char *names, u64 names_len, u64 *needed,
+		 unsigned *count)
+{
+	size_t n = kstrlen(name) + 1;
+
+	if (names && *needed + n <= names_len)
+		kmemcpy(names + *needed, name, n);
+
+	*needed += n;
+
+	if (count)
+		(*count)++;
+}
+
+/* Whether `rest` names the directory itself rather than something in it.
+ *
+ * This filesystem is flat, so the only directory it has is the one it is
+ * mounted at -- `rest` is empty for that and a name for anything else. A name
+ * is not a directory and saying so is the honest answer: a caller that listed
+ * /dev/null and got an empty listing would believe it had found an empty
+ * folder. */
+static bool is_the_root(const char *rest)
+{
+	return !rest || !rest[0];
+}
+
 struct device_entry {
 	const char *name;
 	const struct file_ops *ops;
@@ -149,6 +181,27 @@ struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 	}
 
 	return NULL;
+}
+
+i64 devfs_list(const char *rest, char *names, u64 names_len, unsigned *count)
+{
+	u64 needed = 0;
+	unsigned i;
+
+	if (!is_the_root(rest))
+		return SYS_ENOENT;
+
+	for (i = 0; i < sizeof(devices) / sizeof(devices[0]); i++)
+		emit(devices[i].name, names, names_len, &needed, count);
+
+	/* Nothing was written if it would not all fit, and the caller can tell
+	 * because the answer is larger than what it offered. Half a listing
+	 * reported as a whole one is the failure this shape exists to make
+	 * impossible. */
+	if (needed > names_len && count)
+		*count = 0;
+
+	return (i64)needed;
 }
 
 void devfs_print_summary(void)

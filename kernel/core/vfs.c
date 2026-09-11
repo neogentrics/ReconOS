@@ -380,26 +380,65 @@ struct mount {
 	const char *prefix;
 	struct file *(*open)(const char *rest, unsigned flags, u32 mode,
 			     i64 *error);
+
+	/* Null on a filesystem that cannot be listed at all, which is a
+	 * different answer from one that lists nothing -- and there is no such
+	 * filesystem here yet, so this is the shape rather than a case. */
+	i64 (*list)(const char *rest, char *names, u64 names_len,
+		    unsigned *count);
+
 	const char *name;
 };
 
+/* Listing the mounted volume, which is the only one of the three with owners
+ * to consult.
+ *
+ * The check is here rather than in rootfs.c for the same reason every other
+ * one is: the policy lives in identity.c and is asked in one place. Reading a
+ * directory is a read, so that is what is asked for -- and it is asked *before*
+ * the names are fetched, because names already in a kernel buffer are one
+ * mistake away from being in the caller's. */
+static i64 reconfs_list_path(const char *rest, char *names, u64 names_len,
+			     unsigned *count)
+{
+	u64 needed = 0;
+	u32 mode = 0, uid = UID_KERNEL, gid = UID_KERNEL;
+	enum reconfs_status st;
+
+	if (!rootfs())
+		return SYS_ENODEV;
+
+	if (rootfs_owner_of(rest, &mode, &uid, &gid) == RECONFS_OK &&
+	    !identity_may(mode, uid, gid, ACCESS_READ))
+		return SYS_EPERM;
+
+	st = rootfs_list(rest, names, names_len, &needed, count);
+
+	if (st == RECONFS_ERR_NOT_FOUND)
+		return SYS_ENOENT;
+
+	if (st != RECONFS_OK)
+		return SYS_EIO;
+
+	return (i64)needed;
+}
+
 static const struct mount mounts[] = {
-	{ "/dev/", devfs_open,   "devfs"  },
-	{ "/tmp/", ramfs_open,   "ramfs"  },
-	{ "/",     reconfs_open, "reconfs" },
+	{ "/dev/", devfs_open,   devfs_list,   "devfs"  },
+	{ "/tmp/", ramfs_open,   ramfs_list,   "ramfs"  },
+	{ "/",     reconfs_open, reconfs_list_path, "reconfs" },
 };
 
-struct file *file_open_path(const char *path, unsigned flags, u32 mode,
-			    i64 *error)
+/* Which mount owns a path. Split out of file_open_path rather than copied into
+ * the listing below, because two longest-prefix matches would eventually
+ * disagree about which filesystem owns a name -- and the way they would
+ * disagree is a file that can be opened through one and listed through the
+ * other. */
+static const struct mount *mount_for(const char *path, size_t *prefix_len)
 {
 	unsigned i;
 	size_t best = 0;
 	const struct mount *chosen = NULL;
-
-	*error = SYS_EINVAL;
-
-	if (!path || path[0] != '/')
-		return NULL;
 
 	for (i = 0; i < sizeof(mounts) / sizeof(mounts[0]); i++) {
 		size_t n = kstrlen(mounts[i].prefix);
@@ -409,6 +448,50 @@ struct file *file_open_path(const char *path, unsigned flags, u32 mode,
 			chosen = &mounts[i];
 		}
 	}
+
+	if (chosen && prefix_len)
+		*prefix_len = best;
+
+	return chosen;
+}
+
+i64 file_list_path(const char *path, char *names, u64 names_len,
+		   unsigned *count)
+{
+	const struct mount *m;
+	size_t best = 0;
+
+	if (count)
+		*count = 0;
+
+	if (!path || path[0] != '/')
+		return SYS_EINVAL;
+
+	/* A buffer is only required to exist if one was offered. Asking with no
+	 * room at all is the documented way to find out how much is needed. */
+	if (names_len && !names)
+		return SYS_EFAULT;
+
+	m = mount_for(path, &best);
+
+	if (!m || !m->list)
+		return SYS_ENOENT;
+
+	return m->list(path + (best > 1 ? best : 0), names, names_len, count);
+}
+
+struct file *file_open_path(const char *path, unsigned flags, u32 mode,
+			    i64 *error)
+{
+	size_t best = 0;
+	const struct mount *chosen;
+
+	*error = SYS_EINVAL;
+
+	if (!path || path[0] != '/')
+		return NULL;
+
+	chosen = mount_for(path, &best);
 
 	if (!chosen)
 		return NULL;
@@ -583,6 +666,119 @@ static const struct file_ops counted_ops = {
 	.close = counted_close,
 	.name  = "counted",
 };
+
+/* --- listing ---------------------------------------------------------------
+ *
+ * Every assertion here is about the *shape* of the answer rather than its
+ * contents, because the contents differ by machine -- a boot with no volume
+ * lists no volume -- and a test that depended on them would pass on one path
+ * and fail on another for no fault of the kernel's.
+ *
+ * The one that matters: **a listing that does not fit writes nothing.** An
+ * implementation that filled the buffer as far as it went and reported the
+ * full size would satisfy every other check here, and would hand a file
+ * manager the first half of a folder with no way to tell.
+ */
+bool vfs_list_self_test(void)
+{
+	char small[4];
+	char big[512];
+	unsigned count = 0;
+	i64 whole, again;
+	bool ok = true;
+	unsigned i;
+
+	/* /dev is the one directory every boot has, whether or not a disk was
+	 * ever found, which is why the checks below are written against it. */
+	whole = file_list_path("/dev/", NULL, 0, &count);
+
+	if (whole <= 0) {
+		kprintf("  vfs: listing /dev asked for %lld bytes\n",
+			(long long)whole);
+		return false;
+	}
+
+	/* Asking with no room is how a caller finds out how much it needs, so
+	 * it must not have been treated as an empty listing. */
+	if (count != 0) {
+		kputs("  vfs: a listing nobody had room for reported names "
+		      "anyway\n");
+		ok = false;
+	}
+
+	/* Too small, by construction: /dev has more than four bytes of names.
+	 * Poisoned first, so that anything written shows up. */
+	for (i = 0; i < sizeof(small); i++)
+		small[i] = (char)0xA5;
+
+	again = file_list_path("/dev/", small, sizeof(small), &count);
+
+	if (again != whole) {
+		kprintf("  vfs: the size of a listing changed between two "
+			"asks, %lld then %lld\n",
+			(long long)whole, (long long)again);
+		ok = false;
+	}
+
+	for (i = 0; i < sizeof(small); i++)
+		if (small[i] != (char)0xA5) {
+			kputs("  vfs: a listing too big for the buffer wrote "
+			      "into it anyway, so a caller gets half a "
+			      "directory and a success\n");
+			ok = false;
+			break;
+		}
+
+	if (count != 0) {
+		kputs("  vfs: a listing that did not fit reported a count\n");
+		ok = false;
+	}
+
+	/* And with room, all of it arrives: as many NUL-terminated names as the
+	 * count claims, ending exactly where the size said. */
+	count = 0;
+	again = file_list_path("/dev/", big, sizeof(big), &count);
+
+	if (again != whole || count == 0) {
+		kprintf("  vfs: listing /dev with room gave %lld bytes and %u "
+			"names\n", (long long)again, count);
+		return false;
+	}
+
+	{
+		u64 walked = 0;
+		unsigned seen = 0;
+
+		while (walked < (u64)whole && seen <= count) {
+			walked += kstrlen(big + walked) + 1;
+			seen++;
+		}
+
+		if (walked != (u64)whole || seen != count) {
+			kprintf("  vfs: %u names walked to %llu bytes, but the "
+				"listing said %u names in %lld\n",
+				seen, (unsigned long long)walked, count,
+				(long long)whole);
+			ok = false;
+		}
+	}
+
+	/* A name is not a directory. Listing one has to say so rather than
+	 * answering with nothing, which would read as an empty folder. */
+	if (file_list_path("/dev/null", big, sizeof(big), &count) >= 0) {
+		kputs("  vfs: /dev/null listed as though it were a "
+		      "directory\n");
+		ok = false;
+	}
+
+	if (file_list_path("nowhere", big, sizeof(big), &count) >= 0) {
+		kputs("  vfs: a path that does not start at the root was "
+		      "listed\n");
+		ok = false;
+	}
+
+	return ok;
+}
 
 bool vfs_self_test(void)
 {

@@ -379,6 +379,31 @@ static i64 sys_walltime(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 	return (i64)time_wall_ns();
 }
 
+static i64 sys_list(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	char kpath[VFS_PATH_MAX];
+
+	if (a1 == 0 || a1 >= sizeof(kpath))
+		return SYS_EINVAL;
+
+	if (!user_range_ok(a0, a1) || (a3 && !user_range_ok(a2, a3)))
+		return SYS_EFAULT;
+
+	kmemcpy(kpath, (const void *)(uintptr_t)a0, (size_t)a1);
+	kpath[a1] = 0;
+
+	/* Terminated by us, at the length we were given, so a path with an
+	 * embedded zero is short rather than a way to smuggle one string past
+	 * a check and have a different one used -- the same rule SYS_CREATE
+	 * follows, and for the same reason.
+	 *
+	 * The buffer is checked before anything is written to it, which matters
+	 * more than usual here: the answer goes to an address the caller chose,
+	 * at a length the caller chose. */
+	return file_list_path(kpath, a3 ? (char *)(uintptr_t)a2 : NULL,
+			      a3, NULL);
+}
+
 static i64 sys_getuid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	return (i64)identity_uid();
@@ -519,6 +544,7 @@ const struct personality personality_recon = {
 		[SYS_GETGID]   = sys_getgid,
 		[SYS_GETCAPS]  = sys_getcaps,
 		[SYS_DROPCAP]  = sys_dropcap,
+		[SYS_LIST]     = sys_list,
 	},
 };
 
