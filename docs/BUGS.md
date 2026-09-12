@@ -3958,7 +3958,7 @@ write to.**
 - **Cost:** a device pulled out is never noticed, and neither is any later
   arrival. The block device stays registered, pointing at hardware that is no
   longer there. **Every other deferred work item on the machine stops too.**
-- **Status:** **open.** Characterised, not fixed.
+- **Status:** **fixed.** And it was two things, only one of which was a bug.
 
 Arrival works and is proven on hardware. A machine booted with an empty xHCI
 controller, then given the real stick through QEMU's monitor:
@@ -4015,12 +4015,70 @@ this same stick: **a fixture behaves the way the person who wrote the fixture
 expected, and real hardware does not have to.** Two tests, one emulated and one
 real, disagreed -- and the disagreement is the result.
 
-### Not fixed tonight, deliberately
+### What it actually was
 
-The cause is narrowed to the worker thread failing to return from a poll that
-follows a real claim, and that is one investigation short of a fix. Recording it
-and leaving hot-plug's arrival half claimed and its departure half openly
-unclaimed is more useful than a guess, and 1.7's row says so.
+**Three theories were wrong before the right one, and each was killed by an
+instrument rather than by argument.**
+
+Not the port failing to report the disconnect. Not `ud->port` being unset. Not
+the worker thread wedging -- the work function printed a clean exit as its last
+line, so it returned.
+
+The measurement that settled it: the timer fired, the work ran, `timer_start`
+reported success **every time**, and the chain stopped anyway after 24 polls and
+17 schedule refusals. Those 17 refusals are the claim holding the worker for
+about eight seconds, and each one had another timer armed behind it.
+
+**Nothing else in this kernel re-arms a timer from inside its own callback.**
+The three other users of `timer_start` are one-shots -- a wait deadline, a
+signaller, a work timeout. This was the first periodic timer here, and the first
+thing to depend on that pattern holding.
+
+So it stops depending on it. The timer callback now only hands off; **the work
+arms the next timer when it has finished.** Three things follow and all are
+improvements rather than a workaround:
+
+- The timer is only ever armed from thread context, never from inside its own
+  callback.
+- **At most one timer is outstanding at any moment.** Before, a poll that took
+  eight seconds had sixteen firings behind it.
+- The interval is measured from the **end** of one poll to the start of the
+  next. Half a second *between polls* is what was wanted; half a second between
+  their *starts* is what was written, and those differ exactly when a poll is
+  slow -- which is exactly when a device has arrived and there is work to do.
+
+Measured after the fix: **three plug and unplug cycles in one boot**, all four
+devices arriving and all three departing.
+
+```
+block: usb0 is gone
+block: usb1 is gone
+block: usb2 is gone
+```
+
+Before it, hot-plug worked exactly once per boot.
+
+### And the half that was never a bug
+
+Departure still cannot be observed with the **real** stick, and that is not the
+kernel's fault. The port register is measured, after the removal, with the poll
+now running:
+
+```
+p1 = 0x1203    CCS set, PED set      <- still reports a device connected
+p2..p8 = 0x02A0                       <- nothing connected
+```
+
+QEMU's own `info usb` shows the bus empty. **The xHCI port never reports the
+disconnect for a `usb-host` passthrough device**, so there is nothing for the
+kernel to notice. The values are fresh rather than stale -- the register changed
+from `0x21203` to `0x1203` when the poll acknowledged the change bit -- and the
+same build departs an *emulated* device correctly.
+
+**Whether a physical unplug on real hardware clears the bit is untested**, and
+this is the honest limit of what this stick can prove: it is attached through
+`usbipd` and QEMU, and neither of them is a person pulling a stick out of a
+socket.
 
 ### BG-198 -- retiring a device let seventeen callers hand out one that is gone
 

@@ -1742,28 +1742,46 @@ void usb_poll_all(void)
 		xhci_poll(&controllers[i]);
 }
 
+/* The poll itself, on the worker thread, and the next one armed at the end of
+ * it.
+ *
+ * Arming the next timer *here* rather than in the timer callback is what makes
+ * this reliable, and it is worth saying why. The obvious shape -- a callback
+ * that schedules work and re-arms itself -- means a poll that takes eight
+ * seconds has sixteen firings behind it, each refused by the work queue, each
+ * arming another. Nothing else in this kernel re-arms a timer from inside its
+ * own callback, so that shape was the first of its kind here and it did not
+ * survive its first long claim (BG-199).
+ *
+ * Done this way there is **at most one timer outstanding at any moment**, it is
+ * always armed from thread context, and the interval is measured from the end
+ * of one poll to the start of the next. That last one is not a detail: half a
+ * second *between polls* is what was wanted, and half a second between their
+ * *starts* is what the first version asked for. Those differ exactly when a
+ * poll is slow, which is exactly when a device has arrived and there is
+ * something to do. */
 static void usb_work_fn(void *arg)
 {
 	(void)arg;
+
 	usb_poll_all();
+
+	if (hotplug_running && !timer_start(&usb_timer, USB_POLL_NS)) {
+		/* Said out loud rather than left as a machine that quietly
+		 * stops noticing devices. That silence is what BG-199 was. */
+		hotplug_running = false;
+		kputs("usb: the hot-plug timer would not re-arm; ports will "
+		      "not be watched again\n");
+	}
 }
 
 static void usb_timer_fn(void *arg)
 {
 	(void)arg;
 
-	/* Scheduled, not done here. A timer callback runs from the timer wheel,
-	 * and claiming an arrived device means control transfers that wait --
-	 * doing that here would hold the wheel through a device's timeout and
-	 * delay every other timer on the machine. */
+	/* Nothing but a hand-off. A timer callback runs in interrupt context,
+	 * and claiming an arrived device means control transfers that wait. */
 	work_schedule(&usb_work);
-
-	/* Re-armed from inside the callback, which is how a repeating timer is
-	 * built out of a one-shot one. Re-arming *before* the work runs means a
-	 * slow poll cannot stop the next one being scheduled; it means two can
-	 * overlap, which `work_schedule` refuses, and that refusal is the right
-	 * answer rather than a lost wake-up. */
-	timer_start(&usb_timer, USB_POLL_NS);
 }
 
 void usb_hotplug_start(void)
@@ -1774,13 +1792,13 @@ void usb_hotplug_start(void)
 	work_init(&usb_work, usb_work_fn, NULL);
 	timer_init(&usb_timer, usb_timer_fn, NULL);
 
+	hotplug_running = true;
+
 	if (!timer_start(&usb_timer, USB_POLL_NS)) {
+		hotplug_running = false;
 		kputs("usb: the hot-plug timer would not start; ports are "
 		      "read once at boot and not again\n");
-		return;
 	}
-
-	hotplug_running = true;
 }
 
 void usb_print_summary(void)
