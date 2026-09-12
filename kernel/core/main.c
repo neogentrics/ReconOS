@@ -32,6 +32,7 @@
 #include <recon/kernel/i2c.h>
 #include <recon/kernel/signal.h>
 #include <recon/kernel/ext2.h>
+#include <recon/kernel/net.h>
 #include <recon/kernel/shm.h>
 #include <recon/kernel/swap.h>
 #include <recon/kernel/pageage.h>
@@ -354,6 +355,8 @@ void kmain(void)
 		partition_self_test() ? "pass" : "FAIL");
 	kprintf("  filesystem layout  : %s\n",
 		reconfs_layout_self_test() ? "pass" : "FAIL");
+	kprintf("  the network stack  : %s\n",
+		net_self_test() ? "pass" : "FAIL");
 
 	sched_print_summary();
 
@@ -381,6 +384,8 @@ void kmain(void)
 	i2c_print_summary();
 	signal_print_summary();
 	ext2_print_summary();
+	net_bring_up();
+	net_print_summary();
 	shm_print_summary();
 	ramfs_print_summary();
 

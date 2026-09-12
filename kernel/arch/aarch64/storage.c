@@ -15,6 +15,7 @@
 
 #include <recon/kernel/block.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/net.h>
 #include <recon/kernel/pci.h>
 #include <recon/kernel/xhci.h>
 
@@ -73,7 +74,7 @@ static void probe_slot(u64 base, u64 size)
 	if (!virtio_mmio_probe(regs, &v))
 		return;
 
-	if (virtio_blk_attach(&v))
+	if (virtio_blk_attach(&v) || virtio_net_attach(&v))
 		devices_found++;
 }
 
@@ -111,7 +112,8 @@ void arch_storage_probe(void)
 		if (!virtio_pci_probe(d, &v))
 			continue;
 
-		if (virtio_blk_attach(&v))
+		/* Disk or card, decided by the device id each attach checks. */
+		if (virtio_blk_attach(&v) || virtio_net_attach(&v))
 			devices_found++;
 	}
 }

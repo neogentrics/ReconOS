@@ -39,3 +39,4 @@ kernel/build/flush/
 __pycache__/
 keys/
 boot/src/signing_key.h
+kernel/build-net/
