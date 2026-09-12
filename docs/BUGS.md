@@ -3981,6 +3981,51 @@ volume on that boot to write to.** The only second-boot-on-one-disk in the whole
 matrix cannot mount the disk. So that half remains unexercised and is recorded
 as such rather than assumed closed.
 
+### Where the driver has to live, which is not where the other three do
+
+Measured before writing any of it, because getting this wrong means writing the
+driver twice.
+
+`core/` may contain no inline assembly. That is the rule `make check-portable`
+enforces, and it is what keeps a third architecture four files rather than a
+rewrite. **virtio, NVMe and AHCI all live in `core/` and none of them break it**,
+because all three are reached through memory: the controller's registers are
+behind a PCI BAR, the kernel maps that BAR, and reads and writes to it are
+ordinary loads and stores that compile on any machine.
+
+Legacy IDE is not reached that way. A controller in **compatibility mode** does
+not use its BARs at all -- its registers are at fixed I/O ports (`0x1F0`-`0x1F7`
+and `0x3F6` for the primary channel, `0x170`-`0x177` and `0x376` for the
+secondary), and I/O ports are an x86 instruction, `in` and `out`, with no
+equivalent anywhere else. Checked rather than assumed: there is **no port I/O
+helper reachable from `core/` at all**, and no file under `core/` calls one.
+The two places that do are `arch/x86_64/pci.c` and `arch/x86_64/ps2.c`, both on
+the correct side of the line.
+
+So `ide.c` belongs in **`arch/x86_64/`**, and that is the right answer rather
+than a concession:
+
+- Compatibility-mode IDE ports are a fact about x86, in the same way that
+  reaching PCI configuration space through two I/O ports is.
+- The machines this bug is about -- no UEFI, disk presented as IDE -- are
+  x86 machines. An aarch64 board does not have an IDE controller to find.
+- Putting it in `core/` and reaching for an arch-provided port helper would put
+  a *portable* file's correctness at the mercy of something only one
+  architecture can answer, which is the shape the rule exists to prevent.
+
+The hook is already there and costs one line: `arch_storage_probe` in
+`arch/x86_64/storage.c` walks the bus and offers each device to `xhci_attach`,
+`nvme_attach` and `ahci_attach` in turn. `ide_attach` joins that chain and
+answers for class `0x01` subclass `0x01`.
+
+> The comment at the top of `arch/x86_64/storage.c` still says *"Only virtio is
+> attached so far. NVMe and AHCI are what matter on real hardware and are the
+> obvious next drivers"*. Both have been attached for some time and the lines
+> calling them are eleven lines below the sentence saying they are not. Noted
+> here rather than fixed in passing, because it is the same shape as BG-193: a
+> correct comment that quietly stopped being true, sitting directly above the
+> code that disproves it.
+
 ### BG-191 -- The BIOS loader handed the kernel dirty registers, breaking its own stated invariant
 
 - **Found:** 12 September 2026. `handoff : rbx arrived holding something`.
