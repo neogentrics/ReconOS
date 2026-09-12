@@ -3951,6 +3951,77 @@ the test doing what it exists to do. The rule this restores is narrower and is
 the one that matters: **a disk this kernel cannot read is not a disk it may
 write to.**
 
+### BG-199 -- USB hot-plug notices the first arrival and then stops for ever
+
+- **Found:** 12 September 2026, on the real 16 GB stick, by testing the
+  departure half after the arrival half had been proved.
+- **Cost:** a device pulled out is never noticed, and neither is any later
+  arrival. The block device stays registered, pointing at hardware that is no
+  longer there. **Every other deferred work item on the machine stops too.**
+- **Status:** **open.** Characterised, not fixed.
+
+Arrival works and is proven on hardware. A machine booted with an empty xHCI
+controller, then given the real stick through QEMU's monitor:
+
+```
+xhci : 16 slots, 8 ports, 0 connected, 0 addressed
+usb0 : 13fe:6400 on port 1, class 8.6 protocol 80, 512-byte packets
+usb0 : bulk in 81 (1024 byte), bulk out 2 (1024 byte)
+usb0 :  USB DISK 3.0, 30277632 blocks of 512 bytes
+```
+
+30,277,632 blocks is exactly what Linux reports for the same stick.
+
+**Removal is never noticed.** `device_del` succeeds -- QEMU's own `info usb`
+shows the bus empty afterwards -- and no departure line is ever printed.
+
+### What it is not
+
+Not the port failing to report the disconnect, which was the first guess. The
+poll never gets far enough to read the port again.
+
+Not `ud->port` being unset, which was the second guess. It is set in
+`address_device`, at `core/xhci.c:770`.
+
+### What it is
+
+The poll is a timer that schedules a work item. Instrumented, the timer keeps
+firing and the schedule is refused every time, for ever:
+
+```
+DIAG poll:  port 1 was 0 now 1, portsc 135683     <- arrival, detected
+DIAG port 1: portsc 4611                          <- one more census runs
+DIAG timer: work_schedule refused at poll 10      <- and then this, endlessly
+```
+
+`work_schedule` refuses when `w->queued` is already true, and `queued` is
+cleared at **dequeue**, before the item runs (`core/work.c:103`). So a permanent
+refusal means the item is still on the queue and **the worker thread never came
+back for it**.
+
+The last thing it completed was a port census, one poll after the claim. So the
+worker wedges shortly after a real device is claimed, and since there is one
+worker thread, it takes every other deferred work item with it.
+
+### Why the emulated test did not find it
+
+An emulated `usb-storage` device hot-plugs and unplugs correctly, departure
+included -- that is how this feature was first tested and it is why it was
+believed to work. The real stick is a **SuperSpeed device at 5000 Mb/s** and
+takes a different path through claiming.
+
+That is the whole lesson of this entry, and it is the same one BG-127 taught on
+this same stick: **a fixture behaves the way the person who wrote the fixture
+expected, and real hardware does not have to.** Two tests, one emulated and one
+real, disagreed -- and the disagreement is the result.
+
+### Not fixed tonight, deliberately
+
+The cause is narrowed to the worker thread failing to return from a poll that
+follows a real claim, and that is one investigation short of a fix. Recording it
+and leaving hot-plug's arrival half claimed and its departure half openly
+unclaimed is more useful than a guess, and 1.7's row says so.
+
 ### BG-198 -- retiring a device let seventeen callers hand out one that is gone
 
 - **Found:** 12 September 2026, by matrix 27 failing `partitions` on the first
