@@ -1,12 +1,30 @@
 # The ReconOS kernel
 
 This is phase 2 work, started early and deliberately kept apart from the
-compositor above it. Today it boots on two architectures, says what machine it
-is on, and stops. That is the whole of it, and the version number says so.
+compositor above it. It is now the larger half of the project.
 
-Everything the [roadmap](../docs/ROADMAP.md) lists as "Linux" today — processes,
-memory, files, system calls, signals, drivers — is what this directory is
-eventually for.
+It boots on **x86_64 and aarch64**, under **BIOS and UEFI**, from its own
+bootloader and from GRUB, and on its own filesystem. Above that it has physical
+and virtual memory, per-process address spaces, threads and a scheduler
+verified at thirty-two processors, interrupts and timers, system calls, a VFS
+with ReconFS, FAT32, ramfs, devfs, procfs and ext2 behind one interface,
+signals, block and USB storage, input, and an installer that can put itself
+on a disk beside an operating system that is already there.
+
+**What it still does not have is a network.** That is the one large thing left,
+and it is deliberately last: a machine with no network still boots, installs
+and runs. A machine with no input does not.
+
+Everything the [roadmap](../docs/ROADMAP.md) still lists as "Linux" is what this
+directory is for. The list of what is built, line by line against the original
+architecture checklist, is [docs/KERNEL.md](../docs/KERNEL.md), and the version
+history is [docs/KERNEL-CHANGELOG.md](../docs/KERNEL-CHANGELOG.md).
+
+**The numbers this README quotes are checked by a verification run**, not by
+being written down: `scripts/verify-kernel.sh` boots the kernel nineteen ways
+and every path runs the same self-tests. A claim here that stops being true is
+supposed to be caught there, and this file is evidence that it is not caught
+automatically — prose is not a test.
 
 ## Building
 
@@ -87,9 +105,27 @@ difference is which register holds the boot information.
 
 ## What is deliberately absent
 
-No memory allocator, no interrupt handling, no timer, no MMU management of its
-own beyond the identity map the boot code needs, no processes, no system calls.
-Each of those is a checkpoint in [docs/KERNEL.md](../docs/KERNEL.md), and each
-gets written when the thing above it needs it — not before, because an
-interface invented ahead of its first caller gets fixed in place before it is
-understood. That rule already cost `recon_net` a socket API it did not need.
+Every item this section used to list — the allocator, interrupts, the timer,
+MMU management, processes, system calls — is built. What remains absent, and
+why:
+
+- **The whole network stack.** No NIC driver, no packet buffers, no Ethernet,
+  ARP, IP, ICMP, UDP or TCP, and no socket layer. The largest single body of
+  work left, and last on purpose.
+- **EHCI, and USB hot-plug.** xHCI works and hubs are enumerated; older
+  controllers are not, and ports are read once at boot.
+- **A driver for legacy IDE.** Which is why a kernel that boots over BIOS from
+  an IDE disk cannot then read it (BG-192). It belongs in `arch/x86_64/`
+  rather than `core/`, because compatibility-mode IDE is at fixed I/O ports and
+  `in` and `out` are x86 instructions — the reason the other three block
+  drivers can be portable and this one cannot.
+- **ext4.** `core/ext2.c` reads ext2 and refuses EXTENTS, RECOVER and 64BIT
+  *by name*. Reading a filesystem through the wrong assumption about where its
+  blocks are is worse than refusing to mount it.
+- **A dentry cache, and `mount()`.** Two opens of one path produce two
+  independent files today.
+
+Each is a checkpoint in [docs/KERNEL.md](../docs/KERNEL.md), and each gets
+written when the thing above it needs it — not before, because an interface
+invented ahead of its first caller gets fixed in place before it is understood.
+That rule already cost `recon_net` a socket API it did not need.
