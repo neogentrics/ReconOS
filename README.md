@@ -71,9 +71,9 @@ is here works and is tested; what is not here is listed at the end.
 **There is now a kernel of its own**, built alongside the desktop and not yet
 underneath it — see [The kernel](#the-kernel) below. It boots on two
 architectures under three firmwares, on its own bootloader, off its own
-filesystem, installed by its own installer. What it does not have yet is the
-input, display and network drivers a desktop needs, which is exactly the list
-that section ends with.
+filesystem, installed by its own installer, and it reads a keyboard and a
+mouse. What it does not have yet is the **display and network** a desktop
+needs, which is exactly the list that section ends with.
 
 ## What it looks like
 
@@ -797,7 +797,7 @@ is why ReconOS can drive its own input now.
 ## The kernel
 
 Phase two, built in parallel with the desktop rather than after it. **Version
-0.0.11**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+0.1.11**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
 
 It is a real kernel and it is not yet a kernel you can run ReconOS on. Both
 halves of that sentence matter, so this section says what exists, and then says
@@ -822,15 +822,17 @@ without Linux, and without touching what was already on the disk.
 | **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
 | **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
 | **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
-| **Files** | A virtual filesystem: descriptors, a mount table, and four implementations behind one interface — the volume, the console, pipes, and `/dev`. A program is loaded **from a volume**, and a mapping can be filled from a file |
-| **Between programs** | Pipes, with a reader that waits rather than reporting the end of input, and shared memory two address spaces can both reach |
+| **Files** | A virtual filesystem: descriptors, a mount table, and one interface with the volume, the console, pipes, `/dev`, `/tmp`, `/proc` and a foreign ext2 volume behind it. A program is loaded **from a volume**, and a mapping can be filled from a file |
+| **Foreign filesystems** | ext2 read, checked against `e2fsck`, and a repair that rewrites free counts from the bitmaps — because the bitmap is the evidence and the count is the claim. It never happens on mount and must be asked for by the literal word `repair`. EXTENTS, RECOVER and 64BIT are refused **by name** rather than guessed at, which is also why this is not ext4 |
+| **Input** | PS/2 keyboard and mouse, and USB HID behind the same interface, so a key is a key whichever wire it arrived on |
+| **Between programs** | Pipes, with a reader that waits rather than reporting the end of input; shared memory two address spaces can both reach; and **signals** on both architectures — sent at any time, delivered at exactly one moment, the return to user mode, which is the only instant the kernel both knows where the program was and can still change where it goes |
 | **Allocators** | The physical allocator and the kernel heap are locked, which they were not: the comment saying one processor ran kernel code had outlived its own condition by three checkpoints |
 | **Installer** | Plans first and writes nothing while planning; then partitions, formats, copies and leaves a disk that boots on its own |
 | **Recovery** | The same kernel from the ESP, read-only, offered in the boot menu on every machine |
 
 ### How it is known to work
 
-`scripts/verify-kernel.sh` boots **eighteen paths** on every change — every
+`scripts/verify-kernel.sh` boots **nineteen paths** on every change — every
 firmware, several processor counts, three disk controllers, two CPU models —
 and runs the kernel's self-tests on each. Every format it writes is checked by
 a tool that did not write it: `sgdisk`, `sfdisk`, `mtools`, and a second
@@ -844,20 +846,30 @@ watched to catch it before any pass it reports is believed.
 
 This is the honest list, and it is the reason the desktop is not on it.
 
-- **Input.** No keyboard, no mouse. Every screen this kernel has drawn has been
-  read and not touched.
 - **Display.** A framebuffer console on whatever the firmware left. No mode
-  setting, no surface for a compositor.
-- **Network.** Nothing at all.
-- **Shared file mappings.** A mapping filled from a file is private: a write
-  changes the page and never the file. Sharing one needs a page cache two
-  address spaces can point at, which does not exist yet.
-- **Signals, sockets and message queues.** Pipes and shared memory exist;
-  signals do not, and neither does anything over a network. Descriptors were
-  what the first two were waiting on and they are here now.
-- **Identity that is enforced.** Files carry a mode and processes carry a user;
-  nothing consults either yet. Recorded now so that enforcement, when it
-  arrives, has something true to enforce.
+  setting, no surface for a compositor. This is the one that stands between the
+  kernel and the desktop.
+- **Network.** Nothing at all — no NIC driver, no packet buffers, no Ethernet,
+  ARP, IP, ICMP, UDP or TCP, and no socket layer. The largest single body of
+  work left, and last on purpose: a machine with no network still boots,
+  installs and runs.
+- **Sockets and message queues.** Pipes, shared memory and signals exist.
+  Anything over a network waits on the line above.
+- **EHCI, and USB hot-plug.** xHCI works and hubs are enumerated; older
+  controllers are not, and ports are read once at boot.
+- **A driver for legacy IDE**, which is why a kernel that boots over BIOS from
+  an IDE disk cannot then read it (BG-192).
+- **ext4.** `core/ext2.c` reads ext2 and refuses EXTENTS, RECOVER and 64BIT by
+  name — reading a filesystem through a wrong assumption about where its blocks
+  are is worse than refusing to mount it.
+
+Four things this list used to claim are built, and were still listed as missing
+until 12 September: **input** (PS/2 and USB HID, `input_init` on every boot),
+**signals** on both architectures, **shared file mappings** through the page
+cache, and **identity that is enforced** — `open` consults the mode and the
+process's user at `core/vfs.c:372` and `:473`. Recorded as a correction rather
+than quietly fixed, because a list of what is missing that is wrong in the
+direction of understating what is built is the kind nobody goes looking for.
 - **A device that uses any of the new interrupt routing.** The I/O APIC can send
   a device interrupt to any processor and MSI can be programmed, and every
   storage driver still polls. The half that was missing is built; the half that
