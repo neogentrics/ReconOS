@@ -19,7 +19,9 @@
 #
 # **A patch per bug fixed.** The six that 0.1.0 sat through -- BG-163, 182,
 # 183, 184, 185, 186 -- are why it is not 0.1.1; BG-188 made it 0.1.7, and
-# BG-189, BG-190 and BG-191 make it 0.1.10, and BG-193 makes it 0.1.11. The number had held still through
+# BG-189, BG-190 and BG-191 make it 0.1.10, BG-193 makes it 0.1.11, and
+# BG-194, BG-195 and BG-196 -- all three from the network stack -- make it
+# 0.1.14. The number had held still through
 # all six and twenty-five commits, not because anything forbade a bump but
 # because nothing asked for one. That is the same failure as a counter nobody
 # prints: it is only correct while somebody remembers.
@@ -64,7 +66,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.1.11
+VERSION := 0.1.14
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

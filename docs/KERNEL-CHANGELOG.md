@@ -78,6 +78,62 @@ look exactly the same when it is.
 
 ---
 
+## 0.1.14 -- 12 September 2026
+
+**The network stack, and the three faults it cost.** Section 1.8 was 0 of 4
+built and the largest single thing left on the audit.
+
+**Something at the other end answered.** Measured on both architectures against
+QEMU's own network: a full DHCP exchange -- DISCOVER, OFFER, REQUEST, ACK --
+giving `10.0.2.15` and a gateway, and then an ICMP echo answered in 447
+microseconds on x86_64 and 318 on aarch64. Four packets in, four out, no drops
+and no errors. Every layer below can be proved against itself; this is the one
+claim in the stack that no self-test can make.
+
+**Thirteen files, all under `core/`, and `make check-portable` is still clean.**
+The whole stack is portable, because every card it can talk to is reached
+through a mapped BAR rather than through an instruction only one architecture
+has. That is the same boundary that keeps legacy IDE *out* of `core/` (BG-192).
+
+What is here: virtio-net over both transports; packet buffers with headroom, so
+a header stack is prepended without copying anything; Ethernet; ARP with a cache
+that expires and evicts the oldest rather than the first; IPv4; ICMP echo; UDP
+with the pseudo-header checksum; a TCP state machine with the specification's
+own state names, random initial sequence numbers, retransmission with backoff,
+and a window that follows the free space in the receive buffer; BSD sockets; and
+a DHCP client.
+
+**Three bugs, one bump each.**
+
+**BG-194** -- virtio-net used a descriptor index as a ring slot, twice. It
+stashed a slot number in `desc[head].next`, which is the field that chains the
+head to the frame's descriptor and is read by the device; and it indexed 64
+descriptors into a 32-entry transmit table, so two frames in flight shared one
+and a buffer would have been freed twice. One mistake in two places: borrowing a
+field that already has an owner.
+
+**BG-195** -- a broadcast could not leave a card with no address, which makes
+DHCP impossible to run. Right for ordinary traffic and wrong for the one
+protocol whose job is to run *before* there is an address. No self-test could
+have found it: every test configures its device by hand first, which is the
+exact condition under which the bug cannot occur.
+
+**BG-196** -- the ARP expiry test wrote zero to mean "long ago", on a machine
+whose clock starts at zero. Four seconds into a boot, an entry stamped zero is
+four seconds old, not stale. Fixed by subtracting from *now*, which is correct
+even when it underflows -- the same unsigned-difference property TCP uses to
+compare sequence numbers across the wrap.
+
+**Deliberately absent, written down rather than discovered:** IPv6; IP
+fragmentation and reassembly, refused rather than attempted, because a
+reassembly queue is where a decade of security holes lived; out-of-order TCP
+segments, dropped rather than queued for the same reason; window scaling, SACK
+and timestamps; a measured retransmission timeout; and DHCP lease renewal.
+
+**Not 0.2.0.** The gate is every row in 1.1 to 1.9 Built, and 1.7's USB row is
+still Partly -- EHCI and hot-plug. A minor bump here would be a judgement about
+how large the change feels, which is what the rule exists to replace.
+
 ## 0.1.11 -- 12 September 2026
 
 **Five things built, one bug that had to be found before any of them could be

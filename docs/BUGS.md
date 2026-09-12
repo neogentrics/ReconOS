@@ -3820,6 +3820,116 @@ The volume file had been reading correctly all boot. It started reading a
   are in the table at once. The test that found it was not written to look for
   it.
 
+### BG-194 -- virtio-net used a descriptor index as if it were a ring slot, in two different ways
+
+- **Found:** 12 September 2026, by reading the driver back before trusting it.
+- **Cost:** a corrupted descriptor chain on receive, and a double free on
+  transmit. Neither had fired yet, because both need the ring under load.
+- **Status:** fixed before the driver was ever run.
+
+Two sites, one mistake: **borrowing a field that already has an owner.**
+
+```c
+n->rx.desc[head].next = (u16)slot;      /* remember which slot this is */
+```
+
+`next` is what chains the head descriptor to the second one. A virtio-net
+buffer is submitted as a chain of two -- the twelve-byte virtio header, then the
+frame -- so `next` is *in use*, and it is the device that reads it. Writing a
+slot number there points the device at whatever descriptor happens to have that
+index.
+
+The transmit side had the same fault with different arithmetic:
+
+```c
+n->tx_bufs[head % TX_RING] = b;
+```
+
+The queue holds up to 64 descriptors and the shadow table 32, so descriptors 0
+and 32 name one entry. Two frames in flight would share it: the second
+completion would free a buffer that had already been freed, and the first
+buffer would leak.
+
+**Fixed by keeping a map that belongs to this driver** -- `rx_head_slot[]` and
+`tx_head_hdr[]`, both sized by the queue rather than by the ring, because a
+descriptor index is not a slot index and the two only coincide while the ring is
+empty.
+
+### BG-195 -- a broadcast could not leave a card with no address, which makes DHCP impossible
+
+- **Found:** 12 September 2026, the first time the stack was pointed at a real
+  network rather than at its own tests.
+- **Cost:** no machine could ever obtain an address. The stack was complete and
+  unusable.
+- **Status:** fixed.
+
+```c
+for (i = 0; i < device_count; i++) {
+        struct net_device *d = &devices[i];
+
+        if (!d->up || !d->ip)
+                continue;
+```
+
+Right for ordinary traffic: a card with no address cannot be a packet's source.
+**Wrong for the one protocol whose entire job is to run before there is an
+address to be the source of.** DHCP sends from 0.0.0.0 to 255.255.255.255 by
+necessity, and this refused to route it.
+
+It looked like this:
+
+```
+  dhcp         : 1 sent, 0 answers, 0 not for us
+  udp          : 1 sent, 1 failed, 1 received
+    tx         : 0 packets, 0 bytes, 0 dropped, 0 errors
+```
+
+The card transmitted nothing at all. A broadcast is now routed out of the first
+card that is up, addressed or not, and that is the only case where an
+unaddressed card may send.
+
+### Why no self-test could have caught it
+
+**Every test in the stack configures its device by hand before using it**, which
+is the only way to test routing without a network -- and it is exactly the
+condition under which this bug cannot occur. The test sets `dev->ip`, so the
+device is never in the state that fails.
+
+That is the same shape as BG-193 (a guard whose condition was unreachable) and
+BG-187 (a test that passed by being unable to do the thing it tested): not a
+wrong answer, but a correct one to a question the real path never asks.
+
+### BG-196 -- "long ago" was written as zero, on a machine whose clock starts at zero
+
+- **Found:** 12 September 2026, by the ARP test failing on a kernel whose ARP
+  code was correct.
+- **Cost:** none shipped -- the fault was in the test. Recorded anyway, because
+  a test that cannot fail is a test that is not there.
+- **Status:** fixed.
+
+The test made a cache entry stale by stamping it with time zero:
+
+```c
+e->learned_ns = 0;      /* long ago */
+```
+
+An entry is stale when `now - learned_ns` exceeds sixty seconds. **A machine
+four seconds into its uptime is four seconds from zero.** The entry was not old,
+it was as new as the machine. The lookup correctly handed it back, and the test
+correctly reported a failure that was its own.
+
+Fixed by subtracting from *now* rather than reaching for an absolute past:
+
+```c
+e->learned_ns = time_monotonic_ns() - ARP_TTL_NS - 1;
+```
+
+Correct even when the subtraction underflows, because the comparison is a
+difference in unsigned arithmetic and comes out as `TTL + 1` either way. That is
+the same property TCP relies on to compare sequence numbers across the wrap at
+2^32, used here for the same reason: **there is no "before the beginning" on a
+monotonic clock, and arithmetic that wraps consistently does not need one.**
+
 ### BG-193 -- virt_to_phys answered for addresses it cannot answer for, so a driver wrote to memory that does not exist and reported success
 
 - **Found:** 12 September 2026, by ext2 reading a 512-byte superblock into a
