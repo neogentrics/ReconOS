@@ -15,14 +15,13 @@ every entry to say which half it is about.
   all built.** Not a judgement about what counts as a big change -- a fact about
   the audit that anybody can check.
 
-**Two rows stand in the way**, and one of them is the whole of 1.8:
+**One row stands in the way.**
 
 | section | what is not built |
 |---|---|
 | 1.7 Device drivers and buses | USB host controllers -- **EHCI and hot-plug**. xHCI is built and so are hubs; ports are still read once at boot |
-| 1.8 Network | all of it, and it is the largest single thing left |
 
-**1.1 through 1.6, and 1.9, have no open rows at all.**
+**Every other row in 1.1 through 1.9 is Built.**
 
 ### What closed, and when
 
@@ -36,6 +35,16 @@ them one at a time:
 | 1.4 Interrupts and timers | **the HPET**, found through ACPI and checked against the TSC across a measured wait |
 | 1.6 Filesystem and storage | **ext2 and procfs**. With ramfs and devfs already built, the row is complete |
 | 1.7 Device drivers and buses | **I2C / SPI** -- the PIIX4 SMBus this machine has; SPI is declared with no driver and says so every boot |
+
+And 1.8 closed on the same day, in matrix 26: **1065 self-tests across every
+path, none skipped**, on a tree frozen at the commit under test.
+
+> **Matrix 25 was killed and discarded rather than read.** The kernel was
+> rebuilt four minutes after that run started, so some paths would have tested
+> one binary and some another. A run like that does not fail -- it finishes and
+> reports a number describing no kernel that ever existed. The rule it broke was
+> already written down; the fix was to commit everything first, clear the build
+> directory, and then start.
 
 > **ext4 moved to section 2.3 on 12 September**, by decision rather than by
 > being dropped, which is why 1.6 closed rather than staying open on it. Reading

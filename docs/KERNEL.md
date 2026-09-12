@@ -65,7 +65,7 @@ And, as of 10 September 2026, the four things that earned the bump:
 - **It reads the permission bits it has always stored.** A process running as
   somebody other than the kernel is refused a file it may not open.
 
-**1046 self-tests across twenty-five boots, none skipped**, every format
+**1065 self-tests across twenty-five boots, none skipped**, every format
 checked against a tool that did not write it. The number is what the
 verification run reports, not a total kept by hand: `scripts/verify-kernel.sh`
 prints it, and it is copied here after a green run rather than incremented when
