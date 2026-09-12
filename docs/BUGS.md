@@ -3899,6 +3899,101 @@ That is the same shape as BG-193 (a guard whose condition was unreachable) and
 BG-187 (a test that passed by being unable to do the thing it tested): not a
 wrong answer, but a correct one to a question the real path never asks.
 
+### BG-197 -- the block self-test writes to any disk it thinks is blank, and a disk whose table it could not read looks blank
+
+- **Found:** 12 September 2026, by working out what would happen if a real USB
+  stick were attached at boot. Nothing failed; the fault was reasoned to before
+  it could cost anybody a disk.
+- **Cost:** 256 KB written to the end of somebody's disk, silently, during the
+  boot self-tests. Whether it happens depends on whether this kernel can read
+  that disk's partition table.
+- **Status:** fixed.
+
+`block_self_test` writes to whatever `pick_test_device` reports as writable, and
+that function's test is:
+
+```c
+if (!d->parent && !d->slice_count && !whole_blank)
+        whole_blank = d;
+```
+
+"No parent and no partitions" is meant to mean *a blank disk*. **A disk whose
+partition table this kernel could not read also has no partitions**, because
+none could be worked out -- so it is indistinguishable from a blank one, and the
+difference is somebody's data.
+
+### The kernel already knew the difference
+
+`BLOCK_SCHEME_UNREADABLE` is a distinct value from `BLOCK_SCHEME_NONE`, and it
+is set deliberately: a disk carrying a protective MBR whose GPT will not parse
+is *unreadable*, not an MBR disk, and `partition.c` says so in a comment. The
+installer consults it and refuses:
+
+```c
+if (disk->scheme == BLOCK_SCHEME_UNREADABLE) {
+        out->verdict = INSTALL_NO_TABLE_READABLE;
+        return out->verdict;
+}
+```
+
+**One caller made the distinction and the other did not.** That is this
+project's most repeated shape, and the third instance this week after BG-193
+(a guard whose condition was unreachable) and BG-195 (routing that was right for
+every packet except the one that has to work before there is an address).
+
+The fix is one condition in `pick_test_device`, refusing UNREADABLE the way the
+installer already does.
+
+### What it does not fix
+
+A genuinely blank disk is still written to by the self-test, on purpose. That is
+the test doing what it exists to do. The rule this restores is narrower and is
+the one that matters: **a disk this kernel cannot read is not a disk it may
+write to.**
+
+### BG-198 -- retiring a device let seventeen callers hand out one that is gone
+
+- **Found:** 12 September 2026, by matrix 27 failing `partitions` on the first
+  boot path.
+- **Cost:** any code walking the device table could be handed a retired device
+  and would use it as though it were there. The self-test caught it; a
+  filesystem would have read from a disk nobody could reach.
+- **Status:** fixed.
+
+`block_unregister` introduced a state the table had never held: **a slot that is
+occupied and absent at once.** Twenty places walk the table with
+`block_device_at()`. Three checked `present`. Seventeen did not, and were
+correct not to -- until that morning no device could ever be absent.
+
+It surfaced immediately:
+
+```
+  PVH, direct kernel load      1 of 54 FAILED
+        partitions         : FAIL
+```
+
+The retirement self-test registers a device and a partition of its own, retires
+them, and leaves them in the table. `partition_self_test` then walks the table
+looking for anything with a parent, finds the retired slice first, and asks it
+to refuse a read past its end. A retired device refuses *every* read, with a
+different error, so the assertion failed.
+
+### The fix is not seventeen checks
+
+Adding `if (!d->present) continue;` to seventeen loops is seventeen chances to
+forget the eighteenth, and the eighteenth is whatever gets written next month.
+
+**Enumeration stops being able to produce one instead.** `block_device_at(i)` is
+the i-th *present* device and `block_device_count()` is how many of those there
+are, so a loop written before retirement existed goes on being correct without
+knowing retirement exists.
+
+Absent entries keep their slots, which matters twice: `block_device_by_id` can
+go on refusing a retired identity, and **no pointer moves**. Compacting the array
+would have been simpler and would have invalidated every `struct block_device *`
+held outside `block.c` -- `usb_storage`'s among them -- which is a
+use-after-free rather than a bug.
+
 ### BG-196 -- "long ago" was written as zero, on a machine whose clock starts at zero
 
 - **Found:** 12 September 2026, by the ARP test failing on a kernel whose ARP

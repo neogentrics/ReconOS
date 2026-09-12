@@ -192,16 +192,42 @@ struct block_device *block_register_slice(struct block_device *parent,
 	return d;
 }
 
+/* How many devices are **there**, which is not how many slots are in use.
+ *
+ * A retired device keeps its slot so that its identity can go on being refused,
+ * and every loop in this kernel that walks the table was written before a slot
+ * could be occupied and absent at once. Rather than teach seventeen callers a
+ * new rule, enumeration simply cannot produce one. */
 unsigned block_device_count(void)
 {
-	return device_count;
+	unsigned i, n = 0;
+
+	for (i = 0; i < device_count; i++)
+		if (devices[i].present)
+			n++;
+
+	return n;
 }
 
 struct block_device *block_device_at(unsigned index)
 {
-	if (index >= device_count)
-		return 0;
-	return &devices[index];
+	unsigned i;
+
+	/* The index counts devices that are there, not slots. A caller looping
+	 * to `block_device_count()` therefore sees every live device exactly
+	 * once and no retired one at all -- which is the property that lets the
+	 * loops written before retirement existed go on being correct. */
+	for (i = 0; i < device_count; i++) {
+		if (!devices[i].present)
+			continue;
+
+		if (!index)
+			return &devices[i];
+
+		index--;
+	}
+
+	return 0;
 }
 
 struct block_device *block_device_by_id(u32 id, u32 generation)
@@ -1027,6 +1053,19 @@ static struct block_device *pick_test_device(bool *writable)
 			anything = d;
 
 		if (d->read_only)
+			continue;
+
+		/* A disk whose table could not be *read* is not a blank disk.
+		 *
+		 * It has no slices, because none could be worked out -- which
+		 * is exactly what a blank disk looks like from here, and the
+		 * difference is somebody's data. The kernel already tells them
+		 * apart: `install.c` refuses to install onto UNREADABLE for the
+		 * same reason. This is the second caller, and it was not asking.
+		 *
+		 * BG-197. Found by working out what would happen if a real USB
+		 * stick were attached at boot rather than by anything failing. */
+		if (d->scheme == BLOCK_SCHEME_UNREADABLE)
 			continue;
 
 		/* A whole device with no table and no slices. Both conditions,
