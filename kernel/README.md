@@ -6,7 +6,9 @@ compositor above it. It is now the larger half of the project.
 It boots on **x86_64 and aarch64**, under **BIOS and UEFI**, from its own
 bootloader and from GRUB, and on its own filesystem. Above that it has physical
 and virtual memory, per-process address spaces, threads and a scheduler
-verified at thirty-two processors, interrupts and timers, system calls, a VFS
+with per-processor timers and real preemption -- built to hold 256 and
+deliberately untested above 32, which is what `smp.h` says about itself --
+interrupts and timers, system calls, a VFS
 with ReconFS, FAT32, ramfs, devfs, procfs and ext2 behind one interface,
 signals, block and USB storage, input, and an installer that can put itself
 on a disk beside an operating system that is already there.
@@ -21,8 +23,8 @@ architecture checklist, is [docs/KERNEL.md](../docs/KERNEL.md), and the version
 history is [docs/KERNEL-CHANGELOG.md](../docs/KERNEL-CHANGELOG.md).
 
 **The numbers this README quotes are checked by a verification run**, not by
-being written down: `scripts/verify-kernel.sh` boots the kernel nineteen ways
-and every path runs the same self-tests. A claim here that stops being true is
+being written down: `scripts/verify-kernel.sh` boots the kernel twenty-five
+times on every change and runs the same self-tests on each. A claim here that stops being true is
 supposed to be caught there, and this file is evidence that it is not caught
 automatically — prose is not a test.
 

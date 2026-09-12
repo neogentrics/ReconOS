@@ -832,7 +832,7 @@ without Linux, and without touching what was already on the disk.
 
 ### How it is known to work
 
-`scripts/verify-kernel.sh` boots **nineteen paths** on every change — every
+`scripts/verify-kernel.sh` boots the kernel **twenty-five times** on every change — every
 firmware, several processor counts, three disk controllers, two CPU models —
 and runs the kernel's self-tests on each. Every format it writes is checked by
 a tool that did not write it: `sgdisk`, `sfdisk`, `mtools`, and a second

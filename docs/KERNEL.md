@@ -14,10 +14,18 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.1.0`. The number says what works, and **the first digit moved because what
-works changed in kind rather than in amount**: this is the first version of this
-kernel that a person can type into, and the first that survives running out of
-memory.
+`0.1.11`. The number says what works, and **the first digit moved because what
+works changed in kind rather than in amount**: `0.1.0` was the first version of
+this kernel that a person could type into, and the first that survived running
+out of memory.
+
+Since then the rule is **a patch per bug fixed** — one `BG-` closed, one bump,
+in the same commit — which is why the number is at `.11` rather than still at
+`.0` eleven fixes later. `0.2.0` is not reached by judgement about what counts
+as a big change: it is reached when **every row in sections 1.1 to 1.9 of the
+blueprint audit is Built**, which is a fact anybody can check. Both rules are
+written beside `VERSION` in `kernel/Makefile`, and the history is in
+[KERNEL-CHANGELOG.md](KERNEL-CHANGELOG.md).
 
 Before it, the answer to exhaustion was to fail the allocation, and every screen
 it had ever drawn had been read and not touched.
@@ -57,10 +65,19 @@ And, as of 10 September 2026, the four things that earned the bump:
 - **It reads the permission bits it has always stored.** A process running as
   somebody other than the kernel is refused a file it may not open.
 
-**759 self-tests across eighteen boot paths**, every format checked against a
-tool that did not write it. The number is what the verification run reports, not
-a total kept by hand: `scripts/verify-kernel.sh` prints it, and it is copied
-here after a green run rather than incremented when a test is added.
+**1046 self-tests across twenty-five boots, none skipped**, every format
+checked against a tool that did not write it. The number is what the
+verification run reports, not a total kept by hand: `scripts/verify-kernel.sh`
+prints it, and it is copied here after a green run rather than incremented when
+a test is added.
+
+*The same rule now covers the boot count, and for a reason.* This file said
+eighteen and the READMEs said eighteen; both were corrected to nineteen on 12
+September by counting the labels in the script, which missed that the
+processor-count paths are loops. The run boots twenty-five times. **A number
+counted by eye is a number that goes stale silently** -- which is the whole
+argument this paragraph was already making about the self-test total, applied
+one line too narrowly.
 
 ## What "finished" means
 
@@ -1253,6 +1270,13 @@ driver's own report cannot tell those apart and the wire can.
   transfer failing rather than by a port-change event.
 - **Hubs.** Only devices on a root port are found. Anything behind an external
   hub is invisible, which is most of what is plugged into a laptop.
+  > **Built on 12 September**, and left written here rather than deleted,
+  > because this list is a record of what the checkpoint was. A disk behind a
+  > hub enumerates, is claimed and is usable. The hard part was not the hub
+  > protocol: xHCI does not address a device by the chain of hubs it hangs off,
+  > it wants the root port plus a twenty-bit route string of five four-bit hops
+  > — and a directly-plugged device has a route of zero, which is why every
+  > line of this worked for weeks without the concept existing.
 - **Error recovery.** A stalled endpoint is not cleared and the Bulk-Only
   Transport reset is not implemented, so a device that stalls once stays broken
   until reboot. `BOT_RESET` is defined and unused, which is the honest state.
