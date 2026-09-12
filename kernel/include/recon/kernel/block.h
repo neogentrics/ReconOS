@@ -284,6 +284,24 @@ struct block_device *block_register_slice(struct block_device *parent,
 					  u8 index, u64 first_lba, u64 count,
 					  enum block_scheme scheme);
 
+/* Says the device is gone.
+ *
+ * The structure is **not** freed and the slot is not reused. That is the whole
+ * point of the generation counter beside the id: anything still holding this
+ * device asks for it by identity, and an identity that has been retired answers
+ * null rather than answering with whatever was plugged in afterwards. Freeing
+ * the slot would make the second disk indistinguishable from the first.
+ *
+ * Every partition registered under it goes with it, because a slice of a disk
+ * that is no longer there is not a smaller disk that still is. The buffer cache
+ * drops what it held, because those blocks now describe a device that cannot be
+ * asked to confirm them.
+ *
+ * After this, every operation on the device refuses -- which is not new code:
+ * `present` has been checked at the top of read, write, flush, discard, resolve
+ * and claim since they were written. This is the function that sets it. */
+void block_unregister(struct block_device *dev);
+
 /* By index, for enumeration, and by identity, for holding on to one. */
 unsigned block_device_count(void);
 struct block_device *block_device_at(unsigned index);

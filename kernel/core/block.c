@@ -95,6 +95,43 @@ struct block_device *block_register(const char *name, const struct block_ops *op
 	return d;
 }
 
+void block_unregister(struct block_device *dev)
+{
+	unsigned i;
+
+	if (!dev || !dev->present)
+		return;
+
+	/* Partitions first. A slice whose parent has gone is not a smaller disk
+	 * that is still there, and leaving one present would leave a filesystem
+	 * holding a device that answers reads from a disk nobody can reach. */
+	for (i = 0; i < device_count; i++) {
+		struct block_device *slice = &devices[i];
+
+		if (slice == dev || !slice->present)
+			continue;
+
+		if (slice->parent == dev->id &&
+		    slice->parent_generation == dev->generation) {
+			bcache_invalidate_device(slice);
+			slice->present = false;
+			slice->generation++;
+		}
+	}
+
+	bcache_invalidate_device(dev);
+
+	dev->present = false;
+	dev->slice_count = 0;
+
+	/* The identity is retired rather than reused. Anything still holding
+	 * this device by (id, generation) now fails to find it, instead of
+	 * finding whatever is plugged in next. */
+	dev->generation++;
+
+	kprintf("block: %s is gone\n", dev->name);
+}
+
 struct block_device *block_register_slice(struct block_device *parent,
 					  u8 index, u64 first_lba, u64 count,
 					  enum block_scheme scheme)
@@ -1197,8 +1234,88 @@ void block_print_traffic(void)
 	}
 }
 
+/* A device that exists only here, so that retiring one can be exercised on a
+ * machine with no disk at all -- which is most of the verification matrix.
+ *
+ * Every operation below refuses on a device that is not present, and that
+ * refusal has been in the code since those functions were written. What did not
+ * exist was any way to reach it. This is the test that the way now exists. */
+static enum block_status ghost_read(struct block_device *dev, u64 lba,
+				    u32 count, void *buf)
+{
+	(void)dev; (void)lba; (void)count; (void)buf;
+	return BLOCK_OK;
+}
+
+static const struct block_ops ghost_ops = {
+	.read = ghost_read,
+};
+
+static bool unregister_self_test(void)
+{
+	struct block_device *d;
+	struct block_device *slice;
+	u32 id, generation;
+	u8 scratch[512];
+	bool ok = true;
+
+	d = block_register("ghost", &ghost_ops, 0, 512, 2048);
+
+	if (!d) {
+		kputs("  block: no room to register the retirement test\n");
+		return true;
+	}
+
+	id = d->id;
+	generation = d->generation;
+
+	slice = block_register_slice(d, 1, 0, 1024, BLOCK_SCHEME_MBR);
+
+	if (!block_device_by_id(id, generation)) {
+		kputs("block: a device just registered cannot be found by "
+		      "identity\n");
+		ok = false;
+	}
+
+	block_unregister(d);
+
+	/* The claim that matters: the identity is *retired*, not recycled.
+	 * Something still holding this disk must fail to find it rather than
+	 * find whatever is plugged in next. */
+	if (block_device_by_id(id, generation)) {
+		kputs("block: a retired device is still findable by its old "
+		      "identity\n");
+		ok = false;
+	}
+
+	/* And every operation refuses. Checked through the public entry point
+	 * rather than by reading the flag, because the flag being false is not
+	 * the claim -- the claim is that callers are stopped. */
+	if (block_read(d, 0, 1, scratch) == BLOCK_OK) {
+		kputs("block: a retired device still served a read\n");
+		ok = false;
+	}
+
+	/* A partition of a disk that is gone is not a smaller disk that is
+	 * still there. This is the assertion a naive implementation fails: the
+	 * parent is marked absent and the slice is left behind, holding a
+	 * filesystem that reads from a device nobody can reach. */
+	if (slice && slice->present) {
+		kputs("block: a partition outlived the disk it was on\n");
+		ok = false;
+	}
+
+	/* Retiring twice is not an error and must not double-count. */
+	block_unregister(d);
+
+	return ok;
+}
+
 bool block_self_test(void)
 {
+	if (!unregister_self_test())
+		return false;
+
 	struct block_device *d;
 	u8 *buf, *back;
 	paddr_t buf_pages, back_pages;

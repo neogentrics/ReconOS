@@ -537,6 +537,30 @@ fail:
 	return false;
 }
 
+void usb_storage_release(struct usb_device *ud)
+{
+	unsigned i;
+
+	if (!ud)
+		return;
+
+	for (i = 0; i < 4; i++) {
+		struct usb_storage *s = &drives[i];
+
+		if (s->ud != ud)
+			continue;
+
+		/* The block layer retires the identity rather than freeing the
+		 * slot, so anything still holding this disk by (id, generation)
+		 * now fails to find it instead of finding whatever is plugged
+		 * in next. */
+		if (s->bdev)
+			block_unregister(s->bdev);
+
+		kmemset(s, 0, sizeof(*s));
+	}
+}
+
 unsigned usb_storage_count(void)
 {
 	return drive_count;

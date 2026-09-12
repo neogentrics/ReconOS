@@ -23,6 +23,11 @@ struct pci_device;
  * devices, and the array is allocated for whatever it says. */
 #define XHCI_MAX_SLOTS 16
 
+/* The register field that reports how many ports a controller has is eight
+ * bits wide, so this is the ceiling the hardware itself imposes rather than a
+ * number somebody chose. Ports are numbered from one. */
+#define XHCI_MAX_PORTS 255
+
 /* One device on the bus, once it has been given a slot and an address.
  *
  * "Addressed" is a state, not a property: the controller holds a context for
@@ -135,6 +140,14 @@ struct xhci {
 
 	unsigned max_slots;
 	unsigned max_ports;
+
+	/* What each port looked like the last time anybody asked. A port is
+	 * "changed" when this disagrees with PORTSC_CCS now -- which is more
+	 * reliable than the controller's own change bit alone, because a device
+	 * plugged and unplugged between two polls sets the bit twice and leaves
+	 * the port exactly as it started. Comparing state catches that as the
+	 * nothing it is; comparing edges would report two events. */
+	bool port_present[XHCI_MAX_PORTS + 1];
 	unsigned scratchpads;
 	unsigned ports_enabled;
 
@@ -208,6 +221,25 @@ bool xhci_control_transfer(struct xhci *x, struct usb_device *ud,
  * registers it as a block device. Returns false for anything else, which is
  * not an error -- most of what is plugged into a machine is not a disk. */
 bool usb_storage_attach(struct xhci *x, struct usb_device *ud);
+
+/* Gives up whatever this device was being used as. Called when the port it is
+ * on stops reporting a connection. Safe on a device that was never claimed. */
+void usb_storage_release(struct usb_device *ud);
+
+/* Looks for ports that have changed since the last call, and claims or releases
+ * what is on them. Cheap -- one register read per port -- and called from the
+ * worker thread rather than from an interrupt, because claiming a device means
+ * control transfers that wait. */
+void xhci_poll(struct xhci *x);
+
+/* Every controller. Armed at boot to run periodically, and the count of what it
+ * has seen is printed, because "nothing has been plugged in" and "the poll
+ * stopped running" look identical from outside. */
+void usb_poll_all(void);
+void usb_print_summary(void);
+void usb_hotplug_start(void);
+unsigned usb_arrivals(void);
+unsigned usb_departures(void);
 unsigned usb_storage_count(void);
 
 /* Queues a transfer on this device's IN endpoint without waiting for it.

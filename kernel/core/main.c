@@ -384,7 +384,12 @@ void kmain(void)
 	i2c_print_summary();
 	signal_print_summary();
 	ext2_print_summary();
+	/* Ports are read once during the storage probe; from here they are read
+	 * every half second, so a stick pushed in after boot is noticed. */
+	usb_hotplug_start();
+
 	net_bring_up();
+	usb_print_summary();
 	net_print_summary();
 	shm_print_summary();
 	ramfs_print_summary();

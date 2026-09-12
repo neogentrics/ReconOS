@@ -49,6 +49,8 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/vm.h>
 #include <recon/kernel/xhci.h>
+#include <recon/kernel/work.h>
+#include <recon/kernel/timer.h>
 
 /* --- capability registers -------------------------------------------------- */
 
@@ -1611,6 +1613,206 @@ static bool claim_device(struct xhci *x, struct usb_device *ud,
 	return true;
 }
 
+/* One port that has something on it: reset it, address it, and hand it to
+ * whatever claims that kind of device.
+ *
+ * This is the body the boot walk used to hold inline. It is a function now so
+ * that a port coming up at boot and a port coming up an hour later run exactly
+ * the same code -- two paths that both claim a device are two places for the
+ * next change to be made in one of.
+ *
+ * Returns whether the port ended up enabled, which is what the boot walk
+ * counts. A port that enables and then fails to be claimed is still a port with
+ * something on it. */
+static bool port_arrived(struct xhci *x, unsigned p)
+{
+	struct usb_device *ud;
+	struct usb_path path;
+
+	if (!reset_port(x, p))
+		return false;
+
+	if (x->device_count >= XHCI_MAX_SLOTS)
+		return true;
+
+	ud = &x->devices[x->device_count];
+	kmemset(ud, 0, sizeof(*ud));
+
+	/* A device plugged straight into the machine: route zero, no
+	 * translator, depth zero. Everything a hub adds is an addition to this,
+	 * which is why the root case needs no special case. */
+	kmemset(&path, 0, sizeof(path));
+	path.root_port = p;
+	path.speed = (op32(x, XHCI_PORTSC(p)) >> 10) & 0x0F;
+
+	if (!address_device(x, &path, ud))
+		return true;
+
+	if (!claim_device(x, ud, &path, x->device_count))
+		return true;
+
+	x->device_count++;
+	return true;
+}
+
+/* One port that has stopped reporting a connection.
+ *
+ * There is no conversation to have with the device -- it is gone, and a control
+ * transfer to it would wait out its timeout and fail. So this is bookkeeping
+ * only: tell whoever claimed it to give up what it was being used as, and free
+ * the slot.
+ *
+ * The slot is freed by compacting the array, which is safe because nothing
+ * outside holds an index into it -- `claim_device` is handed the index and uses
+ * it immediately. If that ever stops being true this becomes a use-after-free,
+ * which is why it is said here rather than assumed. */
+static void port_departed(struct xhci *x, unsigned p)
+{
+	unsigned i;
+
+	for (i = 0; i < x->device_count; i++) {
+		struct usb_device *ud = &x->devices[i];
+
+		if (ud->port != p)
+			continue;
+
+		usb_storage_release(ud);
+
+		if (i + 1 < x->device_count)
+			x->devices[i] = x->devices[x->device_count - 1];
+
+		x->device_count--;
+		kmemset(&x->devices[x->device_count], 0,
+			sizeof(x->devices[0]));
+		return;
+	}
+}
+
+static unsigned arrivals;
+static unsigned departures;
+
+void xhci_poll(struct xhci *x)
+{
+	unsigned p;
+
+	if (!x)
+		return;
+
+	for (p = 1; p <= x->max_ports && p <= XHCI_MAX_PORTS; p++) {
+		u32 sc = op32(x, XHCI_PORTSC(p));
+		bool now = (sc & PORTSC_CCS) != 0;
+
+		/* Acknowledge the change bit whether or not the state moved.
+		 * Left set, it stays set for ever and tells nobody anything. */
+		if (sc & PORTSC_CSC)
+			op32_set(x, XHCI_PORTSC(p),
+				 (sc & ~PORTSC_RW1CS) | PORTSC_CSC);
+
+		if (now == x->port_present[p])
+			continue;
+
+		x->port_present[p] = now;
+
+		if (now) {
+			arrivals++;
+			port_arrived(x, p);
+		} else {
+			departures++;
+			port_departed(x, p);
+		}
+	}
+}
+
+static struct work usb_work;
+static struct timer usb_timer;
+static bool hotplug_running;
+static unsigned polls;
+
+/* Half a second. Fast enough that plugging something in feels immediate, slow
+ * enough that the cost is one register read per port twice a second. */
+#define USB_POLL_NS (500ull * 1000000ull)
+
+void usb_poll_all(void)
+{
+	unsigned i;
+
+	polls++;
+
+	for (i = 0; i < controller_count; i++)
+		xhci_poll(&controllers[i]);
+}
+
+static void usb_work_fn(void *arg)
+{
+	(void)arg;
+	usb_poll_all();
+}
+
+static void usb_timer_fn(void *arg)
+{
+	(void)arg;
+
+	/* Scheduled, not done here. A timer callback runs from the timer wheel,
+	 * and claiming an arrived device means control transfers that wait --
+	 * doing that here would hold the wheel through a device's timeout and
+	 * delay every other timer on the machine. */
+	work_schedule(&usb_work);
+
+	/* Re-armed from inside the callback, which is how a repeating timer is
+	 * built out of a one-shot one. Re-arming *before* the work runs means a
+	 * slow poll cannot stop the next one being scheduled; it means two can
+	 * overlap, which `work_schedule` refuses, and that refusal is the right
+	 * answer rather than a lost wake-up. */
+	timer_start(&usb_timer, USB_POLL_NS);
+}
+
+void usb_hotplug_start(void)
+{
+	if (hotplug_running || !controller_count)
+		return;
+
+	work_init(&usb_work, usb_work_fn, NULL);
+	timer_init(&usb_timer, usb_timer_fn, NULL);
+
+	if (!timer_start(&usb_timer, USB_POLL_NS)) {
+		kputs("usb: the hot-plug timer would not start; ports are "
+		      "read once at boot and not again\n");
+		return;
+	}
+
+	hotplug_running = true;
+}
+
+void usb_print_summary(void)
+{
+	if (!controller_count)
+		return;
+
+	kputs("USB\n");
+
+	if (!hotplug_running) {
+		kprintf("  hot-plug     : **not running** -- ports were read "
+			"once at boot\n");
+		return;
+	}
+
+	/* The poll count is here because "nothing has been plugged in" and "the
+	 * poll stopped running" are the same silence otherwise. */
+	kprintf("  hot-plug     : %u poll%s, %u arrived, %u left\n",
+		polls, polls == 1 ? "" : "s",
+		arrivals, departures);
+}
+
+unsigned usb_arrivals(void)
+{
+	return arrivals;
+}
+
+unsigned usb_departures(void)
+{
+	return departures;
+}
+
 bool xhci_attach(const struct pci_device *d)
 {
 	struct xhci *x;
@@ -1690,35 +1892,14 @@ bool xhci_attach(const struct pci_device *d)
 	 * plugged in" and "something is plugged in and has not been spoken to"
 	 * look identical from the register. */
 	for (p = 1; p <= x->max_ports; p++) {
-		struct usb_device *ud;
-		struct usb_path path;
+		if (port_arrived(x, p))
+			enabled++;
 
-		if (!reset_port(x, p))
-			continue;
-
-		enabled++;
-
-		if (x->device_count >= XHCI_MAX_SLOTS)
-			continue;
-
-		ud = &x->devices[x->device_count];
-		kmemset(ud, 0, sizeof(*ud));
-
-		/* A device plugged straight into the machine: route zero, no
-		 * translator, depth zero. Everything a hub adds is an addition
-		 * to this, which is why the root case had no path before and
-		 * needs no special case now. */
-		kmemset(&path, 0, sizeof(path));
-		path.root_port = p;
-		path.speed = (op32(x, XHCI_PORTSC(p)) >> 10) & 0x0F;
-
-		if (!address_device(x, &path, ud))
-			continue;
-
-		if (!claim_device(x, ud, &path, x->device_count))
-			continue;
-
-		x->device_count++;
+		/* Whether or not anything was claimed, remember what the port
+		 * looked like -- that is what the poll compares against. */
+		if (p <= XHCI_MAX_PORTS)
+			x->port_present[p] =
+				(op32(x, XHCI_PORTSC(p)) & PORTSC_CCS) != 0;
 	}
 
 	x->ports_enabled = enabled;
