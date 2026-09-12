@@ -118,6 +118,28 @@ x86_syscall_entry:
 
 	addq	$8, %rsp		/* the seventh argument */
 
+	/* --- the one place a return to user mode asks a question -----------
+	 *
+	 * Everything below this is the same fixed sequence of pops and a
+	 * SYSRET it has always been. What changed is that the registers those
+	 * pops are about to read can now be *edited* first -- which is how a
+	 * signal handler is entered without this path gaining a branch.
+	 *
+	 * The return value is in RAX and nothing here may disturb it, so it is
+	 * pushed and popped around the call. RDI then points at the saved
+	 * register block:
+	 *
+	 *   [0] r9  [1] r8  [2] r10  [3] rdx  [4] rsi  [5] rdi
+	 *   [6] rflags      [7] user rip      [8] user rsp
+	 *
+	 * Interrupts are already off and stay off. A signal delivered here is
+	 * delivered on the kernel stack with the user's registers still
+	 * saved, which is the only moment where both are true. */
+	pushq	%rax
+	leaq	8(%rsp), %rdi
+	call	signal_on_return
+	popq	%rax
+
 	popq	%r9
 	popq	%r8
 	popq	%r10
@@ -186,6 +208,107 @@ user_test_program:
 .Lmsg:
 	.ascii	"hello from user mode -- x86_64, ring 3\n"
 .Lmsg_end:
+
+
+/* --- a program that signals itself -----------------------------------------
+ *
+ * The end-to-end proof, and it has to be a real program in ring 3 because
+ * every interesting part of signal delivery happens on the boundary between
+ * there and here. A kernel-side test can check that the decision logic decides
+ * correctly; only this can check that a handler *runs* and that the program
+ * afterwards is still the program.
+ *
+ * What it does, in order:
+ *
+ *   1. registers a handler for signal 15, with a restorer
+ *   2. asks the kernel to send signal 15 to itself
+ *   3. makes any system call, which is what gives the kernel a return to
+ *      deliver on -- the signal is pending from step 2 and arrives here
+ *   4. the handler adds to a counter in a register the ABI says survives
+ *   5. the restorer invokes SYS_SIGRETURN and the program continues
+ *   6. exits with the counter, which is 7 only if all of that happened
+ *
+ * Seven rather than one: a counter that ends at one also ends at one when the
+ * handler ran twice and the restore lost an increment, and zero is what a
+ * program that never entered the handler at all reports.
+ */
+	.global user_signal_program
+user_signal_program:
+	/* RBX holds the count. Callee-saved, so the kernel's own save and
+	 * restore across the handler is what is being checked -- a scratch
+	 * register would prove nothing, because nothing promises to keep one. */
+	xorq	%rbx, %rbx
+
+	/* sigaction(15, HANDLER, .Lhandler, .Lrestorer) */
+	movq	$15, %rdi		/* SIGTERM */
+	movq	$2, %rsi		/* SIG_ACTION_HANDLER */
+	leaq	.Lhandler(%rip), %rdx
+	leaq	.Lrestorer(%rip), %r10
+	movq	$20, %rax
+	syscall
+
+	/* It was refused. Exit with 1 so the failure is distinguishable from
+	 * the handler never running, which exits with 0. */
+	testq	%rax, %rax
+	jnz	.Lrefused
+
+	/* getpid(), so the signal has somewhere to be sent. */
+	movq	$2, %rax		/* SYS_GETPID */
+	syscall
+	movq	%rax, %r12
+
+	/* kill(self, 15) */
+	movq	%r12, %rdi
+	movq	$15, %rsi
+	movq	$19, %rax
+	syscall
+
+	/* A system call whose return is where the signal gets delivered. The
+	 * handler runs somewhere inside this one. */
+	movq	$4, %rax		/* SYS_YIELD */
+	syscall
+
+	/* exit(rbx). Seven if the handler ran once and the restore put
+	 * everything back. */
+	movq	%rbx, %rdi
+	movq	$0, %rax		/* SYS_EXIT */
+	syscall
+
+.Lrefused:
+	movq	$1, %rdi
+	movq	$0, %rax
+	syscall
+
+.Lhandler:
+	/* RDI holds the signal number the kernel delivered. Checked, because a
+	 * handler entered with the wrong number is a handler that would run for
+	 * the wrong reason and look identical from outside. */
+	cmpq	$15, %rdi
+	jne	.Lwrong_signal
+
+	addq	$7, %rbx
+	ret				/* to the restorer the kernel pushed */
+
+.Lwrong_signal:
+	movq	$2, %rdi
+	movq	$0, %rax
+	syscall
+
+.Lrestorer:
+	movq	$22, %rax
+	syscall
+
+	/* Not reached: SYS_SIGRETURN does not come back here, it comes back
+	 * where the handler interrupted. Spinning beats running on. */
+.Lrhang:
+	jmp	.Lrhang
+
+	.global user_signal_program_end
+user_signal_program_end:
+
+	.global user_signal_program_len
+user_signal_program_len:
+	.quad	user_signal_program_end - user_signal_program
 
 	.global user_test_program_end
 user_test_program_end:

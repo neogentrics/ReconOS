@@ -93,13 +93,32 @@ void *phys_to_virt(paddr_t phys)
 	return (void *)(uintptr_t)(DIRECT_MAP_BASE + phys);
 }
 
+/* The physical address behind a direct-map pointer, or zero.
+ *
+ * The same fault x86_64 had, in the same words, and found there first: the
+ * kernel image is mapped at KERNEL_VMA, which is *above* DIRECT_MAP_BASE, so
+ * every higher-half address passed the test and the subtraction produced a
+ * number for pointers that have no direct-map physical address at all.
+ *
+ * Zero is the answer callers check for, and it was unreachable. Fixed here at
+ * the same time rather than later: this architecture has the same layout, the
+ * same drivers above it, and would have had the same silent write to nowhere
+ * the first time anything handed a driver a stack buffer. (BG-193)
+ */
 paddr_t virt_to_phys(const void *virt)
 {
 	u64 v = (u64)(uintptr_t)virt;
 
-	if (direct_map_live && v >= DIRECT_MAP_BASE)
+	if (direct_map_live && v >= DIRECT_MAP_BASE && v < KERNEL_VMA)
 		return (paddr_t)(v - DIRECT_MAP_BASE);
-	return (paddr_t)v;
+
+	/* Below the higher half: identity mapped, from before the switch. */
+	if (v < DIRECT_MAP_BASE)
+		return (paddr_t)v;
+
+	/* Higher half and not the direct map. There is no physical address to
+	 * give, and giving one anyway is the bug. */
+	return 0;
 }
 
 static u64 *table_at(paddr_t phys)

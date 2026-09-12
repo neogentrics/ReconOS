@@ -3820,6 +3820,270 @@ The volume file had been reading correctly all boot. It started reading a
   are in the table at once. The test that found it was not written to look for
   it.
 
+### BG-193 -- virt_to_phys answered for addresses it cannot answer for, so a driver wrote to memory that does not exist and reported success
+
+- **Found:** 12 September 2026, by ext2 reading a 512-byte superblock into a
+  stack array.
+- **Cost:** any buffer handed to a device driver from outside the direct map was
+  written to a physical address computed from nonsense. On this machine the
+  writes vanished; on a machine that decodes that part of the address space they
+  would have landed on something. Every layer reported success.
+- **Status:** fixed, on both architectures.
+
+```c
+paddr_t virt_to_phys(const void *virt)
+{
+	u64 v = (u64)(uintptr_t)virt;
+
+	if (direct_map_live && v >= DIRECT_MAP_BASE)
+		return (paddr_t)(v - DIRECT_MAP_BASE);
+	return (paddr_t)v;
+}
+```
+
+**The test is one-sided.** Physical memory is mapped from `DIRECT_MAP_BASE`
+(`0xFFFF800000000000`) upward, and the kernel image runs at `KERNEL_VMA`
+(`0xFFFFFFFF80000000`) -- which is *above* it. So a stack address, a pointer
+into the kernel image, a device mapping, anything in the higher half at all,
+passed the test and was subtracted.
+
+For a stack buffer at `0xFFFFFFFF801DB7F0` that produces `0x7FFF801DB7F0` --
+about a hundred and forty terabytes in, which is not memory on any machine this
+runs on.
+
+### The guard against this already existed and could never fire
+
+`virtio_blk` has carried the correct comment since it was written:
+
+> The buffer the caller handed us has to be somewhere the *device* can reach,
+> which means a physical address, which means it has to be in the direct map.
+> **A stack address or anything else would translate to a physical page that has
+> nothing to do with the buffer.**
+
+and the check under it:
+
+```c
+paddr_t p = virt_to_phys(buf);
+
+if (!p)
+	return false;
+```
+
+It tests for zero. `virt_to_phys` never returned zero. **The guard was correct,
+the comment was correct, and the function they both depended on made the
+condition unreachable.**
+
+That is this project's most repeated shape, in its purest form yet: not a wrong
+answer, but a check resting on a premise nobody had verified -- the same family
+as BG-190 (a map that could not distinguish empty from occupied), BG-188
+(recovery's promise enforced by nobody), and BG-186 (counters nothing printed).
+
+### Why it stayed invisible
+
+**Every other caller in the kernel hands drivers pages from the page
+allocator**, and a page from the allocator is a direct-map address by
+construction. The block self-test, ReconFS, the partition reader, the installer,
+USB storage -- all of them. There was no call in the kernel that could expose
+this until a filesystem read a 1024-byte superblock into a local array.
+
+What it looked like from above:
+
+```
+blk entry : lba 0 count 1 range=0 buf=1     the request is well formed
+blk diag  : queued lba 0, serving=0, head=1 it reaches the queue
+blk diag  : issued lba 0 count 1 -> 0       the driver reports success
+ext2 probe: lba0 st=0 b0=aa b1=aa           the buffer still holds its fill byte
+```
+
+### Measured, one variable at a time
+
+The same device, the same LBA, the same count, two buffers:
+
+```
+stack buf=ffffffff801db7f0 st=0 b0=aa b1=aa                  nothing transferred
+page  buf=ffff8000009f2000 st=0 b0=0 b1=10 b56=53 b57=ef     correct
+```
+
+`b1=0x10` is `inodes_count = 4096`; `b56 b57 = 53 ef` is the ext2 magic. The
+difference is not alignment -- both are 16-byte aligned -- it is **which region
+the pointer is in**.
+
+### Fixed by refusing rather than guessing
+
+The direct map is now bounded at both ends. An address below `DIRECT_MAP_BASE`
+is identity-mapped from before the switch and is still its own physical address,
+which is the path early boot takes. An address in the higher half that is not in
+the direct map has no physical address to give, and zero is returned -- which is
+what every caller was already checking for.
+
+**aarch64 had the identical fault with the identical constants**, and was fixed
+in the same change rather than left for whatever found it there. It has the same
+layout and the same drivers above it.
+
+### And ext2 was wrong too, separately
+
+The kernel's rule is that a buffer handed to a driver comes from the page
+allocator. `ext2_mount` used a local array. Both were fixed: the one that let it
+happen, and the one that did it.
+
+### BG-192 -- The kernel boots from a disk over BIOS and then cannot see it
+
+- **Found:** 12 September 2026, by the self-test assertion added for BG-187.
+- **Cost:** on a machine with no UEFI, ReconOS starts and has no storage. It
+  cannot mount its own volume, read its own programs, or write anything down.
+- **Status:** **open.** This is a missing driver, not a fault in existing code.
+
+The BIOS path of `install-then-boot-test.sh` attaches the installed disk as
+**IDE**:
+
+```
+-drive "file=$W/target.img,format=raw,if=ide"
+```
+
+SeaBIOS reads that disk through INT 13h, which is how stage 1 and stage 2 load
+and how the kernel gets into memory. Then the kernel looks for storage and finds
+none:
+
+```
+Storage
+  pci          : 6 devices on bus 0
+  devices      : none found
+```
+
+There are three block drivers -- **virtio**, **NVMe** and **AHCI** -- and no
+driver for a legacy IDE/ATA controller. PCI enumeration works; nothing claims
+the device.
+
+### Why this matters more than it looks
+
+Checkpoint 16 exists because *a machine with no UEFI at all* is a real machine
+somebody owns, and checkpoint 17 is booting on one. **The machines that have no
+UEFI are the same machines likely to present their disk as IDE** -- or as SATA
+in a legacy/compatibility mode that looks like it. So the configuration this
+kernel is least able to read is the one the BIOS bootloader exists to serve.
+
+The boot succeeds, which is what makes it quiet: every assertion about the BIOS
+path has been about *reaching the kernel*, and reaching it is not the same as
+being able to use the machine afterwards.
+
+### What it is not
+
+Not a regression, and not the harness being unfair. `if=ide` is a reasonable
+thing for that test to do -- it is testing a machine with no UEFI, and IDE is
+what such a machine has. The harness was right and nothing was reading its
+output.
+
+#### What this means for BG-187
+
+BG-187 predicted the second boot would go red from tests that leave files
+behind. It did not, and not because the tests are idempotent: **there is no
+volume on that boot to write to.** The only second-boot-on-one-disk in the whole
+matrix cannot mount the disk. So that half remains unexercised and is recorded
+as such rather than assumed closed.
+
+### BG-191 -- The BIOS loader handed the kernel dirty registers, breaking its own stated invariant
+
+- **Found:** 12 September 2026. `handoff : rbx arrived holding something`.
+- **Cost:** the two boot paths were distinguishable to the kernel, which is
+  precisely what the loader's own comment says must not be true.
+- **Status:** fixed.
+
+`reconboot` clears every register it does not need before jumping to the kernel,
+under a long comment explaining why: a kernel that accidentally reads one works
+on the firmware it was written against and fails on the next, and that failure
+arrives as a machine that will not boot with no console to say why.
+
+The **BIOS** loader did not. Its final handoff set `RDI`, computed `RAX`, used
+`RCX` as scratch, and jumped:
+
+```asm
+/* RDI is the first argument in the ABI the kernel was compiled for.
+ * The kernel must not be able to tell which loader started it. */
+	movl	handoff_addr, %edi
+	...
+	jmp	*%rax
+```
+
+**The comment states the invariant the code does not keep.** `RBX`, `RDX`,
+`RSI`, `RBP` and `R8`-`R15` arrived holding whatever stage 2 left in them -- so
+a kernel reading one got firmware leftovers under UEFI and loader leftovers
+under BIOS, different rubbish from the two paths that are supposed to be
+indistinguishable.
+
+Two registers still survive, for the reasons `reconboot` already gives: `RDI`
+carries the handoff, and `RAX` holds the address being jumped to, because naming
+a target without a register to hold it is not something the instruction offers.
+`RSP` is left alone deliberately -- it was set above to a stack clear of stage 2
+and the page tables.
+
+### The four of these share one cause
+
+None was found by reading code. All four came out of **adding an assertion to a
+boot nothing had been reading** -- the BIOS boot's self-tests, which
+`install-then-boot-test.sh` captured in full and grepped only for the kernel
+banner and a partition count. Two of them had been failing on every BIOS boot
+since the checks were written.
+
+That is the same mechanism as BG-186 the day before (counters found because an
+unrelated cache test failed) and BG-099 on the desktop (found because two things
+that should have agreed did not, neither being watched on purpose).
+
+### BG-190 -- The processor identity check could not tell an empty map from one processor
+
+- **Found:** 12 September 2026, on the BIOS boot, by the same assertion.
+- **Cost:** `telling them apart : FAIL` on every boot of a machine with no MADT.
+- **Status:** fixed.
+
+```
+smp: APIC 0x0 belongs to processor 0 but the fast map says 0
+```
+
+The two maps are asymmetric, and the asymmetry is documented in the code that
+created it. The **reverse** map stores the kernel index *plus one*, so zero is
+free to mean "not a processor we know about" and the array needs no
+initialisation pass. The **forward** map stores the raw identifier -- and APIC 0
+is both a legitimate processor and what an untouched array already contains.
+
+A machine that boots without a MADT never registers anybody. Both arrays stay
+zero, and the check read slot 0 as a real processor holding APIC 0, looked it up,
+and found nothing pointing back. **It reported the map as broken on a machine
+that had no map.**
+
+Fixed with a count of how many have ever been registered. When it is zero the
+check says so out loud rather than passing quietly -- a check that prints nothing
+when it did not run looks exactly like one that ran and was happy, which is
+BG-187 restated.
+
+### BG-189 -- Changing VERSION rebuilt nothing, so the kernel printed the old number
+
+- **Found:** 12 September 2026, from a boot that reported `ReconOS kernel 0.1.0`
+  out of a tree whose Makefile said `0.1.7`.
+- **Cost:** the version a running kernel reports can silently disagree with the
+  version in the tree. A whole verification run -- 951 self-tests, no failures --
+  had already passed against a mislabelled kernel.
+- **Status:** fixed.
+
+`VERSION` is handed to the compiler with `-D`, and the object rules were:
+
+```make
+$(BUILD)/%.o: %.c
+```
+
+**The Makefile was not a prerequisite.** So raising the version marked nothing
+dirty, `make` rebuilt nothing, and `main.c` -- which is the file that embeds and
+prints it -- kept the number it was last compiled with. The Makefile said one
+thing and the binary said another, and neither was obviously wrong.
+
+A *clean* build was always correct. Only incremental builds were wrong, which is
+every build anybody actually does. That is the same shape as BG-134 on the
+desktop: **the one configuration that ships was the one configuration nothing
+ran**, inverted -- here the one configuration nothing ran is the one everybody
+uses.
+
+Fixed by making every object depend on the Makefile. The cost is that editing it
+rebuilds everything, which is the correct price: almost anything changed in that
+file changes how the code is compiled.
+
 ### BG-188 -- Recovery wrote to the volume it was inspecting, and the read-only promise was never enforced
 
 - **Found:** 11 September 2026, by matrix 22. The only failing path in a

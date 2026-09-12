@@ -268,6 +268,42 @@ long_entry:
 	movl	entry_low, %ecx
 	orq	%rcx, %rax
 
+/* --- and every register the kernel did not ask for is cleared -------------
+ *
+ * The comment above says the kernel must not be able to tell which loader
+ * started it. It could. reconboot clears its registers before jumping and this
+ * loader did not, so a kernel that accidentally read one got firmware leftovers
+ * under UEFI and stage 2's leftovers under BIOS -- different rubbish from the
+ * two paths that are supposed to be indistinguishable.
+ *
+ * Found on 11 September by a self-test that had been failing on every BIOS boot
+ * since the check was written, on a boot nothing was reading (BG-187, BG-191):
+ *
+ *     handoff      : rbx arrived holding something
+ *
+ * Two registers survive, and for the same reasons reconboot gives. RDI carries
+ * the handoff, which is the one thing the kernel asked for. RAX holds the
+ * address being jumped to, because naming a target without a register to hold
+ * it is not something this instruction offers -- and it is a number the kernel
+ * already knows.
+ *
+ * RSP is left alone: it was set deliberately above, to a stack clear of stage 2
+ * and the page tables, and the kernel runs on it until it builds its own.
+ */
+	xorl	%ecx, %ecx
+	xorl	%ebx, %ebx
+	xorl	%edx, %edx
+	xorl	%esi, %esi
+	xorl	%ebp, %ebp
+	xorl	%r8d, %r8d
+	xorl	%r9d, %r9d
+	xorl	%r10d, %r10d
+	xorl	%r11d, %r11d
+	xorl	%r12d, %r12d
+	xorl	%r13d, %r13d
+	xorl	%r14d, %r14d
+	xorl	%r15d, %r15d
+
 	jmp	*%rax
 
 /* --- data ----------------------------------------------------------------- */

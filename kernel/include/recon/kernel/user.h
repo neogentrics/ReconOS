@@ -101,6 +101,33 @@ enum {
 	 * first half of a directory alongside a success has no way to know. */
 	SYS_LIST,
 
+	/* (process, signal) -> whether it was recorded.
+	 *
+	 * Recorded, not delivered. The target acts on it when one of its
+	 * threads next returns to user mode, which may be immediately or may
+	 * be after it has finished what it was doing. A caller that needs to
+	 * know it *arrived* is asking a different question than this answers. */
+	SYS_KILL,
+
+	/* (signal, what, handler, restorer) -> whether it was accepted.
+	 *
+	 * `restorer` is required for a handler and is where the handler
+	 * returns to -- a few instructions that invoke SYS_SIGRETURN. Refused
+	 * without one, because a handler with nowhere to return to runs once
+	 * and then executes whatever follows it in memory. */
+	SYS_SIGACTION,
+
+	/* (mask) -> what the mask was before.
+	 *
+	 * SIGKILL is never blocked whatever is asked for, and asking is not an
+	 * error: a program masking everything is doing something reasonable. */
+	SYS_SIGMASK,
+
+	/* Restores what a handler interrupted. Made by the restorer, never by
+	 * a program directly -- the frame it reads carries a marker this
+	 * kernel wrote, and one without it is refused. */
+	SYS_SIGRETURN,
+
 	SYS_MAX
 };
 
@@ -207,6 +234,9 @@ struct thread *user_thread_create(const char *name, const void *code,
 				  size_t code_len);
 
 bool user_self_test(void);
+
+/* A program that signals itself, handles it, and carries on. */
+bool user_signal_test(void);
 
 /* Runs a ring-3 program that calls SYS_RANDOM, SYS_MACHINE and SYS_WALLTIME and
  * checks its own answers. Separate from user_self_test because that one is

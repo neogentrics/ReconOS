@@ -88,13 +88,52 @@ void *phys_to_virt(paddr_t phys)
 	return (void *)(uintptr_t)(DIRECT_MAP_BASE + phys);
 }
 
+/* The physical address behind a direct-map pointer, or zero.
+ *
+ * **Zero is the important answer**, and it used to be unreachable. The test was
+ * `v >= DIRECT_MAP_BASE`, and the kernel image is mapped at KERNEL_VMA
+ * (0xFFFFFFFF80000000), which is *above* the direct map base
+ * (0xFFFF800000000000) -- so a stack address, a pointer into the kernel image,
+ * anything in the higher half at all, passed the test. The subtraction then
+ * produced a number: for a stack buffer at 0xFFFFFFFF801DB7F0 it produced
+ * 0x7FFF801DB7F0, about 140 terabytes in, which is not memory on any machine
+ * this runs on.
+ *
+ * That number is *non-zero*, and every caller checks for zero. virtio-blk's
+ * `reachable()` has carried the right comment since it was written -- "a stack
+ * address or anything else would translate to a physical page that has nothing
+ * to do with the buffer" -- and its guard could not fire, because the thing it
+ * guards against never returned zero.
+ *
+ * What it looked like from above: a read that was entered, queued, issued to
+ * the driver and reported BLOCK_OK, with the caller's buffer untouched. The
+ * device wrote where it was told. Nothing anywhere was in a position to
+ * notice, and it stayed invisible because every other caller in the kernel
+ * hands drivers pages from the page allocator, which are direct-map addresses
+ * by construction. It took a filesystem reading a 512-byte superblock into a
+ * stack array to find it. (BG-193)
+ *
+ * The bound at the top is the kernel image. Physical memory is mapped from
+ * DIRECT_MAP_BASE upward and there is no machine here with 128TB of it, so
+ * anything at or above KERNEL_VMA is by construction not a direct-map address.
+ */
 paddr_t virt_to_phys(const void *virt)
 {
 	u64 v = (u64)(uintptr_t)virt;
 
-	if (direct_map_live && v >= DIRECT_MAP_BASE)
+	if (direct_map_live && v >= DIRECT_MAP_BASE && v < KERNEL_VMA)
 		return (paddr_t)(v - DIRECT_MAP_BASE);
-	return (paddr_t)v;
+
+	/* Below the higher half at all: an identity-mapped address from before
+	 * the switch, which is its own physical address. This is the path
+	 * early boot takes and it is still correct. */
+	if (v < DIRECT_MAP_BASE)
+		return (paddr_t)v;
+
+	/* In the higher half and not in the direct map -- the kernel image,
+	 * a stack, a device mapping. There is no physical address this can
+	 * answer with, and answering anyway is what BG-193 was. */
+	return 0;
 }
 
 static u64 *table_at(paddr_t phys)

@@ -486,6 +486,7 @@ static i64 reconfs_list_path(const char *rest, char *names, u64 names_len,
 
 static const struct mount mounts[] = {
 	{ "/dev/", devfs_open,   devfs_list,   "devfs"  },
+	{ "/proc/", procfs_open, procfs_list,  "procfs" },
 	{ "/tmp/", ramfs_open,   ramfs_list,   "ramfs"  },
 	{ "/",     reconfs_open, reconfs_list_path, "reconfs" },
 };

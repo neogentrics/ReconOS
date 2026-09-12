@@ -622,9 +622,14 @@ static u32 *ep_ctx(struct xhci *x, u8 *input, unsigned dci)
 /* Speed is reported by the port, and the default control endpoint's maximum
  * packet size follows from it. Guessing this wrong means the first descriptor
  * read either truncates or overruns. */
-static u32 max_packet_for(u32 portsc)
+/* The starting packet size for endpoint zero, by speed.
+ *
+ * Taken as a speed rather than as a PORTSC value because a device behind a hub
+ * has no PORTSC of its own -- its speed comes from the hub's port status, and
+ * the root port it hangs under may be running at a different one entirely. */
+static u32 max_packet_for_speed(unsigned speed)
 {
-	switch ((portsc >> 10) & 0x0F) {
+	switch (speed & 0x0F) {
 	case 1:  return 64;	/* full speed: 8, 16, 32 or 64 -- 64 is legal
 				 * to start with and is corrected once the
 				 * descriptor has been read */
@@ -633,6 +638,11 @@ static u32 max_packet_for(u32 portsc)
 	case 4:  return 512;	/* super speed */
 	default: return 64;
 	}
+}
+
+static u32 max_packet_for(u32 portsc)
+{
+	return max_packet_for_speed((portsc >> 10) & 0x0F);
 }
 
 /* bMaxPacketSize0 as the device reports it. Below super speed it is the size
@@ -697,9 +707,36 @@ static paddr_t ring_push(struct usb_ring *r, u64 parameter, u32 status,
 
 /* Brings one port's device to the point where it will answer control
  * transfers: a slot, a context, an address. */
-static bool address_device(struct xhci *x, unsigned port, struct usb_device *ud)
+/* Where a device is, which stops being "a port number" the moment a hub is
+ * plugged in.
+ *
+ * xHCI does not address a device by the chain of hubs it hangs off. It addresses
+ * it by the **root port** it is ultimately under, plus a twenty-bit **route
+ * string**: five four-bit hop numbers, the first hop in the lowest nibble. A
+ * device plugged straight into the machine has a route of zero, which is why
+ * everything worked until now without this existing.
+ *
+ * `parent_slot` and `parent_port` are only consulted for a full or low speed
+ * device behind a high speed hub -- that hub has to translate for it, and the
+ * controller needs to know which hub and which of its ports. For everything
+ * else they are zero and the controller ignores them, which is why they are not
+ * conditional here: writing a field the hardware is going to ignore is cheaper
+ * than a branch that has to be right.
+ */
+struct usb_path {
+	unsigned root_port;	/* the port on the machine itself */
+	u32 route;		/* five nibbles, first hop lowest */
+	unsigned speed;		/* as the port reported it */
+	unsigned parent_slot;	/* the hub, when one is translating */
+	unsigned parent_port;	/* which of its ports */
+	unsigned depth;		/* hops from the root, 0 for a direct device */
+};
+
+static bool address_device(struct xhci *x, const struct usb_path *path,
+			   struct usb_device *ud)
 {
 	struct trb result;
+	unsigned port = path->root_port;
 	u32 portsc = op32(x, XHCI_PORTSC(port));
 	u8 *input;
 	u32 *sc, *ep0;
@@ -745,12 +782,18 @@ static bool address_device(struct xhci *x, unsigned port, struct usb_device *ud)
 
 	sc = slot_ctx(x, input);
 	sc[0] = (1u << 27) |				/* context entries: 1 */
-		(((portsc >> 10) & 0x0F) << 20);	/* speed */
+		((path->speed & 0x0F) << 20) |		/* speed */
+		(path->route & 0x000FFFFF);		/* route string */
 	sc[1] = (u32)port << 16;			/* root hub port */
+
+	/* Only meaningful when a high speed hub is translating for a slower
+	 * device below it. Zero otherwise, and ignored by the controller. */
+	sc[2] = (u32)(path->parent_slot & 0xFF) |
+		((u32)(path->parent_port & 0xFF) << 8);
 
 	ep0 = ep_ctx(x, input, 1);
 	ep0[1] = (4u << 3) |				/* control endpoint */
-		 (max_packet_for(portsc) << 16) |
+		 (max_packet_for_speed(path->speed) << 16) |
 		 (3u << 1);				/* error count */
 	((u64 *)ep0)[1] = ud->control.phys | 1;		/* dequeue pointer, cycle */
 
@@ -1222,6 +1265,352 @@ unsigned xhci_ports_connected(struct xhci *x)
 
 /* --- attaching ------------------------------------------------------------- */
 
+
+/* --- hubs -----------------------------------------------------------------
+ *
+ * A hub is an ordinary USB device that happens to have ports. It is class 9,
+ * it answers a handful of class-specific requests, and everything below it is
+ * enumerated exactly the way a device on a root port is -- with a route string
+ * saying how to get there.
+ *
+ * This matters more than it sounds. A keyboard and a mouse on the front of a
+ * desktop are usually behind an internal hub; every USB-C dock is a hub; and a
+ * machine with one visible socket often has two ports and a hub between them.
+ * Until now `ports are enumerated once at boot` also quietly meant *and only
+ * what is plugged straight into the machine*.
+ *
+ * --- What a port has to be told, and in what order ---
+ *
+ * Power, then wait, then look. A hub port comes up unpowered, and a device that
+ * has not been given power does not report itself connected -- so a hub read
+ * immediately after being found looks like a hub with nothing in it. The wait
+ * is the hub's own bPwrOn2PwrGood, in units of two milliseconds, because a hub
+ * that needs a hundred milliseconds and is given twenty reports an empty port
+ * for a device that is there.
+ */
+
+#define HUB_CLASS		0x09
+
+/* Class requests. The recipient in the top bits is what makes a request go to
+ * a *port* rather than to the hub itself. */
+#define HUB_REQ_GET_STATUS	0x00
+#define HUB_REQ_CLEAR_FEATURE	0x01
+#define HUB_REQ_SET_FEATURE	0x03
+#define HUB_REQ_GET_DESCRIPTOR	0x06
+
+#define HUB_RT_GET_DESC		0xA0	/* device to host, class, device */
+#define HUB_RT_PORT_GET		0xA3	/* device to host, class, other */
+#define HUB_RT_PORT_SET		0x23	/* host to device, class, other */
+
+#define PORT_FEAT_RESET		4
+#define PORT_FEAT_POWER		8
+#define PORT_FEAT_C_CONNECTION	16
+#define PORT_FEAT_C_RESET	20
+
+#define PORT_STAT_CONNECTION	0x0001
+#define PORT_STAT_ENABLE	0x0002
+#define PORT_STAT_LOW_SPEED	0x0200
+#define PORT_STAT_HIGH_SPEED	0x0400
+
+/* What the hub says about itself. Only the first seven bytes are fixed; what
+ * follows is a per-port bitmap whose length depends on the port count, and
+ * nothing here needs it. */
+struct hub_descriptor {
+	u8  length;
+	u8  type;
+	u8  ports;
+	u16 characteristics;
+	u8  power_on_to_good;	/* in 2ms units */
+	u8  control_current;
+} __attribute__((packed));
+
+static unsigned hubs_found;
+static unsigned behind_hubs;
+
+/* The speed a hub port reports, translated into the numbering the slot context
+ * uses. A hub reports low and high as flags and full speed as neither, which is
+ * three states in two bits and the one place this is easy to get backwards. */
+static unsigned speed_from_port_status(u16 status)
+{
+	if (status & PORT_STAT_LOW_SPEED)
+		return 2;	/* low */
+
+	if (status & PORT_STAT_HIGH_SPEED)
+		return 3;	/* high */
+
+	return 1;		/* full */
+}
+
+/* One hop added to a route string. Nibble `depth`, counting from zero, and
+ * ports above 15 are pinned at 15 because that is what the specification says
+ * to do rather than a shortcut -- a route nibble is four bits and a hub may
+ * have more ports than that. */
+static u32 route_with(u32 route, unsigned depth, unsigned port)
+{
+	if (depth >= 5)
+		return route;		/* five hops is the architectural limit */
+
+	if (port > 15)
+		port = 15;
+
+	return route | ((u32)port << (depth * 4));
+}
+
+static bool hub_port_status(struct xhci *x, struct usb_device *hub,
+			    unsigned port, u16 *status, u16 *change)
+{
+	u8 *buf = hub->buffer;
+
+	if (!xhci_control_transfer(x, hub, HUB_RT_PORT_GET, HUB_REQ_GET_STATUS,
+				   0, (u16)port, buf, 4))
+		return false;
+
+	if (status)
+		*status = (u16)(buf[0] | ((u16)buf[1] << 8));
+	if (change)
+		*change = (u16)(buf[2] | ((u16)buf[3] << 8));
+
+	return true;
+}
+
+static bool hub_port_feature(struct xhci *x, struct usb_device *hub,
+			     unsigned port, u16 feature, bool set)
+{
+	return xhci_control_transfer(x, hub, HUB_RT_PORT_SET,
+				     set ? HUB_REQ_SET_FEATURE
+					 : HUB_REQ_CLEAR_FEATURE,
+				     feature, (u16)port, NULL, 0);
+}
+
+/* Resets one port and waits for the hub to say it finished.
+ *
+ * The reset bit clearing is not the signal -- `C_PORT_RESET` in the change word
+ * is. A port read while the reset is still running reports not-enabled, which
+ * is indistinguishable from a device that refused to come up. */
+static bool hub_reset_port(struct xhci *x, struct usb_device *hub,
+			   unsigned port, u16 *status)
+{
+	unsigned tries;
+
+	if (!hub_port_feature(x, hub, port, PORT_FEAT_RESET, true))
+		return false;
+
+	for (tries = 0; tries < 50; tries++) {
+		u16 st = 0, ch = 0;
+
+		busy_ms(10);
+
+		if (!hub_port_status(x, hub, port, &st, &ch))
+			return false;
+
+		if (ch & (1u << (PORT_FEAT_C_RESET - 16))) {
+			hub_port_feature(x, hub, port, PORT_FEAT_C_RESET,
+					 false);
+
+			if (status)
+				*status = st;
+
+			return (st & PORT_STAT_ENABLE) != 0;
+		}
+	}
+
+	return false;
+}
+
+/* Enumerates everything on one hub.
+ *
+ * Depth-limited on purpose. Five hops is what the route string can express, and
+ * a chain longer than that is not something this refuses politely -- it is
+ * something it cannot address at all, so the limit is checked rather than
+ * discovered. */
+static void enumerate_hub(struct xhci *x, struct usb_device *hub,
+			  const struct usb_path *hub_path);
+
+static bool claim_device(struct xhci *x, struct usb_device *ud,
+			 const struct usb_path *path, unsigned index);
+
+static void enumerate_hub(struct xhci *x, struct usb_device *hub,
+			  const struct usb_path *hub_path)
+{
+	struct hub_descriptor *hd = hub->buffer;
+	unsigned ports, p;
+	unsigned settle;
+
+	if (hub_path->depth >= 4) {
+		kprintf("  xhci         : a hub at depth %u is deeper than a "
+			"route string can name; what is below it is not "
+			"reachable\n", hub_path->depth);
+		return;
+	}
+
+	/* The hub descriptor. Type 0x29 is the USB 2.0 one; a SuperSpeed hub
+	 * uses 0x2A and this asks for 0x29 first because that is what the hubs
+	 * this can actually meet report. */
+	if (!xhci_control_transfer(x, hub, HUB_RT_GET_DESC,
+				   HUB_REQ_GET_DESCRIPTOR, 0x2900, 0,
+				   hub->buffer, sizeof(*hd))) {
+		kputs("  xhci         : a hub would not describe itself\n");
+		return;
+	}
+
+	ports = hd->ports;
+	settle = (unsigned)hd->power_on_to_good * 2;
+
+	if (!ports || ports > 15) {
+		kprintf("  xhci         : a hub claims %u ports, which is not "
+			"a number of ports\n", ports);
+		return;
+	}
+
+	hubs_found++;
+
+	kprintf("  usb hub      : %u ports, %u ms to power\n", ports, settle);
+
+	/* Power first, every port, then wait once. Waiting per port would be
+	 * correct and would take fifteen times as long for no benefit: the
+	 * hub powers them independently and the settle time is the same. */
+	for (p = 1; p <= ports; p++)
+		hub_port_feature(x, hub, p, PORT_FEAT_POWER, true);
+
+	busy_ms(settle < 20 ? 20 : settle);
+
+	for (p = 1; p <= ports; p++) {
+		u16 st = 0, ch = 0;
+		struct usb_path path;
+		struct usb_device *ud;
+
+		if (!hub_port_status(x, hub, p, &st, &ch))
+			continue;
+
+		if (!(st & PORT_STAT_CONNECTION))
+			continue;
+
+		/* The connection change is acknowledged whether or not the
+		 * device below comes up. A change left set is one the hub goes
+		 * on reporting, and on a machine that ever polls this it would
+		 * look like a device being plugged in over and over. */
+		if (ch & (1u << (PORT_FEAT_C_CONNECTION - 16)))
+			hub_port_feature(x, hub, p, PORT_FEAT_C_CONNECTION,
+					 false);
+
+		if (!hub_reset_port(x, hub, p, &st)) {
+			kprintf("  xhci         : hub port %u has something in "
+				"it that would not reset\n", p);
+			continue;
+		}
+
+		if (x->device_count >= XHCI_MAX_SLOTS)
+			return;
+
+		kmemset(&path, 0, sizeof(path));
+		path.root_port   = hub_path->root_port;
+		path.route       = route_with(hub_path->route, hub_path->depth,
+					      p);
+		path.speed       = speed_from_port_status(st);
+		path.depth       = hub_path->depth + 1;
+
+		/* Only a high speed hub translates, and only for something
+		 * slower than itself. Setting these for a device running at
+		 * the hub's own speed tells the controller to route through a
+		 * translator that is not involved. */
+		if (hub_path->speed == 3 && path.speed != 3) {
+			path.parent_slot = hub->slot;
+			path.parent_port = p;
+		}
+
+		ud = &x->devices[x->device_count];
+		kmemset(ud, 0, sizeof(*ud));
+
+		if (!address_device(x, &path, ud))
+			continue;
+
+		behind_hubs++;
+
+		if (claim_device(x, ud, &path, x->device_count))
+			x->device_count++;
+	}
+}
+
+unsigned xhci_hubs_found(void)
+{
+	return hubs_found;
+}
+
+unsigned xhci_devices_behind_hubs(void)
+{
+	return behind_hubs;
+}
+
+/* Everything done to a device once it has an address, wherever it hangs.
+ *
+ * Extracted because a device on a hub needs exactly this and nothing else --
+ * and because the alternative, a second copy for the hub path, is the
+ * arrangement that lets the two drift until one of them stops offering devices
+ * to a class driver the other one does.
+ *
+ * Returns whether the slot should be kept. A device that cannot describe itself
+ * is not kept; one that cannot be configured is, because it is still addressed
+ * and a driver needing only control transfers can still have it.
+ */
+static bool claim_device(struct xhci *x, struct usb_device *ud,
+			 const struct usb_path *path, unsigned index)
+{
+	unsigned p = path->root_port;
+
+	if (!xhci_describe_device(x, ud)) {
+		kprintf("  xhci         : port %u took an address and would "
+			"not describe itself\n", p);
+		return false;
+	}
+
+	if (!xhci_configure_device(x, ud))
+		kprintf("  xhci         : port %u would not configure; "
+			"control transfers only\n", p);
+
+	if (path->depth)
+		kprintf("  usb%u         : %04x:%04x behind a hub on port %u "
+			"(route %05x), class %u.%u protocol %u, %u-byte "
+			"packets\n", index, ud->vendor, ud->product, p,
+			path->route, ud->usb_class, ud->usb_subclass,
+			ud->usb_protocol, ud->max_packet);
+	else
+		kprintf("  usb%u         : %04x:%04x on port %u, class %u.%u "
+			"protocol %u, %u-byte packets\n", index, ud->vendor,
+			ud->product, p, ud->usb_class, ud->usb_subclass,
+			ud->usb_protocol, ud->max_packet);
+
+	if (ud->configured && ud->in_is_interrupt)
+		kprintf("  usb%u         : interrupt in %02x (%u byte), "
+			"interval %u\n", index, ud->in_ep, ud->in_packet,
+			ud->in_interval);
+	else if (ud->configured)
+		kprintf("  usb%u         : bulk in %02x (%u byte), bulk out "
+			"%02x (%u byte)\n", index, ud->in_ep, ud->in_packet,
+			ud->out_ep, ud->out_packet);
+
+	/* Offered to each class driver in turn. Each refuses anything that is
+	 * not its own, which is most of what gets plugged in. */
+	usb_storage_attach(x, ud);
+	usb_hid_attach(x, ud);
+
+	/* And if it is a hub, what is below it.
+	 *
+	 * After the class drivers, not before: a hub is not going to be claimed
+	 * by one, and doing it in this order means the device is completely
+	 * set up before anything recurses through it. The slot is counted by
+	 * the caller *after* this returns, so a device found below is placed
+	 * in the next slot rather than on top of this one -- which is why
+	 * enumerate_hub advances device_count itself.
+	 */
+	if (ud->usb_class == HUB_CLASS) {
+		x->device_count = index + 1;
+		enumerate_hub(x, ud, path);
+		return false;	/* already counted */
+	}
+
+	return true;
+}
+
 bool xhci_attach(const struct pci_device *d)
 {
 	struct xhci *x;
@@ -1302,6 +1691,7 @@ bool xhci_attach(const struct pci_device *d)
 	 * look identical from the register. */
 	for (p = 1; p <= x->max_ports; p++) {
 		struct usb_device *ud;
+		struct usb_path path;
 
 		if (!reset_port(x, p))
 			continue;
@@ -1314,49 +1704,21 @@ bool xhci_attach(const struct pci_device *d)
 		ud = &x->devices[x->device_count];
 		kmemset(ud, 0, sizeof(*ud));
 
-		if (!address_device(x, p, ud))
+		/* A device plugged straight into the machine: route zero, no
+		 * translator, depth zero. Everything a hub adds is an addition
+		 * to this, which is why the root case had no path before and
+		 * needs no special case now. */
+		kmemset(&path, 0, sizeof(path));
+		path.root_port = p;
+		path.speed = (op32(x, XHCI_PORTSC(p)) >> 10) & 0x0F;
+
+		if (!address_device(x, &path, ud))
 			continue;
 
-		if (!xhci_describe_device(x, ud)) {
-			kprintf("  xhci         : port %u took an address and "
-				"would not describe itself\n", p);
+		if (!claim_device(x, ud, &path, x->device_count))
 			continue;
-		}
-
-		/* Configuring is allowed to fail without losing the device: it
-		 * is still addressed and still describable, and a driver that
-		 * needs no bulk endpoints can still have it. What it must not
-		 * be is silently half-set-up, so it says so. */
-		if (!xhci_configure_device(x, ud))
-			kprintf("  xhci         : port %u would not configure; "
-				"control transfers only\n", p);
 
 		x->device_count++;
-
-		kprintf("  usb%u         : %04x:%04x on port %u, class %u.%u "
-			"protocol %u, %u-byte packets\n",
-			x->device_count - 1, ud->vendor, ud->product, p,
-			ud->usb_class, ud->usb_subclass, ud->usb_protocol,
-			ud->max_packet);
-
-		if (ud->configured && ud->in_is_interrupt)
-			kprintf("  usb%u         : interrupt in %02x (%u byte), "
-				"interval %u\n",
-				x->device_count - 1, ud->in_ep, ud->in_packet,
-				ud->in_interval);
-		else if (ud->configured)
-			kprintf("  usb%u         : bulk in %02x (%u byte), "
-				"bulk out %02x (%u byte)\n",
-				x->device_count - 1, ud->in_ep, ud->in_packet,
-				ud->out_ep, ud->out_packet);
-
-		/* Offered to the one class driver there is. It refuses
-		 * anything that is not SCSI over Bulk-Only Transport, which is
-		 * most of what gets plugged into a machine. */
-		/* Offered to each class driver in turn. Each refuses anything
-		 * that is not its own, which is most of what gets plugged in. */
-		usb_storage_attach(x, ud);
-		usb_hid_attach(x, ud);
 	}
 
 	x->ports_enabled = enabled;

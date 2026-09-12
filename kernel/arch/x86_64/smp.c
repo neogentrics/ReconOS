@@ -92,10 +92,28 @@ static bool cpu_map_ready;
 #define APIC_REVERSE_MAP 4096
 static u16 cpu_for_apic_id[APIC_REVERSE_MAP];
 
+/* How many processors have ever been registered.
+ *
+ * The reverse map can say "not a processor we know about" because it stores
+ * the index plus one, so zero is free to mean nothing. The **forward** map
+ * cannot: it holds the raw identifier, and APIC 0 is both a real processor and
+ * what an untouched array already contains.
+ *
+ * That ambiguity is not academic. A machine that boots without a MADT never
+ * registers anybody, so both arrays stay zero -- and the consistency check
+ * below then read slot 0 as a real processor holding APIC 0, looked it up, and
+ * found nothing pointing back. It reported the map as broken on a machine that
+ * had no map. (BG-190)
+ */
+static unsigned apic_ids_known;
+
 static void remember_apic_id(unsigned cpu, u32 id)
 {
 	if (cpu >= MAX_CPUS)
 		return;
+
+	if (cpu + 1 > apic_ids_known)
+		apic_ids_known = cpu + 1;
 
 	apic_id_for_cpu[cpu] = id;
 
@@ -118,10 +136,23 @@ bool arch_identity_self_test(void)
 	unsigned i;
 	bool ok = true;
 
-	for (i = 0; i < MAX_CPUS; i++) {
+	/* Nothing has been registered, so there are no two arrays to disagree.
+	 *
+	 * Said out loud rather than passed quietly. A check that prints nothing
+	 * when it did not run looks exactly like one that ran and was happy,
+	 * and this project has now been caught by that twice in one day
+	 * (BG-187). A boot with no MADT is an ordinary machine, not a fault. */
+	if (!apic_ids_known) {
+		kputs("  smp: no processor has been registered, so the "
+		      "identity maps have nothing to check\n");
+		return true;
+	}
+
+	for (i = 0; i < apic_ids_known; i++) {
 		u32 id = apic_id_for_cpu[i];
 
-		/* Slot 0 is the only one legitimately holding APIC 0. */
+		/* Slot 0 is the only one legitimately holding APIC 0, and it is
+		 * only reached at all when something registered it. */
 		if (i && !id)
 			continue;
 

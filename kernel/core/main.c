@@ -28,6 +28,10 @@
 #include <recon/kernel/wait.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/hpet.h>
+#include <recon/kernel/i2c.h>
+#include <recon/kernel/signal.h>
+#include <recon/kernel/ext2.h>
 #include <recon/kernel/shm.h>
 #include <recon/kernel/swap.h>
 #include <recon/kernel/pageage.h>
@@ -168,7 +172,20 @@ void kmain(void)
 	/* Last of all, because a driver needs everything: pages for its rings,
 	 * a map to reach registers through, a clock to time out against, and a
 	 * scheduler to yield to while the hardware thinks. */
+	/* After ACPI, which is where the table is, and before anything asks
+	 * the time for a measurement it will keep. */
+	hpet_init();
+
 	block_init();
+
+	/* **After** block_init, not before it, and this is the second time
+	 * that ordering has caught something here. block_init is what walks
+	 * the PCI bus; a driver looking for its device before that walk finds
+	 * an empty table and reports, correctly and uselessly, that the
+	 * machine does not have one. BG-179 was the same mistake with the
+	 * interrupt summary, which printed a count of zero on every boot this
+	 * kernel had ever made. */
+	i2c_init();
 	bcache_init();
 	pagecache_init();
 
@@ -257,6 +274,16 @@ void kmain(void)
 		pipe_self_test() ? "pass" : "FAIL");
 	kprintf("  devices as files   : %s\n",
 		devfs_self_test() ? "pass" : "FAIL");
+	kprintf("  what the kernel knows : %s\n",
+		procfs_self_test() ? "pass" : "FAIL");
+	kprintf("  a clock off the core : %s\n",
+		hpet_self_test() ? "pass" : "FAIL");
+	kprintf("  the small buses    : %s\n",
+		i2c_self_test() ? "pass" : "FAIL");
+	kprintf("  something arrives : %s\n",
+		user_signal_test() ? "pass" : "FAIL");
+	kprintf("  somebody else's disk : %s\n",
+		ext2_self_test() ? "pass" : "FAIL");
 	kprintf("  memory two can see : %s\n",
 		shm_self_test() ? "pass" : "FAIL");
 	kprintf("  files in memory    : %s\n",
@@ -349,6 +376,11 @@ void kmain(void)
 	vfs_print_summary();
 	pipe_print_summary();
 	devfs_print_summary();
+	procfs_print_summary();
+	hpet_print_summary();
+	i2c_print_summary();
+	signal_print_summary();
+	ext2_print_summary();
 	shm_print_summary();
 	ramfs_print_summary();
 

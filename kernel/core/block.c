@@ -355,7 +355,6 @@ static enum block_status submit(struct block_device *dev,
 
 	flags = spin_lock_irq(&dev->queue_lock);
 	queue_insert(dev, r);
-
 	/* Nobody is driving the device, so this thread is. */
 	mine = !dev->serving;
 
@@ -408,7 +407,6 @@ static enum block_status submit(struct block_device *dev,
 		spin_unlock_irq(&dev->queue_lock, flags);
 
 		s = issue(dev, next);
-
 		flags = spin_lock_irq(&dev->queue_lock);
 		next->status = s;
 		next->done = true;

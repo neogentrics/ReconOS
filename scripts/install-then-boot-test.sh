@@ -112,6 +112,41 @@ else
 	fail=$((fail + 1))
 fi
 
+# Whether a boot's own self-tests passed.
+#
+# Worth its own function because it is asked of two boots, and because the
+# interesting case is the second one: both are the same installed disk, so the
+# second boot is the only place in the whole matrix where a ReconFS volume is
+# mounted that something has already written to. Every other path attaches
+# sixty-four megabytes of zeroes, on which the five tests that need a volume
+# print "no volume on this machine" and are counted as having run.
+#
+# Reports what failed rather than that something did. A test name is enough to
+# find it; "self-tests failed" is not.
+self_tests_passed() {
+	local out=$1 label=$2 bad
+
+	bad=$(printf '%s\n' "$out" | grep -E ': +FAIL' || true)
+
+	if [ -n "$bad" ]; then
+		echo "FAILED"
+		printf '%s\n' "$bad" | sed 's/^/      /' | head -8
+		return 1
+	fi
+
+	# A boot that printed no self-tests at all is not a pass. It is a boot
+	# that stopped before them, and the grep above cannot tell the two
+	# apart -- which is the failure this whole function exists to stop
+	# being invisible.
+	if ! printf '%s\n' "$out" | grep -qE ': +pass'; then
+		echo "NO SELF-TESTS RAN"
+		return 1
+	fi
+
+	echo "$(printf '%s\n' "$out" | grep -cE ': +pass') passed, $label"
+	return 0
+}
+
 # --- and the part that cannot be faked --------------------------------------
 #
 # The target, alone. No medium, no -kernel, nothing but firmware and a disk the
@@ -136,6 +171,15 @@ else
 	fail=$((fail + 1))
 fi
 
+# The first boot on a volume that has one. Five tests run here and nowhere else
+# in the matrix, and until now nothing asked what they said.
+say "and its own tests pass, with a volume under them"
+if self_tests_passed "$boot" "first boot on this volume"; then
+	pass=$((pass + 1))
+else
+	fail=$((fail + 1))
+fi
+
 # --- and the same disk again, on a machine with no UEFI in it ---------------
 #
 # The disk above booted under OVMF, through the EFI partition. This is the same
@@ -145,6 +189,12 @@ fi
 # It is the same image, not a second install. If the installer wrote one path
 # and broke the other, exactly one of these two assertions fails -- which is the
 # whole reason to boot it twice rather than once.
+
+# The BIOS boot's serial output, kept when asked for. The UEFI boot above has
+# had KEEP_LOG since it was written; this one had nothing, which is part of why
+# two of its self-tests could fail unnoticed.
+keep_bios() { [ -n "${KEEP_BIOS_LOG:-}" ] && printf '%s
+' "$1" > "$KEEP_BIOS_LOG"; return 0; }
 
 say "and boots the same disk with no UEFI at all"
 bios_boot=$(timeout 90 qemu-system-x86_64 -m 512M -display none -serial stdio \
@@ -161,6 +211,8 @@ else
 	fail=$((fail + 1))
 fi
 
+keep_bios "$bios_boot"
+
 say "and it finds its own partitions"
 if echo "$boot" | grep -q 'nvme0n1p3'; then
 	echo "$(echo "$boot" | grep -cE 'nvme0n1p[0-9]') partitions"
@@ -170,6 +222,21 @@ else
 	echo "$boot" | grep -E 'nvme0n1|table' | sed 's/^/      /' | head -8
 	fail=$((fail + 1))
 fi
+
+# The second boot of the same volume, and the only one anywhere in the matrix.
+#
+# This is where a test that leaves a file behind shows itself: the first boot
+# created it and this one finds it already there. The block layer's own test has
+# said since it was written that "a test that leaves the disk modified is a test
+# that can only be run once" -- and puts back every byte it borrows. Nothing was
+# checking whether the tests above it did the same.
+say "and they pass again, on a volume already written to"
+if self_tests_passed "$bios_boot" "second boot on this volume"; then
+	pass=$((pass + 1))
+else
+	fail=$((fail + 1))
+fi
+
 
 echo
 if [ "$fail" -eq 0 ]; then

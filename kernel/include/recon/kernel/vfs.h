@@ -258,6 +258,18 @@ void vfs_note_write(void);
 /* The devices filesystem: /dev, with no disk under it. Its own file because a
  * second implementation written inside the first one proves nothing. */
 struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error);
+
+/* /proc -- what the kernel knows about itself, reachable by path.
+ *
+ * Every entry is generated at open and read from that snapshot, so a file read
+ * in two goes cannot be half of one machine and half of another. Read-only:
+ * nothing here is a setting. */
+struct file *procfs_open(const char *rest, unsigned flags, u32 mode,
+			 i64 *error);
+i64 procfs_list(const char *rest, char *names, u64 names_len,
+		unsigned *count);
+void procfs_print_summary(void);
+bool procfs_self_test(void);
 i64 devfs_list(const char *rest, char *names, u64 names_len,
 		unsigned *count);
 void devfs_print_summary(void);

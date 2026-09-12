@@ -217,3 +217,81 @@ user_test_facts_end:
 	.global user_test_facts_len
 user_test_facts_len:
 	.quad	user_test_facts_end - user_test_facts
+
+/* --- a program that signals itself, on aarch64 -----------------------------
+ *
+ * The same test as the x86_64 one and the same exit codes, because what is
+ * being checked is a property of the kernel rather than of an instruction set:
+ * a handler runs on the program's own stack, gets the signal number, and the
+ * program afterwards is still the program.
+ *
+ * x19 carries the count. Callee-saved on this ABI, which is what makes the
+ * check meaningful -- a caller-saved register would prove nothing.
+ */
+	.global user_signal_program
+user_signal_program:
+	mov	x19, #0
+
+	/* sigaction(15, HANDLER, handler, restorer) */
+	mov	x0, #15			/* SIGTERM */
+	mov	x1, #2			/* SIG_ACTION_HANDLER */
+	adr	x2, .Lhandler
+	adr	x3, .Lrestorer
+	mov	x8, #20			/* SYS_SIGACTION */
+	svc	#0
+
+	cbnz	x0, .Lrefused
+
+	/* getpid(), so there is somewhere to send it. */
+	mov	x8, #2
+	svc	#0
+	mov	x20, x0
+
+	/* kill(self, 15) */
+	mov	x0, x20
+	mov	x1, #15
+	mov	x8, #19			/* SYS_KILL */
+	svc	#0
+
+	/* A call whose return is where delivery happens. */
+	mov	x8, #4			/* SYS_YIELD */
+	svc	#0
+
+	/* exit(x19) */
+	mov	x0, x19
+	mov	x8, #0
+	svc	#0
+
+.Lrefused:
+	mov	x0, #1
+	mov	x8, #0
+	svc	#0
+
+.Lhandler:
+	/* x0 holds the signal number. Checked, because a handler entered for
+	 * the wrong reason looks identical from outside. */
+	cmp	x0, #15
+	b.ne	.Lwrong_signal
+
+	add	x19, x19, #7
+	ret				/* to the restorer, in x30 */
+
+.Lwrong_signal:
+	mov	x0, #2
+	mov	x8, #0
+	svc	#0
+
+.Lrestorer:
+	mov	x8, #22			/* SYS_SIGRETURN */
+	svc	#0
+
+.Lrhang:
+	b	.Lrhang
+
+	.global user_signal_program_end
+user_signal_program_end:
+
+	.balign 8
+	.global user_signal_program_len
+user_signal_program_len:
+	.quad	user_signal_program_end - user_signal_program

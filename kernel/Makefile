@@ -17,12 +17,23 @@
 
 # What works, not what is planned.
 #
-# **A patch per bug fixed.** BG-187 and BG-188 take this to 0.1.7; the six
-# before them -- BG-163, 182, 183, 184, 185, 186 -- are why it is not 0.1.1.
-# The number sat at 0.1.0 through all of them and twenty-five commits, not
-# because anything forbade a bump but because nothing asked for one. That is
-# the same failure as a counter nobody prints: it is only correct while
-# somebody remembers.
+# **A patch per bug fixed.** The six that 0.1.0 sat through -- BG-163, 182,
+# 183, 184, 185, 186 -- are why it is not 0.1.1; BG-188 made it 0.1.7, and
+# BG-189, BG-190 and BG-191 make it 0.1.10, and BG-193 makes it 0.1.11. The number had held still through
+# all six and twenty-five commits, not because anything forbade a bump but
+# because nothing asked for one. That is the same failure as a counter nobody
+# prints: it is only correct while somebody remembers.
+#
+# **BG-187 has not earned one and is not counted.** Half of it is fixed -- the
+# two volume boots are asserted now, which is what found the three above. The
+# other half cannot even be exercised yet, because the only second-boot-on-one-
+# disk in the matrix turns out to have no volume on it (BG-192). A partial fix
+# does not move the number.
+#
+# **BG-189 is why this rule needed writing down at all.** Raising the version
+# used to rebuild nothing, so the kernel went on printing the old number while
+# the Makefile claimed the new one -- and a full verification run passed against
+# the mislabelled binary. Every object depends on this file now.
 #
 # **0.2.0 is not reached until sections 1.1 to 1.9 of the blueprint audit are
 # all built.** Joshua's rule, and a better one than "a minor when it gains a
@@ -30,11 +41,21 @@
 # made by whoever happened to be bumping the number. This one is a fact about
 # the audit that anybody can check.
 #
-# Eleven rows stand in the way as of 11 September, plus the four things section
-# 1.8 states in prose: IPC (signals, sockets, message queues), the HPET and
-# timer wheel, Block I/O finishing verification, ext2/4 and the pseudo
-# filesystems, USB host controllers, I2C/SPI, self-relocation, video, embedded
-# filesystems, initrd, and the whole of the network stack.
+# **Five rows stand in the way**, plus the whole of 1.8:
+#
+#   1.3  IPC              signals, sockets, message queues, FIFOs
+#   1.4  HPET             the timer wheel is built; no HPET, and nothing needs one
+#   1.6  ext2/4 + procfs  ramfs and devfs are built; these two are not
+#   1.7  USB host         xHCI is built; no EHCI, no hubs, no hot-plug
+#   1.7  I2C / SPI        nothing needs them yet
+#   1.8  Network          all of it
+#
+# Corrected 12 September. This comment previously said eleven rows and listed
+# self-relocation, video, embedded filesystems, initrd and UEFI among them.
+# **Those are section 2 -- the bootloader -- and the gate is 1.1 to 1.9.** The
+# script that produced the list matched only headings beginning `1.`, so five
+# bootloader rows were filed under 1.9 and counted against a gate they are not
+# part of. 1.1, 1.2, 1.5, 1.8 and 1.9 have no open rows at all.
 #
 # 0.1.0 was raised from 0.0.11 on the older argument -- the kernel had stopped
 # fixing things and started gaining them -- and a patch number that only ever
@@ -43,7 +64,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.1.7
+VERSION := 0.1.11
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -147,11 +168,26 @@ $(KERNEL): $(OBJS) $(LINKER_SCRIPT)
 	@echo "  built $@"
 	@size $@ 2>/dev/null || $(CROSS)size $@
 
-$(BUILD)/%.o: %.c
+# Every object depends on this file, and that is not tidiness.
+#
+# VERSION is handed to the compiler with -D, so it is baked into whichever
+# objects happen to be rebuilt after it changes. Without this prerequisite,
+# raising the version rebuilds *nothing*: main.c still holds the old number,
+# the kernel prints the old number, and the Makefile says the new one. The
+# tree and the binary disagree and neither is obviously wrong.
+#
+# Found on 11 September when a boot reported 0.1.0 from a tree that said 0.1.7
+# -- and it was found only because a self-test assertion was added to a boot
+# nothing had been reading (BG-187, BG-189). A whole verification run had
+# already passed against the mislabelled kernel.
+#
+# The cost is that editing this file rebuilds everything. That is the correct
+# price: almost anything changed here changes how the code is compiled.
+$(BUILD)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/%.o: %.S
+$(BUILD)/%.o: %.S Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -MMD -MP -c $< -o $@
 

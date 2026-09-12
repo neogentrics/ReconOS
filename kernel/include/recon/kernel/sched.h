@@ -230,6 +230,25 @@ struct thread {
 	 * is a thread that appears to belong to a different program. */
 	u32 process;
 
+	/* Which signals this thread is not accepting at the moment.
+	 *
+	 * Per thread rather than per process, because blocking is about what
+	 * the code running *here* can be interrupted in the middle of. Two
+	 * threads of one program can be in very different places, and a mask
+	 * shared between them would make one of them wrong. Pending signals
+	 * are per process, because that is who they were sent to. */
+	u32 signal_mask;
+
+	/* Set by SYS_SIGRETURN and acted on by the return hook.
+	 *
+	 * The restore needs the saved register block, and a system call does
+	 * not get one -- the dispatcher takes six arguments and returns a
+	 * number. Rather than thread a pointer through every call to serve
+	 * this one, the call records the request and the hook that already
+	 * runs on the way out does the work. It is the same moment either
+	 * way. */
+	bool signal_restoring;
+
 	/* Who is still accounting for this thread, which is *not* the same
 	 * fact as the line above and is why there are two.
 	 *

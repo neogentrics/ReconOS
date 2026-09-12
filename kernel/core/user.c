@@ -1,4 +1,5 @@
 #include <recon/kernel/user.h>
+#include <recon/kernel/signal.h>
 #include <recon/kernel/identity.h>
 #include <recon/kernel/process.h>
 #include <recon/kernel/arch.h>
@@ -49,6 +50,44 @@ bool user_range_ok(u64 addr, u64 len)
 }
 
 /* --- The calls ------------------------------------------------------------ */
+
+
+/* --- signals -------------------------------------------------------------- */
+
+static i64 sys_kill(u64 process, u64 sig, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return signal_send((u32)process, (unsigned)sig) ? SYS_OK : SYS_EINVAL;
+}
+
+static i64 sys_sigaction(u64 sig, u64 what, u64 handler, u64 restorer,
+			 u64 a4, u64 a5)
+{
+	return signal_set_action((unsigned)sig, (unsigned)what, handler,
+				 restorer) ? SYS_OK : SYS_EINVAL;
+}
+
+static i64 sys_sigmask(u64 mask, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	return (i64)signal_set_mask((u32)mask);
+}
+
+static i64 sys_sigreturn(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct thread *t = sched_current();
+
+	if (!t)
+		return SYS_EPERM;
+
+	/* Recorded rather than done. The hook on the way back to user mode has
+	 * the saved registers; this does not. See the field's own comment.
+	 *
+	 * The value returned here is discarded: the hook overwrites every
+	 * register the return path is about to read, including the one this
+	 * would have landed in. */
+	t->signal_restoring = true;
+
+	return SYS_OK;
+}
 
 static i64 sys_exit(u64 code, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
@@ -527,6 +566,10 @@ const struct personality personality_recon = {
 	.name = "ReconOS",
 	.table = {
 		[SYS_EXIT]   = sys_exit,
+		[SYS_KILL]      = sys_kill,
+		[SYS_SIGACTION] = sys_sigaction,
+		[SYS_SIGMASK]   = sys_sigmask,
+		[SYS_SIGRETURN] = sys_sigreturn,
 		[SYS_WRITE]  = sys_write,
 		[SYS_OPEN]   = sys_open,
 		[SYS_CLOSE]  = sys_close,
@@ -941,6 +984,87 @@ bool user_facts_test(void)
 			"not one of its own codes\n", last_exit_code);
 
 	return false;
+}
+
+
+/* --- signals, end to end --------------------------------------------------
+ *
+ * The kernel-side checks live in signal.c and are about decisions. This one is
+ * about the boundary: a real program in ring 3 registers a handler, sends
+ * itself a signal, and the handler runs on its own stack and returns.
+ *
+ * It exits with 7, and the number is chosen so the failures are
+ * distinguishable rather than merely detectable:
+ *
+ *   0  the handler never ran
+ *   1  sigaction refused the registration
+ *   2  the handler ran with the wrong signal number in RDI
+ *   7  it ran once, with the right number, and the restore put RBX back
+ *  14  it ran twice, which means the pending bit was not cleared
+ *
+ * RBX carries the count deliberately. It is callee-saved, so what is being
+ * checked is that the kernel put the *program's own* registers back -- a
+ * scratch register would prove nothing, because nothing promises to keep one
+ * across a call.
+ */
+bool user_signal_test(void)
+{
+	extern const unsigned char user_signal_program[];
+	extern const u64 user_signal_program_len;
+
+	u64 exits_before = exits;
+	struct thread *t;
+	u64 deadline;
+
+	t = user_thread_create("signals", user_signal_program,
+			       user_signal_program_len);
+
+	if (!t) {
+		kputs("  signals: could not create a user thread\n");
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  signals: the program never reached its exit call -- "
+		      "the handler did not return\n");
+		return false;
+	}
+
+	switch (last_exit_code) {
+	case 7:
+		return true;
+
+	case 0:
+		kputs("  signals: the handler never ran, so nothing was "
+		      "delivered on the way back to user mode\n");
+		return false;
+
+	case 1:
+		kputs("  signals: sigaction refused a handler with a "
+		      "restorer\n");
+		return false;
+
+	case 2:
+		kputs("  signals: the handler ran with the wrong signal "
+		      "number\n");
+		return false;
+
+	case 14:
+		kputs("  signals: the handler ran twice -- the pending bit "
+		      "was not cleared before delivery\n");
+		return false;
+
+	default:
+		kprintf("  signals: the program exited with %ld, which is not "
+			"a number it can produce -- so RBX did not survive "
+			"the handler\n", (long)last_exit_code);
+		return false;
+	}
 }
 
 bool user_self_test(void)

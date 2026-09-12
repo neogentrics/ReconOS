@@ -15,19 +15,25 @@ every entry to say which half it is about.
   all built.** Not a judgement about what counts as a big change -- a fact about
   the audit that anybody can check.
 
-Eleven rows stand in the way as of 11 September, plus the four things section
-1.8 states in prose:
+**Five rows stand in the way**, plus the whole of 1.8:
 
 | section | what is not built |
 |---|---|
 | 1.3 Process, thread, execution | IPC -- signals, sockets, message queues, FIFOs |
-| 1.4 Interrupts and timers | the HPET and the timer wheel |
-| 1.6 Filesystem and storage | Block I/O (in verification); ext2/4, ramfs, devfs, procfs |
-| 1.7 Device drivers and buses | USB host controllers; I2C / SPI |
-| 1.8 Network | all of it |
-| 1.9 Security and diagnostics | self-relocation, video, embedded filesystems, initrd, UEFI |
+| 1.4 Interrupts and timers | the HPET. The **timer wheel is built**; nothing needs an HPET while the TSC is usable |
+| 1.6 Filesystem and storage | ext2/4 and procfs. **ramfs and devfs are built**, and so is directory listing |
+| 1.7 Device drivers and buses | USB host controllers -- xHCI is built, no EHCI, hubs or hot-plug |
+| 1.7 Device drivers and buses | I2C / SPI -- nothing needs them yet |
+| 1.8 Network | all of it, and it is the largest single thing left |
 
-1.1, 1.2 and 1.5 are complete.
+**1.1, 1.2, 1.5 and 1.9 have no open rows at all.**
+
+> **Corrected 12 September.** This table previously said eleven rows and listed
+> self-relocation, video, embedded filesystems, initrd and UEFI. Those are
+> **section 2, the bootloader**, and the gate is 1.1 to 1.9. The script that
+> produced the list matched only headings beginning `1.`, so five bootloader
+> rows were filed under 1.9 and counted against a gate they are not part of.
+> The bootloader has five open rows of its own and they are tracked separately.
 
 The rule also lives beside `VERSION` in `kernel/Makefile`, because that is the
 line that has to change and a rule kept only in a document is a rule read after
@@ -50,6 +56,93 @@ while somebody remembers is a number that will eventually be wrong, and will
 look exactly the same when it is.
 
 ---
+
+## 0.1.11 -- 12 September 2026
+
+**Five things built, one bug that had to be found before any of them could be
+trusted, and none of it through a verification run yet.**
+
+**`virt_to_phys` answered for addresses it cannot answer for.** (BG-193) The
+direct-map test was one-sided, and the kernel image runs *above* the direct map
+base -- so a stack pointer subtracted to a plausible-looking physical address
+about a hundred and forty terabytes in. `virtio_blk` has always had the right
+guard with the right comment, checking for zero; the function it depended on
+never returned zero, so the check could not fire. A read was entered, queued,
+issued and reported `BLOCK_OK` with the caller's buffer untouched. Invisible
+until now because every other caller in the kernel hands drivers pages from the
+page allocator, which are direct-map addresses by construction. Same fault and
+same constants on aarch64, fixed in the same change.
+
+**Signals, on both architectures.** Delivery happens on the way back to user
+mode and nowhere else -- sending records, returning delivers. Default actions,
+per-thread masks, and handlers that run in ring 3 on the program's own stack
+with a caller-supplied restorer. The return path gained no branch on either
+architecture: the same fixed sequence of pops now reads registers that may have
+been edited. Where a handler *returns to* turned out to be architectural -- a
+word on the stack on x86_64, the link register on aarch64 -- and getting that
+wrong let the handler run perfectly and then return to wherever x30 happened to
+point.
+
+**procfs.** `/proc` with version, uptime, meminfo, cpuinfo and self. Every entry
+is generated once at open, into a buffer reads are served from, so a program
+reading `meminfo` in two goes cannot get the first half of one machine and the
+second half of another. `self` is the entry that earns the filesystem: it
+answers differently depending on who opened it.
+
+**The HPET.** Found through ACPI, 100.0 MHz, 10,000,000 femtoseconds per tick,
+and checked against the time stamp counter across a measured wait. The
+femtosecond arithmetic is split so it cannot overflow -- the obvious form wraps
+five hours after boot. Enabling the counter is not treated as evidence it runs.
+
+**I2C, on the PIIX4 SMBus this machine actually has.** 112 transfers, 104
+correctly reporting nobody answered, 0 timed out, 8 devices that did. SPI is
+declared with no driver and says so every boot, because there is no SPI
+controller on either machine this kernel runs on. Finding the controller took
+BG-179 for the third time: `i2c_init` ran before the PCI bus was walked.
+
+**USB hubs.** A disk behind a hub, enumerated and usable. xHCI does not address
+a device by the chain of hubs it hangs off -- it wants the root port plus a
+twenty-bit route string -- which is why this needed the addressing path
+generalised rather than a hub driver bolted on.
+
+**ext2: read, check, and a repair that must be asked for by name.** Reads a
+filesystem `mke2fs` wrote: geometry matching `dumpe2fs`, files from the root and
+one directory down, and a checker that agrees with `e2fsck` about a clean
+volume. Repair rewrites free counts from the bitmaps -- the bitmap is the
+evidence and the count is the claim -- and refuses anything needing a guess
+about which file a block belongs to. It never happens on mount and requires the
+literal word `repair`.
+
+## 0.1.10 -- 12 September 2026
+
+**Found by one assertion added to a boot nothing had been reading.**
+`install-then-boot-test.sh` captured the BIOS boot's serial output in full and
+grepped it only for the kernel banner and a partition count. Asking whether its
+self-tests passed turned up three faults and one gap, two of which had been
+failing on every BIOS boot since the checks were written.
+
+**The BIOS loader hands over a clean machine.** (BG-191) `reconboot` clears every
+register it does not need; the BIOS loader did not, under a comment stating that
+*the kernel must not be able to tell which loader started it*. It could:
+`rbx arrived holding something`.
+
+**The processor identity check knows whether there is a map.** (BG-190) On a
+machine with no MADT nothing is ever registered, both APIC maps stay zero, and
+the check read slot 0 as a real processor holding APIC 0. It reported the map as
+broken on a machine that had no map.
+
+**Changing the version rebuilds the kernel.** (BG-189) It did not. `VERSION` is
+passed with `-D` and the Makefile was not a prerequisite of any object, so the
+binary went on printing 0.1.0 out of a tree that said 0.1.7 -- and matrix 23
+passed 951 self-tests against the mislabelled kernel. A clean build was always
+right; only incremental builds, which is every build anybody does, were wrong.
+
+**Open, and the largest of the four:** the kernel boots from a disk over BIOS and
+then cannot see it (BG-192). The disk is IDE and there is no IDE driver, so a
+machine with no UEFI starts ReconOS and has no storage. The machines with no UEFI
+are the same machines likely to present their disk that way, which makes this the
+configuration the BIOS bootloader exists to serve and the one the kernel can
+least use.
 
 ## 0.1.7 -- 11 September 2026
 
