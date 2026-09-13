@@ -51,7 +51,12 @@ SOURCE = os.path.join(ROOT, "docs", "BUGS.md")
 #           - **Was:** ...
 #           - **Fixed in** ...
 
-ENTRY_RE = re.compile(r"(?m)^### (BG-\d+)\s*[—-]\s*(.+?)\s*$")
+ENTRY_RE = re.compile(
+    r"(?m)^### ((?:BG|KF)-\d+)\s*(?:—|–|--|-)\s*(.+?)\s*$")
+# Two prefixes since 12 September 2026: `BG-` is the desktop's, `KF-` the
+# kernel's. Naming one of them here read 178 entries out of a file holding
+# 251 and printed "highest 178" -- a count produced by the same regex that
+# missed them, so it could not disagree with itself. See KF-200.
 # The colon moves. Ninety-nine entries write `- **Fixed in** ...` and five write
 # `- **Fixed in:** ...` with the colon inside the emphasis -- which is invisible
 # when reading and fatal to a pattern that assumes it is outside. Those five
@@ -110,7 +115,19 @@ def parse(md):
             issue = hit.group(1)
 
         found = fields.get("found") or fields.get("found in") or ""
-        fixed = fields.get("fixed in") or fields.get("fixed") or ""
+        # Four forms, because the register grew four. A `**Status:**` line
+        # is the later convention and the only one that can say *half fixed*,
+        # which is not fixed -- so it is read first and its own words are what
+        # the page prints.
+        status = fields.get("status", "")
+        said = re.match(r"\**\s*([A-Za-z]+)", status)
+        if said and said.group(1).lower().startswith("fix"):
+            fixed = status
+        elif said:
+            fixed = ""
+        else:
+            fixed = (fields.get("fixed in") or fields.get("fixed by")
+                     or fields.get("fixed") or "")
 
         entries.append({
             "id": m.group(1),
@@ -440,7 +457,7 @@ def build(entries, source_mtime):
 
     parts.append('<div class="figures">')
     parts.append('<div class="fig"><div class="n">%d</div><div class="l">recorded, since the first</div></div>' % len(entries))
-    # "with a fix recorded", not "fixed". Nine entries state no fix, and some of
+    # "with a fix recorded", not "fixed". Some entries state no fix, and some of
     # those were certainly fixed -- the entry simply never said so. Calling them
     # open would put a claim on this page that the register does not make, and
     # calling them fixed would put one there that nobody checked.
@@ -562,11 +579,24 @@ def main():
             "the threshold.\n" % (worst, len(entries)))
         return 1
 
-    print("%d entries, %d fixed, %d open, highest %d"
+    print("%d entries, %d with a fix recorded, %d without"
           % (len(entries),
              len([e for e in entries if e["fixed"]]),
-             len([e for e in entries if not e["fixed"]]),
-             max(e["n"] for e in entries)))
+             len([e for e in entries if not e["fixed"]])))
+    for pre in ("BG", "KF"):
+        ns = [e["n"] for e in entries if e["id"].startswith(pre)]
+        if ns:
+            print("  %s- %d entries, highest %d" % (pre, len(ns), max(ns)))
+
+    # The count this script prints has to be checkable against the file without
+    # running this script, because the last two faults here were both a number
+    # the parser produced about its own parsing.
+    on_disk = len(re.findall(r"(?m)^### (?:BG|KF)-\d+", md))
+    if on_disk != len(entries):
+        sys.stderr.write("%d headings in the file, %d parsed -- the entry "
+                         "pattern has stopped matching how entries are "
+                         "written.\n" % (on_disk, len(entries)))
+        return 1
     print("unplaced: %d by how it surfaced, %d by area" % (how_unplaced, where_unplaced))
 
     if args.check:
