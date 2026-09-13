@@ -243,19 +243,19 @@ CURATED = [
      "where RAM starts near zero. On aarch64 RAM starts at 1GB, so 262,433 "
      "bits stood for addresses that were never memory. An assumption true on "
      "the machine you develop on, in code written to be portable."),
-    ("BG-144", "Every UEFI test booted whatever kernel was in the image first",
+    ("KF-144", "Every UEFI test booted whatever kernel was in the image first",
      "A fault fixed three times that faulted identically each time. What "
      "settled it was disassembling the reported address and finding it landed "
      "in the middle of an instruction -- so it was not an address in the "
      "binary being looked at. Five boot paths had been reporting green against "
      "a kernel that no longer existed."),
-    ("BG-145", "A read-only page the kernel could write through, on some boot paths",
+    ("KF-145", "A read-only page the kernel could write through, on some boot paths",
      "CR0.WP was only ever cleared and restored, never set, so whether "
      "read-only meant anything to the kernel depended on which firmware "
      "booted it. Copy-on-write is enforced by mapping a shared page "
      "read-only; on the paths where that bit was clear, the kernel's own "
      "write went into the page every other program was reading."),
-    ("BG-146", "Sixteen bytes past the end, into the next field of the same thread",
+    ("KF-146", "Sixteen bytes past the end, into the next field of the same thread",
      "The comment above the vector save area said 512 bytes covered "
      "thirty-two 128-bit registers with their two status words. Thirty-two "
      "sixteen-byte registers is exactly 512. It asserted the arithmetic the "

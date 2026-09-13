@@ -31,7 +31,7 @@
  * binary built for a machine it is not. That is not a theoretical objection:
  * the aarch64 loader on such a stick read the x86_64 kernel, was told it wanted
  * to live at 0x100000, and failed there -- which reads as a firmware problem
- * and is a packaging one. (BG-128)
+ * and is a packaging one. (KF-128)
  *
  * The name carries the architecture now. The old path is still tried as a
  * fallback, because media that predates this holds it and there is no reason to
@@ -203,7 +203,7 @@ struct elf64_phdr {
  * The cost is not obvious until you meet it: an installed system, or an install
  * medium, had no way to tell the kernel anything at all. The installer could
  * not be told which disk to write to; a recovery mode could not be asked for.
- * The protocol supported it and the implementation quietly did not. (BG-131)
+ * The protocol supported it and the implementation quietly did not. (KF-131)
  *
  * A file rather than something built in, because the point is that it can be
  * changed on a stick without rebuilding anything. Absent is normal: most boots
@@ -406,7 +406,7 @@ static void *read_kernel(UINTN *size_out)
 	 * was innocent.
 	 *
 	 * The comment and the code disagreed and only the machine could tell.
-	 * (BG-132) */
+	 * (KF-132) */
 	if (!verify_kernel(root, buf, size)) {
 		print("reconboot: refusing to start it.\n");
 
@@ -470,7 +470,7 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 	 *
 	 * The caveat about a keyless build was recorded. It said that such a
 	 * loader will not refuse an unsigned kernel. It did not say that the
-	 * parser would trust every field in one. (BG-185)
+	 * parser would trust every field in one. (KF-185)
 	 */
 	if (eh->phentsize < sizeof(struct elf64_phdr))
 		fail("reading the kernel's program headers", EFI_LOAD_ERROR);
@@ -1037,7 +1037,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	/* And the override goes here for the same reason: read_kernel fills
 	 * cmdline_buf, so setting it before that call would be overwritten by
 	 * the file, and setting it after the copy below would never reach the
-	 * kernel. Between the two is the only correct place, and BG-131 was
+	 * kernel. Between the two is the only correct place, and KF-131 was
 	 * exactly this mistake made once already. */
 	if (recovery_chosen) {
 		/* zero first, then eight bytes. copy() is a fixed-length byte

@@ -260,7 +260,7 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 			 * There is no way to skip the argument, because its width
 			 * is exactly what is not understood. So: say so, and stop.
 			 * Missing output is a bug someone fixes; wrong output is a
-			 * bug someone believes. (BG-129) */
+			 * bug someone believes. (KF-129) */
 			raw_puts("%<unsupported conversion '");
 			kputc(*p);
 			raw_puts("'; the rest of this line is not printed>\n");

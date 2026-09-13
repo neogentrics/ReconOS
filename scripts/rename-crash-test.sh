@@ -17,7 +17,7 @@
 # kernel's own reader. That distinction is the whole value: the kernel checking
 # its own image proves the reader and the writer share their assumptions.
 #
-# It has already earned that. The first run of this workload found BG-120: every
+# It has already earned that. The first run of this workload found KF-120: every
 # commit was writing its superblock into dead space, so the second copy still
 # held the empty volume the format left. Nothing inside the kernel could see it
 # -- mounting reads the second copy from the right place and finds a valid,

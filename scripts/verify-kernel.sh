@@ -89,7 +89,7 @@ sub_out() {
 # guest's serial output. What survived was the summary line -- "1 self-test(s)
 # failed" -- which says that something went wrong and not *what*.
 #
-# That cost a real diagnosis: BG-164 turned this run red on the eight-processor
+# That cost a real diagnosis: KF-164 turned this run red on the eight-processor
 # path, and the only way to find out which check had failed was to reproduce the
 # load by hand afterwards and hope. The output naming it had been written,
 # printed, and thrown away.
@@ -203,7 +203,7 @@ check() {
 	#
 	# Found when a lost increment made the scheduler test hang on one boot
 	# in three, and every processor-count check in this file went on passing
-	# through it. (BG-143)
+	# through it. (KF-143)
 	if ! grep -q 'Idling\.' "$log"; then
 		echo "$ran passed, then it stopped before the end -- $log"
 		tr -d "\r" < "$log" | tail -3 | sed 's/^/      /'
@@ -321,11 +321,11 @@ check_cpus() {
 	# so a self-test that fails only on more than one processor was invisible
 	# to the whole matrix.
 	#
-	# BG-148 is what that cost. A user program raced its own process
+	# KF-148 is what that cost. A user program raced its own process
 	# attachment and started in the kernel's address space, failing about one
 	# boot in eight at two processors, and every path in this rig went on
 	# reporting green because no multi-processor run ever looked at a test
-	# result. The same shape as BG-143: a check that cannot fail is not a
+	# result. The same shape as KF-143: a check that cannot fail is not a
 	# check.
 	local failed_tests
 	failed_tests=$(tr -d '\r' < "$log" | grep -acE ': +FAIL' || true)
@@ -601,7 +601,7 @@ echo "x86_64"
 # deletes it.
 #
 # So they go first, serially, and the loader is put back to a keyless build
-# before anything else is started. (BG-166)
+# before anything else is started. (KF-166)
 rm -f boot/src/signing_key.h
 
 printf '%-46s' "  the signature tests, run on their own"
@@ -648,7 +648,7 @@ check "  PVH, no disk attached" \
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
-# exactly one disk of each sort -- so BG-163 lived for as long as it did not
+# exactly one disk of each sort -- so KF-163 lived for as long as it did not
 # because it was subtle but because nothing ever asked. It presented as a
 # machine crawling through its boot at one request every two seconds, on a
 # kernel and a device that were both behaving correctly, and the cause was a
@@ -758,7 +758,7 @@ check_for sata0 "  device tree, AHCI" \
 #
 # This loop stopped at eight, and eight is exactly the largest machine the older
 # interrupt controller supports -- so the kernel panicked at boot on any ARM
-# machine with nine or more processors, and nothing here could see it (BG-124).
+# machine with nine or more processors, and nothing here could see it (KF-124).
 # A rig built on the principle that some bugs only exist above a certain machine
 # size had its own ceiling, one processor below the first machine that would
 # have shown this one.
@@ -900,8 +900,8 @@ done
 # the checker was shown four faults it was built to catch and caught all four.
 #
 # A checker that has only ever been run on good images has never been observed
-# to do anything. Three harness bugs on the day this was written (BG-114,
-# BG-115, BG-116) all presented as clean passes, and the filesystem's crash
+# to do anything. Three harness bugs on the day this was written (KF-114,
+# KF-115, KF-116) all presented as clean passes, and the filesystem's crash
 # suite is about to rest on exactly this checker being honest.
 
 echo
@@ -1006,7 +1006,7 @@ for a in x86_64 aarch64; do
 
 	# The freed-block exclusion can only be checked on a volume small enough
 	# to fill in one transaction, so it reports whether it ran rather than
-	# failing on a large disk (BG-126). This image is 16 MB, which is small
+	# failing on a large disk (KF-126). This image is 16 MB, which is small
 	# enough at every block size -- so demand all three here. Without this,
 	# growing the image would silently stop checking the one rule that keeps
 	# a transaction from overwriting live storage, and the run would still
@@ -1021,7 +1021,7 @@ for a in x86_64 aarch64; do
 	# Checked rather than merely printed. The line appears after the
 	# self-test list, so nothing counts it, and a test whose result is
 	# printed and never read is the failure this file has already had once
-	# (BG-143) -- a boot that stopped half way answering every question a
+	# (KF-143) -- a boot that stopped half way answering every question a
 	# healthy one does.
 	mode=$(echo "$fs_out" | grep -cE 'files carry a mode : pass')
 

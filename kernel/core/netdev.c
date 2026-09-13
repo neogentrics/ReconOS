@@ -353,7 +353,7 @@ void net_init(void)
  * interface. It is also what makes this testable on every boot rather than
  * only the boots that happen to have a NIC -- which is the difference between
  * a test that runs and a test that prints "no device on this machine" and
- * counts as passing. That distinction is what BG-187 was about.
+ * counts as passing. That distinction is what KF-187 was about.
  */
 static struct netbuf *loop_last;
 static unsigned loop_sent;

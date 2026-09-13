@@ -127,7 +127,7 @@ bool arch_power_off(void)
  *
  * WHAT THIS PROVES AND WHAT IT DOES NOT.
  *
- * BG-153 was that arch_cpu_id() returned MPIDR affinity level 0, which is
+ * KF-153 was that arch_cpu_id() returned MPIDR affinity level 0, which is
  * unique on a one-cluster machine and not on any other. The fix is that the
  * identity no longer comes from MPIDR at all -- it is a dense index handed to
  * each processor in TPIDR_EL1 -- so on this machine there is nothing left to
@@ -186,7 +186,7 @@ bool arch_identity_self_test(void)
 
 	/* The control. If the old expression does *not* alias on this table
 	 * then the table is not a multi-cluster machine and the rest of this
-	 * test proves nothing -- which is the failure mode that let BG-153
+	 * test proves nothing -- which is the failure mode that let KF-153
 	 * exist, arriving here as a failure rather than a silent pass. */
 	if (old_collisions == 0) {
 		kputs("  smp: the identity table has no aliases under the old "

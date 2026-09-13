@@ -103,7 +103,7 @@ static u16 cpu_for_apic_id[APIC_REVERSE_MAP];
  * registers anybody, so both arrays stay zero -- and the consistency check
  * below then read slot 0 as a real processor holding APIC 0, looked it up, and
  * found nothing pointing back. It reported the map as broken on a machine that
- * had no map. (BG-190)
+ * had no map. (KF-190)
  */
 static unsigned apic_ids_known;
 
@@ -127,7 +127,7 @@ static void remember_apic_id(unsigned cpu, u32 id)
  * answer then is zero -- which is correct, because until the APIC is up there
  * is only one processor running. */
 /* x86_64 has kept APIC identifiers and kernel indices apart since the map was
- * written -- see apic_id_for_cpu -- so the aliasing BG-153 describes cannot
+ * written -- see apic_id_for_cpu -- so the aliasing KF-153 describes cannot
  * happen here. What can, and what this checks, is the reverse map going out
  * of step with the forward one: they are two arrays holding one fact, and the
  * fast path reads only one of them. */
@@ -141,7 +141,7 @@ bool arch_identity_self_test(void)
 	 * Said out loud rather than passed quietly. A check that prints nothing
 	 * when it did not run looks exactly like one that ran and was happy,
 	 * and this project has now been caught by that twice in one day
-	 * (BG-187). A boot with no MADT is an ordinary machine, not a fault. */
+	 * (KF-187). A boot with no MADT is an ordinary machine, not a fault. */
 	if (!apic_ids_known) {
 		kputs("  smp: no processor has been registered, so the "
 		      "identity maps have nothing to check\n");

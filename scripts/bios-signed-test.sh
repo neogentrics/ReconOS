@@ -39,7 +39,7 @@ W=$(mktemp -d)
 # The key this test generates goes into the *source tree* -- the loader compiles
 # the public modulus in, so there is nowhere else for it to go. That makes this
 # script one that changes the repository, and a test that changes the repository
-# changes every test run after it (BG-139): with a key present, every harness
+# changes every test run after it (KF-139): with a key present, every harness
 # that boots an unsigned kernel is correctly refused, and five paths fail for a
 # reason that has nothing to do with them.
 #
@@ -60,7 +60,7 @@ say() { printf '%-46s' "  $1"; }
 
 # A key first, then everything built against it. The order matters: the loader
 # compiles the public modulus in, so a build made before the key existed
-# announces "not checked" and runs anything (BG-133).
+# announces "not checked" and runs anything (KF-133).
 ./scripts/make-signing-key.sh "$W/keys" >/dev/null
 openssl genrsa -out "$W/other.pem" 2048 2>/dev/null
 
@@ -77,7 +77,7 @@ make -C kernel ARCH=x86_64 >/dev/null 2>&1 || true
 # The verification rig keeps its build directory between runs, so this was a
 # stage 2 compiled with no key announcing "not checked" and running anything,
 # while every refusal below failed for a reason that was not the reason. Same
-# mechanism as BG-133, third time; signed-kernel-test.sh deletes the UEFI loader
+# mechanism as KF-133, third time; signed-kernel-test.sh deletes the UEFI loader
 # for exactly this.
 rm -f boot/bios/build/stage2_c.o boot/bios/build/stage2.bin \
       boot/bios/build/stage1.bin boot/bios/build/mbr.img

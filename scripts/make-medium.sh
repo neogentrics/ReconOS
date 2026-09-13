@@ -13,7 +13,7 @@
 # machine with a BIOS reads the first sector and never looks at partition 2.
 # Neither is told about the other.
 #
-# Both architectures on one medium, which BG-128 is about: the two loaders have
+# Both architectures on one medium, which KF-128 is about: the two loaders have
 # different filenames (BOOTX64.EFI and BOOTAA64.EFI) and so do the two kernels,
 # because the first attempt gave them the same name and one medium could carry
 # only one architecture.
@@ -30,7 +30,7 @@ for t in sgdisk mkfs.vfat mcopy mmd; do
 	command -v "$t" >/dev/null 2>&1 || { echo "need $t" >&2; exit 2; }
 done
 
-# Built, not merely looked for (BG-134).
+# Built, not merely looked for (KF-134).
 make -C kernel ARCH=x86_64  >/dev/null 2>&1 || true
 make -C kernel ARCH=aarch64 >/dev/null 2>&1 || true
 make -C boot   ARCH=x86_64  >/dev/null 2>&1 || true

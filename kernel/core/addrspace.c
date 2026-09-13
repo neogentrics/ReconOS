@@ -63,7 +63,7 @@ struct addrspace *addrspace_create(void)
 		 * vm_fault_user reads to decide whether a fault is demand paging
 		 * or a wild pointer. So a process handed a recycled slot
 		 * inherited the last one's permissions, and a stray pointer got
-		 * a fresh zero page instead of ending the program. (BG-147)
+		 * a fresh zero page instead of ending the program. (KF-147)
 		 *
 		 * The other two tables of this shape already do it this way:
 		 * thread_create allocates with kzalloc, process_create clears the
@@ -127,7 +127,7 @@ void addrspace_release(struct addrspace *as)
 		 * Without this a mapping would hold its file for the life of the
 		 * machine -- and because a slot is reused, the next program to
 		 * get this space would inherit the reference as well. That is
-		 * the same shape as BG-147. */
+		 * the same shape as KF-147. */
 		{
 			unsigned i;
 

@@ -255,7 +255,7 @@ static bool compatible_contains(const char *list, u32 len, const char *want)
  * asking "is there an arm,gic-v3 here" was told no by the machine that had
  * one -- and fell back to GICv2, whose CPU interface does not exist on such a
  * machine, and panicked at boot. Every other node this walk is asked about is
- * childless, which is why it went unseen. (BG-125)
+ * childless, which is why it went unseen. (KF-125)
  */
 static void report_node(bool matched, const u8 *reg_value, u32 reg_len,
 			u32 addr_cells, u32 size_cells,

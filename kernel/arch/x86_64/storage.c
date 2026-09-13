@@ -18,7 +18,7 @@
  * commonly presents its disk that way, and the driver cannot live in `core/`
  * with the other three, because compatibility-mode IDE is at fixed I/O ports
  * and `in` and `out` are x86 instructions. It belongs in this directory, and
- * it is BG-192.
+ * it is KF-192.
  */
 #include "x86_64.h"
 

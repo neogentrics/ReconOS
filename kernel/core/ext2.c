@@ -166,7 +166,7 @@ enum ext2_status ext2_mount(struct block_device *dev, struct ext2 *fs)
 	 * to a plausible-looking number and the device wrote to a physical
 	 * address about a hundred and forty terabytes in. The read was entered,
 	 * queued, issued and reported BLOCK_OK with the buffer untouched
-	 * (BG-193).
+	 * (KF-193).
 	 *
 	 * Every other buffer in this file already came from the page allocator.
 	 * This one did not, which is why it was the one that noticed.

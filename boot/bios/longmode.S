@@ -277,7 +277,7 @@ long_entry:
  * two paths that are supposed to be indistinguishable.
  *
  * Found on 11 September by a self-test that had been failing on every BIOS boot
- * since the check was written, on a boot nothing was reading (BG-187, BG-191):
+ * since the check was written, on a boot nothing was reading (KF-187, KF-191):
  *
  *     handoff      : rbx arrived holding something
  *

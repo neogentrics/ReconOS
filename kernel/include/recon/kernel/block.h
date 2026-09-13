@@ -203,7 +203,7 @@ struct block_device {
 	 * drive, for exactly this reason. Checkpoint 11b must read the SCSI Block
 	 * Device Characteristics VPD page, where a medium rotation rate of 1
 	 * means non-rotating, rather than inferring anything from the bus.
-	 * (BG-127) */
+	 * (KF-127) */
 	bool seek_is_free;
 
 	/* The device wants to be told when a block stops being in use, so it can

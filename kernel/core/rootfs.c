@@ -436,7 +436,7 @@ enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
 
 	if (st == RECONFS_OK) {
 		/* Each guarded, because this header follows the same rule the
-		 * one above it does and BG-161 is what happens when it does
+		 * one above it does and KF-161 is what happens when it does
 		 * not: a promise that a pointer may be null, kept for one of
 		 * them and not the other. */
 		if (mode)
@@ -506,7 +506,7 @@ enum reconfs_status rootfs_read_file(const char *path, void *out, u32 max,
 	 * be null, and `mode` above honours that. `got` did not: it was handed
 	 * straight to reconfs_read_named, which writes through it before it does
 	 * anything else. The first caller to believe the header wrote to address
-	 * zero in kernel mode. (BG-161) */
+	 * zero in kernel mode. (KF-161) */
 	{
 		u32 ignored;
 
@@ -629,7 +629,7 @@ void rootfs_run(void)
 	 *
 	 * Said out loud rather than skipped in silence. A test that quietly
 	 * does nothing prints the same thing as a test that passed, which is
-	 * the whole of BG-187. */
+	 * the whole of KF-187. */
 	if (rootfs_is_read_only()) {
 		kputs("  the volume tests : not run, this is a recovery boot "
 		      "and the volume is read-only\n");

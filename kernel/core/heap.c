@@ -132,7 +132,7 @@ static void *alloc_large(size_t size)
 	return rec->addr;
 }
 
-/* One processor at a time in the free lists. (BG-149)
+/* One processor at a time in the free lists. (KF-149)
  *
  * The header above this file still says there is one processor running kernel
  * code "until checkpoint 9" -- and that sentence has been wrong since 9b woke

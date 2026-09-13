@@ -1751,7 +1751,7 @@ void usb_poll_all(void)
  * seconds has sixteen firings behind it, each refused by the work queue, each
  * arming another. Nothing else in this kernel re-arms a timer from inside its
  * own callback, so that shape was the first of its kind here and it did not
- * survive its first long claim (BG-199).
+ * survive its first long claim (KF-199).
  *
  * Done this way there is **at most one timer outstanding at any moment**, it is
  * always armed from thread context, and the interval is measured from the end
@@ -1768,7 +1768,7 @@ static void usb_work_fn(void *arg)
 
 	if (hotplug_running && !timer_start(&usb_timer, USB_POLL_NS)) {
 		/* Said out loud rather than left as a machine that quietly
-		 * stops noticing devices. That silence is what BG-199 was. */
+		 * stops noticing devices. That silence is what KF-199 was. */
 		hotplug_running = false;
 		kputs("usb: the hot-plug timer would not re-arm; ports will "
 		      "not be watched again\n");

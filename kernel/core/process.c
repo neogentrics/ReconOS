@@ -368,8 +368,8 @@ static void quiet_thread(void *arg)
  * Bounded rather than immediate. The reap happens on the worker thread, after
  * the dying thread is off every processor -- so "not yet" and "not ever" are
  * different answers and a test that asserted straight away would be asking
- * the first while meaning the second. That distinction is what BG-164 and
- * BG-165 were both about.
+ * the first while meaning the second. That distinction is what KF-164 and
+ * KF-165 were both about.
  */
 bool process_reaping_self_test(void)
 {
@@ -457,7 +457,7 @@ bool process_self_test(void)
 
 	test_started = 0;
 
-	/* **Stopped, and that is the whole of BG-165.**
+	/* **Stopped, and that is the whole of KF-165.**
 	 *
 	 * This test drives the bookkeeping by hand: it calls
 	 * process_thread_ended itself, once per thread, and checks that the
@@ -478,7 +478,7 @@ bool process_self_test(void)
 	 * Created stopped, they cannot run until this is finished with them.
 	 * The header on thread_create_stopped already warned about the shape
 	 * of this -- a thread in the ring before the field that describes it
-	 * is set (BG-148) -- and this was the same mistake with the field
+	 * is set (KF-148) -- and this was the same mistake with the field
 	 * being "whether the test has finished looking". */
 	a = thread_create_stopped("proc-a", quiet_thread, 0);
 	b = thread_create_stopped("proc-b", quiet_thread, 0);
@@ -540,7 +540,7 @@ bool process_self_test(void)
 	 * quiet_thread and read by nothing -- a counter that proved the threads
 	 * had run, consulted by nobody. Waiting for it here is what says they
 	 * really ran and really finished, with a bound, because "not yet" and
-	 * "not ever" are different answers (BG-164). */
+	 * "not ever" are different answers (KF-164). */
 	thread_start(a);
 	thread_start(b);
 

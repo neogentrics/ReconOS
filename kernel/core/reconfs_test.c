@@ -5,7 +5,7 @@
  * docs/RECONFS.md puts the reverse sweep second on the list of things to test,
  * and says to run the checker against a deliberately corrupted image *first*
  * and confirm that it fails. That order is not a preference. Three harness bugs
- * in one afternoon (BG-114, BG-115, BG-116) all presented as clean passes, and
+ * in one afternoon (KF-114, KF-115, KF-116) all presented as clean passes, and
  * two of them were in the same script:
  *
  *     a test that has never been seen to fail is not a test yet
@@ -254,7 +254,7 @@ static bool noticed(struct block_device *dev, enum breakage b)
  * transaction. That is true of the verification rig's 16 MB disk and false of
  * every real one -- so without counting, running the battery on real hardware
  * would quietly stop checking the one rule that keeps a transaction from
- * overwriting live storage, and nothing would say so. (BG-119, BG-126) */
+ * overwriting live storage, and nothing would say so. (KF-119, KF-126) */
 static unsigned exclusion_checked;
 
 static bool run_at(struct block_device *dev, u32 bs);
@@ -497,7 +497,7 @@ static bool run_at(struct block_device *dev, u32 bs)
 		 * kept the block, owned by the archive and reachable from
 		 * nothing -- which is a leak, and which passed only because the
 		 * checker exempted archive-owned blocks from having to be
-		 * reachable. Removing that exemption (BG-122) made this test
+		 * reachable. Removing that exemption (KF-122) made this test
 		 * fail, correctly, on the first run. */
 		before = fs.super.epoch;
 		txn = reconfs_txn_begin(&fs);
@@ -589,7 +589,7 @@ static bool run_at(struct block_device *dev, u32 bs)
 
 			if (!last || reconfs_txn_failed(t2)) {
 				/* Two different failures wore one message until
-				 * BG-126. Filling the volume is how this test
+				 * KF-126. Filling the volume is how this test
 				 * forces the allocator to wrap -- and a volume
 				 * with more blocks than one transaction can
 				 * track cannot be filled by one, so on a large
@@ -1058,7 +1058,7 @@ contents_done:
 		 *
 		 * The check that matters is not that the name is gone. It is
 		 * that **the space came back** — which is exactly what renaming
-		 * over a file failed to do (BG-121), invisibly, because the test
+		 * over a file failed to do (KF-121), invisibly, because the test
 		 * that covered it used empty files.
 		 *
 		 * So this writes a file large enough to need blocks of its own,

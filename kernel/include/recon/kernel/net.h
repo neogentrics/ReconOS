@@ -201,7 +201,7 @@ u8 *netbuf_pull(struct netbuf *b, u32 n);
 u8 *netbuf_put(struct netbuf *b, u32 n);
 
 /* How many buffers exist, and how many were refused for want of memory. A
- * drop counter nothing prints is a drop counter nobody acts on -- see BG-186. */
+ * drop counter nothing prints is a drop counter nobody acts on -- see KF-186. */
 void netbuf_print_summary(void);
 bool netbuf_self_test(void);
 
@@ -260,7 +260,7 @@ struct net_device {
 
 	/* Counters. Every one of these is printed by `netdev_print_summary`,
 	 * deliberately: a counter nothing prints is a number that can go to
-	 * zero without anybody noticing, which is exactly what BG-186 was. */
+	 * zero without anybody noticing, which is exactly what KF-186 was. */
 	u64 rx_packets, rx_bytes, rx_dropped, rx_errors;
 	u64 tx_packets, tx_bytes, tx_dropped, tx_errors;
 };

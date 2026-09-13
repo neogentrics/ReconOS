@@ -24,7 +24,7 @@ static struct spinlock swap_lock = SPINLOCK_INIT("swap");
 
 /* One bit per slot, and the same read-modify-write on a shared byte that the
  * page allocator has -- so it is under the lock for the same reason, and that
- * reason is written down in pmm.c under BG-149. */
+ * reason is written down in pmm.c under KF-149. */
 static u8 in_use[SWAP_SLOTS_MAX / 8];
 static u32 slots;			/* how many the device actually gives */
 static u32 next_hint;

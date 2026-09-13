@@ -7,7 +7,7 @@
  *     and a heap allocation spanning two pages cannot promise;
  *   - it has a **physical address the driver can hand to hardware**, obtained
  *     by subtracting the direct map base, which only works because the page
- *     came from the allocator (BG-193 is what happens when it did not);
+ *     came from the allocator (KF-193 is what happens when it did not);
  *   - it either succeeds or it does not. There is no half-allocated buffer to
  *     unwind on the receive path, which runs in an interrupt.
  *

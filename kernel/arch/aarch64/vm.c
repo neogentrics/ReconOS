@@ -103,7 +103,7 @@ void *phys_to_virt(paddr_t phys)
  * Zero is the answer callers check for, and it was unreachable. Fixed here at
  * the same time rather than later: this architecture has the same layout, the
  * same drivers above it, and would have had the same silent write to nowhere
- * the first time anything handed a driver a stack buffer. (BG-193)
+ * the first time anything handed a driver a stack buffer. (KF-193)
  */
 paddr_t virt_to_phys(const void *virt)
 {
@@ -777,7 +777,7 @@ paddr_t arch_as_new_root(void)
  *
  * That second half used to be a sentence saying the opposite -- "not the pages
  * they pointed at: whoever allocated the memory frees the memory" -- and there
- * was nobody else. See BG-182 and the longer note in the x86_64 copy.
+ * was nobody else. See KF-182 and the longer note in the x86_64 copy.
  *
  * A page shared with other spaces is left alone: today the page of zeroes. */
 static u64 leaves_freed;

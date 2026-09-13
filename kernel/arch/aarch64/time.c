@@ -52,7 +52,7 @@
  * or more processors that address is not a CPU interface. The first write to it
  * took an external abort and the machine panicked before finishing boot. It was
  * never seen because the verification rig stopped at eight -- the largest
- * machine QEMU's `virt` board still gives a GICv2 for. (BG-124.)
+ * machine QEMU's `virt` board still gives a GICv2 for. (KF-124.)
  *
  * --- What changes, and what does not ---
  *

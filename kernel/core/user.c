@@ -746,7 +746,7 @@ struct thread *user_thread_create(const char *name, const void *code,
 	/* Only now may anything else see it. Started before the attach, a
 	 * processor that picked it up would run it with no process and so with
 	 * the kernel's address space, and the program would fault on its own
-	 * first instruction. (BG-148) */
+	 * first instruction. (KF-148) */
 	thread_start(t);
 
 	return t;
@@ -825,7 +825,7 @@ struct thread *user_elf_create(const char *name, const void *image, u64 len,
 	/* Only now may anything else see it. Started before the attach, a
 	 * processor that picked it up would run it with no process and so with
 	 * the kernel's address space, and the program would fault on its own
-	 * first instruction. (BG-148) */
+	 * first instruction. (KF-148) */
 	thread_start(t);
 
 	return t;
@@ -853,7 +853,7 @@ struct thread *user_elf_create(const char *name, const void *image, u64 len,
  * It cost real time on 10 September. A program was dying at its own entry point
  * and the test reported a timeout -- because `exits` is only incremented by
  * sys_exit, and a program killed by a fault never gets there. The fault line was
- * in the log the whole time and nothing in the message pointed at it. (BG-150)
+ * in the log the whole time and nothing in the message pointed at it. (KF-150)
  */
 static void say_how_far_it_got(const struct thread *t, u64 calls_before,
 			       u64 faults_before)

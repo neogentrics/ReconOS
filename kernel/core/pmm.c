@@ -13,7 +13,7 @@
  * memory nobody told us about stays untouchable, which is the correct
  * treatment of an unknown. */
 static u8    *bitmap;
-/* One processor at a time in the bitmap. (BG-149)
+/* One processor at a time in the bitmap. (KF-149)
  *
  * This file had no lock and no atomic in it until 10 September, under a comment
  * in heap.h explaining that there is one processor running kernel code "until

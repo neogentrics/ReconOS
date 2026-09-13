@@ -81,7 +81,7 @@ Nothing forbade a bump in either gap. Nothing asked for one either. The kernel
 had no change log of its own, so there was no step at which somebody was
 required to write down what changed and notice the number had not moved.
 
-That is the same shape as BG-186, one level up: a number that is only correct
+That is the same shape as KF-186, one level up: a number that is only correct
 while somebody remembers is a number that will eventually be wrong, and will
 look exactly the same when it is.
 
@@ -111,7 +111,7 @@ Every one green on all twenty-five boots with nothing skipped.
 **The count going up is the evidence, not the pass.** 53 self-tests per path
 became 54 when the network stack's own test joined them, which is how it is
 known to have *run* rather than skipped -- a skipped test and a passing test look
-identical in a total, which is what BG-187 was about. Nothing was moved to Built
+identical in a total, which is what KF-187 was about. Nothing was moved to Built
 on the strength of a run reporting the same number as the one before it.
 
 **Two rulings were needed, and both were made in the open.** `ext4` moved to
@@ -124,10 +124,10 @@ different thing and is why each says so on its own row. **A row renamed quietly
 to let a gate pass is how a checklist stops being worth reading.**
 
 **Named, absent, and outside the gate:** IPv6, which the blueprint adds to 1.8's
-layer 3; EHCI, above; and BG-192, a kernel that boots from a disk over BIOS and
+layer 3; EHCI, above; and KF-192, a kernel that boots from a disk over BIOS and
 cannot see it, because that disk is IDE and there is no IDE driver.
 
-The `.1` is BG-199's fix, which landed with it.
+The `.1` is KF-199's fix, which landed with it.
 
 ## 0.1.14 -- 12 September 2026
 
@@ -144,7 +144,7 @@ claim in the stack that no self-test can make.
 **Thirteen files, all under `core/`, and `make check-portable` is still clean.**
 The whole stack is portable, because every card it can talk to is reached
 through a mapped BAR rather than through an instruction only one architecture
-has. That is the same boundary that keeps legacy IDE *out* of `core/` (BG-192).
+has. That is the same boundary that keeps legacy IDE *out* of `core/` (KF-192).
 
 What is here: virtio-net over both transports; packet buffers with headroom, so
 a header stack is prepended without copying anything; Ethernet; ARP with a cache
@@ -156,20 +156,20 @@ a DHCP client.
 
 **Three bugs, one bump each.**
 
-**BG-194** -- virtio-net used a descriptor index as a ring slot, twice. It
+**KF-194** -- virtio-net used a descriptor index as a ring slot, twice. It
 stashed a slot number in `desc[head].next`, which is the field that chains the
 head to the frame's descriptor and is read by the device; and it indexed 64
 descriptors into a 32-entry transmit table, so two frames in flight shared one
 and a buffer would have been freed twice. One mistake in two places: borrowing a
 field that already has an owner.
 
-**BG-195** -- a broadcast could not leave a card with no address, which makes
+**KF-195** -- a broadcast could not leave a card with no address, which makes
 DHCP impossible to run. Right for ordinary traffic and wrong for the one
 protocol whose job is to run *before* there is an address. No self-test could
 have found it: every test configures its device by hand first, which is the
 exact condition under which the bug cannot occur.
 
-**BG-196** -- the ARP expiry test wrote zero to mean "long ago", on a machine
+**KF-196** -- the ARP expiry test wrote zero to mean "long ago", on a machine
 whose clock starts at zero. Four seconds into a boot, an entry stamped zero is
 four seconds old, not stale. Fixed by subtracting from *now*, which is correct
 even when it underflows -- the same unsigned-difference property TCP uses to
@@ -190,7 +190,7 @@ how large the change feels, which is what the rule exists to replace.
 **Five things built, one bug that had to be found before any of them could be
 trusted, and none of it through a verification run yet.**
 
-**`virt_to_phys` answered for addresses it cannot answer for.** (BG-193) The
+**`virt_to_phys` answered for addresses it cannot answer for.** (KF-193) The
 direct-map test was one-sided, and the kernel image runs *above* the direct map
 base -- so a stack pointer subtracted to a plausible-looking physical address
 about a hundred and forty terabytes in. `virtio_blk` has always had the right
@@ -226,7 +226,7 @@ five hours after boot. Enabling the counter is not treated as evidence it runs.
 correctly reporting nobody answered, 0 timed out, 8 devices that did. SPI is
 declared with no driver and says so every boot, because there is no SPI
 controller on either machine this kernel runs on. Finding the controller took
-BG-179 for the third time: `i2c_init` ran before the PCI bus was walked.
+KF-179 for the third time: `i2c_init` ran before the PCI bus was walked.
 
 **USB hubs.** A disk behind a hub, enumerated and usable. xHCI does not address
 a device by the chain of hubs it hangs off -- it wants the root port plus a
@@ -249,24 +249,24 @@ grepped it only for the kernel banner and a partition count. Asking whether its
 self-tests passed turned up three faults and one gap, two of which had been
 failing on every BIOS boot since the checks were written.
 
-**The BIOS loader hands over a clean machine.** (BG-191) `reconboot` clears every
+**The BIOS loader hands over a clean machine.** (KF-191) `reconboot` clears every
 register it does not need; the BIOS loader did not, under a comment stating that
 *the kernel must not be able to tell which loader started it*. It could:
 `rbx arrived holding something`.
 
-**The processor identity check knows whether there is a map.** (BG-190) On a
+**The processor identity check knows whether there is a map.** (KF-190) On a
 machine with no MADT nothing is ever registered, both APIC maps stay zero, and
 the check read slot 0 as a real processor holding APIC 0. It reported the map as
 broken on a machine that had no map.
 
-**Changing the version rebuilds the kernel.** (BG-189) It did not. `VERSION` is
+**Changing the version rebuilds the kernel.** (KF-189) It did not. `VERSION` is
 passed with `-D` and the Makefile was not a prerequisite of any object, so the
 binary went on printing 0.1.0 out of a tree that said 0.1.7 -- and matrix 23
 passed 951 self-tests against the mislabelled kernel. A clean build was always
 right; only incremental builds, which is every build anybody does, were wrong.
 
 **Open, and the largest of the four:** the kernel boots from a disk over BIOS and
-then cannot see it (BG-192). The disk is IDE and there is no IDE driver, so a
+then cannot see it (KF-192). The disk is IDE and there is no IDE driver, so a
 machine with no UEFI starts ReconOS and has no storage. The machines with no UEFI
 are the same machines likely to present their disk that way, which makes this the
 configuration the BIOS bootloader exists to serve and the one the kernel can
@@ -275,7 +275,7 @@ least use.
 ## 0.1.7 -- 11 September 2026
 
 **Recovery does not write to the volume, and the volume is what refuses.**
-(BG-188) Recovery promised to look and not touch, and nothing enforced it -- the
+(KF-188) Recovery promised to look and not touch, and nothing enforced it -- the
 promise was kept by every caller happening not to write. A self-test that
 replaces a file broke that on every boot. The volume is mounted read-only on a
 recovery boot now, refused at the one place a change can begin rather than by
@@ -285,13 +285,13 @@ Cleaning up after the write would not have been enough: ReconFS is
 copy-on-write, so a file created and then deleted still moves the root and still
 changes the disk. Only not writing keeps a byte-for-byte promise.
 
-**Five self-tests need a volume and no matrix path has one.** (BG-187) Every
+**Five self-tests need a volume and no matrix path has one.** (KF-187) Every
 boot path attaches a blank disk, so they print "no volume on this machine" and
 are counted as having run. A skipped test and a passing test look identical in a
 total.
 
 **Requests reach the disk in an order**, and the block layer's transfer counters
-are printed. (BG-186) They had been incremented since the block layer was
+are printed. (KF-186) They had been incremented since the block layer was
 written and displayed nowhere, so an I/O rewrite that dropped them could not be
 noticed -- and one did.
 
@@ -309,18 +309,18 @@ filesystem was written and nothing above it ever called it.
 Not a release that existed; recorded so the numbering adds up. Between 0.1.0 and
 0.1.7 these were found and fixed while the version sat still:
 
-- **BG-186** -- transfer counters incremented and printed nowhere.
-- **BG-185** -- the loader's ELF reader trusted a signature check the default
+- **KF-186** -- transfer counters incremented and printed nowhere.
+- **KF-185** -- the loader's ELF reader trusted a signature check the default
   build does not perform. One byte changed in a file on the EFI partition faults
   the firmware before the kernel starts.
-- **BG-184** -- the page cache key named the file but not the filesystem, so
+- **KF-184** -- the page cache key named the file but not the filesystem, so
   ramfs slot 10 and volume dossier 10 collided.
-- **BG-183** -- the reapers had no callers. Both were written, both correct, and
+- **KF-183** -- the reapers had no callers. Both were written, both correct, and
   each had exactly one caller: a self-test.
-- **BG-182** -- tearing down an address space freed the page tables and not the
+- **KF-182** -- tearing down an address space freed the page tables and not the
   pages they pointed at, under a comment saying the memory was somebody else's
   job. There was no somebody else. Twelve pages leaked per program.
-- **BG-163** -- two disks of one kind stalled the boot. A legacy interrupt line
+- **KF-163** -- two disks of one kind stalled the boot. A legacy interrupt line
   nothing acknowledged, taking 1,770,000 interrupts on an ordinary one-disk boot
   and printed in the summary the whole time.
 

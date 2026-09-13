@@ -57,11 +57,18 @@ AREA = {
     # the system is a track record of all of it.
     81: 'kernel', 82: 'build', 83: 'build', 84: 'build',
     85: 'storage', 86: 'storage', 87: 'storage', 88: 'storage', 89: 'storage', 90: 'storage', 91: 'kernel', 92: 'kernel',
-    # Renumbered from 082-093 when the kernel branch's register was found to
-    # have forked from main's. The table lagged that renumbering, so BG-114
-    # upward were opened carrying no area label at all -- AREA.get returns None
-    # and labels_for says nothing about it, which is the failure mode a lookup
-    # table has.
+    # These are the kernel's, and they carry the `KF-` prefix now. They were
+    # renumbered once from 082-093, when the register was found to have forked;
+    # that deferred the collision rather than ending it, and by 12 September
+    # 2026 fifty-one numbers named two unrelated bugs. The prefix ends it: the
+    # two tracks allocate separately and neither can take the other's number.
+    #
+    # The table is keyed by number alone and so is shared by both prefixes.
+    # That is safe only because a number is never one area in one track and a
+    # different area in the other -- it is the same fault, recorded once. Add a
+    # line here when adding an entry: AREA.get returns None for a number with
+    # no line, labels_for then says nothing about the area, and filtering by
+    # area misses it silently. That is the failure mode a lookup table has.
     114: 'build', 115: 'build', 116: 'storage', 117: 'storage',
     118: 'storage', 119: 'storage', 120: 'storage', 121: 'storage',
     122: 'storage', 123: 'kernel', 124: 'kernel', 125: 'kernel',
@@ -88,6 +95,14 @@ AREA = {
     164: 'kernel',
     165: 'kernel',
     166: 'build',
+    # The interrupt, process and paging work, then the network stack,
+    # then the register's own filer.
+    179: 'kernel', 180: 'kernel', 181: 'kernel', 182: 'kernel',
+    183: 'kernel', 184: 'storage', 185: 'startup', 186: 'storage',
+    187: 'storage', 188: 'storage', 189: 'build', 190: 'kernel',
+    191: 'startup', 192: 'storage', 193: 'kernel', 194: 'network',
+    195: 'network', 196: 'kernel', 197: 'storage', 198: 'storage',
+    199: 'kernel', 200: 'build',
 }
 
 
@@ -119,9 +134,9 @@ def existing_titles():
     listing came back mangled, every title looks new and the run makes a
     second copy of the whole register.
     """
-    if rows and not any(t.startswith('BG-') for t in titles):
+    if rows and not any(t.startswith(('BG-', 'KF-')) for t in titles):
         raise SystemExit(
-            'The issue list came back with no BG- titles in it. Refusing to '
+            'The issue list came back with no BG-/KF- titles in it. Refusing '
             'run: this is what a decoding fault looks like, and continuing '
             'would duplicate every entry.')
 
@@ -131,7 +146,7 @@ def existing_titles():
 def parse(path):
     text = io.open(path, encoding='utf-8').read()
     # Everything from the first entry on; the preamble is not an entry.
-    blocks = re.split(r'\n### (BG-\d+ — )', text)
+    blocks = re.split(r'\n### ((?:BG|KF)-\d+ *(?:—|–|--) )', text)
     entries = []
     for i in range(1, len(blocks), 2):
         head = blocks[i]
@@ -141,7 +156,12 @@ def parse(path):
         body = re.split(r'\n---\n|\n## ', body)[0].strip()
         entries.append({
             'id': head[:6],
-            'title': (head + title_line).strip(),
+            # The heading may have been typed with `--`. Every issue
+            # title on GitHub uses an em dash, so one form reaches the
+            # filer however the entry was written.
+            'title': re.sub(r' *(?:—|–|--) *',
+                            ' — ', (head + title_line).strip(),
+                            count=1),
             'body': body,
         })
     return entries
@@ -209,7 +229,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### (BG-\d+) .*$', text, re.M):
+    for m in re.finditer(r'^### ((?:BG|KF)-\d+) .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -234,10 +254,61 @@ def check_links():
     return 1 if wrong else 0
 
 
+def entry_is_fixed(body):
+    """
+    Four forms appeared over a hundred and fifty entries: `**Fixed in**`,
+    `**Fixed in:**`, `**Fixed by**`, and a `**Status:**` line saying it in
+    prose. The old test was `'**Fixed in**' in body`, which recognised one of
+    them, so thirty of the kernel's seventy-two entries had their state
+    invisible to the tool that publishes it. See KF-200.
+
+    A `**Status:**` line wins where there is one: it is the later convention
+    and the more explicit. *Half fixed* reads as open, because it is -- KF-127
+    says exactly that and means it.
+    """
+    said = re.search(r'\*\*Status:\*\*\s*\**\s*([A-Za-z]+)', body)
+    if said:
+        return said.group(1).lower().startswith('fix')
+    return bool(re.search(r'\*\*Fixed (?:in|by):?\*\*', body))
+
+
+def check_open(text):
+    """
+    The `## Open` section is a sentence kept beside the data that would
+    contradict it, and it had drifted: it said "None. Every bug below was found
+    and closed" while five entries said they were open. Checked here rather
+    than trusted, because every count in this project that was remembered
+    instead of derived has drifted the same way.
+    """
+    head = re.search(r'^## Open$(.*?)^---$', text, re.M | re.S)
+    if not head:
+        print('  no ## Open section to check')
+        return 0
+
+    open_now = []
+    for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
+        m = re.match(r'### ((?:BG|KF)-\d+)', block)
+        if m and not entry_is_fixed(block.split('\n## ')[0]):
+            open_now.append(m.group(1))
+
+    named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
+    missing = [b for b in open_now if b not in named]
+    extra = [b for b in named if b not in open_now]
+
+    for b in missing:
+        print('  %s is open and the Open section does not say so' % b)
+    for b in extra:
+        print('  %s is named as open and its own entry says otherwise' % b)
+    if not missing and not extra:
+        print('  Open names all %d open entries and no others' % len(open_now))
+    return 1 if (missing or extra) else 0
+
+
 def main():
     dry = '--dry-run' in sys.argv
     if '--check' in sys.argv:
-        sys.exit(check_links())
+        text = pathlib.Path('docs/BUGS.md').read_text(encoding='utf-8')
+        sys.exit(check_links() | check_open(text))
 
     entries = parse('docs/BUGS.md')
     have = existing_titles()
@@ -248,7 +319,7 @@ def main():
             print(f"  {e['id']}  exists as #{have[e['title']]['number']}")
             continue
 
-        closed = '**Fixed in**' in e['body']
+        closed = entry_is_fixed(e['body'])
         labels = labels_for(e)
         body = e['body'] + (
             '\n\n---\n\nFrom the register in '

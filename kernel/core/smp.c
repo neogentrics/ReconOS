@@ -15,7 +15,7 @@ static u64 cpu_ids[MAX_CPUS];
 
 /* What each processor says it is, written by that processor about itself.
  *
- * This exists because BG-153 was invisible to every test there was. On
+ * This exists because KF-153 was invisible to every test there was. On
  * aarch64 arch_cpu_id() returned MPIDR affinity level 0 -- the processor
  * within its cluster -- and on a two-socket or big.LITTLE machine two
  * processors answer the same number and index the same entry of every

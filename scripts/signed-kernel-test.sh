@@ -33,7 +33,7 @@ for t in openssl sgdisk mkfs.vfat mcopy mmd; do
 done
 # Built, not merely looked for. A script that only checks a binary exists
 # will happily test one compiled before the change it is meant to prove --
-# which is how a security check came to be silently absent (BG-133).
+# which is how a security check came to be silently absent (KF-133).
 make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
 [ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 
@@ -42,13 +42,13 @@ W=$(mktemp -d)
 # The key this test generates goes into the *source tree* -- the loader compiles
 # the public modulus in, so there is nowhere else for it to go. That makes this
 # script one that changes the repository, and a test that changes the repository
-# changes every test run after it (BG-139): with a key left behind, every
+# changes every test run after it (KF-139): with a key left behind, every
 # harness that boots an unsigned kernel is correctly refused, and paths fail for
 # a reason that has nothing to do with them.
 #
 # So the previous state is put back, whatever happens. The loader is rebuilt
 # afterwards by whoever needs it, because the header is a tracked dependency --
-# which it was not until BG-133.
+# which it was not until KF-133.
 KEYHDR=boot/src/signing_key.h
 if [ -f "$KEYHDR" ]; then
 	cp "$KEYHDR" "$W.keyhdr"

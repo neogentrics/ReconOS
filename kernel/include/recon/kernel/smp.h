@@ -71,7 +71,7 @@ struct cpu_local {
 	 * on aarch64.
 	 *
 	 * Recorded and printed because the difference between the two numbers
-	 * is where BG-152 and BG-153 both live, and because it was invisible:
+	 * is where KF-152 and KF-153 both live, and because it was invisible:
 	 * a summary that shows only the dense index looks identical on a
 	 * machine whose identities alias and one whose do not. */
 	u64 hw_id;

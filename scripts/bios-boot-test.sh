@@ -35,7 +35,7 @@ cd "$ROOT"
 
 command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "need qemu" >&2; exit 2; }
 
-# Built, not merely looked for (BG-134).
+# Built, not merely looked for (KF-134).
 make -C boot/bios >/dev/null 2>&1 || true
 [ -f boot/bios/build/stage1.bin ] || { echo "stage 1 did not build" >&2; exit 1; }
 [ -f boot/bios/build/stage2.bin ] || { echo "stage 2 did not build" >&2; exit 1; }
@@ -82,7 +82,7 @@ boot_with() {
 # --- before booting anything, is stage 1 going to read all of stage 2? ------
 #
 # Checked directly rather than inferred from a boot failure. When stage 2
-# outgrew the four sectors stage 1 used to read (BG-138), the symptom was a
+# outgrew the four sectors stage 1 used to read (KF-138), the symptom was a
 # machine that printed "ReconOS" and stopped -- and the magic check passed,
 # because the first four bytes had arrived. This asks the question the magic
 # number cannot: did all of it arrive?
@@ -193,7 +193,7 @@ if command -v sgdisk >/dev/null 2>&1 && command -v mkfs.vfat >/dev/null 2>&1; th
 	# The real kernel, under the real name, put there by mtools -- which
 	# shares no code with the reader that has to find it again. The name
 	# needs a long-name entry, and finding it by its 8.3 alias instead is
-	# what BG-130 was about.
+	# what KF-130 was about.
 	make -C kernel ARCH=x86_64 >/dev/null 2>&1 || true
 	KELF=kernel/build/x86_64/reconos-kernel.elf
 	if [ -f "$KELF" ] && command -v mcopy >/dev/null 2>&1; then

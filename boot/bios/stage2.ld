@@ -54,7 +54,7 @@ SECTIONS
 	 *
 	 * Checked here because it is the kind of limit something grows into
 	 * quietly -- the sector count in stage 1 was such a limit, and it was
-	 * found by a boot failure rather than by a build (BG-138).
+	 * found by a boot failure rather than by a build (KF-138).
 	 */
 	ASSERT(__bss_end <= 0x10000,
 	       "stage 2 has grown past the 64KB real mode can address")

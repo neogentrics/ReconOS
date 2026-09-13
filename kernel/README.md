@@ -122,7 +122,7 @@ why:
 - **EHCI, and USB hot-plug.** xHCI works and hubs are enumerated; older
   controllers are not, and ports are read once at boot.
 - **A driver for legacy IDE.** Which is why a kernel that boots over BIOS from
-  an IDE disk cannot then read it (BG-192). It belongs in `arch/x86_64/`
+  an IDE disk cannot then read it (KF-192). It belongs in `arch/x86_64/`
   rather than `core/`, because compatibility-mode IDE is at fixed I/O ports and
   `in` and `out` are x86 instructions — the reason the other three block
   drivers can be portable and this one cannot.

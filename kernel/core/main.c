@@ -183,7 +183,7 @@ void kmain(void)
 	 * that ordering has caught something here. block_init is what walks
 	 * the PCI bus; a driver looking for its device before that walk finds
 	 * an empty table and reports, correctly and uselessly, that the
-	 * machine does not have one. BG-179 was the same mistake with the
+	 * machine does not have one. KF-179 was the same mistake with the
 	 * interrupt summary, which printed a count of zero on every boot this
 	 * kernel had ever made. */
 	i2c_init();

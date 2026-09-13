@@ -637,7 +637,7 @@ void identity_run(void)
 	/* Attached before it is runnable, which is the whole reason
 	 * thread_create_stopped exists: the scheduler reads the process to
 	 * decide the thread's identity, and a thread in the ring before that
-	 * field is set runs as nobody. (BG-148, and again as BG-165.) */
+	 * field is set runs as nobody. (KF-148, and again as KF-165.) */
 	process_attach(p, t);
 	thread_start(t);
 

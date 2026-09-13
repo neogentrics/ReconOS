@@ -24,7 +24,7 @@ OVMF=/usr/share/ovmf/OVMF.fd
 
 # Built, not merely looked for. A script that only checks a binary exists
 # will happily test one compiled before the change it is meant to prove --
-# which is how a security check came to be silently absent (BG-133).
+# which is how a security check came to be silently absent (KF-133).
 make -C kernel ARCH="${ARCH:-x86_64}" >/dev/null 2>&1 || true
 [ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 [ -f "$OVMF" ] || { echo "OVMF is not installed"; exit 2; }

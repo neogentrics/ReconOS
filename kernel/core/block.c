@@ -1004,7 +1004,7 @@ void block_print_summary(void)
  * disk with no table on it. What it can do depends on what the disk is, the
  * same way the read-only case already worked.
  *
- * --- And it used to accept a partition, which was worse (BG-140) ---
+ * --- And it used to accept a partition, which was worse (KF-140) ---
  *
  * The second preference used to be "failing that, a single partition -- bounded,
  * and exercises the slice arithmetic". That reads as the careful choice and is
@@ -1035,7 +1035,7 @@ void block_print_summary(void)
  *                              and what an installer meets on a new machine
  *   anything at all         -- read-only test, better than no test
  *
- * There is no third option, and the missing one is the point: see BG-140 above.
+ * There is no third option, and the missing one is the point: see KF-140 above.
  * A partitioned disk and every slice of it are refused for writing on a machine
  * this kernel does not own, which is every machine except the rig's.
  */
@@ -1063,7 +1063,7 @@ static struct block_device *pick_test_device(bool *writable)
 		 * apart: `install.c` refuses to install onto UNREADABLE for the
 		 * same reason. This is the second caller, and it was not asking.
 		 *
-		 * BG-197. Found by working out what would happen if a real USB
+		 * KF-197. Found by working out what would happen if a real USB
 		 * stick were attached at boot rather than by anything failing. */
 		if (d->scheme == BLOCK_SCHEME_UNREADABLE)
 			continue;

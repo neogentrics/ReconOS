@@ -36,24 +36,24 @@ faults on `main` and twelve entirely different faults on the kernel branch**, an
 `main` ran on to BG-113. Two GitHub issues were titled `BG-085`, for unrelated
 bugs.
 
-The kernel branch's twelve were renumbered to **BG-114 through BG-125**, in the
-same order, and the next fault found took BG-126. `main` keeps its numbers,
+The kernel branch's twelve were renumbered to **KF-114 through KF-125**, in the
+same order, and the next fault found took KF-126. `main` keeps its numbers,
 being the longer sequence and the one the arrangement says is authoritative.
 
 | Was | Is |
 |---|---|
-| BG-082 | BG-114 |
-| BG-083 | BG-115 |
-| BG-084 | BG-116 |
-| BG-085 | BG-117 |
-| BG-086 | BG-118 |
-| BG-087 | BG-119 |
-| BG-088 | BG-120 |
-| BG-089 | BG-121 |
-| BG-090 | BG-122 |
-| BG-091 | BG-123 |
-| BG-092 | BG-124 |
-| BG-093 | BG-125 |
+| BG-082 | KF-114 |
+| BG-083 | KF-115 |
+| BG-084 | KF-116 |
+| BG-085 | KF-117 |
+| BG-086 | KF-118 |
+| BG-087 | KF-119 |
+| BG-088 | KF-120 |
+| BG-089 | KF-121 |
+| BG-090 | KF-122 |
+| BG-091 | KF-123 |
+| BG-092 | KF-124 |
+| BG-093 | KF-125 |
 
 Their GitHub issues (#270–#283) were retitled and carry a line saying what they
 were. **Commit messages were not rewritten and cannot be** — commits on the
@@ -99,7 +99,8 @@ Bugs still open say **Open** and why.
 ## Where this is tracked
 
 Every bug here is also a [GitHub issue](https://github.com/neogentrics/ReconOS/issues),
-titled with its `BG-` number and labelled `bug` plus its area. The issue is
+titled with its `BG-` or `KF-` number and labelled `bug` plus its
+area. The issue is
 where discussion happens; this file is the durable record. If they disagree,
 this file is wrong and should be corrected — the issues carry the timestamps.
 
@@ -108,17 +109,52 @@ Features, patches and releases are tracked the same way: see
 
 ---
 
+## Two prefixes, and why
+
+`BG-` is the desktop's. **`KF-` is the kernel's** -- a kernel *fault*, and not
+`KB-`, because this kernel prints KB for kilobytes in the very summaries these
+numbers appear in.
+
+They were one sequence until 12 September 2026, on the rule that a track record
+of the system should be a track record of all of it. The rule was right and
+nothing enforced it: one sequence needs one allocator, and there were two
+branches counting up from BG-081 with no way to see each other's claims. **51
+numbers ended up naming two unrelated bugs** -- 145 was a diluted outline on the
+desktop and a read-only page fault in the kernel.
+
+It had happened once before and been patched by renumbering the kernel's entries
+from 082 upward to 114; `scripts/make-issues.py` still carried the comment. That
+deferred it rather than fixing it, which is what a renumber does.
+
+**The digits did not change.** BG-145 became KF-145. Anything already written --
+a commit message, a comment, a row on the audit -- needs its prefix substituted
+and nothing else. Kernel commits before 12 September 2026 citing `BG-114` and
+upward mean `KF-`.
+
+Kernel faults from here take the next free `KF-` number; desktop faults the next
+free `BG-`. Neither track can take the other's, so neither has to look at the
+other's file first.
+
+---
+
 ## Open
 
-None. Every bug below was found and closed; the list is kept in full
-rather than pruned, because a register that only shows what is currently
-broken says nothing about the work.
+Five, and each entry says why. They are listed here because a register
+that only shows what is currently broken says nothing about the work --
+and one that claims nothing is broken while five entries say otherwise is
+worse than either. This list is checked against the entries by
+`python scripts/make-issues.py --check`.
 
+- **KF-127** — Whether a drive is flash is a question USB cannot answer, and the storage layer assumes it can
+- **KF-150** — About one boot in sixty, a user program does not finish, and nothing says why
+- **KF-154** — The page allocator scans, and a terabyte is a billion pages
+- **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
+- **KF-187** — Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
 ---
 
 ## Fixed
 
-### BG-119 — A transaction could overwrite storage the live filesystem still used
+### KF-119 — A transaction could overwrite storage the live filesystem still used
 
 [#276](https://github.com/neogentrics/ReconOS/issues/276)
 
@@ -175,7 +211,7 @@ broken says nothing about the work.
   With a control that genuinely applies, the allocator hands back block 4095 —
   the exact block released moments earlier — and the test fails. That is the
   third instance tonight of a check that reported success while doing nothing,
-  after BG-114 and BG-115.
+  after KF-114 and KF-115.
 
   Testing it directly also turned up a smaller thing worth fixing: running out
   of space marked the whole transaction failed, which made "the volume is full"
@@ -183,7 +219,7 @@ broken says nothing about the work.
   leaves the transaction usable, which is what let the test fill a volume on
   purpose.
 
-### BG-120 — Only one of the two superblocks was ever written
+### KF-120 — Only one of the two superblocks was ever written
 
 [#277](https://github.com/neogentrics/ReconOS/issues/277)
 
@@ -226,7 +262,7 @@ broken says nothing about the work.
   into superblock A's fields while B was live, damaging a block nothing pointed
   at, and getting a correct report of a healthy volume.
 
-### BG-121 — Renaming over a file leaked every block it occupied
+### KF-121 — Renaming over a file leaked every block it occupied
 
 [#278](https://github.com/neogentrics/ReconOS/issues/278)
 
@@ -259,7 +295,7 @@ broken says nothing about the work.
   whole thing. An empty file is always complete, so a crash test on empty files
   can only assert that a *name* resolved.
 
-### BG-122 — Every directory rewrite leaked a block, and the checker was built not to notice
+### KF-122 — Every directory rewrite leaked a block, and the checker was built not to notice
 
 [#279](https://github.com/neogentrics/ReconOS/issues/279)
 
@@ -306,7 +342,7 @@ broken says nothing about the work.
   independence a second implementation by the same author buys, and worth
   recording as such.
 
-### BG-123 — A machine with more processors than the kernel holds reported the wrong number, under a comment saying it never would
+### KF-123 — A machine with more processors than the kernel holds reported the wrong number, under a comment saying it never would
 
 [#280](https://github.com/neogentrics/ReconOS/issues/280)
 
@@ -332,8 +368,8 @@ broken says nothing about the work.
   The comment above it says *"Reported, never silently truncated"*, and cites
   the memory map's region cap as the lesson that taught it. The lesson was
   learned, written down, and then implemented as code that could not do it —
-  which is the same shape as BG-120 (a correct sentence above an incorrect line)
-  and BG-122 (an exemption written for a category, applied as a membership
+  which is the same shape as KF-120 (a correct sentence above an incorrect line)
+  and KF-122 (an exemption written for a category, applied as a membership
   test). Three of these now.
 - **Fixed in** kernel 0.0.11. `arch_smp_discover` returns how many processors
   *exist*, which may exceed `max`; only `max` are written to the array. Both
@@ -348,7 +384,7 @@ broken says nothing about the work.
   A message that blames the wrong thing sends whoever reads it somewhere else
   entirely.
 
-### BG-140 — The block self-test would write to a stranger's partition, and only ever on a stranger's machine
+### KF-140 — The block self-test would write to a stranger's partition, and only ever on a stranger's machine
 
 [#379](https://github.com/neogentrics/ReconOS/issues/379)
 
@@ -400,12 +436,12 @@ any coverage: the rig always took the first branch anyway.
   written where the old one stood, because the old one read as careful.
 
 **Worth generalising.** This is the second time this project has found a check
-whose *only* reachable case is the case nobody tests — after BG-119's comment
+whose *only* reachable case is the case nobody tests — after KF-119's comment
 arguing that a case "does not arise here" about a case that then arose. The
 shape to look for is not a wrong branch. It is a fallback whose precondition is
 "the situation the rig never builds".
 
-### BG-141 — A processor count that saturates, and states the shortfall as a fact
+### KF-141 — A processor count that saturates, and states the shortfall as a fact
 
 [#380](https://github.com/neogentrics/ReconOS/issues/380)
 
@@ -443,7 +479,7 @@ The **probe** truncates, one layer down, and the reporting layer cannot tell.
   is worth more than one that is precise and sometimes false.
 
 **Still open:** the count itself. The real answer is to read `/cpus` from the
-device tree, which the parser can now do — it gained the ability at BG-125, when
+device tree, which the parser can now do — it gained the ability at KF-125, when
 the walker learned to report a node that has children. Until then the number is
 a floor rather than a total, and the wording says so.
 
@@ -454,14 +490,14 @@ read that returns fewer bytes than asked for and is treated as a failure — see
 the transfer-event residue in `xhci.c`, where the distinction was built in
 deliberately for exactly this reason.
 
-### BG-142 — The scheduler's own test hung one boot in three, on a counter that `volatile` did not protect
+### KF-142 — The scheduler's own test hung one boot in three, on a counter that `volatile` did not protect
 
 [#381](https://github.com/neogentrics/ReconOS/issues/381)
 
 - **Found:** 8 September 2026, sweeping processor counts on x86_64 after
   checkpoint 9b started the secondaries.
 - **Cost:** nothing shipped, and it had been latent on aarch64 since 9b landed
-  there — see BG-143 for why nothing saw it.
+  there — see KF-143 for why nothing saw it.
 
 The scheduler self-test runs three threads against a deadline, then waits:
 
@@ -503,13 +539,13 @@ recovery loop ran forever at full speed printing nothing. The same conversion
 applies here: after five seconds it reports how many of the three actually
 reported in, and fails.
 
-### BG-143 — The rig reported a boot that stopped half way as a boot that passed
+### KF-143 — The rig reported a boot that stopped half way as a boot that passed
 
 [#382](https://github.com/neogentrics/ReconOS/issues/382)
 
-- **Found:** 8 September 2026, immediately after BG-142, by asking why a hang
+- **Found:** 8 September 2026, immediately after KF-142, by asking why a hang
   that happened on one boot in three had never turned the matrix red.
-- **Cost:** nothing yet. It is the reason BG-142 could have shipped.
+- **Cost:** nothing yet. It is the reason KF-142 could have shipped.
 
 `check()` in `scripts/verify-kernel.sh` decides a boot passed by four tests, and
 a boot that hangs part-way through satisfies **all four**:
@@ -546,7 +582,7 @@ damage tool was given its arguments the wrong way round and damaged nothing. The
 answer each time is the same — **assert that the thing you are measuring
 actually took place**, not merely that no complaint was printed.
 
-### BG-144 — Every UEFI test booted whatever kernel happened to be in the ESP first
+### KF-144 — Every UEFI test booted whatever kernel happened to be in the ESP first
 
 [#383](https://github.com/neogentrics/ReconOS/issues/383)
 
@@ -585,9 +621,9 @@ tell -- the machine was running a different kernel.
   so the sub-make is always *asked*; the kernel's own makefile still decides
   whether anything needs building.
 
-**Worth generalising, and it is the third time in this shape.** BG-133: a
+**Worth generalising, and it is the third time in this shape.** KF-133: a
 generated header absent from the dependency file, so creating it rebuilt
-nothing. BG-138: stage 2 outgrew stage 1's read, and the fix was attached to a
+nothing. KF-138: stage 2 outgrew stage 1's read, and the fix was attached to a
 rule `make` alone does not build. Now this. Each time, **a build artefact that
 does not depend on what it contains**, and each time the symptom was a change
 that appeared to have no effect.
@@ -597,7 +633,7 @@ that builds the image must depend on the thing it copied.* And the diagnostic is
 worth remembering — when a fix appears to do nothing, check that the artefact
 under test contains the fix, before looking at the fix again.
 
-### BG-139 — Two tests generated a signing key into the source tree and left it there
+### KF-139 — Two tests generated a signing key into the source tree and left it there
 
 [#296](https://github.com/neogentrics/ReconOS/issues/296)
 
@@ -632,9 +668,9 @@ its own beforehand — which is the ordinary way to work on a single harness.
 - **Fixed in** kernel 0.0.11. Both scripts save `signing_key.h` if it exists,
   and restore it — or remove it — from a trap, so the tree is as it was however
   the script ends. The loader is rebuilt afterwards by whoever needs it, because
-  that header is a tracked dependency, which it was not until BG-133.
+  that header is a tracked dependency, which it was not until KF-133.
 
-- **The shape.** The instrument changing the thing it measures, which is BG-137
+- **The shape.** The instrument changing the thing it measures, which is KF-137
   four hours earlier wearing a different coat: there, the test observed a signal
   the loader was not producing; here, the test *produced* a condition the next
   test then observed. Both are the harness being part of the experiment rather
@@ -645,7 +681,7 @@ its own beforehand — which is the ordinary way to work on a single harness.
   instead. That way round, a test passes for the wrong reason rather than
   failing for one — and nobody investigates a pass.
 
-### BG-138 — Stage 2 outgrew the number of sectors stage 1 reads, and the magic check passed anyway
+### KF-138 — Stage 2 outgrew the number of sectors stage 1 reads, and the magic check passed anyway
 
 [#295](https://github.com/neogentrics/ReconOS/issues/295)
 
@@ -689,7 +725,7 @@ grows.
   as before. It passed locally, because a `make disk` run by hand had patched
   the file in place, and it failed in the verification rig, which starts from a
   clean copy. **A build step that runs only when some other target is asked for
-  is a build step that is sometimes absent** — BG-133 wearing different clothes,
+  is a build step that is sometimes absent** — KF-133 wearing different clothes,
   two days later. The patch now belongs to `stage1.bin`'s own rule, so the only
   stage 1 that can exist is a patched one.
 
@@ -700,13 +736,13 @@ grows.
 
 - **The shape.** A constant that was true when written, consumed later by code
   that had no way to know it had stopped being true — the same family as
-  BG-126 (a transaction's capacity written down as one number when it is three)
-  and BG-119 (a value correct when computed, used after it had gone stale).
+  KF-126 (a transaction's capacity written down as one number when it is three)
+  and KF-119 (a value correct when computed, used after it had gone stale).
   What is new here is the *check that gave cover*: the magic test made the hop
   look verified, so the one visible symptom had an explanation that was already
   known to be handled.
 
-### BG-137 — The BIOS harness read a mirror of the screen and called it serial output
+### KF-137 — The BIOS harness read a mirror of the screen and called it serial output
 
 [#294](https://github.com/neogentrics/ReconOS/issues/294)
 
@@ -750,16 +786,16 @@ observation was explained at once.
 - **The shape.** Every previous entry of this kind was a claim disagreeing with
   an implementation. This one is a **harness measuring the wrong signal** — the
   output was real, it simply was not coming from where the test believed. It
-  belongs with BG-133 and BG-134: three in two days where the thing under test
+  belongs with KF-133 and KF-134: three in two days where the thing under test
   was not the thing being observed. The instrument is part of the experiment,
   and *this* one also manufactured a bug rather than hiding one, which is the
   more expensive direction to be wrong in.
 
-### BG-134 — Eight test harnesses looked for a kernel instead of building one
+### KF-134 — Eight test harnesses looked for a kernel instead of building one
 
 [#291](https://github.com/neogentrics/ReconOS/issues/291)
 
-- **Found:** 7 September 2026, hours after BG-133, by the recovery test failing
+- **Found:** 7 September 2026, hours after KF-133, by the recovery test failing
   three of five assertions against a kernel that did not contain the code the
   assertions were about.
 - **Cost:** nothing shipped. Two hours of reading `recovery.c` for a fault that
@@ -775,10 +811,10 @@ rig's `build/` was whatever the last run had left there, `recovery.c` had never
 been compiled into it, and the harness happily booted a kernel from before the
 feature existed and reported that the feature did not work.
 
-**This is BG-133 again, one night later, through a different door.** There a
+**This is KF-133 again, one night later, through a different door.** There a
 generated header was not a dependency; here the binary was not a target. Both
 end at the same place: *a test that ran a binary other than the one it was
-written to prove, and reported the result as though it had.* BG-133's stale
+written to prove, and reported the result as though it had.* KF-133's stale
 loader hid the absence of a safety check; this one invented a bug that was not
 there. The register now has both directions of the same mistake.
 
@@ -795,18 +831,22 @@ there. The register now has both directions of the same mistake.
 - **The shape.** A harness is a claim about what was tested. `[ -f ]` states
   that a file with that name exists, which is not the claim anybody wanted.
   This is the fifth entry in this register where a comment or a check said one
-  thing and the machine did another (BG-120, BG-122, BG-123, BG-132, this) —
+  thing and the machine did another (KF-120, KF-122, KF-123, KF-132, this) —
   and the second where the disagreeing party was a *test*, which is the worst
   place for it, because a test is the thing everything else is believed on.
 
 
-### BG-133 — The bootloader build ignored its headers, so a security check silently was not there
+### KF-133 — The bootloader build ignored its headers, so a security check silently was not there
 
 [#292](https://github.com/neogentrics/ReconOS/issues/292)
 
 - **Found:** 7 September 2026, by the verification rig, on a change whose own
   test had just passed.
 - **Cost:** nothing shipped. It is here because of what it would have cost.
+- **Status:** fixed twice, on purpose. The bootloader build emits dependency
+  files so a changed header rebuilds what includes it, and the signed-boot
+  harness now asks first whether the loader can refuse at all, failing with
+  that as the reason when the answer is "not checked".
 
 `boot/Makefile` compiled each object against its `.c` file and nothing else --
 no `-MMD`, no dependency files. Changing a header rebuilt nothing.
@@ -873,13 +913,15 @@ Two fixes, and the second is the one that generalises:
     is reporting on the wrong thing, and reports four confusing failures instead
     of one clear one.
 
-### BG-132 — A handle used two lines after it was closed, under a comment saying it was open
+### KF-132 — A handle used two lines after it was closed, under a comment saying it was open
 
 [#293](https://github.com/neogentrics/ReconOS/issues/293)
 
 - **Found:** 7 September 2026, the first time the loader tried to verify a
   kernel signature.
 - **Cost:** most of an hour, all of it spent suspecting the wrong code.
+- **Status:** fixed. The volume is closed after the verification rather than
+  before it, which is the only place it can be closed.
 
 The verification step needs the volume the kernel came from, because the
 signature is a second file on it. The volume was closed two lines above the
@@ -915,20 +957,24 @@ few lines. Reading them was then enough.
 written in the same minute as the bug, by the same person, and it is what made
 the handle look innocent. This is the fourth time this month that a *comment
 describing an intention* has sent the investigation away from code sitting two
-lines from it — see BG-118, BG-125, BG-127.
+lines from it — see KF-118, KF-125, KF-127.
 
   A comment states what somebody meant. Only the machine states what happens.
 
 The volume is closed after the verification now, which is the only place it can
 be.
 
-### BG-131 — The bootloader never passed a command line, for four checkpoints
+### KF-131 — The bootloader never passed a command line, for four checkpoints
 
 [#290](https://github.com/neogentrics/ReconOS/issues/290)
 
 - **Found:** 6 September 2026, writing the first test that installs from a real
   medium and then boots the installed disk.
 - **Cost:** nothing yet, and it would have cost the entire installer.
+- **Status:** fixed. The loader reads an optional command-line file from the
+  medium, so it can be changed on a stick without rebuilding; absent is
+  normal, and a trailing CR is stripped because a file edited on Windows ends
+  CR LF.
 
 The handoff structure has carried a `cmdline` field since checkpoint 4, and the
 kernel has always honoured it — `reconboot.c` copies it and hands it to
@@ -970,13 +1016,17 @@ never existed outside an afternoon, but recorded because the shape is the
 recurring one: **a value that was correct when computed, consumed at a moment
 when it was not yet.**
 
-### BG-130 — Every rewrite renamed the file, including the one firmware looks for
+### KF-130 — Every rewrite renamed the file, including the one firmware looks for
 
 [#288](https://github.com/neogentrics/ReconOS/issues/288)
 
 - **Found:** 6 September 2026, writing the same files into a FAT32 volume twice
   and reading the result back with `mtools`.
 - **Cost:** none yet. There is no installer to have run twice.
+- **Status:** fixed. The collision test ignores the entry being replaced,
+  matched on the name being written rather than on a cluster number -- an
+  empty file's first cluster is zero, and every empty file would otherwise
+  look like the same one.
 
 Writing a file that already exists looks up the name, finds the entry, and then
 picks an 8.3 alias. The entry it is about to replace is still in the directory
@@ -1011,7 +1061,7 @@ because the bug was not being reached.** That is the same shape as the GICv3
 work earlier the same day, where two correct fixes changed nothing because the
 thing making them unreachable was three files away.
 
-### BG-129 — An unsupported conversion made every later value in the line wrong
+### KF-129 — An unsupported conversion made every later value in the line wrong
 
 [#287](https://github.com/neogentrics/ReconOS/issues/287)
 
@@ -1019,6 +1069,9 @@ thing making them unreachable was three files away.
   `%-30s`, and getting a file of 2,148,777,108 bytes that was a pointer.
 - **Cost:** minutes, because the wrong number was absurd. It would have cost far
   more if it had been plausible.
+- **Status:** fixed, as a refusal. The width of an unsupported conversion is
+  exactly what is not known, so the argument cannot be skipped; the printer
+  names the conversion that defeated it and stops the line.
 
 `kprintf` handled an unrecognised conversion by printing the two characters and
 carrying on, under a comment saying *"print it visibly instead of silently
@@ -1055,13 +1108,16 @@ the alternative was padding them by hand inside the format string.
 **Shown a fault before being believed.** `%o` injected on purpose, watched to
 produce the marker, and watched *not* to print the `%u` after it.
 
-### BG-128 — One medium could not carry two architectures, because both loaders opened the same filename
+### KF-128 — One medium could not carry two architectures, because both loaders opened the same filename
 
 [#286](https://github.com/neogentrics/ReconOS/issues/286)
 
 - **Found:** 6 September 2026, building an actual bootable USB stick and trying
   to boot it on both architectures.
 - **Cost:** nothing yet — no install medium had ever been built until today.
+- **Status:** fixed. The kernel on the medium carries its architecture in its
+  name -- `kernel-x86_64.elf`, `kernel-aarch64.elf` -- and the old path is
+  still tried as a fallback, so media written before the rule still boot.
 
 UEFI's removable-media path is *already* per-architecture: `BOOTX64.EFI` and
 `BOOTAA64.EFI` sit side by side in `\EFI\BOOT`, and a machine runs the one it
@@ -1098,7 +1154,7 @@ architecture's kernel in it. The rig never built a medium holding both, because
 until somebody wanted a real bootable stick there was no reason to. The fault is
 real from the first line; what was missing was a medium that could show it.
 
-### BG-127 — Whether a drive is flash is a question USB cannot answer, and the storage layer assumes it can
+### KF-127 — Whether a drive is flash is a question USB cannot answer, and the storage layer assumes it can
 
 [#285](https://github.com/neogentrics/ReconOS/issues/285)
 
@@ -1148,7 +1204,7 @@ code correct.
 written as "these are the transports we can ask". They were written as *the*
 answer to "is this flash", and a question with two answers that each happen to
 work for one transport looks finished until a third transport arrives. That is
-the same shape as BG-119's comment arguing "this case does not arise here" about
+the same shape as KF-119's comment arguing "this case does not arise here" about
 a case that then arose.
 
 The honest form is three states — rotating, solid state, **unknown** — and a
@@ -1162,13 +1218,17 @@ asking the operating system that already had it what it thought the drive was.
 No emulator would ever have said this, because QEMU is always truthful about
 what it is pretending to be.
 
-### BG-126 — A transaction's capacity was written down as one number, and it is three
+### KF-126 — A transaction's capacity was written down as one number, and it is three
 
 [#284](https://github.com/neogentrics/ReconOS/issues/284)
 
 - **Found:** by running the ReconFS battery against a 512 MB disk instead of the
   16 MB one the verification rig uses.
 - **Cost:** nothing yet. It has never been reached by anything but a test.
+- **Status:** fixed. Capacity is computed from the block size rather than
+  written down as one number, the check says which of the two cases it hit,
+  and `reconfs_txn_capacity` exists so a caller can ask instead of finding
+  out.
 
 A transaction may touch a fixed number of owner-table leaves, and a leaf holds
 one owner per eight bytes of *itself*. So its capacity scales with the block
@@ -1185,7 +1245,7 @@ with no block size attached. That figure is right at 8 KiB and at no other size
 the format allows — and wrong by a factor of two at 4 KiB, which is the size
 every volume under two terabytes gets.
 
-**The same shape as BG-117.** A number written in a comment, stated as a fact,
+**The same shape as KF-117.** A number written in a comment, stated as a fact,
 wrong, and unreachable from any test. That one was a 16 TiB ceiling and was
 found only because somebody asked whether the limit was real. This one was found
 only because a disk was made bigger than the rig's.
@@ -1209,20 +1269,23 @@ and passing quietly is how it would stop being one — but it now says which of
 the two happened, and `reconfs_txn_capacity` exists so a caller can ask rather
 than find out.
 
-**And the rig, for the third time this session.** BG-124 hid below nine
-processors because the rig stopped at eight. BG-125 hid because the only node
+**And the rig, for the third time this session.** KF-124 hid below nine
+processors because the rig stopped at eight. KF-125 hid because the only node
 with a child was one the rig never asked about. This hid because the disk was
 16 MB. Every one of them is the same sentence: *the fault is real from the first
 line; what was missing was a machine big enough to show it.*
 
-### BG-125 — The device tree walk lost any node that had a child, which is why the GICv3 fix could not be reached
+### KF-125 — The device tree walk lost any node that had a child, which is why the GICv3 fix could not be reached
 
 [#283](https://github.com/neogentrics/ReconOS/issues/283)
 
-- **Found:** chasing BG-124's fix, which did not work and had two wrong
+- **Found:** chasing KF-124's fix, which did not work and had two wrong
   diagnoses before this one.
 - **Cost:** an entire debugging session, most of it spent suspecting the pointer
   the walk was given rather than the walk.
+- **Status:** fixed. Both device-tree walkers report a node when its first
+  child begins as well as at its end, and the kernel prints which interrupt
+  controller generation it picked rather than deciding in silence.
 
 `fdt_each_compatible` collects a node's `compatible` and `reg` as the properties
 go by, and reports the node when it sees `FDT_END_NODE`. A node's children sit
@@ -1241,7 +1304,7 @@ So PCI worked, storage worked, and the *first* question ever asked of this walk
 about a node with a child was "does this machine have a GICv3" — answered "no"
 by a machine holding one. The kernel fell back to GICv2, wrote to a CPU
 interface that does not exist on such a machine, and panicked at boot. That is
-BG-124's symptom exactly, which is why two rounds of fixing BG-124 changed
+KF-124's symptom exactly, which is why two rounds of fixing KF-124 changed
 nothing: the fix was correct and could not be reached.
 
 A node is fully described the moment a child begins, because properties always
@@ -1261,7 +1324,7 @@ an address that means nothing unless you already know which generation the
 kernel picked. It prints the generation now — one line, and the difference
 between a five-minute diagnosis and a session-long one.
 
-### BG-124 — The kernel panicked at boot on any ARM machine with more than eight processors
+### KF-124 — The kernel panicked at boot on any ARM machine with more than eight processors
 
 [#281](https://github.com/neogentrics/ReconOS/issues/281)
 
@@ -1332,7 +1395,7 @@ between a five-minute diagnosis and a session-long one.
   it is the same range that caught the original: booting one machine size proves
   something about one machine size.
 
-### BG-117 — ReconFS could not have held a drive you can buy today
+### KF-117 — ReconFS could not have held a drive you can buy today
 
 [#274](https://github.com/neogentrics/ReconOS/issues/274)
 
@@ -1369,7 +1432,7 @@ between a five-minute diagnosis and a session-long one.
   it caught at exactly the sizes that matter — 2^32 blocks of 4096, the old
   ceiling, and 5,859,375,000 blocks, which is a 24TB drive.
 
-### BG-118 — A block-size rule that read like a rule and behaved like a constant
+### KF-118 — A block-size rule that read like a rule and behaved like a constant
 
 [#275](https://github.com/neogentrics/ReconOS/issues/275)
 
@@ -1386,7 +1449,7 @@ between a five-minute diagnosis and a session-long one.
   wrong side of its own starting point is indistinguishable from a working one
   unless somebody tabulates it.
 
-  Third in a row of this shape, after BG-114 and BG-115: **something that looks
+  Third in a row of this shape, after KF-114 and KF-115: **something that looks
   like it is working, is not.**
 - **Fixed in** kernel 0.0.11. Replaced with an explicit table — 4KiB under 2TiB,
   16KiB under 16TiB, 64KiB above — with the trade-off written down beside it,
@@ -1394,7 +1457,7 @@ between a five-minute diagnosis and a session-long one.
   formula can know what a volume will hold. An explicit size passed by the
   caller always wins, which is what the installer is for.
 
-### BG-114 — The crash harness never cut the power, and reported that it had
+### KF-114 — The crash harness never cut the power, and reported that it had
 
 [#270](https://github.com/neogentrics/ReconOS/issues/270)
 
@@ -1424,11 +1487,11 @@ between a five-minute diagnosis and a session-long one.
   an `EXIT`/`INT`/`TERM` trap kills it if the run is interrupted, so orphans
   cannot accumulate silently again.
 
-### BG-115 — The crash harness passed cleanly with its checker missing
+### KF-115 — The crash harness passed cleanly with its checker missing
 
 [#271](https://github.com/neogentrics/ReconOS/issues/271)
 
-- **Found in** kernel 0.0.11. **Found by** fixing BG-114 and watching the next
+- **Found in** kernel 0.0.11. **Found by** fixing KF-114 and watching the next
   run print `0 out of order, 0 torn` while every single round had printed
   `can't open file 'scripts/check-markers.py'`.
 - **Was** the status switch ended in `*) echo ...`, which printed the round and
@@ -1446,7 +1509,7 @@ between a five-minute diagnosis and a session-long one.
   fails with "this is not a result". Verified by hiding `check-markers.py` and
   confirming the harness exits 1.
 
-### BG-116 — The flush instrument counted zero on a driver that was flushing
+### KF-116 — The flush instrument counted zero on a driver that was flushing
 
 [#272](https://github.com/neogentrics/ReconOS/issues/272)
 
@@ -2505,7 +2568,7 @@ between a five-minute diagnosis and a session-long one.
   did not crash, which is why the first three gdb runs looked clean.
 
 
-### BG-145 — Whether the kernel could write through a read-only page depended on which firmware booted it
+### KF-145 — Whether the kernel could write through a read-only page depended on which firmware booted it
 
 [#384](https://github.com/neogentrics/ReconOS/issues/384)
 
@@ -2542,7 +2605,7 @@ table correct.
   after a write and requiring it still to be zero. That assertion exists
   because the failure it catches produces no other symptom.
 
-### BG-146 — Sixteen bytes past the end of the vector save area, into the next field of the same thread
+### KF-146 — Sixteen bytes past the end of the vector save area, into the next field of the same thread
 
 [#385](https://github.com/neogentrics/ReconOS/issues/385)
 
@@ -2586,7 +2649,7 @@ context switch.
 
 
 
-### BG-147 — A new process inherited the last one's permission to touch addresses
+### KF-147 — A new process inherited the last one's permission to touch addresses
 
 [#386](https://github.com/neogentrics/ReconOS/issues/386)
 
@@ -2640,7 +2703,7 @@ Two further consequences, both of them the same fault seen from another side:
 
 
 
-### BG-148 — A thread was runnable before it belonged to its process, and address spaces made that fatal
+### KF-148 — A thread was runnable before it belonged to its process, and address spaces made that fatal
 
 [#387](https://github.com/neogentrics/ReconOS/issues/387)
 
@@ -2704,7 +2767,7 @@ The commit that made it reachable changed neither line.
   changing the comparison moved 35/40 to 36/40, which is noise.
 
 - **It is not all of it.** One boot in sixty still fails with the fix in, with no
-  unexpected fault -- a different mode, recorded as BG-150 rather than folded in
+  unexpected fault -- a different mode, recorded as KF-150 rather than folded in
   here.
 
 **What let it hide, and is worth more than the bug.** Every "N self-tests, all
@@ -2712,20 +2775,20 @@ pass" row in `scripts/verify-kernel.sh` is a *single-processor* run.
 `check_cpus`, which is the only thing that boots with `-smp`, asserts processor
 counts, idle ticks and shootdowns — and never that the self-tests passed. So a
 self-test that fails only on more than one processor is invisible to the matrix,
-which is the same shape as BG-143 and the reason this was found by hand.
+which is the same shape as KF-143 and the reason this was found by hand.
 
 
 
-### BG-149 — The page allocator and the kernel heap have no locking, on a kernel verified at thirty-two processors
+### KF-149 — The page allocator and the kernel heap have no locking, on a kernel verified at thirty-two processors
 
 [#388](https://github.com/neogentrics/ReconOS/issues/388)
 
-- **Found:** 10 September 2026, while looking for the cause of BG-148. It is not
+- **Found:** 10 September 2026, while looking for the cause of KF-148. It is not
   that cause, and it is worse than that cause.
 - **Cost:** none observed, and that is not reassurance. A lost page is invisible
   until something writes through a mapping it no longer owns.
 - **Status:** fixed, 10 September 2026, as its own change with its own
-  measurements — which is why it was recorded rather than fixed inside BG-148.
+  measurements — which is why it was recorded rather than fixed inside KF-148.
 
 `core/pmm.c` and `core/heap.c` contain no spinlock, no atomic, and no interrupt
 mask between them. `pmm_alloc_pages` scans a shared bitmap, sets bits in it, and
@@ -2796,22 +2859,22 @@ passed with the bug present, which is not a test at all.
 
 
 
-### BG-150 — About one boot in sixty, a user program does not finish, and nothing says why
+### KF-150 — About one boot in sixty, a user program does not finish, and nothing says why
 
 [#389](https://github.com/neogentrics/ReconOS/issues/389)
 
-- **Found:** 10 September 2026, as the part of BG-148 that fixing BG-148 did not
+- **Found:** 10 September 2026, as the part of KF-148 that fixing KF-148 did not
   account for.
 - **Cost:** none yet. It is recorded because the alternative is rediscovering it.
-- **Status:** open, and probably BG-156 — see below.
+- **Status:** open, and probably KF-156 — see below.
 
-The interleaved measurement that confirmed BG-148 also measured the kernel with
-BG-148 fixed, and it is not zero:
+The interleaved measurement that confirmed KF-148 also measured the kernel with
+KF-148 fixed, and it is not zero:
 
-    A (BG-147 and BG-148 fixed) : 1 of 60 failed, 0 entry-point faults
-    B (BG-148 restored)         : 4 of 60 failed, 3 entry-point faults
+    A (KF-147 and KF-148 fixed) : 1 of 60 failed, 0 entry-point faults
+    B (KF-148 restored)         : 4 of 60 failed, 3 entry-point faults
 
-The three entry-point faults are BG-148 and they are gone. The remaining one is
+The three entry-point faults are KF-148 and they are gone. The remaining one is
 a different shape: the program does not reach its exit call, and **no unexpected
 fault is reported** -- so it is not a program being killed, which is what the
 entry race looked like.
@@ -2838,21 +2901,21 @@ shows *running, 40 ticks, 0 calls served* is a scheduler fault; one that shows
 
 
 
-**10 September, later the same day: this is very likely BG-156.** A system call
+**10 September, later the same day: this is very likely KF-156.** A system call
 entered on one processor and returned on another read the saved user stack
 pointer out of the wrong processor's block, or out of a GS base of zero. The
 symptom is a program that does not finish, at a rate that depends on how often a
 thread happens to be preempted inside a system call — which is exactly the shape
 of "about one in sixty, and it moves with host load".
 
-It is not being closed on that reasoning. After BG-156 was fixed, **sixty
+It is not being closed on that reasoning. After KF-156 was fixed, **sixty
 consecutive boots at `-smp 4` passed with no failure and no panic**, which is
 consistent with it and does not prove it: the previous rate would predict about
 one failure in sixty. This stays open until a longer run says otherwise, because
 closing it on a run that would have been just as likely to be clean by chance is
-how BG-148 got the credit for a fault it had not fixed.
+how KF-148 got the credit for a fault it had not fixed.
 
-### BG-151 — Eight processors, on a machine that may have five hundred
+### KF-151 — Eight processors, on a machine that may have five hundred
 
 [#390](https://github.com/neogentrics/ReconOS/issues/390)
 
@@ -2862,7 +2925,7 @@ how BG-148 got the credit for a fault it had not fixed.
   would use eight cores of however many are there and say so.
 
 `MAX_CPUS` was 8. It is not a bug in the sense of something behaving wrongly --
-9b's BG-141 already made the shortfall a reported number rather than a silent
+9b's KF-141 already made the shortfall a reported number rather than a silent
 saturation, so a 64-core machine says how many more it found than it can hold.
 It is a bug in the sense that the number was chosen when the largest machine
 this kernel had ever met was a QEMU guest, and modern server parts are two
@@ -2872,7 +2935,7 @@ Xeon 128 P-cores or 288 E-cores, and a dual-socket board is routinely 256 to 576
 
 Raised to **256**, and that number has a reason rather than being the next round
 one up: **255 is the largest processor an 8-bit APIC identifier can name.**
-Going past it is not a bigger array, it is implementing x2APIC -- see BG-152.
+Going past it is not a bigger array, it is implementing x2APIC -- see KF-152.
 
 The cost of the raise is static memory, and it is worth writing down because it
 is the reason not to simply pick a huge number: `struct thread boot_threads[]`
@@ -2893,7 +2956,7 @@ identifier arrays adding tens of kilobytes more.
 - **Untested above 32 processors**, and the header says so. No machine with
   more has run this kernel.
 
-### BG-152 — Processors above 255 are found and cannot be started
+### KF-152 — Processors above 255 are found and cannot be started
 
 [#391](https://github.com/neogentrics/ReconOS/issues/391)
 
@@ -2950,7 +3013,7 @@ number above 255. Both were watched to fail. That does not make x2APIC tested �
 it makes the untested part smaller, and the untested part is now "does the mode
 switch take, and does a real processor answer afterwards".
 
-### BG-153 — On a multi-cluster ARM machine, two processors would believe they are the same processor
+### KF-153 — On a multi-cluster ARM machine, two processors would believe they are the same processor
 
 [#392](https://github.com/neogentrics/ReconOS/issues/392)
 
@@ -2976,7 +3039,7 @@ same task-state, the same current thread, the same active address space, the
 same idle thread.
 
 That is worse than the x86 limit above, and the difference is worth naming.
-BG-152 produces a machine that runs on fewer processors than it has and reports
+KF-152 produces a machine that runs on fewer processors than it has and reports
 the discrepancy. This produces a machine where **two processors share the state
 that exists to keep them apart**, with nothing failing until they touch it at
 the same moment.
@@ -3019,7 +3082,7 @@ the same moment.
   index, because a summary showing only the dense index looks identical on a
   machine whose identities alias and one whose do not.
 
-### BG-154 — The page allocator scans, and a terabyte is a billion pages
+### KF-154 — The page allocator scans, and a terabyte is a billion pages
 
 [#393](https://github.com/neogentrics/ReconOS/issues/393)
 
@@ -3058,7 +3121,7 @@ and it is the kind of thing that is far cheaper to design in than to retrofit.
 ---
 
 
-### BG-155 — The boot thread was processor 0's idle thread, so nothing on the boot path could ever wait
+### KF-155 — The boot thread was processor 0's idle thread, so nothing on the boot path could ever wait
 
 [#394](https://github.com/neogentrics/ReconOS/issues/394)
 
@@ -3085,7 +3148,7 @@ all create threads of their own; the boot path ran straight through. The first
 caller to attempt it was the timer wheel.
 
 - **Was:** a structure cleared wholesale, with one field whose zero is a
-  meaningful and wrong value. Exactly the shape of BG-147.
+  meaningful and wrong value. Exactly the shape of KF-147.
 - **Fixed in** `core/sched.c` and `core/smp.c`: processor 0 is given a real idle
   thread like every other processor, and the boot thread becomes an ordinary
   thread that can sleep.
@@ -3097,14 +3160,14 @@ caller to attempt it was the timer wheel.
   `pinned_to` field that says so on purpose, separate from `idle_for` because
   the two are pinned for different reasons.
 
-### BG-156 — A system call entered on one processor and returned on another, and the kernel stack did not travel with it
+### KF-156 — A system call entered on one processor and returned on another, and the kernel stack did not travel with it
 
 [#395](https://github.com/neogentrics/ReconOS/issues/395)
 
-- **Found:** 10 September 2026, immediately after BG-155 — a double fault at the
+- **Found:** 10 September 2026, immediately after KF-155 — a double fault at the
   first instruction of the system-call entry stub, with `%gs` based at zero.
 - **Cost:** a kernel fault on the way out of a system call that had worked. **It
-  is the best candidate so far for BG-150**, the one-boot-in-sixty that had no
+  is the best candidate so far for KF-150**, the one-boot-in-sixty that had no
   explanation.
 - **Status:** fixed.
 
@@ -3153,7 +3216,7 @@ to it.
   kernel stack pointer the context switch has just set. There is no second place
   holding the answer, so there is nothing to get out of step.
 
-### BG-157 — The clock ran at 201 Hz against a constant that said 100, and every test still passed
+### KF-157 — The clock ran at 201 Hz against a constant that said 100, and every test still passed
 
 [#396](https://github.com/neogentrics/ReconOS/issues/396)
 
@@ -3187,7 +3250,7 @@ the chip in.
   putting `0x36` back: 203 Hz against 100.
 
 
-### BG-158 — An idle thread took its turn in the round robin, and the machine ran at half speed with every test green
+### KF-158 — An idle thread took its turn in the round robin, and the machine ran at half speed with every test green
 
 [#397](https://github.com/neogentrics/ReconOS/issues/397)
 
@@ -3197,7 +3260,7 @@ the chip in.
 - **Cost:** roughly half the machine, for the length of one matrix run.
 - **Status:** fixed.
 
-Fixing BG-155 meant giving processor 0 an idle thread of its own, because the boot
+Fixing KF-155 meant giving processor 0 an idle thread of its own, because the boot
 thread had been serving as one and therefore could never block. That put an idle
 thread in the run ring **alongside a working thread on the same processor for the
 first time**, and `pick_next` returned the first eligible thread it found.
@@ -3212,7 +3275,7 @@ time stopped.
   because the ring had never contained both for the same processor. The boot
   processor had no idle thread and a secondary had nothing else. **The line was
   wrong before it was ever executed**, in the same way the TLB shootdown and
-  BG-148 were: waking the other processors, or in this case giving one an idle
+  KF-148 were: waking the other processors, or in this case giving one an idle
   thread, made existing code wrong without changing it.
 - **Fixed in** `core/sched.c`: an idle thread is now a *last resort* rather than a
   turn in the round. It is remembered as a fallback and returned only when nothing
@@ -3230,10 +3293,10 @@ something to do when nothing else will have it, and running one with work waitin
 is the processor doing nothing on purpose. Watched to fail by restoring the old
 line: four violations in one boot.
 
-Same family as BG-157, found the same day: a fault whose only symptom is time.
+Same family as KF-157, found the same day: a fault whose only symptom is time.
 
 
-### BG-159 — A thread was available to every other processor while the one it was leaving was still standing on its stack
+### KF-159 — A thread was available to every other processor while the one it was leaving was still standing on its stack
 
 [#398](https://github.com/neogentrics/ReconOS/issues/398)
 
@@ -3297,12 +3360,12 @@ rather than three fixes:**
 - **Measured:** the failing configuration went from panicking about one boot in
   three to 10 of 10 clean, and x86_64 at four processors 12 of 12.
 
-**This is also a better candidate for BG-150 than BG-156 was**, and neither is
+**This is also a better candidate for KF-150 than KF-156 was**, and neither is
 being credited with it. Both are real, both were fixed the same day, and the
 honest position is that the one-in-sixty has not been seen since without a run
 long enough to say so.
 
-### BG-160 — The power-cut harnesses timed their cut from launch, so a slower boot meant they cut before anything had been written
+### KF-160 — The power-cut harnesses timed their cut from launch, so a slower boot meant they cut before anything had been written
 
 [#399](https://github.com/neogentrics/ReconOS/issues/399)
 
@@ -3338,7 +3401,7 @@ the early rounds started cutting a guest that had not reached the disk.
   written up beside the code that caused them.
 
 
-### BG-161 — A header promised that either pointer could be null, and one of them could not
+### KF-161 — A header promised that either pointer could be null, and one of them could not
 
 [#400](https://github.com/neogentrics/ReconOS/issues/400)
 
@@ -3363,13 +3426,13 @@ straight through to `reconfs_read_named`, whose first act is `*got = 0`.
   the count, so the promise is kept where it was made rather than pushed down to
   a function whose own header never made it.
 - **Why it is worth an entry at all**, being three lines: it is the same shape as
-  BG-149's expired comment and BG-156's predicted one. A header is a claim about
+  KF-149's expired comment and KF-156's predicted one. A header is a claim about
   behaviour, and a claim nothing checks is a claim that drifts — this one had been
   wrong since it was written and would have stayed wrong until something believed
   it. What made it visible immediately was that the believer was in the kernel and
   crashed; a user program would have got a corrupted answer.
 
-### BG-162 — Power-off declared the machine had refused, while the machine was in the middle of obeying
+### KF-162 — Power-off declared the machine had refused, while the machine was in the middle of obeying
 
 [#401](https://github.com/neogentrics/ReconOS/issues/401)
 
@@ -3408,13 +3471,13 @@ instructions, one of which announced a refusal.
   only ever watched to pass is not a fix that has been tested: eight clean runs
   happen by chance nearly half the time with the fault fully present.
 - **Family:** the third fault this month whose only symptom was *timing* —
-  BG-157 and BG-158 cost duration with the whole suite green, and BG-160 was the
+  KF-157 and KF-158 cost duration with the whole suite green, and KF-160 was the
   same harness cutting power before the guest had spoken. Each was invisible to
   a test that asks only whether the right things happened. The matrix runs
   several guests at once, which is why it is the thing that found this and the
   quick check is not.
 
-### BG-163 — Two virtio-blk disks on one machine, and every request to them times out
+### KF-163 — Two virtio-blk disks on one machine, and every request to them times out
 
 [#402](https://github.com/neogentrics/ReconOS/issues/402)
 
@@ -3557,7 +3620,7 @@ sense on its own -- timing-sensitive, because it was a race against a storm.
   with this, which is the finding behind the finding and the only reason it
   took until September to see.
 
-### BG-179 — The interrupt summary counted devices before the bus had been walked
+### KF-179 — The interrupt summary counted devices before the bus had been walked
 
 - **Found:** 10 September 2026, while deciding whether to wire a driver to MSI.
   The boot summary said `MSI : 0 device(s) can signal by memory write`, which
@@ -3584,12 +3647,12 @@ says `4 device(s) ... 3 of them by MSI-X`.
 - **Now:** `arch_irq_print_device_summary()`, called after `block_init`.
   Separate from the routing summary because the two are true at different
   moments -- which is the whole of the fault, so it is the whole of the fix.
-- **Family:** BG-157, BG-158, BG-160, BG-162 and now this -- five faults this
+- **Family:** KF-157, KF-158, KF-160, KF-162 and now this -- five faults this
   month whose only symptom was *when* something happened rather than what.
 
-### BG-180 — "Can signal by memory write" was implemented as "has MSI"
+### KF-180 — "Can signal by memory write" was implemented as "has MSI"
 
-- **Found:** 10 September 2026, immediately after BG-179 made the number
+- **Found:** 10 September 2026, immediately after KF-179 made the number
   visible for the first time.
 - **Cost:** none yet, because nothing had ever read the number.
 - **Status:** fixed.
@@ -3606,12 +3669,12 @@ the two that matter.
 - **Was:** a count of one mechanism under a heading naming the category.
 - **Now:** either capability counts, with the MSI-X subtotal printed beside it,
   so the sentence and the number say the same thing.
-- **Lesson, which is the same one twice:** both this and BG-179 are a *reported
+- **Lesson, which is the same one twice:** both this and KF-179 are a *reported
   number that nobody had ever had a reason to check*. It went unnoticed for as
   long as nothing depended on it, and was wrong in two independent ways the
   moment something did.
 
-### BG-181 — The vector self-test assumed it was the only thing holding a vector
+### KF-181 — The vector self-test assumed it was the only thing holding a vector
 
 - **Found:** 10 September 2026, the first time a real driver claimed a vector.
 - **Cost:** one red line on an otherwise green boot, and thirty seconds of
@@ -3635,10 +3698,10 @@ allocator is *for* -- and the test failed:
 - **The pattern:** a test that passes only while it is the sole user of a shared
   resource is a test with an expiry date, and the date is the day the thing it
   tests gets its first real caller. It is the second test this week to fail
-  because the kernel got *better* -- after BG-165, where a race was cured and
+  because the kernel got *better* -- after KF-165, where a race was cured and
   the test that had been watching it went red.
 
-### BG-182 — Tearing down an address space freed its page tables and not its pages
+### KF-182 — Tearing down an address space freed its page tables and not its pages
 
 - **Found:** 11 September 2026, while working out whether a page cache could
   safely put shared pages into a program's map. The question was "who frees a
@@ -3674,9 +3737,9 @@ the aarch64 copy.
   control reports `8 page(s) did not come back`, which is exactly the number
   faulted in.
 
-### BG-183 — A process that ends is never reaped, so it keeps its slot and its memory
+### KF-183 — A process that ends is never reaped, so it keeps its slot and its memory
 
-- **Found:** 11 September 2026, immediately after BG-182 and by the same
+- **Found:** 11 September 2026, immediately after KF-182 and by the same
   measurement — which is the interesting part, because the measurement is what
   said the first fix had not worked.
 - **Cost:** a process table that fills, and every ended program's memory held
@@ -3685,7 +3748,7 @@ the aarch64 copy.
 - **Status:** fixed.
 
 **The instrument corrected the diagnosis, and would not have if it counted one
-number instead of two.** Having fixed BG-182, the same probe still showed
+number instead of two.** Having fixed KF-182, the same probe still showed
 exactly twelve pages lost per program run — and a counter printed beside it
 showed the new code had freed eleven leaves in the entire boot. The fix was
 running and had almost nothing to do.
@@ -3704,7 +3767,7 @@ Processes
 
 Every one of those holds an address space, and every space holds its pages.
 
-- **Was:** believed to be the same fault as BG-182. It is not, and BG-182's fix
+- **Was:** believed to be the same fault as KF-182. It is not, and KF-182's fix
   is necessary without being sufficient — a space that is never released cannot
   be released correctly.
 - **Why it is not simply "reap on exit":** the exit status is the thing being
@@ -3724,7 +3787,7 @@ and which is correct — had **exactly one caller in the whole kernel, and it wa
 a self-test**. `process_reap` had two, both in another self-test. Both reapers
 were written, both work, and nothing ever ran them.
 
-`thread_exit` said so, in the same shape as BG-182 one file over:
+`thread_exit` said so, in the same shape as KF-182 one file over:
 
 > The stack cannot be freed here: this code is standing on it. It is left for
 > **whoever notices** the thread is finished.
@@ -3747,7 +3810,7 @@ collaborator who was never created.
   reaped**, which is not the same as when its last thread *ended*. The thread
   count drops to zero inside `thread_exit`, while that thread is still standing
   on a kernel stack reached through the very page tables being freed. The same
-  shape as `off_cpu` in BG-159, one level up.
+  shape as `off_cpu` in KF-159, one level up.
 - **Keeping a status is opt-in.** `process_expect_status` says somebody will
   collect; the default is that nobody will, which is the honest default because
   nothing in this kernel reads a process's exit status except the test that
@@ -3774,7 +3837,7 @@ running as anybody.
   process nobody will collect was still holding a slot two seconds after it
   ended".
 
-### BG-184 — The page cache asked which file and not which filesystem, so two of them were the same file
+### KF-184 — The page cache asked which file and not which filesystem, so two of them were the same file
 
 - **Found:** 11 September 2026, by the eviction test, on its first run that
   managed to fill the table.
@@ -3820,7 +3883,7 @@ The volume file had been reading correctly all boot. It started reading a
   are in the table at once. The test that found it was not written to look for
   it.
 
-### BG-194 -- virtio-net used a descriptor index as if it were a ring slot, in two different ways
+### KF-194 -- virtio-net used a descriptor index as if it were a ring slot, in two different ways
 
 - **Found:** 12 September 2026, by reading the driver back before trusting it.
 - **Cost:** a corrupted descriptor chain on receive, and a double free on
@@ -3855,7 +3918,7 @@ buffer would leak.
 descriptor index is not a slot index and the two only coincide while the ring is
 empty.
 
-### BG-195 -- a broadcast could not leave a card with no address, which makes DHCP impossible
+### KF-195 -- a broadcast could not leave a card with no address, which makes DHCP impossible
 
 - **Found:** 12 September 2026, the first time the stack was pointed at a real
   network rather than at its own tests.
@@ -3895,11 +3958,11 @@ is the only way to test routing without a network -- and it is exactly the
 condition under which this bug cannot occur. The test sets `dev->ip`, so the
 device is never in the state that fails.
 
-That is the same shape as BG-193 (a guard whose condition was unreachable) and
-BG-187 (a test that passed by being unable to do the thing it tested): not a
+That is the same shape as KF-193 (a guard whose condition was unreachable) and
+KF-187 (a test that passed by being unable to do the thing it tested): not a
 wrong answer, but a correct one to a question the real path never asks.
 
-### BG-197 -- the block self-test writes to any disk it thinks is blank, and a disk whose table it could not read looks blank
+### KF-197 -- the block self-test writes to any disk it thinks is blank, and a disk whose table it could not read looks blank
 
 - **Found:** 12 September 2026, by working out what would happen if a real USB
   stick were attached at boot. Nothing failed; the fault was reasoned to before
@@ -3937,8 +4000,8 @@ if (disk->scheme == BLOCK_SCHEME_UNREADABLE) {
 ```
 
 **One caller made the distinction and the other did not.** That is this
-project's most repeated shape, and the third instance this week after BG-193
-(a guard whose condition was unreachable) and BG-195 (routing that was right for
+project's most repeated shape, and the third instance this week after KF-193
+(a guard whose condition was unreachable) and KF-195 (routing that was right for
 every packet except the one that has to work before there is an address).
 
 The fix is one condition in `pick_test_device`, refusing UNREADABLE the way the
@@ -3951,7 +4014,7 @@ the test doing what it exists to do. The rule this restores is narrower and is
 the one that matters: **a disk this kernel cannot read is not a disk it may
 write to.**
 
-### BG-199 -- USB hot-plug notices the first arrival and then stops for ever
+### KF-199 -- USB hot-plug notices the first arrival and then stops for ever
 
 - **Found:** 12 September 2026, on the real 16 GB stick, by testing the
   departure half after the arrival half had been proved.
@@ -4010,7 +4073,7 @@ included -- that is how this feature was first tested and it is why it was
 believed to work. The real stick is a **SuperSpeed device at 5000 Mb/s** and
 takes a different path through claiming.
 
-That is the whole lesson of this entry, and it is the same one BG-127 taught on
+That is the whole lesson of this entry, and it is the same one KF-127 taught on
 this same stick: **a fixture behaves the way the person who wrote the fixture
 expected, and real hardware does not have to.** Two tests, one emulated and one
 real, disagreed -- and the disagreement is the result.
@@ -4080,7 +4143,7 @@ this is the honest limit of what this stick can prove: it is attached through
 `usbipd` and QEMU, and neither of them is a person pulling a stick out of a
 socket.
 
-### BG-198 -- retiring a device let seventeen callers hand out one that is gone
+### KF-198 -- retiring a device let seventeen callers hand out one that is gone
 
 - **Found:** 12 September 2026, by matrix 27 failing `partitions` on the first
   boot path.
@@ -4123,7 +4186,7 @@ would have been simpler and would have invalidated every `struct block_device *`
 held outside `block.c` -- `usb_storage`'s among them -- which is a
 use-after-free rather than a bug.
 
-### BG-196 -- "long ago" was written as zero, on a machine whose clock starts at zero
+### KF-196 -- "long ago" was written as zero, on a machine whose clock starts at zero
 
 - **Found:** 12 September 2026, by the ARP test failing on a kernel whose ARP
   code was correct.
@@ -4154,7 +4217,7 @@ the same property TCP relies on to compare sequence numbers across the wrap at
 2^32, used here for the same reason: **there is no "before the beginning" on a
 monotonic clock, and arithmetic that wraps consistently does not need one.**
 
-### BG-193 -- virt_to_phys answered for addresses it cannot answer for, so a driver wrote to memory that does not exist and reported success
+### KF-193 -- virt_to_phys answered for addresses it cannot answer for, so a driver wrote to memory that does not exist and reported success
 
 - **Found:** 12 September 2026, by ext2 reading a 512-byte superblock into a
   stack array.
@@ -4209,8 +4272,8 @@ condition unreachable.**
 
 That is this project's most repeated shape, in its purest form yet: not a wrong
 answer, but a check resting on a premise nobody had verified -- the same family
-as BG-190 (a map that could not distinguish empty from occupied), BG-188
-(recovery's promise enforced by nobody), and BG-186 (counters nothing printed).
+as KF-190 (a map that could not distinguish empty from occupied), KF-188
+(recovery's promise enforced by nobody), and KF-186 (counters nothing printed).
 
 ### Why it stayed invisible
 
@@ -4260,9 +4323,9 @@ The kernel's rule is that a buffer handed to a driver comes from the page
 allocator. `ext2_mount` used a local array. Both were fixed: the one that let it
 happen, and the one that did it.
 
-### BG-192 -- The kernel boots from a disk over BIOS and then cannot see it
+### KF-192 -- The kernel boots from a disk over BIOS and then cannot see it
 
-- **Found:** 12 September 2026, by the self-test assertion added for BG-187.
+- **Found:** 12 September 2026, by the self-test assertion added for KF-187.
 - **Cost:** on a machine with no UEFI, ReconOS starts and has no storage. It
   cannot mount its own volume, read its own programs, or write anything down.
 - **Status:** **open.** This is a missing driver, not a fault in existing code.
@@ -4307,9 +4370,9 @@ thing for that test to do -- it is testing a machine with no UEFI, and IDE is
 what such a machine has. The harness was right and nothing was reading its
 output.
 
-#### What this means for BG-187
+#### What this means for KF-187
 
-BG-187 predicted the second boot would go red from tests that leave files
+KF-187 predicted the second boot would go red from tests that leave files
 behind. It did not, and not because the tests are idempotent: **there is no
 volume on that boot to write to.** The only second-boot-on-one-disk in the whole
 matrix cannot mount the disk. So that half remains unexercised and is recorded
@@ -4356,11 +4419,11 @@ answers for class `0x01` subclass `0x01`.
 > attached so far. NVMe and AHCI are what matter on real hardware and are the
 > obvious next drivers"*. Both have been attached for some time and the lines
 > calling them are eleven lines below the sentence saying they are not. Noted
-> here rather than fixed in passing, because it is the same shape as BG-193: a
+> here rather than fixed in passing, because it is the same shape as KF-193: a
 > correct comment that quietly stopped being true, sitting directly above the
 > code that disproves it.
 
-### BG-191 -- The BIOS loader handed the kernel dirty registers, breaking its own stated invariant
+### KF-191 -- The BIOS loader handed the kernel dirty registers, breaking its own stated invariant
 
 - **Found:** 12 September 2026. `handoff : rbx arrived holding something`.
 - **Cost:** the two boot paths were distinguishable to the kernel, which is
@@ -4403,11 +4466,11 @@ boot nothing had been reading** -- the BIOS boot's self-tests, which
 banner and a partition count. Two of them had been failing on every BIOS boot
 since the checks were written.
 
-That is the same mechanism as BG-186 the day before (counters found because an
+That is the same mechanism as KF-186 the day before (counters found because an
 unrelated cache test failed) and BG-099 on the desktop (found because two things
 that should have agreed did not, neither being watched on purpose).
 
-### BG-190 -- The processor identity check could not tell an empty map from one processor
+### KF-190 -- The processor identity check could not tell an empty map from one processor
 
 - **Found:** 12 September 2026, on the BIOS boot, by the same assertion.
 - **Cost:** `telling them apart : FAIL` on every boot of a machine with no MADT.
@@ -4431,9 +4494,9 @@ that had no map.**
 Fixed with a count of how many have ever been registered. When it is zero the
 check says so out loud rather than passing quietly -- a check that prints nothing
 when it did not run looks exactly like one that ran and was happy, which is
-BG-187 restated.
+KF-187 restated.
 
-### BG-189 -- Changing VERSION rebuilt nothing, so the kernel printed the old number
+### KF-189 -- Changing VERSION rebuilt nothing, so the kernel printed the old number
 
 - **Found:** 12 September 2026, from a boot that reported `ReconOS kernel 0.1.0`
   out of a tree whose Makefile said `0.1.7`.
@@ -4454,7 +4517,7 @@ prints it -- kept the number it was last compiled with. The Makefile said one
 thing and the binary said another, and neither was obviously wrong.
 
 A *clean* build was always correct. Only incremental builds were wrong, which is
-every build anybody actually does. That is the same shape as BG-134 on the
+every build anybody actually does. That is the same shape as KF-134 on the
 desktop: **the one configuration that ships was the one configuration nothing
 ran**, inverted -- here the one configuration nothing ran is the one everybody
 uses.
@@ -4463,7 +4526,7 @@ Fixed by making every object depend on the Makefile. The cost is that editing it
 rebuilds everything, which is the correct price: almost anything changed in that
 file changes how the code is compiled.
 
-### BG-188 -- Recovery wrote to the volume it was inspecting, and the read-only promise was never enforced
+### KF-188 -- Recovery wrote to the volume it was inspecting, and the read-only promise was never enforced
 
 - **Found:** 11 September 2026, by matrix 22. The only failing path in a
   nineteen-path run.
@@ -4523,7 +4586,7 @@ to remember is a rule the next caller forgets.
 The tests that write ask `rootfs_is_read_only()` and say they are not running,
 rather than meeting the refusal and reporting a failure -- the refusal is the
 feature. Said out loud rather than skipped in silence, which is
-[BG-187](#bg-187).
+[KF-187](#bg-187).
 
 ### It also removed a third copy of a parser
 
@@ -4545,7 +4608,7 @@ recovery wrote nothing                      the disk is byte for byte
 5 of 5: found the damage, kept its hands off the disk
 ```
 
-### BG-187 -- Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+### KF-187 -- Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
 
 - **Found:** 11 September 2026, from a stale disk image left behind by an
   earlier run of `try-disk.sh`.
@@ -4576,7 +4639,7 @@ never run:
 
 None of them fails. The boot reads green, and the run's total counts them.
 
-**A skipped test and a passing test look identical in a total.** That is BG-186
+**A skipped test and a passing test look identical in a total.** That is KF-186
 one level up: there, four counters were incremented and displayed nowhere; here
 five tests are displayed and never run. Both are measurements that exist without
 being observed, and the second kind is worse, because it looks like evidence.
@@ -4633,7 +4696,7 @@ and until now nothing was in a position to notice.
    wrote is its own change and does not belong in the same commit as the
    assertion that proves it is needed.
 
-### BG-186 -- The block layer counted every transfer and printed the number nowhere, so an I/O rewrite lost them silently
+### KF-186 -- The block layer counted every transfer and printed the number nowhere, so an I/O rewrite lost them silently
 
 - **Found:** 11 September 2026, while restoring a cache invalidation that the
   same rewrite had dropped.
@@ -4695,7 +4758,7 @@ two requests -- the first arrival finds the device idle and services itself --
 and the scheduler saying so is more useful than a number that implies it did
 work it did not do.
 
-### BG-185 — The loader's ELF reader trusted a signature check that the default build does not perform
+### KF-185 — The loader's ELF reader trusted a signature check that the default build does not perform
 
 - **Found:** 11 September 2026, reading reconboot while the verification run
   held the tree.
@@ -4759,7 +4822,7 @@ reconboot: reading a kernel segment failed
   The same shape as the comment promising one processor "until checkpoint 9",
   which stayed true only until it was not.
 
-### BG-164 — The reaper assertion asked one processor to have already done what another one owed it
+### KF-164 — The reaper assertion asked one processor to have already done what another one owed it
 
 [#403](https://github.com/neogentrics/ReconOS/issues/403)
 
@@ -4774,7 +4837,7 @@ The scheduler's self-test called `reap()` once and then asserted that no thread
 in the ring was still `THREAD_FINISHED`.
 
 `reap` will not free a thread until `off_cpu` says the processor it was running
-on has finished with it. **That is BG-159's fix**, and it is what stops a stack
+on has finished with it. **That is KF-159's fix**, and it is what stops a stack
 being handed to the page allocator while another processor is still standing on
 it -- the fault whose panic reported a link register of `0xacce5501`. The flag
 is set by *that* processor, on its way out of the context switch, afterwards.
@@ -4799,14 +4862,14 @@ which is why it appeared on the day the host was busiest.
   never reaped, so it is still there when the deadline passes. Watched to fail:
   with `reap` neutered it reports *a finished thread was still not reaped half a
   second later*.
-- **Family:** the fourth this month whose only symptom was timing -- BG-157 (a
-  clock at twice its stated rate with every tick-counting test green), BG-158
+- **Family:** the fourth this month whose only symptom was timing -- KF-157 (a
+  clock at twice its stated rate with every tick-counting test green), KF-158
   (an idle thread halving the machine with twenty-six self-tests passing),
-  BG-160 and BG-162 (a harness and a kernel each mistaking *slow* for *did not
+  KF-160 and KF-162 (a harness and a kernel each mistaking *slow* for *did not
   happen*). Every one was invisible to a suite that asks only whether the right
   things happened.
 
-### BG-165 — The process test raced the very threads it was pretending to end
+### KF-165 — The process test raced the very threads it was pretending to end
 
 [#404](https://github.com/neogentrics/ReconOS/issues/404)
 
@@ -4843,7 +4906,7 @@ passes.
 
 - **Was:** a test that created live threads and then treated them as inert
   props. `thread_create_stopped` exists for exactly this shape and its header
-  says so under BG-148: *"putting a thread in the ring first and setting the
+  says so under KF-148: *"putting a thread in the ring first and setting the
   field second is a race against every other processor"*. The field here was
   "whether the test has finished looking at it".
 - **Fixed in** `core/process.c`: the threads are created stopped, so they
@@ -4857,13 +4920,13 @@ passes.
 - **Watched to fail**: with the thread count zeroed on the first exit, the test
   reports both original messages again. Six runs at sixteen processors pass
   with the fix and the failing path failed the run without it.
-- **Family:** the second in a day, after BG-164, where the matrix was right to
+- **Family:** the second in a day, after KF-164, where the matrix was right to
   go red and wrong about why -- and both were instruments rather than machines.
-  The difference from BG-157 and BG-158 is worth keeping: those were real
+  The difference from KF-157 and KF-158 is worth keeping: those were real
   faults with timing as their only symptom, and these two were correct kernels
   with tests that could not tell *not yet* from *not ever*.
 
-### BG-166 — The signature tests rewrite the tree every other test builds from
+### KF-166 — The signature tests rewrite the tree every other test builds from
 
 [#405](https://github.com/neogentrics/ReconOS/issues/405)
 
@@ -4919,6 +4982,63 @@ written the last time it appeared for a different reason.
   `mktemp` directory. These two write into the source tree, and the rig had no
   rule that said they must not -- so the parallelism that makes the run fast
   was silently unsafe for exactly two of its thirteen jobs.
+
+### KF-200 — The register's own filer reads the register with literal patterns, and the register has more than one convention
+
+- **Found:** 12 September 2026, reconciling the kernel's entries against GitHub
+  before moving them to the `KF-` prefix. Found by counting both sides, not by
+  reading the script.
+- **Cost:** twenty-one entries that could never be filed, six fixed bugs
+  standing open, and a run that reported **139 entries against a register of
+  153** while printing nothing that looked wrong.
+- **Status:** fixed.
+
+`scripts/make-issues.py` finds entries by splitting on a literal:
+
+    blocks = re.split(r'\n### (BG-\d+ — )', text)
+
+An em dash. Fourteen entries were typed with `--` instead. They were not
+skipped with a warning and they were not reported as unparsed -- they were
+**not seen**, and the summary line counted what the splitter had found.
+
+It decides an issue should be closed the same way:
+
+    closed = '**Fixed in**' in e['body']
+
+The register settled on four forms for that field over a hundred and fifty
+entries: `**Fixed in**`, `**Fixed in:**`, `**Fixed by**`, and a `**Status:**`
+line that says *fixed* or *open* in prose. Only the first was recognised.
+**Thirty of the kernel's seventy-two entries had their state invisible to the
+tool that publishes it.**
+
+### Why it looked healthy
+
+Both failures are of the same kind and it is the kind this project keeps
+finding: **the number was produced by the thing being checked.** The script
+counted the entries it had parsed, so its count could not disagree with its
+parser. The only way to see it was to count the register a second way -- `grep
+-c '^### BG-'` says 153 -- and compare. That is the same lesson as KF-187,
+where a boot that skipped five self-tests and a boot that passed them printed
+identical totals, and the same as KF-143, where a hang satisfied every one of
+the four tests for a pass.
+
+### What was done
+
+- The splitter takes either prefix and any of `—`, `–` or `--`, and
+  canonicalises the separator when it builds the title, so one form reaches
+  GitHub however the entry was typed.
+- Whether an entry is fixed is read by a function rather than a substring:
+  a `**Status:**` line wins if present, otherwise `**Fixed in**` or
+  `**Fixed by**`, with or without the colon. *Half fixed* reads as open,
+  because it is -- KF-127 says exactly that and means it.
+- The `AREA` table gained the twenty-two numbers it was missing. An entry with
+  no line there is filed with no area label at all, which the table's own
+  comment has warned about since the last time it happened.
+
+**Not fixed by normalising the file.** Every entry could have been rewritten to
+one convention, and the next one typed by hand would have broken it again. A
+document written by a person is the input; the parser is the thing that has to
+be tolerant.
 
 ## Labels
 

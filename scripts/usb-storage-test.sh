@@ -113,7 +113,7 @@ fi
 
 # --- the question block.h asks for ------------------------------------------
 #
-# BG-127: seek_is_free must come from the SCSI Block Device Characteristics
+# KF-127: seek_is_free must come from the SCSI Block Device Characteristics
 # page, not from the bus. QEMU's emulated stick does not implement the page, so
 # what is asserted is that the kernel *asked* -- the answer being "no page
 # here" is a measured default rather than a guess, and only asking makes it so.

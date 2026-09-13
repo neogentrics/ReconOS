@@ -111,7 +111,7 @@ void *phys_to_virt(paddr_t phys)
  * notice, and it stayed invisible because every other caller in the kernel
  * hands drivers pages from the page allocator, which are direct-map addresses
  * by construction. It took a filesystem reading a 512-byte superblock into a
- * stack array to find it. (BG-193)
+ * stack array to find it. (KF-193)
  *
  * The bound at the top is the kernel image. Physical memory is mapped from
  * DIRECT_MAP_BASE upward and there is no machine here with 128TB of it, so
@@ -132,7 +132,7 @@ paddr_t virt_to_phys(const void *virt)
 
 	/* In the higher half and not in the direct map -- the kernel image,
 	 * a stack, a device mapping. There is no physical address this can
-	 * answer with, and answering anyway is what BG-193 was. */
+	 * answer with, and answering anyway is what KF-193 was. */
 	return 0;
 }
 
@@ -824,7 +824,7 @@ paddr_t arch_as_new_root(void)
  * There was no other list. A program's code, stack and every page it faulted
  * in were never given back: measured at exactly twelve pages per program, the
  * same twelve every time, on a machine that is supposed to launch
- * applications. (BG-182)
+ * applications. (KF-182)
  *
  * Only the user half is walked -- the loop stops at 256 entries at the top
  * level -- so the kernel's own mappings are not reachable from here, which is

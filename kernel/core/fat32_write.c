@@ -303,7 +303,7 @@ static void base_and_ext(const char *name, char *base, unsigned *base_len,
  * The second argument is the whole point. Rewriting a file looks up its
  * name, finds the entry, and then has to pick an alias -- and the entry it
  * is about to replace is still there, so **the file collides with itself**
- * and gets a fresh alias every single time it is written. (BG-130)
+ * and gets a fresh alias every single time it is written. (KF-130)
  *
  * It cannot be fixed by deleting the old entry first. The old entry survives
  * deliberately until the new data is on the medium, because that is what

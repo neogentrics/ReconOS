@@ -178,7 +178,7 @@ bool process_reap(u32 id, i64 *code);
  * The default is that nobody will, and that is the honest default: nothing in
  * this kernel reads a process's exit status except the tests that ask for it.
  * A status kept for a collector who does not exist is a table slot and an
- * address space held for the life of the machine, which is what BG-183 was.
+ * address space held for the life of the machine, which is what KF-183 was.
  *
  * Opt-in rather than inferred from the parent. Every process here is made with
  * a parent of zero, so "has a live parent" would reap everything including the
@@ -193,7 +193,7 @@ void process_expect_status(struct process *p);
  * cannot do it: that drops to zero inside `thread_exit`, while the last thread
  * is still standing on a kernel stack reached through the very page tables
  * being freed. A process is not reapable until every thread that ran it has
- * itself been reaped -- the same shape as `off_cpu` in BG-159, one level up. */
+ * itself been reaped -- the same shape as `off_cpu` in KF-159, one level up. */
 void process_thread_reaped(struct thread *t);
 
 /* Gives a process an address space, and takes a reference to it. The process

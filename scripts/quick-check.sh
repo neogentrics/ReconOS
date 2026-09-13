@@ -67,7 +67,7 @@ FAILED=()
 #   - that it did not panic *after* the tests, because a bad exception vector
 #     shows up in the idle loop, after everything has passed;
 #   - that it reached the end, because a boot that stops half way answers every
-#     other question the way a good one does. That was BG-143.
+#     other question the way a good one does. That was KF-143.
 #
 # The last is free here: the kernel is asked to power itself off, so reaching
 # the end means the guest stopped on its own rather than being killed by the
@@ -134,7 +134,7 @@ if [ "$ONLY" = all ] || [ "$ONLY" = x86_64 ]; then
 
 	# Two, because every "all pass" row in the matrix used to be a
 	# single-processor run and a fault that only appears with more than one
-	# was invisible to all of it. That is how BG-148 survived: a program
+	# was invisible to all of it. That is how KF-148 survived: a program
 	# raced its own process attachment and started in the wrong address
 	# space, about one boot in twenty, and nothing in the rig ever looked.
 	boot "two processors" \

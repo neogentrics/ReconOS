@@ -11,7 +11,7 @@ Run once, by hand, and commit the result:
 
 Not a build step. A generated header that only exists after somebody runs a
 script is a header the build can be missing, and this project has already been
-bitten twice by exactly that (BG-133).
+bitten twice by exactly that (KF-133).
 
 Eight by eight rather than the classic 8x16, and drawn at double size, so a
 1280x800 screen is 80 columns by 50 rows -- the same shape as a text console,

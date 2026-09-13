@@ -72,7 +72,7 @@
  * format allows -- and it is wrong by a factor of two at 4 KiB, which is the
  * size ordinary volumes use. Nothing tested it, because a number in a comment
  * is not reachable from a test: the same shape as the 16 TiB ceiling of
- * BG-117, also written down, also wrong. (BG-126)
+ * KF-117, also written down, also wrong. (KF-126)
  *
  * The bound is still far past any single file operation -- a file needing more
  * than one indirect block is refused, which is 512 blocks at 4 KiB -- but it is

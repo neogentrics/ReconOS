@@ -864,7 +864,7 @@ This is the honest list, and it is the reason the desktop is not on it.
 - **EHCI, and USB hot-plug.** xHCI works and hubs are enumerated; older
   controllers are not, and ports are read once at boot.
 - **A driver for legacy IDE**, which is why a kernel that boots over BIOS from
-  an IDE disk cannot then read it (BG-192).
+  an IDE disk cannot then read it (KF-192).
 - **ext4.** `core/ext2.c` reads ext2 and refuses EXTENTS, RECOVER and 64BIT by
   name — reading a filesystem through a wrong assumption about where its blocks
   are is worse than refusing to mount it.

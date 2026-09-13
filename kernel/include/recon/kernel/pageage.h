@@ -13,7 +13,7 @@
  * immediately faulted back keep every value correct and every ordering intact
  * while the machine grinds -- and this kernel has already been caught twice by
  * faults whose only symptom was duration, with the whole self-test battery green
- * through both (BG-157, BG-158).
+ * through both (KF-157, KF-158).
  *
  * So the order is: measure, then choose, then assert against the measurement.
  * Choosing first would mean a policy nothing could argue with.

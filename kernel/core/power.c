@@ -47,7 +47,7 @@ enum power_result power_off(void)
 	 *
 	 * Its own result rather than a generic refusal, so that a caller which
 	 * was not allowed can tell that apart from a machine that declined --
-	 * the distinction BG-162 was about. */
+	 * the distinction KF-162 was about. */
 	if (!capable(CAP_SHUTDOWN))
 		return POWER_REFUSED;
 
@@ -102,8 +102,8 @@ enum power_result power_off(void)
 	 * off while it was in the middle of turning off. Found by the
 	 * verification run, which boots four guests at once, and never by a
 	 * boot on its own -- eight of eight of those were clean. Same family
-	 * as BG-160: a timing assumption that held until the machine got
-	 * busier. (BG-162)
+	 * as KF-160: a timing assumption that held until the machine got
+	 * busier. (KF-162)
 	 *
 	 * A fifth of a second, against a clock that does not depend on the
 	 * tick. Long enough that no real machine is still deciding, short

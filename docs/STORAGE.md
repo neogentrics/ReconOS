@@ -58,7 +58,7 @@ it is flash. Today that is answered from the transport:
 |---|---|---|
 | NVMe | everything on it is flash | yes, by construction |
 | ATA | IDENTIFY word 217, nominal rotation rate | yes |
-| **USB mass storage** | **nothing to read** | **no — see BG-127** |
+| **USB mass storage** | **nothing to read** | **no — see KF-127** |
 
 USB mass storage is SCSI in a wrapper: no IDENTIFY word 217, no NVMe identity.
 Linux, given a USB flash drive with no moving parts, reports

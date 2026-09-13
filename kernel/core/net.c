@@ -101,7 +101,7 @@ void net_print_summary(void)
  *
  * This is what makes the stack testable on a machine with no network card --
  * which is every machine in the verification matrix. A test that prints "no
- * card on this machine" and counts as passing is the fault BG-187 was about,
+ * card on this machine" and counts as passing is the fault KF-187 was about,
  * and a stack whose only test needs hardware is exactly that fault waiting to
  * happen. */
 static struct netbuf *captured;

@@ -13,7 +13,7 @@
 #   140 KiB matches byte for byte           a writer that lays a chain down
 #                                           wrongly still produces a file of the
 #                                           right length
-#   names do not move between installs      BG-130: every rewrite renamed the
+#   names do not move between installs      KF-130: every rewrite renamed the
 #                                           file, including \EFI\BOOT\BOOTX64.EFI,
 #                                           which is the one filename UEFI runs
 #                                           without a boot entry
@@ -38,7 +38,7 @@ fi
 
 # Built, not merely looked for. A script that only checks a binary exists
 # will happily test one compiled before the change it is meant to prove --
-# which is how a security check came to be silently absent (BG-133).
+# which is how a security check came to be silently absent (KF-133).
 make -C kernel ARCH="$ARCH" >/dev/null 2>&1 || true
 [ -f "$KERNEL" ] || { echo "the kernel did not build" >&2; exit 1; }
 for t in mkfs.vfat mdir mcopy python3; do
@@ -121,7 +121,7 @@ else
 	fail=$((fail + 1))
 fi
 
-# --- BG-130: the names must not move ---------------------------------------
+# --- KF-130: the names must not move ---------------------------------------
 
 printf '%-46s' "  a second install renames nothing"
 before=$listing

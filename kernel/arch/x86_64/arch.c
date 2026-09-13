@@ -305,7 +305,7 @@ void arch_vector_enable(void)
 	 * message, and every page table correct.
 	 *
 	 * Found by the address-space self-test, which reads the shared page
-	 * back after the write and requires it still to be zero. (BG-145)
+	 * back after the write and requires it still to be zero. (KF-145)
 	 */
 	cr0 |=  (1ull << 16);		/* WP on */
 	__asm__ volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");

@@ -32,7 +32,7 @@ static u64 switches;
 static u64 preemptions;
 
 /* Times a thread's vector-state guard was found broken after a save. Zero on
- * every machine this has ever run on except the one that found BG-146, and
+ * every machine this has ever run on except the one that found KF-146, and
  * asserted rather than merely printed. */
 static u64 vector_overruns;
 
@@ -62,7 +62,7 @@ static struct thread boot_threads[MAX_CPUS];
  * seven paths of the verification run that write to a disk, all of which wrote
  * correct data and ran out of time doing it.
  *
- * The same shape as BG-157: a fault whose only symptom is how long things take,
+ * The same shape as KF-157: a fault whose only symptom is how long things take,
  * against which the entire test suite is blind. */
 static u64 idle_over_work;
 
@@ -140,7 +140,7 @@ void sched_init(void)
 	 * caller to try was timer_sleep_ns, which reported that a thread could
 	 * not sleep and was right.
 	 *
-	 * Same shape as BG-147: a structure cleared wholesale, and one field
+	 * Same shape as KF-147: a structure cleared wholesale, and one field
 	 * whose zero is a meaningful and wrong value. */
 	boot->idle_for = -1;
 
@@ -263,7 +263,7 @@ struct thread *thread_create_stopped(const char *name, void (*entry)(void *),
 }
 
 /* Makes a thread the scheduler's. Separate from creating it, and that
- * separation is a bug fix rather than tidiness. (BG-148)
+ * separation is a bug fix rather than tidiness. (KF-148)
  *
  * `thread_create` used to end by putting the thread in the ring, which makes it
  * runnable *immediately* -- on this processor and on every other one. A caller
@@ -374,7 +374,7 @@ static struct thread *pick_next(struct thread *cur, unsigned me)
 			 * boot processor had none, and a secondary spent its whole
 			 * life in one. Giving processor 0 a real idle thread made
 			 * this line wrong without changing it, which is the same
-			 * shape as the TLB shootdown and BG-148.
+			 * shape as the TLB shootdown and KF-148.
 			 *
 			 * And it was expensive rather than incorrect, which is why
 			 * every self-test still passed. idle_loop waits for an
@@ -445,7 +445,7 @@ void sched_switch(void)
 		return;
 	}
 
-	/* prev is NOT marked READY here, which is the change BG-159 is.
+	/* prev is NOT marked READY here, which is the change KF-159 is.
 	 *
 	 * It used to be, and that made the thread available to every other
 	 * processor while this one was still executing on its stack and had
@@ -512,7 +512,7 @@ void sched_switch(void)
 	/* And immediately: a save that wrote past its area has just corrupted
 	 * the next field of this thread, and the sooner that is a number
 	 * somebody can read the less it looks like an unrelated bug three
-	 * subsystems away. This is how BG-146 presented -- a user program
+	 * subsystems away. This is how KF-146 presented -- a user program
 	 * whose process identifier became zero while it ran. */
 	if (prev->vector_guard != VECTOR_GUARD) {
 		vector_overruns++;
@@ -633,7 +633,7 @@ void thread_exit(void)
 	 * "left for whoever notices the thread is finished", and nobody
 	 * noticed: `reap` had exactly one caller in the whole kernel and it was
 	 * a self-test. Every thread stack and every ended process was held for
-	 * the life of the machine. (BG-183)
+	 * the life of the machine. (KF-183)
 	 *
 	 * Deferred rather than done here, because here is the one place it
 	 * cannot be done. The worker refuses a second queueing while the first
@@ -679,7 +679,7 @@ static void reap(void)
 		 * That was safe for exactly as long as this only ran from a
 		 * test, on a quiet machine, with nothing else touching the
 		 * ring. Running it from the worker thread -- which is the fix
-		 * for BG-183 -- makes it concurrent with every scheduling
+		 * for KF-183 -- makes it concurrent with every scheduling
 		 * decision on every processor, and an unlocked walk of a list
 		 * somebody else is splicing is a pointer into freed memory. */
 		flags = spin_lock_irq(&ring_lock);
@@ -870,11 +870,11 @@ bool sched_self_test(void)
 	 * stack per thread is a machine that dies after a few thousand of them.
 	 *
 	 * **Waited for, with a bound, rather than demanded at once** -- and the
-	 * difference is BG-164, which turned the verification run red on a
+	 * difference is KF-164, which turned the verification run red on a
 	 * kernel that was behaving correctly.
 	 *
 	 * `reap` will not free a thread until `off_cpu` says the processor it
-	 * was running on has finished with it, which is BG-159's fix and is
+	 * was running on has finished with it, which is KF-159's fix and is
 	 * what stops a stack being handed to the page allocator while another
 	 * processor is still standing on it. That flag is set by *that*
 	 * processor, afterwards. So a thread can be finished and not yet
@@ -929,7 +929,7 @@ bool sched_self_test(void)
 
 	/* And nothing wrote past its vector area while all that was running.
 	 *
-	 * Asserted rather than printed. This was BG-146: sixteen bytes past the
+	 * Asserted rather than printed. This was KF-146: sixteen bytes past the
 	 * end of a 512-byte save area, into the next field of the same
 	 * structure, on one architecture only -- and it had been there since
 	 * the vector unit was enabled. Nothing failed until a field that
@@ -950,7 +950,7 @@ bool sched_self_test(void)
 	 * This is here because exactly that happened and every test in this
 	 * file passed anyway: the machine was correct and about half as fast,
 	 * and the only thing that noticed was seven disk paths in the
-	 * verification run timing out. See BG-158. */
+	 * verification run timing out. See KF-158. */
 	if (idle_over_work != idle_over_work_before) {
 		kprintf("  sched: an idle thread was scheduled %lu time(s) while another thread was ready to run\n",
 			idle_over_work - idle_over_work_before);

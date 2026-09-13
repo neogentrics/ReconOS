@@ -185,7 +185,7 @@ struct thread {
 	 * them; user programs will, and the day one does is the day this has to
 	 * already be here.
 	 *
-	 * IT WAS 512 BYTES AND THAT WAS SIXTEEN TOO FEW. (BG-146)
+	 * IT WAS 512 BYTES AND THAT WAS SIXTEEN TOO FEW. (KF-146)
 	 *
 	 * The comment that stood here said 512 covered "x86_64's FXSAVE image,
 	 * and aarch64's thirty-two 128-bit V registers with their two status
@@ -275,7 +275,7 @@ struct thread *thread_create(const char *name, void (*entry)(void *), void *arg)
  * it a process, because the scheduler reads that to decide which address space
  * to run it in. Putting a thread in the ring first and setting the field second
  * is a race against every other processor, and the thread runs with the field
- * unset when it is lost. (BG-148) */
+ * unset when it is lost. (KF-148) */
 struct thread *thread_create_stopped(const char *name, void (*entry)(void *),
 				     void *arg);
 
@@ -315,7 +315,7 @@ void sched_adopt_idle(struct thread *idle);
 void sched_reaper_init(void);
 
 /* How many finished threads have actually been freed. Zero on a kernel whose
- * reaper is never asked to run, which is what BG-183 was. */
+ * reaper is never asked to run, which is what KF-183 was. */
 u64 sched_threads_reaped(void);
 
 void sched_print_summary(void);

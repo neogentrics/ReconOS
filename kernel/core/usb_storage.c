@@ -306,7 +306,7 @@ static bool read_capacity(struct usb_storage *s)
 
 /* Whether the medium spins.
  *
- * BG-127: the block layer's `seek_is_free` defaults to false, and for a USB
+ * KF-127: the block layer's `seek_is_free` defaults to false, and for a USB
  * flash drive that default is wrong -- it reports rotating for something with
  * no platter, which steers the allocator to work at keeping files contiguous
  * for no reason and, more seriously, is the same not-knowing that governs
