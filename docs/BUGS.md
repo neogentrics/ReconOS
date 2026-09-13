@@ -5791,6 +5791,8 @@ count the parser did not take.
 
 ### KF-201 — The bounded-queue test races its own drain, and passes only when the machine is slow enough
 
+[#428](https://github.com/neogentrics/ReconOS/issues/428)
+
 - **Found:** 13 September 2026, by matrix 31 — the run that existed only
   because KF-200 had earned a version bump nothing about the kernel required.
 - **Cost:** none to a running machine; the queue is bounded and always was. The
