@@ -186,6 +186,10 @@ void kmain(void)
 	 * This is where a machine with an adapter and no framebuffer gets one. */
 	display_init();
 
+	/* Before the partition scan would want it, and after there is a direct
+	 * map to reach the image through. */
+	initrd_init();
+
 	/* **After** block_init, not before it, and this is the second time
 	 * that ordering has caught something here. block_init is what walks
 	 * the PCI bus; a driver looking for its device before that walk finds

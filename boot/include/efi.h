@@ -29,6 +29,7 @@ typedef unsigned char BOOLEAN;
 #define TRUE  1
 #define FALSE 0
 typedef uint16_t  UINT16;
+typedef int16_t   INT16;
 typedef uint32_t  UINT32;
 typedef uint64_t  UINT64;
 typedef int64_t   INTN;
@@ -195,6 +196,62 @@ typedef struct {
 	EFI_MEMORY_TYPE ImageDataType;
 	void *Unload;
 } EFI_LOADED_IMAGE_PROTOCOL;
+
+/* --- Runtime services -----------------------------------------------------
+ *
+ * The half of the firmware that outlives ExitBootServices. Described here
+ * because the kernel includes this header too, and the alternative is the same
+ * layout written down twice.
+ *
+ * **The order is the interface.** These are function pointers at fixed offsets
+ * and nothing checks them; a member inserted in the wrong place calls whichever
+ * service happens to sit there. So the unused ones are listed rather than
+ * skipped -- a comment saying "and nine more" would be an invitation to count
+ * wrong.
+ */
+typedef struct {
+	UINT16 Year;		/* 1900 - 9999 */
+	UINT8  Month;		/* 1 - 12 */
+	UINT8  Day;		/* 1 - 31 */
+	UINT8  Hour;		/* 0 - 23 */
+	UINT8  Minute;		/* 0 - 59 */
+	UINT8  Second;		/* 0 - 59 */
+	UINT8  Pad1;
+	UINT32 Nanosecond;
+	INT16  TimeZone;
+	UINT8  Daylight;
+	UINT8  Pad2;
+} EFI_TIME;
+
+typedef struct {
+	EFI_TABLE_HEADER Hdr;
+
+	EFI_STATUS (EFIAPI *GetTime)(EFI_TIME *time, void *capabilities);
+	EFI_STATUS (EFIAPI *SetTime)(EFI_TIME *time);
+	EFI_STATUS (EFIAPI *GetWakeupTime)(BOOLEAN *enabled, BOOLEAN *pending,
+					   EFI_TIME *time);
+	EFI_STATUS (EFIAPI *SetWakeupTime)(BOOLEAN enable, EFI_TIME *time);
+
+	EFI_STATUS (EFIAPI *SetVirtualAddressMap)(UINTN map_size,
+						  UINTN descriptor_size,
+						  UINT32 descriptor_version,
+						  void *virtual_map);
+	EFI_STATUS (EFIAPI *ConvertPointer)(UINTN debug_disposition,
+					    void **address);
+
+	EFI_STATUS (EFIAPI *GetVariable)(CHAR16 *name, EFI_GUID *vendor,
+					 UINT32 *attributes, UINTN *size,
+					 void *data);
+	EFI_STATUS (EFIAPI *GetNextVariableName)(UINTN *name_size, CHAR16 *name,
+						 EFI_GUID *vendor);
+	EFI_STATUS (EFIAPI *SetVariable)(CHAR16 *name, EFI_GUID *vendor,
+					 UINT32 attributes, UINTN size,
+					 void *data);
+
+	EFI_STATUS (EFIAPI *GetNextHighMonotonicCount)(UINT32 *high_count);
+	EFI_STATUS (EFIAPI *ResetSystem)(UINT32 type, EFI_STATUS status,
+					 UINTN data_size, void *data);
+} EFI_RUNTIME_SERVICES;
 
 /* --- Files -------------------------------------------------------------- */
 

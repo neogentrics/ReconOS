@@ -274,6 +274,10 @@ struct block_device {
 /* Called by a driver once it has a working device. Copies nothing that the
  * driver must keep alive except `ops` and `driver`, both of which the driver
  * owns for the life of the device. Returns null when there is no room. */
+/* Put a block device in front of the image the loader left in memory, if it
+ * left one. Absent is the ordinary case and not a failure. */
+void initrd_init(void);
+
 struct block_device *block_register(const char *name, const struct block_ops *ops,
 				    void *driver, u32 block_size, u64 block_count);
 

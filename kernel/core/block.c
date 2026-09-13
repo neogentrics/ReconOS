@@ -13,6 +13,7 @@
  * driver that gets the overflow check wrong writes to the wrong sector and says
  * it succeeded.
  */
+#include <recon/kernel/boot.h>
 #include <recon/kernel/block.h>
 #include <recon/kernel/wait.h>
 #include <recon/kernel/identity.h>
@@ -58,6 +59,112 @@ const char *block_scheme_name(enum block_scheme s)
 	case BLOCK_SCHEME_UNREADABLE: return "a table that could not be believed";
 	default:                      return "unrecognised";
 	}
+}
+
+/* --- the initrd, as a disk ------------------------------------------------
+ *
+ * The loader may have put a filesystem image in memory. Nothing above this
+ * needs to know that: it is a block device like any other, and the partition
+ * scanner and the filesystems find it the way they find a real one.
+ */
+#define INITRD_SECTOR 512
+
+static u8 *initrd_at;
+static u64 initrd_sectors;
+
+static enum block_status initrd_read(struct block_device *dev, u64 lba,
+				     u32 count, void *buf)
+{
+	(void)dev;
+
+	/* Checked as a sum that cannot wrap rather than as `lba + count`, which
+	 * on a large lba is a small number and passes. The same subtraction the
+	 * slice arithmetic uses, for the same reason. */
+	if (lba > initrd_sectors || count > initrd_sectors - lba)
+		return BLOCK_ERR_RANGE;
+
+	kmemcpy(buf, initrd_at + lba * INITRD_SECTOR,
+		(u64)count * INITRD_SECTOR);
+	return BLOCK_OK;
+}
+
+static enum block_status initrd_write(struct block_device *dev, u64 lba,
+				      u32 count, const void *buf)
+{
+	(void)dev; (void)lba; (void)count; (void)buf;
+
+	/* Refused rather than quietly accepted. An initrd is what the loader
+	 * handed over; there is nothing behind it to persist to and nothing that
+	 * re-reads it, so a write reported as succeeding would be a lie nobody
+	 * could catch.
+	 *
+	 * READ_ONLY rather than UNSUPPORTED: the header defines the first as
+	 * "the device refuses writes, and says so early", which is precisely
+	 * this. UNSUPPORTED would say the operation is not offered, which is a
+	 * vaguer and slightly different claim. */
+	return BLOCK_ERR_READ_ONLY;
+}
+
+static const struct block_ops initrd_ops = {
+	.read  = initrd_read,
+	.write = initrd_write,
+
+	/* **No flush, rather than a flush that returns OK.**
+	 *
+	 * There is no medium behind this and nothing is ever buffered, so an OK
+	 * would be the device claiming it had made something durable that it had
+	 * not performed at all. The durability layer noticed immediately and said
+	 * so in capitals on every boot, which is exactly what it is for.
+	 *
+	 * Absent is reported as unsupported, which is the true statement. */
+};
+
+void initrd_init(void)
+{
+	const struct boot_info *info = boot_info();
+	u64 sectors;
+
+	if (!info->initrd_base || !info->initrd_size)
+		return;		/* the ordinary case */
+
+	sectors = info->initrd_size / INITRD_SECTOR;
+
+	if (!sectors) {
+		kprintf("initrd: %lu bytes is less than one sector\n",
+			(unsigned long)info->initrd_size);
+		return;
+	}
+
+	initrd_at      = (u8 *)phys_to_virt((paddr_t)info->initrd_base);
+	initrd_sectors = sectors;
+
+	{
+		struct block_device *d;
+
+		d = block_register("initrd", &initrd_ops, 0, INITRD_SECTOR,
+				   sectors);
+		if (!d) {
+			kputs("initrd: the image is here and could not be "
+			      "registered\n");
+			return;
+		}
+
+		/* **Said here, not only when a write is refused.**
+		 *
+		 * The ops refuse writes, which is correct and is not visible to
+		 * anything deciding what to do *before* writing. pick_test_device
+		 * skips read-only devices -- it has since KF-197 -- and without
+		 * this it chose the initrd, wrote a test pattern, was refused,
+		 * and failed two self-tests on a machine behaving exactly as
+		 * designed. A property stated only in a refusal is one nothing
+		 * can check in advance. */
+		d->read_only = true;
+	}
+
+	kprintf("  initrd       : %lu KB at %p, as a disk of %lu sectors\n",
+		(unsigned long)(info->initrd_size / 1024),
+		(void *)(uintptr_t)info->initrd_base,
+		(unsigned long)sectors);
 }
 
 struct block_device *block_register(const char *name, const struct block_ops *ops,
@@ -957,7 +1064,12 @@ void block_print_summary(void)
 			d->block_count, d->block_size,
 			d->read_only ? ", read-only" : "",
 			d->removable ? ", removable" : "",
-			(!d->parent && !d->flush_is_durable)
+			/* Not for a read-only device: the warning is about
+			 * writes that might not have reached the medium, and
+			 * there are none. Said in capitals, it reads as a
+			 * fault on a screen where somebody is looking for
+			 * one. */
+			(!d->parent && !d->read_only && !d->flush_is_durable)
 				? ", FLUSH DOES NOT REACH THE MEDIUM" : "");
 	}
 }

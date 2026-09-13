@@ -322,6 +322,80 @@ static void read_cmdline(EFI_FILE_PROTOCOL *root)
 static BOOLEAN verify_kernel(EFI_FILE_PROTOCOL *root, const void *image,
 			     UINTN size);
 
+/* An optional filesystem image, loaded whole into memory.
+ *
+ * `\reconos\initrd` if it is there, nothing if it is not -- and nothing is the
+ * ordinary case. Deliberately not a format of its own: the kernel already reads
+ * partition tables, FAT32 and ReconFS, so an image here costs no new parser and
+ * inherits every test those already have.
+ *
+ * EfiLoaderData, because this has to outlive ExitBootServices. Boot-services
+ * memory does not, and an initrd that evaporated at the handoff would be a
+ * pointer into whatever the kernel allocated next.
+ */
+static uint64_t initrd_base;
+static uint64_t initrd_size;
+
+static void read_initrd(EFI_FILE_PROTOCOL *root)
+{
+	EFI_GUID fi_guid = EFI_FILE_INFO_GUID;
+	EFI_FILE_PROTOCOL *file;
+	EFI_STATUS s;
+	UINT8 info_buf[512];
+	UINTN info_size = sizeof(info_buf);
+	UINTN size, want;
+	void *buf;
+
+	initrd_base = 0;
+	initrd_size = 0;
+
+	s = root->Open(root, &file, (CHAR16 *)u"\\reconos\\initrd",
+		       EFI_FILE_MODE_READ, 0);
+	if (EFI_ERROR(s))
+		return;		/* absent, which is normal */
+
+	s = file->GetInfo(file, &fi_guid, &info_size, info_buf);
+	if (EFI_ERROR(s)) {
+		file->Close(file);
+		return;
+	}
+
+	size = (UINTN)((EFI_FILE_INFO *)info_buf)->FileSize;
+	if (!size) {
+		file->Close(file);
+		return;
+	}
+
+	s = BS->AllocatePool(EfiLoaderData, size, &buf);
+	if (EFI_ERROR(s)) {
+		/* Said rather than passed over. An initrd that was present and
+		 * could not be loaded is a different fact from one that was not
+		 * there, and the kernel would otherwise boot looking identical
+		 * to a machine that never had one. */
+		print("reconboot: there is an initrd and no room for it\n");
+		file->Close(file);
+		return;
+	}
+
+	want = size;
+	s = file->Read(file, &want, buf);
+	file->Close(file);
+
+	if (EFI_ERROR(s) || want != size) {
+		print("reconboot: the initrd would not read whole\n");
+		return;
+	}
+
+	initrd_base = (uint64_t)(uintptr_t)buf;
+	initrd_size = (uint64_t)size;
+
+	print("  initrd       : ");
+	print_hex(initrd_base);
+	print(", ");
+	print_dec((UINTN)(size / 1024));
+	print(" KB\n");
+}
+
 static void *read_kernel(UINTN *size_out)
 {
 	EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -354,6 +428,7 @@ static void *read_kernel(UINTN *size_out)
 		fail("opening the volume", s);
 
 	read_cmdline(root);
+	read_initrd(root);
 
 	s = root->Open(root, &file, (CHAR16 *)KERNEL_PATH, EFI_FILE_MODE_READ, 0);
 	if (EFI_ERROR(s)) {
@@ -528,6 +603,52 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 			print_hex(at);
 			print(" and the firmware will not give it up.\n");
 			fail("claiming the kernel's memory", s);
+		}
+	}
+
+	/* **Is the kernel about to land on us?**
+	 *
+	 * The kernel goes where its ELF says -- 0x100000 upward, fixed. This
+	 * loader is wherever the firmware decided to put it, which is a choice
+	 * nothing here influences and firmware is not obliged to explain. They
+	 * have never overlapped. Nothing has ever checked, and the failure if
+	 * they ever did would be this loader overwriting its own code part way
+	 * through the copy below, then running whatever the kernel had just
+	 * written over it.
+	 *
+	 * That is unlikely and it is not impossible, and the difference between
+	 * the two is a bounds check. The BIOS path needs none of this: stage 1
+	 * at 0x7C00 and stage 2 below 0x10000 are pinned, and the kernel starts
+	 * at 1 MB, so the gap cannot close.
+	 */
+	{
+		EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
+		EFI_LOADED_IMAGE_PROTOCOL *self;
+
+		if (BS->HandleProtocol(IMAGE, &li_guid,
+				       (void **)&self) == EFI_SUCCESS &&
+		    self->ImageSize) {
+			uint64_t lo = (uint64_t)(uintptr_t)self->ImageBase;
+			uint64_t hi = lo + self->ImageSize;
+
+			/* Two ranges overlap when each begins before the other
+			 * ends. Written out rather than as a distance, because
+			 * a distance between unsigned addresses is the wrong
+			 * answer in one direction and nobody notices which. */
+			if (lowest < hi && lo < highest) {
+				print("\nreconboot: the kernel wants ");
+				print_hex(lowest);
+				print(" to ");
+				print_hex(highest);
+				print("\nand this loader is at ");
+				print_hex(lo);
+				print(" to ");
+				print_hex(hi);
+				print(".\nCopying it would overwrite this "
+				      "loader while it is running.\n");
+				fail("placing the kernel clear of the loader",
+				     EFI_LOAD_ERROR);
+			}
 		}
 	}
 
@@ -969,6 +1090,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	boot_info.firmware = RECONBOOT_FIRMWARE_UEFI;
 	copy(boot_info.loader, "reconboot", 10);
 
+	/* The firmware's own services, which outlive ExitBootServices and are
+	 * the only way to the firmware clock and firmware variables on a machine
+	 * with no other source of either. The pointer has been sitting in the
+	 * system table unused since checkpoint 4; 2.1 was "partly" for exactly
+	 * this line. */
+	boot_info.runtime_services = (uint64_t)(uintptr_t)ST->RuntimeServices;
+
 	find_framebuffer(&boot_info.framebuffer);
 	find_tables(&boot_info);
 
@@ -1028,6 +1156,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	}
 
 	kernel_image = read_kernel(&kernel_size);
+
+	/* After read_kernel, because that is what opens the volume and reads it.
+	 * Zero where there was none, which the kernel is required to cope with
+	 * rather than treat as a failure. */
+	boot_info.initrd_base = initrd_base;
+	boot_info.initrd_size = initrd_size;
 
 	/* After read_kernel, not before: the command line is read from the
 	 * volume inside that call, and copying it earlier copied a buffer that

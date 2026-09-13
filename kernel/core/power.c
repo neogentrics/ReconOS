@@ -35,6 +35,7 @@
 #include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/time.h>
+#include <recon/kernel/smp.h>
 #include <recon/kernel/timer.h>
 
 /* --- an idle that does not wake for nothing --------------------------------
@@ -136,7 +137,21 @@ bool power_idle_self_test(void)
 		return false;
 	}
 
-	would_have_been = (elapsed * TIME_TICK_HZ) / 1000000000ull;
+	/* **Times the number of processors.**
+	 *
+	 * `tick_interrupts` counts every processor's timer, on purpose -- a
+	 * secondary spinning its own costs the same power as the boot processor
+	 * doing it. So the thing to compare it against is what a fixed tick
+	 * would cost *the machine*, which is one processor's worth times however
+	 * many there are.
+	 *
+	 * Against one processor's worth it passed on a quiet host by a hair and
+	 * failed on a loaded one: 7 wakeups measured against a budget of 20 when
+	 * the real budget was 80. A test that compares a machine-wide count to a
+	 * single-processor figure is not measuring what it says it is, and the
+	 * margin it appears to have is the size of the error. */
+	would_have_been = ((elapsed * TIME_TICK_HZ) / 1000000000ull) *
+			  (smp_cpus_online() ? smp_cpus_online() : 1);
 
 	/* A machine that cannot suspend its tick is a normal machine. Saying so
 	 * is what keeps this from being a test that quietly measures nothing. */

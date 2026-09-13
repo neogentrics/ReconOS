@@ -94,6 +94,16 @@ struct boot_info {
 
 	struct framebuffer fb;
 
+	/* A filesystem image the loader put in memory, or zero. Zero is the
+	 * ordinary case and not a failure. */
+	u64 initrd_base;
+	u64 initrd_size;
+
+	/* EFI_RUNTIME_SERVICES, or zero on a machine with no UEFI. The half of
+	 * the firmware that outlives ExitBootServices, and on a board with no
+	 * battery-backed clock it is the only source of the date. */
+	u64 runtime_services;
+
 	paddr_t acpi_rsdp;	/* 0 if the firmware did not point at one */
 	paddr_t dtb;		/* 0 if there is no device tree */
 };

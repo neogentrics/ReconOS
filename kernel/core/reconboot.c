@@ -31,6 +31,23 @@ static enum mem_kind translate_kind(uint32_t kind)
 	}
 }
 
+/* Did the loader write far enough to have filled this field?
+ *
+ * `size` is how this structure grows without a version bump: a field appended
+ * after a given loader was built is simply not there, and reading it would be
+ * reading whatever follows the structure in memory. Every appended field is
+ * read through this and none without it.
+ *
+ * Takes the offset and length rather than the field, because the alternative
+ * is one of these per field and one of them eventually checks the wrong one.
+ */
+static bool wrote_through(const struct reconboot *bi, unsigned long end)
+{
+	return bi->size >= end;
+}
+
+#define RECONBOOT_HAS(bi, field) 	wrote_through((bi), offsetof(struct reconboot, field) + 		      sizeof((bi)->field))
+
 bool reconboot_parse(paddr_t handoff)
 {
 	const struct reconboot *bi = (const struct reconboot *)(uintptr_t)handoff;
@@ -63,6 +80,17 @@ bool reconboot_parse(paddr_t handoff)
 			: bi->firmware == RECONBOOT_FIRMWARE_BIOS
 				? BOOT_FIRMWARE_BIOS
 				: BOOT_FIRMWARE_UNKNOWN);
+
+	/* Appended fields, each read only if the loader wrote far enough. An
+	 * older loader simply did not write them, and what lies past the end of
+	 * the structure it did write is not a value. */
+	if (RECONBOOT_HAS(bi, initrd_size)) {
+		boot_info()->initrd_base = bi->initrd_base;
+		boot_info()->initrd_size = bi->initrd_size;
+	}
+
+	if (RECONBOOT_HAS(bi, runtime_services))
+		boot_info()->runtime_services = bi->runtime_services;
 
 	kstrlcpy(loader_name, bi->loader, sizeof(loader_name));
 	boot_info()->loader = loader_name;

@@ -76,6 +76,11 @@ struct reconboot_kernel_header {
 #define RECONBOOT_MEM_BAD          4
 #define RECONBOOT_MEM_BOOTLOADER   5
 
+/* Memory the firmware needs kept and mapped if its runtime services are ever
+ * to be called. Not usable, and not the same as reserved: the kernel has to be
+ * able to find these to map them. */
+#define RECONBOOT_MEM_FIRMWARE     6
+
 struct reconboot_region {
 	uint64_t base;
 	uint64_t size;
@@ -141,6 +146,27 @@ struct reconboot {
 
 	char loader[32];
 	char cmdline[128];
+
+	/* --- Everything below is gated on `size` ---------------------------
+	 *
+	 * Appended rather than versioned, which is what `size` is for. A kernel
+	 * must check that the loader wrote far enough before reading any of
+	 * these; see reconboot_has() in the kernel's reconboot.c. Raising
+	 * RECONBOOT_VERSION would mean editing two assembly files that cannot
+	 * include this header, and this change moves nothing. */
+
+	/* EFI_RUNTIME_SERVICES, still callable after ExitBootServices, and the
+	 * only way to reach the firmware clock and firmware variables on a
+	 * machine that has no other source of either. Zero on BIOS, and zero
+	 * where the firmware did not publish one. */
+	uint64_t runtime_services;
+
+	/* A disk image in memory, or zero. Deliberately an *image* rather than
+	 * an archive: the kernel already reads partition tables, FAT32 and
+	 * ReconFS, and an initrd in a new format would be a second
+	 * implementation of everything it already has. */
+	uint64_t initrd_base;
+	uint64_t initrd_size;
 };
 
 #endif /* RECON_RECONBOOT_H */
