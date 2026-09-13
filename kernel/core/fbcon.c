@@ -52,6 +52,20 @@
 #define TARGET_ROWS	50
 #define SCALE_MAX	8
 
+/* **The area the console will draw into, however large the screen is.**
+ *
+ * A scroll redraws every cell, so its cost is the console's area in pixels and
+ * nothing else. At 1280x800 that is a million writes and unnoticeable. At
+ * 7680x4320 it is thirty-three million, through uncached device memory, per
+ * scrolled line -- which is seconds, and which broke a timing assertion in a
+ * subsystem that had nothing to do with the screen (KF-203).
+ *
+ * So the console occupies a window and leaves the rest dark. Roughly 1080p:
+ * enough for eighty columns of readable text on any panel, and a bounded cost
+ * on all of them. The glass beyond it is what a compositor is for. */
+#define CONSOLE_MAX_W	1920u
+#define CONSOLE_MAX_H	1200u
+
 /* The shadow, and therefore the largest grid this will use. A display bigger
  * than this is not refused -- it is used, at this many characters, with the
  * rest of the glass left dark. Refusing to print anything because the screen is
@@ -72,6 +86,7 @@ static struct {
 	u32 height;
 	enum fb_format format;
 
+	unsigned draw_w, draw_h;	/* the console's window, not the panel */
 	unsigned scale;			/* pixels per glyph pixel */
 	unsigned cell_w, cell_h;	/* a character cell, in screen pixels */
 
@@ -235,9 +250,16 @@ bool fbcon_adopt(const struct framebuffer *given)
 		return false;
 
 	{
-		unsigned scale = scale_for(given->height);
-		unsigned cols = given->width / (RECON_FONT_WIDTH * scale);
-		unsigned rows = given->height / (RECON_FONT_HEIGHT * scale);
+		/* Scaled and counted against the *window*, not the panel. A
+		 * bigger screen past this point gains resolution for whatever
+		 * draws next; it does not gain console. */
+		unsigned draw_w = given->width  < CONSOLE_MAX_W
+				  ? given->width  : CONSOLE_MAX_W;
+		unsigned draw_h = given->height < CONSOLE_MAX_H
+				  ? given->height : CONSOLE_MAX_H;
+		unsigned scale = scale_for(draw_h);
+		unsigned cols = draw_w / (RECON_FONT_WIDTH * scale);
+		unsigned rows = draw_h / (RECON_FONT_HEIGHT * scale);
 
 		/* Checked before anything is changed, so a framebuffer too
 		 * small to hold one character does not leave the console
@@ -248,6 +270,8 @@ bool fbcon_adopt(const struct framebuffer *given)
 		fb.scale  = scale;
 		fb.cell_w = RECON_FONT_WIDTH * scale;
 		fb.cell_h = RECON_FONT_HEIGHT * scale;
+		fb.draw_w = draw_w;
+		fb.draw_h = draw_h;
 	}
 
 	fb.ready = false;
@@ -258,8 +282,8 @@ bool fbcon_adopt(const struct framebuffer *given)
 	fb.height = given->height;
 	fb.format = given->format;
 
-	fb.cols = fb.width / fb.cell_w;
-	fb.rows = fb.height / fb.cell_h;
+	fb.cols = fb.draw_w / fb.cell_w;
+	fb.rows = fb.draw_h / fb.cell_h;
 
 	if (fb.cols > MAX_COLS)
 		fb.cols = MAX_COLS;
@@ -274,7 +298,10 @@ bool fbcon_adopt(const struct framebuffer *given)
 	fb.row = 0;
 	fb.ready = true;
 
-	fill(0, 0, fb.width, fb.height, pack(0x0C, 0x0E, 0x10));
+	/* Only the window is painted. Clearing thirty-three million pixels to
+	 * show eighty columns of text is most of the cost this bound exists to
+	 * remove, and it would be paid on every mode change. */
+	fill(0, 0, fb.draw_w, fb.draw_h, pack(0x0C, 0x0E, 0x10));
 	return true;
 }
 
@@ -334,4 +361,12 @@ void fbcon_describe(void)
 
 	kprintf("  screen       : %ux%u, %u columns by %u rows\n",
 		fb.width, fb.height, fb.cols, fb.rows);
+
+	/* Said, rather than left to be worked out from a grid that does not
+	 * cover the panel. A dark screen with text in one corner looks like a
+	 * fault unless somebody says it is not. */
+	if (fb.draw_w < fb.width || fb.draw_h < fb.height)
+		kprintf("               : the console uses %ux%u of that; a "
+			"scroll redraws its area and nothing else\n",
+			fb.draw_w, fb.draw_h);
 }

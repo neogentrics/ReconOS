@@ -1,4 +1,7 @@
+#include <recon/kernel/boot.h>
 #include <recon/kernel/time.h>
+
+#include <efi.h>
 #include <recon/kernel/timer.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
@@ -20,52 +23,12 @@ static volatile u64 ticks;
  * same power as the boot processor doing it. */
 static volatile u64 tick_interrupts;
 
-/* Put the tick count where the hardware clock says it should be.
+/* There is no resync any more, and that is the fix rather than a tidy-up.
  *
- * The tick count is what turns the timer wheel, and it only moves when the tick
- * fires -- so a processor that stopped its tick to save power would come back
- * to a wheel that had not turned and timers that had simply never run.
- *
- * **The monotonic clock is not the tick.** It is a hardware counter, read
- * directly, and it keeps counting through any amount of idleness. That is the
- * single fact that makes stopping the tick possible at all; without it this
- * would need the tick to keep the time and there would be nothing to catch up
- * against.
- *
- * Returns how many ticks were owed, which is the honest measure of how long the
- * machine actually slept -- and the number a self-test can check is greater
- * than one, because a tickless idle that never engaged looks exactly like one
- * that did.
+ * A count derived from the clock cannot fall behind it, so there is nothing to
+ * catch up; `time_tick_resync` existed only because the count was kept
+ * separately, and keeping it separately is what let it drift. See time_ticks().
  */
-u64 time_tick_resync(void)
-{
-	u64 should_be;
-	u64 owed;
-
-	/* **Processor 0 only**, for the same reason it is the only one that
-	 * counts ticks and the only one that turns the wheel: there is exactly
-	 * one of it. A secondary writing this would be racing the increment in
-	 * time_tick, and a lost race moves the count *backwards* -- which files
-	 * every pending timer into the past and runs all of them at once.
-	 *
-	 * A secondary that stopped its own tick owes nothing on waking. It was
-	 * never keeping the time; it was only being preempted. */
-	if (arch_cpu_id() != 0)
-		return 0;
-
-	should_be = arch_monotonic_ns() / (1000000000ull / TIME_TICK_HZ);
-
-	/* Only ever forwards. A counter that appeared to go backwards -- a
-	 * recalibration, a different processor's view -- must not be allowed to
-	 * rewind the wheel, which would file every pending timer into the past
-	 * and run all of them at once. */
-	if ((i64)(should_be - ticks) <= 0)
-		return 0;
-
-	owed = should_be - ticks;
-	ticks = should_be;
-	return owed;
-}
 
 void time_tick(void)
 {
@@ -90,8 +53,6 @@ void time_tick(void)
 	if (arch_cpu_id() != 0)
 		return;
 
-	ticks++;
-
 	/* And the timer wheel, turned by the same processor for the same reason:
 	 * there is one wheel, and a wheel turned by four processors would run
 	 * each slot four times. Everything filed on it therefore fires here, in
@@ -102,7 +63,23 @@ void time_tick(void)
 
 u64 time_ticks(void)
 {
-	return ticks;
+	/* **Derived, not counted.**
+	 *
+	 * This used to be a variable that `time_tick` incremented, which was
+	 * right while the tick was the only thing that moved it. When a
+	 * processor became able to suspend its tick, a second author appeared:
+	 * a resync that set the count from the clock on waking. Each was
+	 * correct and together they double-counted -- the resync moved the
+	 * count up to the clock, the next interrupt added one more, and the
+	 * resync would not move it back because it only ever went forward.
+	 *
+	 * Every idle-and-wake cycle therefore added a tick that no time had
+	 * passed for, the wheel outran the clock, and filed timers fired early:
+	 * a 100 ms deadline arriving after 53 ms. (KF-204)
+	 *
+	 * One fact, one author. The hardware counter is the authority and this
+	 * is that counter in coarser units. */
+	return arch_monotonic_ns() / (1000000000ull / TIME_TICK_HZ);
 }
 
 u64 time_tick_interrupts(void)
@@ -115,9 +92,103 @@ u64 time_monotonic_ns(void)
 	return arch_monotonic_ns();
 }
 
+/* What the firmware said the time was, and when it said it.
+ *
+ * Zero until somebody asks, and zero for ever on a machine with no UEFI. */
+static u64 firmware_wall_ns;
+static u64 firmware_wall_at;
+
+/* Days into the year at the first of each month, for a non-leap year. */
+static const u16 month_start[12] = {
+	0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+};
+
+static u64 days_since_epoch(unsigned y, unsigned m, unsigned d)
+{
+	u64 days = 0;
+	unsigned year;
+
+	if (y < 1970 || m < 1 || m > 12 || d < 1)
+		return 0;
+
+	for (year = 1970; year < y; year++)
+		days += (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0))
+			? 366 : 365;
+
+	days += month_start[m - 1];
+
+	/* This year's leap day, but only once March has been reached. A
+	 * February date in a leap year must not be moved forward by the leap
+	 * day it precedes. */
+	if (m > 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)))
+		days += 1;
+
+	return days + (d - 1);
+}
+
+/* Ask the firmware what time it is, once, while its own mappings are still
+ * the ones in force.
+ *
+ * **Must run before vm_init.** The ReconBoot path does not build an address
+ * space -- it adds one entry to the firmware's -- so until the kernel replaces
+ * those tables, firmware runtime code is mapped where firmware expects to find
+ * it. After that it is not, and reaching it would mean SetVirtualAddressMap,
+ * which can be called once and cannot be undone.
+ *
+ * Returns false where there is nothing to ask, which is every BIOS machine and
+ * is not a failure.
+ */
+bool time_capture_firmware_clock(void)
+{
+	const EFI_RUNTIME_SERVICES *rt;
+	EFI_TIME t;
+	u64 days;
+
+	rt = (const EFI_RUNTIME_SERVICES *)(uintptr_t)
+		boot_info()->runtime_services;
+
+	if (!rt || !rt->GetTime)
+		return false;
+
+	if (rt->GetTime(&t, 0) != EFI_SUCCESS)
+		return false;
+
+	/* A firmware that answers with a year it cannot have meant is not a
+	 * clock. Refused rather than turned into a plausible date -- the whole
+	 * reason time_wall_ns returns zero on a machine with no clock is that a
+	 * confident wrong date is worse than an admitted absent one. */
+	if (t.Year < 1970 || t.Year > 2200 || t.Month < 1 || t.Month > 12 ||
+	    t.Day < 1 || t.Day > 31 || t.Hour > 23 || t.Minute > 59 ||
+	    t.Second > 59)
+		return false;
+
+	days = days_since_epoch(t.Year, t.Month, t.Day);
+	if (!days)
+		return false;
+
+	firmware_wall_ns = ((days * 24 + t.Hour) * 60ull + t.Minute) * 60ull;
+	firmware_wall_ns = (firmware_wall_ns + t.Second) * 1000000000ull;
+	firmware_wall_at = arch_monotonic_ns();
+
+	return true;
+}
+
 u64 time_wall_ns(void)
 {
-	return arch_wall_ns();
+	u64 now = arch_wall_ns();
+
+	if (now)
+		return now;
+
+	/* No clock this architecture knows how to read. The firmware told us
+	 * once, before its mappings went away, and the monotonic counter has
+	 * been running since -- so the date is that plus however long ago it
+	 * was. */
+	if (firmware_wall_ns)
+		return firmware_wall_ns +
+		       (arch_monotonic_ns() - firmware_wall_at);
+
+	return 0;
 }
 
 void time_init(void)

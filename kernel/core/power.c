@@ -75,16 +75,16 @@ void power_idle_wait(void)
 	if (arch_wait_tickless(deadline)) {
 		idle_tickless++;
 
-		/* The wheel is turned by comparing itself against the tick
-		 * count, and the tick count only moves when the tick fires. So
-		 * a processor coming back from a suspended tick owes the wheel
-		 * however many intervals passed while it was not looking --
-		 * without this, a stopped tick is a wheel that never turns
-		 * again and every filed timer simply never runs.
+		/* Turn the wheel, which is behind by however long the processor
+		 * was asleep. It catches up in the loop it already has: the
+		 * tick count is the monotonic clock in coarser units, so it
+		 * moved while nothing was ticking, and `timer_tick` walks the
+		 * wheel forward until the two agree.
 		 *
-		 * Processor 0 only, and the function says why. */
-		if (time_tick_resync())
-			timer_tick();
+		 * No resync, and that is deliberate -- a count that is derived
+		 * cannot need one, and the one that existed is what made the
+		 * wheel outrun the clock. KF-204. */
+		timer_tick();
 
 		return;
 	}

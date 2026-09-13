@@ -93,6 +93,17 @@ void kmain(void)
 
 	boot_print_summary();
 
+	/* **Before vm_init**, and that is the whole of why it is here rather
+	 * than beside time_init.
+	 *
+	 * The loader handed over on the firmware's page tables, and the kernel
+	 * is still running on them. Firmware runtime code is mapped where
+	 * firmware expects it exactly until vm_init replaces those tables, so
+	 * this is the one window where the date can be had for the cost of a
+	 * call. Silent on a machine with no UEFI. */
+	if (time_capture_firmware_clock())
+		kputs("  firmware     : it knows what the date is, and said so\n");
+
 	pmm_init();
 	pmm_print_summary();
 

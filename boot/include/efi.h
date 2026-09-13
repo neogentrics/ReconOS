@@ -41,7 +41,15 @@ typedef UINTN     EFI_STATUS;
 typedef UINT64    EFI_PHYSICAL_ADDRESS;
 typedef UINT64    EFI_VIRTUAL_ADDRESS;
 
+/* UEFI on x86_64 uses the Microsoft convention; UEFI on AArch64 uses the
+ * ordinary one. This said `ms_abi` unconditionally, which was true of the only
+ * architecture that had a loader when it was written, and is the reason this
+ * header could not be included by portable code. */
+#if defined(__x86_64__)
 #define EFIAPI __attribute__((ms_abi))
+#else
+#define EFIAPI
+#endif
 
 #define EFI_SUCCESS               0
 #define EFI_LOAD_ERROR            0x8000000000000001ULL
