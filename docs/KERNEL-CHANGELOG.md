@@ -88,6 +88,109 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.12 -- 13 September 2026
+
+**Checkpoint 21 is finished: a program can open the screen and draw on it.**
+
+The first half gave the kernel a mode of its own. This is the half that makes
+that worth having — until now the only thing in the machine that could put a
+pixel anywhere was `fbcon`, and a desktop is not a thing you build out of an
+eighty-column text console.
+
+```
+framebuffer: a program mapped 2560x1440, pitch 10240, and both markers are on the screen
+```
+
+### What a program does now
+
+Opens `/dev/fb0`, asks `SYS_SCREEN` what the screen is, calls `SYS_MAP`, and
+stores pixels. After the map the kernel is not involved at all: drawing is
+stores to memory.
+
+That is the whole reason the mapping exists rather than just `write`. A write
+copies — a 2560x1440 frame is fourteen megabytes *through a system call*, plus
+the copy, plus a second set of dirty cache lines, to reach memory the program
+could have been storing to directly. `write` stays as the honest fallback and
+because it gives the self-test a second route to the same pixels.
+
+### `map` is a new operation and not a flag
+
+The kernel has had file-backed mappings since checkpoint 19: a region records a
+file, a fault allocates a page and fills it from that file. **Using that here
+would have looked exactly right and been wrong.** A page filled *from* a
+framebuffer is a copy of what is on screen — a program would draw into it, read
+every pixel back perfectly, and nobody would ever see anything.
+
+So `map` answers a different question: *what physical memory are you*. The
+mapping is then built with `addrspace_map`, which has been able to do this since
+checkpoint 5 and had never had a caller from user mode.
+
+**Write-combining, not uncached and not write-back.** Uncached is correct and
+makes every pixel its own bus transaction. Write-back is fast and wrong: a pixel
+in a cache line is a pixel that is not on the screen. The page attribute table
+that makes the difference mean anything was programmed in checkpoint 5.
+
+### `SYS_SCREEN` exists for one field
+
+**Pitch.** Bytes per row is not `width * 4` on real hardware — adapters pad a
+row to whatever suits them — and a program that assumes otherwise draws a
+picture that shears one pixel further left on every line. It is the one fact a
+program cannot recover from the pixels, so withholding it would be handing over
+a framebuffer it cannot use.
+
+The self-test writes a second marker at exactly `pitch` bytes in for that
+reason: a marker at offset zero proves the mapping reached memory, and one at
+the start of row 1 proves the stride was the screen's.
+
+### And the program cannot check the thing that matters
+
+It exits 21 having opened, asked, mapped, stored and read back. **A mapping of a
+fresh anonymous page would satisfy every one of those.** So the kernel goes and
+looks at the framebuffer afterwards, through the direct map, at the physical
+address the *device* reported — a different route to the same memory and the
+only one that can disagree. KF-141's lesson, applied to a mapping instead of a
+mode.
+
+### KF-209, found by the second architecture on the first try
+
+Tearing down the program's address space walks its page tables and frees what it
+finds — and this put a PCI aperture in those tables.
+
+`addrspace_release_page` knew two kinds of page it must not free: the shared
+zero page, and a page of the page cache. It was not wrong, it was *complete for
+what existed*. A mapped device is a third kind and nothing in it could say so.
+
+**On x86_64 that is silent.** The aperture is above the bitmap's base, both
+bounds checks pass, the bits are marked free, and the allocator hands the screen
+to whoever asks next — with the self-test still printing `pass`, because the
+pixels really did land and the corruption happens afterwards. **aarch64
+panicked**, because there the aperture is at 0x11000000 and RAM starts at
+0x40000000.
+
+The fix is not a special case for framebuffers. **The allocator can only take
+back what it handed out**, which is a question only it can answer, so it answers
+it: `pmm_owns`. The same two bounds `pmm_free_pages` already panics on, asked
+instead of enforced — they were always a question as well as a guard, and until
+something mapped memory the allocator had never seen, nobody needed to ask.
+
+**A funnel with a list of exceptions is wrong the next time something is added.**
+Inverting it — establishing what may be freed rather than listing what may not —
+covers every future case in one place.
+
+### The matrix grew two paths, and one of them is the point
+
+`device tree, a program draws on the screen` exists **because of KF-209**. It is
+the only machine shape in the rig where a device's aperture is below RAM, which
+is the only arrangement where freeing it fails loudly instead of quietly. Without
+it the rig cannot catch that class again, and it is exactly the sort that comes
+back — the next thing to map a device will be written by somebody who never saw
+this.
+
+Both new paths check for the marker text rather than for the absence of failure.
+The self-test returns true on a machine with no screen, deliberately, because
+most of this matrix has none — so a boot where `/dev/fb0` stopped working
+satisfies every ordinary question and says nothing.
+
 ## 0.2.11 -- 13 September 2026
 
 **KF-208: the tamper test could not tamper.** It wrote an `A` at a fixed offset

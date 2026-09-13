@@ -310,6 +310,131 @@ user_signal_program_end:
 user_signal_program_len:
 	.quad	user_signal_program_end - user_signal_program
 
+/* --- a program that maps the screen and draws on it -------------------------
+ *
+ * Checkpoint 21's second half, end to end, and it has to be a real program at
+ * ring 3. A kernel-side test can check that `fb_map` reports the right physical
+ * address; only this can check that the address a *program* was handed is the
+ * screen. Those are different claims and only the second one matters.
+ *
+ * What it does, in order:
+ *
+ *   1. opens /dev/fb0
+ *   2. asks what the screen is -- width, height, and above all *pitch*
+ *   3. maps the whole of it
+ *   4. writes a marker at (0,0) and a second one at the start of row 1,
+ *      which is `pitch` bytes in and nowhere else
+ *   5. exits with 21
+ *
+ * **The second marker is the point of the first.** One pixel at offset zero
+ * proves the mapping reached memory. A pixel at `pitch` proves the program was
+ * told the right stride -- if SYS_SCREEN reported `width * 4` on an adapter
+ * that pads its rows, that store lands inside row 0 and the kernel finds
+ * nothing at the start of row 1.
+ *
+ * Every exit code below is distinct on purpose. A test whose failures all
+ * report zero says a program did not work; these say which step it reached.
+ */
+	.global user_fb_program
+user_fb_program:
+	/* open("/dev/fb0", len, OPEN_READ|OPEN_WRITE, 0) */
+	leaq	.Lfbpath(%rip), %rdi
+	leaq	.Lfbpath_end(%rip), %rsi
+	subq	%rdi, %rsi
+	movq	$3, %rdx		/* OPEN_READ | OPEN_WRITE */
+	xorq	%r10, %r10
+	movq	$9, %rax		/* SYS_OPEN */
+	syscall
+
+	testq	%rax, %rax
+	js	.Lfb_no_open
+	movq	%rax, %rbx		/* the descriptor, callee-saved */
+
+	/* screen(buffer, 24) onto our own stack. Twenty-four is sizeof(struct
+	 * fb_info) and the call says so itself -- it returns the size it would
+	 * write whatever it was offered, so a mismatch here is a program built
+	 * against a different kernel and is worth its own exit code. */
+	subq	$32, %rsp
+
+	/* Touch it first, from *here*.
+	 *
+	 * The stack is a reserved region rather than mapped memory -- it exists
+	 * when the program touches it and not before, which is what lets it be
+	 * sixty-four kilobytes without costing any. So the page under %rsp does
+	 * not exist yet, and the first thing to write to it would be the kernel
+	 * filling this structure in: a fault on a user address taken in kernel
+	 * mode, which is a different path from the one demand paging is for.
+	 *
+	 * One store from user mode makes the page exist by the ordinary route.
+	 * Thirty-two bytes from a page-aligned top is one page, so one store
+	 * covers the whole buffer. */
+	movq	$0, (%rsp)
+
+	movq	%rsp, %rdi
+	movq	$24, %rsi
+	movq	$24, %rax		/* SYS_SCREEN */
+	syscall
+
+	cmpq	$24, %rax
+	jne	.Lfb_no_screen
+
+	/* map(fd, info.bytes) */
+	movq	%rbx, %rdi
+	movq	16(%rsp), %rsi		/* info.bytes */
+	movq	$23, %rax		/* SYS_MAP */
+	syscall
+
+	testq	%rax, %rax
+	js	.Lfb_no_map
+
+	/* (0,0), and the start of row 1. `pitch` is at offset 8. */
+	movl	$0x5245434F, (%rax)		/* "OCER" -- 'RECO' little-endian */
+	movl	8(%rsp), %ecx			/* info.pitch */
+	movl	$0x214E534F, (%rax,%rcx,1)	/* "OSN!" */
+
+	/* Read one back through the same mapping. A framebuffer is device
+	 * memory and reading it is slow, which is why this reads one word and
+	 * not the screen -- but a mapping that accepted a store and cannot
+	 * return it is not memory, and that is worth one read to find out. */
+	cmpl	$0x5245434F, (%rax)
+	jne	.Lfb_not_memory
+
+	movq	$21, %rdi		/* checkpoint 21, and nothing else is 21 */
+	movq	$0, %rax
+	syscall
+
+.Lfb_no_open:
+	movq	$1, %rdi
+	movq	$0, %rax
+	syscall
+.Lfb_no_screen:
+	movq	$2, %rdi
+	movq	$0, %rax
+	syscall
+.Lfb_no_map:
+	movq	$3, %rdi
+	movq	$0, %rax
+	syscall
+.Lfb_not_memory:
+	movq	$4, %rdi
+	movq	$0, %rax
+	syscall
+
+.Lfb_hang:
+	jmp	.Lfb_hang
+
+.Lfbpath:
+	.ascii	"/dev/fb0"
+.Lfbpath_end:
+
+	.global user_fb_program_end
+user_fb_program_end:
+
+	.balign 8
+	.global user_fb_program_len
+user_fb_program_len:
+	.quad	user_fb_program_end - user_fb_program
+
 	.global user_test_program_end
 user_test_program_end:
 

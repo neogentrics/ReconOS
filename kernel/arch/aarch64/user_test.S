@@ -295,3 +295,121 @@ user_signal_program_end:
 	.global user_signal_program_len
 user_signal_program_len:
 	.quad	user_signal_program_end - user_signal_program
+
+/* --- a program that maps the screen and draws on it -------------------------
+ *
+ * The aarch64 half of checkpoint 21's second half. Same steps, same exit codes
+ * as the x86_64 one in arch/x86_64/user_entry.S, so a failure means the same
+ * thing whichever machine reported it.
+ *
+ *   1. opens /dev/fb0
+ *   2. asks what the screen is -- above all its *pitch*
+ *   3. maps the whole of it
+ *   4. writes a marker at (0,0) and another at the start of row 1
+ *   5. exits with 21
+ *
+ * The second marker is the point of the first: one pixel at offset zero proves
+ * the mapping reached memory, and a pixel exactly `pitch` bytes in proves the
+ * program was told the right stride.
+ *
+ * Most aarch64 machines in the verification rig have no framebuffer at all --
+ * AAVMF provides none -- so this program does not run there and the self-test
+ * says so rather than failing. It runs on a machine given a display adapter,
+ * which is what the kernel's own mode setting is for.
+ */
+	.global user_fb_program
+user_fb_program:
+	/* open("/dev/fb0", len, OPEN_READ|OPEN_WRITE, 0) */
+	adr	x0, .Lfbpath
+	adr	x1, .Lfbpath_end
+	sub	x1, x1, x0
+	mov	x2, #3			/* OPEN_READ | OPEN_WRITE */
+	mov	x3, #0
+	mov	x8, #9			/* SYS_OPEN */
+	svc	#0
+
+	tbnz	x0, #63, .Lfb_no_open	/* the sign bit: an error */
+	mov	x19, x0			/* the descriptor, callee-saved */
+
+	sub	sp, sp, #32
+
+	/* Touch it first, from here.
+	 *
+	 * The stack is a reserved region rather than mapped memory -- it exists
+	 * when the program touches it and not before. So the page under sp does
+	 * not exist yet, and the first write to it would otherwise be the
+	 * kernel filling this structure in: a fault on a user address taken in
+	 * kernel mode, which is a different path from the one demand paging is
+	 * for. */
+	str	xzr, [sp]
+
+	mov	x0, sp
+	mov	x1, #24			/* sizeof(struct fb_info) */
+	mov	x8, #24			/* SYS_SCREEN */
+	svc	#0
+
+	cmp	x0, #24
+	b.ne	.Lfb_no_screen
+
+	/* map(fd, info.bytes) */
+	mov	x0, x19
+	ldr	x1, [sp, #16]		/* info.bytes */
+	mov	x8, #23			/* SYS_MAP */
+	svc	#0
+
+	tbnz	x0, #63, .Lfb_no_map
+
+	/* (0,0). Built with movz/movk because a 32-bit constant does not fit in
+	 * an instruction on this architecture and a literal pool would have to
+	 * be reached PC-relative anyway. */
+	movz	w2, #0x434F
+	movk	w2, #0x5245, lsl #16	/* 'RECO', little-endian */
+	str	w2, [x0]
+
+	/* The start of row 1, which is `pitch` bytes in and nowhere else. */
+	ldr	w3, [sp, #8]		/* info.pitch, zero-extended into x3 */
+	movz	w4, #0x534F
+	movk	w4, #0x214E, lsl #16	/* 'OSN!' */
+	str	w4, [x0, x3]
+
+	/* One read back through the same mapping. A mapping that took a store
+	 * and cannot return it is not memory. */
+	ldr	w5, [x0]
+	cmp	w5, w2
+	b.ne	.Lfb_not_memory
+
+	mov	x0, #21			/* checkpoint 21, and nothing else is */
+	mov	x8, #0			/* SYS_EXIT */
+	svc	#0
+
+.Lfb_no_open:
+	mov	x0, #1
+	mov	x8, #0
+	svc	#0
+.Lfb_no_screen:
+	mov	x0, #2
+	mov	x8, #0
+	svc	#0
+.Lfb_no_map:
+	mov	x0, #3
+	mov	x8, #0
+	svc	#0
+.Lfb_not_memory:
+	mov	x0, #4
+	mov	x8, #0
+	svc	#0
+
+.Lfb_hang:
+	b	.Lfb_hang
+
+.Lfbpath:
+	.ascii	"/dev/fb0"
+.Lfbpath_end:
+
+	.global user_fb_program_end
+user_fb_program_end:
+
+	.balign 8
+	.global user_fb_program_len
+user_fb_program_len:
+	.quad	user_fb_program_end - user_fb_program

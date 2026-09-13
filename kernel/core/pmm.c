@@ -365,6 +365,26 @@ void pmm_free_page(paddr_t page)
 	pmm_free_pages(page, 1);
 }
 
+bool pmm_owns(paddr_t page)
+{
+	/* The same two bounds `pmm_free_pages` panics on, asked instead of
+	 * enforced.
+	 *
+	 * They are a question as well as a guard, and until something mapped
+	 * memory this allocator had never seen, there was no caller who needed
+	 * the question. A page table can now hold a device's own pages -- a
+	 * framebuffer a program mapped -- and the code that tears one down has
+	 * to tell those from memory before handing anything back. (KF-209)
+	 *
+	 * Non-wrapping, like the guard: `page - base_paddr` on an address below
+	 * the base is an enormous index that passes the upper bound
+	 * comfortably. */
+	if (!page || page < base_paddr)
+		return false;
+
+	return page_index(page) < total_pages;
+}
+
 /* Called once, by vm_init(), immediately after the kernel switches to its own
  * page tables. Before that the bitmap is reachable at its physical address
  * because the map we were handed is an identity map; afterwards it is not,

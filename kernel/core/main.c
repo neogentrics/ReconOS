@@ -306,6 +306,13 @@ void kmain(void)
 		i2c_self_test() ? "pass" : "FAIL");
 	kprintf("  a mode of our own  : %s\n",
 		display_self_test() ? "pass" : "FAIL");
+
+	/* After the sweep above, which sets seven modes in turn and moves the
+	 * framebuffer each time. A program's mapping is of one physical address;
+	 * taking it before the last mode change would be a mapping of wherever
+	 * the pixels used to be. */
+	kprintf("  a screen to draw on : %s\n",
+		user_framebuffer_test() ? "pass" : "FAIL");
 	kprintf("  a tick that stops  : %s\n",
 		power_idle_self_test() ? "pass" : "FAIL");
 	kprintf("  something arrives : %s\n",

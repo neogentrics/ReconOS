@@ -98,6 +98,16 @@ struct addrspace {
 	/* What the program is allowed to touch and does not have yet. */
 	struct as_region regions[AS_REGIONS_MAX];
 	unsigned region_count;
+
+	/* Where the next mapped device goes, walking up from USER_MAP_BASE.
+	 *
+	 * Here rather than in the process, because it is a fact about the
+	 * addresses in this map and nothing else -- and never reused: a cursor
+	 * that went backwards after an unmap would put a second device where a
+	 * program still believes the first one is. Nothing unmaps yet, and when
+	 * something does, this is the line that has to be thought about rather
+	 * than the one that quietly already worked. */
+	u64 map_next;
 };
 
 /* A new, empty address space with the kernel's half in place. Null if there is

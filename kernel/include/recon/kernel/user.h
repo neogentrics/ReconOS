@@ -128,6 +128,38 @@ enum {
 	 * kernel wrote, and one without it is refused. */
 	SYS_SIGRETURN,
 
+	/* (fd, length) -> the address it was mapped at, or why not.
+	 *
+	 * Puts the memory a file *is* into the caller's address space. Only
+	 * /dev/fb0 answers today, and the whole reason this exists is that a
+	 * framebuffer reached through `write` is a screen's worth of copying per
+	 * frame, through a system call, to reach memory the program could have
+	 * been storing to directly.
+	 *
+	 * **The program does not choose the address.** One that picked its own
+	 * would have to know what else is mapped, and the kernel is the only
+	 * thing that does. The address comes back instead.
+	 *
+	 * Refused rather than clamped for a length larger than the file has:
+	 * a program given half a screen and told it succeeded draws off the end
+	 * of what it got.
+	 */
+	SYS_MAP,
+
+	/* (buffer, length) -> bytes a whole description needs.
+	 *
+	 * What the screen is: width, height, **pitch**, format, and how many
+	 * bytes of it exist. Pitch is the one a program cannot work out and the
+	 * one it cannot do without -- adapters pad a row to whatever suits them,
+	 * and `width * 4` draws a picture that shears a pixel further left on
+	 * every line.
+	 *
+	 * Same shape as SYS_MACHINE: asking with a length of zero is how a
+	 * program finds out the size, and a bigger answer than was offered means
+	 * nothing was written.
+	 */
+	SYS_SCREEN,
+
 	SYS_MAX
 };
 
@@ -202,6 +234,32 @@ struct recon_machine {
 	char cpu_model[64];
 };
 
+/* What the screen is, for a program that is about to draw on it.
+ *
+ * Here beside `recon_machine` and not in fbdev.h, for the reason that one is
+ * here: it crosses into user mode, and a structure a program lays out has to
+ * be described in the one place both sides read.
+ *
+ * **`pitch` is the field that cannot be derived and cannot be done without.**
+ * Bytes per row is *not* `width * 4` on real hardware -- adapters pad a row to
+ * whatever suits them -- and a program that assumes it draws a picture that
+ * shears one pixel further left on every line. Making a program guess would be
+ * withholding the one fact it cannot recover from the pixels.
+ *
+ * `bytes` is `pitch * height`: what exists, not the size of the memory window,
+ * which is often larger and sometimes the whole BAR. A program told the screen
+ * is bigger than it is draws off the end of it.
+ *
+ * Same rule as `recon_machine`: growing this is allowed, reordering it is not.
+ */
+struct fb_info {
+	u32 width;
+	u32 height;
+	u32 pitch;		/* bytes per row, padded by the adapter */
+	u32 format;
+	u64 bytes;		/* pitch * height */
+};
+
 typedef i64 (*syscall_fn)(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5);
 
 struct personality {
@@ -234,6 +292,12 @@ struct thread *user_thread_create(const char *name, const void *code,
 				  size_t code_len);
 
 bool user_self_test(void);
+
+/* Checkpoint 21's second half: a program opens /dev/fb0, is told the screen's
+ * shape, maps it, and draws -- and the kernel then looks at the framebuffer to
+ * see whether the pixels are there. True on a machine with no screen, which is
+ * most of the verification matrix and is not a failure. */
+bool user_framebuffer_test(void);
 
 /* A program that signals itself, handles it, and carries on. */
 bool user_signal_test(void);
@@ -301,6 +365,19 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top);
  * -- a stack limit that is tight is a program that dies for a reason nobody
  * can see from the fault. */
 #define USER_STACK_MAX  (64 * 1024)
+
+/* Where a mapped device lands.
+ *
+ * Above the stack and a long way clear of it. It cannot go in the space
+ * between USER_BASE and USER_STACK_TOP, which is four megabytes in total: a
+ * 2560x1440 framebuffer is fourteen, and an 8K one is a hundred and thirty.
+ *
+ * A range rather than a single address because a program may map more than one
+ * thing, and each address space carries a cursor through it -- so two mappings
+ * in one program cannot land on each other, and the same program run twice
+ * gets the same answer. */
+#define USER_MAP_BASE   0x0000000010000000ULL	/* 256 MB */
+#define USER_MAP_END    0x0000000080000000ULL	/* 2 GB -- room for several */
 
 #define USER_LIMIT      0x0000800000000000ULL
 

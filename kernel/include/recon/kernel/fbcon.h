@@ -35,6 +35,18 @@ void fbcon_putc(char c);
  * different when the only console is a cable. */
 bool fbcon_active(void);
 
+/* The screen this machine actually has, or null where it has none.
+ *
+ * The *panel*, not the console's window onto it -- the console bounds itself
+ * to 1920x1200 however large the glass is (KF-203), and a program mapping
+ * /dev/fb0 gets all of it.
+ *
+ * Asked of the console because the console is the one place that reconciles
+ * the two ways a machine comes to have a screen: firmware set a mode and
+ * passed it through the handoff, or the display driver asked for one after the
+ * bus walk. Everything else would have to ask both and know which won. */
+const struct framebuffer *fbcon_framebuffer(void);
+
 /* Prints what the screen is, in the same shape as the rest of the boot
  * summary. */
 void fbcon_describe(void);

@@ -706,6 +706,18 @@ check_for "7 shape(s) set and read back, 0 skipped" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
 
+# A program mapped the screen and the pixels are on it.
+#
+# Checked for what it *said*, for the same reason as the sweep above: the
+# self-test returns true on a machine with no screen, deliberately, because
+# most of this matrix has none. So a boot where /dev/fb0 does not exist, or
+# where SYS_MAP quietly stopped working, satisfies every ordinary question --
+# tests ran, none failed, it reached the end -- and says nothing.
+check_for "both markers are on the screen" \
+	"  PVH, a program draws on the screen" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
@@ -807,6 +819,22 @@ check_for nvme0n1 "  device tree, NVMe" \
 		-kernel "$ARM_IMG" \
 		-drive "file=$DISK,format=raw,if=none,id=n0" \
 		-device nvme,serial=recon0,drive=n0
+
+# A screen on this architecture, and **this path exists because of KF-209**.
+#
+# On aarch64 the display adapter's aperture is at 0x11000000 and RAM starts at
+# 0x40000000 -- the pixels are *below* the memory the allocator manages. That is
+# the only arrangement in this matrix where handing a mapped device back to the
+# page allocator is a fault instead of silent corruption, and it is how the bug
+# was found at all: x86_64 ran the same code, freed the framebuffer into the
+# allocator, and reported pass.
+#
+# So this is not "aarch64 has a screen too". It is the one machine shape that
+# can fail loudly, and without it the rig cannot catch that class again.
+check_for "both markers are on the screen" \
+	"  device tree, a program draws on the screen" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1024M -nographic \
+		-no-reboot -device bochs-display -kernel "$ARM_IMG"
 
 check_for sata0 "  device tree, AHCI" \
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \

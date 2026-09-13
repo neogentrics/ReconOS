@@ -95,6 +95,14 @@ static struct {
 
 	char shadow[MAX_ROWS][MAX_COLS];
 	bool ready;
+
+	/* The screen as it was handed over, kept whole.
+	 *
+	 * Everything above is the console's own view of it -- a window, a grid, a
+	 * scale. This is the panel, and it is what anything that is not the
+	 * console needs: /dev/fb0 offers the whole screen, not the eighty columns
+	 * of text drawn in the corner of it. */
+	struct framebuffer screen;
 } fb;
 
 /* How far to magnify the font on a screen this tall.
@@ -282,6 +290,7 @@ bool fbcon_adopt(const struct framebuffer *given)
 	fb.height = given->height;
 	fb.format = given->format;
 
+	fb.screen = *given;
 	fb.cols = fb.draw_w / fb.cell_w;
 	fb.rows = fb.draw_h / fb.cell_h;
 
@@ -345,6 +354,16 @@ void fbcon_putc(char c)
 	fb.shadow[fb.row][fb.col] = c;
 	draw_glyph(fb.col, fb.row, c);
 	fb.col++;
+}
+
+const struct framebuffer *fbcon_framebuffer(void)
+{
+	/* `ready` and not `screen.base`: the description is only meaningful once
+	 * this console has checked it, and it checks several things a caller
+	 * would otherwise have to check again -- a pitch too small for a row, a
+	 * format nobody named. Handing out a description that failed those is
+	 * handing out a framebuffer nothing should draw into. */
+	return fb.ready ? &fb.screen : 0;
 }
 
 bool fbcon_active(void)

@@ -71,6 +71,16 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.12 on 13 September 2026, for KF-209 -- and checkpoint 21 is finished.**
+# A program can open /dev/fb0, be told what the screen is, map the whole of it
+# and draw. Tearing that program down then handed the framebuffer's pages to
+# the page allocator, because the teardown knew about two kinds of page it must
+# not free and a mapped device was a third. On x86_64 that is silent: the
+# aperture is above the bitmap's base, both bounds checks pass, and the screen
+# is given to whoever allocates next. aarch64 panicked, because there the
+# aperture is below RAM. The allocator answers whether a page is its own now,
+# rather than the teardown carrying a list of exceptions.
+#
 # **0.2.11 on 13 September 2026, for KF-208.** The BIOS tamper test wrote an
 # `A` at a fixed offset to make a kernel differing from the one that was signed,
 # and byte 40000 of the kernel became an `A`. So the tampered file *was* the
@@ -150,7 +160,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.11
+VERSION := 0.2.12
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

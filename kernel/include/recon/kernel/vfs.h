@@ -136,6 +136,27 @@ struct file_ops {
 	i64 (*write_at)(struct file *f, u64 offset, const void *in, u64 len);
 
 
+	/* What physical memory this file *is*, for a mapping.
+	 *
+	 * Null for everything that is a stream of bytes, which is everything
+	 * here but one: a framebuffer. Present only where the file is a window
+	 * onto memory that already exists at a fixed physical address.
+	 *
+	 * **This is not the file-backed mapping above, and the difference is why
+	 * it is a separate operation.** A file-backed page is *filled from* the
+	 * file and is a copy of it. These pages are not filled from anything --
+	 * they are the device. A framebuffer mapped the other way would let a
+	 * program draw into a private copy, read every pixel back perfectly, and
+	 * put nothing at all on the screen.
+	 *
+	 * False means there is nothing to map, which is an ordinary answer and
+	 * not an error -- a machine with no screen has no pixels to offer. On
+	 * true, `*pa` is where the memory starts, `*len` how much of it there is,
+	 * and `*flags` the VM_ bits the mapping must carry: a framebuffer mapped
+	 * write-back is a screen that updates when the cache feels like it.
+	 */
+	bool (*map)(struct file *f, paddr_t *pa, u64 *len, unsigned *flags);
+
 	/* For the summary and for tests: what kind of thing this is. Not used
 	 * to decide anything. */
 	const char *name;

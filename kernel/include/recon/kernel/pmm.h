@@ -51,6 +51,14 @@ paddr_t pmm_alloc_pages(size_t count);
 
 void pmm_free_page(paddr_t page);
 
+/* Whether this page is one the allocator handed out and can take back.
+ *
+ * False for anything outside the memory it manages -- a device's own pages
+ * above all, which can be mapped into an address space and must not be freed
+ * when it is torn down. `pmm_free_page` panics on those, which is right for a
+ * bug and useless as a question, so the question is asked here. */
+bool pmm_owns(paddr_t page);
+
 /* Re-reaches the bitmap through the direct map. Called by vm_init() the moment
  * the kernel is running on its own page tables, and never otherwise. */
 void pmm_remap(void);

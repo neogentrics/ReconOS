@@ -1,3 +1,5 @@
+#include <recon/kernel/fbcon.h>
+#include <recon/kernel/fbdev.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/signal.h>
 #include <recon/kernel/identity.h>
@@ -287,6 +289,122 @@ static i64 sys_seek(u64 fd, u64 offset, u64 from, u64 a3, u64 a4, u64 a5)
 	n = f->ops->seek(f, (i64)offset, (unsigned)from);
 	file_release(f);
 	return n;
+}
+
+/* Put a file's memory in the caller's map.
+ *
+ * The mapping outlives the descriptor on purpose, and that is worth saying
+ * because a file-backed mapping does the opposite -- it holds a reference,
+ * because a page faulted in later has to be read from somewhere. There is
+ * nothing to read here. The pages are a device at a fixed physical address, so
+ * once they are in the tables the file has no further part in it and a program
+ * can close the descriptor and keep drawing.
+ *
+ * What that does *not* survive is the mode changing underneath it: a program
+ * holding a mapping of a framebuffer that has since been re-sized is drawing
+ * into memory that is no longer the screen. Nothing re-sizes after boot today,
+ * and when something does this is the line it has to answer for.
+ */
+static i64 sys_map(u64 fd, u64 length, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct process *p = caller();
+	struct file *f;
+	paddr_t pa;
+	u64 have, va, size;
+	unsigned flags;
+
+	(void)a2; (void)a3; (void)a4; (void)a5;
+
+	if (!p || !p->space)
+		return SYS_EPERM;
+
+	f = fd_get(p, (int)fd);
+	if (!f)
+		return SYS_EBADF;
+
+	/* A file that is a stream of bytes is not a window onto memory, and
+	 * that is a different answer from a mapping that failed. */
+	if (!f->ops->map) {
+		file_release(f);
+		return SYS_EPERM;
+	}
+
+	if (!f->ops->map(f, &pa, &have, &flags)) {
+		file_release(f);
+		return SYS_ENODEV;
+	}
+
+	file_release(f);
+
+	/* Refused, not clamped. A program that asked for a screen's worth, was
+	 * handed half of one, and was told it succeeded draws off the end of
+	 * what it got -- and the fault lands nowhere near the mistake. */
+	if (length == 0 || length > have)
+		return SYS_EINVAL;
+
+	/* Whole pages, because that is the unit the tables work in. Rounding up
+	 * gives the program a little more than it asked for rather than a little
+	 * less, and the extra is still inside the device. */
+	size = (length + PAGE_SIZE - 1) & ~((u64)PAGE_SIZE - 1);
+
+	/* **Zero is the starting value, on purpose.**
+	 *
+	 * `addrspace_create` clears the whole slot rather than naming the fields
+	 * it knows about -- that is KF-147's fix, and what it was for was a
+	 * process inheriting the last occupant's regions. A cursor that had to be
+	 * set to USER_MAP_BASE there would be a field that must be non-zero in a
+	 * structure deliberately zeroed wholesale: a second place to keep in
+	 * step, and the next field added would be wrong the same way.
+	 *
+	 * So an untouched space reads zero and means it. Using it directly would
+	 * map a framebuffer at address zero -- the one page kept unmapped so that
+	 * a null pointer faults. */
+	va = p->space->map_next ? p->space->map_next : USER_MAP_BASE;
+
+	/* Non-wrapping, like every other range check here: `va + size` past the
+	 * end of the area would compare as comfortably inside. */
+	if (size > USER_MAP_END - va)
+		return SYS_ENOMEM;
+
+	/* VM_USER is what makes it reachable from ring 3 at all, and it is added
+	 * here rather than asked of the file -- a file deciding whether its
+	 * memory is reachable from user mode would be a file deciding who may
+	 * touch a device. */
+	if (!addrspace_map(p->space, (vaddr_t)va, pa, size, flags | VM_USER))
+		return SYS_ENOMEM;
+
+	p->space->map_next = va + size;
+	return (i64)va;
+}
+
+/* What the screen is. See SYS_SCREEN in user.h for why pitch is the point. */
+static i64 sys_screen(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct fb_info info;
+	int err;
+	u64 copy;
+
+	(void)a2; (void)a3; (void)a4; (void)a5;
+
+	if (!user_range_ok(buf, len)) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	err = fbdev_describe(&info);
+	if (err != SYS_OK)
+		return err;
+
+	/* Whole or nothing, and the size comes back either way -- so asking with
+	 * a length of zero is how a program finds out how much to offer, and a
+	 * bigger answer than was offered means nothing was written. A caller
+	 * handed the first half of a struct alongside a success has no way to
+	 * know which half it got. */
+	copy = sizeof(info);
+	if (len >= copy)
+		kmemcpy((void *)(uintptr_t)buf, &info, (size_t)copy);
+
+	return (i64)copy;
 }
 
 static i64 sys_getpid(u64 a0, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
@@ -588,6 +706,8 @@ const struct personality personality_recon = {
 		[SYS_GETCAPS]  = sys_getcaps,
 		[SYS_DROPCAP]  = sys_dropcap,
 		[SYS_LIST]     = sys_list,
+		[SYS_MAP]      = sys_map,
+		[SYS_SCREEN]   = sys_screen,
 	},
 };
 
@@ -1065,6 +1185,134 @@ bool user_signal_test(void)
 			"the handler\n", (long)last_exit_code);
 		return false;
 	}
+}
+
+/* Checkpoint 21's second half, end to end.
+ *
+ * A program opened /dev/fb0, was told the screen's shape, mapped the whole of
+ * it, and stored two words. This checks the words are *on the screen* -- read
+ * back through the direct map at the physical address the device reported,
+ * which is a second route to the same memory and the only one that can
+ * disagree with the first.
+ *
+ * The exit code alone would not do. A mapping that handed the program a fresh
+ * anonymous page would satisfy every step it can see: the stores land, the
+ * read-back matches, and it exits 21 having drawn on nothing at all. That is
+ * KF-141's shape -- a driver that records what it asked for passes any test
+ * that asks what it recorded -- and the answer is the same one: ask the
+ * hardware.
+ */
+bool user_framebuffer_test(void)
+{
+	extern const unsigned char user_fb_program[];
+	extern const u64 user_fb_program_len;
+
+	struct fb_info info;
+	u64 exits_before = exits;
+	struct thread *t;
+	u64 deadline;
+	const volatile u32 *pixels;
+	u32 at_origin, at_row1;
+
+	/* No screen is not a failure. Most of the verification matrix boots
+	 * with none -- every aarch64 path, because AAVMF provides no
+	 * framebuffer -- and a test that reported FAIL there would be reporting
+	 * on the emulator's choices rather than on this kernel. */
+	if (fbdev_describe(&info) != SYS_OK) {
+		kputs("  framebuffer: no screen on this machine, so there is "
+		      "nothing for a program to map\n");
+		return true;
+	}
+
+	/* Two rows, because the second marker goes at the start of row 1. A
+	 * screen one row tall is not one this can say anything about. */
+	if (info.height < 2 || info.pitch < 4) {
+		kprintf("  framebuffer: the screen is %ux%u with a pitch of "
+			"%u, which is too small to check a stride against\n",
+			info.width, info.height, info.pitch);
+		return false;
+	}
+
+	t = user_thread_create("fb", user_fb_program, user_fb_program_len);
+	if (!t) {
+		kputs("  framebuffer: could not create a user thread\n");
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  framebuffer: the program never reached its exit "
+		      "call\n");
+		return false;
+	}
+
+	/* Every step has its own number, so a failure says how far it got
+	 * rather than only that it stopped. */
+	switch (last_exit_code) {
+	case 21:
+		break;
+	case 1:
+		kputs("  framebuffer: the program could not open /dev/fb0\n");
+		return false;
+	case 2:
+		kputs("  framebuffer: SYS_SCREEN did not describe the screen "
+		      "-- a program built against a different kernel would "
+		      "look exactly like this\n");
+		return false;
+	case 3:
+		kputs("  framebuffer: SYS_MAP refused\n");
+		return false;
+	case 4:
+		kputs("  framebuffer: the mapping took a store and could not "
+		      "give it back, so it is not memory\n");
+		return false;
+	default:
+		kprintf("  framebuffer: the program exited with %ld, which is "
+			"not a number it can produce\n", (long)last_exit_code);
+		return false;
+	}
+
+	/* And now the part the program cannot check for itself. */
+	{
+		const struct framebuffer *fb = fbcon_framebuffer();
+
+		if (!fb)
+			return false;
+
+		pixels = (const volatile u32 *)phys_to_virt(fb->base);
+	}
+
+	at_origin = pixels[0];
+	at_row1   = pixels[info.pitch / 4];
+
+	if (at_origin != 0x5245434FU) {
+		kprintf("  framebuffer: the program wrote 0x5245434F at the "
+			"origin and the screen holds 0x%08X -- it was given a "
+			"mapping of something that is not the framebuffer\n",
+			(unsigned)at_origin);
+		return false;
+	}
+
+	/* The stride, which is the half that catches a plausible lie.
+	 *
+	 * If SYS_SCREEN had reported `width * 4` on an adapter that pads its
+	 * rows, this store landed somewhere inside row 0 and row 1 still holds
+	 * whatever the console last drew there. */
+	if (at_row1 != 0x214E534FU) {
+		kprintf("  framebuffer: the second marker is missing from the "
+			"start of row 1 (%u bytes in), so the pitch the "
+			"program was given is not the screen's\n",
+			(unsigned)info.pitch);
+		return false;
+	}
+
+	kprintf("  framebuffer: a program mapped %ux%u, pitch %u, and both "
+		"markers are on the screen\n",
+		info.width, info.height, info.pitch);
+	return true;
 }
 
 bool user_self_test(void)

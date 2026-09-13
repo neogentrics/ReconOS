@@ -30,6 +30,7 @@
  * that cannot be opened by name is not in here pretending to be.
  */
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/fbdev.h>
 #include <recon/kernel/input.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -137,6 +138,7 @@ static const struct device_entry devices[] = {
 	{ "random",  &random_ops, OPEN_READ },
 	{ "console", NULL,        OPEN_WRITE },	/* built by the VFS itself */
 	{ "input",   &input_file_ops, OPEN_READ },
+	{ "fb0",     &fb_file_ops, OPEN_READ | OPEN_WRITE },
 };
 
 struct file *devfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)

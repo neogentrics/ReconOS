@@ -516,6 +516,21 @@ void addrspace_release_page(paddr_t pa)
 		return;
 	}
 
+	/* Memory the allocator never handed out is not memory it can take back.
+	 *
+	 * A page table can hold a device's own pages since SYS_MAP: a program
+	 * that mapped /dev/fb0 has the framebuffer's aperture in its map, and
+	 * the aperture is a window onto a PCI bar rather than RAM. Freeing it
+	 * hands the screen to whoever allocates next.
+	 *
+	 * **x86_64 did that silently.** Its framebuffer sits above the bitmap's
+	 * base, so both bounds checks passed and the bits were marked free.
+	 * aarch64 panicked, because there the aperture is below RAM -- the same
+	 * code, one architecture reporting success and the other a fault.
+	 * (KF-209) */
+	if (!pmm_owns(pa))
+		return;
+
 	pmm_free_page(pa);
 }
 
