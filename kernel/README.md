@@ -3,6 +3,11 @@
 This is phase 2 work, started early and deliberately kept apart from the
 compositor above it. It is now the larger half of the project.
 
+**Version 0.2.1.** The middle digit moved on 12 September 2026 because every row
+in sections 1.1 to 1.9 of the blueprint audit is Built -- a fact about those
+tables rather than a judgement about how large the change felt. What is left in
+the audit is section 2, the bootloader, which was never in that gate.
+
 It boots on **x86_64 and aarch64**, under **BIOS and UEFI**, from its own
 bootloader and from GRUB, and on its own filesystem. Above that it has physical
 and virtual memory, per-process address spaces, threads and a scheduler

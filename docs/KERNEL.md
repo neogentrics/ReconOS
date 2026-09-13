@@ -14,7 +14,19 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.1.11`. The number says what works, and **the first digit moved because what
+`0.2.1`, and **the middle digit moved on 12 September 2026 because the rule
+was met**: every row in sections 1.1 to 1.9 below is Built. Three verification
+runs in one day closed the last of them -- matrix 24 took signals, the HPET,
+ext2 and procfs and I2C/SPI; matrix 26 took the network stack, which had been
+0 of 4 and the largest single thing left; matrix 29 took USB hot-plug.
+
+Two rulings were needed and both were made in the open, on the rows they affect:
+**ext4** moved to section 2.3, and **EHCI** stays named in 1.7 without gating it.
+Neither changed what is built; both changed what a row is asking for. Still
+named, absent, and outside the gate: IPv6, EHCI, and BG-192's missing IDE
+driver.
+
+Before that, the number said what works, and **the first digit moved because what
 works changed in kind rather than in amount**: `0.1.0` was the first version of
 this kernel that a person could type into, and the first that survived running
 out of memory.

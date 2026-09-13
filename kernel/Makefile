@@ -22,7 +22,13 @@
 # BG-189, BG-190 and BG-191 make it 0.1.10, BG-193 makes it 0.1.11, and
 # BG-194, BG-195 and BG-196 -- all three from the network stack -- make it
 # 0.1.14. BG-197 and BG-198, both out of making a device able to go away,
-# make it 0.1.16, and BG-199 makes it 0.1.17. The number had held still through
+# make it 0.1.16, and BG-199 makes it 0.1.17.
+#
+# **0.2.0 on 12 September 2026**, because the rule was met rather than because
+# the change felt large: every row in sections 1.1 to 1.9 of the blueprint audit
+# is Built. That is a fact about those tables anybody can check, which is the
+# whole reason it was written as one. BG-199's fix rides with it, so the version
+# line opens at 0.2.1. The number had held still through
 # all six and twenty-five commits, not because anything forbade a bump but
 # because nothing asked for one. That is the same failure as a counter nobody
 # prints: it is only correct while somebody remembers.
@@ -67,7 +73,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.1.17
+VERSION := 0.2.1
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

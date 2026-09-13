@@ -797,7 +797,13 @@ is why ReconOS can drive its own input now.
 ## The kernel
 
 Phase two, built in parallel with the desktop rather than after it. **Version
-0.1.11**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+0.2.1**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+
+**The middle digit moved on 12 September 2026 because a rule was met, not
+because the change felt large.** The rule, written down a day earlier: *0.2.0 is
+not reached until every row in sections 1.1 to 1.9 of the blueprint audit is
+built*. That is a fact about those tables anybody can check, including a script,
+and it is deliberately not a judgement about what counts as a big change.
 
 It is a real kernel and it is not yet a kernel you can run ReconOS on. Both
 halves of that sentence matter, so this section says what exists, and then says

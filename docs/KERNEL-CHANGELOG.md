@@ -87,6 +87,48 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.1 -- 12 September 2026
+
+**The gate is met.** Every row in sections 1.1 through 1.9 of the blueprint
+audit is Built: 55 rows, with 3 partly and 2 not built remaining, and all five of
+those in **section 2, the bootloader**, which was never in the gate.
+
+The rule, set on 11 September, was *a patch per bug fixed, and 0.2.0 is not
+reached until 1.1 to 1.9 are all built* -- deliberately not a judgement about
+what counts as a big change, but a fact about those tables that anybody can
+check, including a script. It is checkable, and it checks out.
+
+**It took three verification runs in one day.**
+
+| run | closed | self-tests |
+|---|---|---|
+| matrix 24 | 1.3 signals, 1.4 the HPET, 1.6 ext2 and procfs, 1.7 I2C/SPI | 1046 |
+| matrix 26 | **1.8, the network stack** -- 0 of 4 and the largest single thing left | 1065 |
+| matrix 29 | **1.7's USB row**, with hot-plug | 1065 |
+
+Every one green on all twenty-five boots with nothing skipped.
+
+**The count going up is the evidence, not the pass.** 53 self-tests per path
+became 54 when the network stack's own test joined them, which is how it is
+known to have *run* rather than skipped -- a skipped test and a passing test look
+identical in a total, which is what BG-187 was about. Nothing was moved to Built
+on the strength of a run reporting the same number as the one before it.
+
+**Two rulings were needed, and both were made in the open.** `ext4` moved to
+section 2.3, because reading an ext4 volume is an installing-beside-Linux
+question and that is where NTFS, APFS and HFS+ already sit. `EHCI` stays named
+in 1.7 and does not gate it, because the row means *USB works on the machines
+this kernel runs on* -- and every machine it runs on presents xHCI. Neither
+changed what is built; both changed what a row is asking for, which is a
+different thing and is why each says so on its own row. **A row renamed quietly
+to let a gate pass is how a checklist stops being worth reading.**
+
+**Named, absent, and outside the gate:** IPv6, which the blueprint adds to 1.8's
+layer 3; EHCI, above; and BG-192, a kernel that boots from a disk over BIOS and
+cannot see it, because that disk is IDE and there is no IDE driver.
+
+The `.1` is BG-199's fix, which landed with it.
+
 ## 0.1.14 -- 12 September 2026
 
 **The network stack, and the three faults it cost.** Section 1.8 was 0 of 4
