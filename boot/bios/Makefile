@@ -101,7 +101,7 @@ $(BUILD)/stage1.elf: $(BUILD)/stage1.o stage1.ld
 # stage1.bin and stage2.bin but not mbr.img, so the harness -- which assembles
 # its own disks from stage1.bin -- used an unpatched one. A build step that only
 # runs when some *other* target is asked for is a build step that is sometimes
-# absent, which is BG-133 wearing different clothes.
+# absent, which is KF-133 wearing different clothes.
 $(BUILD)/stage1.bin: $(BUILD)/stage1.elf $(BUILD)/stage2.bin
 	$(OBJCOPY) -O binary $< $@
 	sh patch-stage1.sh $(BUILD)/stage1.elf $@ $(BUILD)/stage2.bin

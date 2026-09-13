@@ -38,6 +38,29 @@ static unsigned rx_queued;
 #define RX_QUEUE_MAX 64
 
 static u64 rx_overflow;		/* frames dropped because the queue was full */
+
+/* Held by the self-test, and only for the length of one flood.
+ *
+ * The bounded-queue assertion needs the queue to actually fill, and
+ * `netdev_receive` schedules the drain on its way out. Given a spare
+ * processor the drain keeps up, the queue never reaches its bound, and the
+ * test then reports that the bound is broken -- when what really happened is
+ * that it could not build its own precondition. It failed at eight processors
+ * and passed at four, on identical code. That is KF-201, and it is the same
+ * shape as KF-197: a check whose setup the rig does not guarantee.
+ *
+ * Read under `rx_lock`, so any take beginning after this is set sees it. A
+ * take already inside the lock removes at most one frame, and the flood runs
+ * eight frames past the bound. */
+static bool rx_drain_held;
+
+static void rx_hold_drain(bool held)
+{
+	u64 flags = spin_lock_irq(&rx_lock);
+
+	rx_drain_held = held;
+	spin_unlock_irq(&rx_lock, flags);
+}
 static u64 rx_serviced;
 static bool initialised;
 
@@ -224,6 +247,12 @@ static struct netbuf *rx_take(void)
 {
 	struct netbuf *b;
 	u64 flags = spin_lock_irq(&rx_lock);
+
+	/* The self-test holds this while it fills the queue on purpose. */
+	if (rx_drain_held) {
+		spin_unlock_irq(&rx_lock, flags);
+		return NULL;
+	}
 
 	b = rx_head;
 
@@ -467,6 +496,12 @@ bool netdev_self_test(void)
 	{
 		unsigned i;
 		u64 dropped_before = rx_overflow;
+		unsigned pushed = 0;
+
+		/* Nothing may drain while this is being filled. See KF-201:
+		 * without it this asserted an overflow the drain had already
+		 * made impossible, and said the bound was broken. */
+		rx_hold_drain(true);
 
 		for (i = 0; i < RX_QUEUE_MAX + 8; i++) {
 			struct netbuf *b = netbuf_alloc();
@@ -476,6 +511,17 @@ bool netdev_self_test(void)
 
 			netbuf_put(b, 4);
 			netdev_receive(d, b);
+			pushed++;
+		}
+
+		/* Say so rather than fail as though the queue misbehaved. A
+		 * flood that was never built has tested nothing, and that is a
+		 * different sentence from "the bound does not hold". */
+		if (pushed <= RX_QUEUE_MAX) {
+			kprintf("net: only %u of %u buffers -- the queue was "
+				"never filled, so the drop path was not "
+				"reached\n", pushed, RX_QUEUE_MAX + 8);
+			ok = false;
 		}
 
 		if (rx_queued > RX_QUEUE_MAX) {
@@ -485,9 +531,13 @@ bool netdev_self_test(void)
 		}
 
 		if (rx_overflow == dropped_before) {
-			kprintf("net: the queue never reported an overflow\n");
+			kprintf("net: %u frames past a bound of %u and not one "
+				"was dropped\n", pushed, RX_QUEUE_MAX);
 			ok = false;
 		}
+
+		/* Before the drain below, which goes through rx_take. */
+		rx_hold_drain(false);
 
 		while (rx_queued) {
 			struct netbuf *b = rx_take();

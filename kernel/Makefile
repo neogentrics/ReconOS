@@ -17,29 +17,29 @@
 
 # What works, not what is planned.
 #
-# **A patch per bug fixed.** The six that 0.1.0 sat through -- BG-163, 182,
-# 183, 184, 185, 186 -- are why it is not 0.1.1; BG-188 made it 0.1.7, and
-# BG-189, BG-190 and BG-191 make it 0.1.10, BG-193 makes it 0.1.11, and
-# BG-194, BG-195 and BG-196 -- all three from the network stack -- make it
-# 0.1.14. BG-197 and BG-198, both out of making a device able to go away,
-# make it 0.1.16, and BG-199 makes it 0.1.17.
+# **A patch per bug fixed.** The six that 0.1.0 sat through -- KF-163, 182,
+# 183, 184, 185, 186 -- are why it is not 0.1.1; KF-188 made it 0.1.7, and
+# KF-189, KF-190 and KF-191 make it 0.1.10, KF-193 makes it 0.1.11, and
+# KF-194, KF-195 and KF-196 -- all three from the network stack -- make it
+# 0.1.14. KF-197 and KF-198, both out of making a device able to go away,
+# make it 0.1.16, and KF-199 makes it 0.1.17.
 #
 # **0.2.0 on 12 September 2026**, because the rule was met rather than because
 # the change felt large: every row in sections 1.1 to 1.9 of the blueprint audit
 # is Built. That is a fact about those tables anybody can check, which is the
-# whole reason it was written as one. BG-199's fix rides with it, so the version
+# whole reason it was written as one. KF-199's fix rides with it, so the version
 # line opens at 0.2.1. The number had held still through
 # all six and twenty-five commits, not because anything forbade a bump but
 # because nothing asked for one. That is the same failure as a counter nobody
 # prints: it is only correct while somebody remembers.
 #
-# **BG-187 has not earned one and is not counted.** Half of it is fixed -- the
+# **KF-187 has not earned one and is not counted.** Half of it is fixed -- the
 # two volume boots are asserted now, which is what found the three above. The
 # other half cannot even be exercised yet, because the only second-boot-on-one-
-# disk in the matrix turns out to have no volume on it (BG-192). A partial fix
+# disk in the matrix turns out to have no volume on it (KF-192). A partial fix
 # does not move the number.
 #
-# **BG-189 is why this rule needed writing down at all.** Raising the version
+# **KF-189 is why this rule needed writing down at all.** Raising the version
 # used to rebuild nothing, so the kernel went on printing the old number while
 # the Makefile claimed the new one -- and a full verification run passed against
 # the mislabelled binary. Every object depends on this file now.
@@ -71,9 +71,24 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.3 on 13 September 2026, for KF-201** -- found by the matrix run that
+# 0.2.2 required, on a tree whose only change was a version string. The bounded-
+# queue self-test had been asserting an overflow it could not force, and passing
+# wherever the machine was slow enough to let the queue fill. It had never
+# exercised the drop path it exists to check.
+#
+# **0.2.2 on 13 September 2026, for KF-200**, and it is worth saying why the
+# obvious objection was refused. KF-200 is in `scripts/`: nothing it changed
+# alters a kernel instruction, and raising this line rebuilds the whole tree --
+# including the tree matrix 30 had just been run against. So the case for
+# skipping it was real, and it was still the wrong case, because *the change
+# does not feel large enough* is precisely the reasoning this comment exists to
+# refuse. A rule that only applies to changes somebody already agrees are big
+# is not a rule. The matrix runs again; that is the price and it is affordable.
+#
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.1
+VERSION := 0.2.3
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -187,7 +202,7 @@ $(KERNEL): $(OBJS) $(LINKER_SCRIPT)
 #
 # Found on 11 September when a boot reported 0.1.0 from a tree that said 0.1.7
 # -- and it was found only because a self-test assertion was added to a boot
-# nothing had been reading (BG-187, BG-189). A whole verification run had
+# nothing had been reading (KF-187, KF-189). A whole verification run had
 # already passed against the mislabelled kernel.
 #
 # The cost is that editing this file rebuilds everything. That is the correct
