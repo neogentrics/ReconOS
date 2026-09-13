@@ -665,7 +665,14 @@ check "  PVH, no disk attached" \
 # 256 MB is enough for 7680x4320 at four bytes a pixel with room to spare, so
 # this path is the one where every shape in the sweep is actually set and read
 # back -- portrait, ultra-wide, 4K and 8K included.
-check "  PVH, an adapter big enough for 8K" \
+# And it must say it got there. Without this the path asks only the four
+# ordinary questions -- did tests run, did any fail, did it panic, did it
+# reach the end -- and every one of them is satisfied by a boot whose mode
+# sweep skipped all seven shapes for want of memory. A passing run deletes
+# the per-boot logs, so there would be nothing left to check afterwards
+# either. Seven set and none skipped is the entire claim.
+check_for "7 shape(s) set and read back, 0 skipped" \
+	"  PVH, an adapter big enough for 8K" \
 	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
 		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
 
