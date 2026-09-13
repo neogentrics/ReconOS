@@ -3622,6 +3622,8 @@ sense on its own -- timing-sensitive, because it was a race against a storm.
 
 ### KF-179 — The interrupt summary counted devices before the bus had been walked
 
+[#406](https://github.com/neogentrics/ReconOS/issues/406)
+
 - **Found:** 10 September 2026, while deciding whether to wire a driver to MSI.
   The boot summary said `MSI : 0 device(s) can signal by memory write`, which
   would have meant there was nothing to wire it to.
@@ -3652,6 +3654,8 @@ says `4 device(s) ... 3 of them by MSI-X`.
 
 ### KF-180 — "Can signal by memory write" was implemented as "has MSI"
 
+[#407](https://github.com/neogentrics/ReconOS/issues/407)
+
 - **Found:** 10 September 2026, immediately after KF-179 made the number
   visible for the first time.
 - **Cost:** none yet, because nothing had ever read the number.
@@ -3675,6 +3679,8 @@ the two that matter.
   moment something did.
 
 ### KF-181 — The vector self-test assumed it was the only thing holding a vector
+
+[#408](https://github.com/neogentrics/ReconOS/issues/408)
 
 - **Found:** 10 September 2026, the first time a real driver claimed a vector.
 - **Cost:** one red line on an otherwise green boot, and thirty seconds of
@@ -3702,6 +3708,8 @@ allocator is *for* -- and the test failed:
   the test that had been watching it went red.
 
 ### KF-182 — Tearing down an address space freed its page tables and not its pages
+
+[#409](https://github.com/neogentrics/ReconOS/issues/409)
 
 - **Found:** 11 September 2026, while working out whether a page cache could
   safely put shared pages into a program's map. The question was "who frees a
@@ -3738,6 +3746,8 @@ the aarch64 copy.
   faulted in.
 
 ### KF-183 — A process that ends is never reaped, so it keeps its slot and its memory
+
+[#410](https://github.com/neogentrics/ReconOS/issues/410)
 
 - **Found:** 11 September 2026, immediately after KF-182 and by the same
   measurement — which is the interesting part, because the measurement is what
@@ -3839,6 +3849,8 @@ running as anybody.
 
 ### KF-184 — The page cache asked which file and not which filesystem, so two of them were the same file
 
+[#411](https://github.com/neogentrics/ReconOS/issues/411)
+
 - **Found:** 11 September 2026, by the eviction test, on its first run that
   managed to fill the table.
 - **Cost:** a file on the volume read back holding a file from `/tmp`. Caught
@@ -3885,6 +3897,8 @@ The volume file had been reading correctly all boot. It started reading a
 
 ### KF-194 -- virtio-net used a descriptor index as if it were a ring slot, in two different ways
 
+[#412](https://github.com/neogentrics/ReconOS/issues/412)
+
 - **Found:** 12 September 2026, by reading the driver back before trusting it.
 - **Cost:** a corrupted descriptor chain on receive, and a double free on
   transmit. Neither had fired yet, because both need the ring under load.
@@ -3919,6 +3933,8 @@ descriptor index is not a slot index and the two only coincide while the ring is
 empty.
 
 ### KF-195 -- a broadcast could not leave a card with no address, which makes DHCP impossible
+
+[#413](https://github.com/neogentrics/ReconOS/issues/413)
 
 - **Found:** 12 September 2026, the first time the stack was pointed at a real
   network rather than at its own tests.
@@ -3963,6 +3979,8 @@ KF-187 (a test that passed by being unable to do the thing it tested): not a
 wrong answer, but a correct one to a question the real path never asks.
 
 ### KF-197 -- the block self-test writes to any disk it thinks is blank, and a disk whose table it could not read looks blank
+
+[#414](https://github.com/neogentrics/ReconOS/issues/414)
 
 - **Found:** 12 September 2026, by working out what would happen if a real USB
   stick were attached at boot. Nothing failed; the fault was reasoned to before
@@ -4015,6 +4033,8 @@ the one that matters: **a disk this kernel cannot read is not a disk it may
 write to.**
 
 ### KF-199 -- USB hot-plug notices the first arrival and then stops for ever
+
+[#415](https://github.com/neogentrics/ReconOS/issues/415)
 
 - **Found:** 12 September 2026, on the real 16 GB stick, by testing the
   departure half after the arrival half had been proved.
@@ -4145,6 +4165,8 @@ socket.
 
 ### KF-198 -- retiring a device let seventeen callers hand out one that is gone
 
+[#416](https://github.com/neogentrics/ReconOS/issues/416)
+
 - **Found:** 12 September 2026, by matrix 27 failing `partitions` on the first
   boot path.
 - **Cost:** any code walking the device table could be handed a retired device
@@ -4188,6 +4210,8 @@ use-after-free rather than a bug.
 
 ### KF-196 -- "long ago" was written as zero, on a machine whose clock starts at zero
 
+[#417](https://github.com/neogentrics/ReconOS/issues/417)
+
 - **Found:** 12 September 2026, by the ARP test failing on a kernel whose ARP
   code was correct.
 - **Cost:** none shipped -- the fault was in the test. Recorded anyway, because
@@ -4218,6 +4242,8 @@ the same property TCP relies on to compare sequence numbers across the wrap at
 monotonic clock, and arithmetic that wraps consistently does not need one.**
 
 ### KF-193 -- virt_to_phys answered for addresses it cannot answer for, so a driver wrote to memory that does not exist and reported success
+
+[#418](https://github.com/neogentrics/ReconOS/issues/418)
 
 - **Found:** 12 September 2026, by ext2 reading a 512-byte superblock into a
   stack array.
@@ -4325,6 +4351,8 @@ happen, and the one that did it.
 
 ### KF-192 -- The kernel boots from a disk over BIOS and then cannot see it
 
+[#419](https://github.com/neogentrics/ReconOS/issues/419)
+
 - **Found:** 12 September 2026, by the self-test assertion added for KF-187.
 - **Cost:** on a machine with no UEFI, ReconOS starts and has no storage. It
   cannot mount its own volume, read its own programs, or write anything down.
@@ -4425,6 +4453,8 @@ answers for class `0x01` subclass `0x01`.
 
 ### KF-191 -- The BIOS loader handed the kernel dirty registers, breaking its own stated invariant
 
+[#420](https://github.com/neogentrics/ReconOS/issues/420)
+
 - **Found:** 12 September 2026. `handoff : rbx arrived holding something`.
 - **Cost:** the two boot paths were distinguishable to the kernel, which is
   precisely what the loader's own comment says must not be true.
@@ -4472,6 +4502,8 @@ that should have agreed did not, neither being watched on purpose).
 
 ### KF-190 -- The processor identity check could not tell an empty map from one processor
 
+[#421](https://github.com/neogentrics/ReconOS/issues/421)
+
 - **Found:** 12 September 2026, on the BIOS boot, by the same assertion.
 - **Cost:** `telling them apart : FAIL` on every boot of a machine with no MADT.
 - **Status:** fixed.
@@ -4497,6 +4529,8 @@ when it did not run looks exactly like one that ran and was happy, which is
 KF-187 restated.
 
 ### KF-189 -- Changing VERSION rebuilt nothing, so the kernel printed the old number
+
+[#422](https://github.com/neogentrics/ReconOS/issues/422)
 
 - **Found:** 12 September 2026, from a boot that reported `ReconOS kernel 0.1.0`
   out of a tree whose Makefile said `0.1.7`.
@@ -4527,6 +4561,8 @@ rebuilds everything, which is the correct price: almost anything changed in that
 file changes how the code is compiled.
 
 ### KF-188 -- Recovery wrote to the volume it was inspecting, and the read-only promise was never enforced
+
+[#423](https://github.com/neogentrics/ReconOS/issues/423)
 
 - **Found:** 11 September 2026, by matrix 22. The only failing path in a
   nineteen-path run.
@@ -4609,6 +4645,8 @@ recovery wrote nothing                      the disk is byte for byte
 ```
 
 ### KF-187 -- Five self-tests need a volume, every matrix disk is blank, and the boot reports green either way
+
+[#424](https://github.com/neogentrics/ReconOS/issues/424)
 
 - **Found:** 11 September 2026, from a stale disk image left behind by an
   earlier run of `try-disk.sh`.
@@ -4698,6 +4736,8 @@ and until now nothing was in a position to notice.
 
 ### KF-186 -- The block layer counted every transfer and printed the number nowhere, so an I/O rewrite lost them silently
 
+[#425](https://github.com/neogentrics/ReconOS/issues/425)
+
 - **Found:** 11 September 2026, while restoring a cache invalidation that the
   same rewrite had dropped.
 - **Cost:** none to a running machine. The cost was to every future diagnosis:
@@ -4759,6 +4799,8 @@ and the scheduler saying so is more useful than a number that implies it did
 work it did not do.
 
 ### KF-185 — The loader's ELF reader trusted a signature check that the default build does not perform
+
+[#426](https://github.com/neogentrics/ReconOS/issues/426)
 
 - **Found:** 11 September 2026, reading reconboot while the verification run
   held the tree.
@@ -4984,6 +5026,8 @@ written the last time it appeared for a different reason.
   was silently unsafe for exactly two of its thirteen jobs.
 
 ### KF-200 — The register's own filer reads the register with literal patterns, and the register has more than one convention
+
+[#427](https://github.com/neogentrics/ReconOS/issues/427)
 
 - **Found:** 12 September 2026, reconciling the kernel's entries against GitHub
   before moving them to the `KF-` prefix. Found by counting both sides, not by
