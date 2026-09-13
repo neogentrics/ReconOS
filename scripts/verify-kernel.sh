@@ -467,8 +467,38 @@ check_power_off() {
 
 	# And it must have got there by the intended route rather than by
 	# falling over: a panic also ends the guest.
-	if tr -d '\r' < "$WORK/off.log" | grep -qE 'kernel fault|PANIC|power:'; then
+	if tr -d '\r' < "$WORK/off.log" | grep -qE 'kernel fault|PANIC'; then
 		echo "FAILED -- it stopped, but not by powering off"
+		tr -d '\r' < "$WORK/off.log" | tail -4 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("power off")
+		return
+	fi
+
+	# **Asked the other way round, and that is the point.**
+	#
+	# This used to also grep the whole log for `power:`, because the four
+	# ways power_off_or_say_why reports failure all begin with it. Then
+	# checkpoint 24 added a *passing* self-test that prints
+	#
+	#   power: 2 wakeup(s) in 197 ms, against 19 a fixed tick would have cost
+	#
+	# and the check went red on every run, on a machine that had powered off
+	# exactly as asked. It had also stopped being able to tell the two apart,
+	# which is the half that earned it a number (KF-207).
+	#
+	# A narrower pattern would have worked today. **Any check that asks
+	# whether a string is absent from the whole log is one another subsystem
+	# can break by printing.** So this asks the positive question instead: on
+	# success the guest dies *inside* power_off(), which makes "Powering off."
+	# the last thing in the log; on every failure one of those four lines
+	# follows it. Nothing printed earlier can change that.
+	local last
+	last=$(tr -d '\r' < "$WORK/off.log" | grep -v '^[[:space:]]*$' | tail -1)
+
+	if [ "$last" != "Powering off." ]; then
+		echo "FAILED -- it stopped, but not by powering off"
+		echo "      the log ends: $last" | sed 's/$//'
 		tr -d '\r' < "$WORK/off.log" | tail -4 | sed 's/^/      /'
 		failures=$((failures + 1))
 		FAILED_PATHS+=("power off")

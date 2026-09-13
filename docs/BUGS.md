@@ -6038,6 +6038,259 @@ different fact, and it has only ever had one author.
 the thing being checked could never disagree with it, and the fix there was also
 to take the number from somewhere else entirely.
 
+### KF-205 — The snapshot test compares two different snapshots, and fails when the clock gains a digit
+
+- **Found:** 13 September 2026, by matrix 36, on `reconboot, UEFI` and no other
+  path: `uptime read in two goes gave 26 bytes and read whole gave 27 -- the
+  file moved under the reader`.
+- **Cost:** a verification run in eight comes back red for no reason, and the
+  fault it names is one that did not happen. **The worse half is the other
+  direction:** the assertion could only ever catch a smear by the same accident
+  that made it fail, so it has been reporting green on a property it barely
+  checked since it was written.
+- **Status:** fixed, kernel 0.2.8.
+
+### What it is
+
+`/proc/uptime` reads `<seconds> seconds\n<ms> milliseconds\n`, with no padding.
+Its length is therefore **a function of how many digits its numbers have**.
+
+The test exists to prove procfs generates a file's content at *open* rather than
+at *read* — otherwise a reader taking two reads is handed two different moments
+spliced together. It reads one open in two halves with a deliberate wait between
+them, and then checks the joined result against the file **opened a second time
+and read whole**.
+
+Two opens are two snapshots. In the gap, the millisecond field crosses 9 to 10,
+or 99 to 100, or wraps past 999; the seconds field crosses a power of ten. Any
+of those changes the length by a digit, honestly, and the test calls it a smear.
+
+With a gap of about two and a half milliseconds and three boundaries in play,
+that is roughly **half a percent of boots** — twenty-six boots a matrix, so
+about one matrix in eight. Its own comment names the problem and then does not
+act on it: *it is a later snapshot, so the two are not required to be equal.*
+They are not required to be the same length either, and that is the same
+sentence.
+
+### The half that matters more
+
+**A smear the test could actually catch is the same coin toss.** If content were
+regenerated per read, the second half would come from bytes 4 onward of a later
+snapshot — and if that snapshot has the same digit count, the join is a
+perfectly well-formed string of the right length. Passed, every time.
+
+So the assertion was flaky in one direction and blind in the other, for the same
+reason: it was measuring digit counts.
+
+### What was done
+
+**The whole-file read is taken from the same open, rewound**, so there is only
+ever one snapshot and the comparison is that snapshot against itself — byte for
+byte, which the length check never was. No clock appears in the assertion, so it
+cannot be flaky, and a smear is caught every time instead of once in two
+hundred.
+
+That needed a `seek` on procfs, which was missing. **Not scaffolding for a
+test:** `file_ops` says a null seek means *a thing with no position at all — a
+console, a pipe*, and a procfs file is a buffer in memory that already advances
+a position on every read. The absence was an oversight, and it is precisely what
+forced the test to open the file twice — the only way it had to read the whole
+thing.
+
+### And the position had two authors
+
+`struct file` carries a `pos` and `struct proc_file` carried another. Only the
+second was ever advanced, so `f->pos` read zero for ever on a file that had been
+read to its end.
+
+Nothing consulted it, so nothing was wrong yet — which is the only difference
+between this and **KF-204**, found the same day, where a count with two authors
+made every timer in the kernel fire early. The duplicate is removed rather than
+kept in step.
+
+### KF-206 — A deadline measured against the wheel's hand, which KF-204 had just stopped being the clock
+
+- **Found:** 13 September 2026, by matrix 36, on `device tree, 2 processors`:
+  `timer: the cascaded timer fired 1 ticks early`. Caused by KF-204's fix, in
+  the same run that verified it.
+- **Cost:** **every timer in the kernel can fire up to one tick — 10 ms —
+  before the time it was asked for.** Smaller than KF-204, which was unbounded,
+  and the same kind of wrong: a timer that fires early is a sleep that returns
+  before its time and a timeout that expires before the thing it is timing has
+  had its chance.
+- **Status:** fixed, kernel 0.2.9.
+
+### What it is
+
+`timer_start` filed a timer at `wheel_now + ticks` — the wheel's own hand, plus
+the delay.
+
+That was right for as long as the hand **was** the clock. Both were stepped by
+the same tick interrupt, one line apart, so `wheel_now` and `time_ticks()` were
+two names for one number and it made no difference which was written here.
+
+**KF-204 made them two numbers.** The tick count is derived from the monotonic
+counter now, so it advances continuously; the hand still only moves when
+`timer_tick` runs. Between one tick interrupt and the next, the clock reads up
+to one tick ahead of the hand.
+
+So a caller that reads `time_ticks()` and asks for seventy ticks is filed at
+`wheel_now + 70`, which may be `time_ticks() + 69`.
+
+### Why this is the same bug as KF-204 and not a new one
+
+KF-204 was *one fact with two authors*. This is what happens next: removing the
+second author turned an identity into an inequality, and **the one line that
+depended on the identity had no way to say so**. Nothing named the assumption;
+it was true, so it did not need to be written down, and when it stopped being
+true nothing pointed at the line.
+
+The defence is the same one this register keeps arriving at. There is no comment
+to add that would have caught it. What caught it was running every path.
+
+### What was done
+
+The deadline is measured from `time_ticks()`, which is what every assertion in
+`timer.c` is already written against and what the code meant when the two were
+the same number. The hand stays the hand — it is the wheel's *position*, and the
+right thing for `place()` to file relative to.
+
+The reach check moves inside the lock with it. `ticks < WHEEL_REACH` was the
+entire precondition while the deadline was hand-plus-delay; the distance the
+wheel must now cover is `(time_ticks() + ticks) - wheel_now`, which is up to one
+larger. At the very edge of the reach that is the difference between a timer
+filed correctly and one that aliases onto the top level's own hand. Vanishingly
+rare at a reach of 2^30 ticks — about 124 days — and it is the guard's actual
+precondition, so it is what the guard should test.
+
+### What it did not change
+
+The sub-tick phase error is inherent to a tick wheel and is untouched: a timer
+filed nine milliseconds into a ten-millisecond interval is still due on a
+boundary, so a 700 ms request can elapse in 690 ms of wall clock. That was true
+before KF-204 and is true now, the sleep self-test allows for it by name, and it
+is a property of counting in ticks rather than a fault.
+
+### KF-207 — The power-off check looks for the word `power:`, and a passing self-test started printing it
+
+- **Found:** 13 September 2026, by matrix 36:
+  `and can turn the machine off   FAILED -- it stopped, but not by powering off`.
+  The machine had powered off correctly.
+- **Cost:** every complete matrix run comes back red on a path that is working.
+  **And the other direction is worse and is the reason this has a number:** the
+  check can no longer distinguish a machine that powered off from one that did
+  not, because the string it looks for is now printed either way.
+- **Status:** fixed, kernel 0.2.10.
+
+### What it is
+
+`power_off_or_say_why` says why it could not, in four messages that all begin
+`  power: `. The harness greps the whole boot log:
+
+```sh
+grep -qE 'kernel fault|PANIC|power:'
+```
+
+with the comment *a panic also ends the guest*, which is a fair thing to guard
+against.
+
+**Checkpoint 24 added a line that begins the same way**, and it is a passing
+self-test on an ordinary boot:
+
+```
+power: 2 wakeup(s) in 197 ms, against 19 a fixed tick would have cost
+```
+
+So the guard fires on every boot, the check fails on every run, and the machine
+it is describing turned itself off exactly as asked.
+
+### Why it took three versions to show up
+
+It has been broken since **0.2.5**, when the tickless idle landed. This is the
+first *complete* matrix since: matrix 34 was killed part-way for being run
+against a tree that was being rebuilt, and matrix 35 went red earlier in the
+list. A check that only runs at the end of a forty-five-minute run is a check
+that is not exercised by anything else.
+
+### What was done
+
+**The negative test is replaced by a positive one.** On success the guest dies
+*inside* `power_off()`, so `Powering off.` is genuinely the last thing in the
+log; on every failure one of the four `  power: ` lines follows it. So the
+assertion is that the last non-empty line is `Powering off.` — which is true
+exactly when the machine went off, and is not affected by anything any other
+subsystem ever prints anywhere else in the log.
+
+A better pattern would have worked today and would have been the same bug
+waiting: **any test that asks "is this string absent from the whole log" is a
+test that another subsystem can break by printing.** The panic and fault checks
+stay, because those are about the log as a whole and that is the right question
+for them.
+
+### KF-208 — The tamper test writes an 'A' over a byte that had become an 'A', and reports that the boot chain fails open
+
+- **Found:** 13 September 2026, by matrix 36:
+  `refuses: a kernel changed after signing   FAILED -- wanted: does not match`,
+  with the loader reporting `signature: good`. The loader was right.
+- **Cost:** it reads as the worst fault this project could have — **the boot
+  chain accepting a kernel that was changed after it was signed** — and it is
+  not that at all. The real cost is the other way round: on any build where
+  that byte is an `A`, **this test cannot pass, and could not have failed for
+  the right reason either.** It is the test for the one property the signing
+  work exists to provide.
+- **Status:** fixed, kernel 0.2.11.
+
+### What it is
+
+```sh
+printf '\101' | dd of="$W/tampered.elf" bs=1 seek=40000 conv=notrunc
+```
+
+`\101` is octal for `A`. **Byte 40000 of the kernel is now an `A`.** So the
+tampered file is byte-for-byte the signed one, the hash matches because it
+should, and `signature: good` is the correct answer to the question actually
+asked.
+
+Measured rather than argued — the same sha256, twice:
+
+```
+original : b57ac973a16c8b73ebd37dd814d7c871
+tampered : b57ac973a16c8b73ebd37dd814d7c871
+```
+
+### Why the UEFI test does not have this
+
+The same test on the UEFI path refuses all four cases, and the difference is one
+line:
+
+```python
+f.seek(200000); b = f.read(1)
+f.seek(200000); f.write(bytes([b[0] ^ 0x01]))
+```
+
+**A flip relative to what is there cannot be a no-op.** An absolute write is a
+no-op exactly when the byte already holds that value — one build in 256, for a
+byte that changes every time the kernel does.
+
+### What was done
+
+The BIOS test flips a bit, like the UEFI one. And then it **checks that the file
+changed** before booting anything, because the point is not to use a cleverer
+poke: it is that the test had a precondition — *this file differs from the one
+that was signed* — which nothing established and nothing checked.
+
+That is KF-197's lesson and KF-201's: **make the precondition hold, and then
+assert that it holds.** A tamper test that cannot confirm it tampered is
+measuring the wrong thing no matter which byte it writes.
+
+### How long it has been like this
+
+Unknowable from the outside, and that is the uncomfortable part. It passed in
+every previous run, which means byte 40000 was not an `A` in those kernels —
+nothing about the test got better or worse, the kernel simply changed underneath
+it. Every green this assertion has produced was conditional on a byte nobody was
+looking at.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -210,8 +210,32 @@ check "refuses: no signature at all" "only runs signed kernels" \
 
 # One byte, changed after signing, well past the ELF header so that the loader's
 # own "is it an ELF" check cannot be what catches it.
+#
+# **Flipped, not written.** This used to `printf '\101'` -- an `A` -- at a fixed
+# offset, and byte 40000 of the kernel became an `A`. The tampered file was then
+# the signed file, the loader said `signature: good` because it was, and the run
+# reported that the boot chain accepts a kernel changed after signing. One build
+# in 256, for a byte that moves every time the kernel does. (KF-208)
+#
+# The UEFI test has always flipped a bit, which is why it never had this.
 cp "$KELF" "$W/tampered.elf"
-printf '\101' | dd of="$W/tampered.elf" bs=1 seek=40000 conv=notrunc status=none
+python3 -c "
+import sys
+f = open(sys.argv[1], 'r+b')
+f.seek(40000); b = f.read(1)
+f.seek(40000); f.write(bytes([b[0] ^ 0x01]))
+f.close()
+" "$W/tampered.elf"
+
+# **And then check that it changed.** The flip is the fix for this build; this is
+# the fix for the test. Its precondition is *this file differs from the one that
+# was signed*, nothing established it, and nothing looked -- so a green here has
+# always been conditional on a byte nobody was watching.
+if cmp -s "$KELF" "$W/tampered.elf"; then
+	echo "  the tampered kernel is identical to the signed one -- refusing to"
+	echo "  report on a signature check using a file that was not changed."
+	exit 1
+fi
 make_disk "$W/tampered.img" "$W/tampered.elf" "$W/good.sig"
 check "refuses: a kernel changed after signing" "does not match" \
 	"$W/tampered.img"

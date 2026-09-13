@@ -124,6 +124,10 @@ AREA = {
     'KF-195': 'network', 'KF-196': 'kernel', 'KF-197': 'storage',
     'KF-198': 'storage', 'KF-199': 'kernel', 'KF-200': 'build', 'KF-201': 'network', 'KF-202': 'build',
     'KF-203': 'display', 'KF-204': 'kernel',
+    'KF-205': 'build',
+    'KF-206': 'kernel',
+    'KF-207': 'build',
+    'KF-208': 'build',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

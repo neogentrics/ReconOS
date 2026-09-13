@@ -136,7 +136,7 @@ void timer_init(struct timer *t, void (*fn)(void *), void *arg)
 bool timer_start(struct timer *t, u64 ns)
 {
 	u64 ticks = (ns * TIME_TICK_HZ + 999999999ull) / 1000000000ull;
-	u64 flags;
+	u64 flags, now;
 
 	if (!t->fn)
 		return false;
@@ -167,7 +167,40 @@ bool timer_start(struct timer *t, u64 ns)
 		return false;
 	}
 
-	t->expires = wheel_now + ticks;
+	/* **From the clock, not from the wheel's hand.**
+	 *
+	 * These were one number until KF-204: both were stepped by the tick
+	 * interrupt, so `wheel_now` and `time_ticks()` could not disagree and
+	 * either would do here. The tick count is derived from the monotonic
+	 * counter now, which means it advances continuously while the hand only
+	 * moves when `timer_tick` runs -- so between two interrupts the clock
+	 * reads up to one tick ahead.
+	 *
+	 * Filing against the hand then means a caller who read `time_ticks()`
+	 * gets a deadline one tick *before* the one they asked for, and a timer
+	 * that fires early is the fault KF-204 was about. (KF-206) */
+	now = time_ticks();
+
+	/* The wheel is never ahead of the clock -- `timer_tick` stops when it
+	 * catches up -- and this says so rather than assuming it. A hand that
+	 * had somehow overrun would otherwise produce a negative distance and a
+	 * timer filed into the slot being processed right now. */
+	if ((i64)(now - wheel_now) < 0)
+		now = wheel_now;
+
+	t->expires = now + ticks;
+
+	/* The reach, re-checked against the distance the wheel actually has to
+	 * cover. `ticks < WHEEL_REACH` above was the whole precondition while
+	 * the deadline was the hand plus the delay; it is up to one tick short
+	 * of it now, and at the edge that is a timer that aliases onto the top
+	 * level's own hand instead of being refused. */
+	if (t->expires - wheel_now >= WHEEL_REACH) {
+		__atomic_add_fetch(&refused, 1, __ATOMIC_RELAXED);
+		spin_unlock_irq(&timer_lock, flags);
+		return false;
+	}
+
 	t->pending = true;
 	place(t);
 	started++;

@@ -71,6 +71,40 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.11 on 13 September 2026, for KF-208.** The BIOS tamper test wrote an
+# `A` at a fixed offset to make a kernel differing from the one that was signed,
+# and byte 40000 of the kernel became an `A`. So the tampered file *was* the
+# signed file, the loader said `signature: good` because it was good, and the run
+# reported the worst fault this project could have -- a boot chain accepting a
+# kernel changed after signing. It flips a bit now, and then checks that the file
+# actually changed, which is the half that was missing.
+#
+# **0.2.10 on 13 September 2026, for KF-207.** The power-off check greps the
+# boot log for `power:` and calls a hit a failure, because that is how
+# `power_off_or_say_why` reports one. Checkpoint 24 then added a *passing*
+# self-test line beginning `power:`, so the check has been red since 0.2.5 on a
+# machine that powers off exactly as asked -- and, worse, had stopped being able
+# to tell the two cases apart. It asks the positive question now: on success the
+# guest dies inside `power_off()`, so `Powering off.` is the last line.
+#
+# **0.2.9 on 13 September 2026, for KF-206, which 0.2.7 caused.** `timer_start`
+# filed deadlines at `wheel_now + ticks` -- the wheel's hand plus the delay --
+# and that was right while the hand *was* the clock. KF-204 made them two
+# numbers, the clock now runs up to a tick ahead of the hand between interrupts,
+# and every timer in the kernel could fire ten milliseconds early. Measured from
+# `time_ticks()` now, which is what every assertion in the file already uses.
+#
+# Worth saying plainly: **the fix caused this, not the test.** Removing a second
+# author turned an identity into an inequality, and the one line that depended
+# on the identity had no way to announce itself.
+#
+# **0.2.8 on 13 September 2026, for KF-205.** The procfs snapshot test compared
+# two *different* snapshots and required them to be the same length -- so it
+# went red whenever the millisecond field gained a digit in between, about half
+# a percent of boots, and could only catch the smear it exists for by the same
+# accident. It reads the same snapshot twice now, rewound, which needed a `seek`
+# on procfs that should have been there anyway.
+#
 # **0.2.7 on 13 September 2026, for KF-204** -- and this one the rule
 # compels. The tick count had two authors, an interrupt that incremented it and
 # a resync that set it from the clock, so it double-counted and only ever
@@ -116,7 +150,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.7
+VERSION := 0.2.11
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

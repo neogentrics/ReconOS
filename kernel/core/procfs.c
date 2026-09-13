@@ -65,7 +65,15 @@
 struct proc_file {
 	char text[PROC_MAX];
 	u64 len;
-	u64 pos;
+
+	/* **No position here.** It lived here and in `struct file` at once, and
+	 * only this one was ever advanced -- so `f->pos` read zero for ever on a
+	 * file that had been read to its end, and would have disagreed with this
+	 * one the moment anything consulted it.
+	 *
+	 * One fact, one author: the position is `f->pos`, which is where the
+	 * rest of the kernel already looks for it. (KF-205, and KF-204 before
+	 * it.) */
 };
 
 /* --- writing into one, without a printf that can run off the end ---------- */
@@ -238,21 +246,55 @@ static i64 proc_read(struct file *f, void *out, u64 len)
 	if (!pf || !out)
 		return SYS_EFAULT;
 
-	if (pf->pos >= pf->len)
+	if (f->pos >= pf->len)
 		return 0;
 
 	/* Subtraction, not addition. `pos + len` past the end of a u64 compares
 	 * as comfortably inside, which is the shape every range check in this
 	 * kernel is written to avoid. */
-	left = pf->len - pf->pos;
+	left = pf->len - f->pos;
 
 	if (len > left)
 		len = left;
 
-	kmemcpy(out, pf->text + pf->pos, (size_t)len);
-	pf->pos += len;
+	kmemcpy(out, pf->text + f->pos, (size_t)len);
+	f->pos += len;
 
 	return (i64)len;
+}
+
+/* A snapshot is a buffer, and a buffer can be rewound.
+ *
+ * `file_ops` says a null seek means *a thing with no position at all -- a
+ * console, a pipe*. A procfs file is not that: it has a position, it advances
+ * it on every read, and there is nothing about going back to an earlier offset
+ * that it cannot do. The absence was an oversight rather than an answer, and it
+ * is what made the snapshot test compare two different snapshots -- the only
+ * way it had to read the whole file was to open it again. (KF-205)
+ *
+ * Bounded against the snapshot's own length, and refusing rather than clamping:
+ * a seek past the end that silently lands on the end is a caller that thinks it
+ * is somewhere it is not. */
+static i64 proc_seek(struct file *f, i64 offset, unsigned from)
+{
+	struct proc_file *pf = f ? (struct proc_file *)f->private : NULL;
+	i64 base;
+
+	if (!pf)
+		return SYS_EFAULT;
+
+	switch (from) {
+	case SEEK_START: base = 0; break;
+	case SEEK_HERE:  base = (i64)f->pos; break;
+	case SEEK_END:   base = (i64)pf->len; break;
+	default:         return SYS_EINVAL;
+	}
+
+	if (offset < -base || base + offset > (i64)pf->len)
+		return SYS_EINVAL;
+
+	f->pos = (u64)(base + offset);
+	return (i64)f->pos;
 }
 
 static i64 proc_write(struct file *f, const void *in, u64 len)
@@ -277,6 +319,7 @@ static i64 proc_close(struct file *f)
 static const struct file_ops proc_ops = {
 	.read  = proc_read,
 	.write = proc_write,
+	.seek  = proc_seek,
 	.close = proc_close,
 };
 
@@ -341,7 +384,6 @@ struct file *procfs_open(const char *rest, unsigned flags, u32 mode, i64 *error)
 		}
 
 		pf->len = (u64)kstrlen(pf->text);
-		pf->pos = 0;
 
 		f = file_new_external(&proc_ops, flags, pf);
 
@@ -515,44 +557,84 @@ bool procfs_self_test(void)
 	}
 
 	n2 = f->ops->read(f, a + (n1 > 0 ? n1 : 0), sizeof(a) - 1 - 4);
-	file_release(f);
 
 	if (n1 <= 0 || n2 <= 0) {
 		kputs("  procfs: /proc/uptime could not be read in two "
 		      "halves\n");
+		file_release(f);
 		ok = false;
 	} else {
 		u64 total = (u64)n1 + (u64)n2;
 
 		a[total] = 0;
 
-		/* The same file, opened again and read whole. It is a *later*
-		 * snapshot, so the two are not required to be equal -- what is
-		 * required is that the first one is internally consistent,
-		 * which is what reading it in halves tests. A smear shows up
-		 * as a length that does not match a single read of the same
-		 * file. */
-		f = file_open_path("/proc/uptime", OPEN_READ, 0, &err);
-
-		if (f) {
+		/* **The same open, rewound.** Not a second open.
+		 *
+		 * This used to open the file again and require the two byte
+		 * counts to match. Two opens are two snapshots taken at
+		 * different times, and the length of this file is how many
+		 * digits its numbers have -- so every time the millisecond
+		 * field crossed 9 to 10 or 99 to 100 in the gap, the lengths
+		 * differed honestly and the test called it a smear. About half
+		 * a percent of boots, which is one matrix in eight; matrix 36
+		 * spent one on it (KF-205).
+		 *
+		 * It was weak as well as flaky. A smear that happened to leave
+		 * the digit count alone joins into a perfectly well-formed
+		 * string and passed.
+		 *
+		 * Rewinding reads the *same snapshot* the halves came from, so
+		 * the comparison is bytes against themselves with no clock in
+		 * it: deterministic, and it catches a smear every time rather
+		 * than one time in two hundred. */
+		if (!f->ops->seek) {
+			kputs("  procfs: /proc/uptime cannot seek, so a "
+			      "snapshot cannot be read twice\n");
+			ok = false;
+		} else if (f->ops->seek(f, 0, SEEK_START) != 0) {
+			kputs("  procfs: /proc/uptime would not rewind\n");
+			ok = false;
+		} else {
 			i64 whole = f->ops->read(f, b, sizeof(b) - 1);
 
-			file_release(f);
+			if (whole <= 0) {
+				kputs("  procfs: /proc/uptime read nothing "
+				      "after rewinding\n");
+				ok = false;
+			} else {
+				u64 i;
 
-			if (whole > 0) {
 				b[whole] = 0;
 
 				if ((u64)whole != total) {
 					kprintf("  procfs: uptime read in two "
-						"goes gave %lu bytes and read "
-						"whole gave %ld -- the file "
-						"moved under the reader\n",
+						"goes gave %lu bytes and the "
+						"same snapshot read whole gave "
+						"%ld -- the file moved under "
+						"the reader\n",
 						(unsigned long)total,
 						(long)whole);
 					ok = false;
 				}
+
+				/* Byte for byte, which the length comparison
+				 * never was. Two reads of one snapshot have no
+				 * excuse to differ anywhere. */
+				for (i = 0; i < total && (i64)i < whole; i++) {
+					if (a[i] == b[i])
+						continue;
+
+					kprintf("  procfs: uptime differs at "
+						"byte %lu of one snapshot: "
+						"%s against %s\n",
+						(unsigned long)i, a, b);
+					ok = false;
+					break;
+				}
 			}
 		}
+
+		file_release(f);
 	}
 
 	return ok;
