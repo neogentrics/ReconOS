@@ -5771,6 +5771,89 @@ number it parsed -- because both faults in this entry were a number the parser
 produced about its own parsing, and the only defence against that is a second
 count the parser did not take.
 
+### KF-201 — The bounded-queue test races its own drain, and passes only when the machine is slow enough
+
+- **Found:** 13 September 2026, by matrix 31 — the run that existed only
+  because KF-200 had earned a version bump nothing about the kernel required.
+- **Cost:** none to a running machine; the queue is bounded and always was. The
+  cost was to the evidence: **matrix 30 passed this path on identical code**, so
+  a green run had already been read as proof of something it had not tested.
+- **Status:** fixed, kernel 0.2.3.
+
+`PVH, 8 processors` failed with `the network stack : FAIL`, on a tree whose only
+change since the last green run was a version string and some comments.
+
+### What it is not
+
+Not memory. The same boot printed `pages : 131037 total, 130702 free` — 510 MB
+free, so `netbuf_alloc` never returned null and the flood loop never took its
+`break`.
+
+Not the card. `devices : none found` on that path; the frames are synthetic and
+the test builds them itself.
+
+### What it is
+
+The assertion needs the receive queue to actually fill:
+
+```c
+for (i = 0; i < RX_QUEUE_MAX + 8; i++) {
+        b = netbuf_alloc();
+        if (!b) break;
+        netbuf_put(b, 4);
+        netdev_receive(d, b);
+}
+if (rx_overflow == dropped_before)
+        FAIL;
+```
+
+`netdev_receive` enqueues **and then calls `work_schedule(&rx_work)`**, and that
+work item drains through `netdev_service`: `while ((b = rx_take()) != NULL)`. So
+the flood races the drain it starts. Given a processor with nothing else to do,
+the drain keeps up, the queue never reaches its bound, and nothing is ever
+dropped.
+
+**The boot said so in its own counters, and nobody had asked them.** The log
+records `ethernet : ... 72 too short`, and 72 is exactly `RX_QUEUE_MAX + 8`.
+Every frame reached the ethernet layer, which is only possible if every frame
+was drained; a dropped frame is freed in `netdev_receive` and never gets there.
+
+So the test passed at one, two and four processors and failed at eight — and
+*passing* was the wrong answer at all four. It had never once exercised the drop
+path it exists to check; it had been measuring how busy the machine was.
+
+### What was done
+
+The drain is **held** for the length of the flood, so the queue fills at any
+processor count:
+
+- `rx_drain_held`, read inside `rx_take` under the lock the queue already uses.
+  A take beginning after it is set sees it; a take already inside the lock
+  removes at most one frame, and the flood runs eight past the bound.
+- released before the test drains its own frames, because that drain goes
+  through `rx_take` too — holding it there would have leaked seventy-two pages
+- and if the flood still cannot be built, the test now says **that**, in those
+  words, rather than reporting that the bound does not hold. Those are different
+  sentences and only one of them was ever true.
+
+**This is KF-197 again, inverted.** There the test wrote to any disk it thought
+was blank, because it could not guarantee its own precondition. Here the
+precondition is *the queue is full*, and hoping for it made the result a
+function of how many processors the machine had. **Make the precondition hold;
+do not hope for it.**
+
+### And two things in the harness that made it harder to read
+
+`check()` printed the failure as
+`grep -aE ': +FAIL|^  [a-z].*: ' | head -10`. The processor identity block
+matches the second branch and comes first in the log, so a real failure printed
+ten lines of `architecture : x86_64` and **never reached the FAIL line it was
+called to show**. The failures print first and alone now.
+
+And the per-processor-count log was `cpus_$label.log`, with no count in it, so
+each sweep overwrote the last. The evidence for this bug survived only because
+eight is the last count PVH tries. It is `cpus_${label}_$n.log` now.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -248,7 +248,10 @@ check_for() {
 check_cpus() {
 	local label=$1 n=$2
 	shift 2
-	local log="$WORK/cpus_$label.log"
+	# The processor count belongs in the name. Without it each sweep
+	# overwrote the last, and the log for a failing count survived only if
+	# that count happened to be the last one tried (KF-201).
+	local log="$WORK/cpus_${label}_$n.log"
 
 	printf '%-46s' "  $label, $n processors"
 
@@ -332,8 +335,15 @@ check_cpus() {
 
 	if [ "${failed_tests:-0}" -ne 0 ]; then
 		echo "FAILED -- $n online, and $failed_tests self-test(s) failed"
-		tr -d '\r' < "$log" | grep -aE ': +FAIL|^  [a-z].*: ' |
-			head -10 | sed 's/^/      /'
+		# The failures first, and on their own. This was one grep with an
+		# alternation and a `head -10`, and the identity block matched the
+		# second branch first -- so a real failure printed ten lines of
+		# "architecture : x86_64" and never reached the FAIL line it was
+		# called to show. KF-201 had to be read out of the raw log.
+		tr -d '\r' < "$log" | grep -aE ': +FAIL' |
+			head -6 | sed 's/^/      /'
+		tr -d '\r' < "$log" | grep -aE '^net: |^  [a-z].*: ' |
+			head -6 | sed 's/^/      /'
 		failures=$((failures + 1))
 		FAILED_PATHS+=("$label $n processors, self-tests")
 		return

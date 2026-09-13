@@ -71,6 +71,12 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.3 on 13 September 2026, for KF-201** -- found by the matrix run that
+# 0.2.2 required, on a tree whose only change was a version string. The bounded-
+# queue self-test had been asserting an overflow it could not force, and passing
+# wherever the machine was slow enough to let the queue fill. It had never
+# exercised the drop path it exists to check.
+#
 # **0.2.2 on 13 September 2026, for KF-200**, and it is worth saying why the
 # obvious objection was refused. KF-200 is in `scripts/`: nothing it changed
 # alters a kernel instruction, and raising this line rebuilds the whole tree --
@@ -82,7 +88,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.2
+VERSION := 0.2.3
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
