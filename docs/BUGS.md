@@ -6040,6 +6040,8 @@ to take the number from somewhere else entirely.
 
 ### KF-205 — The snapshot test compares two different snapshots, and fails when the clock gains a digit
 
+[#432](https://github.com/neogentrics/ReconOS/issues/432)
+
 - **Found:** 13 September 2026, by matrix 36, on `reconboot, UEFI` and no other
   path: `uptime read in two goes gave 26 bytes and read whole gave 27 -- the
   file moved under the reader`.
@@ -6110,6 +6112,8 @@ kept in step.
 
 ### KF-206 — A deadline measured against the wheel's hand, which KF-204 had just stopped being the clock
 
+[#433](https://github.com/neogentrics/ReconOS/issues/433)
+
 - **Found:** 13 September 2026, by matrix 36, on `device tree, 2 processors`:
   `timer: the cascaded timer fired 1 ticks early`. Caused by KF-204's fix, in
   the same run that verified it.
@@ -6173,6 +6177,8 @@ is a property of counting in ticks rather than a fault.
 
 ### KF-207 — The power-off check looks for the word `power:`, and a passing self-test started printing it
 
+[#434](https://github.com/neogentrics/ReconOS/issues/434)
+
 - **Found:** 13 September 2026, by matrix 36:
   `and can turn the machine off   FAILED -- it stopped, but not by powering off`.
   The machine had powered off correctly.
@@ -6228,6 +6234,8 @@ stay, because those are about the log as a whole and that is the right question
 for them.
 
 ### KF-208 — The tamper test writes an 'A' over a byte that had become an 'A', and reports that the boot chain fails open
+
+[#435](https://github.com/neogentrics/ReconOS/issues/435)
 
 - **Found:** 13 September 2026, by matrix 36:
   `refuses: a kernel changed after signing   FAILED -- wanted: does not match`,
