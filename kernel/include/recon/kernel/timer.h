@@ -85,6 +85,16 @@ bool timer_sleep_ns(u64 ns);
 /* Called once per tick by whichever processor owns the tick count. */
 void timer_tick(void);
 
+/* When the next filed timer is due, in ticks since boot. False where nothing is
+ * filed -- which is what lets an idle processor sleep with no deadline at all
+ * rather than waking to find there was never anything to do. */
+bool timer_next_deadline(u64 *when);
+
+/* How far the wheel has been turned, in ticks. Not the same as time_ticks():
+ * this one moves only as the wheel processes, so the difference is what a
+ * processor that stopped its tick owes on waking. */
+u64 timer_wheel_position(void);
+
 void timer_print_summary(void);
 bool timer_self_test(void);
 

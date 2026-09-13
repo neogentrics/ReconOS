@@ -191,6 +191,55 @@ bool timer_cancel(struct timer *t)
 	return was;
 }
 
+/* When the next filed timer is due, in wheel ticks. False where nothing is
+ * filed at all, which is the ordinary state of an idle machine and is the
+ * answer that lets a processor sleep indefinitely.
+ *
+ * **The obvious scan, on purpose.** Three hundred and twenty lists, every slot
+ * of every level. The alternative is a minimum maintained as timers are filed
+ * and cancelled and cascaded -- three places to keep in step, in exchange for
+ * saving work on a processor whose next act is to halt. The cheap version is
+ * the one that has to be right.
+ *
+ * Compared by difference against the wheel's own position rather than by
+ * magnitude, so a deadline that has wrapped past 2^64 is still nearer than one
+ * that has not -- the same rule sequence numbers use in tcp.c.
+ */
+bool timer_next_deadline(u64 *when)
+{
+	u64 flags = spin_lock_irq(&timer_lock);
+	bool found = false;
+	u64 best = 0;
+	unsigned level, index;
+
+	for (level = 0; level < WHEEL_LEVELS; level++) {
+		for (index = 0; index < WHEEL_SIZE; index++) {
+			const struct timer *t = slots[level][index];
+
+			for (; t; t = t->next) {
+				if (!found || (i64)(t->expires - best) < 0) {
+					best = t->expires;
+					found = true;
+				}
+			}
+		}
+	}
+
+	spin_unlock_irq(&timer_lock, flags);
+
+	if (found && when)
+		*when = best;
+
+	return found;
+}
+
+/* How far the wheel has actually been turned. A processor that has been asleep
+ * compares this against the tick count to know what it owes. */
+u64 timer_wheel_position(void)
+{
+	return wheel_now;
+}
+
 void timer_tick(void)
 {
 	u64 flags = spin_lock_irq(&timer_lock);

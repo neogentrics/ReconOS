@@ -60,6 +60,7 @@ void x86_pic_end_of_interrupt(unsigned irq);
 bool x86_irq_enable_line(unsigned irq);
 
 void x86_pic_unmask(unsigned irq);
+void x86_pic_mask(unsigned irq);
 void x86_pic_mask_all(void);
 void x86_pic_restore_default(void);
 
@@ -89,6 +90,10 @@ bool x86_ioapic_present(void);
  * question as `present`: a chip that was found and could not be armed is
  * present and not in use, and the acknowledgement path depends on which. */
 bool x86_ioapic_in_use(void);
+
+/* Mask or unmask one ISA line without changing how it is routed. False where
+ * the I/O APIC is not the thing carrying that line. */
+bool x86_ioapic_mask_isa(unsigned irq, bool masked);
 
 bool x86_ioapic_route_isa(unsigned irq, u8 vector, u32 destination);
 bool x86_ioapic_take_over(void);
@@ -194,6 +199,11 @@ void x86_apic_send_startup(u32 target, u8 page);
 void x86_apic_send_ipi_all_but_self(u8 vector);
 void x86_apic_calibrate_timer(void);	/* once, against a clock already trusted */
 void x86_apic_start_timer(void);	/* per processor */
+
+/* Fire once, `ns` from now. Used as the alarm that ends a tickless idle; the
+ * count comes from the same calibration the periodic tick uses. */
+void x86_apic_timer_oneshot(u64 ns);
+void x86_apic_timer_stop(void);
 bool x86_apic_timer_ready(void);
 
 /* The vectors the APIC raises. Above the sixteen the 8259 occupies, so the two

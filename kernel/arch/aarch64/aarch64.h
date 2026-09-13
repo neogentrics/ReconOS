@@ -114,4 +114,9 @@ void fdt_each_property(u64 dtb_phys, const char *compat, const char *prop_name,
  * False when there is no bridge in the tree, or none that forwards memory. */
 bool fdt_pci_window(u64 dtb_phys, u64 *base, u64 *size);
 
+/* The generic timer, armed for one long interval rather than for the tick.
+ * For arch_wait_tickless. */
+bool aarch64_timer_arm_ns(u64 ns);
+void aarch64_timer_rearm_tick(void);
+
 #endif /* RECON_ARCH_AARCH64_H */

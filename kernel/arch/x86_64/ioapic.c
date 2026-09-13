@@ -270,6 +270,41 @@ bool x86_ioapic_route_isa(unsigned irq, u8 vector, u32 destination)
 	return true;
 }
 
+/* Mask or unmask one ISA line, leaving its routing alone.
+ *
+ * For an idle processor suspending its tick: the line stays routed exactly as
+ * it was, and only the mask bit moves. Unmasking rebuilds the entry through
+ * the same path that routed it, so the polarity, trigger and destination come
+ * from the override table rather than from anything remembered here -- a
+ * remembered copy is a second place for the truth to live.
+ *
+ * **The failure mode is loud, which is why this is safe to do on a hot path.**
+ * A mask left set is a processor that never ticks again, which the
+ * verification rig reports as a boot that stopped before the end (KF-143). It
+ * is not the quiet kind of wrong.
+ */
+bool x86_ioapic_mask_isa(unsigned irq, bool masked)
+{
+	u32 gsi;
+	unsigned index;
+	struct ioapic *a;
+
+	if (irq >= 16 || !routed_through_ioapic)
+		return false;
+
+	gsi = isa_to_gsi[irq];
+	a = owner_of(gsi, &index);
+
+	if (!a)
+		return false;
+
+	if (!masked)
+		return x86_ioapic_route_isa(irq, (u8)(32 + irq), 0);
+
+	write_entry(a, index, ENTRY_MASKED, 0);
+	return true;
+}
+
 /* Takes every ISA line off the 8259 and puts it on the I/O APIC.
  *
  * The vectors are the ones the 8259 was already using, so nothing downstream of

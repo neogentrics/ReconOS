@@ -5,6 +5,68 @@
 
 static volatile u64 ticks;
 
+/* Interrupts actually taken, as opposed to ticks believed to have passed.
+ *
+ * These two numbers are the same thing today and stop being the same thing the
+ * moment a processor is allowed to stop its tick: `ticks` is resynced from the
+ * hardware clock on waking, because the timer wheel is turned by comparing
+ * itself against it, so it goes on counting through any amount of idleness.
+ * That is correct and it is also why `ticks` cannot measure what a tickless
+ * idle is *for*.
+ *
+ * This one is never resynced. It counts wakeups, which is what a stopped tick
+ * saves and what a warm laptop is made of. Every processor's interrupt counts
+ * here, not just processor 0's -- a secondary spinning its own timer costs the
+ * same power as the boot processor doing it. */
+static volatile u64 tick_interrupts;
+
+/* Put the tick count where the hardware clock says it should be.
+ *
+ * The tick count is what turns the timer wheel, and it only moves when the tick
+ * fires -- so a processor that stopped its tick to save power would come back
+ * to a wheel that had not turned and timers that had simply never run.
+ *
+ * **The monotonic clock is not the tick.** It is a hardware counter, read
+ * directly, and it keeps counting through any amount of idleness. That is the
+ * single fact that makes stopping the tick possible at all; without it this
+ * would need the tick to keep the time and there would be nothing to catch up
+ * against.
+ *
+ * Returns how many ticks were owed, which is the honest measure of how long the
+ * machine actually slept -- and the number a self-test can check is greater
+ * than one, because a tickless idle that never engaged looks exactly like one
+ * that did.
+ */
+u64 time_tick_resync(void)
+{
+	u64 should_be;
+	u64 owed;
+
+	/* **Processor 0 only**, for the same reason it is the only one that
+	 * counts ticks and the only one that turns the wheel: there is exactly
+	 * one of it. A secondary writing this would be racing the increment in
+	 * time_tick, and a lost race moves the count *backwards* -- which files
+	 * every pending timer into the past and runs all of them at once.
+	 *
+	 * A secondary that stopped its own tick owes nothing on waking. It was
+	 * never keeping the time; it was only being preempted. */
+	if (arch_cpu_id() != 0)
+		return 0;
+
+	should_be = arch_monotonic_ns() / (1000000000ull / TIME_TICK_HZ);
+
+	/* Only ever forwards. A counter that appeared to go backwards -- a
+	 * recalibration, a different processor's view -- must not be allowed to
+	 * rewind the wheel, which would file every pending timer into the past
+	 * and run all of them at once. */
+	if ((i64)(should_be - ticks) <= 0)
+		return 0;
+
+	owed = should_be - ticks;
+	ticks = should_be;
+	return owed;
+}
+
 void time_tick(void)
 {
 	/* Counted once per interval, not once per processor.
@@ -18,6 +80,13 @@ void time_tick(void)
 	 *
 	 * The boot processor is the one that counts. Not because its ticks are
 	 * special, but because there is exactly one of it. */
+	/* Before the processor-0 test, deliberately: this is a count of
+	 * interrupts taken by the machine, and every processor's timer costs
+	 * the same power. `ticks` below is a count of intervals that have
+	 * passed, of which there is one regardless of how many processors
+	 * noticed -- which is KF's reason for the test in the first place. */
+	tick_interrupts++;
+
 	if (arch_cpu_id() != 0)
 		return;
 
@@ -34,6 +103,11 @@ void time_tick(void)
 u64 time_ticks(void)
 {
 	return ticks;
+}
+
+u64 time_tick_interrupts(void)
+{
+	return tick_interrupts;
 }
 
 u64 time_monotonic_ns(void)

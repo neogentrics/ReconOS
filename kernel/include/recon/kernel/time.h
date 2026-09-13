@@ -46,11 +46,26 @@ u64 time_monotonic_ns(void);
  * plausible wrong one. */
 u64 time_wall_ns(void);
 
-/* How many times the tick has fired. */
+/* How many intervals have passed. Resynced from the hardware clock where a
+ * processor has stopped its tick, so this keeps counting through idleness and
+ * **cannot be used to measure whether the tick stopped**. */
 u64 time_ticks(void);
+
+/* How many timer interrupts were actually taken, by any processor. Never
+ * resynced, so this is the one that falls when a tick stops -- and the one a
+ * test has to look at, because the count above does not move. */
+u64 time_tick_interrupts(void);
 
 /* Called by the architecture from its timer interrupt. */
 void time_tick(void);
+
+/* Put the tick count where the hardware clock says it should be, and say how
+ * many ticks were owed.
+ *
+ * For a processor coming back from having stopped its tick: the wheel is turned
+ * by comparing itself against this count, so without it a stopped tick is a
+ * wheel that never turns again. Never moves the count backwards. */
+u64 time_tick_resync(void);
 
 void time_print_summary(void);
 bool time_self_test(void);

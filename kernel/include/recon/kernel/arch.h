@@ -138,6 +138,25 @@ RK_NORETURN void arch_halt(void);
  * rather than promised in a document. */
 void arch_wait_for_interrupt(void);
 
+/* The same, with this processor's periodic tick suspended for the duration,
+ * waking no later than `deadline_ns` on the monotonic clock.
+ *
+ * A tick that fires a hundred times a second on a processor with nothing to do
+ * is a hundred wakeups doing nothing, which is what makes an idle machine warm.
+ * This is how it stops.
+ *
+ * The deadline is a **ceiling, not a promise**: the processor may wake earlier
+ * for any interrupt, and the caller must be able to cope with that -- it is an
+ * idle loop, so it can. A caller passing a deadline already in the past gets a
+ * wait bounded by the shortest sleep the machine can arrange rather than an
+ * error, because "wake immediately" is a sensible request.
+ *
+ * **False means nothing was changed** and the caller should fall back to the
+ * ordinary wait: a machine whose tick cannot be suspended is a normal machine,
+ * not a broken one.
+ */
+bool arch_wait_tickless(u64 deadline_ns);
+
 /* --- The vector unit ------------------------------------------------------
  *
  * Enabled per processor, and saved per thread. Both halves are required

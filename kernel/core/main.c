@@ -291,6 +291,8 @@ void kmain(void)
 		i2c_self_test() ? "pass" : "FAIL");
 	kprintf("  a mode of our own  : %s\n",
 		display_self_test() ? "pass" : "FAIL");
+	kprintf("  a tick that stops  : %s\n",
+		power_idle_self_test() ? "pass" : "FAIL");
 	kprintf("  something arrives : %s\n",
 		user_signal_test() ? "pass" : "FAIL");
 	kprintf("  somebody else's disk : %s\n",
@@ -487,5 +489,5 @@ void kmain(void)
 	 * there is nothing to wake for belongs with the scheduler, and is
 	 * recorded in docs/KERNEL.md rather than left to be noticed. */
 	for (;;)
-		arch_wait_for_interrupt();
+		power_idle_wait();
 }

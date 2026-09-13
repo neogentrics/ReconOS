@@ -452,6 +452,49 @@ void x86_apic_start_timer(void)
 	apic_write(APIC_TIMER_INITIAL, timer_ticks_per_interval);
 }
 
+/* Arm this processor's timer to fire once, `ns` from now, and not again.
+ *
+ * The count is derived from the same calibration the periodic tick uses, so
+ * there is no second frequency here to be wrong about -- which is the whole
+ * reason this is the alarm rather than something newly measured.
+ *
+ * A count of zero would mean "never" to the hardware rather than "immediately",
+ * so a request too short to express becomes the shortest one that can be, and
+ * a request too long to express is clamped instead of wrapping. Both of those
+ * are a processor that wakes sooner than asked, which an idle loop can cope
+ * with; the alternative is one that never wakes.
+ */
+void x86_apic_timer_oneshot(u64 ns)
+{
+	u64 counts;
+
+	if (!lapic || !timer_ticks_per_interval)
+		return;
+
+	/* timer_ticks_per_interval is one tick of TIME_TICK_HZ. */
+	counts = (ns * timer_ticks_per_interval) /
+		 (1000000000ull / TIME_TICK_HZ);
+
+	if (counts == 0)
+		counts = 1;
+	if (counts > 0xFFFFFFFFull)
+		counts = 0xFFFFFFFFull;
+
+	apic_write(APIC_TIMER_DIVIDE, TIMER_DIVIDE_BY_16);
+	apic_write(APIC_LVT_TIMER, VECTOR_APIC_TIMER);	/* one-shot: no PERIODIC */
+	apic_write(APIC_TIMER_INITIAL, (u32)counts);
+}
+
+/* Stop it counting. */
+void x86_apic_timer_stop(void)
+{
+	if (!lapic)
+		return;
+
+	apic_write(APIC_TIMER_INITIAL, 0);
+	apic_write(APIC_LVT_TIMER, TIMER_MASKED | VECTOR_APIC_TIMER);
+}
+
 bool x86_apic_timer_ready(void)
 {
 	return lapic != 0 && timer_ticks_per_interval != 0;

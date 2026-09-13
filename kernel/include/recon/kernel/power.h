@@ -19,6 +19,22 @@ enum power_result {
 	POWER_REFUSED,			/* it was told, and did not */
 };
 
+/* Wait for something to happen, with this processor's tick suspended where the
+ * machine can do that.
+ *
+ * The idle loops call this instead of arch_wait_for_interrupt. It works out how
+ * long there is until the next filed timer, bounds that, and hands it to the
+ * architecture -- then catches the timer wheel up on the way back, because the
+ * wheel is turned by the tick and the tick was off. */
+void power_idle_wait(void);
+
+
+/* How many times the tick was actually suspended. Zero on a machine that
+ * cannot do it, which is a real answer rather than a failure. */
+u64 power_idle_tickless(void);
+
+bool power_idle_self_test(void);
+
 /* Does not return on a machine that obeys. */
 enum power_result power_off(void);
 

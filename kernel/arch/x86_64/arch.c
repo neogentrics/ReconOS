@@ -120,6 +120,78 @@ void arch_wait_for_interrupt(void)
 	__asm__ volatile("hlt");
 }
 
+/* Wait with this processor's tick suspended. See arch.h.
+ *
+ * Two processors, two ticks, one alarm. Processor 0 ticks from the 8254 through
+ * whichever controller took the line, so its tick is suspended by masking that
+ * line; a secondary ticks from its own local APIC timer, so its tick is
+ * suspended by stopping that timer. Both are woken by the same thing: the local
+ * APIC timer programmed one-shot, which on processor 0 is a timer that was
+ * calibrated at boot and never started.
+ *
+ * **The PIT is not reprogrammed and its routing is not touched.** It goes on
+ * running at 100 Hz in mode 2 exactly as it does today; the only thing that
+ * moves is a mask bit, and only across the halt. KF-157 was this tick being
+ * moved and coming back at twice the rate with every test still passing, which
+ * is the reason for being this careful about a change that saves power.
+ */
+bool arch_wait_tickless(u64 deadline_ns)
+{
+	u64 now = arch_monotonic_ns();
+	u64 ns = (i64)(deadline_ns - now) > 0 ? deadline_ns - now : 0;
+	unsigned cpu = arch_cpu_id();
+	bool masked = false;
+
+	/* No alarm means no way back. Falling back to the ordinary wait is the
+	 * only safe answer: a suspended tick with nothing to end it is a
+	 * processor that has stopped, and the machine would look hung. */
+	if (!x86_apic_timer_ready())
+		return false;
+
+	/* Interrupts off across the whole arrangement, and `sti; hlt` as a pair
+	 * at the end.
+	 *
+	 * An interrupt taken between arming the alarm and halting would be
+	 * handled and gone, and the halt would then wait for the *next* one --
+	 * with the tick masked, that could be a very long time. `sti` does not
+	 * take effect until after the instruction that follows it, which is
+	 * what makes the pair atomic and is the whole reason it is written this
+	 * way rather than as two statements. */
+	__asm__ volatile("cli");
+
+	if (cpu == 0) {
+		masked = x86_ioapic_in_use()
+			 ? x86_ioapic_mask_isa(0, true)
+			 : (x86_pic_mask(0), true);
+
+		if (!masked) {
+			__asm__ volatile("sti");
+			return false;
+		}
+	} else {
+		x86_apic_timer_stop();
+	}
+
+	x86_apic_timer_oneshot(ns);
+
+	__asm__ volatile("sti; hlt");
+
+	/* Back. Put the tick where it was, before anything else can depend on
+	 * it -- including the caller's own decision about what to do next. */
+	x86_apic_timer_stop();
+
+	if (cpu == 0) {
+		if (x86_ioapic_in_use())
+			x86_ioapic_mask_isa(0, false);
+		else
+			x86_pic_unmask(0);
+	} else {
+		x86_apic_start_timer();
+	}
+
+	return true;
+}
+
 /* --- Processors and interrupts -------------------------------------------- */
 
 unsigned arch_cpu_id(void)

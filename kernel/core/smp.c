@@ -1,3 +1,4 @@
+#include <recon/kernel/power.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/pmm.h>
@@ -48,7 +49,11 @@ unsigned smp_cpus_online(void) { return online_count; }
 static void idle_loop(void *arg)
 {
 	for (;;) {
-		arch_wait_for_interrupt();
+		/* With this processor's tick suspended where the machine can
+		 * do it. A processor with nothing to run has nothing to be
+		 * preempted from, so the hundred wakeups a second the tick
+		 * would cost it buy nothing at all. */
+		power_idle_wait();
 
 		/* The tick woke us. If there is real work now, take it; if not,
 		 * this returns immediately and we wait again. */

@@ -122,6 +122,19 @@ void x86_pic_unmask(unsigned irq)
 		outb(PIC1_DATA, (u8)(inb(PIC1_DATA) & ~(1u << 2)));
 }
 
+/* One line closed at the 8259, without disturbing the others. The mirror of
+ * x86_pic_unmask, and read-modify-write for the same reason. */
+void x86_pic_mask(unsigned irq)
+{
+	u16 port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
+	u8 bit = (u8)(1u << (irq & 7));
+
+	if (irq >= 16)
+		return;
+
+	outb(port, (u8)(inb(port) | bit));
+}
+
 void x86_pic_mask_all(void)
 {
 	outb(PIC1_DATA, 0xFF);

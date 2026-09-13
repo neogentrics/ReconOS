@@ -396,6 +396,38 @@ static inline u64 read_count(void)
 	return v;
 }
 
+/* Arm it for one long interval instead of the tick, and say whether it could
+ * be done. For arch_wait_tickless; see arch.h.
+ *
+ * The countdown register is 32 bits, so an interval past what it can hold is
+ * clamped rather than wrapped -- a processor that wakes sooner than asked is
+ * something an idle loop copes with, and one that wakes after the counter has
+ * wrapped is a machine that has stopped. */
+bool aarch64_timer_arm_ns(u64 ns)
+{
+	u64 counts;
+
+	if (!timer_hz)
+		return false;
+
+	counts = (ns * timer_hz) / 1000000000ull;
+
+	if (counts == 0)
+		counts = 1;
+	if (counts > 0x7FFFFFFFull)
+		counts = 0x7FFFFFFFull;
+
+	__asm__ volatile("msr cntp_tval_el0, %0" : : "r"(counts));
+	__asm__ volatile("msr cntp_ctl_el0, %0" : : "r"(1UL));
+	return true;
+}
+
+/* Back to the ordinary tick. */
+void aarch64_timer_rearm_tick(void)
+{
+	arm_timer();
+}
+
 static void arm_timer(void)
 {
 	/* TVAL is a countdown: writing it says "interrupt me this many ticks

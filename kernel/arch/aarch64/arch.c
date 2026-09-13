@@ -80,6 +80,31 @@ void arch_wait_for_interrupt(void)
 	__asm__ volatile("wfi");
 }
 
+/* Wait with this processor's tick suspended. See arch.h.
+ *
+ * Simpler than the other architecture's, and the reason is structural rather
+ * than lucky: every processor here has its own generic timer reached through
+ * system registers, so the thing that ticks and the thing that wakes it are the
+ * same timer. There is no interrupt line to mask and no second controller that
+ * might be carrying it.
+ *
+ * `wfi` returns on an interrupt whether or not it was taken, so the tick is put
+ * back before returning and the caller is told the time may have moved.
+ */
+bool arch_wait_tickless(u64 deadline_ns)
+{
+	u64 now = arch_monotonic_ns();
+	u64 ns = (i64)(deadline_ns - now) > 0 ? deadline_ns - now : 0;
+
+	if (!aarch64_timer_arm_ns(ns))
+		return false;
+
+	__asm__ volatile("wfi");
+
+	aarch64_timer_rearm_tick();
+	return true;
+}
+
 /* --- Processors and interrupts -------------------------------------------- */
 
 void arch_irq_route_init(void)

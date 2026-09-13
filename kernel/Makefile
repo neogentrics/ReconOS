@@ -71,6 +71,12 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.5 on 13 September 2026: checkpoint 24's tick.** No bug, and the rule is
+# a patch per bug *fixed* -- so this one is not compelled, it is chosen. Every
+# idle processor on every machine now behaves differently, and a version that
+# cannot tell the two apart is a version that has stopped identifying the
+# build. The rule mandates a bump for a bug; it has never forbidden one.
+#
 # **0.2.4 on 13 September 2026, for KF-202** -- found while building
 # checkpoint 21, because a new self-test showed up on every boot path except
 # the UEFI ones. Booting the install image writes OVMF's variables into it,
@@ -95,7 +101,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.4
+VERSION := 0.2.5
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

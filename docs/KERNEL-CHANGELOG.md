@@ -88,6 +88,71 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.5 -- 13 September 2026
+
+**Checkpoint 24, the tick half: a tick that stops.** Suspend is its own
+follow-up and is not in this.
+
+`time.h` has carried the description of this since the tick was written: *a tick
+that fires a hundred times a second on an idle machine is a hundred wakeups a
+second doing nothing, and that shows up as a laptop that runs warm... making it
+stop when there is nothing to wake for belongs with the scheduler.* That is a
+promise with a date on it, and this is the date.
+
+| | wakeups in ~200 ms | a fixed tick would cost |
+|---|---|---|
+| x86_64, 1 processor | **1** | 21 |
+| x86_64, 4 processors | 7 | 20 each -- 80 across the machine |
+| aarch64, 1 processor | **1** | 20 |
+| aarch64, 4 processors | 7 | 80 across the machine |
+
+### What made it possible, and what nearly made it untestable
+
+**Monotonic time is a hardware counter, not the tick.** It keeps counting
+through any amount of idleness, which is the single fact this rests on -- with
+the time kept by the tick there would be nothing to catch up against.
+
+But the timer wheel *is* turned by the tick count, so a stopped tick is a wheel
+that never turns again and every filed timer simply never runs.
+`time_tick_resync()` puts the count where the hardware clock says it should be
+and the wheel catches up in the loop it already had. Processor 0 only: a
+secondary writing it would race the increment, and a lost race moves the count
+*backwards*, which files every pending timer into the past and runs all of them
+at once.
+
+**And that resync is why the obvious measurement cannot work.** `time_ticks()`
+reads the same after a 200 ms sleep whether the machine woke twenty times or
+once. A self-test written against it would pass identically with the tick
+stopped and with it running flat out -- KF-187's shape, in the test for the
+feature. So what is counted is `time_tick_interrupts()`: interrupts actually
+taken, by any processor, never resynced.
+
+### How the tick is suspended
+
+**Processor 0 and the secondaries tick from different chips on x86**, which
+shapes the whole thing. Processor 0's tick is the 8254 PIT through whichever
+controller took the line; a secondary's is its own local APIC timer.
+
+The way back is the same for both: the local APIC timer, one-shot. On processor
+0 that timer turned out to be **calibrated at boot and never started** --
+`x86_apic_start_timer` has exactly one caller and it is the secondary bring-up
+path -- so it was sitting unused and cost nothing to borrow.
+
+**Nothing boot-critical moved.** The PIT goes on running at 100 Hz in mode 2,
+routed exactly as before; only a mask bit moves, and only across the halt. That
+restraint is deliberate: KF-157 was this tick being moved and coming back at
+201 Hz against a 100 Hz constant with every test still passing.
+
+aarch64 is simpler for a structural reason rather than a lucky one: every
+processor has its own generic timer in system registers, so the thing that ticks
+and the thing that wakes it are the same timer and there is no line to mask.
+
+**The sleep is bounded at one second even with nothing filed.** Preemption comes
+from the tick, so a processor that suspended its own tick also suspended the
+thing that would notice work arriving elsewhere. A ceiling turns a hundred
+wakeups a second into one -- all of the saving to three significant figures --
+and leaves no way to build a machine that has stopped listening.
+
 ## 0.2.4 -- 13 September 2026
 
 **Checkpoint 21, the first half: the kernel sets its own display mode.** And
