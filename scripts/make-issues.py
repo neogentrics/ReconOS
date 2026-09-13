@@ -32,78 +32,131 @@ REPO = 'neogentrics/ReconOS'
 # "accounts" is worse than no label, because somebody filtering by area then
 # trusts the filter.
 AREA = {
-    1: 'display',  2: 'display',  3: 'display',  4: 'display',
-    5: 'input',    6: 'display',  7: 'display',  8: 'input',
-    9: 'display', 10: 'applications', 11: 'input', 12: 'input',
-    13: 'display', 14: 'applications', 15: 'display', 16: 'display',
-    17: 'input',  18: 'input',   19: 'input',   20: 'input',
-    21: 'applications', 22: 'display', 23: 'storage', 24: 'startup',
-    25: 'skins',  26: 'accounts', 27: 'display', 28: 'display',
-    29: 'accounts', 30: 'input', 31: 'display', 32: 'network',
-    33: 'skins',  34: 'display', 35: 'skins',   36: 'build',
-    37: 'docs',   38: 'input',   39: 'build',   40: 'docs',
-    41: 'skins',  42: 'skins',   43: 'display', 44: 'display',
-    45: 'input',  46: 'help',    47: 'help',    48: 'help',
-    49: 'help',   50: 'programs', 51: 'programs', 52: 'network',
-    53: 'network', 54: 'docs',   55: 'programs', 56: 'help',
-    57: 'build',  58: 'startup', 59: 'build',   60: 'settings',
-    61: 'display', 62: 'help',   63: 'display', 64: 'input',
-    65: 'display', 66: 'display', 67: 'display', 68: 'input',
-    69: 'build',   70: 'help',   71: 'help',
-    72: 'settings', 73: 'display', 74: 'storage',
-    75: 'input',   76: 'firewall', 77: 'input',
-    78: 'display', 79: 'skins',  80: 'display',
-    # The kernel's own faults share this register, so a track record of
-    # the system is a track record of all of it.
-    81: 'kernel', 82: 'build', 83: 'build', 84: 'build',
-    85: 'storage', 86: 'storage', 87: 'storage', 88: 'storage', 89: 'storage', 90: 'storage', 91: 'kernel', 92: 'kernel',
-    # These are the kernel's, and they carry the `KF-` prefix now. They were
-    # renumbered once from 082-093, when the register was found to have forked;
-    # that deferred the collision rather than ending it, and by 12 September
-    # 2026 fifty-one numbers named two unrelated bugs. The prefix ends it: the
-    # two tracks allocate separately and neither can take the other's number.
+    # Keyed by the whole identifier, not by the number.
     #
-    # The table is keyed by number alone and so is shared by both prefixes.
-    # That is safe only because a number is never one area in one track and a
-    # different area in the other -- it is the same fault, recorded once. Add a
-    # line here when adding an entry: AREA.get returns None for a number with
-    # no line, labels_for then says nothing about the area, and filtering by
-    # area misses it silently. That is the failure mode a lookup table has.
-    114: 'build', 115: 'build', 116: 'storage', 117: 'storage',
-    118: 'storage', 119: 'storage', 120: 'storage', 121: 'storage',
-    122: 'storage', 123: 'kernel', 124: 'kernel', 125: 'kernel',
-    126: 'storage', 127: 'storage', 128: 'startup', 129: 'kernel',
-    130: 'storage', 131: 'startup', 132: 'startup', 133: 'build',
-    134: 'build',
-    # 135 and 136 are the desktop session's, taken from main. 137 is the next
-    # free one, which was checked rather than assumed: the offer of "135+" had
-    # already been acted on by the time this needed a number.
-    137: 'startup', 138: 'startup', 139: 'build', 140: 'storage', 141: 'startup', 142: 'startup',
-    143: 'build', 144: 'build',
-    # Checkpoint 19 and 20. Added at the same time as the entries rather than
-    # afterwards, because a number missing from this table gets no area label
-    # and says nothing about it -- AREA.get returns None quietly, which is how
-    # twenty entries came to be filed with only `bug` on them.
-    145: 'kernel', 146: 'kernel', 147: 'kernel', 148: 'kernel',
-    149: 'kernel', 150: 'kernel', 151: 'kernel', 152: 'kernel',
-    153: 'kernel', 154: 'kernel', 155: 'kernel', 156: 'kernel',
-    157: 'kernel', 158: 'kernel', 159: 'kernel',
-    160: 'build',
-    161: 'storage',
-    162: 'kernel',
-    163: 'storage',
-    164: 'kernel',
-    165: 'kernel',
-    166: 'build',
-    # The interrupt, process and paging work, then the network stack,
-    # then the register's own filer.
-    179: 'kernel', 180: 'kernel', 181: 'kernel', 182: 'kernel',
-    183: 'kernel', 184: 'storage', 185: 'startup', 186: 'storage',
-    187: 'storage', 188: 'storage', 189: 'build', 190: 'kernel',
-    191: 'startup', 192: 'storage', 193: 'kernel', 194: 'network',
-    195: 'network', 196: 'kernel', 197: 'storage', 198: 'storage',
-    199: 'kernel', 200: 'build',
+    # It was keyed by the number while one sequence served both tracks. When
+    # they split -- BG- for the desktop, KF- for the kernel, 12 September 2026
+    # -- the two tables were merged and 44 numbers turned out to want different
+    # areas on either side: BG-114 is a desktop fault about installing programs,
+    # KF-114 is a crash harness that never cut the power. Keyed by number, one
+    # of every such pair takes the other's label.
+    #
+    # Add a line here when adding an entry. AREA.get returns None for an
+    # identifier with no line, labels_for then says nothing about the area, and
+    # filtering by area misses it silently. That is the failure mode a lookup
+    # table has, and this table has had it twice.
+    'BG-001': 'display', 'BG-002': 'display', 'BG-003': 'display',
+    'BG-004': 'display', 'BG-005': 'input', 'BG-006': 'display',
+    'BG-007': 'display', 'BG-008': 'input', 'BG-009': 'display',
+    'BG-010': 'applications', 'BG-011': 'input', 'BG-012': 'input',
+    'BG-013': 'display', 'BG-014': 'applications', 'BG-015': 'display',
+    'BG-016': 'display', 'BG-017': 'input', 'BG-018': 'input',
+    'BG-019': 'input', 'BG-020': 'input', 'BG-021': 'applications',
+    'BG-022': 'display', 'BG-023': 'storage', 'BG-024': 'startup',
+    'BG-025': 'skins', 'BG-026': 'accounts', 'BG-027': 'display',
+    'BG-028': 'display', 'BG-029': 'accounts', 'BG-030': 'input',
+    'BG-031': 'display', 'BG-032': 'network', 'BG-033': 'skins',
+    'BG-034': 'display', 'BG-035': 'skins', 'BG-036': 'build',
+    'BG-037': 'docs', 'BG-038': 'input', 'BG-039': 'build',
+    'BG-040': 'docs', 'BG-041': 'skins', 'BG-042': 'skins',
+    'BG-043': 'display', 'BG-044': 'display', 'BG-045': 'input',
+    'BG-046': 'help', 'BG-047': 'help', 'BG-048': 'help',
+    'BG-049': 'help', 'BG-050': 'programs', 'BG-051': 'programs',
+    'BG-052': 'network', 'BG-053': 'network', 'BG-054': 'docs',
+    'BG-055': 'programs', 'BG-056': 'help', 'BG-057': 'build',
+    'BG-058': 'startup', 'BG-059': 'build', 'BG-060': 'settings',
+    'BG-061': 'display', 'BG-062': 'help', 'BG-063': 'display',
+    'BG-064': 'input', 'BG-065': 'display', 'BG-066': 'display',
+    'BG-067': 'display', 'BG-068': 'input', 'BG-069': 'build',
+    'BG-070': 'help', 'BG-071': 'help', 'BG-072': 'settings',
+    'BG-073': 'display', 'BG-074': 'storage', 'BG-075': 'input',
+    'BG-076': 'firewall', 'BG-077': 'input', 'BG-078': 'display',
+    'BG-079': 'skins', 'BG-080': 'display', 'BG-081': 'kernel',
+    'BG-082': 'kernel', 'BG-083': 'kernel', 'BG-084': 'kernel',
+    'BG-085': 'kernel', 'BG-086': 'kernel', 'BG-087': 'display',
+    'BG-088': 'programs', 'BG-089': 'display', 'BG-090': 'build',
+    'BG-091': 'display', 'BG-092': 'kernel', 'BG-093': 'kernel',
+    'BG-094': 'kernel', 'BG-095': 'kernel', 'BG-096': 'applications',
+    'BG-097': 'applications', 'BG-098': 'applications', 'BG-099': 'applications',
+    'BG-100': 'display', 'BG-101': 'build', 'BG-102': 'build',
+    'BG-103': 'kernel', 'BG-104': 'kernel', 'BG-105': 'kernel',
+    'BG-106': 'display', 'BG-107': 'display', 'BG-108': 'skins',
+    'BG-109': 'settings', 'BG-110': 'settings', 'BG-111': 'settings',
+    'BG-112': 'input', 'BG-113': 'network', 'BG-114': 'programs',
+    'BG-115': 'input', 'BG-116': 'applications', 'BG-117': 'input',
+    'BG-118': 'input', 'BG-119': 'applications', 'BG-120': 'help',
+    'BG-121': 'applications', 'BG-122': 'input', 'BG-123': 'help',
+    'BG-124': 'applications', 'BG-125': 'storage', 'BG-126': 'display',
+    'BG-127': 'display', 'BG-128': 'startup', 'BG-129': 'applications',
+    'BG-130': 'display', 'BG-131': 'firewall', 'BG-132': 'applications',
+    'BG-133': 'storage', 'BG-134': 'build', 'BG-135': 'settings',
+    'BG-136': 'display', 'BG-137': 'display', 'BG-138': 'input',
+    'BG-139': 'display', 'BG-140': 'display', 'BG-141': 'skins',
+    'BG-142': 'display', 'BG-143': 'display', 'BG-144': 'skins',
+    'BG-145': 'display', 'BG-146': 'display', 'BG-147': 'display',
+    'BG-148': 'display', 'BG-149': 'display', 'BG-150': 'display',
+    'BG-151': 'display', 'BG-152': 'skins', 'BG-153': 'skins',
+    'BG-154': 'skins', 'BG-155': 'skins', 'BG-156': 'display',
+    'BG-157': 'startup', 'BG-158': 'display', 'BG-159': 'display',
+    'BG-160': 'applications', 'BG-161': 'applications', 'KF-114': 'build',
+    'KF-115': 'build', 'KF-116': 'storage', 'KF-117': 'storage',
+    'KF-118': 'storage', 'KF-119': 'storage', 'KF-120': 'storage',
+    'KF-121': 'storage', 'KF-122': 'storage', 'KF-123': 'kernel',
+    'KF-124': 'kernel', 'KF-125': 'kernel', 'KF-126': 'storage',
+    'KF-127': 'storage', 'KF-128': 'startup', 'KF-129': 'kernel',
+    'KF-130': 'storage', 'KF-131': 'startup', 'KF-132': 'startup',
+    'KF-133': 'build', 'KF-134': 'build', 'KF-137': 'startup',
+    'KF-138': 'startup', 'KF-139': 'build', 'KF-140': 'storage',
+    'KF-141': 'startup', 'KF-142': 'startup', 'KF-143': 'build',
+    'KF-144': 'build', 'KF-145': 'kernel', 'KF-146': 'kernel',
+    'KF-147': 'kernel', 'KF-148': 'kernel', 'KF-149': 'kernel',
+    'KF-150': 'kernel', 'KF-151': 'kernel', 'KF-152': 'kernel',
+    'KF-153': 'kernel', 'KF-154': 'kernel', 'KF-155': 'kernel',
+    'KF-156': 'kernel', 'KF-157': 'kernel', 'KF-158': 'kernel',
+    'KF-159': 'kernel', 'KF-160': 'build', 'KF-161': 'storage',
+    'KF-162': 'kernel', 'KF-163': 'storage', 'KF-164': 'kernel',
+    'KF-165': 'kernel', 'KF-166': 'build', 'KF-179': 'kernel',
+    'KF-180': 'kernel', 'KF-181': 'kernel', 'KF-182': 'kernel',
+    'KF-183': 'kernel', 'KF-184': 'storage', 'KF-185': 'startup',
+    'KF-186': 'storage', 'KF-187': 'storage', 'KF-188': 'storage',
+    'KF-189': 'build', 'KF-190': 'kernel', 'KF-191': 'startup',
+    'KF-192': 'storage', 'KF-193': 'kernel', 'KF-194': 'network',
+    'KF-195': 'network', 'KF-196': 'kernel', 'KF-197': 'storage',
+    'KF-198': 'storage', 'KF-199': 'kernel', 'KF-200': 'build',
+    # Read off the entries' own titles when the registers were merged;
+    # they had no line at all, which files them with no area label.
+    'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
+    'BG-165': 'applications', 'BG-166': 'applications', 'BG-167': 'applications',
+    'BG-168': 'applications', 'BG-169': 'applications', 'BG-170': 'build',
+    'BG-171': 'applications', 'BG-172': 'display', 'BG-173': 'input',
+    'BG-174': 'display', 'BG-175': 'help', 'BG-176': 'network',
+    'BG-177': 'network', 'BG-178': 'network',
 }
+
+def is_fixed(body):
+    """
+    Does the register say this one is fixed?
+
+    Four phrasings, because the register grew four over two hundred and fifty
+    entries, and every narrowing of this function has cost the same thing:
+    entries filed as open bugs on a public tracker when the register said they
+    were done.
+
+    - `**Fixed in** <version>`, where the version is the point
+    - `**Fixed by** <what was done>`, where the change is. Asking for the first
+      only filed nine entries as open, including the player's clock and three
+      kernel faults.
+    - `**Fixed in:**`, the same field with the colon inside the emphasis
+    - a `**Status:**` line saying it in prose, which is the later convention
+
+    The Status line wins where there is one: it is the most explicit, and it is
+    the only form that can say a thing this register needs to say. *Half fixed*
+    reads as open, because it is -- KF-127 says exactly that and means it.
+    """
+    said = re.search(r'\*\*Status:\*\*\s*\**\s*([A-Za-z]+)', body)
+    if said:
+        return said.group(1).lower().startswith('fix')
+    return bool(re.search(r'\*\*Fixed (?:in|by):?\*\*', body))
 
 
 def gh(args):
@@ -122,7 +175,7 @@ def gh(args):
 
 def existing_titles():
     out = gh(['issue', 'list', '--repo', REPO, '--state', 'all',
-              '--limit', '500', '--json', 'title,number,state'])
+              '--limit', '500', '--json', 'title,number,state,labels'])
     if out.returncode != 0:
         raise SystemExit(f'gh issue list failed: {out.stderr.strip()}')
 
@@ -175,7 +228,7 @@ def labels_for(entry):
     if re.search(r'regression', body, re.I):
         out.append('regression')
 
-    area = AREA.get(int(entry['id'][3:]))
+    area = AREA.get(entry['id'])
     if '**Documentation.**' in body:
         area = 'docs'
     if area is not None and area not in out:
@@ -254,24 +307,6 @@ def check_links():
     return 1 if wrong else 0
 
 
-def entry_is_fixed(body):
-    """
-    Four forms appeared over a hundred and fifty entries: `**Fixed in**`,
-    `**Fixed in:**`, `**Fixed by**`, and a `**Status:**` line saying it in
-    prose. The old test was `'**Fixed in**' in body`, which recognised one of
-    them, so thirty of the kernel's seventy-two entries had their state
-    invisible to the tool that publishes it. See KF-200.
-
-    A `**Status:**` line wins where there is one: it is the later convention
-    and the more explicit. *Half fixed* reads as open, because it is -- KF-127
-    says exactly that and means it.
-    """
-    said = re.search(r'\*\*Status:\*\*\s*\**\s*([A-Za-z]+)', body)
-    if said:
-        return said.group(1).lower().startswith('fix')
-    return bool(re.search(r'\*\*Fixed (?:in|by):?\*\*', body))
-
-
 def check_open(text):
     """
     The `## Open` section is a sentence kept beside the data that would
@@ -288,7 +323,7 @@ def check_open(text):
     open_now = []
     for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
         m = re.match(r'### ((?:BG|KF)-\d+)', block)
-        if m and not entry_is_fixed(block.split('\n## ')[0]):
+        if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
     named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
@@ -316,10 +351,43 @@ def main():
 
     for e in entries:
         if e['title'] in have:
-            print(f"  {e['id']}  exists as #{have[e['title']]['number']}")
+            row = have[e['title']]
+            '''
+            An entry that already has an issue is left alone -- except when
+            the register says it is fixed and the issue is open, which is the
+            two drifting apart, and this file exists to stop that. Closing to
+            match is the contract: the register is the source.
+            '''
+            note = []
+            if is_fixed(e['body']) and row['state'] == 'OPEN':
+                note.append('close')
+                if not dry:
+                    gh(['issue', 'close', str(row['number']), '--repo', REPO,
+                        '--reason', 'completed'])
+
+            '''
+            Labels too, for the same reason and one of its own: an area is
+            assigned by hand in AREA below, so an entry filed before its line
+            was added carries only "bug" forever. Filtering by area then
+            quietly misses it, which is worse than the label being absent --
+            the filter looks like it worked.
+            '''
+            want = set(labels_for(e))
+            has = {label['name'] for label in row.get('labels', [])}
+            if want - has:
+                note.append('label ' + ','.join(sorted(want - has)))
+                if not dry:
+                    gh(['issue', 'edit', str(row['number']), '--repo', REPO,
+                        '--add-label', ','.join(sorted(want - has))])
+
+            if note:
+                print(f"  {e['id']}  #{row['number']}: "
+                      f"{'would ' if dry else ''}{'; '.join(note)}")
+            else:
+                print(f"  {e['id']}  exists as #{row['number']}")
             continue
 
-        closed = entry_is_fixed(e['body'])
+        closed = is_fixed(e['body'])
         labels = labels_for(e)
         body = e['body'] + (
             '\n\n---\n\nFrom the register in '
