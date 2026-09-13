@@ -217,6 +217,13 @@ void recon_net_refresh(void) {
     struct ifaddrs *list = NULL;
     if (getifaddrs(&list) != 0) {
         set_error("cannot read the interface list: %s", strerror(errno));
+        /*
+         * F-001, and its description is unusually literal about why: ReconOS
+         * reports the host's network rather than implementing one, so when
+         * the host will not say what it has there is nothing underneath to
+         * fall back to. Everything that shows a network shows none.
+         */
+        recon_error_raisef(NULL, RECON_ERR_F001, "%s", strerror(errno));
         return;
     }
 

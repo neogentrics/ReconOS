@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "recon_error.h"
 #include "recon_fs.h"
 #include "recon_registry.h"
 #include "recon_theme.h"
@@ -3050,6 +3051,22 @@ static recon_color tint_hue(void) {
 
 recon_color recon_theme_color(enum recon_theme_role role) {
     if (role < 0 || role >= RECON_THEME_ROLE_COUNT) {
+        /*
+         * L-003. Reported once, and only once, however many times it is asked.
+         *
+         * This is a drawing path -- it runs for every coloured thing in every
+         * window on every frame -- so a code raised per call would put
+         * thousands of identical lines in the log between two blinks and bury
+         * whatever else was in there. One line is enough to send somebody
+         * looking, because the other half of this fault is already on screen.
+         */
+        static bool said;
+        if (!said) {
+            said = true;
+            recon_error_raisef(NULL, RECON_ERR_L003,
+                "role %d is not one this system has", (int)role);
+        }
+
         /* Magenta, on purpose. A colour nobody chose should be obvious on
          * screen rather than blending in as a shadow. */
         return RECON_RGB(0xFF, 0x00, 0xFF);

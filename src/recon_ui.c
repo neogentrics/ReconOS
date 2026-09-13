@@ -24,6 +24,7 @@
 #include <wlr/util/log.h>
 
 #include "recon_clip.h"
+#include "recon_error.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
 
@@ -728,6 +729,16 @@ struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
     panel->height = height;
     panel->pixels = calloc((size_t)width * height, sizeof(uint32_t));
     if (panel->pixels == NULL) {
+        /*
+         * D-002, and the code's own description is what makes it worth
+         * raising rather than returning quietly: *the window is not shown;
+         * the rest of the system is unaffected*. Somebody whose window did
+         * not appear has no other way to learn which of those two things
+         * happened -- a window that failed to open and a window that opened
+         * somewhere unexpected look identical from the desk.
+         */
+        recon_error_raisef(NULL, RECON_ERR_D002,
+            "no memory for a %dx%d window's pixels", width, height);
         free(panel);
         return NULL;
     }
@@ -735,6 +746,8 @@ struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
     /* Created with no buffer; commit installs one. */
     panel->scene_buffer = wlr_scene_buffer_create(parent, NULL);
     if (panel->scene_buffer == NULL) {
+        recon_error_raise(NULL, RECON_ERR_D002,
+            "the scene refused a buffer for it");
         free(panel->pixels);
         free(panel);
         return NULL;
@@ -764,6 +777,12 @@ bool recon_panel_resize(struct recon_panel *panel, int width, int height) {
 
     uint32_t *pixels = calloc((size_t)width * height, sizeof(uint32_t));
     if (pixels == NULL) {
+        /* The same fault on a window that already exists. It keeps the size
+         * it had rather than losing its pixels, so this one is a window that
+         * did not *resize* -- which is why the detail says so. */
+        recon_error_raisef(NULL, RECON_ERR_D002,
+            "no memory to resize a window to %dx%d; it kept %dx%d",
+            width, height, panel->width, panel->height);
         return false;
     }
 

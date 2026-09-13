@@ -11,6 +11,7 @@
 #include <wayland-server-core.h>
 
 #include "recon_apps.h"
+#include "recon_error.h"
 #include "recon_appwin.h"
 #include "recon_procinfo.h"
 #include "recon_server.h"
@@ -37,6 +38,16 @@ struct app_entry {
     /* When close was asked for, in milliseconds since ReconOS started. Zero
      * means it has not been asked. */
     uint64_t close_requested_ms;
+
+    /*
+     * Whether J-002 has been raised for this one.
+     *
+     * `describe` runs every time anything lists the running programs, which
+     * Watchtower does several times a second. Without this the log would fill
+     * with the same sentence about the same program for as long as it sat
+     * there not answering -- and a log that repeats is one nobody reads.
+     */
+    bool reported_not_responding;
 
     bool present; /* seen during the last refresh */
 };
@@ -204,6 +215,36 @@ int recon_apps_refresh(void) {
         if (!g_apps[i].present) {
             g_apps[i] = g_apps[g_count - 1];
             g_count--;
+        }
+    }
+
+    /*
+     * --- J-002, once per program ---
+     *
+     * Here rather than in `describe`, which takes a const entry and should:
+     * describing something must not change it, and a code raised once has to
+     * remember that it has been. This loop is already walking the table
+     * mutably and already runs on a clock, which is what a transition defined
+     * by elapsed time needs.
+     *
+     * Raised as the state is *entered*, not while it lasts. Watchtower lists
+     * the running programs several times a second, so a line per look would
+     * fill the log with the same sentence for as long as the program sat
+     * there -- and a log that repeats is one nobody reads.
+     */
+    for (int i = 0; i < g_count; i++) {
+        struct app_entry *entry = &g_apps[i];
+        bool late = entry->close_requested_ms != 0 &&
+            now_ms() - entry->close_requested_ms > RECON_APP_UNRESPONSIVE_MS;
+
+        if (late && !entry->reported_not_responding) {
+            entry->reported_not_responding = true;
+            recon_error_raisef(g_server, RECON_ERR_J002,
+                "%s was asked to close and has not", entry->name);
+        } else if (!late) {
+            /* It answered, or was asked again. The next time it goes quiet is
+             * a new event and says so. */
+            entry->reported_not_responding = false;
         }
     }
 

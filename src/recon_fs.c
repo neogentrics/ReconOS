@@ -848,6 +848,10 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     FILE *f = fopen(host, "rb");
     if (f == NULL) {
         set_error("cannot read '%s': %s", canonical, strerror(errno));
+        /* B-001's first half: the file is there -- resolve and readable both
+         * said so -- and it still would not open. */
+        recon_error_raisef(NULL, RECON_ERR_B001, "'%s': %s", canonical,
+            strerror(errno));
         return NULL;
     }
 
@@ -857,6 +861,8 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     if (size < 0) {
         fclose(f);
         set_error("cannot read '%s'", canonical);
+        recon_error_raisef(NULL, RECON_ERR_B001,
+            "'%s' would not say how long it is", canonical);
         return NULL;
     }
 
@@ -868,6 +874,29 @@ char *recon_fs_read(const char *cwd, const char *path, size_t *size_out) {
     }
     size_t read = fread(data, 1, (size_t)size, f);
     fclose(f);
+
+    /*
+     * --- B-001's second half, which nothing was checking ---
+     *
+     * The file said how long it was and then gave less. That is the exact
+     * case the code was written for, and until now it was silent: the short
+     * answer came back looking like the whole file, and every caller that
+     * treats the result as a NUL-terminated string -- which is most of them,
+     * because `size_out` is optional -- read a truncated one and could not
+     * tell.
+     *
+     * Refused rather than returned, for the reason this system refuses a
+     * truncated path: half a settings file parses, and parses to something
+     * nobody wrote.
+     */
+    if (read != (size_t)size) {
+        set_error("'%s' ended after %zu of %ld bytes", canonical, read, size);
+        recon_error_raisef(NULL, RECON_ERR_B001,
+            "'%s' ended after %zu of the %ld bytes it said it had",
+            canonical, read, size);
+        free(data);
+        return NULL;
+    }
 
     data[read] = '\0';
     if (size_out != NULL) {
@@ -918,6 +947,8 @@ static bool write_file(const char *cwd, const char *path, const char *data,
     FILE *f = fopen(host, mode);
     if (f == NULL) {
         set_error("cannot write '%s': %s", canonical, strerror(errno));
+        recon_error_raisef(NULL, RECON_ERR_B002, "'%s': %s", canonical,
+            strerror(errno));
         return false;
     }
 
@@ -926,6 +957,11 @@ static bool write_file(const char *cwd, const char *path, const char *data,
 
     if (written != size) {
         set_error("only wrote %zu of %zu bytes to '%s'", written, size, canonical);
+        /* A part-written file is the case B-002 names a full disk for, and it
+         * is the one worth a code: the file exists, it looks saved, and it is
+         * not what was saved. */
+        recon_error_raisef(NULL, RECON_ERR_B002,
+            "only %zu of %zu bytes reached '%s'", written, size, canonical);
         return false;
     }
     return true;
@@ -1658,6 +1694,14 @@ bool recon_fs_trash(const char *cwd, const char *path) {
      */
     enum recon_volume volume = recon_volume_of(cwd, canonical);
     if (!ensure_trash_in(volume)) {
+        /*
+         * B-005. The file is deliberately left where it was rather than
+         * deleted outright -- which is what the code's own description
+         * promises, and is the difference between a delete that failed and a
+         * delete that worked with nowhere to undo it from.
+         */
+        recon_error_raisef(NULL, RECON_ERR_B005,
+            "'%s' was left where it is", canonical);
         return false;
     }
 

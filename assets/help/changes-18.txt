@@ -166,4 +166,35 @@ and manages physical memory. It is built by its own Makefile against no libc
 and no wlroots. It runs nothing of the desktop yet, and this file will say so
 plainly when it does.
 
+The kernel now also arranges things to happen later: a timer wheel, so
+anything can ask for a callback or a thread can sleep without a processor
+spinning for it, and a worker thread so an interrupt handler can hand off work
+it must not do inline. Device interrupts have moved off the 8259 -- which has
+one output, wired to one processor -- onto the I/O APIC, which can send them
+to any of them; the switch is verified against the clock and reverted if the
+tick stops, rather than trusted. Message-signalled interrupts are composed and
+programmed, and no driver asks for one yet, which is said rather than implied.
+
+The kernel has a virtual filesystem. Programs open things, hold them, read
+and write and seek through them, and close them -- and what is on the other end
+can be a file on the volume, the console, a pipe, or something in /dev, with
+nothing above the interface knowing which. That unblocked five things at once:
+pipes between programs, memory two programs can both reach, a mapping filled
+from a file, /dev/null and friends, and a program loaded from a volume
+rather than from inside the kernel image.
+
+The scheduler also stopped handing a thread to another processor before the one
+it was leaving had finished with it. That had been possible since the second
+processor was woken and showed up as a kernel panic whose link register held a
+marker word written by the page allocator's own concurrency test -- the reaper
+had freed a stack that was still being stood on, and the allocator had handed
+the page straight to something that wrote to it.
+
+And it now expects a much larger machine than the one it is tested on. The
+processor ceiling is 256 rather than 8, x2APIC is implemented so identifiers
+above 255 can be addressed at all, and on aarch64 a processor's identity no
+longer comes from one MPIDR affinity field -- which two processors on a
+two-socket board would have shared. None of that is tested above 32
+processors, and both the code and the bug register say so.
+
 ---
