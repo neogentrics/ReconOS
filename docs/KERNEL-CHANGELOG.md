@@ -15,13 +15,14 @@ every entry to say which half it is about.
   all built.** Not a judgement about what counts as a big change -- a fact about
   the audit that anybody can check.
 
-**One row stands in the way.**
+**The gate was met on 12 September 2026.** Every row in 1.1 through 1.9 is
+Built, which is why the version reads 0.2.x. What remains in the audit is
+**section 2, the bootloader**, which was never part of it.
 
-| section | what is not built |
-|---|---|
-| 1.7 Device drivers and buses | USB host controllers -- **EHCI and hot-plug**. xHCI is built and so are hubs; ports are still read once at boot |
-
-**Every other row in 1.1 through 1.9 is Built.**
+This paragraph asked for 1.7's USB row until 13 September, forty lines above an
+entry recording that row closing. A file that records a gate being met and goes
+on guarding it is worse than one that does neither, because a reader believes
+the part they read first.
 
 ### What closed, and when
 
@@ -86,6 +87,53 @@ while somebody remembers is a number that will eventually be wrong, and will
 look exactly the same when it is.
 
 ---
+
+## 0.2.2 -- 13 September 2026
+
+**KF-200.** The register's own tooling read the register with literal patterns,
+against a document that has more than one convention.
+
+`make-issues.py` split it on a hard-coded em dash and fourteen entries had been
+typed with `--`; they were not skipped with a warning, they were **not seen**,
+and the run printed *139 entries* against a file holding 153. It decided an
+issue was closed by matching one of the four forms the register uses for a fix
+line, so **thirty of the kernel's seventy-two entries had their state invisible
+to the tool that publishes them** -- twenty-one bugs never filed, six fixed ones
+standing open. `make-bug-register.py` had both faults too, and reported *178
+entries, highest 178* against a file holding 251.
+
+- the splitter takes either prefix and any of three separators, and
+  canonicalises the separator when it builds the title
+- `is_fixed()` reads the state instead of matching a substring; a `**Status:**`
+  line wins where there is one, and *half fixed* reads as open, because it is
+- `--check` fails if the `## Open` section stops naming exactly the entries that
+  say they are open. It said *"None"*; five entries said otherwise
+- the `AREA` table gained the numbers it was missing, and is keyed by the whole
+  identifier -- forty-four numbers want a different area in each track
+- the page generator fails rather than publishes if the number of headings in
+  the file is not the number it parsed
+
+**Why a bump for a change in `scripts/`.** Nothing here alters a kernel
+instruction, and raising `VERSION` rebuilds the tree the previous matrix was run
+against -- a real cost, and KF-189 is the entry about what happens when that
+dependency is missing. The rule is still a patch per bug fixed. *The change does
+not feel large enough* is the reasoning the version comment in `kernel/Makefile`
+exists to refuse, and it does not become sound because it is being applied to
+tooling.
+
+### The same shape three times, in one register's tools
+
+Each of the three printed a total **derived from its own filter**, so no run of
+any of them could disagree with itself. The third was the script written to
+clean up after the first two: it moved 383 references from `BG-` to `KF-`,
+filtering the walk on a list of file extensions, and reported *383 references in
+69 files*. A `Makefile` has no extension. Twenty-one references in
+`kernel/Makefile`, `boot/Makefile` and `boot/bios/Makefile` were still `BG-` a
+day later, found by reading one of those files for an unrelated reason.
+
+The defence is not a better pattern -- each of the three was written
+deliberately and each was nearly right. It is a second count taken a different
+way: `grep -c '^### '` for the register, `grep -rl` with no filter for the tree.
 
 ## 0.2.1 -- 12 September 2026
 

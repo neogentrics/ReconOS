@@ -5685,7 +5685,7 @@ written the last time it appeared for a different reason.
 - **Cost:** twenty-one entries that could never be filed, six fixed bugs
   standing open, and a run that reported **139 entries against a register of
   153** while printing nothing that looked wrong.
-- **Status:** fixed.
+- **Status:** fixed, kernel 0.2.2.
 
 `scripts/make-issues.py` finds entries by splitting on a literal:
 
@@ -5743,7 +5743,28 @@ against a file holding 251, and would have published the twenty-five entries
 that record their state as `**Status:** fixed.` as *no fix recorded*.
 
 Found the same way and worth saying so: not by reading the script, but by
-putting its own count beside `grep -c '^### '` and seeing them disagree. It now
+putting its own count beside `grep -c '^### '` and seeing them disagree.
+
+### And a third time, in the tool written to clean the first two up
+
+The script that moved 383 references from `BG-` to `KF-` walked the tree
+filtering on a list of extensions -- `.c`, `.h`, `.md`, `.sh`, `.py`, `.S`,
+`.ld`, `.txt` -- and then printed **"383 references in 69 files"**. A `Makefile`
+has no extension. Twenty-one references in `kernel/Makefile`, `boot/Makefile`
+and `boot/bios/Makefile` were not skipped with a warning; they were not looked
+at, and the summary counted what the filter had let through.
+
+Found a day later, by reading `kernel/Makefile` for an unrelated reason and
+seeing `BG-199` in it. Not by any check, because the check would have been the
+same filter asked twice.
+
+**Three instances of one shape in one register's tooling**, and the common
+element is not carelessness about patterns -- each pattern was written
+deliberately and each was nearly right. It is that **every one of the three
+reported a total derived from its own filter**, so no run of any of them could
+ever have disagreed with itself. The defence is not a better pattern. It is a
+second count taken a different way: `grep -c '^### '` for the register,
+`grep -rl` with no filter at all for the tree. It now
 takes both prefixes and all four fix forms, prints a count per track, and
 **fails rather than publishes** if the number of headings in the file is not the
 number it parsed -- because both faults in this entry were a number the parser

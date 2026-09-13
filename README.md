@@ -797,7 +797,7 @@ is why ReconOS can drive its own input now.
 ## The kernel
 
 Phase two, built in parallel with the desktop rather than after it. **Version
-0.2.1**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+0.2.2**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
 
 **The middle digit moved on 12 September 2026 because a rule was met, not
 because the change felt large.** The rule, written down a day earlier: *0.2.0 is
