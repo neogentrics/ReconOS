@@ -180,40 +180,41 @@ SURFACED = [
                                  "still running"]),
 ]
 
-AREA = [
-    ("Memory and paging",   ["page table", "paging", "vm_", "tlb", "address space",
-                             "bitmap", "allocator", "identity map", "direct map",
-                             "cr0.wp", "vector save"]),
-    ("Processors",          ["processor", "secondary", "smp", "trampoline",
-                             "gicv", "vbar", "apic", "core"]),
-    ("Storage",             ["nvme", "ahci", "virtio", "block", "partition",
-                             "gpt", "mbr", "disk", "sector", "usb", "xhci",
-                             "scsi"]),
-    ("Filesystems",         ["reconfs", "fat32", "superblock", "inode",
-                             "cluster", "filesystem", "volume"]),
-    ("Boot and firmware",   ["bootloader", "reconboot", "uefi", "bios", "ovmf",
-                             "esp", "firmware", "stage 1", "stage 2", "signature"]),
-    ("Scheduling and time", ["scheduler", "thread", "preempt", "context switch",
-                             "timer", "clock", "tick", "spinlock", "process"]),
-    ("Drawing and windows", ["window", "draw", "font", "glyph", "title bar",
-                             "skin", "wallpaper", "dialog", "compositor",
-                             "framebuffer", "console"]),
-    ("Input and clicking",  ["click", "keyboard", "mouse", "hit region",
-                             "focus", "alt+tab", "scroll", "caret"]),
-    ("Help and docs",       ["help", "roadmap", "documented", "documentation",
-                             "change log", "readme"]),
-    ("Network",             ["network", "socket", "tls", "smtp", "cookie",
-                             "firewall", "http"]),
-    ("Programs and packages", ["module", "package", "abi", "calculator",
-                             "spawn", "install"]),
-    ("The build",           ["makefile", "cmake", "prerequisite", "pkill",
-                             "encoding", "issue script", "dependency file"]),
-    ("Tests and harnesses", ["harness", "the rig", "test suite", "self-test",
-                             "fixture", "checker", "verify-kernel", "check.sh",
-                             "a test", "tests"]),
-    ("Signing and integrity", ["signing key", "signature", "rsa", "ecdsa",
-                             "keyring", "secret", "digest"]),
-]
+# Where a fault was is **recorded**, not guessed: `scripts/make-issues.py`
+# holds an area for every entry and that is what labels the issue on GitHub.
+#
+# This used to phrase-match into fourteen buckets of its own and the page called
+# the result "derived". Measured against the recorded table over 252 entries it
+# disagreed badly -- six `build` entries under Network, eight `help` entries
+# under Drawing and windows -- and it placed every one, so its unplaced count
+# was zero and its own quality check passed. A classifier that files everything
+# and files much of it wrong draws the same tidy picture as one that works.
+#
+# Reading it here is a coupling between two scripts, so it is checked: an empty
+# table stops the run rather than publishing a page with no areas on it.
+AREA_SOURCE = os.path.join(ROOT, "scripts", "make-issues.py")
+
+AREA_LABEL = {
+    "display": "Drawing and windows", "input": "Input and clicking",
+    "help": "Help", "skins": "Skins", "build": "The build",
+    "applications": "Applications", "network": "Network",
+    "docs": "Documentation", "programs": "Programs", "storage": "Storage",
+    "startup": "Startup", "accounts": "Accounts", "settings": "Settings",
+    "firewall": "Firewall", "kernel": "Kernel",
+}
+
+
+def recorded_areas():
+    src = io.open(AREA_SOURCE, encoding="utf-8").read()
+    table = {k: a for k, a in
+             re.findall(r"'((?:BG|KF)-\d+)':\s*'([a-z-]+)'", src)}
+    if not table:
+        raise SystemExit(
+            "no areas parsed out of %s -- its AREA table has changed shape. "
+            "Every entry would be published with no area and the page would "
+            "look no different, which is why this stops instead."
+            % AREA_SOURCE)
+    return table
 
 
 def plain(text):
@@ -431,7 +432,19 @@ def build(entries, source_mtime):
     highest = max(e["n"] for e in entries)
 
     how, how_unplaced = tally(entries, SURFACED, "surfaced")
-    where, where_unplaced = tally(entries, AREA, "area")
+    # Recorded, so nothing can go unplaced except an entry with no line in
+    # the table -- which is a gap in that table and is reported as one.
+    recorded = recorded_areas()
+    where_counts = {}
+    where_unplaced = 0
+    for e in entries:
+        code = recorded.get(e["id"])
+        e["area"] = AREA_LABEL.get(code, code) if code else None
+        if e["area"] is None:
+            where_unplaced += 1
+        else:
+            where_counts[e["area"]] = where_counts.get(e["area"], 0) + 1
+    where = sorted(where_counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
     parts = []
     parts.append('<!doctype html><html lang="en"><head><meta charset="utf-8">')
@@ -476,13 +489,17 @@ def build(entries, source_mtime):
                      'put a claim on this page that nobody checked.</div>'
                      % (len(open_), ", ".join(e["id"] for e in open_)))
 
-    parts.append('<div class="derived">The two charts below are <strong>derived, not '
-                 'recorded</strong>. The register has no field for how a fault surfaced or '
-                 'which part of the system it was in, so both are worked out by matching '
-                 'phrases in the entry &mdash; which is a guess. The guesses that failed are '
-                 'counted in each chart rather than being folded into a catch-all, because a '
-                 'classifier that files everything under &ldquo;something else&rdquo; draws '
-                 'exactly the same tidy picture as one that works.</div>')
+    parts.append('<div class="derived"><strong>One of the two charts below is a '
+                 'guess and the other is not.</strong> Where a fault was is '
+                 '<strong>recorded</strong> &mdash; every entry carries an area in '
+                 '<code>scripts/make-issues.py</code>, and that is the label its GitHub '
+                 'issue wears. How a fault <em>surfaced</em> has no field anywhere, so it '
+                 'is worked out by matching phrases, and the ones that could not be placed '
+                 'are counted in the chart rather than folded into a catch-all &mdash; '
+                 'because a classifier that files everything under &ldquo;something '
+                 'else&rdquo; draws exactly the same tidy picture as one that works. '
+                 'This page guessed at the area too until 13 September 2026, and did it '
+                 'badly while reporting nothing unplaced.</div>')
 
     parts.append('<section><h2>How they surfaced</h2>')
     parts.append('<p class="lede">Ordered by how many. Read this as a rough shape rather '
@@ -491,6 +508,8 @@ def build(entries, source_mtime):
     parts.append('</section>')
 
     parts.append('<section><h2>Where they were</h2>')
+    parts.append('<p class="lede">Recorded, not inferred &mdash; the same areas '
+                 'the issues are labelled with.</p>')
     parts.append(bars(where, where_unplaced, "b2"))
     parts.append('</section>')
 
@@ -571,12 +590,29 @@ def main():
     # The guard the header talks about. A quarter is not a principled number;
     # it is far enough above today's figure to leave room and far below the
     # point where the chart would be fiction.
-    worst = max(how_unplaced, where_unplaced)
-    if worst * 4 > len(entries):
+    # The two counts stopped meaning the same thing when the area chart became
+    # recorded rather than guessed, so they are checked differently now.
+    #
+    # An entry with no area is a **gap in a table that is meant to be
+    # complete**, and one is already too many: that entry's issue is filed with
+    # no area label at all, and filtering by area then misses it silently.
+    if where_unplaced:
+        missing = [e["id"] for e in entries if not e.get("area")]
         sys.stderr.write(
-            "%d of %d entries could not be classified -- the phrase rules have "
-            "stopped matching how entries are written. Fix the rules rather than "
-            "the threshold.\n" % (worst, len(entries)))
+            "%d entries have no area in scripts/make-issues.py: %s. Add a line "
+            "there; without one the issue is filed with no area label.\n"
+            % (where_unplaced, ", ".join(missing[:12])))
+        return 1
+
+    # How a fault surfaced really is a guess, so it gets a proportion instead.
+    # A quarter is not a principled number; it is far enough above today's
+    # figure to leave room and far below where the chart would be fiction.
+    if how_unplaced * 4 > len(entries):
+        sys.stderr.write(
+            "%d of %d entries could not be placed by how they surfaced -- the "
+            "phrase rules have stopped matching how entries are written. Fix "
+            "the rules rather than the threshold.\n"
+            % (how_unplaced, len(entries)))
         return 1
 
     print("%d entries, %d with a fix recorded, %d without"
