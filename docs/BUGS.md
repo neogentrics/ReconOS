@@ -6301,6 +6301,8 @@ looking at.
 
 ### KF-209 — Tearing down an address space hands the framebuffer to the page allocator
 
+[#436](https://github.com/neogentrics/ReconOS/issues/436)
+
 - **Found:** 13 September 2026, by the first aarch64 boot of checkpoint 21's
   second half: `pmm: asked to free memory below the start of the bitmap`, one
   line after the new self-test passed on x86_64.
