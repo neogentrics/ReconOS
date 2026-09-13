@@ -88,6 +88,120 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.11 -- 13 September 2026
+
+**KF-208: the tamper test could not tamper.** It wrote an `A` at a fixed offset
+of the kernel to produce a file differing from the one that was signed. Byte
+40000 of the kernel had become an `A`.
+
+So the tampered file *was* the signed file — the same sha256, measured twice —
+the loader answered `signature: good` because the kernel was good, and matrix 36
+reported the worst fault this project could have: **a boot chain accepting a
+kernel changed after it was signed.**
+
+```
+original : b57ac973a16c8b73ebd37dd814d7c871
+tampered : b57ac973a16c8b73ebd37dd814d7c871
+```
+
+The same test on the UEFI path flips a bit relative to whatever is there, which
+cannot be a no-op, and has never had this. The BIOS one flips now too.
+
+**And then it checks that the file changed**, which is the part that matters.
+The flip fixes this build; the check fixes the test. Its precondition — *this
+file differs from the one that was signed* — was never established and never
+looked at, so every green it produced was conditional on a byte nobody was
+watching. One build in 256, for a byte that moves whenever the kernel does.
+
+## 0.2.10 -- 13 September 2026
+
+**KF-207: the power-off check greps the log for `power:`.**
+
+That is how `power_off_or_say_why` reports a failure, so the harness treats any
+occurrence as one. Checkpoint 24 then added a *passing* self-test that prints
+
+```
+power: 2 wakeup(s) in 197 ms, against 19 a fixed tick would have cost
+```
+
+on every boot. The check has been red since 0.2.5 on machines that power off
+exactly as asked — and had stopped being able to distinguish the two cases at
+all, which is the half that earned it a number.
+
+**A narrower pattern would have worked today and been the same bug waiting.**
+Any check asking whether a string is absent from an entire log can be broken by
+another subsystem printing. So it asks the positive question: on success the
+guest dies *inside* `power_off()`, which makes `Powering off.` the last line;
+on every failure one of the four `  power: ` lines follows it.
+
+Checked in both directions, which is the step that is easy to skip — the old
+rule failed the good log **and** the bad one, and that is exactly why it was
+worthless. A fix tested only against the false alarm would have accepted a rule
+that always says pass.
+
+## 0.2.9 -- 13 September 2026
+
+**KF-206, and 0.2.7 caused it.**
+
+`timer_start` filed deadlines at `wheel_now + ticks` — the wheel's hand plus the
+delay. That was right while the hand *was* the clock: both were stepped by the
+same tick interrupt, so `wheel_now` and `time_ticks()` were two names for one
+number.
+
+**KF-204 made them two numbers.** The tick count is derived from the monotonic
+counter now, so it advances continuously; the hand only moves when `timer_tick`
+runs. Between interrupts the clock reads up to one tick ahead — so a caller who
+read `time_ticks()` and asked for seventy ticks was filed at `time_ticks() + 69`.
+
+```
+timer: the cascaded timer fired 1 ticks early
+```
+
+**Every timer in the kernel could fire ten milliseconds early.** Bounded, unlike
+KF-204, and the same kind of wrong: a sleep that returns before its time, a
+timeout that expires before the thing it is timing has had its chance.
+
+Measured from `time_ticks()` now, which is what every assertion in the file
+already uses. The reach check moves inside the lock with it: the distance the
+wheel must cover is up to one tick larger than `ticks`, and at the edge of the
+reach that is a timer aliasing onto the top level's own hand instead of being
+refused.
+
+**Worth saying plainly: the fix caused this, not the test.** Removing a second
+author turned an identity into an inequality, and the one line that depended on
+the identity had no way to announce itself. No comment would have caught it.
+Running all twenty-six paths did.
+
+## 0.2.8 -- 13 September 2026
+
+**KF-205: the procfs snapshot test compared two different snapshots.**
+
+`/proc/uptime` reads `<seconds> seconds\n<ms> milliseconds\n` unpadded, so its
+length is how many digits its numbers have. The test proves content is generated
+at *open* by reading one open in two halves with a wait between — then checked
+the join against the file **opened a second time and read whole**, requiring the
+byte counts to match.
+
+Two opens are two moments. Whenever the millisecond field crossed 9 to 10 or 99
+to 100 in the gap, the lengths differed honestly and the test called it a smear:
+about half a percent of boots, one matrix in eight. Its own comment says *it is
+a later snapshot, so the two are not required to be equal* — and they are not
+required to be the same length either, which is the same sentence.
+
+**It was blind as well as flaky.** A real smear leaving the digit count alone
+joins into a well-formed string of the right length, and passed.
+
+It rewinds one open now and compares that snapshot with itself, byte for byte,
+with no clock in the assertion. That needed a `seek` on procfs — not scaffolding:
+`file_ops` says a null seek means *a thing with no position at all, a console, a
+pipe*, and a procfs file is a buffer that already advances one. Its absence is
+what forced the second open.
+
+While there, **the position had two homes** and only one was ever advanced, so
+`f->pos` read zero for ever on a fully-read file. KF-204's shape, caught before
+the second author had anything to disagree with. The duplicate is removed rather
+than kept in step.
+
 ## 0.2.7 -- 13 September 2026
 
 **KF-204: the tick count had two authors, so it outran the clock.** Every timer
