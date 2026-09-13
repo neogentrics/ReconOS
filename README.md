@@ -1027,10 +1027,12 @@ This is the honest list, and it is the reason the desktop is not on it.
 - **Display.** A framebuffer console on whatever the firmware left. No mode
   setting, no surface for a compositor. This is the one that stands between the
   kernel and the desktop.
-- **A socket layer.** The network itself is built — see below — and no user
-  program can reach it. TCP is opened from inside the kernel by connection
-  index; there is no file descriptor that names a connection, so `read` and
-  `write` cannot be pointed at one. Pipes, shared memory and signals exist.
+- **A way for a program to reach the network.** The network itself is built,
+  and so is a socket layer over it — `core/socket.c` has create, bind, listen,
+  accept, connect, send and receive. What it has no caller for outside the
+  kernel: there is no socket system call and no file descriptor that names a
+  connection, so the only thing that opens one today is the network's own
+  self-test. Pipes, shared memory and signals exist.
 - **EHCI.** xHCI works, hubs are enumerated, and a device plugged in or pulled
   out after boot is noticed (KF-199). Older EHCI controllers are not driven —
   on Joshua's ruling, because USB works on the machines this runs on.
