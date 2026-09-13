@@ -122,3 +122,176 @@ user_test_bad_end:
 	.global user_test_bad_len
 user_test_bad_len:
 	.quad	user_test_bad_end - user_test_bad
+
+/* The same three questions, on aarch64. See the x86_64 copy for why the values
+ * live in stack slots rather than in registers across a system call. */
+	.global user_test_facts
+user_test_facts:
+	sub	sp, sp, #128		/* buffer at [sp], saved copy at [sp,#64] */
+
+	/* random(buf, 16), which must return exactly 16. */
+	mov	x0, sp
+	mov	x1, #16
+	mov	x8, #5			/* SYS_RANDOM */
+	svc	#0
+	cmp	x0, #16
+	b.ne	.Lfacts_1
+
+	ldr	x9, [sp]
+	str	x9, [sp, #64]
+
+	/* Again. Identical reads mean a generator that is not advancing. */
+	mov	x0, sp
+	mov	x1, #16
+	mov	x8, #5
+	svc	#0
+	cmp	x0, #16
+	b.ne	.Lfacts_1
+
+	ldr	x9, [sp]
+	ldr	x10, [sp, #64]
+	cmp	x9, x10
+	b.eq	.Lfacts_2
+
+	/* machine(buf, 128): a positive size back, and version 1 at offset 4. */
+	mov	x0, sp
+	mov	x1, #128
+	mov	x8, #6			/* SYS_MACHINE */
+	svc	#0
+	cmp	x0, #0
+	b.le	.Lfacts_3
+
+	ldr	w9, [sp, #4]
+	cmp	w9, #1
+	b.ne	.Lfacts_4
+
+	/* walltime(), a positive number of nanoseconds. */
+	mov	x8, #7			/* SYS_WALLTIME */
+	svc	#0
+	cmp	x0, #0
+	b.le	.Lfacts_5
+
+	/* create() handed a kernel address for its path. See the x86_64 copy:
+	 * the pointer check has to happen before anything else, because this is
+	 * the one call that both walks a path and sets permissions. */
+	movz	x0, #0xFFFF, lsl #48
+	movk	x0, #0x8000, lsl #32
+	mov	x1, #8
+	mov	x2, #0x180		/* 0600 */
+	mov	x3, #0
+	mov	x4, #0
+	mov	x8, #8			/* SYS_CREATE */
+	svc	#0
+	cmn	x0, #2			/* SYS_EFAULT, and nothing else will do */
+	b.ne	.Lfacts_6
+
+	mov	x0, #77
+	b	.Lfacts_exit
+.Lfacts_1:
+	mov	x0, #1
+	b	.Lfacts_exit
+.Lfacts_2:
+	mov	x0, #2
+	b	.Lfacts_exit
+.Lfacts_3:
+	mov	x0, #3
+	b	.Lfacts_exit
+.Lfacts_4:
+	mov	x0, #4
+	b	.Lfacts_exit
+.Lfacts_5:
+	mov	x0, #5
+	b	.Lfacts_exit
+.Lfacts_6:
+	mov	x0, #6
+.Lfacts_exit:
+	mov	x8, #0			/* SYS_EXIT */
+	svc	#0
+.Lfacts_hang:
+	b	.Lfacts_hang
+
+	.global user_test_facts_end
+user_test_facts_end:
+
+	.balign 8
+	.global user_test_facts_len
+user_test_facts_len:
+	.quad	user_test_facts_end - user_test_facts
+
+/* --- a program that signals itself, on aarch64 -----------------------------
+ *
+ * The same test as the x86_64 one and the same exit codes, because what is
+ * being checked is a property of the kernel rather than of an instruction set:
+ * a handler runs on the program's own stack, gets the signal number, and the
+ * program afterwards is still the program.
+ *
+ * x19 carries the count. Callee-saved on this ABI, which is what makes the
+ * check meaningful -- a caller-saved register would prove nothing.
+ */
+	.global user_signal_program
+user_signal_program:
+	mov	x19, #0
+
+	/* sigaction(15, HANDLER, handler, restorer) */
+	mov	x0, #15			/* SIGTERM */
+	mov	x1, #2			/* SIG_ACTION_HANDLER */
+	adr	x2, .Lhandler
+	adr	x3, .Lrestorer
+	mov	x8, #20			/* SYS_SIGACTION */
+	svc	#0
+
+	cbnz	x0, .Lrefused
+
+	/* getpid(), so there is somewhere to send it. */
+	mov	x8, #2
+	svc	#0
+	mov	x20, x0
+
+	/* kill(self, 15) */
+	mov	x0, x20
+	mov	x1, #15
+	mov	x8, #19			/* SYS_KILL */
+	svc	#0
+
+	/* A call whose return is where delivery happens. */
+	mov	x8, #4			/* SYS_YIELD */
+	svc	#0
+
+	/* exit(x19) */
+	mov	x0, x19
+	mov	x8, #0
+	svc	#0
+
+.Lrefused:
+	mov	x0, #1
+	mov	x8, #0
+	svc	#0
+
+.Lhandler:
+	/* x0 holds the signal number. Checked, because a handler entered for
+	 * the wrong reason looks identical from outside. */
+	cmp	x0, #15
+	b.ne	.Lwrong_signal
+
+	add	x19, x19, #7
+	ret				/* to the restorer, in x30 */
+
+.Lwrong_signal:
+	mov	x0, #2
+	mov	x8, #0
+	svc	#0
+
+.Lrestorer:
+	mov	x8, #22			/* SYS_SIGRETURN */
+	svc	#0
+
+.Lrhang:
+	b	.Lrhang
+
+	.global user_signal_program_end
+user_signal_program_end:
+
+	.balign 8
+	.global user_signal_program_len
+user_signal_program_len:
+	.quad	user_signal_program_end - user_signal_program

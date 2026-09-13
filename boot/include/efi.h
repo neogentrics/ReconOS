@@ -25,6 +25,9 @@
 #include <stdbool.h>
 
 typedef uint8_t   UINT8;
+typedef unsigned char BOOLEAN;
+#define TRUE  1
+#define FALSE 0
 typedef uint16_t  UINT16;
 typedef uint32_t  UINT32;
 typedef uint64_t  UINT64;
@@ -43,6 +46,11 @@ typedef UINT64    EFI_VIRTUAL_ADDRESS;
 #define EFI_LOAD_ERROR            0x8000000000000001ULL
 #define EFI_INVALID_PARAMETER     0x8000000000000002ULL
 #define EFI_UNSUPPORTED           0x8000000000000003ULL
+/* LocateHandle's search types. */
+#define AllHandles		0
+#define ByRegisterNotify	1
+#define ByProtocol		2
+
 #define EFI_BUFFER_TOO_SMALL      0x8000000000000005ULL
 #define EFI_NOT_FOUND             0x800000000000000EULL
 
@@ -190,6 +198,74 @@ typedef struct {
 
 /* --- Files -------------------------------------------------------------- */
 
+/* --- Device paths ----------------------------------------------------------
+ *
+ * How firmware names a thing: a chain of variable-length nodes ending in a
+ * terminator, describing a route from the root of the machine to a device and
+ * then, optionally, to a file on it.
+ *
+ * Declared here because chain-loading another operating system needs one: to
+ * start somebody else's bootloader we must hand the firmware a path to *their*
+ * file on *their* filesystem, and the only way to build one is to take the
+ * device's own path and append a file node to it.
+ */
+/* --- Reading a key -----------------------------------------------------
+ *
+ * `ReadKeyStroke` returns EFI_NOT_READY rather than waiting when nothing has
+ * been pressed, which is the behaviour a boot menu wants: a loader that blocks
+ * waiting for somebody is a machine that never comes back from a power cut
+ * because nobody was there to press anything.
+ */
+typedef struct {
+	UINT16 ScanCode;
+	CHAR16 UnicodeChar;
+} EFI_INPUT_KEY;
+
+typedef struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL EFI_SIMPLE_TEXT_INPUT_PROTOCOL;
+
+struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
+	EFI_STATUS (EFIAPI *Reset)(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *self,
+				   BOOLEAN extended);
+	EFI_STATUS (EFIAPI *ReadKeyStroke)(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *self,
+					   EFI_INPUT_KEY *key);
+	void *WaitForKey;
+};
+
+#define EFI_NOT_READY 0x8000000000000006ULL
+
+#define EFI_DEVICE_PATH_PROTOCOL_GUID \
+	{ 0x09576e91, 0x6d3f, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
+
+#define MEDIA_DEVICE_PATH	0x04
+#define MEDIA_FILEPATH_DP	0x04
+#define END_DEVICE_PATH_TYPE	0x7F
+#define END_ENTIRE_DEVICE_PATH	0xFF
+
+typedef struct {
+	UINT8 Type;
+	UINT8 SubType;
+	UINT8 Length[2];	/* two bytes, and *not* aligned -- see below */
+} EFI_DEVICE_PATH_PROTOCOL;
+
+/* The length field is two separate bytes in the specification, not a UINT16,
+ * because nodes are packed with no padding and a 16-bit read of an odd address
+ * faults on some machines. Read and written a byte at a time for that reason. */
+static inline UINT16 dp_len(const EFI_DEVICE_PATH_PROTOCOL *n)
+{
+	return (UINT16)(n->Length[0] | ((UINT16)n->Length[1] << 8));
+}
+
+static inline void dp_set_len(EFI_DEVICE_PATH_PROTOCOL *n, UINT16 v)
+{
+	n->Length[0] = (UINT8)(v & 0xFF);
+	n->Length[1] = (UINT8)(v >> 8);
+}
+
+static inline BOOLEAN dp_is_end(const EFI_DEVICE_PATH_PROTOCOL *n)
+{
+	return n->Type == END_DEVICE_PATH_TYPE;
+}
+
 #define EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID \
 	{ 0x964e5b22, 0x6459, 0x11d2, \
 	  { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
@@ -277,14 +353,20 @@ typedef struct {
 					    void **interface);
 	void *Reserved;
 	void *RegisterProtocolNotify;
-	void *LocateHandle;
+	EFI_STATUS (EFIAPI *LocateHandle)(UINT32 type, EFI_GUID *protocol,
+					  void *key, UINTN *size,
+					  EFI_HANDLE *buffer);
 	void *LocateDevicePath;
 	void *InstallConfigurationTable;
 
-	void *LoadImage;
-	void *StartImage;
+	EFI_STATUS (EFIAPI *LoadImage)(BOOLEAN policy, EFI_HANDLE parent,
+				       EFI_DEVICE_PATH_PROTOCOL *path,
+				       void *source, UINTN size,
+				       EFI_HANDLE *image);
+	EFI_STATUS (EFIAPI *StartImage)(EFI_HANDLE image, UINTN *exit_size,
+					CHAR16 **exit_data);
 	void *Exit;
-	void *UnloadImage;
+	EFI_STATUS (EFIAPI *UnloadImage)(EFI_HANDLE image);
 	EFI_STATUS (EFIAPI *ExitBootServices)(EFI_HANDLE image_handle, UINTN map_key);
 
 	void *GetNextMonotonicCount;
@@ -322,7 +404,7 @@ typedef struct {
 	CHAR16 *FirmwareVendor;
 	UINT32 FirmwareRevision;
 	EFI_HANDLE ConsoleInHandle;
-	void *ConIn;
+	EFI_SIMPLE_TEXT_INPUT_PROTOCOL *ConIn;
 	EFI_HANDLE ConsoleOutHandle;
 	EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *ConOut;
 	EFI_HANDLE StandardErrorHandle;

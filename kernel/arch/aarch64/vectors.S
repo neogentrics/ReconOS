@@ -103,6 +103,19 @@ vector_common:
 	mov	x0, sp
 	bl	trap_dispatch
 
+	/* --- and the one place a return to user mode asks a question -------
+	 *
+	 * The frame is already in hand and already reloaded below, so
+	 * delivering a signal here costs one call and no new branch. The
+	 * comment beneath this has said since it was written that the handler
+	 * may have changed ELR to resume somewhere else -- this is the second
+	 * thing that does, and it needed nothing changed to allow it.
+	 *
+	 * x0 is reloaded from the frame at the very end, so nothing here has
+	 * to preserve it. */
+	mov	x0, sp
+	bl	signal_on_return
+
 	/* Reload unconditionally. The handler may have changed ELR to resume
 	 * somewhere else; reloading an unchanged value costs nothing, and a
 	 * conditional here would be a branch on state the handler owns. */

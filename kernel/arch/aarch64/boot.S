@@ -51,14 +51,40 @@ real_start:
 	 * up are callee-saved, and nothing this file calls is C. */
 	mov	x19, x0
 
-	/* Which core is this? MPIDR_EL1's low byte is the CPU number within its
-	 * cluster. QEMU releases every configured core at the entry point at
-	 * once, so without this, four CPUs race to run the same kernel with the
-	 * same stack. Secondaries sleep until there is an SMP story to wake
-	 * them into. */
+	/* Which core is this? QEMU releases every configured core at the entry
+	 * point at once, so without this, four CPUs race to run the same kernel
+	 * with the same stack. Secondaries sleep until there is an SMP story to
+	 * wake them into.
+	 *
+	 * ALL FOUR AFFINITY LEVELS, not the low byte.
+	 *
+	 * This tested `mpidr & 0xff`, which is affinity level 0 -- the processor
+	 * *within its cluster*. On every machine this kernel had run on there
+	 * was one cluster, so that was unique. On a two-socket board, or on
+	 * anything big.LITTLE, core 0 of every cluster passes a low-byte test:
+	 * several processors would each decide they were the boot processor and
+	 * run kmain at once, on one stack, before a single line of this
+	 * kernel's own SMP code had executed.
+	 *
+	 * Aff0..Aff2 are bits 23:0 and Aff3 is bits 39:32, so the test is that
+	 * every one of them is zero. A machine whose boot processor is not
+	 * affinity zero would park all of them and hang -- visibly, at the very
+	 * first instruction, rather than corrupting a stack and appearing to
+	 * work. Of the two, that is the failure to choose. */
 	mrs	x1, mpidr_el1
-	and	x1, x1, #0xff
-	cbnz	x1, secondary_park
+	and	x2, x1, #0xffffff		/* Aff2:Aff1:Aff0 */
+	lsr	x3, x1, #32
+	and	x3, x3, #0xff		/* Aff3 */
+	orr	x2, x2, x3
+	cbnz	x2, secondary_park
+
+	/* This processor's kernel index, which for the boot processor is zero.
+	 * TPIDR_EL1 is where every processor keeps its own, because MPIDR names
+	 * a position in a topology and the kernel needs a dense array index --
+	 * and because reading a register is what arch_cpu_id() should cost when
+	 * it sits on the path of every lock. Written before any C runs; at reset
+	 * its contents are UNKNOWN. */
+	msr	tpidr_el1, xzr
 
 	/* A stack, at the address it is loaded at rather than the one it is
 	 * linked at. The ABI requires SP to be 16-byte aligned. */
@@ -122,6 +148,47 @@ secondary_entry:
 reconboot_entry:
 	/* x0 = struct reconboot *. Both ABIs agree on this architecture, so
 	   there is nothing to reconcile the way there is on x86_64. */
+
+	/* --- what the loader handed over, before anything here changes it ---
+	 *
+	 * Straight into the kernel's own data, which x86_64 cannot do: there
+	 * the capture has to live beside the page tables at a low address and
+	 * be carried up afterwards, because the identity mapping that reaches
+	 * it is torn down. Here `adrp` is PC-relative, so the same instruction
+	 * names the physical address before the MMU is on and the virtual one
+	 * after -- the distance between the code and the data is the same
+	 * either way.
+	 *
+	 * x0 is absent because it carries the handoff. x1 is absent because it
+	 * is spent naming where to put the others -- there is no store to an
+	 * address that does not first put the address in a register. x16 is
+	 * absent because it holds the entry point being jumped to. The check
+	 * in C reports how many it covers rather than implying it covers
+	 * everything.
+	 */
+	adrp	x1, handoff_saved
+	add	x1, x1, #:lo12:handoff_saved
+	stp	x2, x3, [x1, #0]
+	stp	x4, x5, [x1, #16]
+	stp	x6, x7, [x1, #32]
+	stp	x8, x9, [x1, #48]
+	stp	x10, x11, [x1, #64]
+	stp	x12, x13, [x1, #80]
+	stp	x14, x15, [x1, #96]
+	stp	x17, x18, [x1, #112]
+	stp	x19, x20, [x1, #128]
+	stp	x21, x22, [x1, #144]
+	stp	x23, x24, [x1, #160]
+	stp	x25, x26, [x1, #176]
+	stp	x27, x28, [x1, #192]
+	stp	x29, x30, [x1, #208]
+
+	movz	x2, #0x5245, lsl #48
+	movk	x2, #0x434F, lsl #32
+	movk	x2, #0x4E52, lsl #16
+	movk	x2, #0x4547			/* "RECONREG" */
+	str	x2, [x1, #224]
+
 	mov	x19, x0
 
 	adrp	x1, __stack_top
@@ -367,6 +434,9 @@ secondary_high:
 	ldr	x1, [x1]
 	mov	sp, x1
 
+	/* Its own index, before it runs any C -- arch_cpu_id() reads this. */
+	msr	tpidr_el1, x19
+
 	mov	x0, x19
 	bl	smp_secondary_main
 
@@ -381,6 +451,16 @@ secondary_high:
 	.global reconboot_handoff
 reconboot_handoff:
 	.quad	0
+
+	/* Twenty-eight registers and the mark. In .data rather than beside the
+	 * page tables because this architecture can reach it either way, and
+	 * initialised because a section with bytes in the file arrives as those
+	 * bytes -- though the mark is what is actually trusted, since nothing
+	 * here depends on anyone having cleared anything. */
+	.align 8
+	.global handoff_saved
+handoff_saved:
+	.fill	29, 8, 0
 
 /* --- ReconBoot header ---------------------------------------------------
  *

@@ -14,8 +14,41 @@
  *
  * The invariant SWAPGS depends on, written down because getting it backwards is
  * both easy and silent: while user code runs, GS_BASE is zero and
- * KERNEL_GS_BASE holds this processor's block. One SWAPGS on the way in, one on
- * the way out, and nothing between them may take a second one.
+ * KERNEL_GS_BASE holds this processor's block.
+ *
+ * --- AND WHY BOTH SWAPGS ARE AT THE TOP ---
+ *
+ * This used to swap on the way in and swap back on the way out, holding the
+ * kernel's GS across the whole call and reading the saved user stack pointer
+ * out of GS:8 at the end. That is the ordinary arrangement and it was wrong
+ * here, for a reason that only exists on a kernel with more than one
+ * processor and a preemptible system call.
+ *
+ * Interrupts are enabled across syscall_dispatch, deliberately -- see below.
+ * So the thread can be preempted in the middle of a call and picked up by a
+ * **different processor**. Two things then break at once, and both are
+ * silent until they are not:
+ *
+ *   - GS_BASE is a register, one per processor, and it does not travel with
+ *     the thread. The processor the call returns on has whatever GS_BASE it
+ *     had -- zero, if it has been running kernel threads and never came from
+ *     user mode -- so `movq %gs:8, %rsp` reads address 8 and takes a page
+ *     fault in kernel mode, on the way out of a system call that worked.
+ *
+ *   - Even with GS right, GS:8 is the *other* processor's slot. The user
+ *     stack pointer was written into processor A's block and would be read
+ *     out of processor B's: the program returns standing on some other
+ *     thread's stack.
+ *
+ * The fix is that per-processor storage is only used for the few instructions
+ * where there is no alternative -- before this thread has a stack -- and the
+ * user stack pointer is then carried on the kernel stack, which is the
+ * thread's own and travels with it. GS goes back to the user's immediately
+ * afterwards and the kernel never touches it again, so there is no swap on
+ * the way out and no window at all in which a migration matters.
+ *
+ * The two instructions between the swaps run with interrupts masked, by
+ * SYSCALL itself, through IA32_FMASK.
  */
 
 	.section .text
@@ -28,6 +61,12 @@ x86_syscall_entry:
 	swapgs
 	movq	%rsp, %gs:CPU_USER_RSP
 	movq	%gs:CPU_KERNEL_RSP, %rsp
+
+	/* Off the per-processor block and onto this thread's own stack, which
+	  * is the whole point: from here on nothing this call needs lives
+	  * anywhere that belongs to a processor rather than to the thread. */
+	pushq	%gs:CPU_USER_RSP
+	swapgs
 
 	/* RCX and R11 are not saved because the convention is polite about
 	 * them; they are saved because SYSRET *reads* them. Losing either one
@@ -46,10 +85,11 @@ x86_syscall_entry:
 	pushq	%r8
 	pushq	%r9
 
-	/* Eight pushes, so the stack is still sixteen-byte aligned. The seventh
-	 * C argument goes on the stack and would break that alignment on its
-	 * own, hence the gap pushed with it. */
-	subq	$8, %rsp
+	/* Nine pushes, which leaves the stack eight off sixteen-byte alignment
+	  * -- so the seventh C argument, which goes on the stack, puts it back
+	  * rather than breaking it. It used to be eight pushes and a gap pushed
+	  * alongside the argument; carrying the user stack pointer here is the
+	  * ninth, and it fills that gap exactly. */
 	pushq	%r9			/* a5 */
 
 	/* Shuffle from the system-call convention into the C one. Right to left,
@@ -76,7 +116,29 @@ x86_syscall_entry:
 	call	syscall_dispatch
 	cli
 
-	addq	$16, %rsp		/* the seventh argument and its gap */
+	addq	$8, %rsp		/* the seventh argument */
+
+	/* --- the one place a return to user mode asks a question -----------
+	 *
+	 * Everything below this is the same fixed sequence of pops and a
+	 * SYSRET it has always been. What changed is that the registers those
+	 * pops are about to read can now be *edited* first -- which is how a
+	 * signal handler is entered without this path gaining a branch.
+	 *
+	 * The return value is in RAX and nothing here may disturb it, so it is
+	 * pushed and popped around the call. RDI then points at the saved
+	 * register block:
+	 *
+	 *   [0] r9  [1] r8  [2] r10  [3] rdx  [4] rsi  [5] rdi
+	 *   [6] rflags      [7] user rip      [8] user rsp
+	 *
+	 * Interrupts are already off and stay off. A signal delivered here is
+	 * delivered on the kernel stack with the user's registers still
+	 * saved, which is the only moment where both are true. */
+	pushq	%rax
+	leaq	8(%rsp), %rdi
+	call	signal_on_return
+	popq	%rax
 
 	popq	%r9
 	popq	%r8
@@ -87,11 +149,15 @@ x86_syscall_entry:
 	popq	%r11
 	popq	%rcx
 
-	/* Back onto the user stack while GS still points at the kernel's block,
-	 * and only then swap it back. The other order reads GS:8 through the
-	 * user program's GS base, which is zero, and loads RSP from address 8. */
-	movq	%gs:CPU_USER_RSP, %rsp
-	swapgs
+	/* Back onto the user stack, taken from where this thread left it rather
+	  * than from whichever processor happens to be running now. GS is
+	  * already the user's -- it was swapped back at the top -- so there is
+	  * nothing left to undo.
+	  *
+	  * Interrupts are off, and must be: between this instruction and SYSRET
+	  * the processor is in ring 0 standing on a user stack, and an interrupt
+	  * taken there would push its frame onto memory the program chose. */
+	popq	%rsp
 	sysretq
 
 /* --- The first program ReconOS runs at a lower privilege level ------------
@@ -142,6 +208,107 @@ user_test_program:
 .Lmsg:
 	.ascii	"hello from user mode -- x86_64, ring 3\n"
 .Lmsg_end:
+
+
+/* --- a program that signals itself -----------------------------------------
+ *
+ * The end-to-end proof, and it has to be a real program in ring 3 because
+ * every interesting part of signal delivery happens on the boundary between
+ * there and here. A kernel-side test can check that the decision logic decides
+ * correctly; only this can check that a handler *runs* and that the program
+ * afterwards is still the program.
+ *
+ * What it does, in order:
+ *
+ *   1. registers a handler for signal 15, with a restorer
+ *   2. asks the kernel to send signal 15 to itself
+ *   3. makes any system call, which is what gives the kernel a return to
+ *      deliver on -- the signal is pending from step 2 and arrives here
+ *   4. the handler adds to a counter in a register the ABI says survives
+ *   5. the restorer invokes SYS_SIGRETURN and the program continues
+ *   6. exits with the counter, which is 7 only if all of that happened
+ *
+ * Seven rather than one: a counter that ends at one also ends at one when the
+ * handler ran twice and the restore lost an increment, and zero is what a
+ * program that never entered the handler at all reports.
+ */
+	.global user_signal_program
+user_signal_program:
+	/* RBX holds the count. Callee-saved, so the kernel's own save and
+	 * restore across the handler is what is being checked -- a scratch
+	 * register would prove nothing, because nothing promises to keep one. */
+	xorq	%rbx, %rbx
+
+	/* sigaction(15, HANDLER, .Lhandler, .Lrestorer) */
+	movq	$15, %rdi		/* SIGTERM */
+	movq	$2, %rsi		/* SIG_ACTION_HANDLER */
+	leaq	.Lhandler(%rip), %rdx
+	leaq	.Lrestorer(%rip), %r10
+	movq	$20, %rax
+	syscall
+
+	/* It was refused. Exit with 1 so the failure is distinguishable from
+	 * the handler never running, which exits with 0. */
+	testq	%rax, %rax
+	jnz	.Lrefused
+
+	/* getpid(), so the signal has somewhere to be sent. */
+	movq	$2, %rax		/* SYS_GETPID */
+	syscall
+	movq	%rax, %r12
+
+	/* kill(self, 15) */
+	movq	%r12, %rdi
+	movq	$15, %rsi
+	movq	$19, %rax
+	syscall
+
+	/* A system call whose return is where the signal gets delivered. The
+	 * handler runs somewhere inside this one. */
+	movq	$4, %rax		/* SYS_YIELD */
+	syscall
+
+	/* exit(rbx). Seven if the handler ran once and the restore put
+	 * everything back. */
+	movq	%rbx, %rdi
+	movq	$0, %rax		/* SYS_EXIT */
+	syscall
+
+.Lrefused:
+	movq	$1, %rdi
+	movq	$0, %rax
+	syscall
+
+.Lhandler:
+	/* RDI holds the signal number the kernel delivered. Checked, because a
+	 * handler entered with the wrong number is a handler that would run for
+	 * the wrong reason and look identical from outside. */
+	cmpq	$15, %rdi
+	jne	.Lwrong_signal
+
+	addq	$7, %rbx
+	ret				/* to the restorer the kernel pushed */
+
+.Lwrong_signal:
+	movq	$2, %rdi
+	movq	$0, %rax
+	syscall
+
+.Lrestorer:
+	movq	$22, %rax
+	syscall
+
+	/* Not reached: SYS_SIGRETURN does not come back here, it comes back
+	 * where the handler interrupted. Spinning beats running on. */
+.Lrhang:
+	jmp	.Lrhang
+
+	.global user_signal_program_end
+user_signal_program_end:
+
+	.global user_signal_program_len
+user_signal_program_len:
+	.quad	user_signal_program_end - user_signal_program
 
 	.global user_test_program_end
 user_test_program_end:
@@ -207,3 +374,119 @@ user_test_bad_end:
 	.global user_test_bad_len
 user_test_bad_len:
 	.quad	user_test_bad_end - user_test_bad
+
+/* A program that asks the kernel the three questions the desktop currently
+ * asks the host's /proc.
+ *
+ * It checks its own answers and reports which one failed through its exit code,
+ * because a program that exits normally after getting nonsense is a test that
+ * passes. Every value it compares against is one the kernel cannot return by
+ * accident: a length that must be exactly what was asked for, two random reads
+ * that must differ, and a structure version that must be one.
+ *
+ * Values are kept in stack slots rather than in registers across a system
+ * call. Which registers survive a syscall is a property of the entry path in
+ * another file, and a test that quietly depends on it is a test that breaks
+ * when that path is optimised.
+ */
+	.global user_test_facts
+user_test_facts:
+	subq	$128, %rsp		/* buffer at 0(%rsp), saved copy at 64 */
+
+	/* random(buf, 16), which must return exactly 16. */
+	movq	%rsp, %rdi
+	movq	$16, %rsi
+	movq	$5, %rax		/* SYS_RANDOM */
+	syscall
+	cmpq	$16, %rax
+	jne	.Lfacts_1
+
+	movq	(%rsp), %rax
+	movq	%rax, 64(%rsp)
+
+	/* Again. Two reads that come back identical mean a generator that is
+	 * not advancing, which every other check here would pass. */
+	movq	%rsp, %rdi
+	movq	$16, %rsi
+	movq	$5, %rax
+	syscall
+	cmpq	$16, %rax
+	jne	.Lfacts_1
+
+	movq	(%rsp), %rax
+	cmpq	64(%rsp), %rax
+	je	.Lfacts_2
+
+	/* machine(buf, 128). The return is the size the kernel would write, so
+	 * it must be positive; the version field at offset 4 must be 1. */
+	movq	%rsp, %rdi
+	movq	$128, %rsi
+	movq	$6, %rax		/* SYS_MACHINE */
+	syscall
+	cmpq	$0, %rax
+	jle	.Lfacts_3
+
+	movl	4(%rsp), %eax
+	cmpl	$1, %eax
+	jne	.Lfacts_4
+
+	/* walltime(), which must be a positive number of nanoseconds. */
+	movq	$7, %rax		/* SYS_WALLTIME */
+	syscall
+	cmpq	$0, %rax
+	jle	.Lfacts_5
+
+	/* create() handed a kernel address for its path.
+	 *
+	 * The one thing about this call that must be true on every machine,
+	 * including the ones with no filesystem at all: the pointer check
+	 * happens before anything else. A kernel that walked a path through an
+	 * address the caller does not own would do it while creating a file
+	 * whose permissions the caller chose, which is the worst possible
+	 * combination of the two.
+	 *
+	 * The direct map's base, which is every byte of physical memory. Fourth
+	 * argument in R10 rather than RCX, because SYSCALL destroys RCX before
+	 * the kernel sees it. */
+	movabsq	$0xFFFF800000000000, %rdi
+	movq	$8, %rsi
+	movq	$0x180, %rdx		/* 0600 */
+	movq	$0, %r10
+	movq	$0, %r8
+	movq	$8, %rax		/* SYS_CREATE */
+	syscall
+	cmpq	$-2, %rax		/* SYS_EFAULT, and nothing else will do */
+	jne	.Lfacts_6
+
+	movq	$77, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_1:
+	movq	$1, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_2:
+	movq	$2, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_3:
+	movq	$3, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_4:
+	movq	$4, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_5:
+	movq	$5, %rdi
+	jmp	.Lfacts_exit
+.Lfacts_6:
+	movq	$6, %rdi
+.Lfacts_exit:
+	movq	$0, %rax		/* SYS_EXIT */
+	syscall
+.Lfacts_hang:
+	jmp	.Lfacts_hang
+
+	.global user_test_facts_end
+user_test_facts_end:
+
+	.balign 8
+	.global user_test_facts_len
+user_test_facts_len:
+	.quad	user_test_facts_end - user_test_facts

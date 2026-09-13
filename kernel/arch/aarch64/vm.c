@@ -23,7 +23,11 @@
 #include "aarch64.h"
 
 #include <recon/kernel/vm.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/pageage.h>
+#include <recon/kernel/evict.h>
 #include <recon/kernel/arch.h>
+#include <recon/kernel/smp.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/cpu.h>
 #include <recon/kernel/console.h>
@@ -89,13 +93,32 @@ void *phys_to_virt(paddr_t phys)
 	return (void *)(uintptr_t)(DIRECT_MAP_BASE + phys);
 }
 
+/* The physical address behind a direct-map pointer, or zero.
+ *
+ * The same fault x86_64 had, in the same words, and found there first: the
+ * kernel image is mapped at KERNEL_VMA, which is *above* DIRECT_MAP_BASE, so
+ * every higher-half address passed the test and the subtraction produced a
+ * number for pointers that have no direct-map physical address at all.
+ *
+ * Zero is the answer callers check for, and it was unreachable. Fixed here at
+ * the same time rather than later: this architecture has the same layout, the
+ * same drivers above it, and would have had the same silent write to nowhere
+ * the first time anything handed a driver a stack buffer. (KF-193)
+ */
 paddr_t virt_to_phys(const void *virt)
 {
 	u64 v = (u64)(uintptr_t)virt;
 
-	if (direct_map_live && v >= DIRECT_MAP_BASE)
+	if (direct_map_live && v >= DIRECT_MAP_BASE && v < KERNEL_VMA)
 		return (paddr_t)(v - DIRECT_MAP_BASE);
-	return (paddr_t)v;
+
+	/* Below the higher half: identity mapped, from before the switch. */
+	if (v < DIRECT_MAP_BASE)
+		return (paddr_t)v;
+
+	/* Higher half and not the direct map. There is no physical address to
+	 * give, and giving one anyway is the bug. */
+	return 0;
 }
 
 static u64 *table_at(paddr_t phys)
@@ -185,7 +208,16 @@ static u64 leaf_attrs(unsigned flags, bool block)
 
 	a |= ATTR_AF;
 
-	if (flags & VM_DEVICE) {
+	if (flags & (VM_DEVICE | VM_WRITE_COMBINE)) {
+		/* Write-combining falls back to device memory here, and that
+		 * is a deliberate choice rather than an omission.
+		 *
+		 * This architecture can express something close to it -- Normal
+		 * Non-Cacheable, which permits gathering -- but it would need
+		 * another MAIR entry and the only caller is a framebuffer that
+		 * this architecture's firmware does not currently provide one
+		 * of. Falling back is correct and slower; guessing at an
+		 * attribute nothing exercises is neither. */
 		a |= ATTR_IDX(MAIR_DEVICE);
 		/* Device memory is not cacheable, so shareability is
 		 * meaningless for it and left alone. */
@@ -227,9 +259,20 @@ static u64 leaf_attrs(unsigned flags, bool block)
 
 /* Which root a virtual address belongs to. The hardware decides this by the
  * top bits, and so does this function, for the same reason. */
+/* Held per processor: two processors run two different programs at the same
+ * instant, so there is no single answer to "which address space is current".
+ * Null means the kernel's own. */
+static u64 *active_user_root[MAX_CPUS];
+
 static u64 *root_for(vaddr_t va)
 {
-	return (va >> 63) ? ttbr1_root : ttbr0_root;
+	u64 *user;
+
+	if (va >> 63)
+		return ttbr1_root;
+
+	user = active_user_root[arch_cpu_id()];
+	return user ? user : ttbr0_root;
 }
 
 bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
@@ -284,6 +327,93 @@ bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags)
 
 	return true;
 }
+
+/* Takes a mapping away. See the x86_64 file for the reasoning, which is the
+ * same on both: the entry is cleared before the invalidation rather than after,
+ * a large mapping is never split to satisfy a small request, and nothing is
+ * freed because this cannot know who else points at the page.
+ *
+ * The one difference is that the invalidation here reaches every processor by
+ * itself -- `tlbi vaae1is` carries an Inner Shareable suffix and the hardware
+ * broadcasts it. The x86_64 side needs an interrupt and an acknowledgement to
+ * achieve the same sentence.
+ */
+bool vm_unmap(vaddr_t va, u64 size)
+{
+	if ((va | size) & (PAGE_SIZE - 1))
+		panic("vm_unmap: unaligned request");
+
+	while (size) {
+		u64 *l0 = root_for(va);
+		unsigned i0 = (unsigned)((va >> 39) & 0x1FF);
+		unsigned i1 = (unsigned)((va >> 30) & 0x1FF);
+		unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
+		unsigned i3 = (unsigned)((va >> 12) & 0x1FF);
+
+		u64 *l1 = next_level(l0, i0, false);
+		u64 *l2, *l3;
+		u64 old;
+
+		/* Nothing there is not an error: a caller tearing down a range
+		 * it only partly mapped is doing the right thing. */
+		if (!l1) {
+			va += PAGE_SIZE;
+			size -= PAGE_SIZE;
+			continue;
+		}
+
+		if ((l1[i1] & 3) == DESC_BLOCK) {
+			if (size < SIZE_1G || (va & (SIZE_1G - 1)))
+				return false;
+
+			old = l1[i1];
+			l1[i1] = DESC_INVALID;
+			invalidate_if_live(old, va);
+			mapped_1g--;
+			va += SIZE_1G;
+			size -= SIZE_1G;
+			continue;
+		}
+
+		l2 = next_level(l1, i1, false);
+		if (!l2) {
+			va += PAGE_SIZE;
+			size -= PAGE_SIZE;
+			continue;
+		}
+
+		if ((l2[i2] & 3) == DESC_BLOCK) {
+			if (size < SIZE_2M || (va & (SIZE_2M - 1)))
+				return false;
+
+			old = l2[i2];
+			l2[i2] = DESC_INVALID;
+			invalidate_if_live(old, va);
+			mapped_2m--;
+			va += SIZE_2M;
+			size -= SIZE_2M;
+			continue;
+		}
+
+		l3 = next_level(l2, i2, false);
+		if (l3 && (l3[i3] & 3) != DESC_INVALID) {
+			old = l3[i3];
+			l3[i3] = DESC_INVALID;
+			invalidate_if_live(old, va);
+			mapped_4k--;
+		}
+
+		va += PAGE_SIZE;
+		size -= PAGE_SIZE;
+	}
+
+	return true;
+}
+
+/* How many pages have been touched for the first time since their flag
+ * was cleared. On a processor with no hardware update this is the cost of
+ * measuring, one trap at a time, and it is reported rather than absorbed. */
+static unsigned access_flag_faults;
 
 paddr_t vm_lookup(vaddr_t va)
 {
@@ -430,16 +560,34 @@ void vm_init(void)
 	 * reaching for it -- which is the right way round, since a map that
 	 * covers what nothing uses is a map that hides what nothing checked. */
 	{
-		static const paddr_t fixed_devices[] = {
-			PL011_BASE,	/* console */
-			GICD_BASE,	/* interrupt controller, distributor */
-			GICC_BASE,	/* interrupt controller, CPU interface */
-			PL031_BASE,	/* real-time clock */
+		/* Each one carries its own size, because they are not all the
+		 * same size. Sixteen pages was enough for every register block
+		 * here until the GICv3 redistributors, which are a *pair* of
+		 * 64KiB frames per processor laid end to end -- and a machine
+		 * with sixteen processors puts the sixteenth frame two
+		 * megabytes past the start. Mapping them all at one fixed size
+		 * left the far frames unmapped, and the read that walked to
+		 * them took a translation fault. */
+		static const struct {
+			paddr_t base;
+			unsigned pages;
+		} fixed_devices[] = {
+			{ PL011_BASE, 16 },	/* console */
+			{ GICD_BASE,  16 },	/* interrupt controller */
+			{ GICC_BASE,  16 },	/* its v2 CPU interface */
+			{ PL031_BASE, 16 },	/* real-time clock */
+
+			/* Sixty-four redistributor pairs: more processors than
+			 * this kernel can hold, deliberately, so that a machine
+			 * larger than MAX_CPUS can still be *walked* and
+			 * reported rather than faulting while being counted. */
+			{ GICR_BASE, 64 * 0x20000 / PAGE_SIZE },
 		};
 
 		for (unsigned i = 0; i < RK_ARRAY_LEN(fixed_devices); i++)
-			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i],
-				    fixed_devices[i], PAGE_SIZE * 16,
+			if (!vm_map(DIRECT_MAP_BASE + fixed_devices[i].base,
+				    fixed_devices[i].base,
+				    PAGE_SIZE * fixed_devices[i].pages,
 				    VM_READ | VM_WRITE | VM_DEVICE | VM_GLOBAL))
 				panic("vm: could not map the machine's fixed hardware");
 	}
@@ -503,6 +651,217 @@ void vm_init(void)
 	pmm_remap();
 }
 
+/* --- what the kernel has in the half a process is meant to own -------------
+ *
+ * The same report as x86_64's, and it is worth having on both even though this
+ * architecture separates the halves in hardware. TTBR0 translates the low half
+ * and TTBR1 the high one, so "give each process its own low half" is a register
+ * write here rather than a page-table redesign -- but only if the low half
+ * holds nothing the kernel still needs. What it actually holds is the question,
+ * and this answers it by walking the live tables rather than by reading the
+ * code that built them.
+ */
+struct low_walk {
+	vaddr_t  start;
+	vaddr_t  end;
+	bool     user;
+	bool     open;
+	unsigned runs;
+	unsigned kernel_runs;
+};
+
+static void low_close(struct low_walk *w)
+{
+	if (!w->open)
+		return;
+
+	if (w->runs < 8)
+		kprintf("  %s : 0x%lx-0x%lx\n",
+			w->user ? "a program " : "the kernel",
+			(unsigned long)w->start,
+			(unsigned long)(w->end - 1));
+
+	w->runs++;
+	if (!w->user)
+		w->kernel_runs++;
+
+	w->open = false;
+}
+
+static void low_add(struct low_walk *w, vaddr_t va, u64 span, bool user)
+{
+	/* Adjacent ranges join only when they are owned the same way: two
+	 * neighbours with different owners are exactly what this is looking
+	 * for and must not be merged away. */
+	if (w->open && w->user == user && w->end == va) {
+		w->end = va + span;
+		return;
+	}
+
+	low_close(w);
+
+	w->open  = true;
+	w->start = va;
+	w->end   = va + span;
+	w->user  = user;
+}
+
+/* Level 4 is the l0 table, level 1 the last. The access-permission field
+ * carries both questions at once on this architecture; its low bit is the one
+ * that says whether EL0 may reach the page at all. */
+static void low_level(struct low_walk *w, u64 *table, unsigned level,
+		      vaddr_t base)
+{
+	u64 span = 1ULL << (12 + 9 * (level - 1));
+	unsigned i;
+
+	for (i = 0; i < 512; i++) {
+		u64 e = table[i];
+		vaddr_t va = base + (vaddr_t)i * span;
+		bool user;
+
+		if ((e & 3) == DESC_INVALID)
+			continue;
+
+		user = ((e >> 6) & 1) != 0;
+
+		if (level == 1 || (level < 4 && (e & 3) == DESC_BLOCK))
+			low_add(w, va, span, user);
+		else
+			low_level(w, table_at(e & ADDR_MASK), level - 1, va);
+	}
+}
+
+unsigned vm_user_half_report(void)
+{
+	struct low_walk w;
+
+	kmemset(&w, 0, sizeof(w));
+
+	kprintf("\nThe user half\n");
+	low_level(&w, ttbr0_root, 4, 0);
+	low_close(&w);
+
+	if (!w.runs)
+		kputs("  nothing is mapped in TTBR0\n");
+
+	kprintf("  kernel-owned : %u of %u range%s\n",
+		w.kernel_runs, w.runs, w.runs == 1 ? "" : "s");
+
+	return w.kernel_runs;
+}
+
+/* --- an address space of its own -----------------------------------------
+ *
+ * This architecture already asked the question the x86_64 side had to be
+ * taught: TTBR0 translates the low half and TTBR1 the high one, chosen by the
+ * top bits of the address, in hardware. So a process address space here is a
+ * TTBR0 root and nothing else -- there is no kernel half to copy into it,
+ * because the kernel half is a different register that never changes.
+ *
+ * The whole of a process root is the program's, which is why the teardown walks
+ * all 512 entries rather than the lower half only.
+ */
+paddr_t arch_as_new_root(void)
+{
+	u64 *root = alloc_table();
+
+	if (!root)
+		return 0;
+
+	return virt_to_phys(root);
+}
+
+/* Frees the page tables a program's mappings caused to exist, **and the pages
+ * they pointed at**.
+ *
+ * That second half used to be a sentence saying the opposite -- "not the pages
+ * they pointed at: whoever allocated the memory frees the memory" -- and there
+ * was nobody else. See KF-182 and the longer note in the x86_64 copy.
+ *
+ * A page shared with other spaces is left alone: today the page of zeroes. */
+static u64 leaves_freed;
+
+u64 vm_leaves_freed(void)
+{
+	return leaves_freed;
+}
+
+static void free_tables(u64 *table, unsigned level)
+{
+	unsigned i;
+
+	for (i = 0; i < 512; i++) {
+		u64 e = table[i];
+
+		if ((e & 3) == DESC_INVALID)
+			continue;
+
+		/* A block is a leaf -- memory, not a table. Left alone: see
+		 * the x86_64 copy for why a large mapping is not a page to
+		 * hand back. */
+		if (level < 4 && (e & 3) == DESC_BLOCK)
+			continue;
+
+		if (level > 1) {
+			free_tables(table_at(e & ADDR_MASK), level - 1);
+			pmm_free_page(e & ADDR_MASK);
+			table_pages--;
+		} else {
+			/* Whatever kind of page it is. A leaf here may be the
+			 * machine's shared zeroes, a page of a file somebody
+			 * else still has mapped, or this space's own -- and a
+			 * page table entry looks identical for all three. */
+			addrspace_release_page(e & ADDR_MASK);
+			leaves_freed++;
+		}
+	}
+}
+
+void arch_as_free_root(paddr_t root)
+{
+	if (!root)
+		return;
+
+	free_tables(table_at(root), 4);
+
+	pmm_free_page(root);
+	table_pages--;
+}
+
+/* Makes an address space the one this processor translates the low half
+ * through. Root zero means the kernel's own TTBR0, which holds nothing since
+ * the secondary stacks stopped being identity mapped -- so a kernel thread
+ * runs with an empty low half, and a stray pointer into it faults rather than
+ * finding whatever the last program left.
+ *
+ * THE FLUSH IS HEAVIER THAN IT NEEDS TO BE, AND THAT IS WRITTEN DOWN RATHER
+ * THAN HIDDEN. Nothing here uses ASIDs, so the processor cannot tell one
+ * program's translations from another's and the whole of EL1's local set has
+ * to go. ASIDs are the fix and they are a register-allocation problem with a
+ * recycling policy attached -- worth doing when there is a measurement asking
+ * for it, not before. Local rather than broadcast on purpose: another
+ * processor's translations of *its* program are not made wrong by this one
+ * changing programs.
+ */
+void arch_as_activate(paddr_t root)
+{
+	unsigned cpu = arch_cpu_id();
+	u64 target = root ? (u64)root : (u64)ttbr0_phys;
+
+	active_user_root[cpu] = root ? table_at(root) : NULL;
+
+	__asm__ volatile(
+		"msr ttbr0_el1, %0\n"
+		"isb\n"
+		"tlbi vmalle1\n"
+		"dsb nsh\n"
+		"isb\n"
+		:
+		: "r"(target)
+		: "memory");
+}
+
 void vm_print_summary(void)
 {
 	kprintf("\nVirtual memory\n");
@@ -554,6 +913,297 @@ bool vm_self_test(void)
 		ok = false;
 	}
 
+	/* --- taking a mapping away, and proving the processor believes it ---
+	 *
+	 * Two separate claims, and only the second is hard.
+	 *
+	 * The easy one is that the entry is gone from the tables, which
+	 * `vm_lookup` answers by walking them.
+	 *
+	 * The one that matters is that the *translation* is gone, which is a
+	 * different question: a cached translation is consulted before the table
+	 * it came from, so a page table can be perfect and the processor still
+	 * reach the old page. That is exactly the fault checkpoint 10 found,
+	 * where the second user program read the first program's memory through
+	 * tables that were correct.
+	 *
+	 * So this maps a second, differently-filled page at the same address and
+	 * reads it. If the unmap forgot to invalidate, the entry it left behind
+	 * is not present -- so the map that follows sees nothing live, skips its
+	 * own invalidation, and the stale translation survives to answer with the
+	 * *first* page. The read is the assertion; every table involved would
+	 * look right.
+	 */
+	{
+		/* A slot nothing else uses: above the direct map, below the
+		 * kernel image, and never mapped by anything at boot. */
+		const vaddr_t at = 0xFFFF900000000000ULL;
+		paddr_t first = pmm_alloc_page();
+		paddr_t second = pmm_alloc_page();
+
+		if (!first || !second) {
+			kputs("  vm: could not allocate two pages to test "
+			      "unmapping with\n");
+			ok = false;
+		} else {
+			volatile u32 *seen = (volatile u32 *)at;
+
+			*(volatile u32 *)phys_to_virt(first)  = 0x1111FFFFU;
+			*(volatile u32 *)phys_to_virt(second) = 0x2222FFFFU;
+
+			if (!vm_map(at, first, PAGE_SIZE, VM_READ | VM_WRITE) ||
+			    *seen != 0x1111FFFFU) {
+				kputs("  vm: the page it was about to unmap was "
+				      "not readable in the first place\n");
+				ok = false;
+			}
+
+			if (!vm_unmap(at, PAGE_SIZE)) {
+				kputs("  vm: it refused to unmap a four-kilobyte "
+				      "page it had just mapped\n");
+				ok = false;
+			}
+
+			if (vm_lookup(at) != 0) {
+				kputs("  vm: an unmapped address still resolves "
+				      "to a page\n");
+				ok = false;
+			}
+
+			if (!vm_map(at, second, PAGE_SIZE, VM_READ | VM_WRITE)) {
+				kputs("  vm: could not map a second page where "
+				      "the first had been\n");
+				ok = false;
+			} else if (*seen == 0x1111FFFFU) {
+				kputs("  vm: after unmapping and mapping another "
+				      "page, the address still reads the first "
+				      "one -- the translation was never "
+				      "invalidated\n");
+				ok = false;
+			} else if (*seen != 0x2222FFFFU) {
+				kputs("  vm: the address reads neither page\n");
+				ok = false;
+			}
+
+			vm_unmap(at, PAGE_SIZE);
+			pmm_free_page(first);
+			pmm_free_page(second);
+		}
+	}
+
+	/* Unmapping something that was never mapped is not an error. A caller
+	 * unwinding a range it only partly built has to be able to say "take all
+	 * of this away" without tracking how far it got. */
+	if (!vm_unmap(0xFFFF900000000000ULL, PAGE_SIZE)) {
+		kputs("  vm: unmapping an address that was not mapped was "
+		      "reported as a failure\n");
+		ok = false;
+	}
+
 	pmm_free_page(page);
 	return ok;
+}
+
+/* Nothing to report. `tlbi ... is` broadcasts to every processor in the inner
+ * shareable domain in hardware, so there is no message to send, nothing to wait
+ * for, and no way for one to go unanswered. */
+void vm_print_shootdowns(void)
+{
+}
+
+/* --- how recently a page was touched -------------------------------------
+ *
+ * ATTR_AF has been set on every mapping this kernel has ever made and never
+ * read. Clearing it is how you ask "has this been touched since I last looked",
+ * and on this architecture the answer arrives in a way it does not on x86_64.
+ *
+ * **Before ARMv8.1 there is no hardware update of the Access Flag at all.** A
+ * valid descriptor with AF clear does not quietly get it set on access -- the
+ * access *faults*, with an Access Flag fault, and software sets the bit and
+ * returns. Cortex-A72, which is what the rig runs, is one of those cores.
+ *
+ * That is more accurate than a bit the processor sets when it happens to refill
+ * a translation: a fault is exact, and it happens on the first touch rather than
+ * at some point afterwards. It is also far more expensive -- one trap per page
+ * per sweep -- which is why vm_page_age_is_cheap exists and why a caller is told
+ * the answer rather than left to assume the two architectures cost the same.
+ *
+ * ARMv8.1 and later can do it in hardware, and the field that says so is read
+ * below rather than guessed from the processor's name.
+ */
+static u64 *leaf_entry_any(vaddr_t va)
+{
+	u64 *l0 = root_for(va);
+	unsigned i0 = (unsigned)((va >> 39) & 0x1FF);
+	unsigned i1 = (unsigned)((va >> 30) & 0x1FF);
+	unsigned i2 = (unsigned)((va >> 21) & 0x1FF);
+	unsigned i3 = (unsigned)((va >> 12) & 0x1FF);
+	u64 *l1, *l2, *l3;
+
+	if (!l0)
+		return 0;
+
+	l1 = next_level(l0, i0, false);
+	if (!l1)
+		return 0;
+
+	/* A block descriptor carries the flag for a whole gigabyte or two
+	 * megabytes. Readable, and a different measurement from the one this is
+	 * for, so it is refused rather than answered at the wrong granularity.
+	 */
+	if ((l1[i1] & 3) == DESC_BLOCK)
+		return 0;
+
+	l2 = next_level(l1, i1, false);
+	if (!l2)
+		return 0;
+
+	if ((l2[i2] & 3) == DESC_BLOCK)
+		return 0;
+
+	l3 = next_level(l2, i2, false);
+	if (!l3)
+		return 0;
+
+	/* The slot, valid or not. A swapped page has a descriptor that
+	 * is deliberately invalid, so a walk that stopped at invalid
+	 * could never find one. */
+	return &l3[i3];
+}
+
+static u64 *leaf_entry(vaddr_t va)
+{
+	u64 *entry = leaf_entry_any(va);
+
+	return (entry && (*entry & 3) == DESC_PAGE) ? entry : 0;
+}
+
+bool vm_page_touched(vaddr_t va, bool clear)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	bool was;
+
+	if (!entry)
+		return false;
+
+	was = (*entry & ATTR_AF) != 0;
+
+	if (clear && was) {
+		*entry &= ~ATTR_AF;
+		invalidate_if_live(*entry | DESC_PAGE, page);
+	}
+
+	return was;
+}
+
+bool vm_page_age_is_cheap(void)
+{
+	u64 mmfr1;
+
+	/* ID_AA64MMFR1_EL1.HAFDBS, bits 3:0. Zero means the processor does not
+	 * update the flag at all and every sample costs a fault; anything else
+	 * means it does it in hardware.
+	 *
+	 * Read rather than inferred from the processor's name, for the same
+	 * reason checkpoint 3 reads what the chip offers rather than what the
+	 * architecture allows: the two are not the same question, and the
+	 * second one has been wrong here before. */
+	__asm__ volatile("mrs %0, id_aa64mmfr1_el1" : "=r"(mmfr1));
+
+	return (mmfr1 & 0xF) != 0;
+}
+
+/* Answers an Access Flag fault by setting the flag.
+ *
+ * Called from the abort path for fault status codes 0x08 to 0x0B, which are the
+ * four levels of "this descriptor is valid and its Access Flag is clear". Before
+ * page-age sampling existed nothing in this kernel ever cleared that flag, so
+ * this fault could not happen and the abort decoder had no name for it -- an
+ * unnamed abort is a panic, so arming the measurement without this would have
+ * turned the first sampled page into a dead machine.
+ *
+ * Returns true if it handled it. The flag is set and the translation
+ * invalidated; the faulting instruction is retried and succeeds.
+ */
+bool vm_fault_access_flag(vaddr_t va)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+
+	if (!entry)
+		return false;
+
+	/* Already set means this was not an access-flag fault after all, and
+	 * answering it would turn a real fault into a silent retry loop. */
+	if (*entry & ATTR_AF)
+		return false;
+
+	*entry |= ATTR_AF;
+	invalidate_if_live(*entry, page);
+
+	access_flag_faults++;
+	return true;
+}
+
+u64 vm_page_age_faults(void)
+{
+	return access_flag_faults;
+}
+
+/* --- a descriptor that names a swap slot instead of a page ----------------
+ *
+ * The same idea as x86_64 and the same reasoning: a descriptor whose low two
+ * bits are 0b00 is invalid, the processor reads nothing else in it, and every
+ * other bit is software's.
+ *
+ * Bit 2 is the marker, which is inside the field the architecture reserves for
+ * software use in an invalid descriptor. The slot goes at bit 12 upward.
+ */
+#define DESC_SWAPPED   (1ULL << 2)
+#define DESC_SLOT_SHIFT 12
+
+bool vm_swap_out(vaddr_t va, u32 slot)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry(page);
+	u64 old;
+
+	if (!entry || !slot)
+		return false;
+
+	old = *entry;
+
+	if ((old & 3) != DESC_PAGE)
+		return false;
+
+	*entry = ((u64)slot << DESC_SLOT_SHIFT) | DESC_SWAPPED;
+
+	/* invalidate_if_live is given the *old* descriptor, because what it
+	 * decides from is whether there was a live translation to remove -- and
+	 * the new one is deliberately not live. */
+	invalidate_if_live(old, page);
+	return true;
+}
+
+u32 vm_swap_slot(vaddr_t va)
+{
+	vaddr_t page = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	u64 *entry = leaf_entry_any(page);
+	u64 value;
+
+	if (!entry)
+		return 0;
+
+	value = *entry;
+
+	/* A valid descriptor carrying the marker is one of the impossible
+	 * states. Answered as "not swapped", which leaves the page alone. */
+	if ((value & 3) != 0)
+		return 0;
+
+	if (!(value & DESC_SWAPPED))
+		return 0;
+
+	return (u32)(value >> DESC_SLOT_SHIFT);
 }

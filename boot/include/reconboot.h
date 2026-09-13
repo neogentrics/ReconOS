@@ -112,6 +112,14 @@ struct reconboot_framebuffer {
 
 #define RECONBOOT_FIRMWARE_UEFI 1
 
+/* A PC BIOS. Added when the BIOS loader learned to produce this handoff, and
+ * the kernel had been assuming the answer: it wrote BOOT_FIRMWARE_UEFI in
+ * whenever it saw a ReconBoot structure, because until then only one loader
+ * produced one. A machine with no UEFI in it would have reported "firmware :
+ * UEFI" -- true when it was written, and false the moment there was a second
+ * loader. */
+#define RECONBOOT_FIRMWARE_BIOS 2
+
 struct reconboot {
 	uint64_t magic;
 	uint32_t version;

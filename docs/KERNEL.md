@@ -14,12 +14,82 @@ desktop needs. This file is the kernel's side.
 
 ## Version
 
-`0.0.11`. The number says what works. What works: it boots four ways across two
-architectures, knows which firmware is underneath it, knows what the processor
-can do, knows what memory exists, hands pages of it out, runs on page tables it built itself, allocates memory by
-the byte, says where and why it faulted instead of resetting, keeps two
-clocks, services a hundred interrupts a second, runs threads and takes
-execution away from them, and is started by a bootloader we wrote.
+`0.2.1`, and **the middle digit moved on 12 September 2026 because the rule
+was met**: every row in sections 1.1 to 1.9 below is Built. Three verification
+runs in one day closed the last of them -- matrix 24 took signals, the HPET,
+ext2 and procfs and I2C/SPI; matrix 26 took the network stack, which had been
+0 of 4 and the largest single thing left; matrix 29 took USB hot-plug.
+
+Two rulings were needed and both were made in the open, on the rows they affect:
+**ext4** moved to section 2.3, and **EHCI** stays named in 1.7 without gating it.
+Neither changed what is built; both changed what a row is asking for. Still
+named, absent, and outside the gate: IPv6, EHCI, and KF-192's missing IDE
+driver.
+
+Before that, the number said what works, and **the first digit moved because what
+works changed in kind rather than in amount**: `0.1.0` was the first version of
+this kernel that a person could type into, and the first that survived running
+out of memory.
+
+Since then the rule is **a patch per bug fixed** — one `BG-` closed, one bump,
+in the same commit — which is why the number is at `.11` rather than still at
+`.0` eleven fixes later. `0.2.0` is not reached by judgement about what counts
+as a big change: it is reached when **every row in sections 1.1 to 1.9 of the
+blueprint audit is Built**, which is a fact anybody can check. Both rules are
+written beside `VERSION` in `kernel/Makefile`, and the history is in
+[KERNEL-CHANGELOG.md](KERNEL-CHANGELOG.md).
+
+Before it, the answer to exhaustion was to fail the allocation, and every screen
+it had ever drawn had been read and not touched.
+
+What works: it boots four ways across two architectures, knows which firmware is
+underneath it, knows what the processor can do, knows what memory exists, hands
+pages of it out, runs on page tables it built itself, allocates memory by the
+byte, says where and why it faulted instead of resetting, keeps two clocks,
+services a hundred interrupts a second, runs threads and takes execution away
+from them, and is started by a bootloader we wrote — which refuses to start it if
+it is not signed.
+
+It reads and writes disks over four drivers, reads every partition layout it has
+been shown, has a filesystem of its own that survives the power going out, reads
+and writes FAT32 well enough that somebody else's tools agree with it, installs
+itself onto a disk beside Windows without disturbing what is there, boots the
+machine it installed, offers the other systems it found, and says what is wrong
+with a machine that will not start.
+
+It turns the machine off by interpreting the vendor's own bytecode, tells the
+other processors when a translation has changed, gives a thread a way to *wait*
+rather than spin, and gives each process an address space of its own — with
+memory that appears when it is touched rather than when it is promised, and one
+page of zeroes shared by every untouched read in the machine until somebody
+writes to it.
+
+And, as of 10 September 2026, the four things that earned the bump:
+
+- **It has a filesystem you reach by name.** `open`, a path, a descriptor —
+  which five separate rows of the audit were waiting on.
+- **It survives memory pressure.** Pages it has not needed lately go to a swap
+  partition and come back when they are touched, and a block cache keeps the
+  disk it reads from cheap.
+- **It can be typed into.** A keyboard and a mouse on the 8042, and both of them
+  again over USB — which is the only input aarch64 can have, since that
+  architecture has never had an 8042 to talk to.
+- **It reads the permission bits it has always stored.** A process running as
+  somebody other than the kernel is refused a file it may not open.
+
+**1065 self-tests across twenty-five boots, none skipped**, every format
+checked against a tool that did not write it. The number is what the
+verification run reports, not a total kept by hand: `scripts/verify-kernel.sh`
+prints it, and it is copied here after a green run rather than incremented when
+a test is added.
+
+*The same rule now covers the boot count, and for a reason.* This file said
+eighteen and the READMEs said eighteen; both were corrected to nineteen on 12
+September by counting the labels in the script, which missed that the
+processor-count paths are loops. The run boots twenty-five times. **A number
+counted by eye is a number that goes stale silently** -- which is the whole
+argument this paragraph was already making about the self-test total, applied
+one line too narrowly.
 
 ## What "finished" means
 
@@ -30,6 +100,33 @@ either firmware, without GRUB, without Linux, and without destroying whatever
 was already on the disk unless asked to.
 
 Every checkpoint below is a step on that path. None of them is a refactor.
+
+### But the eighteen checkpoints do not get all the way there
+
+They end at **checkpoint 17, the kernel booting on real hardware.** They do not
+end at the desktop running on it, and reading the list as though they do is a
+mistake this section used to invite.
+
+What the kernel does not have, and what the desktop would need before it could
+run on this kernel rather than on Linux:
+
+| Missing | Size of the gap |
+|---|---|
+| ~~**Per-process address spaces**~~ | **Built, 9 September 2026.** Each process has page tables of its own and the scheduler switches them; the kernel half is shared by copying the top-level entries rather than the tables beneath. Demand paging, stack growth, zero-page sharing and copy-on-write on top |
+| **Process creation and ELF loading** | user code is a blob passed as a pointer. The *bootloader* parses ELF; the kernel does not |
+| **Memory syscalls** | there is no way for a program to *ask* for memory. What an `mmap` would be built on now exists: a region is reserved and its pages appear when touched |
+| **File syscalls, and a namespace** | ReconFS and FAT32 are kernel-internal. No `open`, no paths, no VFS |
+| **A framebuffer driver** | the smallest of these — address, pitch and format already arrive in the boot info, and nothing yet reads them |
+| **Input** | none at all. PS/2 for virtual machines, USB HID for real ones, which needs checkpoint 11b |
+| **IPC and shared memory** | a display server is the first program that cannot be written without them |
+
+There are five system calls today: `exit`, `write`, `getpid`, `time`, `yield`.
+
+So **the desktop remaining a Linux program is the correct state, not a delay.**
+Joining the two halves is its own phase with its own list, and treating it as
+the tail of this one makes both boards wrong: the kernel's would look
+unfinished for missing things that were never on it, and the desktop's would
+look blocked on work that was never scheduled.
 
 ## The rule about other people's code
 
@@ -59,16 +156,27 @@ courtesy now rather than a dependency.
 | 7 | Interrupts and exceptions, and a fault that reports itself instead of resetting the machine | **Done** |
 | 8 | A timer, a tick, and time | **Done** |
 | 9 | Threads, a scheduler, and preemption | **Done** |
-| 9b | Every core in use — waking the other processors | **aarch64 done**, x86_64 open |
+| 9b | Every core in use — waking the other processors | **Done** |
 | 10 | User mode, the first system call, and the kernel moves to the higher half | **Done** |
 | 11 | Block devices — storage the kernel can read and write | **Done** |
-| 11b | USB mass storage — a USB stack, and a disk on the end of it | |
+| 11b | USB mass storage — a USB stack, and a disk on the end of it | **Done** |
 | 12 | Partition tables — GPT and MBR, and every layout it will meet | **Done** |
-| 13 | ReconFS — a filesystem of its own | |
-| 14 | Reads foreign filesystems well enough to install beside them | |
-| 15 | The installer | |
-| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | |
-| 17 | Boots on real hardware: both architectures, both firmwares | |
+| 13 | ReconFS — a filesystem of its own | **Done** |
+| 14 | Reads foreign filesystems well enough to install beside them | **Done** |
+| 15 | The installer | **Done** |
+| 16 | Its own BIOS bootloader on x86_64 — a machine with no UEFI at all | **Done** |
+| 17 | Boots on real hardware: both architectures, both firmwares | **Next** |
+
+Asked for after this list was made, and not numbered into it:
+
+| Added | Status |
+|---|---|
+| The boot chain verifies itself — the loader refuses a kernel that is not ours | **Done**, boot-time half |
+| The other systems on the disk, found and offered | **Done** |
+| Three partitions: EFI, system, and programs | **Done** |
+| A recovery environment | **Done**, and reachable from the boot menu on every machine |
+| Gatekeeper — what the running system may load | Open, and mostly the desktop's |
+| macOS on hardware Apple never supported | Parked, on Joshua's call |
 
 Eighteen, numbered 0 to 17, is a lot to hold in your head, so they group into four stages: **the
 kernel exists** (0–3, done), **the kernel owns the machine** (4–10),
@@ -543,7 +651,7 @@ Decided here rather than at checkpoint 10, because deciding it later means
 deciding it about a system that has already leaked.
 
 The desktop found a password `memset` that survived only by accident of build
-flags (BG-090). Its fix protects the *previous owner's* copy — and that is a
+flags (KF-122). Its fix protects the *previous owner's* copy — and that is a
 different obligation from the kernel's. **A kernel that hands a freed page to
 another process without clearing it has leaked the secret however carefully the
 previous owner scrubbed it.**
@@ -612,7 +720,7 @@ Secondary processors are still parked in `boot.S` on both architectures. Waking
 them needs a way to start a CPU — a mailbox and PSCI on ARM, an interrupt
 sequence on x86 — and locking on everything the scheduler touches, because a run
 queue that two processors can edit at once is a run queue that will eventually
-contain a cycle. That is real work, it is where BG-088's lesson about ownership
+contain a cycle. That is real work, it is where KF-120's lesson about ownership
 checks will first bite this kernel, and it is listed rather than assumed.
 
 Also absent by choice: priorities (a scheme invented before there is a workload
@@ -1151,6 +1259,46 @@ reached through firmware during boot and through a real disk afterwards. USB
 becomes necessary when somebody wants to plug a drive in while the system is
 running, which is a desktop feature rather than an install one.
 
+### Done, 8 September 2026 — and what it still does not do
+
+All three layers exist: `core/xhci.c` is the controller and the bus,
+`core/usb_storage.c` is the class driver, and a stick registers as an ordinary
+block device that the partition reader and the filesystems use without knowing
+what it is on the end of. The kernel now boots from the install medium and reads
+that same medium's partition table back over USB, which is the round trip the
+checkpoint is for.
+
+Two assertions hold it: `medium-boot-test.sh` requires the GPT to be found *at
+the offsets `make-medium.sh` wrote*, and `usb-storage-test.sh` requires a real
+`WRITE(10)` and `SYNCHRONIZE CACHE` in QEMU's SCSI trace. The second exists
+because the block layer's self-test restores what it borrowed, so a passing run
+leaves an image byte-identical to one where nothing was ever written — the
+driver's own report cannot tell those apart and the wire can.
+
+**What is deliberately not built, so that it is not mistaken for finished:**
+
+- **Hot-plug.** Ports are enumerated once, during the storage probe. A stick
+  pushed in afterwards is not noticed, and one pulled out is discovered by a
+  transfer failing rather than by a port-change event.
+- **Hubs.** Only devices on a root port are found. Anything behind an external
+  hub is invisible, which is most of what is plugged into a laptop.
+  > **Built on 12 September**, and left written here rather than deleted,
+  > because this list is a record of what the checkpoint was. A disk behind a
+  > hub enumerates, is claimed and is usable. The hard part was not the hub
+  > protocol: xHCI does not address a device by the chain of hubs it hangs off,
+  > it wants the root port plus a twenty-bit route string of five four-bit hops
+  > — and a directly-plugged device has a route of zero, which is why every
+  > line of this worked for weeks without the concept existing.
+- **Error recovery.** A stalled endpoint is not cleared and the Bulk-Only
+  Transport reset is not implemented, so a device that stalls once stays broken
+  until reboot. `BOT_RESET` is defined and unused, which is the honest state.
+- **UAS**, the newer transport — SCSI over four endpoints, with a real queue.
+  Interface protocol `0x62` is refused rather than misread as Bulk-Only.
+- **UNMAP**, so a USB SSD is still never told a block was freed. See KF-127,
+  which this checkpoint half fixed: the rotation rate is now *asked* for over
+  SCSI rather than inferred from the bus, but the discard path it governs is
+  still absent.
+
 ## Storage, partitions and filesystems
 
 The goal that shapes all of this: **install beside whatever is already there.**
@@ -1188,10 +1336,48 @@ looks impossible:
    need anyway. Reading a Mac's *files* needs APFS, which is a separate and much
    larger job — and, importantly, is not required in order to install beside
    macOS without damaging it.
-3. **A filesystem of our own** (checkpoint 13). ReconFS. Not designed yet, and
-   deliberately not designed yet: it should be designed when there is a block
-   layer to build it on and real use to shape it, not before. What is already
-   known about it is recorded below.
+3. **A filesystem of our own** (checkpoint 13). ReconFS. **Designed, and the
+   format is written**, in [docs/RECONFS.md](RECONFS.md) and
+   `kernel/include/recon/kernel/reconfs.h`. Copy-on-write with a single commit,
+   chosen over journalling because it makes recovery a pure function of the
+   image bytes — which is what gives a crash suite exactly two outcomes to
+   assert instead of a spectrum to reason about.
+
+   Every allocated block carries a back-reference to its owner, so walking down
+   from the root and sweeping up from the owner table are two derivations of the
+   same set that read disjoint fields. That is the only independence available
+   to one author writing both the reader and the writer, and it had to be in the
+   first version or never.
+
+   What exists: the format, mount, allocation, the commit path, names, file
+   contents, rename, delete, nested directories, the checker, and a second
+   implementation of the format in Python that judges what survives a power cut.
+   The shape `recon_fs` needs — System, Programs and User, each with a recycle
+   bin — is built and checked, with a file three levels down.
+
+   Moving between directories works too, which is four directory rewrites and
+   two chains copied to the root in one commit.
+
+   Every constraint the checkpoint was given is answered, including the
+   awkward seventh: a listing must come with a stated guarantee about concurrent
+   modification or a stated absence of one. `reconfs_readdir` has none and says
+   so; `reconfs_list` reads a whole directory in one call and therefore has one.
+
+   What is left is the layer above — how a volume gets found, mounted and
+   presented — which belongs with the installer rather than the format.
+
+   The test `docs/RECONFS.md` lists first is done: the power is cut inside a
+   rename and the surviving image is judged by the Python reader, which requires
+   the target to resolve to exactly one object whose contents are one whole
+   version — a round number agreeing in three places and a checksum over the
+   payload.
+
+   **There is no disk-size ceiling.** The allocation table's owner was a 32-bit
+   block number, capping a volume at 16TiB, which is smaller than drives on sale
+   today; it is 64 bits now. What stops first is somebody else's limit — ATA's
+   LBA48 at 128PiB, MBR at 2TiB — and the layout arithmetic is checked on every
+   boot at volumes up to an exabyte, against a derivation written separately
+   from the code so the two can disagree. See [docs/STORAGE.md](STORAGE.md).
 4. **Reading foreign filesystems** (checkpoint 14). NTFS, ext4, APFS, HFS+,
    FAT32. Much bigger than it sounds, and **mostly not needed for the goal.**
    Installing beside Windows requires reading the *partition table*; it does
@@ -1219,8 +1405,11 @@ looks impossible:
 
 ### What is already known about ReconFS
 
-Not a design, just the constraints it has to satisfy, collected as they turned
-up:
+*Kept as written. These were the constraints collected before there was a
+design, and they are left here in that form because the design in
+[docs/RECONFS.md](RECONFS.md) — and the filesystem now built from it — has to
+keep answering them. A list of requirements is more useful unedited than
+retrofitted to match what was built.*
 
 - **Create-with-mode.** The desktop currently writes a TLS private key and
   *then* tightens it with `chmod`, leaving a window where a private key is
@@ -1393,11 +1582,2231 @@ assumption.
 ### The installer
 
 Checkpoint 15, and the thing that turns all of the above into an operating
-system somebody can have. It needs: the boot medium to carry both loaders and
-both architectures; a partitioner that can read an existing layout and shrink a
-partition without losing what is in it; somewhere to write the bootloader that
-the machine's firmware will actually look at; and a first-run flow, which the
-desktop already has.
+system somebody can have.
+
+It is **the one piece of this system that runs once, on a stranger's machine,
+with their data already on it.** There is no second attempt and no undo. That
+single fact decides its shape.
+
+#### Deciding and doing are separate programs
+
+`install_plan()` reads the disk and returns a plan. It writes nothing — not a
+byte, not a flag, not a retry counter. `install_execute()` takes a plan and
+carries it out. They are split because a decision that can be inspected before
+it is acted on is a decision somebody can refuse, and because the deciding half
+can then be tested exhaustively against layouts it must never damage.
+
+`scripts/install-plan-test.sh` builds seven disks with `sgdisk` — which shares
+no code with this kernel and is what actually partitioned the disks we will
+meet — and requires the right answer on each: a blank disk, a disk with Windows
+on it, a disk with no gap, a gap too small, a GPT disk with no ESP, an ESP with
+no free space, and a GPT header with a nonsense entry count. The last three are
+refusals. **A disk whose layout cannot be read is the one disk never to write
+to**, and an ESP with no room must be refused by name rather than filled with a
+bootloader nobody can boot.
+
+Then `install_execute()` re-plans from the disk and **refuses if anything
+changed** since the plan it was handed. A plan is a statement about a disk at a
+moment; acting on a stale one is how an installer eats a partition that was not
+there when it looked.
+
+#### Three partitions, because an application should not be able to break the OS
+
+Asked for directly, and right:
+
+| Partition | Holds | Why separate |
+|---|---|---|
+| EFI System | the bootloader and the kernel | firmware can only read FAT32, and only here |
+| System | the operating system | so a full disk of programs cannot stop it booting |
+| Programs | installed applications, in a subdirectory per subsystem | **so a bad application damages an application, not the system** |
+
+The sizes are in `install.h` as named constants rather than numbers in the code:
+the ESP gets 256 MiB when we create one, the system volume takes a quarter of
+what is left within a 2 GiB floor and a 64 GiB ceiling, and programs get the
+rest. An existing ESP is **reused** rather than replaced — it belongs to the
+machine, not to us — but only after `fat32_free_clusters` says there is room in
+it.
+
+#### What it writes, and where it will not
+
+`install_gpt.c` preserves every partition entry it did not create **byte for
+byte**, including the ones it does not understand. It is not a partitioner that
+rewrites a table into its own idea of a good one; it is a program that adds
+entries to somebody else's table and leaves the rest exactly as found.
+
+`install_exec.c` writes only inside partitions it created in that same run. The
+boot files are copied last, so a machine interrupted mid-install has an unused
+partition rather than a bootloader pointing at a system that is not there.
+
+#### The GUIDs, and an honest note about them
+
+Partition GUIDs are derived from the name, the size, the clock and a counter.
+**There is no hardware randomness in this kernel yet**, so they are unique but
+not unguessable, and that is written in the source where somebody would look
+rather than left to be discovered. Nothing depends on them being secret; if
+something ever does, this is the line that has to change first.
+
+#### Verified end to end
+
+`scripts/install-onto-test.sh` installs onto a disk and checks the result with
+`sgdisk` and `mtools`. `scripts/install-then-boot-test.sh` then **boots the
+machine it just built**, under firmware, from the bootloader it just wrote —
+which is the only claim that matters and the only one the other two cannot make.
+
+## Booting the other operating systems on the disk
+
+**Built.** `boot/src/menu.c`. ReconOS installs beside whatever was already
+there, and that promise is worthless if the machine then only boots ReconOS:
+installing beside Windows and then being unable to reach Windows is not a
+partial success, it is a machine somebody has lost the use of.
+
+Under UEFI this is more tractable than it sounds. Another operating system's
+loader is an ordinary `.EFI` file on an EFI System Partition, and starting it is
+loading and running it — the same operation the firmware performed on us. No
+emulation, no patching, and no knowledge of what the other system is.
+
+| System | What is run |
+|---|---|
+| ReconOS | `\EFI\ReconOS\BOOTX64.EFI`, offered first |
+| Windows | `\EFI\Microsoft\Boot\bootmgfw.efi` |
+| Linux | `\EFI\<distro>\grubx64.efi`, or its shim |
+| macOS | `\System\Library\CoreServices\boot.efi` — on a Mac; on a PC, see below |
+| anything | `\EFI\BOOT\BOOTX64.EFI`, the removable-media path |
+
+#### Found, not configured
+
+There is no list of installed systems anywhere. A configuration file would have
+to be kept correct as somebody installs and removes systems, and **a stale one
+is worse than none** — it offers a choice that does not work, on the one screen
+where a person has no way to investigate. So every ESP on every disk is looked
+at, every time, and what is there is what is offered.
+
+The paths are named rather than discovered. A `.EFI` file on an ESP is not
+necessarily a bootable system — firmware updates, diagnostic tools and vendor
+utilities live there too — and a menu of things that are not operating systems
+is worse than a short menu.
+
+#### It chooses without anybody present
+
+A boot menu that requires a keypress is a machine that does not come back from a
+power cut. The menu counts down and starts the first entry, and the countdown is
+bounded rather than driven by a clock that might not tick. `ST->ConIn` is
+checked for null: firmware with no console input is not a reason to hang
+forever at a prompt nobody can answer.
+
+#### What it does not do
+
+It does not touch the other system's files, its boot variables, or its
+partition. Chain-loading is the **least** invasive way to do this. The
+alternative — registering ourselves as the firmware's default and promising to
+hand control on — means editing NVRAM entries that somebody else's updater also
+edits, and losing that argument means a machine that boots to nothing.
+
+Checked by `scripts/boot-menu-test.sh`, which puts decoy loaders on several
+disks and requires each to be found exactly once, with the duplicate-labelled
+ones collapsed.
+
+### macOS, and the two questions that get merged
+
+**Booting an installed macOS from ReconOS on a Mac** is the same job as Windows.
+Apple's firmware is present, macOS's own `boot.efi` is on the ESP, and starting
+it is loading and running a file. Tractable, and it belongs with the menu.
+
+**Making macOS boot on hardware Apple never supported** is a different thing
+entirely, and it is what OpenCore exists to do. It is not a bootloader feature;
+it is a bootloader. What it does, roughly, is:
+
+  - inject and patch **ACPI** tables so the machine describes itself the way
+    macOS expects a Mac to;
+  - present **Apple's own UEFI protocols**, which are not in the UEFI
+    specification and which `boot.efi` requires to be there;
+  - inject **kexts** — drivers — into the running kernel's cache for hardware
+    Apple never wrote drivers for;
+  - patch the macOS kernel in memory for the checks it makes about being on a
+    Mac.
+
+OpenCore Legacy Patcher (`dortania/OpenCore-Legacy-Patcher`, built on
+`acidanthera/OpenCorePkg`) is where that is done and is worth *reading*: it is
+the best available description of what macOS demands of the firmware under it.
+
+It is not worth *copying*, and not only for the from-scratch rule. Every one of
+those four is a moving target chased against each macOS release by people who do
+nothing else. Taking it on means signing up to that maintenance forever, in
+exchange for a capability that is not what ReconOS is for.
+
+**So: boot an installed macOS on a Mac — yes, planned. Boot macOS on a PC —
+parked as a side project, on Joshua's call, to be returned to once the rest of
+the system is finished. Recorded as a decision with a reason rather than as an
+oversight, so that returning to it starts from why it was set aside.**
+
+The two things this needed -- a **menu**, and enumeration across every ESP on
+every disk rather than only the one we were loaded from -- both exist now, so
+booting an installed macOS on a Mac is a table entry rather than a project. The
+framebuffer the loader already finds is still unused: the menu is text, and a
+graphical one is worth having only once it can degrade to text, because AAVMF
+offers no framebuffer at all.
+
+## Keeping the kernel from being modified
+
+Asked for as "so outside sources can't edit, modify or change the kernel". Two
+different mechanisms get merged under that heading and they solve different
+problems, so they are separated before either is discussed:
+
+- **Encryption** (what BitLocker is) protects data when somebody takes the drive
+  out. It does nothing about modified code: a decrypted, running system happily
+  runs a tampered kernel.
+- **Code integrity** (what Secure Boot and Gatekeeper are) protects against
+  running something that is not what it claims to be.
+
+The request is the second. The mechanism is that the kernel is signed and the
+bootloader verifies the signature before jumping to it.
+
+**The boot-time half is built** — `boot/src/sha256.c` and `boot/src/rsa.c`, an
+RSA-2048 PKCS#1 v1.5 verification of a SHA-256 hash, checked by
+`scripts/signed-kernel-test.sh`. Hand-written rather than borrowed, which is
+defensible here for a specific reason and not only the from-scratch rule:
+**verification touches only public material.** There is no private key in the
+loader and nothing secret for a timing side channel to leak, which is exactly
+the property that makes hand-writing the *other* half — signing — a bad idea.
+The padding is checked in full rather than scanned for the hash, because a
+verifier that finds the digest wherever it appears is a verifier Bleichenbacher
+forged signatures against in 2006.
+
+There is no way to turn it off. A safety check with a switch beside it is a
+safety check that will be found switched off on the machine that needed it.
+An unsigned kernel is refused; the loader says so and stops, rather than
+carrying on with a warning nobody reads.
+
+The full argument, including what this does **not** protect against, is in
+[INTEGRITY.md](INTEGRITY.md).
+
+### The part that decides whether any of it is real
+
+**A verification is worth exactly what its root of trust is worth.** If our
+bootloader checks the kernel but anybody can replace our bootloader, an attacker
+replaces both and the check is theatre.
+
+Protecting the loader is what UEFI Secure Boot exists for: the firmware holds
+the keys and refuses to run a loader it cannot verify. Getting there needs one
+of two things, and both are decisions rather than code —
+
+  1. the machine's owner enrolls a ReconOS key into their firmware, which works
+     on any machine and is a thing a person has to be walked through; or
+  2. our loader is signed by Microsoft's UEFI CA, via shim, which works out of
+     the box and means accepting somebody else's signing policy.
+
+Until one of those is chosen, signature-checking the kernel is still worth
+doing — it catches corruption, a half-written update, and casual tampering —
+but it is **not** protection against an attacker who can write to the ESP, and
+saying otherwise would be the sort of security claim this project does not make.
+
+### And the run-time half
+
+Refusing to load code the system has not been told to trust, adjustable by
+somebody with authority over the machine, is the Gatekeeper-shaped half. Most of
+it belongs to the desktop rather than the kernel; the kernel's share is the
+enforcement point for anything it loads into its own address space, and the
+per-process syscall personality from checkpoint 10 is already the seam a
+compatibility layer will hang off.
+
+## A screen
+
+**Built.** `kernel/core/fbcon.c` and `boot/src/gfx.c`.
+
+Everything the kernel said went to a serial port. That is right for the
+verification rig, which is holding the other end of the cable, and useless on a
+machine somebody has just installed ReconOS onto: the screen stopped at the
+bootloader's last line, and the recovery report, the boot log and the fault
+reporter were all somewhere nobody was looking.
+
+It was found by taking a screenshot of the recovery environment and getting the
+*loader's* last frame instead — `reconboot: leaving UEFI.` and then nothing.
+Not a capture fault. There was nothing after it to capture.
+
+### One font, drawn as pictures
+
+`scripts/make-font.py` carries the glyphs as art and generates the table:
+
+```python
+'A': ("...##...", "..#..#..", ".#....#.", ".#....#.",
+      ".######.", ".#....#.", ".#....#.", "........"),
+```
+
+A font written directly as hex is how you get a `k` with one wrong row that
+nobody notices until it is on a screen. **Rendering the whole set found two
+defects that reading it would not have**: `J` and `*` ran to the right edge of
+the cell and would have touched the next character, and `g j p q y` had no
+descenders, so *"storage"* and *"personality"* sat flat on the line.
+
+The header is committed rather than generated at build time — a header that
+only exists once somebody has run a script is a header the build can be
+missing, which this project has been bitten by twice.
+
+Shared by the kernel and the loader, so a machine looks like one machine from
+the first pixel to the last rather than two programs that happen to run in
+sequence.
+
+### The console
+
+Started as soon as `vm_init` has built a direct map to reach the framebuffer
+through — which `vm_init` already mapped uncached, because a write that sits in
+a cache line is a pixel that does not appear.
+
+**Both surfaces get everything.** `kputc` writes to the serial port *and* the
+screen rather than choosing: the rig reads the cable, a person reads the glass,
+and a message that went to only one of them is a message somebody did not get.
+
+Scrolling redraws from a four-kilobyte shadow of the characters rather than
+copying the screen. A framebuffer is memory across a bus and reading it back is
+far slower than writing to it, so a scroll is writes only.
+
+No framebuffer is a normal answer, not a failure — and that branch is taken on
+every aarch64 boot in the matrix, because AAVMF provides none.
+
+### The menu, tried and fallen back from
+
+An attempt, with the text menu behind it. It gives up on **no framebuffer**, **a
+layout it cannot name**, **a pitch that cannot hold a row**, or **a screen too
+small**, and none of those is an error. Drawing into a framebuffer we have
+misread writes past the end of every row, and on a device mapping that is
+somebody else's registers; refusing is the cheaper failure.
+
+**One list of entries, two renderers.** What to offer, what a keypress means and
+when the clock runs out is decided once, and neither surface gets a say. A
+graphical menu that decided differently from the text one would be a second
+bootloader.
+
+The matrix requires **`drawn` on OVMF and `text` on AAVMF**. That it draws where
+there is a framebuffer is the feature; that it does not where there is none is
+what stops the feature being a machine that shows nothing. An unasserted
+fallback is the branch that rots, and this fallback is the reason the graphical
+menu was allowed to exist at all.
+
+### The bug that was in both, and invisible
+
+`pack()` had the BGRA and RGBA cases the wrong way round, in the console and in
+the menu. Amber came out blue.
+
+**It could not be seen until something drew a colour that was not grey.** The
+console draws light grey on near-black, and swapping red and blue does nothing
+at all to a colour whose red and blue are equal — so it looked perfectly
+correct, and would have gone on looking correct until the first error message
+anybody wanted in red.
+
+## The recovery environment
+
+**Built.** `kernel/core/recovery.c`, reached by booting the kernel with
+`recovery` on its command line.
+
+### It must not depend on the thing it repairs
+
+That one rule settles the whole design:
+
+- it cannot live on the ReconOS system volume, because a broken system volume is
+  the most likely reason somebody is here;
+- it cannot need ReconFS to be mountable, for the same reason;
+- so it has to be reachable by firmware alone, which means the **EFI System
+  Partition** — the one volume the machine can read before anything of ours has
+  run.
+
+So recovery is **this same kernel**, doing something else with itself. Not a
+second kernel: a separate recovery build is a second thing to keep working, and
+the one time it matters is the one time nobody has been testing it. The kernel
+that boots you every day is the kernel that recovers you, and it is exercised
+every day.
+
+A separate recovery *partition* was the other option and is not needed. Windows
+uses one because its recovery environment is a whole second operating system;
+ours is a few thousand lines that already have to be on the ESP.
+
+### It looks, and it says what it found
+
+Nothing in it writes. That is not a first-version compromise, it is the shape of
+the thing: **a person arrives here because a machine will not start, which means
+they do not yet know why — and a tool that begins by repairing destroys the
+evidence of what was wrong.** Repair comes second, chosen explicitly, after
+somebody has read what this says.
+
+Every disk, then every volume. For a ReconFS volume it runs the checker, which
+derives the in-use set twice from disjoint fields, so a volume it calls sound is
+sound by two accounts rather than one:
+
+```
+  nvme0n1p2    2.0 GB  ReconFS, 4096-byte blocks
+               checked: DAMAGED -- reachable from the root but not allocated (block 17)
+  nvme0n1p3    5.7 GB  ReconFS, 4096-byte blocks
+               checked: sound (2968 blocks, 1 inodes)
+```
+
+A volume this kernel does not recognise is reported as **not recognised**, never
+as empty. Somebody looking at a disk they believe holds their data needs those
+to be different sentences, and this kernel understands two formats out of the
+many that exist.
+
+### Reachable, which it is not yet
+
+**As built, a person cannot get to it.** Recovery runs when `recovery` is on the
+kernel command line, and the command line comes from `\reconos\cmdline` on the
+ESP — a file you edit from a working computer. So the recovery environment for a
+machine that will not start currently requires a second machine to reach, which
+is most of the way to not having one.
+
+The fix is small and belongs in the loader: `cmdline_buf` is a static the loader
+fills before the handoff, so a menu entry that sets it to `recovery` and boots
+our own kernel is a few lines beside the chain-loading the menu already does.
+Written down here rather than left as an assumption, because *"the recovery
+environment is finished"* and *"a person can reach the recovery environment"*
+were about to be the same sentence.
+
+### How it is known to work
+
+`scripts/recovery-test.sh` installs a machine, breaks one of its two ReconFS
+volumes with `scripts/reconfs-check.py` — a second implementation written from
+the specification rather than from the kernel — and requires recovery to name
+the damaged volume and block, **still call the other volume sound**, and leave
+the disk byte-for-byte identical, which is checked by hashing it.
+
+**A recovery environment that has never been seen to report damage is not a
+recovery environment. It is a screen that says "sound", which is what a broken
+one says too.**
+
+The near-miss is worth keeping: the first attempt passed the damage tool its
+arguments the wrong way round. It damaged nothing, recovery reported *sound*,
+and the test went green — a correct answer about a volume nobody had broken. The
+tool now refuses that invocation, and the script checks that the damage took
+before it believes anything after it. That check is a test assertion in its own
+right, and it is the one that would have caught the whole thing.
+
+## Checkpoint 16 — a machine with no UEFI at all
+
+The last thing between here and real hardware, and the one checkpoint whose
+requirements are set by the two before it rather than by BIOS.
+
+### The rule that decides the whole design
+
+**The kernel must not be able to tell which loader started it.** It already
+cannot tell the difference between reconboot on OVMF, reconboot on AAVMF, PVH
+and Multiboot2 — every one of them arrives through the same ReconBoot protocol
+with a memory map, a framebuffer or an honest absence of one, and a command
+line. A BIOS loader that invented its own protocol would put a second shape of
+"how the machine was started" into a kernel that has spent sixteen checkpoints
+having exactly one.
+
+So the BIOS loader's job is not "boot the kernel". It is **produce a ReconBoot
+handoff from a machine that offers none of the things UEFI offers.**
+
+### And the rule that makes it harder than GRUB's equivalent
+
+**A BIOS path that does not check the kernel's signature is the off-switch we
+said did not exist.** An attacker who can write to the disk does not need to
+defeat the verification in reconboot; they only need to make the machine take
+the other path. Every claim in [INTEGRITY.md](INTEGRITY.md) is therefore a claim
+about *both* loaders or about neither.
+
+That single sentence sets the size of the problem, because it means SHA-256 and
+RSA-2048 have to run before the kernel does, on a machine whose first stage is
+**440 bytes**. Which forces the staging below rather than merely suggesting it.
+
+### Where the stages live
+
+| Stage | Where | Size | Job |
+|---|---|---|---|
+| 1 | MBR boot code | 440 bytes | check for INT 13h extensions, read stage 2, jump |
+| 2 | BIOS Boot Partition, GUID `21686148-…` | 1 MiB | E820, FAT32, verify, long mode, ReconBoot |
+
+The BIOS Boot Partition is the honest option of the two available. The other —
+hiding stage 2 in the gap between the MBR and the first partition — works, is
+what a lot of installers do, and depends on unallocated space that **nothing on
+the disk says is in use.** A partition entry is how a disk says "this is
+occupied"; using space that no entry covers means the next tool along is
+entitled to take it. This project does not install beside other systems by
+relying on them not to notice.
+
+The installer already writes GPT and already preserves entries it did not
+create, so adding a fourth entry is a size constant and a type GUID, not a new
+mechanism. It does move the layout: on a blank disk the first partition starts
+at `INSTALL_ALIGN_BLOCKS`, LBA 2048, so the BIOS Boot Partition takes that
+megabyte and the ESP moves to LBA 4096.
+
+**Three partitions is still the answer to the question that was asked.** EFI,
+system and programs are the ones that mean anything to somebody using the
+machine; the BIOS Boot Partition is a megabyte of loader that exists because
+firmware from 1981 cannot read a filesystem, and it is created only where it is
+needed. A disk installed on a UEFI-only machine does not get one.
+
+### What stage 2 has to do that UEFI did for us
+
+- **A memory map**, from `INT 15h, AX=E820` rather than `GetMemoryMap`. Same
+  destination structure, different source. The E820 entries need sorting and
+  overlap-resolving, which UEFI's map arrives already having had done to it.
+- **Read a filesystem.** UEFI hands out `SIMPLE_FILE_SYSTEM`; BIOS hands out
+  512-byte sector reads. Stage 2 needs its own FAT32 reader — read-only, and
+  much smaller than the kernel's, because it needs to open exactly two files.
+- **Get to long mode.** A20, a GDT, paging for the first four gigabytes, and the
+  switch. This is the part every tutorial covers and the part least likely to be
+  where the time goes.
+- **A framebuffer, or an honest absence.** VBE 2.0 if it is there, and text mode
+  if it is not. The kernel already handles a boot with no framebuffer, because
+  AAVMF does not provide one — that path is tested, not hypothetical.
+
+### What runs today
+
+**Stage 1 and the hop to stage 2.** `boot/bios/`, built by the same clang and
+lld the rest of the project uses — no NASM, because adding an assembler to the
+dependency list to write 440 bytes would be a poor trade.
+
+```
+Booting from Hard Disk...
+ReconOS
+stage2 ok, drive 0x80
+```
+
+SeaBIOS, an IDE disk, and no UEFI anywhere in the machine. `scripts/bios-boot-test.sh`
+requires five things, and the last two are the ones that matter:
+
+| | |
+|---|---|
+| the firmware runs our 440 bytes | the claim |
+| stage 2 is read and jumped to | 440 bytes cannot hold a bootloader, so the design rests on this hop |
+| the boot drive survives the hop | `DL` is the only way to learn which disk the firmware picked |
+| **an unreadable stage 2 says `E:RD`** | a deliberate fault |
+| **one changed byte of stage 2's magic says `E:S2`** | a deliberate fault, and the only proof the check is connected |
+
+The first three would all pass with the magic check deleted.
+
+#### Two guards that are shown to fire, not assumed
+
+`.space 440 - (. - _start)` at the end of stage 1 fails to **assemble** if the
+code reaches the partition table — and `make -C boot/bios check` inserts 400
+bytes and requires the build to be refused. A stage 1 that overran would
+assemble, link, and then destroy the partition table of the first disk it was
+written to, which is the single worst thing this project could ship.
+
+The `0xAA55` signature is verified in the image after it is written, because
+`printf '\x55\xaa'` in dash writes the six literal characters `\x55\xaa` and the
+disk is then simply not bootable, with nothing to say so.
+
+#### Stage 2 is C, and that was worth finding out early
+
+`clang -m16` emits real-mode code from ordinary C. What is left of this
+checkpoint is a FAT32 reader, an RSA-2048 check over a SHA-256 hash, page tables
+and a handoff structure — and in 16-bit assembly that would be hundreds of lines
+nobody could review against the UEFI loader that already does the same four jobs
+in C. Only three things need assembly, and they are the three that cannot be
+said in C: the magic number has to be the first four bytes, the segment
+registers have to be right before any pointer is touched, and there has to be a
+stack before there can be a call.
+
+The entry stub also **zeroes `.bss`**, because `objcopy -O binary` drops NOBITS
+sections: they occupy no bytes in the image, so whatever the firmware left at
+those addresses would otherwise be the initial value of every static. On this
+machine that is usually zero, which is the worst case — it would work here and
+fail on a machine whose firmware had used the memory.
+
+The memory map is read, and reported:
+
+```
+e820: 7 regions, 127 MB usable      -m 128M
+e820: 7 regions, 511 MB usable      -m 512M
+```
+
+Two machine sizes, because *"it printed a number"* and *"it read the machine"*
+look identical on one. The same argument the boot-path evidence rests on.
+
+The first version returned **nought regions on every machine**, in a routine
+whose assembly equivalent had worked minutes earlier: the inline assembly named
+`eax` in both the input and the output list — `"+a"` for the returned signature
+and `"a"` for the `0xE820` going in — so two values shared one register and the
+call was never correctly made. Each register is now one read-write operand.
+
+### Where the kernel is read from, and why not from raw blocks
+
+The kernel is a **file on the EFI partition**, read with the FAT32 reader below,
+and not from raw blocks the installer reserved. Raw blocks would delete the
+FAT32 reader entirely and are much the cheaper thing to build.
+
+They would also put **a second copy of the kernel on the disk**, which every
+system update would have to keep in step with the first. A BIOS machine quietly
+booting the kernel from before the last update is exactly the class of
+divergence this project keeps finding in itself, and the way not to have it is
+not to have the second copy.
+
+#### Finding the kernel
+
+```
+esp: block 4096
+kernel: kernel-x86_64.elf, 708976 bytes, cluster 3
+```
+
+The EFI System Partition is found by its type GUID in the GPT rather than
+assumed, because the installer places partitions according to what was already
+on the disk. The FAT32 reader is read-only and understands just enough to open
+one path: directories are walked a *sector* at a time, so no buffer has to be as
+large as a cluster, and the long-name fragments that straddle a sector boundary
+are assembled outside the loop that reads them.
+
+**Matched on the long name, not the 8.3 alias.** An alias is generated by
+whatever wrote the file and may change when the directory is rewritten — which
+is KF-130, where every rewrite renamed the file and the listing still looked
+right because the long name had not moved. A loader that finds its kernel by
+alias finds it until the day something rewrites the directory.
+
+The harness builds the disk with `sgdisk` and puts the kernel on it with
+`mtools`, then asserts the **size**: a reader that walked into the wrong
+directory entry would still report a cluster and a size, and matching the byte
+count `mtools` wrote is what says it found this file and not a neighbour.
+
+#### KF-138, and why the magic number did not help
+
+`stage1.S` carried the sector count as a literal — four, 2048 bytes, true when
+written. The FAT32 reader took stage 2 to 2797 bytes and stage 1 went on reading
+2048 of them.
+
+**The check that should have caught this is the one that passed.** The magic
+number is in stage 2's first four bytes, which had loaded perfectly, so stage 1
+confirmed the image was ours and jumped into a copy whose second half was
+whatever the disk held there before. A magic number answers *"is this the thing
+I meant to load?"* and cannot answer *"did all of it arrive?"* — and the two
+look like one question until a file grows.
+
+`patch-stage1.sh` now computes the count from stage 2's size at build time and
+writes it in, taking the offset from the symbol table rather than counting bytes
+in a hex dump. There is no literal left to be wrong.
+
+#### The signature, and the same two source files
+
+**A BIOS path that does not check the kernel's signature is the off-switch the
+UEFI path deliberately does not have.** An attacker who can write to the disk
+would not need to defeat the check in reconboot; they would only need to make
+the machine take this path instead. So every claim in
+[INTEGRITY.md](INTEGRITY.md) is a claim about both loaders or about neither.
+
+Stage 2 compiles **the same `sha256.c` and `rsa.c`** the UEFI loader does, for
+16-bit real mode, and uses them unchanged. Not copies: the same files. Two
+implementations of a signature check is two chances to be wrong with one set of
+tests between them, and the untested one is the one that will be wrong. If the
+padding check in `rsa.c` is ever corrected, both loaders are corrected.
+
+Sharing them needed two small changes and no forks:
+
+- the declarations moved from `boot_internal.h` into a new `crypto.h`, because
+  there are now two callers and only one is a UEFI application — stage 2 has no
+  use for the rest of that header, and including it collided with its own
+  `print`. Duplicating the context struct into stage 2 was the easy alternative
+  and exactly the wrong one: that is how two copies silently diverge.
+- `sha256()` grew an incremental form, `sha256_init/update/final`, because the
+  kernel is hashed **as it is read** — the only moment each byte is reachable is
+  while its cluster sits in a low buffer, since real mode cannot read back what
+  it has put above the first megabyte. The one-shot is now written in terms of
+  the incremental one, so the path the BIOS loader depends on is the path the
+  existing tests already cover.
+
+`scripts/bios-signed-test.sh` shows it four kernels — signed, unsigned, one byte
+changed after signing, and one validly signed by a different key — with the
+signatures made by `openssl`, which shares no code with the verifier. The last
+case is the one that matters: everything is well-formed, and a verifier that
+checks the padding and forgets the modulus passes it.
+
+The byte in the tampered case is changed at offset 40000, well past the ELF
+header, so that the loader's own *"is this an ELF"* check cannot be what catches
+it.
+
+### And the kernel starts
+
+```
+Booting from Hard Disk...
+ReconOS
+stage2 ok, drive 0x80
+e820: 7 regions, 255 MB usable
+esp: block 4096
+kernel: kernel-x86_64.elf, 709000 bytes
+signature: good
+handing over: entry 0x001000ef
+
+ReconOS kernel 0.0.11
+  architecture : x86_64
+
+Boot
+  firmware     : BIOS
+  protocol     : ReconBoot
+  loader       : reconboot-bios
+  framebuffer  : none
+```
+
+`firmware : BIOS` beside `protocol : ReconBoot` is the checkpoint. The BIOS path
+joined the set of loaders the kernel cannot tell apart, rather than becoming a
+second shape of *"how the machine was started"*.
+
+That needed one correction in the kernel: `reconboot_parse()` wrote
+`BOOT_FIRMWARE_UEFI` outright whenever it saw a ReconBoot handoff — true while
+only one loader produced one, false the moment there were two. A machine with no
+UEFI anywhere in it would have reported *"firmware : UEFI"*, confidently, in the
+one place somebody looks to find out what booted them. It reads the field now,
+and an unrecognised value is reported as unknown rather than guessed at.
+
+#### The order of the mode switch, and why it is that order
+
+`boot/bios/longmode.S` — the only assembly beyond the entry stub, because
+between its first and last instruction the machine is not running the language.
+
+1. **A20**, or every address above 1 MB wraps into the first megabyte and the
+   kernel at `0x100000` *is* the interrupt vector table. Tried three ways — the
+   BIOS call, port 0x92, then the keyboard controller — and **each attempt is
+   tested rather than trusted**, because all three report success on machines
+   where they did nothing.
+2. **Page tables**, built while addressing is still simple.
+3. **A null-limit IDT**, because the real-mode vector table stops meaning
+   anything the instant protection is on. An interrupt taken in the gap would
+   dispatch through whatever the firmware left at zero; a null limit makes it a
+   fault instead of a jump into arbitrary memory.
+4. **EFER.LME, then CR0 protection and paging in one write.** On x86_64 you do
+   not enter 32-bit protected mode and then long mode — long mode is enabled
+   first and becomes active when paging comes on, and the far jump that reloads
+   CS takes the CPU the rest of the way.
+
+#### The bug, which was a rule this file states and the code broke
+
+Stage 2's pointers are offsets into the 64 KB real mode can address. That is
+written at the top of `stage2.c` — and the page tables went at `0x70000` and the
+handoff at `0x60000`, both written through ordinary C pointers.
+
+The symptom was a page fault on the **first instruction after paging came on**,
+with `CR2` equal to that instruction's own address: the identity map was not
+there. `qemu -d int,cpu_reset` gave that in one command; a read-back of two
+table entries said which half had landed (`pml4[0]` correct, `pd[0]` zero).
+Neither was reasoning.
+
+Both moved, in opposite directions for the same reason: the page tables to 8 MB,
+built a table at a time in a low buffer and block-moved up the way the kernel
+is, and the handoff down to `0x4000` where stage 2 can actually write it.
+
+The loader reports **two** bootloader regions as a result, because they are
+nowhere near each other — and the second matters: *the page tables are still
+live when the kernel starts.* Handing that memory out as usable would be handing
+the kernel the map it is running on.
+
+### What is still to build here
+
+The installer does not yet write this path: a BIOS Boot Partition, stage 1 into
+the protective MBR, stage 2 into the partition, and the LBA patched into stage 1.
+Until then the harness builds those disks and the loader is proven on them.
+
+### What will be checked, and what would make the checkpoint a lie
+
+- A machine with **BIOS only** (SeaBIOS, no OVMF) boots the installed disk.
+- A machine with **UEFI only** still boots, unchanged.
+- A machine with **both** boots the same disk either way, and comes up
+  indistinguishable — same kernel version, same partitions found, same
+  ReconBoot protocol reported.
+- **An unsigned kernel is refused on the BIOS path too**, checked the same way
+  the UEFI path is checked: by showing the loader a kernel it should reject and
+  requiring it to say so and stop.
+
+The last one is the checkpoint. The first three are a bootloader; the fourth is
+whether the sentence "there is no way to turn it off" is true.
+
+## The ELF loader — a program from a file
+
+Checkpoint 19 had two halves. Address spaces landed on 10 September; this is the
+other one, and it is what turns "a process has memory of its own" into "a
+process is a *program*".
+
+Before it, a user program was a byte array compiled into the kernel and copied
+to a fixed address. You could not write one, build one, or replace one without
+rebuilding the kernel around it — which means it was not a program in any sense
+somebody outside this repository would use the word.
+
+### It is not the bootloader's ELF reader, and should not be
+
+`boot/src/main.c` has read ELF since checkpoint 4. It is right that these are
+two pieces of code, because they answer different questions.
+
+The bootloader loads **our own kernel**, whose signature it has already checked.
+A field it dislikes means the file is corrupt and the machine should stop; a
+malformed header there is an accident.
+
+The kernel loads **somebody else's program**. Every number in the file is chosen
+by whoever produced it, every one is an input, and a malformed header is the
+ordinary case rather than the exceptional one. So the bootloader reads the
+fields it needs, and the kernel refuses everything it has not been given a
+reason to accept.
+
+### What it refuses, and what each refusal is protecting
+
+| Refused | Because |
+|---|---|
+| A segment not entirely inside the file | Computed as a subtraction, never an addition — `offset + length` near the top of the range wraps and then compares as comfortably inside |
+| A segment outside the user half | The kernel's half is mapped in every address space, so a program that could name an address in it could rewrite the kernel |
+| A segment in the never-mapped first page | That page is what makes a null dereference fault; a file asking to be loaded there is asking for that to stop being true |
+| Two segments claiming the same page | Whichever was mapped second would decide the permissions of a page the first is using |
+| A segment both writable and executable | A program entitled to run its own input |
+| An entry point outside an executable segment | Starting a program on a page it can rewrite |
+| Address and file offset disagreeing modulo a page | Pages are copied whole; anything else needs a partial-page copy, and getting it wrong shifts a program's code by a few bytes — which runs, for a while |
+| `ET_DYN` | A position-independent executable must be relocated, which is a second parser over a second untrusted table whose whole job is writing to addresses the file chooses. There is no caller for it yet |
+| `PT_INTERP` | Refused rather than ignored: a program that asked for a dynamic linker and did not get one would run with its libraries missing |
+
+Two passes, and no page is allocated during the first. A loader that maps as it
+validates leaves a half-built address space behind when it meets the bad field,
+and then the caller has to know how much to undo — so the test requires that a
+refused file leaves the space with **zero bytes mapped**.
+
+### The program it loads is built by the linker
+
+`kernel/user/hello.S` linked against `kernel/user/user.ld`, by the ordinary
+cross linker, into a real ELF with two `PT_LOAD` segments — one R-X, one RW,
+with a page between them because a page cannot have two sets of permissions.
+
+Built rather than hand-written, for the same reason the partition fixtures come
+from `sgdisk` and the FAT32 ones from `mkfs.vfat`: **a loader tested against a
+structure this project also wrote is tested against its own misunderstandings.**
+The linker decides the program headers, including the ones nobody thought to
+arrange.
+
+The program is written to fail if any part of loading were skipped. It prints
+from its read-only segment; it reads a value that is only there if the file's
+bytes were copied rather than the page zeroed; it reads a byte of `.bss`, which
+the file does not contain, and requires it to be zero — catching both a loader
+that stops at `filesz` and one that hands over whatever the page last held; and
+it writes to `.bss` and reads it back.
+
+**It exits 55 on success, not 0.** The exit code is read out of a field that is
+zero before the program runs and zero if it never reached its exit call, so a
+test that treats zero as success passes in both of the cases it exists to catch.
+
+### The seventeen refusals are each watched happening
+
+A loader that answered "refused" to everything would pass a test that only asked
+whether it complained. So each case takes a copy of the real file, changes one
+field, and requires the *specific* refusal for that field — and the last case
+loads the copy unchanged and requires it to be accepted. Without that control,
+every case above it passes on a loader that has simply stopped working.
+
+### What it still does not do
+
+No dynamic linking and no shared objects. No arguments or environment — a
+program is started with an entry point and a stack and nothing else. No
+`PT_GNU_STACK` handling, because the stack's permissions are the kernel's to
+decide and it makes it non-executable regardless. Sections, symbols and
+relocations are not read at all: they are a linker's business, and a loader that
+reads them is reading a table the program does not need it to read.
+
+And the file still arrives from inside the kernel image rather than from a
+volume. That is the next piece and it changes nothing here — the bytes are the
+same bytes, and the loader does not know where they came from.
+
+
+## A virtual filesystem, and the five rows that were waiting on it
+
+Five rows of the architecture audit said, in one form or another, *waits on:
+descriptors*. Descriptors waited on a virtual filesystem, and the VFS waited on
+nothing — it just had not been written. This is that, and then the four things
+that were behind it.
+
+### What was actually missing
+
+The kernel had files and no way to **hold** one. `rootfs_create_file` takes a
+path and a whole file's contents; `rootfs_read_file` takes a path and gives the
+whole file back. Both are complete operations on a name. Neither is a file you
+can keep, read a piece of, write a bit more to, and hand to something else.
+
+That is what a descriptor is, and almost everything above the filesystem needs
+one. A pipe is two ends of something held open. A program loaded from a volume
+is a file read a piece at a time. A file-backed mapping is a file held while its
+pages are faulted in. **None of those is about ReconFS**, which is why they were
+all stuck behind the same missing piece.
+
+### What makes it a VFS and not ReconFS wearing a hat
+
+`struct file_ops` is four functions — read, write, seek, close — and a pointer to
+private state. Nothing above that line names a filesystem, and the test for that
+is not that it compiles. It is that `sys_read` and `sys_write` contain **no `if`
+about what kind of thing they are talking to**.
+
+There are four implementations now, and they were built in an order chosen to
+keep the interface honest:
+
+- **the console**, which has no filesystem underneath it at all. It went first
+  deliberately: an interface that fits only the thing it was written for is not
+  an interface, and if this one had been shaped around a disk the console would
+  not have fitted through it.
+- **a file on the mounted volume**, which is the case everything was waiting for.
+- **a pipe**, which has no path, no size, no position, and two ends that are not
+  the same kind of thing.
+- **`/dev`**, which is a filesystem with no disk, no blocks, no transaction and
+  no format.
+
+A thing that cannot do one of the four leaves the function **null** rather than
+providing a stub that returns an error. So "you cannot read the console" and
+"you cannot write to the read end of a pipe" are answered by the same line, once,
+above — instead of by a check inside every implementation that might get it wrong
+differently.
+
+The self-test adds a fifth implementation that the kernel has never heard of,
+defined inside the test itself. A `file_ops` that only the code which invented it
+can satisfy is not an interface, and the cheapest way to find that out is to
+write one from outside.
+
+### Descriptors belong to the process
+
+Small numbers, on the process rather than the thread, because two threads of one
+program that both write to descriptor 1 mean the same open file — and that
+sharing is what distinguishes a thread from a process in the first place.
+
+A file is reference-counted and a descriptor is one reference. That is not
+bookkeeping: it is what makes a pipe possible, and the test for it is that
+**closing one of two descriptors must not close the file**. A naive
+implementation fails exactly there, and it fails silently, because a
+use-after-free reads correct-looking memory most of the time. So the test counts
+closes rather than checking a pointer.
+
+`fd_get` takes its reference **under the table lock**, which is the whole reason
+it exists rather than callers reading the array: without it, another thread of
+the same process closing that descriptor between the read and the use would free
+the file while it was being read from.
+
+### Close is where a write fails
+
+ReconFS reads and writes whole files — there is no call that reads from an
+offset — so a descriptor over one holds the contents in memory, and the commit
+happens when the descriptor is closed.
+
+That has a consequence worth stating loudly rather than discovering: **a close
+whose result is thrown away is a write whose result was thrown away.** Every
+caller in the kernel checks it, the header says so, and the test asserts that the
+file is *not* visible before the close — which is what stops somebody later
+"fixing" the close to be a formality.
+
+A file larger than the buffer is **refused at open**, not opened and then found
+to be short. A caller handed part of a file with a success status cannot tell.
+
+### The mount table
+
+Four lines of table, and it is what turns a file interface into a *virtual* one.
+Before it, "open" meant ReconFS and the console was reached by a special case.
+After it, a path is looked up and whatever answers is what the program talks to.
+
+Longest prefix wins, written as a length rather than as an ordering — because a
+table that only works in the order it happens to be written is a table somebody
+will reorder. There is no `mount()` call and no unmounting: this kernel has one
+volume, found at boot, and inventing the calls before something wants them gets
+their arguments wrong.
+
+### Pipes
+
+A ring of bytes, a lock, and two queues of threads. The mechanism is small; the
+four questions at its edges are not, and each has a wrong answer that looks like
+it works:
+
+- a reader with nothing to read **waits**, and does not return zero — zero means
+  the input has ended, and a reader told that while a writer is still running
+  stops early and reports success;
+- a reader waiting when the last writer closes gets zero, because now it really
+  has ended;
+- a writer with nowhere to put bytes waits rather than discarding them, because a
+  pipe that drops bytes under pressure works in every test and loses data on a
+  busy machine;
+- a writer whose readers have all gone gets an error and not a wait, because
+  nothing will ever drain it.
+
+The test starts the reader **first**, and asserts it has not finished before
+anything is written. A reader that returned zero instead of waiting would still
+pass a test that wrote first and read afterwards, because there would be bytes
+waiting either way.
+
+### A program from a volume
+
+The last piece of "a process is a program". The ELF loader made a program a
+*file* rather than a byte array, but the file was still inside the kernel image.
+
+`user_exec_path` opens a descriptor, reads to the end, and hands the result to
+the loader that already existed. Nothing in it knows what filesystem the path
+names — which is the point: the same function will load a program off a pipe or
+out of a devfs without a line changing. It reads in a **loop**, because "read"
+does not promise to give everything asked for in one call, and a loader that
+assumed otherwise would work on a disk and truncate everything else.
+
+The test is the loop closed: the kernel's own program is written onto the volume
+**through a descriptor**, read back **through a descriptor**, and executed. It is
+the first time in this kernel that a file on a disk has become a running process.
+
+### A mapping backed by a file
+
+1.2's last open row, and it needed a VFS rather than more memory management: the
+page tables have been able to fill a page on demand since checkpoint 19, and what
+was missing was anything to fill one *from* that was not zeroes.
+
+A region can now carry a file, an offset and a length. A fault in it allocates a
+page, zeroes it, and reads the file over the top — so the tail past the end of
+what the file backs stays zero, which is exactly what an ELF segment with a
+`.bss` is made of.
+
+**Private, not shared.** A write changes the page and never the file. Shared
+mappings need a page cache two address spaces can point at, and there is no such
+thing here yet; a program that expected its changes to be saved would find out by
+losing them, so it is written down instead.
+
+The one subtlety is that filling a page means *seek then read*, which is one
+operation only if nothing else touches the file in between. Two processors
+faulting on the same mapping would otherwise each read from where the other had
+just seeked to, and each would get a page of somebody else's file with no error
+anywhere. There is a lock.
+
+### Memory two programs can both reach
+
+The other half of IPC, and not a variation on pipes: a pipe is a stream with an
+order and a producer and a consumer; shared memory is a region with no order at
+all, where the only promise is that both programs are looking at the same
+physical pages.
+
+It could not exist before per-process address spaces, because sharing memory
+between processes that share *all* of it is not a mechanism — the audit said
+exactly that. Now that each has a map of its own, the map already knows how to
+point at a physical page, so what had to be built is only the lifetime.
+
+Mapped eagerly rather than on demand, deliberately: the thing being shared is the
+*page*, and a demand-paged region hands each faulter a page of its own unless
+something coordinates them. That coordination is the whole difficulty; mapping up
+front does not have it.
+
+**There is no system call yet, and that is on purpose.** The shape of one —
+named or anonymous, inherited or looked up — is decided by whatever wants it
+first, and a call invented before its caller gets its arguments wrong in a way
+that is expensive to change. The mechanism is here and tested; the call arrives
+with its caller.
+
+### And one fault it found on the way
+
+KF-161: `rootfs_read_file`'s header promised that either output pointer could be
+null. One of them could. The first caller to believe it wrote to address zero in
+kernel mode — a claim that had been wrong since it was written, and unexercised
+because nothing had ever passed null.
+
+## Time, deferred work, and where a device interrupt goes
+
+Three rows of the architecture audit said "waits on: wait queues". Wait queues
+landed with checkpoint 18, and nothing went back to them — so this is that,
+plus the interrupt routing they made worth having.
+
+### The timer wheel
+
+The kernel could tell the time and be interrupted by it, and could not *arrange*
+anything. There was no way to say "call this in fifty milliseconds", and no way
+for a thread to sleep: every wait was a spin against a deadline, which burns a
+processor for the whole wait.
+
+`core/timer.c` is a five-level hashed timing wheel — five wheels of 64 slots,
+each counting in units 64 times coarser than the one below, reaching about 124
+days at a hundred ticks a second. A request past that is refused rather than
+clamped, because a clamped timer fires at a time nobody asked for and reports
+success.
+
+The structure is chosen for the operation that actually happens. A list kept in
+expiry order is cheap to check and O(n) to insert, which is the wrong way round:
+timers are inserted and cancelled constantly and almost none of them ever fire,
+because the thing they guard against usually does not happen. A wheel makes
+insertion O(1) by not sorting at all, and *cascades* a timer down into finer
+slots only if it survives long enough to need it.
+
+The test waits about three quarters of a second, and that cost is deliberate: 70
+ticks is past level 0's 64 slots, so that timer can only fire if it is walked
+back down. There is no faster way to test the cascade that is still testing this
+code — driving the wheel by hand from the test would be testing a second
+implementation of the loop.
+
+### Deferred work
+
+An interrupt handler runs with interrupts masked, on a processor that is doing
+nothing else until it finishes. It cannot take a lock somebody might hold and it
+cannot wait. Every real kernel splits a handler in two; this one had not, which
+was tolerable only because no handler did much — and the timer wheel ends that,
+because a timer callback is an interrupt handler that arbitrary code can now ask
+for.
+
+`core/work.c` is one worker thread running items in the order they were queued.
+Not a thread pool: one worker makes two guarantees worth more here than
+throughput, which are that work items cannot race each other and that a slow one
+delays the queue rather than multiplying threads.
+
+**The assertion that matters is not that the work runs, it is where.** An
+implementation that called the function immediately would pass any test that
+only checked it was called — and would be the thing this replaces. So each item
+records which thread ran it and the test requires that to be the worker, with
+the items queued from inside a timer callback, which is real interrupt context.
+
+### The I/O APIC
+
+The 8259 pair has one output and it goes to one processor. That is not how it is
+programmed, it is what the chip is: on a machine with two processors or two
+hundred and eighty-eight, every disk completion and every keypress lands on
+processor 0 and the others cannot be given any of it.
+
+`arch/x86_64/ioapic.c` reads the MADT for I/O APICs and for **interrupt source
+overrides**, which is the part that is not optional. The inputs are not the
+sixteen ISA lines; they are Global System Interrupts, and the firmware is free
+to wire an ISA line to a different one. It usually does: on almost every PC the
+timer arrives on GSI 2, and a kernel that assumes IRQ *n* is GSI *n* masks the
+timer by accident and stops.
+
+The 8259 is masked rather than removed, and the switch is **verified rather than
+assumed**: the tick is watched across it against a clock that does not depend on
+it, and if it does not advance the lines go back and the machine says so. That
+is not an off-switch for a check — it is the check. The alternative is a kernel
+that hangs at boot on hardware nobody here owns with no output to say why. It
+earned its place on the first attempt, catching a mistake in the check itself.
+
+Then it caught a real one. See KF-157: the 8254 was programmed as a square wave,
+which changes its output twice a period, and the new controller counted both
+transitions where the old one counted one. **The kernel ran at 201 Hz against a
+100 Hz constant and every tick-counting test passed** — the ordering of timers
+held, the cascade fired at the right tick, the scheduler preempted. Only a
+comparison against the monotonic counter could see it, and there had never been
+one. There is now.
+
+### Interrupts with no wire
+
+`arch/x86_64/msi.c` composes the address and data a device writes to raise a
+vector on a processor, and programs them into a PCI device's MSI capability. An
+MSI is not special: the range at 0xFEE00000 is claimed by the local APICs and a
+write landing there is decoded as an interrupt, so the address and the data
+*are* the routing — no table in a chip, and no line to share.
+
+It is tested by performing the write, because the write a device does is an
+ordinary memory write and a processor can do the same one. If the vector
+arrives, the encoding is right.
+
+**No driver asks for it yet**, and that is stated rather than implied. Every
+storage driver here polls, and turning MSI on for a device whose driver does not
+expect asynchronous completions would be worse than leaving it off.
+
+### An idle thread is a last resort, not a turn in the round
+
+This is here because it cost a whole verification run and because the shape of it
+is worth more than the fix.
+
+Fixing KF-155 meant giving processor 0 an idle thread of its own. That put an idle
+thread in the run ring **beside a working thread on the same processor for the
+first time** — the boot processor had never had one, and a secondary had nothing
+else to run — and `pick_next` returned the first eligible thread it found. So the
+boot thread and `idle-000` were handed alternate slices.
+
+An idle slice is not a short one. `idle_loop` calls `arch_wait_for_interrupt`, so
+it holds the processor until the next tick, doing nothing. **The machine ran at
+about half speed.**
+
+Twenty-six self-tests passed. Nothing was incorrect: every thread ran, every timer
+fired in the right order, every assertion held. What failed was seven paths of the
+verification matrix, and every one of them writes to a disk — they wrote correct
+data and ran out of time doing it.
+
+The scheduler now counts, and fails on, an idle thread being scheduled while
+another thread on that processor is READY. That is an invariant with a number
+attached rather than a statistic: an idle thread exists so a processor has
+something to do when nothing else will have it, and running one with work waiting
+is the processor doing nothing on purpose.
+
+**The general lesson is the one from KF-157 the same day.** The suite catches
+wrongness. It is blind to slowness, because every assertion in it is about order
+and value and none is about duration. The matrix is what has real timeouts on real
+work, and it is the only thing that saw either of these.
+
+### READY meant two things, and they stopped being the same thing
+
+The scheduler marked a thread READY *before* `arch_context_switch` had saved its
+registers and written its stack pointer. For those few instructions the thread
+was advertised to every other processor while this one was still standing on its
+stack — and a processor that took it would resume from a pointer that had not
+been written.
+
+The comment beside the lock release argued it was safe, and was wrong in a
+precise way: *"prev is READY and owned by nobody, next is RUNNING and owned by
+this processor."* Owned by nobody was exactly the problem. It was still being
+used by this one.
+
+Three paths share it, which is why the fix is an invariant and not three patches.
+`thread_exit` marks a thread FINISHED and then switches away, and the reaper's
+guard — `t != this_cpu()->current` — does not cover a thread that is current on a
+*different* processor. `wait_sleep` marks a thread BLOCKED and then switches away,
+and a waker on another processor can make it READY in that gap. And ordinary
+preemption, above.
+
+**How it was found is worth keeping.** A live kernel stack was freed by the
+reaper, handed straight to the page allocator's own concurrency test, and had a
+marker word written over a return address. The panic reported a link register of
+`0xacce5501` — which is `0xACCE5500 | 1`, the marker racer number one writes into
+every page it is given. A test built for one purpose named a fault in another.
+
+A thread now carries `off_cpu`, and both `pick_next` and the reaper require it.
+It is cleared when the thread is chosen and set by **whoever runs next on that
+processor**, which is the first instant at which the outgoing thread has genuinely
+stopped. A thread running for the first time has no such return point, so every
+thread starts in a small C wrapper that releases its predecessor and then calls
+the entry point — in C rather than in each architecture's assembly trampoline,
+because an agreement between two assembly files is the kind that drifts.
+
+Ten of ten clean where it had been panicking one boot in three.
+
+## Processors: how many, and telling them apart
+
+`MAX_CPUS` was 8, which was the size of the test rig. A current server part is
+two orders of magnitude past that — EPYC reaches 128 cores a socket and 192 on
+Turin, Xeon 128 P-cores or 288 E-cores, and a two-socket board is routinely 256
+to 576 *logical* processors. It is now **256**, and that number has a reason:
+255 is the largest processor an 8-bit APIC identifier can name, so 256 is
+exactly where the xAPIC interrupt controller stops being able to address what it
+can see.
+
+Going past it is x2APIC, which is implemented and **has never executed**: QEMU
+8.2 does not provide it under TCG and KVM is not reachable from this machine.
+What is tested is the arithmetic it depends on. See KF-152, which says plainly
+which half is which.
+
+On aarch64 the identity was MPIDR affinity level 0 — the processor *within its
+cluster*, unique on every machine this kernel had run on and not on a two-socket
+board. It is now a dense index the kernel assigns, carried in TPIDR_EL1. The
+same mistake was in `boot.S`, where it was worse: the test for "am I the boot
+processor" was also the low byte, so core 0 of every cluster would have run
+`kmain` at once on one stack.
+
+**None of this is tested above 32 processors, and the header says so.** The
+capacity is there deliberately, ahead of a machine to prove it on.
+
+
+## Foreign filesystems, and why FAT32 is not optional
+
+Checkpoint 14 exists for one reason: **the UEFI System Partition is FAT32 by
+specification, and that is where our own bootloader has to be written.** An
+installer that cannot put a file into a FAT32 volume cannot make a machine boot.
+NTFS, ext4, APFS and HFS+ are not required for that and are not being built --
+installing beside Windows means reading its *partition table*, not one of its
+files.
+
+### The rule is the opposite of ReconFS's
+
+ReconFS is ours: every volume that exists was written by this code, and when the
+checker disagrees with the tree, one of the two is our bug.
+
+FAT32 volumes were written by somebody else, and those somebodies disagree with
+each other about every ambiguous part of the specification. So:
+
+> **Believe nothing that can be derived, and derive everything that can be.**
+
+Three places that matters, all of which are how FAT readers usually go wrong:
+
+- **The type.** There is a string at offset 82 reading `"FAT32   "`, and
+  Microsoft's own specification says outright that it must not be used to
+  determine the type -- it is a comment, and formatters write what they like in
+  it. The type is the **count of data clusters**: at or under 4084 it is FAT12,
+  at or under 65524 it is FAT16, above that FAT32. Those boundaries are exact.
+  Off by one reads the wrong *width* of table entry from the right offset, which
+  produces a plausible wrong answer rather than an error.
+- **The length.** A boot sector says how many sectors the volume has and the
+  device knows how many it has. The device wins. Without that check a volume
+  claiming to be longer mounts perfectly and then fails one read at a time as
+  I/O errors -- so the machine reports a broken disk about a disk that is fine,
+  and the real fault is never named.
+- **The sector size.** `BPB_BytsPerSec` is 512 on almost everything and is not
+  512 on some 4Kn media, and it need not equal the block device's. Both are
+  read; a volume whose sectors are not a whole number of device blocks is
+  refused rather than approximated.
+
+### Long names are required, not a nicety
+
+Our own ESP holds `kernel-x86_64.elf`, whose 8.3 alias is `KERNEL~1.ELF`. An
+installer that could only see aliases could not tell one kernel from another on
+a volume it had written itself -- and the alias is not even stable, since it
+depends on what else is in the directory and in what order it was created.
+
+Long names are stored backwards, in fragments preceding the entry they belong
+to, tied to it only by **a checksum of the 8.3 name**. Checking that checksum is
+what stops orphaned fragments -- left by a system that did not understand long
+names -- being glued onto the next real file.
+
+### Both allocation tables are compared
+
+The second copy exists because the first can be wrong, and a reader that only
+looks at one throws that away. They are compared **per sector as it is read**,
+not in full at mount: comparing megabytes of table to open a volume is a cost
+paid every time for a fault almost no volume has, and this project has measured
+what an invisible-on-an-image check costs on real media. A disagreement is
+refused rather than resolved -- which copy is right is not knowable from here,
+and preferring the first is a guess wearing a uniform.
+
+### How it is known rather than believed
+
+`scripts/make-fat-fixture.sh` builds the volume with `mkfs.vfat` and `mcopy`,
+which share no code with this kernel. `scripts/fat32-damage.py` is a second
+reader, written from the specification rather than from the C, and it also
+breaks a volume in four specific ways. `scripts/fat32-reads-foreign.sh` requires
+each break to produce its **own** refusal -- signature, length, disagreeing
+tables, impossible chain -- because a reader that answered "I/O error" to
+everything would pass a test that only asked whether it complained.
+
+The length check exists *because* its damage test was written first and had
+nothing to catch.
+
+## Who may, and who may not
+
+Files have carried a mode, a uid and a gid since the filesystem was written, and
+**nothing had ever read them**. The audit carried that sentence unchanged for
+months. The desktop's own notes call it the largest honest gap in the system: a
+standard account cannot install a program because the Control Panel declines to,
+not because anything stops it.
+
+### The policy is in one place
+
+Every filesystem knows facts the policy does not — where an inode lives, what a
+device node means, whether a pipe has ends. None of them decides *policy*. They
+supply the mode, the owner and the group; the answer comes from `core/identity.c`.
+
+That is not tidiness. A decision made in three filesystems is three decisions,
+and the day they disagree is the day a file is readable through one path and not
+another.
+
+### The first matching class decides
+
+A mode has three sets of bits: owner, group, other. The tempting reading is *may
+they do it under any of the classes they belong to* — an or. It is wrong, and it
+is wrong in the direction that grants access.
+
+Mode `0004` on a file you own says **the owner may not read it**, and everybody
+else may. The digits are owner, group, other in that order, so this is `0` for
+the owner and `4` for everyone else — a strange thing to write, a perfectly legal
+one, and how a file is hidden from its owner while staying readable to a service.
+Under an or, the owner reads it.
+
+So the classes are tried in order and the first one that *matches* answers,
+whether the answer is yes or no. **A later class cannot grant what an earlier one
+refused.**
+
+That case is what the self-test is built around, and it caught an error on its
+first run — mine. The trap had been written as `0604`, which grants the owner
+read and write, because the digits are owner-first. The code was right; the test
+was not.
+
+### The kernel is not subject to it
+
+A thread with no process is the kernel, and it may do anything. Not an oversight:
+the check exists to constrain *programs*, and the kernel is the thing enforcing
+it. A kernel that had to ask permission to read its own filesystem would need an
+identity of its own to ask with — a second account that can do everything, which
+is the thing this prevents, wearing a hat.
+
+### Capabilities, which are the answer to that
+
+"Root may do everything" is a blunt instrument, and the answer is to name the
+powers and hold them separately.
+
+**They are dropped, never gained**, and that is the whole of the safety property.
+A process may take a capability out of its own set, and there is no call that
+puts one back — not *no call yet*, because a set that can be regained protects
+nothing: anything that could re-take a power is a power that was never given up.
+
+What that buys is worth having. An installer holds `CAP_RAW_DISK` while it writes
+a partition table and drops it the moment it is done, and every bug in everything
+it does afterwards — a corrupted path, a wild pointer, a hostile file it was
+asked to copy — cannot reach a disk. **The window in which the power exists is
+the window the programmer chose, not the lifetime of the program.**
+
+Three of them, because this kernel has three privileged acts:
+
+| Capability | What it guards |
+|---|---|
+| `CAP_FILE_OVERRIDE` | Ignoring the permission bits |
+| `CAP_RAW_DISK` | `block_claim_raw` — which calls itself *a declaration of intent to destroy a disk*, and until now nothing asked who was declaring it |
+| `CAP_SHUTDOWN` | Stopping the machine |
+
+A capability nothing checks is a promise nothing keeps, so the list is exactly
+the acts that exist. The day something needs a fourth, the name will be chosen by
+whatever needs it.
+
+`capable()` requires **every** capability asked for, not any of them — the
+tempting `(held & caps) != 0` grants a caller that asked for two powers on the
+strength of one.
+
+### Proof, rather than a mechanism
+
+A pure policy is easy to test and proves nothing about whether anything consults
+it. So a real process running as **uid 1000** opens a real `0600` file owned by
+the kernel, and is refused.
+
+Two ordering traps on the way, both the one swap fell into: the check had to move
+after `rootfs_run`, because no filesystem exists when the self-tests run; and the
+summary after the check, because otherwise it prints `0 allowed, 0 refused` and
+describes a permission system nobody consults.
+
+Under a control that forces the policy to say yes, the pure test reports `FAIL`
+and the enforcement check reports `LET IN`.
+
+**Not checked, and said out loud** in the header and in the boot summary:
+directory traversal — reaching `/a/b/file` does not require the right to traverse
+`/a` — and set-user-id.
+
+## A driver can ask for an interrupt of its own
+
+An ISA line is a wire and there are sixteen of them. A message-signalled
+interrupt has no wire at all: the device writes a value to an address, the local
+APIC decodes the write as an interrupt, and **the number is the whole of the
+routing**.
+
+So a driver that wants one does not ask for a line, it asks for a number nobody
+else is using — and until now there was exactly one such number, `VECTOR_MSI`,
+and it belonged to the self-test. The audit named this as one of three cheap
+things worth doing: *a vector allocator, so a driver can ask for an MSI rather
+than being handed the one number the self-test uses.*
+
+Sixteen of them, at `0x50` to `0x5F`, because each is an assembly stub in the
+image whether it is claimed or not — and sixteen is more devices than this kernel
+has ever had. They are written out rather than generated: inside a `.macro` body
+the `.irp` iterator and the macro's own parameter are spelled the same way, and
+the assembler resolves it to the wrong one.
+
+The claim being **exclusive** is what the self-test is built around. Two drivers
+handed one vector is two drivers taking each other's interrupts, which is exactly
+the fault the xHCI event ring had — and running out is reported rather than
+papered over.
+
+This is the blocker under 1.4's MSI row, whose own text says *the missing half is
+a driver*. The half that was missing before that is now built.
+
+## A disk that says when it is finished
+
+The vector allocator above is the half a driver needs. This is the driver.
+
+### The flavour that is actually offered
+
+`x86_msi_enable` had been written, tested, and pointed at capability `0x05`.
+Every device on this machine that has an interrupt-without-a-wire has capability
+`0x11` instead — **MSI-X** — and the two are not the same register set.
+
+MSI keeps the address and the data in configuration space, which is why it
+allows one message per device. MSI-X keeps them in a *table in the device's own
+memory*: up to 2048 messages, each with its own address and its own vector, so a
+device with eight queues can aim eight interrupts at eight processors.
+
+Wiring the disk driver to `x86_msi_enable` would have compiled, run, returned
+`false`, and changed nothing. Every test would have passed. That is the shape of
+bug this project keeps finding: not a wrong answer, **an answer to a question
+nothing asked.**
+
+It was caught by not believing a summary line — see [KF-179](BUGS.md), where the
+number that said there was nothing to wire up turned out to have been printed
+before the bus was walked.
+
+### The order of four stores
+
+An entry is sixteen bytes: address, address-high, data, and a control word whose
+bit 0 masks it. They are written masked, and **unmasked last, as a separate
+store**. An interrupt raised between the address and the data carries half of
+each configuration, which is a vector nothing has a handler for — so there must
+be no instant at which a live entry is half-written.
+
+Two off-by-ones are sitting in the capability, and both would work on most
+devices:
+
+- the size field holds **the count minus one**, so a device with one message
+  reports zero. Read as a count, it writes one entry past the end of the table.
+- the table pointer's **low three bits name a BAR** and the rest is an offset.
+  Masked the wrong way round, the offset is a little too large in a register
+  that is usually the right one anyway — so it works on a device whose table
+  starts at zero and corrupts one whose table does not.
+
+### The driver still polls, on purpose
+
+The handler counts the arrival and returns. It does not touch the queue: the
+thread that submitted the request is still in `run()` with the ring in its
+hands, and a second party collecting from it needs a lock this driver does not
+have yet.
+
+That is a smaller step than it sounds and it is the right one. Counting answers
+the only question an interrupt path has at this stage — **does it arrive at
+all** — and every later question is then asked of a mechanism known to work
+rather than of one merely written. The alternative is to build the whole stack
+and debug it at once with no idea which layer is silent.
+
+### Which is exactly why the test has to be adversarial
+
+A silent interrupt looks identical to a working one while something else is also
+polling. If the vector were misconfigured, the table written at the wrong
+offset, or the device never told which message to use, every disk operation in
+this kernel would keep working and nothing would say a word.
+
+So a real process does a real read of sector 0 and asserts the counter moved.
+Not "an interrupt can be delivered" — the MSI self-test already shows that by
+writing one by hand — but that *this device*, told about *this vector*, raises
+it when it finishes work it was actually given.
+
+Two negative controls, and they failed differently, which is the useful part:
+
+- **not telling the device its vector.** The test *passed* — because the
+  read-back guard caught it. That register is one of the very few in virtio that
+  answers: a device that cannot take a vector writes `NO_VECTOR` back and
+  carries on working, so a driver that writes and does not look has silently
+  returned to polling while believing otherwise. The driver reported it and fell
+  back. A control that finds a guard rather than a failure is still a result.
+- **leaving the entry masked.** The device accepts the vector, raises it, and
+  nothing is delivered. The test failed, naming the device and what it did:
+  *virtio0 was given a message vector and finished a request without raising
+  it.*
+
+### And then the summary was worth reading
+
+Asking for an interrupt meant switching off the legacy one, because a device
+must not assert both. That turned out to fix [KF-163](BUGS.md) — two virtio
+disks on one machine crawling at one request every two seconds — which had six
+candidates eliminated and a seventh implicated, and was none of them.
+
+The line no driver claimed had been taking **1,770,000 interrupts on an ordinary
+one-disk boot**, printed in the boot summary on a path the matrix runs eighteen
+times. The machine had been saying it all along.
+
+## A sleep that gives up
+
+`wait_sleep` waits for ever, and for a thread waiting on another thread that is
+right: if the signal never comes the program is wrong, and hanging is honest.
+For a thread waiting on **hardware** it is wrong. A disk that never answers is
+not a bug in this kernel, it is a disk, and a driver that waits for ever on one
+turns a broken device into a machine that stops with nothing on the screen.
+
+So every such caller polled instead — burning a slice per look, and unable to
+have more than one request outstanding, because the only way it knew a request
+had finished was that it went and looked.
+
+### Why the caller owns the deadline
+
+The obvious interface is `wait_sleep_timeout(q, lock, flags, ns)`, with the
+timer on the stack. `timer_sleep_ns` does exactly that and is correct — because
+it drops its lock **and restores interrupts** before waiting out a callback that
+lost the cancel race.
+
+A deadline sleep cannot. It has to return the way `wait_sleep` does — lock held,
+interrupts still off — so if the tick belongs to this processor, a spin waiting
+for that callback is waiting for something that **cannot run**. It would be a
+deadlock that appears only when the timer fires in the same instant as the
+wakeup, on the processor that owns the tick.
+
+Putting the timer in the caller's own structure removes the question rather than
+answering it. A callback that fires late points at something that is still
+there, so there is nothing to wait for — and this kernel has already paid once
+for a pointer to a stack frame that had gone, in the lock registry.
+
+### And why there is a generation number
+
+`timer_cancel` can lose, so a disarmed deadline may still fire. As a flag, that
+late callback would mark a structure whose *next* request has already started,
+and that request would time out immediately — leaking the descriptors its device
+still owns, for a timeout belonging to the request before it.
+
+So the callback records **which arming it belongs to**, and only the current one
+counts. A stale one writes a number nobody is looking at.
+
+Both halves were watched failing. A plain flag reports *a freshly armed deadline
+says it has already run out, so the arming before it leaked*; a deadline that
+expires at once reports *a 100ms deadline ran out after 20143 ns*.
+
+### The disk stops looking
+
+`virtio-blk` waits now. **The two-second limit on a request is unchanged** and
+still a comparison against the monotonic clock — the deadline only stops a sleep
+lasting for ever, so the loop gets to look at that clock again. A device that
+goes silent still fails after two seconds whether or not it had an interrupt to
+offer.
+
+The counters are not decoration. Had `wait_sleep` always returned false, the
+driver would have yielded every time, behaved exactly as before, and **passed
+every test** — so it reports what it actually did. That caught two things.
+
+The counter could not fire at all, because it read the deadline *after*
+disarming, and disarming retires the arming. The control built to make it fire
+is what exposed it.
+
+Then, fixed, it immediately reported **one sleep in two ending on the clock
+rather than on the device** — a lost wakeup, which I had introduced by tidying.
+Collecting under the lock, releasing it, and taking it again to sleep leaves a
+window in which the handler runs against a queue nobody is on yet. Collect and
+sleep are one acquisition now, which is what `wait.h` said all along: *the
+condition is tested and the thread is queued under the same lock the waker must
+take to signal.*
+
+| | sleeps ending on the clock |
+|---|---|
+| two acquisitions | **1 of 2** |
+| one acquisition | 0 of 2 |
+| handler wakes nobody *(control)* | 2 of 2, and says so |
+
+Under that last control every test still passes, which is the entire argument
+for counting.
+
+## Four calls, so a program can reach its own identity
+
+`capability_drop` had exactly one caller in this kernel: its own self-test.
+
+The whole argument for having capabilities is that an installer holds
+`CAP_RAW_DISK` while it writes a partition table and gives it up the moment it
+is done — and **no installer could**, because nothing outside the kernel could
+reach the call. The mechanism landed and was inert.
+
+The same gap on the other half. The kernel started refusing files based on uid,
+and a program had no way to find out *as whom* it was running. A process refused
+a file could not tell "I am the wrong user" from "the file is not there" — which
+is the difference between asking somebody to log in and reporting a bug.
+
+`SYS_GETUID`, `SYS_GETGID`, `SYS_GETCAPS`, `SYS_DROPCAP`. Appended rather than
+inserted, because a call number is a promise to every program already built
+against it.
+
+**`SYS_DROPCAP` answers with what is still held.** That is what makes it
+testable — the effect of the call is visible in the call's own answer rather
+than only in a later one. There is deliberately no argument that makes it grant
+anything, and that is not an omission to be filled in later: a set that can be
+regained protects nothing.
+
+Unknown bits are dropped rather than refused. A process cannot hold what does
+not exist, so the effect is nothing, and refusing would mean a program built
+against a later kernel failing here instead of simply giving up a power this one
+does not have.
+
+### Tested against the layer below, not against a constant
+
+Each call is compared with the kernel function beside it, in the same thread, in
+the process that already holds everything. A constant would prove the file
+agrees with itself; what is worth proving is that **the two layers agree**,
+because the layer a program sees is the one that has to be right.
+
+Both halves watched failing: a `DROPCAP` that returns without dropping reports
+*a drop nothing outside the kernel can actually perform*, and a `GETCAPS` that
+answers a set it does not hold reports the two disagreeing.
+
+Dispatched directly rather than trapped from ring 3, **and the comment says so**.
+These four take no pointers, so there is no user address to get wrong, and the
+entry path is a table lookup that does not know one number from another. "Tested"
+and "tested from user mode" are different claims, and this is the weaker one.
+
+## One copy of a file's page
+
+A file-backed mapping used to fill every page privately: each fault allocated a
+page, zeroed it, and read the file over the top. Two programs mapping one file
+got two copies of every page; a program mapping it twice got two more. Nothing
+was wrong with any of them, and the machine held four copies of something that
+had not changed.
+
+### The mechanism already existed, with one entry
+
+**The shared page of zeroes is a page cache whose key is "zeroes".** It is
+mapped read-only into every address space in the machine, a write to it traps,
+and the handler answers by copying it into a page of the writer's own.
+
+That is copy-on-write, and a page cache is the same three moves with a key on
+the front — which is why the fault path barely changed. `have == zero_page`
+became *is this a page somebody else is also using*, and the copy that already
+happened for zeroes now happens for file contents.
+
+### The key is what the filesystem calls the file
+
+A `struct file *` will not do. Open twice and there are two of them, and keying
+on the pointer would give the two mappings separate entries and share nothing —
+which is precisely the aliasing the block cache was bitten by, where a partition
+and its disk were the same sectors under two names.
+
+So a filesystem says what a file *is*, and a filesystem that cannot answer
+stably says zero. Zero is not a failure: it means *fill this the old way*, and
+the old way still works.
+
+**ramfs can answer** because it never removes a name — a slot there is a file
+for the life of the machine. Its header wrote that down as a *decision* rather
+than an omission, and it turns out to be exactly the property a cache key needs.
+
+**And so can the volume**, which I first said it could not. The reasoning was
+right about the block — an inode moves under copy-on-write and its number can be
+reused — and wrong about the conclusion. ReconFS already carries a **dossier**,
+and its own comment states the two properties: *stable across rewrites; never
+reused*. It exists because a child records its parent as a dossier rather than a
+block; recording the block would mean that adding one file to a directory
+stranded every child's back-reference, and fixing those would move them in turn.
+The property that makes the filesystem usable is the one that makes it
+cacheable.
+
+### A stable key is what makes invalidation necessary
+
+Worth naming as a trade rather than treating as an afterthought. Keyed on
+something that *moved* when the file changed, a rewrite produced a new key and
+the old pages were simply never asked for again — invalidation by accident, and
+a cache that misses every time anybody writes. A dossier survives the rewrite,
+so the cache has to be told.
+
+Pages somebody still has mapped are not taken away. The entry goes **stale**,
+nothing new is served from it, and the page goes back when the last mapping lets
+go. A mapping made before the write keeps seeing what it mapped, which is the
+only answer that does not pull memory out from under a running program.
+
+**The test for this was wrong before the code was.** Written the obvious way —
+write "first", rewrite as "second", read back — it reported reading "first",
+which looks exactly like a cache serving stale pages. It was not: the commit
+answered `ERR_EXISTS` and the file was never rewritten, because **this kernel
+cannot overwrite a file**. So the wiring is real and has no caller that can fire
+it yet; the test checks the mechanism instead, and asserts on the *page* rather
+than the contents, since the bytes are identical either way.
+
+## A write one program can see in another
+
+1.2 said shared mappings were *refused rather than faked*. They are offered now
+where the promise can be kept, and still refused where it cannot.
+
+Three things have to hold, and the third decides the shape of the other two: the
+two spaces must land on one page, the page must be mapped writable rather than
+copied on the first write, and what is in it has to reach the file afterwards.
+**A mapping that does the first two and not the third accepts a program's
+changes and loses them** — worse than not offering one.
+
+So the capability follows the filesystem's ability, through an operation whose
+*presence is the promise*. `write_at` puts bytes back at an offset with no
+position and no later commit, and it is deliberately separate from `write`:
+every filesystem here has `write`, and on the volume a write is buffered until a
+close that refuses. ramfs implements it — a file there is memory, so there is no
+commit to fail. The volume does not, so a shared mapping of its files is
+**refused at map time**, once, where something can still be done about it.
+
+The cache holds a reference to the file for entries that can be written back,
+which pins it open while the page is cached. A real cost, and the reason the
+reference is only taken where it could ever be used.
+
+## The memory a program used to keep for ever
+
+Building the cache meant asking who frees a mapped page. Two faults came out of
+that question, and the second was found by the measurement refusing to agree the
+first fix had worked.
+
+**[KF-182](BUGS.md)** — tearing down an address space freed the page tables and
+not the pages they pointed at. `free_lower_tables` said so itself: *whoever
+allocated the memory frees the memory, and the two are not the same list*. There
+was no other list.
+
+**[KF-183](BUGS.md)** — and even fixed, twelve pages still went per program,
+while a counter showed the new code had freed eleven leaves in the entire boot.
+`reap()`, which frees finished threads' stacks and which is *correct*, had
+exactly one caller in the whole kernel and it was a self-test. `process_reap`
+had two, both in another. **Both reapers were written, both work, and nothing
+ever ran them.** `thread_exit` had said so: the stack is *left for whoever
+notices the thread is finished*.
+
+Twice in two days a comment delegated to a collaborator who was never created.
+
+Measured, the same program three times: **twelve pages lost per run before, none
+after**, and the process table goes from eight slots in use to one.
+
+## Somebody touching the machine
+
+Every screen this kernel had ever drawn had been read and not touched. There was
+no keyboard, no mouse, and nothing that turned a keypress into anything -- which
+the audit named as the single item with nothing above it and nothing blocking it.
+
+### An event is a key, not a character
+
+This is the decision the whole subsystem turns on, and getting it the other way
+round is how a kernel ends up owning keyboard layouts.
+
+The hardware says "the key in position 30 went down". What *character* that is
+depends on the layout, the modifiers, the dead-key state, and in some languages
+on the two keys before it. **All of that is data, and none of it is the
+kernel's.** A kernel that hands up characters has to contain a layout table, and
+then a second one, and then a way to choose between them -- and a program that
+wants the *position*, like a game reading WASD which is ZQSD on a French
+keyboard, can never get it back, because the information was thrown away below.
+
+So an event carries a **keycode**: a number naming a physical position, the same
+number for that position on every keyboard. The numbers follow the USB HID usage
+table, which is not a preference -- it is what every keyboard made this century
+actually reports, so a USB driver will hand these up with no translation at all.
+It is the PS/2 driver, the older and stranger one, that does the converting.
+
+### Press, release, and the third one
+
+A held key repeats, because the keyboard's own typematic circuit sends the make
+code again. Those are reported as *repeats* rather than as fresh presses.
+
+Not cosmetic. A text field wants repeats -- holding backspace should delete more
+than one character. A game does not: a repeat is not a new jump. Collapsed into
+"pressed", the two become impossible to tell apart and every program that cares
+has to reconstruct the difference from timing, badly.
+
+### A release with no press
+
+After a dropped event, or for a program that started while a key was already
+held, a release arrives for a press nobody saw.
+
+So held-state is a **bit per key, derived from the events**, and a release of a
+key that was not held is a no-op. A counter here goes negative, wraps, and
+leaves the machine believing shift is held for the rest of the boot.
+
+### The firmware bit that cannot be believed
+
+The FADT has a bit -- `IAPC_BOOT_ARCH` bit 1 -- meaning "this machine has an
+8042". **It cannot be trusted when clear, and that is measured rather than
+suspected:**
+
+| QEMU machine | `IAPC_BOOT_ARCH` | has an 8042 |
+|---|---|---|
+| `-M pc` (i440fx) | `0x0000` | yes |
+| `-M q35` | `0x0002` | yes |
+
+Same hardware, two answers. A kernel that believed the bit has no keyboard on one
+machine and a keyboard on the other, with nothing anywhere saying why.
+
+So presence is established **positively**: the controller is asked to run its own
+self-test and answer `0x55`. A port nothing drives reads back `0xFF`, so "the
+status register looks plausible" proves nothing, but `0x55` is a specific answer
+only an 8042 gives. Every wait is bounded, so probing a machine that genuinely
+has none costs microseconds and cannot hang. The bit still earns its place: it
+says whether finding nothing is worth reporting as a fault or is simply the truth
+about this machine.
+
+### Scancode sets, verified rather than hoped for
+
+A keyboard sends set 2. The controller can translate to set 1 on the way past,
+and a bit in its configuration byte says whether it does. Almost every machine
+boots with translation on, which is why almost every small kernel assumes set 1
+-- and is silently wrong on the machine where it is off, with every key coming
+out as a different key and nothing reporting a fault.
+
+So the configuration byte is written **and read back**. If translation did not
+stick, the driver says so and delivers no keys rather than wrong ones. A keyboard
+that types the wrong letters is worse than one that does not type: the first
+looks like a broken program.
+
+### The order that cost an afternoon
+
+Three things have to happen and the order is the whole of it: **register the
+handler, open the line, then let the device raise interrupts.**
+
+The first version armed the device inside its configuration, before registering.
+The keyboard's own reset and acknowledgement bytes then arrived at a line nobody
+had claimed -- and because nothing read the data port, the controller kept its
+output buffer full. **An 8042 holding a byte nobody has taken raises no further
+interrupts.** Four bytes in, the keyboard was silent for the rest of the boot,
+with every register correctly programmed and every self-test passing.
+
+It was found by counting: the interrupt table reported *four taken on line 1,
+four with nobody to take them*, next to a summary saying the keyboard was
+registered on line 1. Two things that cannot both be true.
+
+### What the handler does
+
+Takes one byte. That is the whole of it.
+
+The controller holds exactly one and the next keypress overwrites it, so the byte
+has to leave the port now, at interrupt level, however busy the machine is.
+Everything after -- the scancode state machine, the queue -- is a thread's job
+and goes to `work_schedule`. This is the first driver in the kernel to use
+deferred work for what it was built for, and the first to ask for an interrupt
+line at all, which is what the I/O APIC work had been waiting for.
+
+Measured end to end, with keystrokes injected through QEMU's monitor:
+
+| sent | scancodes seen | keycode delivered |
+|---|---|---|
+| `a` | `0x1E` then `0x9E` | 4 down, 4 up |
+| `b` | `0x30` then `0xB0` | 5 down, 5 up |
+| up arrow | `0xE0 0x48` then `0xE0 0xC8` | 82 down, 82 up |
+
+The third row is the one worth having: the extended prefix is a separate
+namespace, and `0x1D` is left control on its own and right control after `0xE0`.
+Folding them into one table is how a kernel reports the wrong modifier.
+
+### A mouse, and what an event has to carry for one
+
+The input core only knew about keys, and a mouse does not produce keys. An
+event gained a signed **value** and a fourth kind, `INPUT_MOTION`, naming an
+axis and a distance.
+
+Relative, always. A mouse reports *movement* and has no idea where the pointer
+is -- whoever draws the pointer owns that, and is the only thing that knows
+where the edges of the screen are.
+
+**Y increases downward on every device**, and that is a decision rather than a
+passthrough. A PS/2 mouse says positive is up; a USB HID mouse says positive is
+down. Reporting each as it arrives would mean every reader had to know which
+kind of mouse was attached, which is the one thing this layer exists to
+prevent. The two drivers normalise in opposite directions and nothing above
+them asks.
+
+### Merging movements, and the one case that must not be merged
+
+A hand dragged across a desk produces hundreds of packets a second. Without
+help they fill the two-hundred-event queue and push the keystrokes out of it.
+
+So consecutive motion on one axis is **added to the event already waiting**
+rather than appended. That is safe only because the quantity is relative --
+deltas of 3 and 4 mean the same thing as one of 7 -- and nothing else on the
+queue may be treated that way: two presses of a key are not one press of it.
+
+And only ever against the **newest** event. If a button was pressed after the
+last movement then the newest is the button, nothing merges, and the press
+stays between the two movements where it happened. Merging across it would put
+the click somewhere the hand never was -- a drag that starts in the wrong place,
+which no later layer can repair. The self-test checks exactly that case.
+
+The sum clamps rather than wraps. A saturated delta is a pointer that stops at
+the edge of the screen; a wrapped one jumps to the other side of it.
+
+### One byte of framing
+
+A PS/2 mouse packet is three bytes, or four with a wheel, and **bit 3 of the
+first is always one**. That bit is the entire synchronisation.
+
+The stream has no other framing, so a single byte lost or gained leaves the
+decoder permanently one out of step: every movement becomes a different
+movement, forever, with nothing reporting a fault. Checking the bit at the
+start of each packet makes the error self-correcting for the price of one
+comparison, and resyncs are counted -- otherwise "the pointer sometimes jumps"
+is a complaint nobody can check.
+
+The wheel is found by **knocking**: three sample rates in a particular order,
+after which a mouse that understands the extension starts reporting device id 3
+and sending a fourth byte in every packet. There is no bit to ask. Getting it
+wrong is not cosmetic, because the packet *length* changes with the answer.
+
+## USB keyboards and mice
+
+This is what gives aarch64 any input at all. The 8042 is an ISA chip from 1984
+and ARM machines have neither the bus nor the chip, so that architecture had a
+keyboard driver it could never use.
+
+### The boot protocol is not a shortcut
+
+A HID device describes its own reports in a *report descriptor*: a small stack
+language saying which bits mean which usages. Parsing it properly is real work,
+and a kernel that gets it wrong reads somebody's mouse as a joystick.
+
+The **boot protocol** exists precisely so something small does not have to. A
+device reporting subclass 1 promises a fixed layout -- eight bytes for a
+keyboard, three or four for a mouse -- and `SET_PROTOCOL(0)` asks for it. It
+exists so a BIOS can run a keyboard before an operating system loads, which is
+exactly this kernel's position.
+
+What it costs is written down rather than discovered: six keys at a time, no
+media keys, three buttons. Past that is a report-descriptor parser, which is
+its own piece of work.
+
+**A boot keyboard reports HID usage ids, which are exactly the keycodes this
+kernel's input layer uses.** There is no translation in the USB driver at all.
+That is the payoff from choosing those numbers when the PS/2 driver was
+written, and it is why the older, stranger device is the one that converts.
+
+### A report is a state, not an event
+
+A PS/2 keyboard sends make and break codes: the events themselves. A USB
+keyboard sends **which keys are held right now**, over and over.
+
+So the driver keeps the previous report and compares. A keycode in the new one
+and not the old is a press; in the old and not the new is a release; in both is
+nothing -- which is what stops a held key generating a press on every poll.
+
+Two consequences worth stating. **There are no repeats from USB**: the
+typematic repeat a PS/2 keyboard generates in hardware does not exist, because
+the device just keeps saying the key is down. Whatever wants repeats makes them
+from the press and the clock, and that is a policy belonging with whoever knows
+what is being typed into.
+
+And a report of six ones is **ErrorRollOver** -- more keys held than the device
+can name -- not a list of keys. Treating it as one presses the letter A six
+times.
+
+### The completion that belonged to somebody else
+
+The event ring is shared by every endpoint on a controller, and this driver
+read it by taking the next event and assuming it was the one it was waiting
+for. That held while transfers only happened during enumeration: one device at
+a time, from one thread.
+
+It stopped holding the moment a keyboard and a mouse were both polled. A
+transfer that times out is abandoned by its waiter and **not cancelled in the
+controller**, so its completion arrives later and the next waiter takes it.
+
+The symptom was a mouse reporting four bytes of nothing over and over while the
+button presses went missing -- every transfer succeeding, with somebody else's
+answer. Before that, the very first "report" this driver ever saw was
+`09 02 16 00`, which is a configuration descriptor still sitting in the buffer
+from enumeration, decoded as a mouse with a button down and a jump of 22.
+
+Two fixes, and both are about not inventing input:
+
+- a completion is **routed to the endpoint it names**, into that device's own
+  mailbox, rather than taken by whoever is waiting;
+- the buffer is **cleared before every read**, so a transfer that reports bytes
+  it did not move reads as zeroes -- nothing held, nowhere moved -- rather than
+  as whatever was there. Whatever was there is always something that looks like
+  input.
+
+### Every device outstanding at once
+
+Asking each device in turn and waiting for its answer means a keypress waits
+behind however long the mouse takes to be moved, which for a mouse nobody is
+touching is for ever.
+
+An interrupt endpoint is *meant* to be left outstanding: the controller
+completes it when the device has something to say. So one transfer is queued on
+every device at once, and the poller asks each in turn without blocking on any.
+Reading events for one device delivers the others theirs, which is why none of
+them starves.
+
+Measured, with a keyboard and a mouse on one emulated controller:
+
+| sent | report | meaning |
+|---|---|---|
+| `mouse_move 7 3` | `00 07 03 00` | x +7, y +3 |
+| `mouse_button 1` | `01 00 00 00` | left down |
+| `mouse_button 0` | `00 00 00 00` | left up |
+| `sendkey b` | `00 00 05 00` | keycode 5, which is `b` |
+| `mouse_move -4 -2` | `00 fc fe 00` | x -4, y -2 |
+
+The same on aarch64, where it is the only input there is.
+
+## When the memory runs out
+
+Everything above the page allocator was built assuming there would be enough.
+Demand paging, copy-on-write, one address space per process -- all of it, with
+one answer to running out: fail the allocation. There is now somewhere for pages
+to go, a rule for choosing which, and a cache in front of the disk underneath.
+
+### Swap is a partition, and that is a deadlock argument rather than a preference
+
+The obvious place to put evicted pages is a file on ReconFS. It is the wrong
+place, and the reason is not performance.
+
+ReconFS is copy-on-write, so **writing to a file allocates**. The moment
+eviction runs is precisely the moment there is nothing to allocate from -- so a
+swap file would need memory in order to free memory, and the deeper the machine
+got into pressure the more certain the failure. A partition is a flat array of
+blocks at fixed offsets: slot *n* is always the same place, and writing to it
+allocates nothing.
+
+The cost is that swap has to be told which device it is, the same way `reconfs=`
+and `durability=` are, and for the same reason: this writes over a whole device
+from the first eviction, and picking one by looking at it is how a machine
+destroys its own system volume.
+
+### A swapped page is not an absent one
+
+This is the part that has a wrong answer looking exactly like a right one.
+
+When a page is written out, its page table entry stays where it is with the
+present bit clear, carrying the slot number in bits the hardware ignores plus a
+marker bit saying *this is a slot, not nothing*. Without the marker the fault
+handler cannot tell a page that was written out from a page that was never
+touched -- and it would hand the program a fresh page of zeroes over the top of
+memory it still owns.
+
+Nothing crashes. The program carries on with silently corrupted memory, which is
+worse than the fault. So that check runs **before every other branch** in the
+fault path, and a page that cannot be read back is refused rather than replaced
+with zeroes.
+
+### Which pages are cold is measured
+
+The processor sets an accessed bit when it fills a translation, so a sweep can
+see what has been touched since the last one -- and *clearing* it costs an
+invalidation, or every hot page reports cold for ever.
+
+The two architectures differ in a way that matters. On aarch64 before ARMv8.1
+there is no hardware update at all: a valid descriptor with the access flag
+clear **faults**. So the kernel asks `ID_AA64MMFR1_EL1.HAFDBS` whether the
+hardware maintains it, and says which answer it got rather than assuming either.
+
+Twenty anomalies are enumerated at the top of `core/evict.c` and each is handled
+at the line that names it -- the shared zero page, which must never be written
+out; a space that is not the one the processor is on; a fault on a page that is
+being evicted at that moment. **Every refusal is counted and printed**, because
+a policy that quietly declines to evict looks exactly like one with nothing to
+evict, and the difference is a machine about to run out of memory.
+
+### The block cache, and the aliasing problem that shapes it
+
+ReconFS reads through a cache now. Nothing else does, and that is the design:
+
+- the **partition reader** must see the disk as it is, not as it was;
+- the **installer** is rewriting a disk it has just claimed;
+- **swap** exists to move pages that did not fit in memory, so a cache in front
+  of it keeps in memory the very pages that were evicted for not fitting.
+
+**A partition and the disk it lives on are the same sectors under two names.**
+Block 0 of `virtio0p1` and block 2048 of `virtio0` reach one physical sector, so
+a cache keyed on the name it was handed holds two entries for it -- and a write
+through one name leaves the other holding what used to be there. A filesystem
+reads its own superblock back as the version from before it wrote it.
+
+So the key is the root device and the absolute block, resolved by the same code
+`block_read` already uses. `block_resolve` lives in `core/block.c` rather than in
+the cache for that reason: two implementations of that arithmetic would drift,
+and the day they drifted the aliasing would come back.
+
+The test for it is not that the bytes match. Two entries holding the same stale
+data agree with each other perfectly. It is that a read through the second name
+must **hit**, which can only happen if both resolved to one entry.
+
+### Write-through, and why that is not a compromise
+
+A write goes to the device first and updates the cache only if the device took
+it. No dirty list, no ordered flush, no window in which the only copy of
+somebody's data is in volatile memory.
+
+The cost is real: no write coalescing. The gain is that **every entry is clean,
+always**, and that single property carries the rest:
+
+- the cache can be dropped entirely, at any instant, with no loss -- which is
+  what lets memory pressure reclaim it without reclaim ever having to write to a
+  disk to make progress. On the eviction path that would be the same deadlock the
+  swap partition exists to avoid;
+- `flush_is_durable` keeps meaning what `block.h` says it means. A write-back
+  cache would have quietly added a second volatile layer above the one that
+  header goes to such lengths not to lie about.
+
+Write-back is the right answer once there is a wait queue and a flush that can be
+ordered. It is the wrong answer to reach for first.
+
+### What the locks cost
+
+Every lock counts how often it was taken, how often the taker had to spin, and
+the worst spin it ever suffered. That is the only way to answer *would more
+processors help* with something other than an opinion.
+
+The trap in lock profiling is that **the instrument is made of the thing it
+measures**: a counter shared by every processor is a cache line every processor
+writes, which is exactly the traffic a contended lock produces. A naive profiler
+reports contention it created, and reports most on the locks that were fine.
+
+This avoids it by adding no sharing that is not there already. The counters live
+in the lock, on the cache line `owner` is written to on every acquisition, so the
+line is already being taken exclusively by whoever took the lock. Only the holder
+writes them. And the contention counters are written only when there *was*
+contention, on a path that has already spent thousands of cycles spinning.
+
+Measured on this kernel:
+
+| processors | acquisitions | contended | worst |
+|---|---|---|---|
+| 1 | 789,267 | **0** | -- |
+| 4 | 762,801 | 1,196 | `pmm` 201 spins, `sched` 360 |
+
+The single-processor run is the negative control that makes the other worth
+reading. A counter incremented on every acquisition rather than only on a spin
+would report heavy contention on one processor too, and "every lock is
+contended" is exactly the sort of plausible answer somebody would act on.
+
+Their first run found three things: two locks that had never been given a name,
+two more that were initialised twice in a way that would have kept them out of
+the registry, and an initialiser that named its fields positionally -- so adding
+one turned every static lock in the kernel into a build error.
+
+## The order requests reach the disk in
+
+Before this, requests fought over one atomic. Whoever won `busy` went first and
+the head moved wherever the winner happened to want -- which is not an ordering
+but the absence of one, and on anything with a seek it is the difference between
+a sweep and a scramble.
+
+They queue now, sorted by block, one direction.
+
+### There is no worker thread, and that is the design
+
+A thread that wants a disk is already going to wait for one, so it is the right
+thread to drive it. Whoever arrives at an idle device becomes the **servicer**:
+it takes requests off the queue in order and issues them -- including ones that
+arrive while it is working -- and wakes each owner as it finishes. Everybody else
+inserts and sleeps.
+
+That matters most where it is least visible. With one caller, which is every
+read during early boot, before there is a scheduler to sleep on, the caller
+finds the device idle, services its own request, and the whole mechanism costs
+one list insertion. There is no thread to have started and nothing to fall back
+to.
+
+Stopping is done under the lock. A servicer that finds the queue empty clears
+`serving` before releasing it, so a request arriving at that instant either gets
+on the queue before the check and is taken, or finds the device idle and drives
+itself. There is no gap in which a request is queued and nobody is coming.
+
+The request lives on the requester's stack, for the reason swap lives on a
+partition: an allocation here is a read that fails when memory is short, which
+is when reads matter most. Nothing returns early on a failed wait, because the
+request has to stay on that stack until it is done.
+
+### A device that says seeking is free is not sorted
+
+Ordering costs a little and buys nothing there, and pretending otherwise would
+be a scheduler that is sure it is helping.
+
+### The test is deliberately not the obvious one
+
+Several threads asking for descending blocks, and an assertion that the driver
+saw them ascending, **cannot be written honestly.** It only holds when the
+threads overlap, and with one caller the queue never holds two requests. A test
+that depended on losing that race would pass or fail by timing and tell nobody
+anything either way.
+
+So the ordering is tested where the ordering lives. `queue_insert` is a pure
+function of a list and a request. Give it the worst arrival order there is --
+strictly descending, so every insertion has to land in front of something -- and
+the queue is either sorted or it is not: no threads, no timing, the same answer
+on every machine. The `reordered` counter is asserted too, because a queue that
+came out sorted with nothing ever put in order was sorted by the test.
+
+Both halves were watched failing under a control. Removing the sort gives
+*"requests came off the queue in the order they arrived, not the order the head
+wants them"*; forcing it on regardless of the flag gives *"a device that says
+seeking is free was sorted anyway, so the sort is not a decision"*.
+
+### What replacing two function bodies took with it
+
+Three things, and only one had a test watching it:
+
+| dropped | noticed by |
+|---|---|
+| `bcache_invalidate(dev, lba, count)` | `blocks kept nearby : FAIL`, the same boot |
+| the refusal to write through a partitioned disk | nothing |
+| the four transfer counters | nothing, and nothing could |
+
+The last is [KF-186](BUGS.md): `reads`, `writes`, `blocks_read` and
+`blocks_written` had been incremented since the block layer was written and
+**printed nowhere.** `-Werror` had no complaint to make and was right not to --
+a static that is assigned is used. The variable was live; the statistic was not.
+
+`block_print_traffic()` prints them now, beside the cache summary, late enough
+to describe a machine that has done some work:
+
+```
+Block traffic
+  transfers    : 12 read, 4 written, 1 flushed
+  blocks       : 137 read, 80 written
+  virtio0      : 16 queued, 0 put in order
+```
+
+Twelve reads plus four writes is sixteen transfers, and sixteen is what the
+queue saw. That cross-check is visible on every boot now, and it is exactly the
+line that would have read zero.
+
+`0 put in order` is not a fault. On a one-caller boot the queue never holds two
+requests, and a scheduler saying so is more useful than a number implying work
+it did not do.
+
+`issue` still takes `busy` across the split. The queue admits one servicer at a
+time, but `busy` is not the queue's lock: `block_flush` takes it too, and a flush
+overlapping a transfer asks the driver to commit something it is in the middle
+of writing.
+
+## Interrupt controllers on ARM
+
+Both generations. GICv2 up to eight processors, GICv3 above that — which is not
+an optional extra: GICv2 *stops* at eight, and every ARM machine with more has a
+v3 whose CPU interface is a set of system registers rather than memory.
+
+The kernel spoke only v2 until 0.0.11 and panicked at boot on anything larger
+(KF-124). The verification rig booted at 2, 4 and 8 processors, on the principle
+that some faults only exist above a certain machine size — and stopped one
+processor below the first machine that would have shown this one. It boots
+sixteen now.
+
+The generation comes from the device tree rather than from a register, because
+the register that would answer is at a different offset in each generation:
+asking at one of them faults on the other.
 
 ## Architecture support
 

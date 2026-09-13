@@ -14,7 +14,10 @@
 #include "aarch64.h"
 
 #include <recon/kernel/trap.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/backtrace.h>
 #include <recon/kernel/panic.h>
 #include <recon/kernel/user.h>
 #include <recon/kernel/sched.h>
@@ -77,6 +80,16 @@ static const char *abort_reason(unsigned iss)
 	case 0x05: return "translation fault, level 1";
 	case 0x06: return "translation fault, level 2";
 	case 0x07: return "translation fault, level 3 (nothing is mapped there)";
+
+	/* The descriptor is valid and its Access Flag is clear.
+	 *
+	 * Three of these four were already named, which is worth recording
+	 * because it was assumed otherwise: this decoder has been able to
+	 * *describe* an access-flag fault since it was written, and nothing
+	 * has ever been able to *answer* one. A named fault is still a dead
+	 * program -- the name goes in the report and then the program ends.
+	 * Level 0 was the one genuinely missing. */
+	case 0x08: return "access flag fault, level 0";
 	case 0x09: return "access flag fault, level 1";
 	case 0x0A: return "access flag fault, level 2";
 	case 0x0B: return "access flag fault, level 3 (the access flag was not set)";
@@ -121,12 +134,67 @@ void trap_dispatch(struct trap_frame *f)
 	 * and is the first time in this kernel's life that something can go
 	 * wrong without the machine stopping. */
 	if (f->vector >= 8) {
+		/* Before it is a fault, ask whether it is a promise. See the
+		 * x86_64 file: an address the program was told it could use,
+		 * touched for the first time, is demand paging rather than a
+		 * mistake.
+		 *
+		 * Only for an abort, and the write bit is read from the syndrome
+		 * rather than guessed: class 0x24 is a data abort from a lower
+		 * level, 0x20 an instruction abort, and WnR -- bit 6 -- says a
+		 * data abort was caused by a write. An instruction abort is
+		 * never a write, and asking for a writable page to satisfy one
+		 * would hand a program a writable copy of its own code.
+		 */
+		if (ec == 0x24 || ec == 0x20) {
+			bool write = (ec == 0x24) && ((f->esr >> 6) & 1);
+
+			/* An access-flag fault is not a fault about memory at
+		  * all -- it is this kernel having asked to be told when
+		  * the page was next touched. Answered first, because
+		  * vm_fault_user would find the address already mapped and
+		  * refuse it as a wild pointer. */
+			if ((iss & 0x3F) >= 0x08 && (iss & 0x3F) <= 0x0B &&
+			    vm_fault_access_flag((vaddr_t)f->far))
+				return;
+
+			if (vm_fault_user((vaddr_t)f->far, write))
+				return;
+		}
+
 		kprintf("\nuser program fault: %s at %p, touching %p\n",
 			exception_class(ec), (void *)(uintptr_t)f->elr,
 			(void *)(uintptr_t)f->far);
 		kputs("the program is ended; the kernel continues\n");
 		user_note_fault();
 		thread_exit();
+	}
+
+	/* The kernel, touching a program's memory on its behalf.
+	 *
+	 * Class 0x25 is a data abort taken at the current level and 0x21 an
+	 * instruction abort -- the kernel's own faults. A system call writing
+	 * into a buffer the program passed is the kernel dereferencing a user
+	 * address, and once that memory is demand paged the write faults here
+	 * with nothing wrong. Refusing would mean every buffer a program hands
+	 * over has to have been touched by the program first, which is a rule
+	 * nobody could keep and one that fails silently when they do not.
+	 *
+	 * Narrow on purpose, exactly as on x86_64: only while a program's
+	 * address space is active, and vm_fault_user still refuses any address
+	 * that program was not promised. A kernel pointer gone wild into the
+	 * lower half is still a fault and still stops the machine.
+	 */
+	if (ec == 0x25 || ec == 0x21) {
+		bool write = (ec == 0x25) && ((f->esr >> 6) & 1);
+
+		if ((iss & 0x3F) >= 0x08 && (iss & 0x3F) <= 0x0B &&
+		    vm_fault_access_flag((vaddr_t)f->far))
+			return;
+
+		if (f->far < USER_LIMIT && addrspace_active() &&
+			vm_fault_user((vaddr_t)f->far, write))
+			return;
 	}
 
 	if (trap_expecting) {
@@ -214,4 +282,32 @@ void trap_init(void)
 		"msr vbar_el1, %0\n"
 		"isb\n"
 		: : "r"((u64)(uintptr_t)exception_vectors) : "memory");
+}
+
+/* --- walking the stack ----------------------------------------------------
+ *
+ * The AArch64 procedure call standard puts the frame record at the address in
+ * x29: the caller's x29 first, then the caller's x30, which is the return
+ * address. The same two words in the same order as x86_64 -- which is an
+ * agreement between two ABIs rather than a rule, so each architecture states it
+ * for itself rather than one of them being written as "the same as the other".
+ */
+u64 arch_frame_pointer(void)
+{
+	u64 fp;
+
+	__asm__ volatile("mov %0, x29" : "=r"(fp));
+	return fp;
+}
+
+bool arch_frame_step(u64 frame, u64 *next, u64 *return_address)
+{
+	const u64 *f = (const u64 *)(uintptr_t)frame;
+
+	if (!frame || !next || !return_address)
+		return false;
+
+	*next = f[0];
+	*return_address = f[1];
+	return true;
 }

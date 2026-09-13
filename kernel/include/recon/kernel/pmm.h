@@ -37,6 +37,14 @@ void pmm_init(void);
  * return and a null dereference cannot be confused for a valid page. */
 paddr_t pmm_alloc_page(void);
 
+/* A page whose whole extent lies below `limit`, or zero if there is none.
+ *
+ * For the hardware ceilings that are not about how much memory exists: a
+ * processor woken by its neighbour starts in a mode that can address only the
+ * first megabyte, and some bus masters reach only the first four gigabytes.
+ * Freed with pmm_free_page like any other. */
+paddr_t pmm_alloc_page_below(paddr_t limit);
+
 /* `count` pages, contiguous. Contiguity matters for anything a device will
  * read by physical address, which cannot follow a page table. */
 paddr_t pmm_alloc_pages(size_t count);
@@ -58,5 +66,11 @@ void pmm_print_summary(void);
  * finding out about immediately rather than three checkpoints later, and
  * there is no test harness that can run a kernel yet. */
 bool pmm_self_test(void);
+
+/* Several processors allocating and freeing at once, asserting that no page is
+ * ever handed to two owners. Separate from pmm_self_test because it needs
+ * threads, and because what it proves is different: that one is about counting,
+ * this one is about ownership. (KF-149) */
+bool pmm_concurrent_test(void);
 
 #endif /* RECON_KERNEL_PMM_H */

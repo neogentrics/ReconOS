@@ -239,6 +239,40 @@ reconboot_entry:
 	cli
 	cld
 
+	/* --- what the loader handed over, before anything here changes it ---
+	 *
+	 * `cli` and `cld` come first and neither writes a general register, so
+	 * every value below is exactly what the jump arrived with. An interrupt
+	 * taken in between would be arriving at a kernel with no handlers at
+	 * all, which is a worse problem than this one.
+	 *
+	 * RDI is not here: it carries the handoff and is supposed to. RAX is
+	 * here and is expected to hold the entry point rather than zero -- the
+	 * loader has to name the address it jumps to in *some* register, and
+	 * that is the one. The check in C knows and says so.
+	 *
+	 * RIP-relative because the image is running at its loaded address and
+	 * these symbols are in the low region beside the page tables. An
+	 * absolute reference would be to the address this will have after the
+	 * high mapping exists, which is several instructions away.
+	 */
+	movq	%rax, boot_handoff_regs + 0(%rip)
+	movq	%rbx, boot_handoff_regs + 8(%rip)
+	movq	%rcx, boot_handoff_regs + 16(%rip)
+	movq	%rdx, boot_handoff_regs + 24(%rip)
+	movq	%rsi, boot_handoff_regs + 32(%rip)
+	movq	%rbp, boot_handoff_regs + 40(%rip)
+	movq	%r8, boot_handoff_regs + 48(%rip)
+	movq	%r9, boot_handoff_regs + 56(%rip)
+	movq	%r10, boot_handoff_regs + 64(%rip)
+	movq	%r11, boot_handoff_regs + 72(%rip)
+	movq	%r12, boot_handoff_regs + 80(%rip)
+	movq	%r13, boot_handoff_regs + 88(%rip)
+	movq	%r14, boot_handoff_regs + 96(%rip)
+	movq	%r15, boot_handoff_regs + 104(%rip)
+	movabsq	$0x5245434F4E524547, %rax	/* "RECONREG" */
+	movq	%rax, boot_handoff_mark(%rip)
+
 	movq	%rdi, %r15		/* the handoff, kept across all of this */
 
 	/* The high chain: a pointer table and a directory, both of which the
@@ -354,6 +388,24 @@ reconboot_high:
 	 * that has no bytes in the file, which is exactly BSS, and clearing it
 	 * again would wipe the handoff pointer stored next. */
 	movq	%r15, reconboot_handoff(%rip)
+
+	/* And the registers the handoff arrived with, carried up out of the
+	 * low region.
+	 *
+	 * They were captured beside the page tables, which is the only place
+	 * reachable before the high mapping exists -- and the identity mapping
+	 * that makes it reachable is torn down once the kernel is running up
+	 * here. So the early boot summary could read them and the self-test,
+	 * two hundred lines later, faulted on exactly the same address.
+	 *
+	 * The source address is a 64-bit immediate because it is *low* and this
+	 * code is *high*: the distance between them does not fit the 32-bit
+	 * displacement a RIP-relative reference has. Done here, where both
+	 * mappings are still live. */
+	movabsq	$boot_handoff_regs, %rsi
+	leaq	handoff_saved(%rip), %rdi
+	movl	$17, %ecx			/* 16 registers and the mark */
+	rep movsq
 	movl	$3, boot_protocol(%rip)
 
 	call	kmain
@@ -410,3 +462,10 @@ boot_magic:
 	.global reconboot_handoff
 reconboot_handoff:
 	.quad	0
+
+	/* Where the capture ends up, in the half the kernel keeps. Sixteen
+	 * slots and the mark, copied as one block by the code above. */
+	.align 8
+	.global handoff_saved
+handoff_saved:
+	.fill	17, 8, 0

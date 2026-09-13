@@ -9,15 +9,24 @@
  * architecture. What *is* specific is how configuration space is reached, and
  * that is two I/O ports, in pci.c beside this file.
  *
- * Only virtio is attached so far. NVMe and AHCI are what matter on real
- * hardware and are the obvious next drivers; the bus walk that finds them is
- * already here, which was most of the work.
+ * What is attached here: the USB controller, NVMe, AHCI, and virtio --
+ * which is a disk or a network card depending on what its configuration space
+ * says it is. Each attach answers for its own device and declines quietly
+ * otherwise, so this is a list rather than a decision tree.
+ *
+ * Missing, and it matters: **legacy IDE**. A machine that boots over BIOS
+ * commonly presents its disk that way, and the driver cannot live in `core/`
+ * with the other three, because compatibility-mode IDE is at fixed I/O ports
+ * and `in` and `out` are x86 instructions. It belongs in this directory, and
+ * it is KF-192.
  */
 #include "x86_64.h"
 
 #include <recon/kernel/block.h>
 #include <recon/kernel/pci.h>
+#include <recon/kernel/xhci.h>
 #include <recon/kernel/virtio.h>
+#include <recon/kernel/net.h>
 #include <recon/kernel/console.h>
 
 /* In core/virtio_pci.c. */
@@ -31,6 +40,12 @@ void arch_storage_probe(void)
 		const struct pci_device *d = pci_device_at(i);
 		struct virtio_device v;
 
+		/* The USB controller first: it is not storage itself, and
+		 * claiming it here keeps the storage probes below from
+		 * having to know it exists. */
+		if (xhci_attach(d))
+			continue;
+
 		if (nvme_attach(d))
 			continue;
 
@@ -40,7 +55,16 @@ void arch_storage_probe(void)
 		if (!virtio_pci_probe(d, &v))
 			continue;
 
-		virtio_blk_attach(&v);
+		/* A probed virtio device is a disk, a card, or something
+		 * else entirely, and which one is a number in its
+		 * configuration space. Each attach answers for its own
+		 * device id and declines quietly otherwise, so the order
+		 * here carries no meaning and adding a third costs a
+		 * line. */
+		if (virtio_blk_attach(&v))
+			continue;
+
+		virtio_net_attach(&v);
 	}
 }
 

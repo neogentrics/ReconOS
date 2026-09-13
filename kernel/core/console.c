@@ -1,5 +1,7 @@
 #include <recon/kernel/console.h>
+#include <recon/kernel/klog.h>
 #include <recon/kernel/arch.h>
+#include <recon/kernel/fbcon.h>
 #include <recon/kernel/kstring.h>
 
 #include <recon/kernel/lock.h>
@@ -30,6 +32,24 @@ void kputc(char c)
 	if (c == '\n')
 		arch_console_putc('\r');
 	arch_console_putc(c);
+
+	/* And the ring, which is why this is the only hook it needs:
+	 * everything printed anywhere in this kernel arrives here.
+	 *
+	 * The carriage return above is deliberately not logged. It is
+	 * something a serial terminal needs and not something the kernel
+	 * said, and a log full of them is a log somebody has to strip
+	 * before reading. */
+	klog_putc(c);
+
+	/* And the screen, where there is one.
+	 *
+	 * Both surfaces get everything, rather than one being chosen: the rig
+	 * reads the serial port and a person reads the screen, and a message
+	 * that went to only one of them is a message somebody did not get. It
+	 * costs a call that returns immediately on a machine with no
+	 * framebuffer, which is every aarch64 boot in the matrix. */
+	fbcon_putc(c);
 }
 
 /* The whole of the output path, without the lock. Everything that already holds
@@ -92,6 +112,31 @@ static void put_unsigned(u64 value, unsigned base, bool upper, unsigned pad)
 		kputc(buf[n]);
 }
 
+/* A string in a field of `width`, padded with spaces. Truncating would be the
+ * other choice and is the wrong one: a name cut down to fit a column is a
+ * different name, and this printer's whole job is to be believed. */
+static void put_padded(const char *s, unsigned width, bool left)
+{
+	size_t n = 0;
+	const char *q = s;
+
+	if (!s)
+		s = q = "(null)";
+
+	while (q[n])
+		n++;
+
+	if (!left)
+		while (n < width--)
+			kputc(' ');
+
+	raw_puts(s);
+
+	if (left)
+		while (n < width--)
+			kputc(' ');
+}
+
 static void put_signed(i64 value)
 {
 	u64 magnitude;
@@ -118,12 +163,30 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 	for (const char *p = fmt; *p; p++) {
 		unsigned longness = 0;
 
+		unsigned width = 0;
+		bool left = false;
+
 		if (*p != '%') {
 			kputc(*p);
 			continue;
 		}
 
 		p++;
+
+		/* An optional `-` and a decimal width, which is the whole of
+		 * the formatting this kernel needs: every table it prints is
+		 * columns of names and numbers, and the alternative is padding
+		 * them by hand with spaces in the format string, which is what
+		 * was being done and is why %-30s got reached for. */
+		if (*p == '-') {
+			left = true;
+			p++;
+		}
+		while (*p >= '0' && *p <= '9') {
+			width = width * 10 + (unsigned)(*p - '0');
+			p++;
+		}
+
 		while (*p == 'l') {
 			longness++;
 			p++;
@@ -131,7 +194,7 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 
 		switch (*p) {
 		case 's':
-			raw_puts(va_arg(ap, const char *));
+			put_padded(va_arg(ap, const char *), width, left);
 			break;
 		case 'c':
 			kputc((char)va_arg(ap, int));
@@ -155,6 +218,17 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 			else
 				put_unsigned(va_arg(ap, unsigned), 16, false, 0);
 			break;
+		/* Octal, which exists here for exactly one reason: a file's
+		 * permission bits. They are grouped in threes and every person
+		 * who has ever read one reads them in octal, so printing 0640
+		 * as 416 turns a number somebody can check at a glance into one
+		 * they have to convert first. */
+		case 'o':
+			if (longness)
+				put_unsigned(va_arg(ap, u64), 8, false, 0);
+			else
+				put_unsigned(va_arg(ap, unsigned), 8, false, 0);
+			break;
 		case 'p':
 			raw_puts("0x");
 			put_unsigned((u64)(uintptr_t)va_arg(ap, void *), 16, false,
@@ -169,11 +243,28 @@ static void kvprintf_raw(const char *fmt, va_list ap)
 			kputc('%');
 			return;
 		default:
-			/* An unsupported conversion is a bug in the caller. Print it
-			 * visibly instead of silently dropping it. */
-			kputc('%');
+			/* An unsupported conversion cannot be recovered from, and
+			 * this used to try.
+			 *
+			 * It printed the two characters and carried on -- which
+			 * looks like the careful thing and is not, because the
+			 * argument was never consumed. Every conversion after it
+			 * then read the *previous* caller's argument: a pointer
+			 * printed as a number, a length printed as an address.
+			 * The output stays perfectly well formed and every value
+			 * in it is wrong, which is the worst way for a printer to
+			 * fail. It was found reading a real filesystem, where a
+			 * directory listing reported a file of 2148777108 bytes
+			 * that was a pointer.
+			 *
+			 * There is no way to skip the argument, because its width
+			 * is exactly what is not understood. So: say so, and stop.
+			 * Missing output is a bug someone fixes; wrong output is a
+			 * bug someone believes. (KF-129) */
+			raw_puts("%<unsupported conversion '");
 			kputc(*p);
-			break;
+			raw_puts("'; the rest of this line is not printed>\n");
+			return;
 		}
 	}
 }

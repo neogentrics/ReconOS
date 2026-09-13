@@ -70,4 +70,38 @@ void acpi_print_summary(void);
  * two-I/O-port mechanism to be used instead. */
 bool acpi_pci_ecam(u64 *base, u8 *start_bus, u8 *end_bus);
 
+/* What the FADT says about this machine's fixed hardware.
+ *
+ * Four things the kernel either could not do or was guessing at: where the AML
+ * description starts, where the power-off register is, which CMOS index holds
+ * the century, and whether there is a PS/2 controller to look for at all.
+ *
+ * `has_8042` defaults to *true* on a table too old to carry the field, because
+ * the specification says the legacy devices are then assumed present -- and the
+ * safe direction is to look and find nothing rather than to skip and be wrong
+ * about a machine that has a keyboard. */
+struct acpi_fadt_facts {
+	bool present;
+
+	paddr_t dsdt;			/* where the AML begins */
+
+	u32 pm1a_control;		/* power management, for turning off */
+	u32 pm1b_control;		/* zero on most machines */
+	u8  pm1_control_width;		/* bytes */
+
+	u32 smi_command;		/* how to ask firmware for ACPI mode */
+	u8  acpi_enable;
+
+	u8  century_register;		/* a CMOS index, or zero for none */
+
+	u64 reset_address;
+	u8  reset_address_space;	/* 0 memory, 1 I/O port, 2 PCI config */
+	u8  reset_value;
+
+	bool has_8042;			/* a PS/2 controller worth probing for */
+	bool has_vga;
+};
+
+bool acpi_fadt(struct acpi_fadt_facts *out);
+
 #endif /* RECON_KERNEL_ACPI_H */

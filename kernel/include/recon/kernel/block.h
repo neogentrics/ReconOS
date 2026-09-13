@@ -37,6 +37,8 @@
 #define RECON_KERNEL_BLOCK_H
 
 #include <recon/kernel/types.h>
+#include <recon/kernel/wait.h>
+#include <recon/kernel/lock.h>
 #include <recon/kernel/pmm.h>
 
 #define BLOCK_NAME_MAX 24
@@ -64,6 +66,9 @@ enum block_status {
 	BLOCK_ERR_IO,		/* the hardware tried and failed */
 	BLOCK_ERR_TIMEOUT,	/* the hardware did not answer */
 	BLOCK_ERR_BUSY,		/* no room in the queue right now */
+	BLOCK_ERR_UNSUPPORTED,	/* the device does not offer this operation --
+				 * not a failure, and a caller must not treat it
+				 * as one */
 };
 
 const char *block_status_name(enum block_status s);
@@ -94,12 +99,39 @@ struct block_device;
  * survivable has to be able to say "and mean it". Leaving flush out would make
  * every ordering guarantee above this line a fiction, so it is here from the
  * first driver rather than added once something has already been lost. */
+/* One thing somebody wants done to a disk.
+ *
+ * On the requester's own stack, because it lives exactly as long as the wait
+ * for it -- and an allocation here would be a read that fails when memory is
+ * short, which is when reads matter most. The same argument that put swap on a
+ * partition.
+ */
+struct block_request {
+	struct block_request *next;
+
+	u64 lba;
+	u32 count;
+	void *buf;			/* const for a write; see submit */
+	bool write;
+
+	volatile bool done;
+	volatile enum block_status status;
+};
+
 struct block_ops {
 	enum block_status (*read)(struct block_device *dev, u64 lba,
 				  u32 count, void *buf);
 	enum block_status (*write)(struct block_device *dev, u64 lba,
 				   u32 count, const void *buf);
 	enum block_status (*flush)(struct block_device *dev);
+
+	/* Optional. A null pointer means the device does not offer it, which is
+	 * reported as BLOCK_ERR_UNSUPPORTED rather than as success -- a caller
+	 * told a discard succeeded when nothing was issued would draw exactly
+	 * the wrong conclusion about the drive's state, which is the mistake
+	 * virtio-blk's flush used to make. */
+	enum block_status (*discard)(struct block_device *dev, u64 lba,
+				     u32 count);
 };
 
 struct block_device {
@@ -117,6 +149,92 @@ struct block_device {
 
 	bool removable;
 	bool read_only;
+
+	/* Whether block_flush on this device actually reaches the medium.
+	 *
+	 * It is not always true, and the case where it is false used to be
+	 * invisible: virtio-blk returns success from flush without issuing
+	 * anything when the device did not offer the flush feature, and no
+	 * caller could tell that apart from a flush that happened.
+	 *
+	 * The comment that used to sit there said a device without the feature
+	 * "has nothing volatile to flush, so success is the true answer". That
+	 * is an assumption about the device, not something the kernel checked --
+	 * the specification says only that the driver must not send a flush, not
+	 * that the device has no cache. A durability promise resting on an
+	 * assumption is not a durability promise.
+	 *
+	 * So the fact is recorded instead of assumed. flush still returns
+	 * success, because there is nothing better to do; what changes is that
+	 * anything building a crash-recoverable structure on top can ask, and
+	 * refuse to promise what this device cannot deliver. */
+	bool flush_is_durable;
+
+	/* --- What kind of medium this is, so callers can stop guessing -------
+	 *
+	 * A filesystem's allocator has one decision that depends entirely on the
+	 * medium: whether it may put a file's blocks wherever there is room, or
+	 * must work to keep them together.
+	 *
+	 * On solid state a seek costs nothing and scattering is free. On a
+	 * spinning disk a seek costs milliseconds -- five orders of magnitude
+	 * more than the transfer -- and a file scattered across the platter reads
+	 * at a fraction of the drive's sequential speed. Copy-on-write scatters
+	 * by nature, so for ReconFS this is not a tuning detail: it is the
+	 * difference between a filesystem that is pleasant on a hard disk and one
+	 * that is unusable on it.
+	 *
+	 * `seek_is_free` defaults to false, which is the safe direction. Treating
+	 * an SSD as a disk costs a little allocator effort and nothing else;
+	 * treating a disk as an SSD fragments it and cannot be undone without
+	 * rewriting the volume.
+	 *
+	 * **This is two states standing in for three, and the third is real.**
+	 * Every driver that sets it today can actually answer -- NVMe because
+	 * everything on it is flash, ATA because IDENTIFY word 217 says. USB
+	 * mass storage is SCSI in a wrapper and has neither, so it cannot answer
+	 * at all, and the default then reports *rotating* for an external SSD
+	 * rather than reporting that it does not know. That costs nothing here,
+	 * where the field only steers the allocator -- but the same not-knowing
+	 * governs discard, and a drive never told about freed space wears out
+	 * faster and slows down over months with every line of code correct.
+	 *
+	 * Measured, not supposed: Linux reports `rotational: 1` for a USB flash
+	 * drive, for exactly this reason. Checkpoint 11b must read the SCSI Block
+	 * Device Characteristics VPD page, where a medium rotation rate of 1
+	 * means non-rotating, rather than inferring anything from the bus.
+	 * (KF-127) */
+	bool seek_is_free;
+
+	/* The device wants to be told when a block stops being in use, so it can
+	 * stop preserving its contents. On an SSD this is what keeps write
+	 * amplification down as the drive fills; a drive never told about freed
+	 * space eventually behaves as though it is full even when it is not. */
+	bool discard_supported;
+
+	/* Bytes the device would rather move in one request. Advisory, and zero
+	 * means it did not say -- which is different from "it said zero", and is
+	 * why this is not a defaulted value. */
+	u32 transfer_hint;
+
+	/* Held for the length of one request. See block.c: not a spinlock,
+	 * because every driver polls with sched_yield() and a spinlock held
+	 * across a yield is a deadlock. */
+	volatile int busy;
+
+	/* --- what is waiting, and who is serving it ---------------------
+	 *
+	 * Requests queue here rather than fighting over `busy`, and whoever
+	 * arrives at an idle device becomes the one that drains them -- see
+	 * block.c. There is no worker thread: a thread that is already waiting
+	 * for a disk is the right thread to drive it.
+	 */
+	struct block_request *queue;	/* in the order the head will take them */
+	struct wait_queue waiters;
+	struct spinlock queue_lock;
+	bool serving;
+
+	u64 queued, merged, reordered;
 
 	/* --- Slices ------------------------------------------------------
 	 *
@@ -166,6 +284,24 @@ struct block_device *block_register_slice(struct block_device *parent,
 					  u8 index, u64 first_lba, u64 count,
 					  enum block_scheme scheme);
 
+/* Says the device is gone.
+ *
+ * The structure is **not** freed and the slot is not reused. That is the whole
+ * point of the generation counter beside the id: anything still holding this
+ * device asks for it by identity, and an identity that has been retired answers
+ * null rather than answering with whatever was plugged in afterwards. Freeing
+ * the slot would make the second disk indistinguishable from the first.
+ *
+ * Every partition registered under it goes with it, because a slice of a disk
+ * that is no longer there is not a smaller disk that still is. The buffer cache
+ * drops what it held, because those blocks now describe a device that cannot be
+ * asked to confirm them.
+ *
+ * After this, every operation on the device refuses -- which is not new code:
+ * `present` has been checked at the top of read, write, flush, discard, resolve
+ * and claim since they were written. This is the function that sets it. */
+void block_unregister(struct block_device *dev);
+
 /* By index, for enumeration, and by identity, for holding on to one. */
 unsigned block_device_count(void);
 struct block_device *block_device_at(unsigned index);
@@ -177,6 +313,37 @@ enum block_status block_read(struct block_device *dev, u64 lba, u32 count, void 
 enum block_status block_write(struct block_device *dev, u64 lba, u32 count,
 			      const void *buf);
 enum block_status block_flush(struct block_device *dev);
+
+/* Which disk, and which block of it, a request actually names.
+ *
+ * A partition and the disk it lives on are the same sectors under two
+ * names, and anything holding on to blocks -- a cache, today -- has to be
+ * able to tell that. Exported so there is one implementation of the
+ * translation rather than two that can disagree.
+ *
+ * Checks the bound against `dev` before translating, so a caller cannot use
+ * this to learn the absolute address of a block outside the slice it was
+ * given. */
+enum block_status block_resolve(struct block_device *dev, u64 lba, u32 count,
+				u32 *root_id, u32 *root_generation,
+				u64 *abs_lba);
+
+/* Tells the device that a range of blocks no longer holds anything anyone
+ * wants. Advisory in both directions: a device may ignore it, and a caller
+ * must never rely on the blocks reading back as anything in particular
+ * afterwards -- some devices return zeroes, some return the old contents, and
+ * the specification permits both.
+ *
+ * Returns BLOCK_ERR_UNSUPPORTED on a device that does not offer it, which is
+ * not a failure and callers should not treat it as one. */
+enum block_status block_discard(struct block_device *dev, u64 lba, u32 count);
+
+/* Whether a flush on this device reaches the medium, or merely succeeds.
+ *
+ * A filesystem that promises to survive power loss must ask, and must refuse
+ * to make that promise where the answer is no. Asking is cheap; finding out
+ * afterwards is somebody's data. */
+bool block_flush_is_durable(const struct block_device *dev);
 
 /* --- Rewriting a disk, which is the dangerous direction ---------------------
  *
@@ -213,6 +380,13 @@ enum block_status block_check_layout(const struct block_device *dev,
 void block_init(void);
 void block_print_summary(void);
 bool block_self_test(void);
+
+/* That the queue comes out in an order, and that a device which says it does
+ * not need one is left alone. Runs against a device that is not there, so it
+ * needs no disk and reports the same thing on every machine. */
+bool block_queue_test(void);
+
+void block_print_traffic(void);
 
 /* What the partition reader prints, and what the fixture harness compares
  * against: the scheme, how many slices, and one line of geometry each. Kept

@@ -1,4 +1,5 @@
 #include <recon/kernel/time.h>
+#include <recon/kernel/timer.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/console.h>
 
@@ -6,7 +7,28 @@ static volatile u64 ticks;
 
 void time_tick(void)
 {
+	/* Counted once per interval, not once per processor.
+	 *
+	 * Every processor's timer calls this, and on a four-processor machine
+	 * that made the reported count four times the number of intervals that
+	 * had actually passed. Nothing depended on it -- monotonic time comes
+	 * from a hardware counter, not from here -- so it was a number on a
+	 * summary being wrong rather than a clock being wrong, and it would
+	 * have stayed wrong quietly for exactly that reason.
+	 *
+	 * The boot processor is the one that counts. Not because its ticks are
+	 * special, but because there is exactly one of it. */
+	if (arch_cpu_id() != 0)
+		return;
+
 	ticks++;
+
+	/* And the timer wheel, turned by the same processor for the same reason:
+	 * there is one wheel, and a wheel turned by four processors would run
+	 * each slot four times. Everything filed on it therefore fires here, in
+	 * interrupt context on processor 0 -- which is why deferred work exists
+	 * and why timer.h says a callback must not do anything substantial. */
+	timer_tick();
 }
 
 u64 time_ticks(void)
@@ -97,6 +119,47 @@ bool time_self_test(void)
 	 * Two ticks rather than one: the first may be a fraction of a period
 	 * away, and waiting for it proves only that the timer was already
 	 * running. */
+	/* --- and that it fires at the rate it claims to ---------------------
+	 *
+	 * TIME_TICK_HZ is not a measurement, it is a promise: every timer, every
+	 * sleep and every scheduling slice in the kernel converts nanoseconds to
+	 * ticks with it. If the hardware is actually delivering at some other
+	 * rate, all of that is wrong by the same factor and *nothing counting
+	 * ticks notices* -- every ordering assertion still holds, every timer
+	 * still fires in the right sequence, and every sleep is simply the wrong
+	 * length.
+	 *
+	 * That is not hypothetical. Moving the interrupt lines onto the I/O APIC
+	 * did exactly this: the 8254 was programmed as a square wave, which
+	 * changes its output twice a period, and the new controller counted both
+	 * transitions where the old one counted one. The kernel ran at 201 Hz
+	 * against a 100 Hz constant, and every tick-counting test passed.
+	 *
+	 * Measured against the monotonic clock, which comes from a counter and
+	 * not from this tick. A fifth of a second is long enough to tell 100 from
+	 * 200 and short enough to pay for on every boot; the tolerance is wide
+	 * because a loaded guest genuinely loses ticks, and a factor of two is
+	 * what this is for. */
+	{
+		u64 t0 = time_ticks();
+		u64 n0 = time_monotonic_ns();
+		u64 elapsed, rate;
+
+		while (time_monotonic_ns() - n0 < 200000000ULL)
+			arch_cpu_relax();
+
+		elapsed = time_monotonic_ns() - n0;
+		rate = (time_ticks() - t0) * 1000000000ULL / elapsed;
+
+		if (rate > (u64)TIME_TICK_HZ * 3 / 2 ||
+		    rate < (u64)TIME_TICK_HZ / 2) {
+			kprintf("  time: the tick arrives at about %lu Hz, and every "
+				"conversion in the kernel assumes %u\n",
+				(unsigned long)rate, (unsigned)TIME_TICK_HZ);
+			ok = false;
+		}
+	}
+
 	ticks_before = time_ticks();
 	{
 		u64 deadline = time_monotonic_ns() + 500000000ULL;	/* half a second */

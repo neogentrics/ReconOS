@@ -86,6 +86,7 @@
 #define ATA_WRITE_DMA_EXT  0x35
 #define ATA_FLUSH_EXT      0xEA
 #define ATA_IDENTIFY       0xEC
+#define ATA_DSM            0x06	/* DATA SET MANAGEMENT; feature 1 is TRIM */
 
 #define AHCI_MAX 2
 #define AHCI_PRD_MAX 120	/* what fits in the page beside everything else */
@@ -134,6 +135,10 @@ struct ahci {
 	paddr_t cmd_table_phys;
 
 	u32 block_size;
+	bool seek_is_free;
+	bool discard_supported;
+	u16 rpm;		/* zero when the drive did not say */
+	u16 dsm_blocks;	/* range blocks per DSM command */
 	u64 block_count;
 
 	struct block_device *bdev;
@@ -404,6 +409,34 @@ static bool identify(struct ahci *a, paddr_t scratch_phys, const u16 *words)
 			sector_size = in_words * 2;
 	}
 
+	/* Word 217 is the nominal media rotation rate, and it is the only place
+	 * a drive says outright what it is made of:
+	 *
+	 *      0       not reported
+	 *      1       non-rotating -- solid state
+	 *   0x0401..0xFFFE   rotations per minute
+	 *
+	 * Anything else is a drive that did not answer, and the answer is then
+	 * "assume it spins". That is the safe direction: treating an SSD as a
+	 * disk costs a little allocator effort, while treating a disk as an SSD
+	 * fragments it in a way that cannot be undone without rewriting the
+	 * volume.
+	 *
+	 * Read here rather than guessed from the bus, because SATA carries both
+	 * kinds and has for fifteen years. */
+	a->seek_is_free = (words[217] == 1);
+	a->rpm = (words[217] >= 0x0401 && words[217] <= 0xFFFE) ? words[217] : 0;
+
+	/* Word 169 bit 0: the drive supports DATA SET MANAGEMENT, whose only
+	 * defined function is TRIM. */
+	a->discard_supported = (words[169] & 1u) != 0;
+
+	/* Word 105 is the largest number of 512-byte blocks of range
+	 * descriptors one DSM command may carry. Each descriptor covers up to
+	 * 65535 sectors, and there are 64 per block. Zero means the drive did
+	 * not say, and one block is the floor the specification guarantees. */
+	a->dsm_blocks = words[105] ? words[105] : 1;
+
 	a->block_count = sectors;
 	a->block_size  = sector_size;
 	return true;
@@ -569,9 +602,31 @@ bool ahci_attach(const struct pci_device *d)
 		return false;
 	}
 
+	/* What the drive said about itself, passed up rather than re-derived.
+	 * A filesystem asking "is a seek free here" must get the drive's answer,
+	 * not a guess made from the driver's name. */
+	a->bdev->seek_is_free      = a->seek_is_free;
+	/* The drive's answer AND whether this driver can act on it. Reporting
+	 * the drive's answer alone would tell a filesystem that discard works
+	 * here when block_discard would refuse it -- the same shape of lie as
+	 * a flush that returns success having issued nothing. */
+	a->bdev->discard_supported = a->discard_supported &&
+				     ahci_ops.discard != NULL;
+
+	if (a->seek_is_free)
+		kprintf("%s: solid state\n", name);
+	else if (a->rpm)
+		kprintf("%s: %u rpm\n", name, (unsigned)a->rpm);
+	else
+		kprintf("%s: the drive did not say whether it spins; "
+			"assuming it does\n", name);
+
 	/* One scatter entry per page, and a fixed number of them. Stated so the
 	 * block layer splits rather than the driver failing a request a caller
 	 * had every right to make. */
+	/* FLUSH CACHE EXT is issued and waited for. */
+	a->bdev->flush_is_durable = true;
+
 	a->bdev->max_blocks_per_request =
 		(u32)(AHCI_PRD_MAX * PAGE_SIZE / a->block_size);
 

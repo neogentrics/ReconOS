@@ -32,6 +32,28 @@ from here on has the same window, so this gets worse rather than better.
 **What would replace it:** create-with-mode, or an open-then-write where the
 mode is fixed before any content lands.
 
+**Built, 8 September 2026 — the first form, and it closes the window rather
+than narrowing it.** `SYS_CREATE(path, path_len, mode, data, len)` creates the
+file, fills it, and sets its mode inside **one ReconFS transaction**. Copy-on-
+write commits once, so the file becomes visible only when it is finished,
+already carrying the permissions asked for. There is no instant at which it
+exists with the wrong ones — and that holds across a power cut, because the
+intermediate state is not a state the volume can be left in.
+
+Creating a name that already exists is **refused**, not overwritten. A create
+that silently replaces is how running a key-generation routine a second time
+destroys the key that was working.
+
+**What this does not do, said plainly: nothing enforces the mode.** It is
+stored, reported and survives a remount, and no code anywhere consults it
+before reading a file, because the kernel still has no idea who is asking. That
+is the next entry on this list and it is a larger piece.
+
+What is fixed is the window. Every file created from here has correct
+permissions recorded from the first instant it exists, so when enforcement
+arrives it has something true to enforce and no volume written in the meantime
+has to be gone back over.
+
 ---
 
 ## Who somebody is, enforced by something underneath
@@ -49,6 +71,32 @@ that knows about both.
 
 **What would replace it:** an identity the kernel enforces, so that "this
 account may not do that" is true even when the thing asking is not ReconOS.
+
+**Built, 11 September 2026.** A process running as uid 1000 is refused a `0600`
+file owned by the kernel, and the refusal comes from the kernel rather than from
+anything asking itself. The policy lives in one place — three filesystems
+deciding would be three decisions, and the day they disagree is the day a file is
+readable through one path and not another.
+
+The rule is **first matching class decides**, not an or across the classes a
+caller belongs to: mode `0004` means the owner may *not* read it and everybody
+else may. Under an or, the owner reads it.
+
+**And a program can ask.** `SYS_GETUID` and `SYS_GETGID`, because a process
+refused a file could otherwise not tell "I am the wrong user" from "the file is
+not there" — which is the difference between asking somebody to log in and
+reporting a bug.
+
+**Capabilities came with it**, and they are the part that matters for an
+installer: `CAP_FILE_OVERRIDE`, `CAP_RAW_DISK` and `CAP_SHUTDOWN`, held and then
+**dropped, never regained**. `SYS_DROPCAP` answers with what is still held, and
+there is deliberately no call that grants — a set that can be regained protects
+nothing. So a privileged step can hold a power for the window it needs and give
+it up, and every bug after that cannot reach a disk.
+
+**Not built, and said plainly:** directory traversal is not checked — reaching
+`/a/b/file` does not require the right to traverse `/a` — and neither is
+set-user-id.
 
 ---
 
@@ -115,6 +163,20 @@ it will not survive contact with a machine that does not have `/proc`.
 **What would replace it:** the kernel answering these directly — processor,
 core count, memory in use, per-interface byte counts.
 
+**Partly built, 8 September 2026.** `SYS_MACHINE` answers processor vendor and
+model, processors found *and* online, total and free memory, page size, and how
+much entropy the pool holds. The caller passes the size of its own structure and
+gets back the size the kernel would have written, so a program built against one
+kernel version and run on another gets a valid prefix and can see that it got
+one. Growing the structure is allowed; reordering it is not.
+
+Two counts for processors rather than one, because a machine where they differ
+is a machine with something wrong with it, and a single number hides exactly
+that case.
+
+**Per-interface byte counts are not in it**, because there is no network stack
+to count. That half stays open.
+
 ---
 
 ## Randomness
@@ -129,6 +191,29 @@ no way to know how good the one underneath it is.
 
 **What would replace it:** an entropy source the kernel owns, and a way to ask
 how much it has.
+
+**Built, 8 September 2026.** `random_bytes()` runs a ChaCha20 generator over a
+pool seeded from the processor's own generator where there is one -- RDSEED on
+x86_64, RNDRRS on aarch64, both preferred over their weaker siblings because a
+seed wants the noise source and not an expansion of it -- and from timing
+jitter where there is not. `random_entropy_bits()` is the way to ask.
+
+Three things about it are worth knowing before building on it:
+
+- **It refuses rather than returning weak bytes**, and there is no override.
+  A caller that ignores the return value has generated a key from an
+  uninitialised buffer, so the bool is not advisory.
+- **The estimate is deliberately low.** The hardware generator is credited at
+  half its width because nothing can check a sealed box whose output looks
+  identical working or failed; timing is credited one bit per sample.
+- **"No hardware generator" and "a hardware generator that did not answer" are
+  different lines in the summary**, because they call for different responses.
+
+**And `SYS_RANDOM` reaches it from a program**, added the same day. It returns
+`SYS_EAGAIN` rather than `SYS_EINVAL` when the pool is not seeded, and the
+difference is deliberate: a bad argument means the program is wrong and should
+stop, while this means the machine is not ready and the same call may work
+later. A key generator told `EINVAL` would report *itself* broken.
 
 ---
 
@@ -145,6 +230,20 @@ It is a good mechanism. It is also entirely borrowed, and it is the thing that
 will need replacing first when the host goes away — before anything about the
 network port matters, because this is the path everything local uses.
 
+**The kernel half exists as of 11 September 2026**, and the desktop half does
+not, so this entry stays open rather than being ticked.
+
+What the borrowed mechanism actually does is ask the filesystem *who opened
+this*, and both halves of that answer are now available without a host: files
+carry an owner the kernel enforces, and `SYS_GETUID` tells a program what it is
+running as. That is enough to build the same proof natively — a socket whose
+node only its owner may open, and a server that asks the kernel rather than
+asking itself.
+
+It is worth saying which part is still missing: the kernel has no sockets at
+all, so there is nothing yet to apply this to. See 1.3's IPC row in the audit —
+pipes and shared memory are built, sockets are not.
+
 ---
 
 ## Time
@@ -159,6 +258,12 @@ compute it from.
 
 **What would replace it:** a real-time clock the kernel reads, and a monotonic
 clock that does not go backwards.
+
+**Built, 8 September 2026.** Both, and they are two calls rather than one:
+`SYS_TIME` is monotonic and means nothing outside this boot, `SYS_WALLTIME` is
+the date and can jump. A caller timing something must use the first and a caller
+stamping a file must use the second — collapsing them into one call is how a
+duration comes out negative.
 
 ---
 

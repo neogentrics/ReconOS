@@ -132,6 +132,54 @@ irq_\n:
 	IRQ 14
 	IRQ 15
 
+/* The two the local APIC raises, which are not the 8259's and must not be
+ * acknowledged to it. A vector rather than an IRQ number, because there is no
+ * controller in between to number them. */
+	.macro VECTOR n
+	.global vector_\n
+vector_\n:
+	pushq	$0
+	pushq	$\n
+	jmp	isr_common
+	.endm
+
+	VECTOR 64	/* the local APIC timer: this processor's own tick */
+	VECTOR 65	/* a request to invalidate a translation */
+	VECTOR 66	/* a message-signalled interrupt, for the self-test */
+
+	/* Sixteen for drivers to ask for, at 0x50 to 0x5F.
+	 *
+	 * Written out rather than generated, because `.irp` cannot help here:
+	 * inside a `.macro` body the iterator and the macro's own parameter are
+	 * spelled the same way, and the assembler resolves it to the wrong one.
+	 *
+	 * A fixed block rather than every free vector, because each of these is a
+	 * stub in the image whether anything claims it or not -- and sixteen is
+	 * more devices than this kernel has ever had. Running out says so rather
+	 * than handing back a vector somebody else holds.
+	 *
+	 * Above the ISA lines and below the spurious vector, which is where a
+	 * message-signalled interrupt belongs: it has no wire, so it has no line,
+	 * and the number is the only thing that makes it an interrupt. */
+	VECTOR 80
+	VECTOR 81
+	VECTOR 82
+	VECTOR 83
+	VECTOR 84
+	VECTOR 85
+	VECTOR 86
+	VECTOR 87
+	VECTOR 88
+	VECTOR 89
+	VECTOR 90
+	VECTOR 91
+	VECTOR 92
+	VECTOR 93
+	VECTOR 94
+	VECTOR 95
+
+	VECTOR 255	/* spurious, and it must return without doing anything */
+
 isr_common:
 	SAVE_REGS
 

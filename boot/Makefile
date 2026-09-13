@@ -73,9 +73,24 @@ $(EFI): $(OBJS)
 	$(LD) $(LDFLAGS) $(OBJS) -out:$@
 	@echo "  built $@"
 
+# Header dependencies, tracked rather than assumed.
+#
+# Without -MMD, changing a header rebuilds nothing: make compares each object
+# against its .c file alone and sees no reason to act. That was survivable while
+# the headers were checked in, and stopped being survivable the moment one of
+# them became *generated* -- scripts/make-signing-key.sh writes
+# src/signing_key.h, and the build happily reused a loader compiled before the
+# key existed.
+#
+# The failure was silent in the worst possible direction: the loader announced
+# "signature : not checked (built without a key)" and ran an unsigned kernel,
+# and the test that generated the key was satisfied because the loader it tested
+# was not the loader it had just asked for. (BG-133)
 $(BUILD)/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(OBJS:.o=.d)
 
 all-arches:
 	$(MAKE) ARCH=x86_64
@@ -93,13 +108,32 @@ $(ESP_IMG): $(EFI) $(KERNEL_ELF)
 	mkfs.vfat -F 32 -n RECONOS $@ >/dev/null
 	mmd   -i $@ ::/EFI ::/EFI/BOOT ::/reconos
 	mcopy -i $@ $(EFI) ::/EFI/BOOT/$(EFI_NAME)
-	mcopy -i $@ $(KERNEL_ELF) ::/reconos/kernel.elf
+	mcopy -i $@ $(KERNEL_ELF) ::/reconos/kernel-$(ARCH).elf
 	@echo "  built $@"
 
 esp: $(ESP_IMG)
 
-$(KERNEL_ELF):
+# The kernel, built by its own makefile, which knows its own dependencies.
+#
+# Forced, and the reason is worth writing down because it cost three debugging
+# runs. This rule used to have *no prerequisites at all*, and to make, a file
+# that exists and has no prerequisites is up to date for ever -- so once
+# esp.img had been built once, changing the kernel rebuilt the kernel and left
+# the ESP carrying the old one.
+#
+# Every UEFI path in the verification rig boots from that image. So a kernel
+# with a fault in it could be fixed, rebuilt, booted, and *still fault*, with
+# the fault address landing in the middle of an instruction in the binary on
+# disk -- which is what finally gave it away. Worse, the rig would have gone
+# on reporting those paths green against a kernel that no longer existed.
+#
+# The sub-make decides whether anything actually needs building; this only
+# guarantees it is asked. (BG-144)
+.PHONY: force-kernel
+force-kernel:
 	$(MAKE) -C ../kernel ARCH=$(ARCH)
+
+$(KERNEL_ELF): force-kernel
 
 run: $(ESP_IMG)
 	$(QEMU) $(MACHINE) $(FIRMWARE) -m 512M \

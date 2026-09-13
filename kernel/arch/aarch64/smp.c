@@ -23,6 +23,7 @@
 /* PSCI function identifiers. The 64-bit forms, because this kernel is 64-bit
  * and the 32-bit ones take different argument widths. */
 #define PSCI_CPU_ON     0xC4000003u
+#define PSCI_SYSTEM_OFF 0x84000008u
 
 #define PSCI_SUCCESS            0
 #define PSCI_NOT_SUPPORTED      (-1)
@@ -94,16 +95,152 @@ static void psci_probe(void)
 	psci_available = false;
 }
 
-unsigned arch_cpu_id_real(void)
+/* Turning the machine off, by the same interface that turns processors on.
+ *
+ * There is no ACPI on a machine booted from a device tree, so the portable
+ * power_off() -- which reads a register out of the FADT and a value out of the
+ * vendor's bytecode -- has nothing to work with and correctly says so. PSCI is
+ * this architecture's answer, and it was already here: the call that wakes a
+ * secondary processor is one function number away from the call that stops the
+ * machine.
+ *
+ * The probe is the SMP one and it has to have run. A machine started with one
+ * processor still probes, because smp_init runs on every boot -- but if that
+ * ever stops being true, this returns false and the caller says the machine
+ * could not be turned off, which is the right failure rather than a hang in an
+ * unprobed call.
+ *
+ * SYSTEM_OFF does not return. Reaching the line after it means firmware
+ * declined, and that is worth reporting rather than spinning on.
+ */
+bool arch_power_off(void)
+{
+	if (!psci_available)
+		return false;
+
+	psci_call(PSCI_SYSTEM_OFF, 0, 0, 0, psci_use_hvc);
+
+	return false;
+}
+
+/* --- the identity arithmetic, on machines this rig does not have ----------
+ *
+ * WHAT THIS PROVES AND WHAT IT DOES NOT.
+ *
+ * KF-153 was that arch_cpu_id() returned MPIDR affinity level 0, which is
+ * unique on a one-cluster machine and not on any other. The fix is that the
+ * identity no longer comes from MPIDR at all -- it is a dense index handed to
+ * each processor in TPIDR_EL1 -- so on this machine there is nothing left to
+ * catch.
+ *
+ * And this machine cannot be made into the other kind. QEMU's virt board
+ * numbers its processors 0,1,2,3 whatever topology it is asked for: -smp
+ * 8,sockets=2,cores=4 and -smp 8,clusters=2,cores=4 both produce flat
+ * affinities, which was measured rather than assumed. So there is no way here
+ * to boot the machine the bug was about.
+ *
+ * What is testable is the arithmetic, against MPIDR values written down from
+ * the specification. The table below is a two-socket, four-core-per-socket
+ * machine and a big.LITTLE one. The old expression is run beside the new one
+ * and the test requires that the old produces collisions and the new does
+ * not -- so the test would fail if somebody quietly restored the old
+ * behaviour, and it fails loudly today if the packing is wrong.
+ *
+ * It is a test of a calculation, not of a machine, and it is labelled that
+ * way so nobody reads a pass here as this kernel having run on two sockets.
+ */
+static u64 pack_affinity(u64 mpidr)
+{
+	return (mpidr & 0x00FFFFFFull) | (((mpidr >> 32) & 0xFFull) << 24);
+}
+
+bool arch_identity_self_test(void)
+{
+	/* Bit 31 is RES1 in MPIDR_EL1 and is set on every real value, which is
+	 * why it is here: an implementation that masked the whole register
+	 * rather than the affinity fields would produce identical rubbish for
+	 * every processor and pass a test built from bare numbers. */
+	static const u64 machines[] = {
+		/* two sockets, four cores each: Aff1 is the cluster */
+		0x80000000ull, 0x80000001ull, 0x80000002ull, 0x80000003ull,
+		0x80000100ull, 0x80000101ull, 0x80000102ull, 0x80000103ull,
+		/* big.LITTLE: two clusters again, and a third at Aff2 */
+		0x80010000ull, 0x80010001ull,
+		/* and one with Aff3 set, which lives at bits 39:32 and is the
+		 * field an implementation is most likely to drop */
+		0x8000000000ull | 0x80000000ull,
+	};
+	const unsigned n = (unsigned)(sizeof(machines) / sizeof(machines[0]));
+	unsigned i, j, old_collisions = 0, new_collisions = 0;
+	bool ok = true;
+
+	for (i = 0; i < n; i++)
+		for (j = 0; j < i; j++) {
+			if ((machines[i] & 0xFFull) == (machines[j] & 0xFFull))
+				old_collisions++;
+
+			if (pack_affinity(machines[i]) ==
+			    pack_affinity(machines[j]))
+				new_collisions++;
+		}
+
+	/* The control. If the old expression does *not* alias on this table
+	 * then the table is not a multi-cluster machine and the rest of this
+	 * test proves nothing -- which is the failure mode that let KF-153
+	 * exist, arriving here as a failure rather than a silent pass. */
+	if (old_collisions == 0) {
+		kputs("  smp: the identity table has no aliases under the old "
+			"rule, so it is not testing anything\n");
+		ok = false;
+	}
+
+	if (new_collisions != 0) {
+		kprintf("  smp: %u pairs of processors would share an identity\n",
+			new_collisions);
+		ok = false;
+	}
+
+	/* Aff3 specifically, because dropping it is silent: it only matters on
+	 * machines with more than 65536 processors per Aff2 group, and the two
+	 * values below differ in nothing else. */
+	if (pack_affinity(0x80000000ull) ==
+	    pack_affinity(0x8000000000ull | 0x80000000ull)) {
+		kputs("  smp: affinity level 3 is being dropped\n");
+		ok = false;
+	}
+
+	/* And that a packed value is what the hardware would give: Aff0 in the
+	 * low byte and Aff3 in the top one, not merely something unique. */
+	if (pack_affinity(0x80000103ull) != 0x103ull ||
+	    pack_affinity(0x8200000000ull) != 0x82000000ull) {
+		kputs("  smp: affinity fields are not packed where they were "
+			"promised to be\n");
+		ok = false;
+	}
+
+	return ok;
+}
+
+u64 arch_cpu_hw_id(void)
+{
+	return arch_cpu_affinity();
+}
+
+u64 arch_cpu_affinity(void)
 {
 	u64 mpidr;
 
 	__asm__ volatile("mrs %0, mpidr_el1" : "=r"(mpidr));
 
-	/* Affinity level 0 is the processor within its cluster. Enough for the
-	 * machines this kernel runs on; a many-cluster machine needs the higher
-	 * affinity fields folded in, and that is a change to this one function. */
-	return (unsigned)(mpidr & 0xFF);
+	/* All four affinity levels packed into one 32-bit value: Aff0 in the low
+	 * byte, then Aff1 and Aff2, and Aff3 -- which lives up at bits 39:32 of
+	 * MPIDR -- brought down to the top byte.
+	 *
+	 * This is the processor's *position in the machine*, and it is what PSCI
+	 * is given to start one. It is not an array index and must never be used
+	 * as one: the values are sparse, and a second socket may begin at a large
+	 * number. arch_cpu_id() is the index. */
+	return (mpidr & 0x00FFFFFFull) | (((mpidr >> 32) & 0xFFull) << 24);
 }
 
 unsigned arch_smp_discover(u64 *ids, unsigned max)
@@ -126,20 +263,35 @@ unsigned arch_smp_discover(u64 *ids, unsigned max)
 	 * This is a placeholder for reading the device tree properly, and it is
 	 * a placeholder that cannot silently be wrong -- a processor it fails to
 	 * find is a processor that does not answer. */
-	ids[0] = arch_cpu_id_real();
+	ids[0] = arch_cpu_affinity();
 
-	for (u64 candidate = 0; candidate < max && count < max; candidate++) {
+	/* Probes past `max`, so a machine with more processors than this kernel
+	 * can hold is *reported* rather than quietly halved. Twice the array is
+	 * enough to notice; probing without a bound would ask forever. */
+	for (u64 candidate = 0; candidate < (u64)max * 2; candidate++) {
 		if (candidate == ids[0])
 			continue;
 
 		/* Ask whether it is affine to us -- CPU_ON with a null entry
 		 * point would start it somewhere useless, so the probe is
 		 * AFFINITY_INFO (0xC4000004), which only reports. */
-		if (psci_call(0xC4000004u, candidate, 0, 0, psci_use_hvc) >= 0)
-			ids[count++] = candidate;
+		if (psci_call(0xC4000004u, candidate, 0, 0, psci_use_hvc) >= 0) {
+			if (count < max)
+				ids[count] = candidate;
+			count++;
+		}
 	}
 
 	return count;
+}
+
+/* Nothing to release. Starting a processor here is one call into firmware,
+ * which needs no code of ours in low memory to do it -- and since the stacks
+ * stopped being identity mapped there is nothing of this kernel's below the
+ * kernel at all. Present so that the portable caller does not have to know
+ * which architecture it is on. */
+void arch_smp_bringup_done(void)
+{
 }
 
 bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
@@ -152,31 +304,29 @@ bool arch_smp_start(u64 id, unsigned cpu, void *stack_top)
 	if (cpu >= MAX_CPUS)
 		return false;
 
-	/* THE STACK MUST BE A PHYSICAL ADDRESS, AND MUST STAY VALID WHEN THE MMU
-	 * COMES ON.
+	/* THE STACK IS A DIRECT-MAP ADDRESS, AND THIS USED TO BE AN IDENTITY
+	 * MAPPING INSTEAD.
 	 *
-	 * A processor started by PSCI begins with its MMU off, so the direct-map
-	 * address the allocator hands back means nothing to it -- setting the
-	 * stack pointer to one and pushing faults immediately. So it gets the
-	 * physical address.
+	 * The comment that stood here argued that a processor started by PSCI
+	 * begins with its MMU off, so the address must be physical and must stay
+	 * valid across the switch -- and it identity-mapped four pages to make
+	 * one pointer work on both sides. It cost one entry, and one entry was
+	 * not worth an assembly stack switch to avoid.
 	 *
-	 * But a physical address stops meaning anything the instant that
-	 * processor turns its MMU on, because the kernel identity-maps only its
-	 * own image and this stack is not in it. So the stack is identity mapped
-	 * too, and the same pointer is correct on both sides of the switch.
+	 * The argument was wrong about *when*. `secondary_entry` calls
+	 * `mmu_install` before it sets a stack pointer at all, and mmu_install
+	 * keeps its return address in a register and touches no memory -- so the
+	 * processor never uses this stack while its MMU is off. And the boot
+	 * tables already carry the direct map at entry 256, put there so a
+	 * secondary could reach a device before the real tables exist, which
+	 * means a direct-map stack is addressable from the first instruction
+	 * after the switch.
 	 *
-	 * The alternative -- switching stacks immediately after enabling the MMU
-	 * -- means doing it in assembly between two instructions that must not be
-	 * separated, and is not worth avoiding one page table entry for. */
-	{
-		paddr_t phys = virt_to_phys((u8 *)stack_top - 4 * PAGE_SIZE);
-
-		if (!vm_map((vaddr_t)phys, phys, 4 * PAGE_SIZE,
-			    VM_READ | VM_WRITE | VM_GLOBAL))
-			return false;
-
-		secondary_stacks[cpu] = (u64)phys + 4 * PAGE_SIZE;
-	}
+	 * What made the entry worth removing is not that it was unnecessary. It
+	 * is that it was in the half a *process* is meant to own, and every
+	 * mapping down there is one a per-process address space would have to
+	 * carry a copy of. See vm_user_half_report. */
+	secondary_stacks[cpu] = (u64)(uintptr_t)stack_top;
 
 	/* The processor being started has its data cache off, so it reads memory
 	 * directly rather than through this processor's cache -- where the write
@@ -237,4 +387,8 @@ void arch_smp_cpu_init(void)
 	 * it will sit in its idle loop forever, online and uninterruptible. */
 	aarch64_gic_cpu_init();
 	aarch64_timer_cpu_init();
+
+	/* Its own vector unit: CPACR_EL1 is per-processor, and firmware's
+	 * setting of it is not something to rely on. */
+	arch_vector_enable();
 }

@@ -15,7 +15,65 @@
 #   make check-portable       fail if core/ has learned about a machine
 #   make clean
 
-VERSION := 0.0.11
+# What works, not what is planned.
+#
+# **A patch per bug fixed.** The six that 0.1.0 sat through -- BG-163, 182,
+# 183, 184, 185, 186 -- are why it is not 0.1.1; BG-188 made it 0.1.7, and
+# BG-189, BG-190 and BG-191 make it 0.1.10, BG-193 makes it 0.1.11, and
+# BG-194, BG-195 and BG-196 -- all three from the network stack -- make it
+# 0.1.14. BG-197 and BG-198, both out of making a device able to go away,
+# make it 0.1.16, and BG-199 makes it 0.1.17.
+#
+# **0.2.0 on 12 September 2026**, because the rule was met rather than because
+# the change felt large: every row in sections 1.1 to 1.9 of the blueprint audit
+# is Built. That is a fact about those tables anybody can check, which is the
+# whole reason it was written as one. BG-199's fix rides with it, so the version
+# line opens at 0.2.1. The number had held still through
+# all six and twenty-five commits, not because anything forbade a bump but
+# because nothing asked for one. That is the same failure as a counter nobody
+# prints: it is only correct while somebody remembers.
+#
+# **BG-187 has not earned one and is not counted.** Half of it is fixed -- the
+# two volume boots are asserted now, which is what found the three above. The
+# other half cannot even be exercised yet, because the only second-boot-on-one-
+# disk in the matrix turns out to have no volume on it (BG-192). A partial fix
+# does not move the number.
+#
+# **BG-189 is why this rule needed writing down at all.** Raising the version
+# used to rebuild nothing, so the kernel went on printing the old number while
+# the Makefile claimed the new one -- and a full verification run passed against
+# the mislabelled binary. Every object depends on this file now.
+#
+# **0.2.0 is not reached until sections 1.1 to 1.9 of the blueprint audit are
+# all built.** Joshua's rule, and a better one than "a minor when it gains a
+# capability" -- that version was a judgement call about what counts as big,
+# made by whoever happened to be bumping the number. This one is a fact about
+# the audit that anybody can check.
+#
+# **Five rows stand in the way**, plus the whole of 1.8:
+#
+#   1.3  IPC              signals, sockets, message queues, FIFOs
+#   1.4  HPET             the timer wheel is built; no HPET, and nothing needs one
+#   1.6  ext2/4 + procfs  ramfs and devfs are built; these two are not
+#   1.7  USB host         xHCI is built; no EHCI, no hubs, no hot-plug
+#   1.7  I2C / SPI        nothing needs them yet
+#   1.8  Network          all of it
+#
+# Corrected 12 September. This comment previously said eleven rows and listed
+# self-relocation, video, embedded filesystems, initrd and UEFI among them.
+# **Those are section 2 -- the bootloader -- and the gate is 1.1 to 1.9.** The
+# script that produced the list matched only headings beginning `1.`, so five
+# bootloader rows were filed under 1.9 and counted against a gate they are not
+# part of. 1.1, 1.2, 1.5, 1.8 and 1.9 have no open rows at all.
+#
+# 0.1.0 was raised from 0.0.11 on the older argument -- the kernel had stopped
+# fixing things and started gaining them -- and a patch number that only ever
+# goes up is a version that has stopped saying anything. That reasoning still
+# explains 0.1.0; it is not what decides 0.2.0.
+#
+# Written here rather than in a document because this is the line that has to
+# change, and a rule kept anywhere else is a rule read after the fact.
+VERSION := 0.2.1
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -65,7 +123,7 @@ CFLAGS := -std=c11 -O2 -g \
           -DRECONOS_KERNEL_VERSION=\"$(VERSION)\" \
           $(ARCHFLAGS)
 
-ASFLAGS := $(ARCHFLAGS) -fno-pic -Iinclude
+ASFLAGS := $(ARCHFLAGS) -fno-pic -Iinclude -I$(BUILD)/user
 LDFLAGS := -nostdlib -no-pie -z noexecstack -z max-page-size=4096
 
 # --- Sources -----------------------------------------------------------------
@@ -74,11 +132,33 @@ CORE_SRCS := $(wildcard core/*.c)
 ARCH_SRCS := $(wildcard arch/$(ARCH)/*.c)
 ARCH_ASM  := $(wildcard arch/$(ARCH)/*.S)
 
+# core/ has one .S, and it holds no instructions -- it carries a file into
+# the image with .incbin. check-portable reads these too, so "portable" keeps
+# meaning the same thing here as it does for the C.
+CORE_ASM  := $(wildcard core/*.S)
+
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(CORE_SRCS) $(ARCH_SRCS)) \
-        $(patsubst %.S,$(BUILD)/%.o,$(ARCH_ASM))
+        $(patsubst %.S,$(BUILD)/%.o,$(ARCH_ASM) $(CORE_ASM))
 
 LINKER_SCRIPT := arch/$(ARCH)/linker.ld
 KERNEL := $(BUILD)/reconos-kernel.elf
+
+# --- The program the kernel loads --------------------------------------------
+#
+# A real ELF, linked by the ordinary cross linker, embedded in the kernel image
+# and parsed at run time by the kernel's own loader.
+#
+# Built rather than hand-written for the same reason the partition fixtures are
+# built by sgdisk and the FAT32 ones by mkfs.vfat: a loader tested against a
+# structure this project also wrote is tested against its own misunderstandings.
+# The linker decides the program headers here, including the ones nobody
+# thought to arrange.
+#
+# It is embedded rather than read from a disk *for now* -- there is no path from
+# a file on a volume to a running program yet, and this is the half of it that
+# can be finished first. The bytes are identical either way, which is the point:
+# when the filesystem half arrives, the loader does not change.
+USER_ELF := $(BUILD)/user/hello.elf
 
 # --- Rules -------------------------------------------------------------------
 
@@ -97,13 +177,41 @@ $(KERNEL): $(OBJS) $(LINKER_SCRIPT)
 	@echo "  built $@"
 	@size $@ 2>/dev/null || $(CROSS)size $@
 
-$(BUILD)/%.o: %.c
+# Every object depends on this file, and that is not tidiness.
+#
+# VERSION is handed to the compiler with -D, so it is baked into whichever
+# objects happen to be rebuilt after it changes. Without this prerequisite,
+# raising the version rebuilds *nothing*: main.c still holds the old number,
+# the kernel prints the old number, and the Makefile says the new one. The
+# tree and the binary disagree and neither is obviously wrong.
+#
+# Found on 11 September when a boot reported 0.1.0 from a tree that said 0.1.7
+# -- and it was found only because a self-test assertion was added to a boot
+# nothing had been reading (BG-187, BG-189). A whole verification run had
+# already passed against the mislabelled kernel.
+#
+# The cost is that editing this file rebuilds everything. That is the correct
+# price: almost anything changed here changes how the code is compiled.
+$(BUILD)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BUILD)/%.o: %.S
+$(BUILD)/%.o: %.S Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -MMD -MP -c $< -o $@
+
+# -nostdlib and its own script: no C runtime, no libc, and nothing between
+# `_start` and the first instruction.
+$(USER_ELF): user/hello.S user/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c user/hello.S -o $(BUILD)/user/hello.o
+	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ $(BUILD)/user/hello.o
+	@echo "  built $@"
+
+# The blob that carries it into the kernel image. `.incbin` rather than
+# objcopy's `-I binary`, because objcopy names its symbols after the path it
+# was given and that name changes when the build directory does.
+$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF)
 
 -include $(OBJS:.o=.d)
 
@@ -150,7 +258,7 @@ run: $(BOOT_IMAGE)
 # directories, and a genuinely machine-specific assumption fails there.
 check-portable:
 	@bad=""; \
-	for f in core/*.c core/*.h; do \
+	for f in core/*.c core/*.h core/*.S; do \
 		[ -e "$$f" ] || continue; \
 		hit=$$(sed -e 's|/\*.*\*/||g' -e '\|/\*|,\|\*/|d' -e 's|//.*||' "$$f" \
 		      | grep -nE '__asm__|asm volatile|\bx86|\baarch64|\briscv|\*[[:space:]]*\)[[:space:]]*0x[0-9a-fA-F]{6,}|\bout[bwl]\b|\bin[bwl]\b' \

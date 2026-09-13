@@ -106,9 +106,27 @@ bool reconboot_parse(paddr_t handoff);
 /* The one copy. Written only by arch/ during early init. */
 struct boot_info *boot_info(void);
 
+/* Whether a whole word appears on the kernel command line. */
+bool boot_cmdline_has(const char *word);
+
 /* --- Used by arch/ while translating -------------------------------------- */
 
 void boot_info_reset(const char *protocol, enum boot_firmware firmware);
+
+/* --- what the loader left in the registers ---------------------------------
+ *
+ * The ReconBoot path records every register the handoff arrived with, before
+ * the kernel has touched one, and this reports whether they were all clear.
+ *
+ * False with `*dirty` naming the first one that was not. True on every other
+ * boot path, with `*dirty` left null -- GRUB and a hypervisor make no such
+ * promise and are not being held to one, and saying "pass" for a promise
+ * nobody made would be a test that cannot fail.
+ *
+ * `*checked` receives how many registers the answer covers, because it is not
+ * all of them: the loader has to name the address it jumps to in some
+ * register, and that one necessarily still holds it. */
+bool boot_handoff_registers_clear(const char **dirty, unsigned *checked);
 void boot_add_region(paddr_t base, u64 size, enum mem_kind kind);
 
 /* Sorts by address and merges adjacent regions of the same kind, then

@@ -60,6 +60,18 @@
  * not a check in any code, but a bit the processor consults on every access. */
 #define VM_USER   (1u << 5)
 
+/* Write-combining: writes may be gathered and delivered in bursts, but they are
+ * not held in a cache waiting for company.
+ *
+ * For a framebuffer, which is the only thing that wants it. Uncached is correct
+ * and slow -- every pixel is its own bus transaction -- and cached is fast and
+ * wrong, because a write that sits in a cache line is a pixel that does not
+ * appear. Write-combining is the one that is both.
+ *
+ * An architecture that cannot express it falls back to VM_DEVICE, which is
+ * correct and slower rather than fast and wrong. */
+#define VM_WRITE_COMBINE (1u << 6)
+
 /* --- The direct map -----------------------------------------------------
  *
  * All of physical memory at a fixed virtual offset. The offset is per
@@ -87,6 +99,33 @@ void vm_activate_this_cpu(void);
  * Returns false if it ran out of memory for page tables. */
 bool vm_map(vaddr_t va, paddr_t pa, u64 size, unsigned flags);
 
+/* Removes a mapping and tells every processor it has gone. Returns false only
+ * when the request would mean splitting a large page, which it refuses to do:
+ * a range that is not mapped is not an error, because a caller unwinding a
+ * partly-built range is doing the right thing.
+ *
+ * The physical pages are not freed. This has no way to know who else points at
+ * them -- the direct map does, for one -- so ownership stays with whoever
+ * allocated them. */
+bool vm_unmap(vaddr_t va, u64 size);
+
+/* --- What the architecture provides for address spaces --------------------
+ *
+ * A root is the physical address of a top-level page table, which is what both
+ * architectures' root registers take. Zero means the kernel's own. */
+
+/* A new root with the kernel's half already in it, or zero if there is no
+ * memory. On aarch64 there is no kernel half to put in: the architecture holds
+ * it in a separate register. */
+paddr_t arch_as_new_root(void);
+
+/* Frees the page tables below a root, and the root. Not the memory those
+ * tables mapped -- whoever allocated it frees it. */
+void arch_as_free_root(paddr_t root);
+
+/* Points this processor's low half at `root`. Zero restores the kernel's. */
+void arch_as_activate(paddr_t root);
+
 /* The physical address a virtual one currently resolves to, or 0 for
  * unmapped. Reads the tables rather than the CPU, so it answers for the map
  * being built as well as the one in use. */
@@ -94,8 +133,24 @@ paddr_t vm_lookup(vaddr_t va);
 
 void vm_print_summary(void);
 
+/* Reports every range mapped in the half a user program is meant to own, and
+ * returns how many of them belong to the kernel. Zero is what per-process
+ * address spaces need: anything else is a mapping every process would have to
+ * carry a copy of. Printed rather than asserted, because the number is
+ * currently not zero and the interesting thing is *what* it is. */
+unsigned vm_user_half_report(void);
+
+/* How many times this processor has had to interrupt the others to tell them a
+ * translation changed, and how many of those went unanswered. Silent on an
+ * architecture whose invalidation is broadcast by the hardware. */
+void vm_print_shootdowns(void);
+
 /* Allocates, maps and returns a page of the given size, in one call, because
  * every caller that wants memory wants it mapped. Returns 0 on failure. */
 bool vm_self_test(void);
+
+/* How many of a program's own pages have been handed back on teardown. Zero
+ * on a kernel that has forgotten to again. */
+u64 vm_leaves_freed(void);
 
 #endif /* RECON_KERNEL_VM_H */

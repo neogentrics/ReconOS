@@ -31,6 +31,9 @@
  * program's stack, at whatever address the user program had chosen.
  */
 #include "x86_64.h"
+#include <recon/kernel/console.h>
+#include <recon/kernel/vm.h>
+#include <recon/kernel/pmm.h>
 
 #include <recon/kernel/user.h>
 #include <recon/kernel/sched.h>
@@ -96,9 +99,58 @@ void arch_user_init(void)
 	 * and let it read the structure itself as permissions. */
 	tss[cpu].iomap_base = sizeof(struct tss);
 
-	write_tss_descriptor(SEL_TSS / 8, (u64)(uintptr_t)&tss[cpu],
+	/* This processor's block, parked where the system-call stub's SWAPGS
+	 * will find it. Here rather than in arch_enter_user, which is where it
+	 * used to be: that runs only on a processor that is about to enter user
+	 * mode, so a processor which never did had KERNEL_GS_BASE at zero -- and
+	 * a thread that entered a system call elsewhere and was rescheduled
+	 * onto this one would SWAPGS to a base of zero and take a double fault
+	 * on the first instruction of the entry stub.
+	 *
+	 * It is per-processor and constant, so once is the right number of
+	 * times to write it. */
+	x86_wrmsr(MSR_KERNEL_GS_BASE, (u64)(uintptr_t)&percpu[cpu]);
+	x86_wrmsr(MSR_GS_BASE, 0);
+
+	/* Two stacks this processor can take a fault on when the stack it was
+	 * using is the problem. See x86_arm_fault_stacks in trap.c.
+	 *
+	 * Allocated per processor, because a double fault on two processors at
+	 * once landing on one stack is the same class of failure the shared
+	 * task-state segment had -- and it would arrive in the middle of
+	 * reporting something else that had already gone wrong.
+	 *
+	 * A processor with no memory for them keeps the old behaviour, which is
+	 * a triple fault on a bad stack. Saying so beats a silent reset. */
+	{
+		paddr_t df = pmm_alloc_pages(2);
+		paddr_t nmi = pmm_alloc_pages(2);
+
+		if (df && nmi) {
+			/* The *top*, because the stack grows down. Writing the
+			 * base here gives the processor a stack pointer aimed
+			 * at the rest of memory. */
+			tss[cpu].ist[0] = (u64)(uintptr_t)phys_to_virt(df) +
+					  2 * PAGE_SIZE;
+			tss[cpu].ist[1] = (u64)(uintptr_t)phys_to_virt(nmi) +
+					  2 * PAGE_SIZE;
+
+			x86_arm_fault_stacks();
+		} else {
+			if (df)
+				pmm_free_pages(df, 2);
+			if (nmi)
+				pmm_free_pages(nmi, 2);
+
+			kprintf("  cpu %u: no memory for fault stacks; a bad "
+				"stack will reset the machine\n", cpu);
+		}
+	}
+
+	/* This processor's own slot, not the shared one. See trap.c. */
+	write_tss_descriptor(SEL_TSS_FOR(cpu) / 8, (u64)(uintptr_t)&tss[cpu],
 			     sizeof(struct tss) - 1);
-	__asm__ volatile("ltr %w0" : : "r"((u16)SEL_TSS));
+	__asm__ volatile("ltr %w0" : : "r"(SEL_TSS_FOR(cpu)));
 
 	/* SYSCALL is off until EFER says otherwise. Read, modify, write: NXE was
 	 * turned on in vm.c and clearing it here would make every no-execute
@@ -129,6 +181,21 @@ void arch_user_init(void)
 	x86_wrmsr(MSR_FMASK, 0x700u);
 }
 
+void arch_thread_switched_in(struct thread *t)
+{
+	unsigned cpu = (unsigned)arch_cpu_id();
+
+	/* A thread that has never been to user mode has nowhere for a trap
+	 * from user mode to land, and cannot take one. Leaving the previous
+	 * occupant's values in place is correct: the next thread that *can*
+	 * take one brings its own. */
+	if (cpu >= MAX_CPUS || !t || !t->entry_stack)
+		return;
+
+	percpu[cpu].kernel_rsp = (u64)(uintptr_t)t->entry_stack;
+	tss[cpu].rsp[0] = (u64)(uintptr_t)t->entry_stack;
+}
+
 RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top)
 {
 	unsigned cpu = (unsigned)arch_cpu_id();
@@ -147,15 +214,21 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top)
 	__asm__ volatile("movq %%rsp, %0" : "=r"(rsp));
 	rsp &= ~0xFULL;
 
+	/* Recorded on the *thread*, and then told to this processor. The
+	 * comment above used to say this would have to move into the context
+	 * switch when processes arrived, and it was right: see
+	 * arch_thread_switched_in. */
+	if (sched_current())
+		sched_current()->entry_stack = (void *)(uintptr_t)rsp;
+
 	percpu[cpu].kernel_rsp = rsp;
 	tss[cpu].rsp[0] = rsp;
 
-	/* Establish the SWAPGS invariant for user mode: GS_BASE zero, this
-	 * processor's block parked in KERNEL_GS_BASE for the entry stub to swap
-	 * in. Set in this order so that no kernel code between here and IRETQ
-	 * can be tempted to read GS and find the wrong thing. */
-	x86_wrmsr(MSR_KERNEL_GS_BASE, (u64)(uintptr_t)&percpu[cpu]);
-	x86_wrmsr(MSR_GS_BASE, 0);
+	/* The SWAPGS invariant -- GS_BASE zero, this processor's block in
+	 * KERNEL_GS_BASE -- is established once per processor in
+	 * arch_user_init and holds everywhere, so there is nothing to set
+	 * here. It used to be set here, which is why a processor that had
+	 * never entered user mode did not have it. */
 
 	__asm__ volatile(
 		"cli\n\t"
@@ -175,6 +248,46 @@ RK_NORETURN void arch_enter_user(u64 entry, u64 stack_top)
 		"pushq %[fl]\n\t"
 		"pushq %[cs]\n\t"
 		"pushq %[ip]\n\t"
+		
+		/* Every register the program has no business seeing, zeroed --
+		 * after the frame is on the stack, so the operands above have
+		 * already been consumed by the pushes.
+		 *
+		 * Without this, a program's first instruction can read whatever
+		 * the kernel last left in a register: kernel stack addresses,
+		 * pointers into kernel structures, whatever a system call was
+		 * holding. None of it is secret the way a key is, and all of it
+		 * is the map somebody needs to aim at the kernel -- knowing
+		 * where the stack is defeats much of the point of not being
+		 * able to read it.
+		 *
+		 * RSP is the exception and is untouched: IRETQ takes the
+		 * program's stack pointer off the frame it was just given.
+		 *
+		 * Thirty-two-bit writes, because writing the low half of a
+		 * register on this architecture clears the top half -- so this
+		 * is shorter than the 64-bit form and does the same thing.
+		 *
+		 * The vector registers are not cleared here. They are restored
+		 * from the thread's own saved state at every context switch, so
+		 * they hold this thread's values rather than the kernel's -- and
+		 * the kernel is built with no floating point at all. */
+		"xorl %%eax, %%eax\n\t"
+		"xorl %%ebx, %%ebx\n\t"
+		"xorl %%ecx, %%ecx\n\t"
+		"xorl %%edx, %%edx\n\t"
+		"xorl %%esi, %%esi\n\t"
+		"xorl %%edi, %%edi\n\t"
+		"xorl %%ebp, %%ebp\n\t"
+		"xorl %%r8d, %%r8d\n\t"
+		"xorl %%r9d, %%r9d\n\t"
+		"xorl %%r10d, %%r10d\n\t"
+		"xorl %%r11d, %%r11d\n\t"
+		"xorl %%r12d, %%r12d\n\t"
+		"xorl %%r13d, %%r13d\n\t"
+		"xorl %%r14d, %%r14d\n\t"
+		"xorl %%r15d, %%r15d\n\t"
+		
 		"iretq\n\t"
 		:
 		: [uds] "r"((u16)(SEL_UDATA | 3)),

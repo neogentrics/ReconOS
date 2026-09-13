@@ -9,6 +9,7 @@
 #include "x86_64.h"
 
 #include <recon/kernel/cpu.h>
+#include <recon/kernel/random.h>
 #include <recon/kernel/kstring.h>
 
 static void cpuid_count(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
@@ -176,4 +177,74 @@ void arch_cpu_caps(struct cpu_caps *c)
 
 	if (c->threads && !c->cores)
 		c->cores = c->threads;
+}
+
+/* --- the hardware generator ----------------------------------------------
+ *
+ * Two instructions, and they are not interchangeable.
+ *
+ *   RDSEED draws from the physical noise source itself. It is what a *seed*
+ *   wants, and it fails often, because the noise source produces bits at a
+ *   rate that has nothing to do with how fast software asks.
+ *
+ *   RDRAND draws from a generator seeded by that source. It nearly always
+ *   succeeds and is not what you want to seed another generator from -- it is
+ *   already an expansion of something, and expanding an expansion adds nothing.
+ *
+ * So RDSEED is preferred and RDRAND is the fallback, which is the opposite of
+ * the way round most code does it.
+ *
+ * **Both report failure in the carry flag**, and that is the part worth being
+ * careful about: on failure the destination register is set to zero on some
+ * parts and left alone on others. Code that ignores the flag therefore reads
+ * either a constant zero or the last value it got -- for ever, at full speed,
+ * with no error anywhere. It is the exact shape of a security failure nothing
+ * downstream can detect.
+ */
+bool arch_random_hw_present(void)
+{
+	struct cpu_caps caps;
+
+	arch_cpu_caps(&caps);
+	return caps.hw_random;
+}
+
+static bool try_rdseed(u64 *out)
+{
+	u8 ok;
+
+	__asm__ volatile("rdseed %0; setc %1" : "=r"(*out), "=qm"(ok) : : "cc");
+	return ok != 0;
+}
+
+static bool try_rdrand(u64 *out)
+{
+	u8 ok;
+
+	__asm__ volatile("rdrand %0; setc %1" : "=r"(*out), "=qm"(ok) : : "cc");
+	return ok != 0;
+}
+
+bool arch_random_hw(u64 *out)
+{
+	struct cpu_caps caps;
+	unsigned attempt;
+
+	arch_cpu_caps(&caps);
+	if (!caps.hw_random)
+		return false;
+
+	/* Ten attempts, which is the figure Intel's own guidance gives for
+	 * RDSEED, and then the weaker instruction rather than nothing. A bound
+	 * rather than a loop: an entropy source that has stopped answering must
+	 * become a refusal, not a machine that stops booting. */
+	for (attempt = 0; attempt < 10; attempt++)
+		if (try_rdseed(out))
+			return true;
+
+	for (attempt = 0; attempt < 10; attempt++)
+		if (try_rdrand(out))
+			return true;
+
+	return false;
 }

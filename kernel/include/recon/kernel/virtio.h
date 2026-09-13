@@ -178,6 +178,20 @@ struct virtio_transport {
 	/* "There is something in the available ring." */
 	void (*notify)(struct virtio_device *v, u16 index);
 
+	/* Asks for this queue's completions to arrive as an interrupt.
+	 *
+	 * Optional, and null on a transport that has no way to do it -- which
+	 * is how the memory-mapped transport says so without every driver
+	 * needing to know there are two. A driver that gets null, or false,
+	 * keeps polling; a driver that stops polling on the strength of a
+	 * pointer it never checked stops for ever.
+	 *
+	 * `name` is what the vector is called in the interrupt summary, so
+	 * that a line nobody is taking can be traced back to who asked. */
+	bool (*request_interrupt)(struct virtio_device *v, u16 index,
+				  void (*fn)(void *), void *arg,
+				  const char *name);
+
 	/* Device-specific configuration space, which means something different
 	 * for every device type. Read as bytes rather than as a struct, because
 	 * the layout depends on which features were negotiated. */
@@ -210,6 +224,13 @@ bool virtio_mmio_probe(void *regs, struct virtio_device *out);
  * and most of what it finds is not a disk. */
 bool virtio_blk_attach(const struct virtio_device *probed);
 unsigned virtio_blk_count(void);
+
+/* That a disk given a message vector actually raises it. True, with a line
+ * saying so, when no device here has one. */
+bool virtio_blk_self_test(void);
+
+/* What the disks are, and how their waiting actually went. */
+void virtio_blk_print_summary(void);
 
 /* Walks the handshake as far as FEATURES_OK, negotiating `wanted` on top of
  * VIRTIO_F_VERSION_1. Leaves DRIVER_OK unset: the driver still has to set its

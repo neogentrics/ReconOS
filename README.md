@@ -118,6 +118,17 @@ found — what it actually was, how it surfaced, who found it, and what was done
 about it. Every entry is also a
 [GitHub issue](https://github.com/neogentrics/ReconOS/issues).
 
+Still early. The desktop still runs on Linux, and its account roles are
+enforced by ReconOS inside ReconOS rather than by anything underneath it. What
+is here works and is tested; what is not here is listed at the end.
+
+**There is now a kernel of its own**, built alongside the desktop and not yet
+underneath it — see [The kernel](#the-kernel) below. It boots on two
+architectures under three firmwares, on its own bootloader, off its own
+filesystem, installed by its own installer, and it reads a keyboard and a
+mouse. It has a network stack of its own now too. What it does not have yet is
+the **display** a desktop needs, and a way for a program to reach that network
+— which is exactly the list that section ends with.
 ---
 
 ## Contents
@@ -134,6 +145,7 @@ about it. Every entry is also a
 - [Controls](#controls) — every keyboard shortcut
 - [Building](#building) · [Running](#running) · [Configuration](#configuration)
 - [Bugs](#bugs) — how faults are recorded
+- [The kernel](#the-kernel) — phase two, built in parallel
 - [The widget layer](docs/WIDGETS.md) — one place that owns what a control looks like
 - [Where this is going](#where-this-is-going)
 
@@ -641,8 +653,9 @@ difference between this working and this not existing.
 
 ### The network
 
-**The network — seen, not implemented.** ReconOS has no kernel, so it has no
-ARP, no IP and no TCP. What it has is `recon_net`, which presents the host's
+**The network — seen, not implemented.** The desktop runs on Linux, so the
+ARP, IP and TCP under it are not ReconOS's — the kernel has its own now,
+and the desktop does not run on it yet. What it has is `recon_net`, which presents the host's
 network in ReconOS's own terms: which interfaces exist, their addresses, the
 gateway, the resolvers, and whether there is a way out. It can resolve a name
 and ask whether a host answers, without freezing the desktop while a dead
@@ -952,6 +965,109 @@ desktop down because a struct grew a field and the ABI number did not; every
 context menu entry in the system silently doing nothing for weeks because
 nothing could press a button without a person there to do it. That last one
 is why ReconOS can drive its own input now.
+
+## The kernel
+
+Phase two, built in parallel with the desktop rather than after it. **Version
+0.2.1**, handoff protocol **ReconBoot v1**, on the `kernel` branch.
+
+**The middle digit moved on 12 September 2026 because a rule was met, not
+because the change felt large.** The rule, written down a day earlier: *0.2.0 is
+not reached until every row in sections 1.1 to 1.9 of the blueprint audit is
+built*. That is a fact about those tables anybody can check, including a script,
+and it is deliberately not a judgement about what counts as a big change.
+
+It is a real kernel and it is not yet a kernel you can run ReconOS on. Both
+halves of that sentence matter, so this section says what exists, and then says
+what does not.
+
+### What it does
+
+A machine with nothing on it, or with Windows or Linux already on it, boots
+ReconOS media, is told where to install, and comes up on its own kernel
+afterwards — on either architecture, under either firmware, without GRUB,
+without Linux, and without touching what was already on the disk.
+
+| | |
+|---|---|
+| **Architectures** | x86_64 and aarch64, one portable core behind a six-function boundary the build enforces |
+| **Firmware** | UEFI on both architectures, BIOS on x86_64, and device tree with no firmware at all |
+| **Bootloader** | `reconboot`, ours. UEFI and a 440-byte BIOS stage 1. It verifies the kernel's signature and there is no way to turn that off |
+| **Memory** | Four-level paging, large pages where the processor has them, a direct map, no-execute, TLB shootdown across processors, write-combining for the framebuffer, demand paging and copy-on-write |
+| **Processors** | Verified at 1, 2, 4, 8, 9, 16 and 32. Per-processor timers, real preemption, idle threads that cannot be stolen. Built to hold **256**, with x2APIC so identifiers above 255 can be addressed — **untested above 32**, deliberately ahead of a machine to prove it on |
+| **Interrupts** | I/O APIC on x86_64, so a device interrupt can be sent to any processor rather than only the boot one; GIC v2 and v3 on aarch64. The switch off the 8259 is verified against the clock and reverted if the tick stops. Message-signalled interrupts are composed and programmed; no driver asks for one yet |
+| **Time** | A five-level timer wheel — a callback at a time, or a thread that sleeps without a processor spinning for it — and a worker thread, so an interrupt handler can hand off work it must not do inline |
+| **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
+| **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
+| **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
+| **Files** | A virtual filesystem: descriptors, a mount table, and one interface with the volume, the console, pipes, `/dev`, `/tmp`, `/proc` and a foreign ext2 volume behind it. A program is loaded **from a volume**, and a mapping can be filled from a file |
+| **Foreign filesystems** | ext2 read, checked against `e2fsck`, and a repair that rewrites free counts from the bitmaps — because the bitmap is the evidence and the count is the claim. It never happens on mount and must be asked for by the literal word `repair`. EXTENTS, RECOVER and 64BIT are refused **by name** rather than guessed at, which is also why this is not ext4 |
+| **Input** | PS/2 keyboard and mouse, and USB HID behind the same interface, so a key is a key whichever wire it arrived on |
+| **Between programs** | Pipes, with a reader that waits rather than reporting the end of input; shared memory two address spaces can both reach; and **signals** on both architectures — sent at any time, delivered at exactly one moment, the return to user mode, which is the only instant the kernel both knows where the program was and can still change where it goes |
+| **Allocators** | The physical allocator and the kernel heap are locked, which they were not: the comment saying one processor ran kernel code had outlived its own condition by three checkpoints |
+| **Installer** | Plans first and writes nothing while planning; then partitions, formats, copies and leaves a disk that boots on its own |
+| **Recovery** | The same kernel from the ESP, read-only, offered in the boot menu on every machine |
+
+### How it is known to work
+
+`scripts/verify-kernel.sh` boots the kernel **twenty-five times** on every change — every
+firmware, several processor counts, three disk controllers, two CPU models —
+and runs the kernel's self-tests on each. Every format it writes is checked by
+a tool that did not write it: `sgdisk`, `sfdisk`, `mtools`, and a second
+ReconFS reader written from the specification in another language.
+
+The standing rule is that **a test that has never been seen to fail is not a
+test yet**. Every checker in the tree has been shown a deliberate fault and
+watched to catch it before any pass it reports is believed.
+
+### What it does not have
+
+This is the honest list, and it is the reason the desktop is not on it.
+
+- **Display.** A framebuffer console on whatever the firmware left. No mode
+  setting, no surface for a compositor. This is the one that stands between the
+  kernel and the desktop.
+- **A socket layer.** The network itself is built — see below — and no user
+  program can reach it. TCP is opened from inside the kernel by connection
+  index; there is no file descriptor that names a connection, so `read` and
+  `write` cannot be pointed at one. Pipes, shared memory and signals exist.
+- **EHCI.** xHCI works, hubs are enumerated, and a device plugged in or pulled
+  out after boot is noticed (KF-199). Older EHCI controllers are not driven —
+  on Joshua's ruling, because USB works on the machines this runs on.
+- **A driver for legacy IDE**, which is why a kernel that boots over BIOS from
+  an IDE disk cannot then read it (KF-192).
+- **ext4.** `core/ext2.c` reads ext2 and refuses EXTENTS, RECOVER and 64BIT by
+  name — reading a filesystem through a wrong assumption about where its blocks
+  are is worse than refusing to mount it.
+
+Four things this list used to claim are built, and were still listed as missing
+until 12 September: **input** (PS/2 and USB HID, `input_init` on every boot),
+**signals** on both architectures, **shared file mappings** through the page
+cache, and **identity that is enforced** — `open` consults the mode and the
+process's user at `core/vfs.c:372` and `:473`. Recorded as a correction rather
+than quietly fixed, because a list of what is missing that is wrong in the
+direction of understating what is built is the kind nobody goes looking for.
+
+**And it happened again in this same section, six days later.** The network
+stack, USB hubs and USB hot-plug all landed on 12 September and were all still
+listed here as missing when the kernel branch was merged. A paragraph explaining
+why that matters does not stop it; the list has to be read against the tree
+every time something lands, which is what the blueprint audit is for.
+- **A device that uses any of the new interrupt routing.** The I/O APIC can send
+  a device interrupt to any processor and MSI can be programmed, and every
+  storage driver still polls — so does the network card: `virtio_net.c` sets
+  `enable_interrupts` to null and offers a `poll` instead. The half that was
+  missing is built; the half that uses it comes with the first driver that
+  wants it.
+
+### Where to read more
+
+- [docs/KERNEL.md](docs/KERNEL.md) — the plan, checkpoint by checkpoint.
+- [docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md) — what the desktop has asked the
+  kernel for, ordered by how sharply the gap is felt rather than by difficulty.
+- [docs/BUGS.md](docs/BUGS.md) — every fault, what it actually was, and how it
+  surfaced. The kernel's share is the majority of the register.
+
 
 ## Where this is going
 

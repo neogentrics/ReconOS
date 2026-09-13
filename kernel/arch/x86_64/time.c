@@ -24,8 +24,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/sched.h>
 
-static inline void outb(u16 port, u8 v) { __asm__ volatile("outb %0, %1" : : "a"(v), "Nd"(port)); }
-static inline u8  inb(u16 port) { u8 v; __asm__ volatile("inb %1, %0" : "=a"(v) : "Nd"(port)); return v; }
+/* Port I/O is in x86_64.h, which this already includes. */
 
 /* A short pause between writes to the same 1981 chip. Writing to an unused
  * port is the traditional way to spend a bus cycle. */
@@ -89,6 +88,65 @@ void x86_pic_end_of_interrupt(unsigned irq)
 	outb(PIC1_CMD, 0x20);
 }
 
+/* Every line masked at both chips. Used when the I/O APIC takes the lines
+ * over: two controllers delivering one line is a duplicate interrupt that the
+ * kernel then acknowledges to only one of them. */
+/* The mask the 8259 is left with at boot: the timer open, everything else
+ * shut. Used to put the lines back when the I/O APIC could not hold them. */
+void x86_pic_restore_default(void)
+{
+	outb(PIC1_DATA, 0xFE);
+	outb(PIC2_DATA, 0xFF);
+}
+
+/* One line opened at the 8259, without disturbing the others.
+ *
+ * Read-modify-write rather than a remembered value: the mask is a register
+ * in a chip, and this kernel is not the only thing that has written to it
+ * -- firmware left it in some state and x86_pic_restore_default has its own
+ * opinion. Reading it is one instruction and removes the question. */
+void x86_pic_unmask(unsigned irq)
+{
+	u16 port = (irq < 8) ? PIC1_DATA : PIC2_DATA;
+	u8 bit = (u8)(1u << (irq & 7));
+
+	if (irq >= 16)
+		return;
+
+	outb(port, (u8)(inb(port) & ~bit));
+
+	/* A line on the second chip only arrives if the cascade is open
+	 * too. Forgetting this is the classic way an interrupt above 7
+	 * never appears with every other register correct. */
+	if (irq >= 8)
+		outb(PIC1_DATA, (u8)(inb(PIC1_DATA) & ~(1u << 2)));
+}
+
+void x86_pic_mask_all(void)
+{
+	outb(PIC1_DATA, 0xFF);
+	outb(PIC2_DATA, 0xFF);
+}
+
+/* Whichever controller actually delivered it.
+ *
+ * This is the single line that has to change when the routing changes, and it
+ * is worth having in one place rather than at each site: acknowledging to the
+ * 8259 an interrupt the I/O APIC delivered unbalances a chip that is no longer
+ * sending anything, and *failing* to acknowledge the local APIC leaves the
+ * interrupt in service -- after which that processor takes no further
+ * interrupt at or below its priority. Neither says anything; the machine
+ * simply stops getting interrupts. */
+void x86_irq_ack(unsigned irq)
+{
+	if (x86_ioapic_in_use()) {
+		x86_apic_eoi();
+		return;
+	}
+
+	x86_pic_end_of_interrupt(irq);
+}
+
 /* --- The programmable interval timer ------------------------------------- */
 
 #define PIT_CH0   0x40
@@ -102,7 +160,22 @@ static void pit_start_tick(void)
 {
 	unsigned divisor = PIT_HZ / TIME_TICK_HZ;
 
-	outb(PIT_CMD, 0x36);			/* channel 0, both bytes, square wave */
+	/* Mode 2, a rate generator, and NOT mode 3, a square wave.
+	 *
+	 * This was 0x36 -- mode 3 -- and it worked for as long as the 8259 was
+	 * the only thing listening. A square wave holds its output high for
+	 * half the period and low for the other half, so there are *two*
+	 * transitions per tick; the 8259 as emulated counts one of them and
+	 * the I/O APIC counts both. The first boot with the lines moved across
+	 * ran the whole kernel at 201 Hz against a 100 Hz constant -- every
+	 * sleep half as long as asked, every timer early, and every test that
+	 * counted ticks rather than nanoseconds still passing.
+	 *
+	 * Mode 2 pulses the output low for one input cycle and leaves it high
+	 * the rest of the period: one transition, one interrupt, whichever
+	 * controller is listening. It is what the chip is for and what every
+	 * other kernel uses it in. */
+	outb(PIT_CMD, 0x34);			/* channel 0, both bytes, rate generator */
 	outb(PIT_CH0, (u8)(divisor & 0xFF));
 	outb(PIT_CH0, (u8)(divisor >> 8));
 }
@@ -257,7 +330,30 @@ void x86_timer_interrupt(void)
 	 * acknowledgement would never happen. The controller would then send no
 	 * further interrupts, and the machine would freeze on the first
 	 * preemption with everything looking correct. */
-	x86_pic_end_of_interrupt(0);
+	x86_irq_ack(0);
+
+	if (preempt)
+		sched_switch();
+}
+
+/* The same tick, from this processor's own APIC rather than from the one 8254.
+ *
+ * Deliberately not x86_timer_interrupt with a flag. Two things differ and both
+ * of them are the kind that fail silently: the acknowledgement goes to the APIC
+ * and must *not* go to the 8259 -- telling that chip about an interrupt it did
+ * not send unbalances it, and it stops delivering the ones it did -- and the
+ * global tick counter is advanced by one processor rather than by all of them.
+ *
+ * The end-of-interrupt is before the switch, for the reason written out in
+ * x86_timer_interrupt: a switch does not return here. */
+void x86_apic_timer_interrupt(void)
+{
+	bool preempt;
+
+	time_tick();
+	preempt = sched_tick();
+
+	x86_apic_eoi();
 
 	if (preempt)
 		sched_switch();

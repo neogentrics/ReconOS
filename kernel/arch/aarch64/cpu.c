@@ -15,6 +15,7 @@
 #include "aarch64.h"
 
 #include <recon/kernel/cpu.h>
+#include <recon/kernel/random.h>
 #include <recon/kernel/kstring.h>
 
 #define READ_SYSREG(name) ({                            \
@@ -152,4 +153,76 @@ void arch_cpu_caps(struct cpu_caps *c)
 	 * would believe. */
 	c->cores = 0;
 	c->threads = 0;
+}
+
+/* --- the hardware generator ----------------------------------------------
+ *
+ * `RNDR` and `RNDRRS` are system registers rather than instructions, and they
+ * report failure the same way x86's do but in a different place: the read
+ * returns zero *and sets the condition flags*, so the flags are what must be
+ * checked. A read that ignores them gets a plausible-looking zero.
+ *
+ * RNDRRS reseeds from the physical source before answering, which is what a
+ * seed wants and is the slower of the two; RNDR draws from the conditioned
+ * generator. So RNDRRS is preferred, and RNDR is the fallback -- the same
+ * preference, for the same reason, as RDSEED over RDRAND on the other
+ * architecture.
+ *
+ * The registers only exist when ID_AA64ISAR0_EL1 says so, and reading one that
+ * does not exist is an undefined instruction rather than a zero -- so the
+ * capability check is not a nicety here, it is what stops the machine faulting.
+ */
+bool arch_random_hw_present(void)
+{
+	struct cpu_caps caps;
+
+	arch_cpu_caps(&caps);
+	return caps.hw_random;
+}
+
+bool arch_random_hw(u64 *out)
+{
+	struct cpu_caps caps;
+	unsigned attempt;
+
+	arch_cpu_caps(&caps);
+	if (!caps.hw_random)
+		return false;
+
+	for (attempt = 0; attempt < 10; attempt++) {
+		u64 value;
+		u64 failed;
+
+		/* RNDRRS is S3_3_C2_C4_1. Written by encoding rather than by
+		 * name so that this assembles on a toolchain whose assembler
+		 * predates the extension -- the same reason the GIC registers
+		 * elsewhere in this directory are written out. */
+		__asm__ volatile(
+			"mrs %0, s3_3_c2_c4_1\n\t"
+			"cset %1, eq\n\t"
+			: "=r"(value), "=r"(failed) : : "cc");
+
+		if (!failed) {
+			*out = value;
+			return true;
+		}
+	}
+
+	for (attempt = 0; attempt < 10; attempt++) {
+		u64 value;
+		u64 failed;
+
+		/* RNDR is S3_3_C2_C4_0. */
+		__asm__ volatile(
+			"mrs %0, s3_3_c2_c4_0\n\t"
+			"cset %1, eq\n\t"
+			: "=r"(value), "=r"(failed) : : "cc");
+
+		if (!failed) {
+			*out = value;
+			return true;
+		}
+	}
+
+	return false;
 }

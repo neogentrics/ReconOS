@@ -4,6 +4,45 @@
 
 static struct boot_info info;
 
+/* Is this word on the kernel command line?
+ *
+ * Whole words only: `recovery` must not match `recoveryzzz`, and a word is
+ * ended by a space or the end of the line.
+ *
+ * There were two copies of this before, in main.c and recovery.c, under a
+ * comment saying *two call sites is not yet a reason to share one*. That was a
+ * fair call at two. There is a third now -- the volume has to know whether this
+ * boot is a recovery boot -- and a third copy of a parser is how two of them
+ * quietly stop agreeing.
+ */
+bool boot_cmdline_has(const char *word)
+{
+	const char *p = boot_info()->cmdline;
+
+	if (!word || !*word)
+		return false;
+
+	while (p && *p) {
+		const char *k = word;
+		const char *q = p;
+
+		while (*k && *q == *k) {
+			q++;
+			k++;
+		}
+
+		if (!*k && (*q == '\0' || *q == ' '))
+			return true;
+
+		while (*p && *p != ' ')
+			p++;
+		while (*p == ' ')
+			p++;
+	}
+
+	return false;
+}
+
 struct boot_info *boot_info(void)
 {
 	return &info;
@@ -245,12 +284,110 @@ static void print_size(u64 bytes)
 		kprintf("%lu.%lu %s", whole, frac, units[unit]);
 }
 
+/* --- the registers the loader handed over ---------------------------------*/
+
+#if defined(__x86_64__)
+
+/* The copy in the higher half, not the capture itself: the capture sits beside
+ * the page tables at a low address, and the identity mapping that reaches it is
+ * gone by the time anything in C asks. See boot.S. */
+extern u64 handoff_saved[];
+
+#define boot_handoff_regs (handoff_saved)
+#define boot_handoff_mark (handoff_saved[16])
+
+/* In the order boot.S stores them. RDI is absent because it carries the
+ * handoff; RAX is present, and is the one that cannot be zero. */
+static const char *const handoff_names[] = {
+	"rax", "rbx", "rcx", "rdx", "rsi", "rbp",
+	"r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+};
+
+#define HANDOFF_MARK   0x5245434F4E524547ull	/* "RECONREG" */
+#define HANDOFF_SKIP   1			/* rax holds the entry point */
+#define HANDOFF_UNCHECKED "rdi carried the handoff, rax the entry point"
+
+#elif defined(__aarch64__)
+
+extern u64 handoff_saved[];
+
+#define boot_handoff_regs (handoff_saved)
+#define boot_handoff_mark (handoff_saved[28])
+
+/* x0, x1 and x16 are absent, for three different reasons -- see boot.S. */
+static const char *const handoff_names[] = {
+	"x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",
+	"x9",  "x10", "x11", "x12", "x13", "x14", "x15",
+	"x17", "x18", "x19", "x20", "x21", "x22", "x23",
+	"x24", "x25", "x26", "x27", "x28", "x29", "x30",
+};
+
+#define HANDOFF_MARK   0x5245434F4E524547ull	/* "RECONREG" */
+#define HANDOFF_SKIP   0			/* none of these carry one */
+#define HANDOFF_UNCHECKED "x0 carried the handoff, x16 the entry point, and x1 was spent naming where to record the rest"
+
+#else
+
+static u64 *const boot_handoff_regs;
+static const u64 boot_handoff_mark;
+static const char *const handoff_names[] = { 0 };
+
+#define HANDOFF_MARK   0
+#define HANDOFF_SKIP   0
+#define HANDOFF_UNCHECKED ""
+
+#endif
+
+bool boot_handoff_registers_clear(const char **dirty, unsigned *checked)
+{
+	unsigned i;
+	unsigned n = sizeof(handoff_names) / sizeof(handoff_names[0]);
+
+	if (dirty)
+		*dirty = 0;
+	if (checked)
+		*checked = 0;
+
+	/* Nothing recorded. Either this is not the ReconBoot path, or it is an
+	 * architecture with no capture -- and in both cases the honest answer
+	 * is that there is nothing to report rather than that everything was
+	 * fine. */
+	if (!HANDOFF_MARK || boot_handoff_mark != HANDOFF_MARK)
+		return true;
+
+	if (checked)
+		*checked = n - HANDOFF_SKIP;
+
+	for (i = HANDOFF_SKIP; i < n; i++) {
+		if (boot_handoff_regs[i]) {
+			if (dirty)
+				*dirty = handoff_names[i];
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void boot_print_summary(void)
 {
 	kprintf("\nBoot\n");
 	kprintf("  firmware     : %s\n", boot_firmware_name(info.firmware));
 	kprintf("  protocol     : %s\n", info.protocol ? info.protocol : "none");
 	kprintf("  loader       : %s\n", info.loader);
+
+	{
+		const char *dirty = 0;
+		unsigned checked = 0;
+
+		if (!boot_handoff_registers_clear(&dirty, &checked))
+			kprintf("  handoff      : %s arrived holding "
+				"something\n", dirty ? dirty : "a register");
+		else if (checked)
+			kprintf("  handoff      : %u register(s) arrived "
+				"clear (%s)\n", checked,
+				HANDOFF_UNCHECKED);
+	}
 	if (info.cmdline && info.cmdline[0])
 		kprintf("  command line : %s\n", info.cmdline);
 	if (info.acpi_rsdp)

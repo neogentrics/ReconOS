@@ -1,5 +1,6 @@
 #include <recon/kernel/panic.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/backtrace.h>
 #include <recon/kernel/arch.h>
 
 #include <stdarg.h>

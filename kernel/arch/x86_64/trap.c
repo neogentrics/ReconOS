@@ -15,8 +15,14 @@
  */
 #include "x86_64.h"
 
+#include <recon/kernel/smp.h>
+
 #include <recon/kernel/trap.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/user.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/irq.h>
+#include <recon/kernel/backtrace.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/panic.h>
 #include <recon/kernel/user.h>
@@ -61,17 +67,28 @@ static struct idt_entry idt[256];
  * would find natural -- code, code, data, data -- does not work, and fails by
  * loading a plausible wrong segment rather than by refusing.
  *
- * The last two entries are one descriptor: a task-state segment is sixteen
- * bytes in 64-bit mode, because its base address no longer fits in one. It is
- * filled in at run time by user.c, which is the only code that needs it. */
-u64 x86_gdt[7] RK_ALIGNED(16) = {
+ * After them come the task-state segments: sixteen bytes each, because a base
+ * address no longer fits in one entry, and **one per processor**.
+ *
+ * One per processor rather than one shared, which is what this was until
+ * checkpoint 9b. A TSS holds the stack a system call lands on, and that stack
+ * cannot be shared: two processors entering the kernel at once on one stack
+ * overwrite each other's frames. The single slot worked only because there was
+ * only ever one processor to write it -- arch_user_init filled it with the
+ * caller's own TSS, so with secondaries running every processor would have used
+ * whichever one was written last. Nothing would have failed until two of them
+ * took a system call at the same moment.
+ *
+ * They are filled in at run time by user.c, which is the only code that needs
+ * them. */
+u64 x86_gdt[5 + 2 * MAX_CPUS] RK_ALIGNED(16) = {
 	0,
 	0x00AF9A000000FFFFULL,	/* 0x08 kernel code: executable, long mode */
 	0x00CF92000000FFFFULL,	/* 0x10 kernel data: writable */
 	0x00CFF2000000FFFFULL,	/* 0x18 user data: writable, DPL 3 */
 	0x00AFFA000000FFFFULL,	/* 0x20 user code: executable, long mode, DPL 3 */
-	0,			/* 0x28 task-state segment, low half */
-	0,			/*      and high half */
+	/* 0x28 onwards: one task-state segment per processor, two entries each,
+	 * left zero until the processor that owns it fills it in. */
 };
 
 static struct table_descriptor gdt_ptr, idt_ptr;
@@ -99,6 +116,20 @@ extern void irq_6(void);   extern void irq_7(void);   extern void irq_8(void);
 extern void irq_9(void);   extern void irq_10(void);  extern void irq_11(void);
 extern void irq_12(void);  extern void irq_13(void);  extern void irq_14(void);
 extern void irq_15(void);
+
+/* The local APIC's two, which have vectors rather than IRQ numbers. */
+extern void vector_64(void);
+extern void vector_65(void);
+extern void vector_66(void);
+extern void vector_80(void); extern void vector_81(void);
+extern void vector_82(void); extern void vector_83(void);
+extern void vector_84(void); extern void vector_85(void);
+extern void vector_86(void); extern void vector_87(void);
+extern void vector_88(void); extern void vector_89(void);
+extern void vector_90(void); extern void vector_91(void);
+extern void vector_92(void); extern void vector_93(void);
+extern void vector_94(void); extern void vector_95(void);
+extern void vector_255(void);
 
 static void (*const stubs[32])(void) = {
 	isr_0,  isr_1,  isr_2,  isr_3,  isr_4,  isr_5,  isr_6,  isr_7,
@@ -142,6 +173,36 @@ static void set_gate(unsigned vector, void (*handler)(void), u16 selector)
 	idt[vector].reserved    = 0;
 }
 
+/* --- Stacks for the faults that cannot use the one they arrived on --------
+ *
+ * A double fault means the processor failed while *delivering* a fault, and by
+ * far the most common cause is that the stack it was told to use is unusable --
+ * unmapped, misaligned, or overrun. Pushing a fault frame onto that same stack
+ * to report it fails in exactly the same way, and a fault taken while
+ * delivering a double fault is a triple fault, which is a silent reset.
+ *
+ * So the interrupt stack table exists: an IST index in a gate tells the
+ * processor to load a stack pointer out of the TSS instead of using the current
+ * one. It is the difference between a machine that says what went wrong and a
+ * machine that reboots.
+ *
+ * The TSS field is per-processor and the IDT is shared, which sets the order:
+ * these gates are armed by whichever processor has just filled in its own
+ * stacks, and never before -- a gate naming an IST slot that is still zero
+ * turns the one fault this exists to survive into the one it exists to prevent.
+ */
+#define IST_DOUBLE_FAULT	1	/* one-based, as the gate encodes it */
+#define IST_NMI			2
+
+void x86_arm_fault_stacks(void)
+{
+	set_gate(2, stubs[2], 0x08);
+	idt[2].ist = IST_NMI;
+
+	set_gate(8, stubs[8], 0x08);
+	idt[8].ist = IST_DOUBLE_FAULT;
+}
+
 /* A page fault's error code says what was attempted, and the four bits that
  * matter are worth spelling out rather than printing as a number. */
 static void describe_page_fault(u64 error)
@@ -167,14 +228,75 @@ static void describe_page_fault(u64 error)
 
 void trap_dispatch(struct trap_frame *f)
 {
+	/* This processor's own timer, from its local APIC rather than from the
+	 * one 8254 in the machine. Acknowledged to the APIC, never to the 8259:
+	 * telling the 8259 an interrupt it did not send has been handled
+	 * unbalances it, and it stops delivering the ones it did send. */
+	if (f->vector == VECTOR_APIC_TIMER) {
+		x86_apic_timer_interrupt();
+		return;
+	}
+
+	/* Another processor has changed a mapping this one may have cached.
+	 *
+	 * Handled before anything else that could take time, because the
+	 * processor that sent it is *waiting* -- and acknowledged to the APIC
+	 * before the acknowledgement to the sender, so that the sender is never
+	 * released while this processor still has an interrupt in service. */
+	if (f->vector == VECTOR_TLB_SHOOTDOWN) {
+		x86_apic_eoi();
+		x86_tlb_shootdown_service();
+		return;
+	}
+
+	/* Raised when an interrupt is withdrawn between being raised and being
+	 * taken. Rare, harmless, and it must land somewhere that returns --
+	 * with no acknowledgement, which is the one thing the specification is
+	 * explicit about. */
+	if (f->vector == VECTOR_SPURIOUS)
+		return;
+
+	/* A device -- or, so far, only the self-test -- raising an interrupt by
+	 * writing to the local APIC's window. Acknowledged like any other
+	 * interrupt the APIC delivered; there is no controller behind it to
+	 * tell, which is the point of it. */
+	if (f->vector == VECTOR_MSI) {
+		x86_msi_test_arrivals++;
+		x86_apic_eoi();
+		return;
+	}
+
+	/* A vector a driver claimed. No controller to acknowledge -- that is
+	 * what a message-signalled interrupt *is* -- so the local APIC is told
+	 * and nothing else. Acknowledged after the handler, and never inside
+	 * it, for the same reason the ISA lines are. */
+	if (f->vector >= IRQ_VECTOR_FIRST &&
+	    f->vector < IRQ_VECTOR_FIRST + IRQ_VECTOR_COUNT) {
+		irq_dispatch_vector((u8)f->vector);
+		x86_apic_eoi();
+		return;
+	}
+
 	/* A hardware interrupt rather than a fault. Handled and acknowledged;
 	 * an interrupt the controller is not told about is the last one it
 	 * ever sends. */
 	if (f->vector >= 32 && f->vector < 48) {
-		if (f->vector == 32)
+		unsigned line = (unsigned)(f->vector - 32);
+
+		if (f->vector == 32) {
 			x86_timer_interrupt();
-		else
-			x86_pic_end_of_interrupt((unsigned)(f->vector - 32));
+			return;
+		}
+
+		/* Whoever claimed this line, and then the controller.
+		 *
+		 * The acknowledgement is here and never inside a handler. A
+		 * handler that forgot would stop every interrupt on the
+		 * machine from that moment, which looks like a freeze with
+		 * nothing on screen -- and it would be one driver's mistake
+		 * taking the whole machine down. */
+		irq_dispatch(line);
+		x86_irq_ack(line);
 		return;
 	}
 
@@ -189,6 +311,28 @@ void trap_dispatch(struct trap_frame *f)
 	 * sentence is the whole return on this checkpoint -- before it, any
 	 * wrong pointer anywhere stopped the machine. */
 	if ((f->cs & 3) == 3) {
+		/* Before it is a fault, ask whether it is a promise.
+		 *
+		 * A page fault on an address the program was told it could
+		 * use is how demand paging works at all: nothing was mapped,
+		 * the program touched it, and the handler makes it exist and
+		 * lets the instruction run again. Bit 1 of the error code says
+		 * the access was a write, which is what decides between
+		 * sharing the machine's one page of zeroes and handing over a
+		 * page of its own.
+		 *
+		 * Only for exception 14. A protection fault at an address is
+		 * not a missing page, and must not be answered by inventing
+		 * one. */
+		if (f->vector == 14) {
+			u64 want;
+
+			__asm__ volatile("movq %%cr2, %0" : "=r"(want));
+
+			if (vm_fault_user((vaddr_t)want, (f->error & 2) != 0))
+				return;
+		}
+
 		kprintf("\nuser program fault: %s at %p\n",
 			f->vector < 32 ? exception_name[f->vector] : "unknown",
 			(void *)(uintptr_t)f->rip);
@@ -201,6 +345,32 @@ void trap_dispatch(struct trap_frame *f)
 		}
 		user_note_fault();
 		thread_exit();
+	}
+
+	/* The kernel, touching a program's memory on its behalf.
+	 *
+	 * A system call that writes into a buffer the program gave it is the
+	 * kernel dereferencing a user address, and the moment that memory is
+	 * demand paged the write can fault -- in kernel mode, at a user
+	 * address, with nothing wrong. Refusing here would mean every buffer a
+	 * program passes has to be touched by the program first, which is a
+	 * rule nobody could keep and one that fails silently when they do not.
+	 *
+	 * This is deliberately narrow. It only applies while a program's
+	 * address space is the active one, and `vm_fault_user` still refuses
+	 * any address that program was not promised -- so a kernel pointer that
+	 * has gone wild into the lower half is still a fault, and still stops
+	 * the machine with a report. What it must not become is a rule that any
+	 * low address the kernel touches is made to exist on request.
+	 */
+	if (f->vector == 14) {
+		u64 want;
+
+		__asm__ volatile("movq %%cr2, %0" : "=r"(want));
+
+		if (want < USER_LIMIT && addrspace_active() &&
+			vm_fault_user((vaddr_t)want, (f->error & 2) != 0))
+			return;
 	}
 
 	/* Somebody was expecting this. Record it and resume where they said,
@@ -275,8 +445,74 @@ void trap_init(void)
 	for (unsigned i = 0; i < 16; i++)
 		set_gate(32 + i, irq_stubs[i], 0x08);
 
+	set_gate(VECTOR_APIC_TIMER, vector_64, 0x08);
+	set_gate(VECTOR_TLB_SHOOTDOWN, vector_65, 0x08);
+	set_gate(VECTOR_MSI, vector_66, 0x08);
+
+	/* The block a driver may claim from. Installed together, because a gate
+	 * that is missing for a vector something was handed is a general
+	 * protection fault the first time the device speaks. */
+	{
+		static void (*const claimable[IRQ_VECTOR_COUNT])(void) = {
+			vector_80, vector_81, vector_82, vector_83,
+			vector_84, vector_85, vector_86, vector_87,
+			vector_88, vector_89, vector_90, vector_91,
+			vector_92, vector_93, vector_94, vector_95,
+		};
+		unsigned i;
+
+		for (i = 0; i < IRQ_VECTOR_COUNT; i++)
+			set_gate((u8)(IRQ_VECTOR_FIRST + i), claimable[i],
+				 0x08);
+	}
+	set_gate(VECTOR_SPURIOUS, vector_255, 0x08);
+
 	idt_ptr.limit = sizeof(idt) - 1;
 	idt_ptr.base  = (u64)(uintptr_t)idt;
 
 	x86_load_tables(&gdt_ptr, &idt_ptr);
+}
+
+/* The same two tables, on a processor that has just started.
+ *
+ * Not a second trap_init: the descriptors are the machine's, built once, and
+ * rebuilding them per processor would mean eight chances to build them
+ * differently. What is per-processor is only that each one must be *told* --
+ * a secondary begins on whatever GDT the trampoline left it with and with no
+ * IDT at all, so the first fault it takes without this would triple-fault. */
+void x86_load_tables_this_cpu(void)
+{
+	x86_load_tables(&gdt_ptr, &idt_ptr);
+}
+
+/* --- walking the stack ----------------------------------------------------
+ *
+ * The System V ABI's frame layout, which `-fno-omit-frame-pointer` guarantees:
+ * a function pushes the caller's RBP and sets RBP to point at it, so [RBP] is
+ * the caller's frame pointer and [RBP+8] is the return address into the caller.
+ *
+ * Nothing here validates anything. That is deliberate and it is the division of
+ * labour the header describes: the *rules* about which frames may be followed
+ * are the same on both architectures and live in one place, and this only knows
+ * the layout. A second copy of the validation here would be a second copy to
+ * get wrong.
+ */
+u64 arch_frame_pointer(void)
+{
+	u64 rbp;
+
+	__asm__ volatile("movq %%rbp, %0" : "=r"(rbp));
+	return rbp;
+}
+
+bool arch_frame_step(u64 frame, u64 *next, u64 *return_address)
+{
+	const u64 *f = (const u64 *)(uintptr_t)frame;
+
+	if (!frame || !next || !return_address)
+		return false;
+
+	*next = f[0];
+	*return_address = f[1];
+	return true;
 }
