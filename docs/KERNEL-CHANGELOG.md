@@ -88,6 +88,64 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.13 -- 13 September 2026
+
+**KF-210: the crash test's control waited on a stopwatch.**
+
+`rename-crash-test.sh` proves its checker against a known-good image before it
+believes any round, and made that image by booting the guest and killing it
+after `sleep 6`, measured from launch.
+
+**KF-160 fixed exactly this, in this file, for the rounds below it** — each of
+them waits, bounded, for `reconfs-crash: replacing` and sweeps from there. The
+control above them kept its stopwatch. *A dependency hardened at one link of a
+chain does not harden the chain*, which is KF-202's sentence about a different
+chain three versions ago.
+
+The variable is how busy the machine is:
+
+| other work running | first commit after |
+|---|---|
+| nothing | 4.17 s |
+| 8 busy processes | 4.66 s |
+| **16 busy processes** | **7.55 s** |
+| 32 busy processes | 10.10 s |
+
+The matrix starts a dozen sub-tests at once and each boots guests of its own, so
+sixteen busy processes on sixteen processors is not a stress test. **It passes
+alone and fails in the matrix**, which is the worst way round.
+
+Not a larger number. One big enough today has to be big enough for the busiest
+the rig ever gets, which nobody can know — and this constant has been outgrown
+twice. The event exists and was already being waited for eighty lines below.
+
+### The instrument was wrong twice before it was right
+
+Recorded because the second one is instructive.
+
+The first attempt at proof passed the architecture where the script wanted a
+round count, so it never reached the rounds and both versions "passed".
+
+The second built its load out of **idle ReconOS guests** — and an idle ReconOS
+processor stops its tick and halts, as of checkpoint 24, four versions earlier.
+Sixteen of them cost almost nothing, the measurement showed load having no
+effect at all, and the diagnosis was withdrawn on the strength of it.
+
+**The load generator was defeated by the feature it was competing with.** A
+measurement reporting "no effect" is a claim about the instrument at least as
+much as about the thing measured.
+
+Proved on the third attempt by watching it fail: under sixteen busy processes,
+with the stopwatch restored, the control reports the guest never reached the
+filesystem; with the fix, the run completes — checker proved on three injected
+faults, cuts taken, nothing inconsistent.
+
+### And the failure says which thing went wrong
+
+"The image the control needs was not consistent to begin with" reads like a
+filesystem fault. The usual cause is a guest that never got far enough to write
+one, and those want different things done about them.
+
 ## 0.2.12 -- 13 September 2026
 
 **Checkpoint 21 is finished: a program can open the screen and draw on it.**
