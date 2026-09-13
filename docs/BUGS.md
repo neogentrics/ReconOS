@@ -5876,6 +5876,8 @@ eight is the last count PVH tries. It is `cpus_${label}_$n.log` now.
 
 ### KF-202 — Booting the install image makes it newer than the kernel in it, so every later UEFI test boots the old one
 
+[#429](https://github.com/neogentrics/ReconOS/issues/429)
+
 - **Found:** 13 September 2026, while bringing up checkpoint 21. A newly built
   kernel's new self-test appeared on every boot path except the UEFI ones.
 - **Cost:** unbounded, and of exactly the kind this rig exists to prevent.
