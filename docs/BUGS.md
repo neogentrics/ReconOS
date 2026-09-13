@@ -5935,6 +5935,109 @@ it calls `make -C boot esp` and trusts the answer. Any run of the matrix on its
 own, on a machine that had booted a UEFI path before, would have tested a stale
 kernel on five paths and said so nowhere.
 
+### KF-203 — The console redraws its whole screen to scroll one line, and the kernel learned to ask for an 8K screen
+
+[#430](https://github.com/neogentrics/ReconOS/issues/430)
+
+- **Found:** 13 September 2026, in matrix 35, on the one boot path given an
+  adapter with 256 MB of memory. It surfaced three subsystems away, as
+  `waiting and waking` failing an assertion that a signal sent at 50 ms is
+  acted on inside a second. Nothing was wrong with waiting or with waking.
+- **Cost:** seconds of every boot, on any machine with a large panel, spent
+  inside a text console. Not a correctness fault on its own; it became one by
+  pushing unrelated timing assertions past their deadlines.
+- **Status:** fixed, kernel 0.2.6.
+
+### What it is
+
+`fbcon` scrolls by redrawing every cell of its grid out of the shadow buffer.
+That was measured and deliberate: reading back a framebuffer is far slower than
+writing one, so the shadow pays for itself, and the file's header says so.
+
+**The trade was priced against a screen the kernel did not choose.** Firmware
+handed over 1280x800 and a scroll was a million writes. Checkpoint 21 made the
+kernel a mode-setter, it asks the ladder's top entry that fits in adapter
+memory, and on a 256 MB adapter that is 7680x4320 — **thirty-three million
+uncached writes, per scrolled line.**
+
+The self-test section prints enough to scroll many times over.
+
+### Why it was diagnosed wrongly first
+
+I read the failure as the console being slow and bounded it, which is this fix,
+and the test **still failed**. The bound was right and was not the fault: the
+message says the deadline ran out *after 53 ms of a 100 ms wait* — early, not
+late. Something slow cannot make a timer fire early. That is KF-204, and this
+entry exists separately because the cost is real and was going to be paid on
+every large panel regardless.
+
+**A fix that makes the symptom smaller is not evidence the cause was found.**
+
+### What was done
+
+The console draws into a window of at most 1920x1200 and leaves the rest of the
+glass dark, saying so on the boot summary so that a mostly-dark panel does not
+read as a fault. Rows, columns and the initial clear are all measured against
+the window rather than the panel.
+
+The bound is in pixels, not characters, because the cost is pixels. It is the
+same answer this file already gave for a screen wider than the shadow — used,
+at this size, with the rest left dark — applied to area. Thirty-three megapixels
+is what a compositor is for.
+
+### KF-204 — The tick count had two authors, so it outran the clock and every filed timer fired early
+
+[#431](https://github.com/neogentrics/ReconOS/issues/431)
+
+- **Found:** 13 September 2026, in matrix 35, misread first as KF-203. The
+  message is `wait: a 100ms deadline ran out after 53544579 ns`.
+- **Cost:** **every timer in the system fires early, and by an amount that
+  grows without bound.** The drift is one tick per idle-and-wake cycle and is
+  never given back. Sleeps end early, timeouts expire before the thing they are
+  timing has had its time, and no subsystem is exempt because they all file
+  through the same wheel.
+- **Status:** fixed, kernel 0.2.7.
+
+### What it is
+
+Two pieces of correct code maintaining one number.
+
+`time_tick`, the interval interrupt, incremented the tick count. Right, and for
+most of this kernel's life the only thing that touched it. Checkpoint 24 let an
+idle processor stop its tick, which would have stopped the wheel with it, so
+`time_tick_resync` was added: on waking, set the count to wherever the monotonic
+clock says it should be.
+
+Each is right alone. Together they double-count — resync moves the count up to
+the clock, the next interrupt adds one more — and because resync **only ever
+moves forward**, a count that is ahead stays ahead. Every idle-and-wake cycle
+adds a tick no time passed for.
+
+The wheel is turned by comparing itself against that count. A count that outruns
+the clock is a wheel that outruns the clock.
+
+### Why it showed up where it did
+
+On the 8K path, and only there, because that path idles longest and so drifted
+furthest before anything measured it. **Every other path in the matrix was
+carrying the identical fault under the threshold at which an assertion notices.**
+The 8K path was not unlucky; it was the only honest one.
+
+### What was done
+
+`time_ticks` is derived: the monotonic counter divided into tick units. The
+increment is gone and `time_tick_resync` is deleted rather than corrected —
+it existed only because the count was kept separately, and keeping it separately
+is what let it drift. A derived count cannot fall behind, so there is nothing
+to catch up.
+
+`tick_interrupts` is untouched. It counts interrupts actually taken, which is a
+different fact, and it has only ever had one author.
+
+**One fact, one author.** The same shape as KF-200, where a count produced by
+the thing being checked could never disagree with it, and the fix there was also
+to take the number from somewhere else entirely.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

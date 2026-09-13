@@ -71,6 +71,21 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.7 on 13 September 2026, for KF-204** -- and this one the rule
+# compels. The tick count had two authors, an interrupt that incremented it and
+# a resync that set it from the clock, so it double-counted and only ever
+# forward. The wheel is turned against that count, so the wheel outran the clock
+# and *every filed timer in the system fired early*, by a margin that grew with
+# every idle cycle. Found on the 8K path because that path idles longest; every
+# other path was carrying it under the threshold.
+#
+# **0.2.6 on 13 September 2026, for KF-203.** The console scrolls by redrawing
+# its whole grid, which was a million writes when firmware chose the mode and is
+# thirty-three million now that the kernel does. It is bounded to a window.
+# Filed and numbered separately from KF-204 because I fixed this one first
+# believing it was the other, and it was still worth fixing -- but a symptom
+# getting smaller is not a cause being found.
+#
 # **0.2.5 on 13 September 2026: checkpoint 24's tick.** No bug, and the rule is
 # a patch per bug *fixed* -- so this one is not compelled, it is chosen. Every
 # idle processor on every machine now behaves differently, and a version that
@@ -101,7 +116,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.5
+VERSION := 0.2.7
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

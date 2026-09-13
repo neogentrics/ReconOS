@@ -88,6 +88,80 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.7 -- 13 September 2026
+
+**KF-204: the tick count had two authors, so it outran the clock.** Every timer
+in the system was firing early, by a margin that grew with every idle cycle.
+
+0.2.5 let an idle processor stop its tick and added `time_tick_resync` so the
+wheel could catch up on waking. The interrupt still incremented the count. Each
+is correct alone; together they double-count, and because the resync only ever
+moved the count *forward*, once it was ahead it stayed ahead.
+
+The wheel is turned by comparing itself against that count, so the wheel outran
+the clock:
+
+```
+wait: a 100ms deadline ran out after 53544579 ns
+```
+
+**The count is derived now**, from the monotonic counter that was always the
+authority, and the resync is deleted rather than corrected — a derived count
+cannot fall behind, so there is nothing to catch up. `tick_interrupts` is
+untouched: it counts interrupts actually taken, a different fact with one
+author.
+
+Measured after the fix, to show the feature survived its bug being removed —
+removing a resync could just as easily have removed the tickless idle along with
+it, and a tick that never suspends passes any test that only asks whether timers
+fire on time:
+
+| | wakeups in ~200 ms | a fixed tick would cost |
+|---|---|---|
+| x86_64, 1 processor | **1** | 20 |
+| x86_64, 4 processors | 7 | 76 across the machine |
+
+### Section 2.1 is finished: the firmware's runtime services are called
+
+The row was never about holding the pointer, it was about calling through it.
+`time_capture_firmware_clock` calls `GetTime` in the window between the handoff
+and `vm_init`, where firmware runtime code is still mapped where firmware left
+it — possible because ReconBoot on x86_64 adds one entry to the firmware's page
+tables instead of building its own. No `SetVirtualAddressMap`, which can be
+called once and never taken back.
+
+A fallback rather than a replacement: x86_64 reads CMOS and aarch64 a PL031, and
+this answers the machine where those read nothing — a board with no battery, a
+machine with no legacy RTC.
+
+**Checked against the host's clock, not against the call returning success.**
+Day 20709 since the epoch is 56 years, 14 leap days, 243 days of whole months
+and 12 of September: 2026-09-13, to the day. A conversion wrong by one leap day
+returns success just as happily as a right one.
+
+`EFIAPI` was unconditionally `ms_abi`, which is one architecture's calling
+convention; AArch64 UEFI uses the ordinary one. Making it conditional is what
+let this live in `core/` instead of being written twice.
+
+## 0.2.6 -- 13 September 2026
+
+**KF-203: the console is bounded to a window, because a scroll costs a screen.**
+
+`fbcon` redraws its whole grid to scroll one line. At the 1280x800 firmware used
+to hand over, that is a million writes and the shadow buffer pays for it. Since
+0.2.4 the kernel sets its own mode, and on an adapter with 256 MB it asks for
+7680x4320 — thirty-three million uncached writes, per scrolled line.
+
+It draws into at most 1920x1200 now and says so on the boot summary, so a
+mostly-dark panel does not read as a fault. The bound is in pixels because the
+cost is pixels.
+
+Filed separately from KF-204 although the two were found in the same failing
+run: I fixed this one first, believing it was the cause, and the test failed
+again. It was not the cause — the deadline fired *early*, and nothing slow makes
+a timer early — but the cost is real and would have been paid on every large
+panel. **A symptom getting smaller is not a cause being found.**
+
 ## 0.2.5 -- 13 September 2026
 
 **Checkpoint 24, the tick half: a tick that stops.** Suspend is its own
@@ -115,7 +189,13 @@ the time kept by the tick there would be nothing to catch up against.
 But the timer wheel *is* turned by the tick count, so a stopped tick is a wheel
 that never turns again and every filed timer simply never runs.
 `time_tick_resync()` puts the count where the hardware clock says it should be
-and the wheel catches up in the loop it already had. Processor 0 only: a
+and the wheel catches up in the loop it already had.
+
+> **This is how 0.2.5 shipped and it was wrong.** `time_tick_resync` was a
+> second author for a number the tick interrupt was already writing, and the two
+> together made the count outrun the clock. It was removed in 0.2.7; see
+> KF-204. The count is derived from the monotonic counter now, so the wheel
+> catches up without anybody setting it. Processor 0 only: a
 secondary writing it would race the increment, and a lost race moves the count
 *backwards*, which files every pending timer into the past and runs all of them
 at once.
@@ -126,6 +206,10 @@ once. A self-test written against it would pass identically with the tick
 stopped and with it running flat out -- KF-187's shape, in the test for the
 feature. So what is counted is `time_tick_interrupts()`: interrupts actually
 taken, by any processor, never resynced.
+
+> That reasoning survived the fix intact, and is why the fix could be checked at
+> all. `time_ticks()` is now the monotonic clock in coarser units, which makes
+> it even less able to tell a stopped tick from a running one.
 
 ### How the tick is suspended
 
