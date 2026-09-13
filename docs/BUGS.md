@@ -5734,6 +5734,22 @@ one convention, and the next one typed by hand would have broken it again. A
 document written by a person is the input; the parser is the thing that has to
 be tolerant.
 
+### The same fault was in the other script
+
+`scripts/make-bug-register.py`, which builds the published register page, names
+`BG-` in its own `ENTRY_RE` and reads a fix from `**Fixed in**` or `**Fixed**`
+alone. Run against the merged register it printed **178 entries, highest 178**
+against a file holding 251, and would have published the twenty-five entries
+that record their state as `**Status:** fixed.` as *no fix recorded*.
+
+Found the same way and worth saying so: not by reading the script, but by
+putting its own count beside `grep -c '^### '` and seeing them disagree. It now
+takes both prefixes and all four fix forms, prints a count per track, and
+**fails rather than publishes** if the number of headings in the file is not the
+number it parsed -- because both faults in this entry were a number the parser
+produced about its own parsing, and the only defence against that is a second
+count the parser did not take.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because
