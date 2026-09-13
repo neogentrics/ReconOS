@@ -6370,6 +6370,8 @@ establishes what may be.
 
 ### KF-210 — KF-160 fixed the rounds and left the control sleeping six seconds from launch
 
+[#437](https://github.com/neogentrics/ReconOS/issues/437)
+
 - **Found:** 13 September 2026, by matrix 38, the first run after checkpoint 21's
   second half added a self-test to every boot:
   `a rename survives the power going out   FAILED — the image the control needs
