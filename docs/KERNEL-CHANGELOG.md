@@ -88,6 +88,56 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.3 -- 13 September 2026
+
+**KF-201.** The bounded-queue self-test raced its own drain, and passed only
+where the machine was slow enough to let the queue fill.
+
+Found by matrix 31 -- the run that existed only because KF-200 had earned a
+version bump nothing about the kernel required. One path failed, `PVH, 8
+processors`, on a tree whose only change since the last green run was a version
+string and some comments.
+
+The assertion floods `RX_QUEUE_MAX + 8` frames and requires an overflow to have
+been counted. `netdev_receive` enqueues **and then schedules the drain**, and
+the drain empties the queue through `rx_take`. Given a processor with nothing
+else to do it keeps up, the queue never reaches its bound, and nothing is ever
+dropped.
+
+**The boot said so in its own counters.** `ethernet : ... 72 too short`, and 72
+is exactly the flood: every frame reached the ethernet layer, which can only
+happen if every frame was drained. Not memory -- 510 MB free. Not the card --
+`devices : none found` on that path.
+
+So it passed at one, two and four processors and **passing was the wrong answer
+at all four**: it had never exercised the drop path it exists to check. aarch64's
+own 8-processor path passed in the same run, which is what a race looks like
+rather than a threshold.
+
+- the drain is held for the length of the flood, read inside `rx_take` under the
+  lock the queue already uses
+- released before the test drains its own frames, because that goes through
+  `rx_take` too and holding it there would have leaked seventy-two pages
+- a flood that still cannot be built now says *that*, rather than reporting that
+  the bound does not hold. Two different sentences, and only one was ever true
+
+Verified both ways, which is the standing rule here: the exact failing
+configuration ten times for ten passes, then drop counting removed on purpose
+and the test answered `net: 72 frames past a bound of 64 and not one was
+dropped` -- proving the flood reaches 72 deterministically and that the
+assertion can still fire.
+
+### Two harness faults found on the way
+
+`check()` printed a failure as `grep -aE ': +FAIL|^  [a-z].*: ' | head -10`. The
+processor identity block matches the second branch and comes first in the log,
+so a real failure printed ten lines of `architecture : x86_64` and **never
+reached the FAIL line it was called to show**. Failures print first and alone.
+
+And the sweep log was `cpus_$label.log`, with no processor count in the name, so
+each count overwrote the last. The evidence for KF-201 survived only because
+eight is the last count the PVH sweep tries.
+
 ## 0.2.2 -- 13 September 2026
 
 **KF-200.** The register's own tooling read the register with literal patterns,
