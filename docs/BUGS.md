@@ -159,6 +159,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### BG-105 — A register that says nothing until the port is already running
 
+[#297](https://github.com/neogentrics/ReconOS/issues/297)
+
 - **Found in** v0.0.12, by the kernel session, on the one boot path where no
   firmware had touched the hardware first.
 - **Was** AHCI's port signature register does not describe the socket. It holds
@@ -193,6 +195,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### BG-104 — An unimplemented region reporting exactly four gigabytes
 
+[#298](https://github.com/neogentrics/ReconOS/issues/298)
+
 - **Found in** v0.0.12, by the kernel session, the moment the sizes were
   printed.
 - **Was** sizing a PCI base address register fills the high half with ones so
@@ -215,6 +219,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ### BG-103 — A 64-bit base address restored only in its low half
 
+[#299](https://github.com/neogentrics/ReconOS/issues/299)
+
 - **Found in** v0.0.12, by the kernel session.
 - **Was** sizing a 64-bit PCI base address register requires writing all ones
   and reading back, then restoring what was there. Only the low half was
@@ -226,6 +232,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   away from the register that caused it, in code that was correct.
 
 ### BG-102 — A clock test that fails for two hours out of every twelve
+
+[#300](https://github.com/neogentrics/ReconOS/issues/300)
 
 - **Found in** v0.3.1, at ten o'clock at night, by running the suite for an
   unrelated reason.
@@ -250,6 +258,8 @@ Checked against the entries by `python scripts/make-issues.py --check`.
   example of the output instead of against the property.
 
 ### BG-101 — The engine named an 'l' as an 'I', which is the one thing it must
+
+[#301](https://github.com/neogentrics/ReconOS/issues/301)
 not do
 
 - **Found in** v0.3.1, before the matcher shipped, by reading a real screenshot
@@ -287,6 +297,8 @@ not do
   removed the only characters that could have exposed this.
 
 ### BG-100 — One pixel of ascender decided whether a line kept its words
+
+[#302](https://github.com/neogentrics/ReconOS/issues/302)
 
 - **Found in** v0.3.1, within an hour of the code being committed, by running
   it on a screenshot of ReconOS's own text instead of on rectangles.
@@ -326,6 +338,8 @@ not do
 
 ### BG-099 — The position bar never moved on its own
 
+[#303](https://github.com/neogentrics/ReconOS/issues/303)
+
 - **Found in** v0.3.1, by noticing that the video's position advanced and the
   MP3's did not, in the same run, reading the same clock.
 - **Was** the player asked the sound device where it had got to only while it
@@ -354,6 +368,8 @@ not do
 
 ### BG-098 — Seeking worked at every whole second and nowhere else
 
+[#304](https://github.com/neogentrics/ReconOS/issues/304)
+
 - **Found in** v0.3.1, by a seek test that happened to include two times with a
   decimal point in them.
 - **Was** seeking sets a line before which decoded frames are used to prime the
@@ -380,6 +396,8 @@ not do
   in the list are the same mistake wearing five hats.
 
 ### BG-097 — Every reordered video would have played at the wrong times
+
+[#305](https://github.com/neogentrics/ReconOS/issues/305)
 
 - **Found in** v0.3.1, before it shipped, by checking which boxes the test file
   actually contained instead of assuming the ones being read were the ones that
@@ -5878,6 +5896,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-106 — A panel in front could not stop a tooltip search it had no answer for
 
+[#306](https://github.com/neogentrics/ReconOS/issues/306)
+
 - **Found in** v0.3.1. **Found by** opening the taskbar clock's new menu: the menu
   appeared under a pointer that had not moved, and the clock's own tooltip
   carried on showing across it.
@@ -5903,6 +5923,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   drawn, each stopping the search if the point is inside it.
 
 ### BG-107 — Desktop labels were unreadable on half the wallpapers
+
+[#307](https://github.com/neogentrics/ReconOS/issues/307)
 
 - **Found in** v0.3.1. **Found by** the user, in a screenshot: the Recycle Bin's
   label on a pale wallpaper, barely legible.
@@ -5940,6 +5962,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-108 — Changing the wallpaper left the desktop labels chosen against the old one
 
+[#308](https://github.com/neogentrics/ReconOS/issues/308)
+
 - **Found in** v0.3.1. **Found by** the harness for [BG-107](#bg-107--desktop-labels-were-unreadable-on-half-the-wallpapers),
   which set a skin and then a wallpaper — and every measurement came back
   describing the skin's own picture rather than the one on screen.
@@ -5957,6 +5981,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 - **Fixed in** v0.3.1.
 
 ### BG-109 — The clock was an hour slow for half the year, in half the world
+
+[#309](https://github.com/neogentrics/ReconOS/issues/309)
 
 - **Found in** v0.3.1. **Found by** the user, looking at it: Central selected,
   the host reading 4:25 am, ReconOS reading 3:25 am.
@@ -5978,6 +6004,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-110 — The time zone list had a scrollbar and no way to move it
 
+[#310](https://github.com/neogentrics/ReconOS/issues/310)
+
 - **Found in** v0.3.1. **Found by** the user, trying to scroll it.
 - **What it was** `panel_scroll` had a branch for Appearance, Display, Network,
   Firewall, Programs and the Registry, and none for Date and Time. Twenty-six
@@ -5992,6 +6020,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-111 — A first account started on UTC on a machine that was not
 
+[#311](https://github.com/neogentrics/ReconOS/issues/311)
+
 - **Found in** v0.3.1, while fixing [BG-109](#bg-109--the-clock-was-an-hour-slow-for-half-the-year-in-half-the-world).
 - **What it was** the zone defaulted to UTC, which is right nowhere and reads
   as a fault everywhere. Adopting the host's zone was written into
@@ -6004,6 +6034,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   where somebody chose UTC on a machine that is not on it.
 
 ### BG-112 — Moving focus between form fields emptied the field arrived at
+
+[#312](https://github.com/neogentrics/ReconOS/issues/312)
 
 - **Found in** v0.3.1. **Found by** filling in the mail setup form and noticing
   the port had gone. Tabbing past a field cleared it; the two ports on that form
@@ -6026,6 +6058,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-113 — A TLS handshake that stalled was never timed out
 
+[#313](https://github.com/neogentrics/ReconOS/issues/313)
+
 - **Found in** v0.3.1, while building STARTTLS. **Found by** a fake SMTP server
   that speaks the plain half of STARTTLS and cannot speak TLS — so it accepts,
   answers, agrees to upgrade, and then falls silent. The client waited forever
@@ -6044,6 +6078,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   connection came up.
 
 ### BG-114 — Nothing in All Programs would open
+
+[#314](https://github.com/neogentrics/ReconOS/issues/314)
 
 - **Found in** v0.3.1. **Found by** the user: clicking any entry in All Programs
   closed the Start menu and launched nothing.
@@ -6065,6 +6101,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-115 — Right-clicking in the Start menu closed the menu
 
+[#315](https://github.com/neogentrics/ReconOS/issues/315)
+
 - **Found in** v0.3.1. **Found by** the user: *"you can't even see what you're
   right clicking to do."*
 - **What it was** the right-click handler closed the menu before showing the
@@ -6082,6 +6120,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   on the Start menu. It now checks the menu is open rather than assuming it.
 
 ### BG-116 — The Calculator opened smaller than its own minimum size
+
+[#316](https://github.com/neogentrics/ReconOS/issues/316)
 
 - **Found in** v0.3.1. **Found by** the user: *"They're not big enough, or the
   calculator window is not big enough, and the text isn't... [cen]tered
@@ -6115,6 +6155,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-117 — Every click was ignored while the login screen was up
 
+[#317](https://github.com/neogentrics/ReconOS/issues/317)
+
 - **Found in** v0.4.0. **Found by** the look harness, which opened the
   Calculator, clicked "7", and photographed a display still reading zero.
 - **What it is** the login screen takes the whole screen's pointer input, as it
@@ -6136,6 +6178,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   the desktop.
 
 ### BG-118 — Every text field on a form drew a caret at once
+
+[#318](https://github.com/neogentrics/ReconOS/issues/318)
 
 - **Found in** v0.4.0. **Found by** a screenshot taken for something else: the
   Mail setup screen, photographed to check the new Cc and Bcc rows, showed a
@@ -6161,6 +6205,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-119 — Every built-in application lost its version number
 
+[#319](https://github.com/neogentrics/ReconOS/issues/319)
+
 - **Found in** v0.4.0. **Found by** running `apps` on the control socket
   immediately after adding a field, for no reason except to see whether
   anything had moved. Every built-in showed `-` in the version column.
@@ -6182,6 +6228,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   is public and will gain another field; this is what stops it happening twice.
 
 ### BG-120 — Five applications' F1 opened the wrong page, or none
+
+[#320](https://github.com/neogentrics/ReconOS/issues/320)
 
 - **Found in** v0.4.0. **Found by** searching the help for "Networking" while
   testing the new search box, and getting no results — for a topic two
@@ -6212,6 +6260,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-121 — Dragging the graph changed everything except the picture
 
+[#321](https://github.com/neogentrics/ReconOS/issues/321)
+
 - **Found in** v0.4.0. **Found by** dragging the new panning and watching
   nothing move.
 - **What it was** `motion` changed the view and did not ask for a redraw. A
@@ -6236,6 +6286,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   same symptom and the same cause.
 
 ### BG-122 — Two more forms drew a caret in both their fields
+
+[#322](https://github.com/neogentrics/ReconOS/issues/322)
 
 - **Found in** v0.4.0. **Found by** auditing the help against the system —
   photographing Notepad's Replace bar to check the sentence *"Ctrl+H is the
@@ -6264,6 +6316,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-123 — The change log was cut off at 512 lines and did not say so
 
+[#323](https://github.com/neogentrics/ReconOS/issues/323)
+
 - **Found in** v0.4.0. **Found by** searching the help for "STARTTLS", getting
   the change log as the only result, and landing on the top of it. The search
   was working; the word was not among the lines the page had kept.
@@ -6289,6 +6343,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-124 — The web viewer cut a long page off and said nothing
 
+[#324](https://github.com/neogentrics/ReconOS/issues/324)
+
 - **Found in** v0.4.0. **Found by** sweeping for the shape BG-123 had, which is
   a fixed ceiling that drops data quietly. `recon_html.c` has six of them.
 - **The ceilings are right and are not the bug.** A page is somebody else's file
@@ -6311,6 +6367,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-125 — A folder with more than 512 things in it looked complete
 
+[#325](https://github.com/neogentrics/ReconOS/issues/325)
+
 - **Found in** v0.4.0. **Found by** continuing the sweep that produced BG-123
   and BG-124: every fixed ceiling in the system, and what it does when reached.
 - **What it was** File Explorer read a folder into a 512-entry array and then
@@ -6332,6 +6390,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   missing file turns up as something not working weeks later.
 
 ### BG-126 — The shell forgot three panels and a timer when it was destroyed
+
+[#326](https://github.com/neogentrics/ReconOS/issues/326)
 
 - **Found in** v0.4.0. **Found by** running the *compositor* under the leak
   checker rather than only the test suites. The suites cover what can be
@@ -6364,6 +6424,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-127 — A long enough dialog read a line that was never written
 
+[#327](https://github.com/neogentrics/ReconOS/issues/327)
+
 - **Found in** v0.4.0. **Found by** writing a message long enough to fill the
   dialog, which nothing had done before: the warning about opening a file with
   a program that does not claim it has to say what will happen *and* how to
@@ -6388,6 +6450,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   short and a dialog that is missing its point look different.
 
 ### BG-128 — ReconOS could not be asked to stop, only killed
+
+[#328](https://github.com/neogentrics/ReconOS/issues/328)
 
 - **Found in** v0.4.0. **Found by** adding the marker file that tells a crash
   from a power cut, and then finding it left behind after every ordinary run
@@ -6424,6 +6488,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-129 — Two of File Explorer's dialogs read a field that had been cleared
 
+[#329](https://github.com/neogentrics/ReconOS/issues/329)
+
 - **Found in** v0.4.0. **Found by** a `-Wformat-truncation` warning, which was
   about something else entirely: `question_target` had just been grown from a
   name to a path, and `explorer_answer` copies it into a name-sized local.
@@ -6449,6 +6515,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-130 — A window's title had eight pixels less room on one side than the other
 
+[#330](https://github.com/neogentrics/ReconOS/issues/330)
+
 - **Found in** v0.4.0. **Found by** the first test ever written for
   `recon_titlebar`, which `scripts/coverage.sh` had just reported as one of two
   files no suite runs a line of.
@@ -6469,6 +6537,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   room, which is the property rather than the arithmetic.
 
 ### BG-131 — One damaged byte in the rules file turned the firewall off
+
+[#331](https://github.com/neogentrics/ReconOS/issues/331)
 
 - **Found in** v0.4.0. **Found by** writing the first test that reads the rules
   file, which `scripts/coverage.sh --zero` had just named: `parse_rule`,
@@ -6504,6 +6574,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-132 — Watchtower said "0 shown" above the applications it was showing
 
+[#332](https://github.com/neogentrics/ReconOS/issues/332)
+
 - **Found in** v0.4.0. **Found by** photographing the whole desktop at the end
   of the night to check that eight thousand lines of change had not broken
   anything visible. Nothing was broken; this was.
@@ -6521,6 +6593,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   processor and memory figures moving.
 
 ### BG-133 — A link inside the filesystem read a file outside it
+
+[#333](https://github.com/neogentrics/ReconOS/issues/333)
 
 - **Found in** v0.4.0. **Found by** writing an exhaustive escape sweep for
   `recon_fs`, after `scripts/coverage.sh` put that file at 46% -- the largest
@@ -6552,6 +6626,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-134 — The containment fix aborted every optimised build
 
+[#334](https://github.com/neogentrics/ReconOS/issues/334)
+
 - **Found in** v0.4.0, in the change that fixed BG-133, before it shipped.
   **Found by** benchmarking the cost of that change, which meant building it
   at `-O2` for the first time.
@@ -6580,6 +6656,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-178 — A Max-Age longer than a long could hold was added to the clock
 
+[#376](https://github.com/neogentrics/ReconOS/issues/376)
+
 - **Found in** v0.4.21. **Found by** the undefined-behaviour sanitizer, on a
   header the fuzzer made: `Max-Age=99999999999999999999`.
 - **What it was** `atoll` saturates at `LLONG_MAX` rather than failing, and
@@ -6594,6 +6672,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-177 — A cookie name longer than the table holds would have been stored under a different name
 
+[#377](https://github.com/neogentrics/ReconOS/issues/377)
+
 - **Found in** v0.4.21. **Found by** `-Wformat-truncation` on the optimised
   build, which is the third fault that warning has found in this project.
 - **What it was** the name and the value were copied with `snprintf` into
@@ -6606,6 +6686,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   length, so the compiler can see what the check established.
 
 ### BG-176 — Epoch zero was both a date and "could not read the date"
+
+[#378](https://github.com/neogentrics/ReconOS/issues/378)
 
 - **Found in** v0.4.21, before any of it had run against a server. **Found by**
   the suite, on the first run.
@@ -6629,6 +6711,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   headers real servers send, before the code had spoken to one.
 
 ### BG-175 — The Help application's change log stopped fourteen versions ago
+
+[#372](https://github.com/neogentrics/ReconOS/issues/372)
 
 - **Found in** v0.4.20. **Found by** `git status` after running
   `scripts/make-help.sh`, which produced fourteen new pages -- so the pages in
@@ -6657,6 +6741,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-174 — A three-line box was measured against a line it had made three lines tall
 
+[#373](https://github.com/neogentrics/ReconOS/issues/373)
+
 - **Found in** v0.4.20, while forms were being built. **Found by** the first
   photograph of a form. The `<textarea>` was drawn straight through the row of
   buttons under it, while the page's own height said the block had ended long
@@ -6678,6 +6764,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-173 — Working a control with the keyboard let go of it
 
+[#374](https://github.com/neogentrics/ReconOS/issues/374)
+
 - **Found in** v0.4.20. **Found by** asking the window where its focus was
   after each key -- `ui app` reports it -- rather than by reading the picture.
   The picture showed a ticked box and looked entirely correct.
@@ -6698,6 +6786,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-172 — A tooltip outlived the button it belonged to
 
+[#375](https://github.com/neogentrics/ReconOS/issues/375)
+
 - **Found in** v0.4.20. **Found by** a screen capture of a form being sent:
   the browser's confirmation strip closes the moment *Send* is pressed, and
   its tooltip was still sitting there explaining a button that had sent the
@@ -6717,6 +6807,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   they match, which is almost always.
 
 ### BG-171 — Half of a Wikipedia article was the contents of an attribute
+
+[#371](https://github.com/neogentrics/ReconOS/issues/371)
 
 - **Found in** v0.4.19. **Found by** a sweep of twelve real sites, looking at
   what came back rather than at whether it crashed. Wikipedia's *Comparison of
@@ -6760,6 +6852,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-170 — Two secrets were erased with `memset`, which the compiler deletes
 
+[#370](https://github.com/neogentrics/ReconOS/issues/370)
+
 - **Found in** v0.4.12. **Found by** the keyring review Joshua asked for --
   reading outward from `recon_keyring.c` to what its callers do with what they
   are handed.
@@ -6791,6 +6885,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-169 — Typing an address went to a path on the site you were reading
 
+[#369](https://github.com/neogentrics/ReconOS/issues/369)
+
 - **Found in** v0.4.11. **Found by** the History page, on its first look: the
   list said `https://gaming.recontowers.com/example.com`, which is not
   anywhere anybody had asked to go.
@@ -6816,6 +6912,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-168 — Every link to a place on the same page went to the top
 
+[#368](https://github.com/neogentrics/ReconOS/issues/368)
+
 - **Found in** v0.4.10, while building the jump those links needed. **Found by**
   clicking "Skip to content" on gaming.recontowers.com and arriving at the top
   of the page it was already at the top of.
@@ -6840,6 +6938,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-167 — Every `<hr>` claimed to be a picture at the page's first link
 
+[#366](https://github.com/neogentrics/ReconOS/issues/366)
+
 - **Found in** v0.4.9. **Found by** the html5lib corpus, on its first run, from
   cases like `<!doctype html><hr><frameset>`.
 - **What it was** `add_rule` is the one place that writes a block without going
@@ -6859,6 +6959,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   because the next field added to that struct would have been missed here too.
 
 ### BG-166 — Find on page searched the screen, not the page
+
+[#367](https://github.com/neogentrics/ReconOS/issues/367)
 
 - **Found in** v0.4.9, shipped in v0.4.8. **Found by** searching
   gaming.recontowers.com for a word further down than the first screenful and
@@ -6881,6 +6983,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-165 — A background on a page with no `<body>` tag was never found
 
+[#364](https://github.com/neogentrics/ReconOS/issues/364)
+
 - **Found in** v0.4.7. **Found by** the test written for BG-164, whose markup
   was `<style>...</style><p>hello</p>` -- no `<body>`, because nobody writes
   one in a test.
@@ -6898,6 +7002,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   attribute and a synthetic query cannot see one.
 
 ### BG-164 — Every site was drawn in the skin's black on the skin's white
+
+[#365](https://github.com/neogentrics/ReconOS/issues/365)
 
 - **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, a
   near-black site, and getting a white page.
@@ -6933,6 +7039,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-163 — An image drew straight over the status bar
 
+[#362](https://github.com/neogentrics/ReconOS/issues/362)
+
 - **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, whose
   masthead photograph is the first thing on the page.
 - **What it was** the web viewer decided whether an image was *visible* and
@@ -6951,6 +7059,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   the plain one. The viewer passes its viewport.
 
 ### BG-162 — A `<br>` ended the heading, not just the line
+
+[#363](https://github.com/neogentrics/ReconOS/issues/363)
 
 - **Found in** v0.4.6. **Found by** loading gaming.recontowers.com, whose
   masthead is `<h1>Games built to<br>mean something.</h1>`. The first half
@@ -6977,6 +7087,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-161 — A link was underlined once per word, with a hole at every space
 
+[#361](https://github.com/neogentrics/ReconOS/issues/361)
+
 - **Found in** v0.4.5. **Found by** loading news.ycombinator.com, where every
   headline is a link of several words.
 - **What it was** the rule and the clickable region were drawn by the function
@@ -6999,6 +7111,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-160 — The window's title was every `<title>` in the page, not the page's
 
+[#359](https://github.com/neogentrics/ReconOS/issues/359)
+
 - **Found in** v0.4.5. **Found by** loading wikipedia.org to see whether the web
   viewer reaches the internet. It does; the title bar said **"Wikipedia Close"**.
 - **What it was** `<title>` is not only the document's. SVG uses it for the
@@ -7011,6 +7125,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   is in its head, and the head comes first.
 
 ### BG-159 — The web viewer's status line was the bar's colour written in a page's ink
+
+[#360](https://github.com/neogentrics/ReconOS/issues/360)
 
 - **Found in** v0.4.5. **Found by** the same load: "396 blocks, 117 KB" was
   drawn on the strip and could not be read.
@@ -7025,6 +7141,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   warning on a red bar is the case where being unreadable matters most.
 
 ### BG-158 — The search box only showed a caret once somebody had typed
+
+[#349](https://github.com/neogentrics/ReconOS/issues/349)
 
 - **Found in** v0.4.0. **Found by** the author: "I can type in it, but I can't
   click into it to know that I'm typing. There's no indicator."
@@ -7048,6 +7166,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-157 — The "last run did not finish" card reported itself as `(null)`
 
+[#350](https://github.com/neogentrics/ReconOS/issues/350)
+
 - **Found in** v0.4.0. **Found by** running `session` over the control socket
   after a session had been killed rather than stopped: `session: (null)`, while
   `state` correctly reported that the login screen had the input.
@@ -7068,6 +7188,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-156 — A picture icon on a coloured title bar was dark on dark
 
+[#351](https://github.com/neogentrics/ReconOS/issues/351)
+
 - **Found in** v0.4.0. **Found by** the author: "the icons in the top left
   corner can't be seen, and they should be."
 - **What it was** an icon that is a *silhouette* is drawn in the skin's own
@@ -7084,6 +7206,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   untouched: they already answer this by being recoloured.
 
 ### BG-155 — The selection colour was the one thing on screen not told which skin this is
+
+[#352](https://github.com/neogentrics/ReconOS/issues/352)
 
 - **Found in** v0.4.0. **Found by** the author: "the right-click context menus
   aren't showing up properly. They're not theming like they're supposed to."
@@ -7104,6 +7228,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-154 — Sixteen skins was thirteen shipped ones and a rounding error
 
+[#353](https://github.com/neogentrics/ReconOS/issues/353)
+
 - **Found in** v0.4.0. **Found by** the skin tests, the moment Metallic became
   the thirteenth built-in: ten checks failed at once, all of them about
   renaming.
@@ -7116,6 +7242,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built-ins happen to need.
 
 ### BG-153 — A tint chosen on one skin was applied to a skin that never offered it
+
+[#354](https://github.com/neogentrics/ReconOS/issues/354)
 
 - **Found in** v0.4.0. **Found by** photographing Metallic and finding it pink.
 - **What it was** the account remembers one tint, not one per skin, and
@@ -7130,6 +7258,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   shows as itself until somebody picks from its own row.
 
 ### BG-152 — The skin list rounded its sample buttons by painting the corners out
+
+[#355](https://github.com/neogentrics/ReconOS/issues/355)
 
 - **Found in** v0.4.0. **Found by** the author: "if you're gonna round them
   all, make sure they are actually rounded. This doesn't look right. And it's
@@ -7151,6 +7281,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-151 — The clock took its colour from a role that also means "on a button"
 
+[#356](https://github.com/neogentrics/ReconOS/issues/356)
+
 - **Found in** v0.4.0. **Found by** the author, on Beacon: "you can barely see
   the time".
 - **What it was** `bar.text` is used for the label on a task button *and* for
@@ -7171,6 +7303,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-150 — A button's outline was a grey that had never looked at the background
 
+[#357](https://github.com/neogentrics/ReconOS/issues/357)
+
 - **Found in** v0.4.0. **Found by** the author, on Beacon: "there's that weird
   black line on the outer ring of the buttons".
 - **What it was** the outline was the face mixed toward black, and nothing
@@ -7189,6 +7323,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   edge; Beacon gets a deep blue shadow instead of a grey ring.
 
 ### BG-149 — The taskbar was see-through, so a window under it washed it out
+
+[#358](https://github.com/neogentrics/ReconOS/issues/358)
 
 - **Found in** v0.4.0. **Found by** the author: "when a window opens, no matter
   what it is, for some reason the taskbar greys out and you can't see it. It's
@@ -7212,6 +7348,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-148 — Switch user was a person standing next to a floating notch
 
+[#335](https://github.com/neogentrics/ReconOS/issues/335)
+
 - **Found in** v0.4.0. **Found by** photographing the start menu's five
   session buttons at five times size, after BG-147 was found the same way.
 - **What it was** the two figures are drawn back one first, then a gap in the
@@ -7225,6 +7363,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   says one person is standing behind another.
 
 ### BG-147 — The power symbol was a closed ring with a bar across it
+
+[#336](https://github.com/neogentrics/ReconOS/issues/336)
 
 - **Found in** v0.4.0. **Found by** photographing the start menu's five
   session buttons at five times size. At the size they are drawn the mark is
@@ -7241,6 +7381,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   ring, one gap.
 
 ### BG-146 — Windows covered the taskbar
+
+[#337](https://github.com/neogentrics/ReconOS/issues/337)
 
 - **Found in** v0.4.0. **Found by** the author, moving windows about: "the
   task bar should always be on top of every window no matter what because it's
@@ -7266,6 +7408,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-145 — The outline was diluted by the fill at every corner
 
+[#338](https://github.com/neogentrics/ReconOS/issues/338)
+
 - **Found in** v0.4.0. **Found by** the author, going through the skins: "in
   Recon, you can see those weird triangles too."
 - **What it was** a control was filled and then outlined -- two blends. At a
@@ -7286,6 +7430,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   C8C8C8`, every blend on the dark side of the outline.
 
 ### BG-144 — A white line above the taskbar and above every button, on dark skins
+
+[#339](https://github.com/neogentrics/ReconOS/issues/339)
 
 - **Found in** v0.4.0. **Found by** the author switching to a dark skin:
   "there's this weird white line that appears above all the different buttons,
@@ -7316,6 +7462,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   and this highlight. All three were written when every skin was grey.
 
 ### BG-143 — Every selection and hover highlight was square
+
+[#340](https://github.com/neogentrics/ReconOS/issues/340)
 
 - **Found in** v0.4.0. **Found by** the author, going round the desktop:
   "when you highlight something, it's square. They should be rounded too...
@@ -7349,6 +7497,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
     the pixel wants both multiplied.
 
 ### BG-142 — Every rounded corner was painted out with a guess at what was behind it
+
+[#341](https://github.com/neogentrics/ReconOS/issues/341)
 
 - **Found in** v0.4.0. **Found by** the author: "now it has that weird corner
   issue that the windows had... the buttons here in the corner have that same
@@ -7384,6 +7534,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   colour any more.
 
 ### BG-141 — Half of every button's edge was missing on any skin that was not grey
+
+[#342](https://github.com/neogentrics/ReconOS/issues/342)
 
 - **Found in** v0.4.0. **Found by** the author, pointing at the Calculator:
   "there's this weird white space between the buttons. It doesn't even show
@@ -7429,6 +7581,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-140 — recon_icon_get wrote through the pointers a caller had said were NULL
 
+[#343](https://github.com/neogentrics/ReconOS/issues/343)
+
 - **Found in** v0.4.0, while fixing BG-139 and reading the function around it.
   Not found by it happening.
 - **What it was** `recon_icon_get(name, width, height)` filled in both out
@@ -7444,6 +7598,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   worth noting because most things here were not.
 
 ### BG-139 — The icon cache filled up and then answered every further name with nothing
+
+[#344](https://github.com/neogentrics/ReconOS/issues/344)
 
 - **Found in** v0.4.0. **Found by** adding sixteen account pictures and seeing
   six of the twenty-four drawn in the picker -- which looks exactly like
@@ -7469,6 +7625,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   was a bound on the wrong quantity.
 
 ### BG-138 — Nothing in the system reacted to being pointed at or pressed
+
+[#345](https://github.com/neogentrics/ReconOS/issues/345)
 
 - **Found in** v0.4.0. **Found by** the author, looking at the three buttons in
   the corner of a window: "there's no animation to them. When I click on them,
@@ -7510,6 +7668,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-137 — Every rounded corner came out square, and every glass surface opaque
 
+[#346](https://github.com/neogentrics/ReconOS/issues/346)
+
 - **Found in** v0.4.0. **Found by** the author looking at the screen and saying
   the corners were "cut off" -- a notch of the frame's own colour where the
   curve should have been. Every window had it, under every skin that asks for a
@@ -7547,6 +7707,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
 
 ### BG-136 — Every file dialog put a hole through the window behind it
 
+[#347](https://github.com/neogentrics/ReconOS/issues/347)
+
 - **Found in** v0.4.0. **Found by** photographing a file picker newly added to
   the Calculator, and seeing the What's New window through the middle of it.
   The first guess was that the new code had broken the Calculator's drawing.
@@ -7581,6 +7743,8 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   first answer; the photograph produced the right one immediately.
 
 ### BG-135 — A setting with a leading space lost it at the next start
+
+[#348](https://github.com/neogentrics/ReconOS/issues/348)
 
 - **Found in** v0.4.0. **Found by** writing a round-trip test for the registry
   after `scripts/coverage.sh` put it at 57%: eighteen awkward values, stored
