@@ -12,11 +12,21 @@
 #ifndef RECON_KERNEL_FBCON_H
 #define RECON_KERNEL_FBCON_H
 
+#include <recon/kernel/boot.h>
 #include <recon/kernel/types.h>
 
 /* Reads the framebuffer out of the boot info and clears the screen. Must run
  * after vm_init(), because the framebuffer is reached through the direct map. */
 void fbcon_init(void);
+
+/* Point the console at a framebuffer somebody else obtained.
+ *
+ * The display driver calls this after the bus walk, on a machine where firmware
+ * left no framebuffer and it set a mode itself. False means the description was
+ * not one this console will draw into, and whatever was there before is
+ * untouched -- a refused framebuffer must not cost the caller a working screen.
+ */
+bool fbcon_adopt(const struct framebuffer *given);
 
 /* One character. Understands \n, \r and \t, and scrolls at the bottom. */
 void fbcon_putc(char c);

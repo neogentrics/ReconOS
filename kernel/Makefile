@@ -71,6 +71,13 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.4 on 13 September 2026, for KF-202** -- found while building
+# checkpoint 21, because a new self-test showed up on every boot path except
+# the UEFI ones. Booting the install image writes OVMF's variables into it,
+# which makes it newer than the kernel it was built from, which makes `make
+# esp` a no-op for ever. Checkpoint 21's mode setting rides along in this
+# version: it is a feature, and the rule is a patch per bug fixed.
+#
 # **0.2.3 on 13 September 2026, for KF-201** -- found by the matrix run that
 # 0.2.2 required, on a tree whose only change was a version string. The bounded-
 # queue self-test had been asserting an overflow it could not force, and passing
@@ -88,7 +95,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.3
+VERSION := 0.2.4
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

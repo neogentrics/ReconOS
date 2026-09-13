@@ -88,6 +88,93 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.4 -- 13 September 2026
+
+**Checkpoint 21, the first half: the kernel sets its own display mode.** And
+**KF-202**, which is what the version number is actually for -- the feature
+rides along, because the rule is a patch per bug *fixed*.
+
+### A mode, on a machine firmware gave nothing
+
+Until now the kernel had one relationship with a screen: it drew into the
+framebuffer the bootloader had been handed, at whatever size firmware chose,
+and where there was none it had no screen at all. That is most of the matrix --
+**every PVH and direct-kernel path boots with `framebuffer : none`**, because
+there is no firmware on those paths to have set one up. A display adapter is on
+the bus regardless. Nobody had ever asked it for a mode.
+
+`core/display.c` drives the `1234:1111` adapter through its DISPI registers,
+reached **through a PCI BAR rather than an I/O port** -- so it lives in `core/`,
+compiles for aarch64 untouched, and `make check-portable` stays clean. The
+same reasoning that keeps virtio, NVMe and AHCI portable and leaves legacy IDE
+in `arch/` (KF-192).
+
+**Every size, not one size.** A panel is 1024x600 on something small, 1080x1280
+held in portrait, 3440x1440 across a desk, or 7680x4320 on a wall, and a driver
+that knows one of those works on one machine. The mode is chosen from a ladder,
+largest first, bounded by the memory the adapter actually reports:
+
+| adapter memory | mode taken |
+|---|---|
+| 4 MB | 1280x800 |
+| 16 MB | 2560x1440 |
+| 64 MB | 5120x2880 |
+| 256 MB | **7680x4320** |
+
+and the self-test sets seven shapes -- 640x480 up to 8K, portrait and
+ultra-wide among them -- reading every one **back out of the hardware** rather
+than out of the request, because a driver that records what it asked for passes
+any test that asks what it recorded (KF-141). Shapes the adapter has no memory
+for are skipped and *counted*, because a sweep that silently skipped everything
+looks exactly like one that passed (KF-187). A new matrix path gives the
+adapter 256 MB so the large end is exercised on every run rather than by hand.
+
+A dimension past the sixteen-bit mode registers is **refused, not truncated**:
+70000 becomes 4464 on the way in, and the adapter would accept it.
+
+### And the console scales with the panel
+
+The glyph was doubled, which is right at 1280x800 and wrong at both ends. An
+8x8 glyph doubled is sixteen pixels on a 4320-line screen -- a fortieth of the
+height, and a 480x270 character grid, most of it clamped away and left dark.
+The scale is chosen from the height now, so the console stays about the same
+apparent size on any panel. 800 pixels still comes out at exactly two, which is
+what keeps every path that already had a framebuffer looking as it did.
+
+| panel | grid |
+|---|---|
+| 1280x800 | 80 x 50 |
+| 2560x1440 | 106 x 60 |
+| 5120x2880 | 91 x 51 |
+| 7680x4320 | 120 x 67 |
+
+A machine whose firmware already provided a screen **keeps it**. Re-setting a
+working mode is a flicker and a chance of ending with nothing, in exchange for
+nothing.
+
+### KF-202: the image the UEFI paths boot had frozen
+
+The new self-test appeared on every path except the UEFI ones. The kernel
+extracted back out of the install image was **1,804,808 bytes against the
+1,822,488 just built**.
+
+`boot/Makefile` builds the ESP with a timestamp rule, and **something else
+writes into that file**: OVMF, booted with `-bios`, keeps its firmware
+variables in `NvVars` on the very filesystem it is handed. One UEFI boot leaves
+the image newer than the kernel it was built from, and `make esp` is a no-op
+from then on.
+
+This is KF-144's sentence word for word -- *the rig would have gone on
+reporting those paths green against a kernel that no longer existed* -- arriving
+through the one door KF-144 did not close. That fix made the **kernel** rule
+phony; it said nothing about the image that carries it, and the image is what
+the firmware boots. A dependency hardened at one link of a chain does not
+harden the chain, and the comment explaining KF-144 sits four lines below the
+rule this was in.
+
+Matrices 31 and 32 were honest only because the script that launched them
+happened to clear `boot/build` first. Nothing in `verify-kernel.sh` does.
+
 ## 0.2.3 -- 13 September 2026
 
 **KF-201.** The bounded-queue self-test raced its own drain, and passed only

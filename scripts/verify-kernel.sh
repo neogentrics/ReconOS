@@ -655,6 +655,20 @@ check_for virtio0 "  PVH, -cpu max" \
 check "  PVH, no disk attached" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
+# A display adapter with enough memory to be asked for every size.
+#
+# The adapter QEMU gives by default has 16 MB, which is 1920x1080 and no more
+# -- so on every other path the mode sweep skips 4K, 5K and 8K for want of
+# memory and says so. That is honest and it is not coverage: the sizes this
+# kernel is meant to drive largest were the ones nothing ever tried.
+#
+# 256 MB is enough for 7680x4320 at four bytes a pixel with room to spare, so
+# this path is the one where every shape in the sweep is actually set and read
+# back -- portrait, ultra-wide, 4K and 8K included.
+check "  PVH, an adapter big enough for 8K" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device VGA,vgamem_mb=256 -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had

@@ -35,18 +35,35 @@
 
 #include <recon_font.h>
 
-/* Drawn at double size: an 8x8 glyph in a 16x16 cell, so a 1280x800 screen is
- * 80 columns by 50 rows -- the shape of a text console. */
-#define SCALE	2
-#define CELL_W	(RECON_FONT_WIDTH * SCALE)
-#define CELL_H	(RECON_FONT_HEIGHT * SCALE)
+/* **The glyph is scaled to the panel, not to a constant.**
+ *
+ * This was a fixed doubling, which is right on the 1280x800 the UEFI paths
+ * come up at and wrong at both ends of the range the kernel now has to cope
+ * with. An 8x8 glyph doubled is sixteen pixels tall: on a 4320-line 8K panel
+ * that is a fortieth of the screen height and unreadable from a desk, and the
+ * character grid would be 480x270 -- most of it clamped away and left dark. On
+ * a small 480-line panel the same doubling leaves thirty rows.
+ *
+ * So the scale is chosen from the height to keep the console at roughly the
+ * same *apparent* size on any screen. 800 pixels still comes out at exactly
+ * two, which is what keeps every path that already had a framebuffer looking
+ * precisely as it did.
+ */
+#define TARGET_ROWS	50
+#define SCALE_MAX	8
 
-/* The shadow, and therefore the largest screen this will use. A display bigger
+/* The shadow, and therefore the largest grid this will use. A display bigger
  * than this is not refused -- it is used, at this many characters, with the
  * rest of the glass left dark. Refusing to print anything because the screen is
- * large would be the wrong way round. */
-#define MAX_COLS 200
-#define MAX_ROWS 64
+ * large would be the wrong way round.
+ *
+ * These are far less likely to bite now the glyph scales with the panel: 8K at
+ * scale 8 is a 120x67 grid rather than the 480x270 a fixed doubling would have
+ * asked for. The margin above that is for shapes rather than sizes -- an
+ * ultra-wide is short and very wide, a phone panel held in portrait is the
+ * other way round, and neither is unusual enough to clip. */
+#define MAX_COLS 240
+#define MAX_ROWS 80
 
 static struct {
 	volatile u8 *pixels;
@@ -55,12 +72,33 @@ static struct {
 	u32 height;
 	enum fb_format format;
 
+	unsigned scale;			/* pixels per glyph pixel */
+	unsigned cell_w, cell_h;	/* a character cell, in screen pixels */
+
 	unsigned cols, rows;
 	unsigned col, row;
 
 	char shadow[MAX_ROWS][MAX_COLS];
 	bool ready;
 } fb;
+
+/* How far to magnify the font on a screen this tall.
+ *
+ * Integer, because a glyph drawn at a fractional scale is a glyph with uneven
+ * strokes -- and this font is eight pixels of bitmap, which has nothing to
+ * spare. At least one, so a very small panel still gets text rather than
+ * nothing. */
+static unsigned scale_for(u32 height)
+{
+	unsigned s = height / (RECON_FONT_HEIGHT * TARGET_ROWS);
+
+	if (s < 1)
+		s = 1;
+	if (s > SCALE_MAX)
+		s = SCALE_MAX;
+
+	return s;
+}
 
 /* Colours as they are written, not as they are named.
  *
@@ -110,24 +148,24 @@ static void fill(u32 x0, u32 y0, u32 w, u32 h, u32 colour)
  * nothing was printed. */
 static void draw_glyph(unsigned col, unsigned row, char c)
 {
-	u32 x0 = col * CELL_W;
-	u32 y0 = row * CELL_H;
+	u32 x0 = col * fb.cell_w;
+	u32 y0 = row * fb.cell_h;
 	u32 ink = pack(0xD0, 0xD4, 0xD8);
 	u32 paper = pack(0x0C, 0x0E, 0x10);
 	const unsigned char *g;
 	unsigned gy, gx, sy, sx;
 
-	fill(x0, y0, CELL_W, CELL_H, paper);
+	fill(x0, y0, fb.cell_w, fb.cell_h, paper);
 
 	if ((unsigned char)c < RECON_FONT_FIRST ||
 	    (unsigned char)c > RECON_FONT_LAST) {
 		if (c == ' ' || c == 0)
 			return;
 		/* The box. */
-		fill(x0 + 2, y0 + 2, CELL_W - 4, 2, ink);
-		fill(x0 + 2, y0 + CELL_H - 4, CELL_W - 4, 2, ink);
-		fill(x0 + 2, y0 + 2, 2, CELL_H - 4, ink);
-		fill(x0 + CELL_W - 4, y0 + 2, 2, CELL_H - 4, ink);
+		fill(x0 + 2, y0 + 2, fb.cell_w - 4, 2, ink);
+		fill(x0 + 2, y0 + fb.cell_h - 4, fb.cell_w - 4, 2, ink);
+		fill(x0 + 2, y0 + 2, 2, fb.cell_h - 4, ink);
+		fill(x0 + fb.cell_w - 4, y0 + 2, 2, fb.cell_h - 4, ink);
 		return;
 	}
 
@@ -136,10 +174,10 @@ static void draw_glyph(unsigned col, unsigned row, char c)
 	for (gy = 0; gy < RECON_FONT_HEIGHT; gy++)
 		for (gx = 0; gx < RECON_FONT_WIDTH; gx++)
 			if (g[gy] & (0x80u >> gx))
-				for (sy = 0; sy < SCALE; sy++)
-					for (sx = 0; sx < SCALE; sx++)
-						put_pixel(x0 + gx * SCALE + sx,
-							  y0 + gy * SCALE + sy,
+				for (sy = 0; sy < fb.scale; sy++)
+					for (sx = 0; sx < fb.scale; sx++)
+						put_pixel(x0 + gx * fb.scale + sx,
+							  y0 + gy * fb.scale + sy,
 							  ink);
 }
 
@@ -167,42 +205,66 @@ static void scroll(void)
 	fb.row = fb.rows - 1;
 }
 
-void fbcon_init(void)
+/* Point the console at a framebuffer and start drawing into it.
+ *
+ * Two callers, and they arrive at different times on purpose. `fbcon_init`
+ * passes what the handoff carried, before there is a PCI bus to ask about
+ * anything. The display driver passes a mode it set itself, after the bus walk,
+ * on a machine where firmware left no framebuffer at all -- which is every PVH
+ * and direct-kernel path in the verification matrix.
+ *
+ * Returns false where the description is one this console will not draw into,
+ * leaving whatever was there before untouched: a refused framebuffer must not
+ * cost the caller the screen it already had.
+ */
+bool fbcon_adopt(const struct framebuffer *given)
 {
-	const struct boot_info *info = boot_info();
 	unsigned r, c;
-
-	fb.ready = false;
 
 	/* No framebuffer, or one whose layout the loader could not name. Either
 	 * way this console does not start, and the serial port carries
 	 * everything as it did before. */
-	if (!info->fb.width || !info->fb.height || !info->fb.base ||
-	    info->fb.format == FB_FORMAT_NONE)
-		return;
+	if (!given || !given->width || !given->height || !given->base ||
+	    given->format == FB_FORMAT_NONE)
+		return false;
 
 	/* A pitch that cannot hold a row is a framebuffer description this
 	 * kernel does not believe. Drawing into it would write past the end of
 	 * every line, which on a device mapping is somebody else's registers. */
-	if (info->fb.pitch < info->fb.width * 4)
-		return;
+	if (given->pitch < given->width * 4)
+		return false;
 
-	fb.pixels = (volatile u8 *)phys_to_virt(info->fb.base);
-	fb.pitch  = info->fb.pitch;
-	fb.width  = info->fb.width;
-	fb.height = info->fb.height;
-	fb.format = info->fb.format;
+	{
+		unsigned scale = scale_for(given->height);
+		unsigned cols = given->width / (RECON_FONT_WIDTH * scale);
+		unsigned rows = given->height / (RECON_FONT_HEIGHT * scale);
 
-	fb.cols = fb.width / CELL_W;
-	fb.rows = fb.height / CELL_H;
+		/* Checked before anything is changed, so a framebuffer too
+		 * small to hold one character does not leave the console
+		 * pointing at it with nothing drawable. */
+		if (!cols || !rows)
+			return false;
+
+		fb.scale  = scale;
+		fb.cell_w = RECON_FONT_WIDTH * scale;
+		fb.cell_h = RECON_FONT_HEIGHT * scale;
+	}
+
+	fb.ready = false;
+
+	fb.pixels = (volatile u8 *)phys_to_virt(given->base);
+	fb.pitch  = given->pitch;
+	fb.width  = given->width;
+	fb.height = given->height;
+	fb.format = given->format;
+
+	fb.cols = fb.width / fb.cell_w;
+	fb.rows = fb.height / fb.cell_h;
 
 	if (fb.cols > MAX_COLS)
 		fb.cols = MAX_COLS;
 	if (fb.rows > MAX_ROWS)
 		fb.rows = MAX_ROWS;
-
-	if (!fb.cols || !fb.rows)
-		return;
 
 	for (r = 0; r < fb.rows; r++)
 		for (c = 0; c < fb.cols; c++)
@@ -213,6 +275,13 @@ void fbcon_init(void)
 	fb.ready = true;
 
 	fill(0, 0, fb.width, fb.height, pack(0x0C, 0x0E, 0x10));
+	return true;
+}
+
+void fbcon_init(void)
+{
+	fb.ready = false;
+	fbcon_adopt(&boot_info()->fb);
 }
 
 void fbcon_putc(char c)

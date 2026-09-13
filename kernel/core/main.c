@@ -48,6 +48,7 @@
 #include <recon/kernel/aml.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
@@ -179,6 +180,12 @@ void kmain(void)
 
 	block_init();
 
+	/* **After block_init, because that is what walks the PCI bus**, and the
+	 * display adapter is on it. Before this line the console is whatever
+	 * firmware left -- on the PVH and direct-kernel paths, nothing at all.
+	 * This is where a machine with an adapter and no framebuffer gets one. */
+	display_init();
+
 	/* **After** block_init, not before it, and this is the second time
 	 * that ordering has caught something here. block_init is what walks
 	 * the PCI bus; a driver looking for its device before that walk finds
@@ -194,6 +201,7 @@ void kmain(void)
 	 * line -- and it is the first thing in this kernel that ever has. */
 	input_init();
 	block_print_summary();
+	display_print_summary();
 
 	/* What the devices can do about interrupts, printed here rather than
 	 * beside the processors.
@@ -281,6 +289,8 @@ void kmain(void)
 		hpet_self_test() ? "pass" : "FAIL");
 	kprintf("  the small buses    : %s\n",
 		i2c_self_test() ? "pass" : "FAIL");
+	kprintf("  a mode of our own  : %s\n",
+		display_self_test() ? "pass" : "FAIL");
 	kprintf("  something arrives : %s\n",
 		user_signal_test() ? "pass" : "FAIL");
 	kprintf("  somebody else's disk : %s\n",

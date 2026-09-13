@@ -5874,6 +5874,65 @@ And the per-processor-count log was `cpus_$label.log`, with no count in it, so
 each sweep overwrote the last. The evidence for this bug survived only because
 eight is the last count PVH tries. It is `cpus_${label}_$n.log` now.
 
+### KF-202 — Booting the install image makes it newer than the kernel in it, so every later UEFI test boots the old one
+
+- **Found:** 13 September 2026, while bringing up checkpoint 21. A newly built
+  kernel's new self-test appeared on every boot path except the UEFI ones.
+- **Cost:** unbounded, and of exactly the kind this rig exists to prevent.
+  **Every UEFI path in the verification matrix reports green against whatever
+  kernel happened to be in the image first.** The fault it would hide is any
+  fault fixed since that image was built.
+- **Status:** fixed, kernel 0.2.4.
+
+### What it is
+
+`boot/Makefile` builds the ESP with an ordinary timestamp rule:
+
+```make
+$(ESP_IMG): $(EFI) $(KERNEL_ELF)
+```
+
+and **something else writes into that file**. OVMF, booted with `-bios`, keeps
+its firmware variables in `NvVars` on the very FAT filesystem it was handed. So
+one UEFI boot leaves the image newer than the kernel it was built from, `make
+esp` becomes a no-op from then on, and the image is frozen at whatever it
+contained.
+
+Measured rather than argued: after `make -C boot esp` reported success, the
+kernel extracted back out of the image was **1,804,808 bytes against the
+1,822,488 that had just been built**, and `strings` could not find the new
+self-test in it. The image's own directory listing carries the evidence --
+`NvVars`, written hours after the two directories beside it.
+
+### Why KF-144's fix did not cover it
+
+KF-144 was this same sentence: *the rig would have gone on reporting those
+paths green against a kernel that no longer existed.* Its fix made the
+**kernel** rule phony, so the sub-make is always asked whether anything needs
+building. That guarantees the kernel in the tree is current. It says nothing
+about the image that carries it, and the image is the thing the firmware boots.
+
+**A dependency hardened at one link of a chain does not harden the chain.** The
+comment explaining KF-144 sits four lines below the rule this bug is in.
+
+### What was done
+
+`$(ESP_IMG)` takes a phony prerequisite, so it is rebuilt on every invocation.
+Sixty-four megabytes written and about a second, against a rig that otherwise
+cannot be trusted to be testing the kernel in the tree.
+
+**Not fixed by telling OVMF to put its variables somewhere else**, which would
+work and would leave the rule still wrong for the next thing that writes into
+the image. The rule should not depend on nobody touching its output.
+
+### How near it came to being believed
+
+Matrices 31 and 32 were run by a script that happened to `rm -rf boot/build`
+first, so both were honest. Nothing in `scripts/verify-kernel.sh` does that --
+it calls `make -C boot esp` and trusts the answer. Any run of the matrix on its
+own, on a machine that had booted a UEFI path before, would have tested a stale
+kernel on five paths and said so nowhere.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

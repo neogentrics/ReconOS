@@ -102,7 +102,30 @@ all-arches:
 # firmware will run without a boot entry having been registered in NVRAM. It is
 # what makes a USB stick bootable on a machine that has never seen it, and it is
 # therefore what install media uses.
-$(ESP_IMG): $(EFI) $(KERNEL_ELF)
+# **Always rebuilt, and not for tidiness.**
+#
+# KF-144, one rule below, guaranteed the *kernel* is always offered for
+# rebuilding. It did not guarantee the image that carries it, and that turns
+# out to matter because **something else writes into this file**: OVMF, booted
+# with `-bios`, keeps its firmware variables in `NvVars` on this very
+# filesystem.
+#
+# So one UEFI boot makes the image newer than the kernel it was built from, and
+# an ordinary timestamp rule then calls it up to date for ever. `make esp`
+# becomes a no-op, and every UEFI path goes on booting whatever kernel happened
+# to be in the image first -- which is KF-144's sentence exactly, arriving
+# through the one door KF-144 did not close. Found on 13 September 2026 when a
+# freshly built kernel's new self-test was missing from a UEFI boot and present
+# on every other path; the image on disk held a kernel 17,680 bytes smaller
+# than the one that had just been built. (KF-202)
+#
+# The cost is a 64 MB image written on every invocation, which takes about a
+# second. The alternative is a rig that cannot be trusted to be testing the
+# kernel in the tree.
+.PHONY: force-esp
+force-esp:
+
+$(ESP_IMG): $(EFI) $(KERNEL_ELF) force-esp
 	@mkdir -p $(dir $@)
 	dd if=/dev/zero of=$@ bs=1M count=64 status=none
 	mkfs.vfat -F 32 -n RECONOS $@ >/dev/null
