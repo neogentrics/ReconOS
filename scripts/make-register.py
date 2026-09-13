@@ -24,7 +24,20 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else '/tmp/reconos-register.html'
 
 src = io.open('docs/BUGS.md', encoding='utf-8').read()
 areas_src = io.open('scripts/make-issues.py', encoding='utf-8').read()
-AREA = {int(n): a for n, a in re.findall(r"(\d+):\s*'([a-z]+)'", areas_src)}
+# Keyed by the whole identifier -- `'BG-114': 'build'` -- since the tracks
+# split on 12 September 2026 and forty-four numbers want a different area in
+# each. This read `(\d+):` until then; when the key changed it matched nothing,
+# every entry lost its area, and the page drew exactly as tidily as before.
+# Hence the check. Reading another script's source is a coupling, and the least
+# it can do is say when the coupling breaks.
+AREA = {k: a for k, a in
+        re.findall(r"'((?:BG|KF)-\d+)':\s*'([a-z-]+)'", areas_src)}
+
+if not AREA:
+    raise SystemExit(
+        "no areas parsed out of scripts/make-issues.py -- its AREA table has "
+        "changed shape. Every entry would publish with no area and the page "
+        "would look no different, which is why this stops instead.")
 
 
 def clean(text, limit=None):
@@ -71,11 +84,13 @@ def how(by):
 entries = []
 for block in re.split(r'\n### ', src)[1:]:
     head, _, rest = block.partition('\n')
-    m = re.match(r'BG-(\d+)\s+[—-]+\s*(.+)', head.strip())
+    m = re.match(r'((?:BG|KF)-(\d+))\s*(?:—|–|--|-)+\s*(.+)',
+                 head.strip())
     if not m:
         continue
 
-    n = int(m.group(1))
+    bug_id = m.group(1)
+    n = int(m.group(2))
     issue = re.search(r'\[#(\d+)\]', rest)
     fi = re.search(r'\*\*Found in\*\*\s*(.+?)\.\s', rest, re.S)
     fb = re.search(r'\*\*Found by\*\*\s*(.+?)\.\s', rest, re.S)
@@ -85,7 +100,8 @@ for block in re.split(r'\n### ', src)[1:]:
     by_raw = fb.group(1) if fb else ''
     entries.append({
         'n': n,
-        'title': clean(m.group(2)),
+        'id': bug_id,
+        'title': clean(m.group(3)),
         'issue': issue.group(1) if issue else None,
         'in': clean(fi.group(1)) if fi else '',
         'by': clean(by_raw),
@@ -95,8 +111,13 @@ for block in re.split(r'\n### ', src)[1:]:
         'was': clean(wa.group(1), 260) if wa else
                '<em>A documentation fault &mdash; the title is the whole of it.</em>',
         'fixed': clean(fx.group(1), 150) if fx else '',
-        'open': '**Open.**' in rest,
-        'area': AREA.get(n, 'other'),
+        # Two forms, because the two tracks wrote two. The desktop's is
+        # `**Open.**`; the kernel's is a `**Status:**` line, which is also the
+        # only one that can say *half fixed* -- which is not fixed.
+        'open': ('**Open.**' in rest
+                 or bool(re.search(r'\*\*Status:\*\*\s*\**\s*(?!fix)',
+                                   rest, re.I))),
+        'area': AREA.get(bug_id, 'other'),
         'how': how(by_raw),
     })
 
@@ -139,7 +160,7 @@ for e in entries:
              if e['issue'] else '')
     fixed = f'<div class="fix">Fixed in {e["fixed"]}</div>' if e['fixed'] else ''
     rows.append(f'''<details class="bug">
-<summary><span class="bgn">BG-{e['n']:03d}</span><span class="bgt">{e['title']}</span><span class="area">{html.escape(AREA_LABEL.get(e['area'], e['area']))}</span></summary>
+<summary><span class="bgn">{e['id']}</span><span class="bgt">{e['title']}</span><span class="area">{html.escape(AREA_LABEL.get(e['area'], e['area']))}</span></summary>
 <div class="body">
 <p class="was">{e['was']}</p>
 <p class="meta">Found in {e['in']} &middot; by {e['by']}{issue}</p>
@@ -331,4 +352,17 @@ page = f'''<title>ReconOS Bug Register</title>
 '''
 
 io.open(OUT, 'w', encoding='utf-8', newline='').write(page)
+# The count this script prints comes out of its own parser, so it can never
+# disagree with it. The only check that catches a pattern quietly matching a
+# subset is a second count taken a different way.
+on_disk = len(re.findall(r'(?m)^### (?:BG|KF)-\d+', src))
+if on_disk != len(entries):
+    raise SystemExit(
+        '%d headings in docs/BUGS.md and %d parsed -- the entry pattern has '
+        'stopped matching how entries are written.' % (on_disk, len(entries)))
+
 print('wrote', OUT, len(page), 'bytes')
+print('%d entries: %s' % (
+    len(entries),
+    ', '.join('%d %s-' % (len([e for e in entries if e['id'].startswith(p)]), p)
+              for p in ('BG', 'KF'))))
