@@ -6368,6 +6368,98 @@ third kind of page is what made it incomplete, and nothing in it could say so.
 Asking `pmm_owns` inverts that: instead of listing what must not be freed, it
 establishes what may be.
 
+### KF-210 — KF-160 fixed the rounds and left the control sleeping six seconds from launch
+
+- **Found:** 13 September 2026, by matrix 38, the first run after checkpoint 21's
+  second half added a self-test to every boot:
+  `a rename survives the power going out   FAILED — the image the control needs
+  was not consistent to begin with`.
+- **Cost:** the whole crash-consistency test refuses to run, and it refuses for a
+  reason that reads like the filesystem is broken. Nothing was wrong with the
+  rename, the checker, or the volume.
+- **Status:** fixed, kernel 0.2.13.
+
+### What it is
+
+`rename-crash-test.sh` proves its checker before it believes any round: it makes
+one image, breaks it two ways, and requires the checker to report each. Making
+that image means booting the guest, letting it format and commit, and killing
+it.
+
+The kill is `sleep 6`, measured from the moment QEMU was launched.
+
+**Checkpoint 21's second half added another self-test to every boot**, and that
+is what tipped it over — but the number matters and was measured rather than
+assumed.
+
+Measured against how busy the machine is, because that is the variable:
+
+| other work running | first commit after |
+|---|---|
+| nothing | 4.17 s |
+| 8 busy processes | 4.66 s |
+| **16 busy processes** | **7.55 s** |
+| 32 busy processes | 10.10 s |
+
+The matrix launches its sub-tests in parallel — `sub_launch` starts a dozen
+scripts, each of which boots guests of its own — so sixteen busy processes on a
+sixteen-processor machine is not a stress test, it is Tuesday.
+
+So the failure is not "the boot got slower than six seconds". **It passes alone
+and fails in the matrix**, which is the worst way round, because the run that
+matters is the loaded one. That makes this KF-201's shape as well as KF-160's:
+*a test that had been measuring how busy the machine was.*
+
+### The instrument was wrong first, twice
+
+Worth recording, because the second one is funny and the lesson is not.
+
+The first attempt to reproduce this ran the crash test with the architecture
+where the script wanted a round count, so it never reached the rounds at all
+and both versions "passed".
+
+The second built its load out of **idle ReconOS guests** — and an idle ReconOS
+processor stops its tick and halts, as of checkpoint 24, four versions ago. So
+sixteen of them cost almost nothing, the measurement showed load having no
+effect, and the conclusion drawn was that the diagnosis must be wrong.
+
+**The load generator was defeated by the feature it was competing with.** A
+measurement that says "no effect" is a claim about the instrument at least as
+much as about the thing measured, and this one was wrong twice before it was
+right.
+
+### This is KF-160, in the same file, one function up
+
+KF-160 was exactly this: *"Checkpoint 20 added about a second of self-tests to
+every boot ... and the early rounds started cutting a guest that had not reached
+the disk."* Its fix was right and is still right — **each round waits, bounded,
+for the guest to print `reconfs-crash: replacing`, then sweeps from there.**
+
+It hardened the rounds. The control above them kept its stopwatch.
+
+**A dependency hardened at one link of a chain does not harden the chain** —
+which is KF-202's sentence, written about a different chain three versions ago.
+The register now has three entries whose cause is *a fixed delay measured from
+launch, in a file where somebody had already replaced one*.
+
+### What was done
+
+The control waits for the same line, with the same bound, for the same reason.
+`reconfs-crash: replacing` is printed only after the format, the mount **and the
+first commit** have all succeeded — which is precisely the "known-good image"
+the control is trying to obtain, so the line it needed already existed and was
+already being waited for eighty lines below.
+
+### What it is not
+
+Not a larger number. A constant big enough today is the same bug with a longer
+fuse, and it would have to be big enough for the *busiest* the rig ever gets,
+which is not a thing anybody can know. The event exists and was already being
+waited for eighty lines below. Wait for the event.
+
+**Measured before and after**, because "it passes now" is what a bigger number
+would also produce.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

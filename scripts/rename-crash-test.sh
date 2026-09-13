@@ -88,13 +88,47 @@ else
 fi
 
 qemu_pid=$!
-sleep 6
+
+# Wait for the guest, not for the clock.
+#
+# This was `sleep 6`, measured from the moment QEMU was launched, and it is the
+# third time that constant has been outgrown. **KF-160 fixed exactly this in the
+# rounds below** -- each of them waits for `reconfs-crash: replacing` and sweeps
+# from there -- and left the control above them holding a stopwatch. Checkpoint
+# 21's second half added another self-test to every boot, the guest reached its
+# first commit after the six seconds were up, and the run failed saying the
+# filesystem was inconsistent when nothing had been written yet. (KF-210)
+#
+# The line is the right event and not a proxy for one: it is printed only after
+# the format, the mount *and* the first commit have succeeded, which is the
+# known-good image this control exists to obtain.
+#
+# Bounded, because a guest that never gets there must fail rather than hang --
+# and the check below then reports what actually happened.
+for _ in $(seq 300); do
+	if grep -q "reconfs-crash: replacing" "$OUT/prove.log" 2>/dev/null; then
+		break
+	fi
+	if ! kill -0 "$qemu_pid" 2>/dev/null; then
+		break
+	fi
+	sleep 0.05
+done
+
 kill -9 "$qemu_pid" 2>/dev/null
 wait "$qemu_pid" 2>/dev/null
 while kill -0 "$qemu_pid" 2>/dev/null; do sleep 0.05; done
 qemu_pid=
 
 if ! python3 scripts/reconfs-check.py "$PROVE" settings >/dev/null 2>&1; then
+	if ! grep -q "reconfs-crash: replacing" "$OUT/prove.log" 2>/dev/null; then
+		echo "      the guest never reached the filesystem in 15s, so there is"
+		echo "      no image to prove the checker against -- this is not a"
+		echo "      filesystem fault. The last thing it said:"
+		tail -3 "$OUT/prove.log" 2>/dev/null | sed 's/^/        /'
+		rm -f "$PROVE"
+		exit 1
+	fi
 	echo "      the image the control needs was not consistent to begin with"
 	rm -f "$PROVE"
 	exit 1

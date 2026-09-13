@@ -71,6 +71,16 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.13 on 13 September 2026, for KF-210.** The crash-consistency test proves
+# its checker against a known-good image before believing any round, and made
+# that image by booting the guest and killing it after six seconds measured from
+# launch. KF-160 fixed exactly this for the rounds below it -- they wait for the
+# guest to say it has started replacing -- and left the control holding a
+# stopwatch. Measured: the guest commits after 4.17 s idle, a thirty per cent
+# margin, in a rig that runs many guests at once. It waits for the same line
+# now. A bigger number would have to be big enough for the busiest the rig ever
+# gets, which is not a thing anybody can know.
+#
 # **0.2.12 on 13 September 2026, for KF-209 -- and checkpoint 21 is finished.**
 # A program can open /dev/fb0, be told what the screen is, map the whole of it
 # and draw. Tearing that program down then handed the framebuffer's pages to
@@ -160,7 +170,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.12
+VERSION := 0.2.13
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
