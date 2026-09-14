@@ -88,6 +88,141 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.15 -- 13 September 2026
+
+**KF-211: entering user mode on aarch64 was interruptible, and the interrupt
+overwrote where user mode was going to start.**
+
+`arch_enter_user` programs three system registers and then returns to EL0:
+
+```
+msr sp_el0, x1        the program's stack
+msr elr_el1, x0       where it starts
+msr spsr_el1, x2      at EL0, with interrupts on
+eret
+```
+
+**`ELR_EL1` and `SPSR_EL1` are the registers exception entry writes.** A tick
+landing in that window makes the hardware overwrite `ELR_EL1` with the
+interrupted kernel PC. The handler saves it, works, restores it and returns to
+the next instruction — *correctly*, which is exactly what makes it invisible —
+and the `eret` then drops to EL0 at an address inside this function.
+
+**Any user program on aarch64 could fail to start, at random, and has been able
+to since checkpoint 10.**
+
+### The address was the diagnosis
+
+```
+user program fault: instruction abort from a lower EL at 0xffffffffc00bfe9c
+```
+
+`objdump` puts that twelve bytes into `arch_enter_user`, on `msr spsr_el1, x2` —
+the instruction the interrupt landed on. One command turned *the program went
+wrong* into *the interrupt arrived here*.
+
+### x86_64 never had it, and not by luck
+
+Its return-to-user frame is built **on the stack**, and `iretq` reads it from
+memory. An interrupt cannot overwrite memory the way it overwrites a system
+register — it pushes its own frame elsewhere and leaves this one alone.
+
+Same function, same intent, one architecture with a window. The third fault this
+week that only the second architecture would admit to, after KF-206 and KF-209.
+
+### A rate was claimed and withdrawn
+
+"About one boot in twelve" went into the register from a single matrix failure —
+one observation treated as a frequency. Twelve boots of the same **unfixed**
+kernel then came back `12 passed, 0 failed`.
+
+That does not refute the fault. It refutes the number, and the entry now says
+the mechanism is known and the frequency is not.
+
+### And it ruled out the obvious proof
+
+**The broken kernel passes twelve boots in a row**, so passing is what a fix and
+a non-fix both produce. That is KF-208's trap exactly: a test that cannot
+distinguish the two cases is not a test.
+
+So the window was widened with a delay loop until a tick was certain to land in
+it, with the delay left in **both** builds so the only difference between them
+was the one instruction under test:
+
+```
+wide window, interrupts masked   pass
+wide window, mask removed        FAIL
+```
+
+### The fix
+
+`msr daifset, #0xf` before the three writes. The `eret` unmasks them again,
+because `SPSR_EL0T` already has `DAIF` clear — so the program still starts with
+interrupts on, exactly as the comment beside it always claimed, and there is no
+longer an instant where half the return state is programmed.
+
+**The same shape as `arch_wait_tickless`**, where `sti` and `hlt` had to be an
+atomic pair for the same reason: a window in which the machine's state is half
+set up is a window an interrupt can land in.
+
+## 0.2.14 -- 13 September 2026
+
+**The suspend framework, which refuses.**
+
+Checkpoint 24's other half. Suspend is not "write the sleep value" — the machine
+declares that and this kernel reads it. It is **every device losing power and
+having to come back**, and the useful question is which of them could not, which
+is a fact about what happens to be plugged in.
+
+```
+suspend      : 3 device(s) declared, and these cannot come back yet:
+               nvme0n1, bochs-display, input
+sleep states : S3 (1/1), S4 (2/2)
+```
+
+**That list is generated from the machine, not remembered by a person.** The
+declarations sit where the kernel already enumerates hardware — `block_register`
+covers NVMe, AHCI, virtio-blk, USB storage and the initrd; `netdev_register`
+covers the cards — so a block driver written next year is declared the day it
+registers, appears in that list, and holds the machine un-suspendable until
+somebody does the work. Five edits rather than fifteen, and a list that cannot
+go stale.
+
+**The refusal is the feature, and it happens before anything is stopped.**
+Readiness, then `_S3`, then the register, then the architecture — refused at the
+first. Both architectures answer *no wake source* today and each says why in its
+own file: x86_64 has none armed, aarch64 does not use ACPI sleep at all and
+needs PSCI `SYSTEM_SUSPEND`. A machine told to sleep with nothing able to wake
+it does sleep, and the next event is somebody holding the power button.
+
+The AML parser reads every `_Sx` rather than `_S5` alone — four characters of
+comparison, and it turned "we do not know whether this machine can suspend" into
+a measured line on every boot.
+
+### What the self-test spends its time on
+
+The unwind, because that is where a suspend framework is either right or a
+machine that hangs with its disk off: when the third device refuses to stop, the
+ones already stopped must be put back before the refusal is returned.
+
+Watched failing three ways, because a test only ever seen passing has not been
+observed to do anything:
+
+```
+unmodified            pass
+no unwind             FAIL  went 'cb'     wanted 'cbC'
+wrong quiesce order   FAIL  went 'abcABC' wanted 'cbaABC'
+wrong resume order    FAIL  went 'cbaCBA' wanted 'cbaABC'
+```
+
+The third is the plausible one: stopping and resuming in mirror order reads as
+symmetrical and is wrong only where one device sits on another, which no
+topology in this rig has.
+
+It runs on its own table through the *real* quiesce and resume, which cost two
+words of parameterisation. A copy written to be tested would pass while the real
+one was wrong.
+
 ## 0.2.13 -- 13 September 2026
 
 **KF-210: the crash test's control waited on a stopwatch.**
