@@ -80,11 +80,19 @@ BOOLEAN menu_is_recovery(unsigned index);
  * provides no framebuffer at all. */
 BOOLEAN gfx_available(const struct reconboot_framebuffer *fb);
 void gfx_menu_draw(unsigned count, const char *const *labels,
-		   unsigned selected, unsigned seconds);
+		   unsigned selected, unsigned seconds, BOOLEAN paused);
 void gfx_report(BOOLEAN used);
 
 /* How many entries the menu will hold. Shared so the graphical renderer can
  * size a screen against it without a second, drifting number. */
 #define MENU_MAX 8
+
+/* How long the menu waits before starting the default.
+ *
+ * One number for every machine. It used to be two seconds when recovery was
+ * the only other entry and five when other operating systems had been found --
+ * defensible, and two seconds is not enough to read a screen and reach for a
+ * key, which is what it looks like on a real panel. */
+#define MENU_SECONDS 6
 
 #endif /* RECONBOOT_INTERNAL_H */

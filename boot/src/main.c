@@ -785,6 +785,89 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 
 /* --- Framebuffer -------------------------------------------------------- */
 
+/* The largest mode this loader is willing to ask for.
+ *
+ * The same numbers stage 2's VBE picker uses, and for the same reason: the menu
+ * is drawn by software into an uncached framebuffer, and every pixel is a bus
+ * transaction. Past this the redraw costs more than the extra resolution is
+ * worth for eight lines of text -- and the kernel sets its own mode afterwards
+ * anyway, with its own ladder and its own limits.
+ *
+ * A machine whose only mode is larger than this still gets it: the ceiling
+ * filters the candidates, and if it filters all of them the mode the firmware
+ * left is kept. Refusing to draw would be worse than drawing large. */
+#define GOP_MAX_W 1920u
+#define GOP_MAX_H 1200u
+
+/* Can this loader draw into a mode of this kind at all?
+ *
+ * PixelBitMask needs the masks interpreting and PixelBltOnly has no linear
+ * framebuffer to interpret -- the same two the pixel-format switch below
+ * refuses. Asked here as well so that a mode which would end as
+ * RECONBOOT_PIXEL_NONE is never *selected*: setting one would take a usable
+ * screen away and hand back one nothing can draw on. */
+static BOOLEAN mode_is_drawable(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *i)
+{
+	return i->PixelFormat == PixelBlueGreenRedReserved8BitPerColor ||
+	       i->PixelFormat == PixelRedGreenBlueReserved8BitPerColor;
+}
+
+/* Picks the largest drawable mode inside the ceiling and sets it.
+ *
+ * Does nothing, deliberately, in three cases: no mode is better than the
+ * current one, the firmware offers no mode list, or SetMode fails. In all
+ * three the mode already in place is kept, because this runs before anything
+ * has been drawn and a loader that blanked the screen chasing a larger one
+ * would be a machine with no output and no explanation. */
+static void choose_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop)
+{
+	UINT32 best = gop->Mode->Mode;
+	UINT64 best_area = 0;
+	UINT32 m;
+
+	/* The mode in place is the one to beat, and only if it is one we could
+	 * have chosen ourselves. A firmware sitting in PixelBltOnly is not a
+	 * baseline worth defending. */
+	if (gop->Mode->Info && mode_is_drawable(gop->Mode->Info) &&
+	    gop->Mode->Info->HorizontalResolution <= GOP_MAX_W &&
+	    gop->Mode->Info->VerticalResolution <= GOP_MAX_H)
+		best_area = (UINT64)gop->Mode->Info->HorizontalResolution *
+			    gop->Mode->Info->VerticalResolution;
+
+	for (m = 0; m < gop->Mode->MaxMode; m++) {
+		EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+		UINTN size = 0;
+		UINT64 area;
+
+		if (EFI_ERROR(gop->QueryMode(gop, m, &size, &info)) || !info)
+			continue;
+
+		if (!mode_is_drawable(info))
+			continue;
+
+		if (info->HorizontalResolution > GOP_MAX_W ||
+		    info->VerticalResolution > GOP_MAX_H)
+			continue;
+
+		/* Zero pixels per scanline would make the pitch zero and every
+		 * row land on the first one. Firmware has no business
+		 * reporting it and this costs one comparison. */
+		if (!info->PixelsPerScanLine)
+			continue;
+
+		area = (UINT64)info->HorizontalResolution *
+		       info->VerticalResolution;
+
+		if (area > best_area) {
+			best_area = area;
+			best = m;
+		}
+	}
+
+	if (best != gop->Mode->Mode)
+		gop->SetMode(gop, best);
+}
+
 static void find_framebuffer(struct reconboot_framebuffer *fb)
 {
 	EFI_GUID gop_guid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
@@ -803,6 +886,15 @@ static void find_framebuffer(struct reconboot_framebuffer *fb)
 		return;
 	}
 
+	/* Chosen, not inherited. `gop->Mode` on entry is whatever the firmware
+	 * set for its own setup screen -- 800x600 on a machine whose panel is
+	 * 1920x1080, measured. */
+	choose_mode(gop);
+
+	/* Every field below is read from the protocol after the call rather
+	 * than from the mode that was asked for: firmware is free to give a
+	 * different one, and a loader that reported its request would describe
+	 * a screen that is not there (KF-141). */
 	fb->base   = gop->Mode->FrameBufferBase;
 	fb->size   = gop->Mode->FrameBufferSize;
 	fb->width  = gop->Mode->Info->HorizontalResolution;
@@ -1241,9 +1333,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 			 * is chosen to be visible without being a tax: long
 			 * enough that somebody watching can act, short enough
 			 * that a machine restarting at three in the morning is
-			 * not kept waiting for a person who is not there. */
-			pick = menu_choose(found == 1 && menu_is_recovery(0) ? 2
-									    : 5,
+			 * not kept waiting for a person who is not there.
+			 *
+			 * **One number, not two.** It was two seconds when
+			 * recovery was the only extra entry and five when
+			 * other systems had been found, on the reasoning that
+			 * somebody with a choice to make needs longer. Six
+			 * either way now, at Joshua's call -- two seconds is
+			 * not enough time to read a screen and reach for a
+			 * key, and a person who has just watched their machine
+			 * start is not helped by being told they had a choice
+			 * after it is gone. */
+			pick = menu_choose(MENU_SECONDS,
 					   &boot_info.framebuffer);
 
 			/* If it starts, this does not return. If it declines,

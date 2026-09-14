@@ -6706,6 +6706,86 @@ and the count going up would have said nothing about it.
 That is checkpoint 17's whole argument, and this is the first entry in the
 register that only a physical machine could have produced.
 
+### KF-215 — The boot menu drew over itself, and highlighted something that was not going to happen
+
+- **Found:** 14 September 2026, in a photograph of the first real-hardware boot.
+  Two faults on one screen, both invisible in the rig.
+- **Cost:** the first thing anybody sees of this operating system was unreadable
+  and, where it was readable, wrong.
+
+**Two renderers, one screen.** `gfx_menu_draw` paints the framebuffer with the
+loader's own font. `print` writes to the firmware's ConOut, which owns the same
+pixels, draws at its own size, and puts text wherever its cursor happens to be.
+Both were doing exactly what they were told and nothing knew there were two, so
+`waiting -- press a number, or Enter for ReconOS` came out small and sideways
+through the middle of the title.
+
+Invisible in the matrix because the rig reads the *serial* console, where the
+two are one stream in the right order. The collision only exists in pixels, and
+nothing in the rig has eyes.
+
+**And the bar was on the wrong row.** ReconOS is what Enter starts and what the
+clock starts. It was never drawn. The highlight sat on the first *other* entry
+-- `> 1. ReconOS recovery` -- which is precisely what a person reads as "this is
+what will happen". Nothing on that screen was true except the labels.
+
+- **Status:** fixed, kernel 0.2.19.
+
+### What was done
+
+The status line belongs to whichever renderer is actually drawing: the graphical
+menu draws its own, and the text fallback keeps the prints, because there it is
+the only renderer there is.
+
+The default gets a row of its own at the top, on the bar, keyed `Enter` rather
+than numbered -- because that is the key that picks it, and the numbers below
+are what '1' to '9' already map to. The screen now says what the keyboard does.
+
+The layout was rebuilt at the same time: rules drawn as rectangles rather than
+rows of dashes, a title at twice the body scale with rows of its own, and
+everything positioned against a fixed content width so the same arrangement
+lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
+
+### KF-216 — The loader drew on a fifth of the screen the machine had
+
+- **Found:** 14 September 2026, from the firmware's own setup screen. Its VBT
+  names the panel `eDP AUO B125HAN02.201` -- **1920x1080**. The loader reported
+  `framebuffer : 800x600`.
+- **Cost:** every machine, since checkpoint 4. The menu and every message the
+  loader prints were drawn at whatever resolution the firmware happened to be
+  using for its own setup screen.
+- **What it was.** `find_framebuffer` read `gop->Mode` and never called
+  `QueryMode` or `SetMode`. There was no wrong code to find: the loader asked
+  for nothing and was given what was lying around.
+- **The other two got it right.** The kernel's display driver has walked the
+  adapter's mode ladder since checkpoint 21, and stage 2's VBE picker does the
+  same with the same ceiling. The UEFI loader was the only one of the three
+  still accepting what it found -- and the only one nobody had looked at on a
+  machine whose firmware chose badly.
+- **Status:** fixed, kernel 0.2.20.
+
+### What was done
+
+The mode list is walked, modes this loader cannot draw into are discarded
+(PixelBitMask needs the masks interpreting, PixelBltOnly has no linear
+framebuffer at all), and the largest inside 1920x1200 is set -- the same ceiling
+stage 2 uses, for the same reason: the menu is drawn by software into uncached
+memory and every pixel is a bus transaction.
+
+**Nothing is taken away on failure.** If no mode beats the current one, if the
+firmware offers no list, or if `SetMode` fails, the mode already in place is
+kept. This runs before anything has been drawn, and a loader that blanked the
+screen chasing a larger one would be a machine with no output and no way to say
+so.
+
+And every field is read back from `gop->Mode` *after* the call rather than from
+the mode that was requested, because firmware may give a different one -- KF-141
+in its sibling: a driver that records what it asked for passes any test that
+asks what it recorded.
+
+Measured: 1280x800 to 1920x1200 under OVMF, with the kernel and a ring-3 program
+both receiving the larger one.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

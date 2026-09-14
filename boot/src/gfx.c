@@ -94,7 +94,14 @@ static void fill(UINT32 x0, UINT32 y0, UINT32 w, UINT32 h, UINT32 colour)
 			put_pixel(x0 + x, y0 + y, colour);
 }
 
-static void draw_char(UINT32 x0, UINT32 y0, char c, UINT32 ink)
+/* One glyph, at whatever multiple of the font it is asked for.
+ *
+ * The scale is a parameter rather than the SCALE constant so the title can be
+ * larger than the body. A header set at the same size as its own subtitle is
+ * not a header, and this menu had the two sharing a single line until the
+ * first machine with a different screen made that visible. */
+static void draw_char_at(UINT32 x0, UINT32 y0, char c, UINT32 ink,
+			 unsigned scale)
 {
 	const unsigned char *g;
 	unsigned gy, gx, sy, sx;
@@ -108,11 +115,16 @@ static void draw_char(UINT32 x0, UINT32 y0, char c, UINT32 ink)
 	for (gy = 0; gy < RECON_FONT_HEIGHT; gy++)
 		for (gx = 0; gx < RECON_FONT_WIDTH; gx++)
 			if (g[gy] & (0x80u >> gx))
-				for (sy = 0; sy < SCALE; sy++)
-					for (sx = 0; sx < SCALE; sx++)
-						put_pixel(x0 + gx * SCALE + sx,
-							  y0 + gy * SCALE + sy,
+				for (sy = 0; sy < scale; sy++)
+					for (sx = 0; sx < scale; sx++)
+						put_pixel(x0 + gx * scale + sx,
+							  y0 + gy * scale + sy,
 							  ink);
+}
+
+static void draw_char(UINT32 x0, UINT32 y0, char c, UINT32 ink)
+{
+	draw_char_at(x0, y0, c, ink, SCALE);
 }
 
 static void draw_text(UINT32 col, UINT32 row, const char *s, UINT32 ink)
@@ -123,6 +135,17 @@ static void draw_text(UINT32 col, UINT32 row, const char *s, UINT32 ink)
 	while (*s) {
 		draw_char(x, y, *s++, ink);
 		x += CELL_W;
+	}
+}
+
+/* Text positioned in pixels rather than in cells, because a larger scale does
+ * not land on the cell grid the rest of the menu is laid out on. */
+static void draw_big(UINT32 x, UINT32 y, const char *s, UINT32 ink,
+		     unsigned scale)
+{
+	while (*s) {
+		draw_char_at(x, y, *s++, ink, scale);
+		x += RECON_FONT_WIDTH * scale;
 	}
 }
 
@@ -179,16 +202,31 @@ BOOLEAN gfx_available(const struct reconboot_framebuffer *fb)
  * that gets its arithmetic wrong leaves the previous frame's text underneath
  * the new one, and nobody looking at the result can tell which is which. */
 void gfx_menu_draw(unsigned count, const char *const *labels,
-		   unsigned selected, unsigned seconds)
+		   unsigned selected, unsigned seconds, BOOLEAN paused)
 {
 	UINT32 ink    = pack(0xD8, 0xDC, 0xE0);
 	UINT32 dim    = pack(0x70, 0x78, 0x80);
 	UINT32 accent = pack(0xE0, 0xA8, 0x40);
 	UINT32 paper  = pack(0x0C, 0x0E, 0x10);
 	UINT32 bar    = pack(0x1E, 0x24, 0x2A);
+	UINT32 rule   = pack(0x2A, 0x32, 0x3A);
 	UINT32 cols   = screen.width / CELL_W;
-	UINT32 first  = (screen.height / LINE_H - (count + 6)) / 2;
-	UINT32 left   = (cols - 34) / 2;
+
+	/* The content is a fixed number of columns wide and centred, so the
+	 * same layout lands on a 1280x800 panel and on the 800x600 one this was
+	 * first photographed on. Everything below positions against WIDE rather
+	 * than against the screen. */
+	const UINT32 WIDE = 36;
+	UINT32 left = cols > WIDE ? (cols - WIDE) / 2 : 0;
+	UINT32 x0   = left * CELL_W;
+	UINT32 x1   = (left + WIDE) * CELL_W;
+
+	/* Header, subtitle, rule, the default, the entries, rule, two lines of
+	 * footer -- counted rather than guessed, because this number is what
+	 * centres the whole thing and a stale one pushes it off a short screen. */
+	UINT32 rows  = count + 10;
+	UINT32 first = screen.height / LINE_H > rows
+		     ? (screen.height / LINE_H - rows) / 2 : 0;
 	unsigned i;
 
 	if (!screen.ready)
@@ -196,33 +234,74 @@ void gfx_menu_draw(unsigned count, const char *const *labels,
 
 	fill(0, 0, screen.width, screen.height, paper);
 
-	draw_text(left, first, "ReconOS", accent);
-	draw_text(left + 8, first, "-- choose what to start", dim);
+	/* **The name on its own line, and larger than the line under it.** It
+	 * shared one with the subtitle before, which meant the two were
+	 * positioned by counting the characters in the first -- and a rename
+	 * would have silently overlapped them. */
+	draw_big(x0, first * LINE_H, "ReconOS", accent, SCALE * 2);
+	draw_text(left, first + 2, "choose what to start", dim);
 
-	for (i = 0; i < count; i++) {
-		UINT32 row = first + 2 + i;
+	/* Rules are rectangles, not rows of dashes: a character-drawn rule is
+	 * as wide as the font happens to be and has to be counted out to fit. */
+	fill(x0, (first + 3) * LINE_H, x1 - x0, 1, rule);
 
-		if (i == selected) {
-			/* The whole line, so the eye finds it without reading
-			 * anything. */
-			fill((left - 2) * CELL_W, row * LINE_H - 3,
-			     36 * CELL_W, LINE_H, bar);
-			draw_text(left - 1, row, ">", accent);
+	/* **The default is a row, and it is the one on the bar.**
+	 *
+	 * It was not drawn at all before. ReconOS is what Enter starts and what
+	 * the clock starts, and the screen instead put the highlight on the
+	 * first *other* entry -- `> 1. ReconOS recovery` -- which is precisely
+	 * what a person reads as "this is what will happen". It was not.
+	 *
+	 * Keyed `Enter` rather than numbered, because that is the key that
+	 * picks it, and the numbers below are the ones '1' to '9' already map
+	 * to. The screen now says what the keyboard does.
+	 */
+	{
+		UINT32 row = first + 4;
+
+		if (selected == 0) {
+			fill(x0, row * LINE_H - 3, x1 - x0, LINE_H, bar);
+			draw_text(left, row, ">", accent);
 		}
 
-		draw_dec(left + 1, row, i + 1, dim);
-		draw_text(left + 2, row, ".", dim);
-		draw_text(left + 4, row, labels[i],
-			  i == selected ? ink : dim);
+		draw_text(left + 2, row, "Enter", selected == 0 ? accent : dim);
+		draw_text(left + 9, row, "ReconOS",
+			  selected == 0 ? ink : dim);
 	}
 
-	draw_text(left, first + count + 3, "starting in", dim);
-	draw_dec(left + 12, first + count + 3, seconds, accent);
-	draw_text(left + 14, first + count + 3,
-		  seconds == 1 ? "second" : "seconds", dim);
+	for (i = 0; i < count; i++) {
+		UINT32 row = first + 5 + i;
+		BOOLEAN on = (selected == i + 1);
 
-	draw_text(left, first + count + 4,
-		  "a number chooses, any key waits", dim);
+		if (on) {
+			fill(x0, row * LINE_H - 3, x1 - x0, LINE_H, bar);
+			draw_text(left, row, ">", accent);
+		}
+
+		draw_dec(left + 2, row, i + 1, on ? accent : dim);
+		draw_text(left + 9, row, labels[i], on ? ink : dim);
+	}
+
+	fill(x0, (first + count + 6) * LINE_H, x1 - x0, 1, rule);
+
+	/* **The status line is drawn here, in this font, on this surface.**
+	 * It used to be a `print` to the firmware's console -- which owns these
+	 * same pixels, draws at its own size, and puts it wherever its cursor
+	 * happened to be. On the first real machine this ran on, that landed
+	 * through the middle of the title. */
+	if (paused) {
+		draw_text(left, first + count + 7, "waiting for you", ink);
+		draw_text(left, first + count + 8,
+			  "a number chooses, Enter starts ReconOS", dim);
+	} else {
+		draw_text(left, first + count + 7, "starting in", dim);
+		draw_dec(left + 12, first + count + 7, seconds, accent);
+		draw_text(left + 14, first + count + 7,
+			  seconds == 1 ? "second" : "seconds", dim);
+
+		draw_text(left, first + count + 8,
+			  "a number chooses, any key waits", dim);
+	}
 }
 
 /* Says what happened, once, on the serial console -- which is where the

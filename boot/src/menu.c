@@ -331,11 +331,17 @@ int menu_choose(unsigned seconds,
 		for (i = 0; i < entry_count; i++)
 			labels[i] = entries[i].label;
 
-		gfx_menu_draw(entry_count, labels, 0, seconds);
+		gfx_menu_draw(entry_count, labels, 0, seconds, FALSE);
 	}
 
-	print("\n  ReconOS starts on its own; press a number to choose "
-	      "something else\n");
+	/* **Only where there is no other renderer.** This goes to the
+	 * firmware's console, which owns the same pixels the graphical menu
+	 * just painted and draws at its own size wherever its cursor is --
+	 * photographed on a real machine running straight through the middle
+	 * of the title. Where the menu is drawn, the menu says this itself. */
+	if (!drawing)
+		print("\n  ReconOS starts on its own; press a number to "
+		      "choose something else\n");
 
 	for (;;) {
 		EFI_STATUS s = ST->ConIn->ReadKeyStroke(ST->ConIn, &key);
@@ -362,8 +368,20 @@ int menu_choose(unsigned seconds,
 			 * wait for them to decide. */
 			if (!paused) {
 				paused = TRUE;
-				print("  waiting -- press a number, or Enter "
-				      "for ReconOS\n");
+
+				if (drawing) {
+					const char *labels[MENU_MAX];
+					unsigned j;
+
+					for (j = 0; j < entry_count; j++)
+						labels[j] = entries[j].label;
+
+					gfx_menu_draw(entry_count, labels, 0,
+						      0, TRUE);
+				} else {
+					print("  waiting -- press a number, "
+					      "or Enter for ReconOS\n");
+				}
 			}
 			continue;
 		}
@@ -384,7 +402,8 @@ int menu_choose(unsigned seconds,
 			for (i = 0; i < entry_count; i++)
 				labels[i] = entries[i].label;
 
-			gfx_menu_draw(entry_count, labels, 0, (left / 10) + 1);
+			gfx_menu_draw(entry_count, labels, 0, (left / 10) + 1,
+				      FALSE);
 		}
 
 		BS->Stall(100000);		/* a tenth of a second */
