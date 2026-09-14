@@ -236,16 +236,34 @@ menu_line() {
 # no test: it teaches whoever sees it red to run it again.
 #
 # So the loader states its own intention, once, before it waits, and this reads
-# that. Deterministic, and it checks the thing the assertion is actually about
-# -- a person with something to choose between gets longer than a person who
-# has only recovery on offer.
-say "waits five seconds with a menu, two without"
+# that. Deterministic, and it reads the loader's own statement rather than the
+# host's clock.
+#
+# --- what this used to assert, and why it no longer does --------------------
+#
+# Five seconds with other systems on the machine, two with only recovery, under
+# the reasoning that *a person with something to choose between gets longer
+# than a person who has only recovery on offer*. That was a good property and
+# it is gone on purpose: Joshua asked for a six-second countdown, flat, after
+# watching the menu on the Gateway. `MENU_SECONDS` in boot_internal.h is one
+# number now and `menu_choose` is called with it once.
+#
+# Recorded here rather than quietly rewritten, because a test that stops
+# asserting something is the only trace left that it was ever asserted --
+# and somebody reading this in a month should be able to tell a decision
+# from a regression.
+#
+# Both machines are still measured. The countdown no longer varies, so what
+# this checks is that it does not vary: one boot with other systems present and
+# one without, and the same number required from both. A single boot would pass
+# just as happily if the loader had gone back to choosing.
+say "counts down six seconds, menu or not"
 
 with_menu=$(menu_line 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0 	-drive "file=$W/other.img,format=raw,if=none,id=o0" -device nvme,serial=o,drive=o0)
 alone=$(menu_line 	-drive "file=$W/medium.img,format=raw,if=none,id=m0" -device nvme,serial=m,drive=m0)
 
-if [ "$with_menu" = "5" ] && [ "$alone" = "2" ]; then
-	echo "five seconds with others, two with only recovery"
+if [ "$with_menu" = "6" ] && [ "$alone" = "6" ]; then
+	echo "six seconds either way, as asked for"
 	pass=$((pass + 1))
 else
 	echo "FAILED -- ${with_menu:-nothing} s with others, ${alone:-nothing} s alone"
