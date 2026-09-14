@@ -6462,6 +6462,97 @@ waited for eighty lines below. Wait for the event.
 **Measured before and after**, because "it passes now" is what a bigger number
 would also produce.
 
+### KF-211 — Entering user mode on aarch64 is interruptible, and the interrupt overwrites where user mode was going to start
+
+- **Found:** 13 September 2026, by matrix 41, on `device tree, a program draws
+  on the screen`:
+  `user program fault: instruction abort from a lower EL at 0xffffffffc00bfe9c`.
+  Matrix 40 had run the identical kernel green — the only commit between them
+  changed `scripts/` and nothing else.
+- **Cost:** **any program on aarch64 can fail to start, at random.** Not the
+  framebuffer test: that was simply the third user program in the boot and the
+  first new one in weeks, so it ran the path often enough to hit it. Every user
+  program this kernel has started on this architecture has been rolling the same
+  dice.
+  <br><br>
+  **The rate is not known and the first estimate was wrong.** "One boot in
+  twelve" was written here from a single matrix failure -- one observation
+  treated as a frequency. Twelve boots of the same kernel afterwards were
+  **12 passed, 0 failed**, which does not refute the fault but does refute the
+  number. What is known is the mechanism, which is checkable; how often the
+  interrupt lands in a window a few instructions wide depends on the host, the
+  emulator and what else is running, and nothing here has measured it.
+- **Status:** fixed, kernel 0.2.15.
+
+### What it is
+
+`arch_enter_user` programs three system registers and then returns to EL0:
+
+```
+msr sp_el0, x1        the program's stack
+msr elr_el1, x0       where it starts
+msr spsr_el1, x2      at EL0, with interrupts on
+...
+eret
+```
+
+**`ELR_EL1` and `SPSR_EL1` are the registers exception entry writes.** An
+interrupt taken anywhere in that window makes the hardware overwrite `ELR_EL1`
+with the interrupted kernel PC. The handler saves them, does its work, restores
+them and returns to the next instruction — correctly, and that is what makes it
+invisible. But `ELR_EL1` now holds an address inside `arch_enter_user` instead
+of `USER_BASE`.
+
+The `eret` then drops to EL0 **at a kernel address**, and the machine takes an
+instruction abort from a lower EL.
+
+The tick alone is a hundred chances a second at a window a few instructions
+wide.
+
+### How it was found, and why the address is the whole diagnosis
+
+The reported fault address is not incidental — it is the instruction the
+interrupt landed on. `objdump` placed `0xffffffffc00bfe9c` twelve bytes into
+`arch_enter_user`, on `msr spsr_el1, x2`, which turns "something went wrong in
+the program" into "the interrupt arrived here".
+
+One command, after a wrong theory would have been cheap to write and expensive
+to act on. See [[project-reconos-instrument-over-theory]].
+
+### Why x86_64 does not have it
+
+Not luck, and worth stating because the two files look like the same function.
+
+x86_64 builds its return-to-user frame **on the stack** and `iretq` reads it
+from there. An interrupt cannot overwrite memory the way it overwrites a system
+register — it pushes its own frame somewhere else and leaves this one alone.
+
+Same intent, same shape, and only one architecture has a window. That is the
+third fault this week that only the second architecture would admit to, after
+KF-206 and KF-209.
+
+### What was done
+
+`msr daifset, #0xf` before the three writes. The `eret` unmasks them again,
+because `SPSR_EL0T` already has `DAIF` clear — so the program still starts with
+interrupts on, exactly as the comment beside it always claimed, and there is no
+longer an instant where half the return state is programmed.
+
+**The same shape as `arch_wait_tickless`**, where `sti` and `hlt` had to be an
+atomic pair for the same reason: a window in which the machine's state is half
+set up is a window an interrupt can land in.
+
+### Proving it
+
+**A rare fault cannot be shown fixed by passing.** The unfixed kernel passed
+twelve boots in a row while this entry was being written, which is exactly the
+evidence a fix would produce.
+
+So the window was **widened deliberately** with a delay loop, making a tick
+certain to land inside it rather than probable. The delay stays in both builds
+and the mask is the only difference between them, so what is being compared is
+the one instruction under test rather than two different kernels.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -71,6 +71,15 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.15 on 13 September 2026, for KF-211.** Entering user mode on aarch64
+# programmed ELR_EL1 and SPSR_EL1 with interrupts on -- and those are the
+# registers exception entry writes. A tick landing in that window overwrote
+# ELR_EL1 with a kernel PC, the handler restored it faithfully, and the eret
+# then dropped to EL0 at an address inside arch_enter_user. Any user program on
+# this architecture could fail to start, at random, and has been able to since
+# checkpoint 10. x86_64 never could: its return frame is on the stack, where an
+# interrupt cannot reach it.
+#
 # **0.2.14 on 13 September 2026: the suspend framework.** No bug, and chosen
 # rather than compelled -- the same call as 0.2.5, and for the same reason. Every
 # boot now says by name what would not survive a suspend, which is a different
@@ -177,7 +186,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.14
+VERSION := 0.2.15
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

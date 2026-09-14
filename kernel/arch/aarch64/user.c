@@ -59,6 +59,26 @@ void arch_thread_switched_in(struct thread *t)
 void arch_enter_user(u64 entry, u64 stack_top)
 {
 	__asm__ volatile(
+		/* **Interrupts off across the three writes, and this is not
+		 * caution -- it is the whole correctness of this function.**
+		 *
+		 * ELR_EL1 and SPSR_EL1 are the registers *exception entry
+		 * writes*. An interrupt taken between setting ELR_EL1 and the
+		 * eret overwrites it with the interrupted kernel PC; the
+		 * handler saves and restores them properly and returns here, so
+		 * nothing appears to have gone wrong -- and the eret then drops
+		 * to EL0 at an address inside this function.
+		 *
+		 * The machine takes an instruction abort from a lower EL at the
+		 * exact instruction the interrupt landed on, which is how this
+		 * was found: the reported address was twelve bytes into
+		 * arch_enter_user. The tick alone is a hundred chances a second
+		 * at a window a few instructions wide. (KF-211)
+		 *
+		 * Unmasked again by the eret itself: SPSR_EL0T has DAIF clear,
+		 * so the program starts with interrupts on exactly as before.
+		 * Nothing about the state user mode is entered with changes. */
+		"msr	daifset, #0xf\n"
 		"msr	sp_el0, %[sp]\n"	/* the program's own stack */
 		"msr	elr_el1, %[pc]\n"	/* where it starts */
 		"msr	spsr_el1, %[st]\n"	/* at EL0, with interrupts on */
