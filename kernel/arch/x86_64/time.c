@@ -216,9 +216,27 @@ static u64 calibrate_tsc(void)
 
 	start = rdtsc();
 
-	/* Bit 5 of the gate port goes high when channel 2 finishes counting. */
-	while (!(inb(PIT_GATE2) & 0x20))
-		;
+	/* Bit 5 of the gate port goes high when channel 2 finishes counting.
+	 *
+	 * **Bounded, because a machine is allowed not to have this chip.** The
+	 * 8254 has been optional on Intel platforms for years and firmware can
+	 * leave it off; port 0x61 then reads back a constant and bit 5 never
+	 * rises. This loop had no exit, and on the first real machine this
+	 * kernel was ever booted on the report stopped dead one line before
+	 * the clock was mentioned.
+	 *
+	 * The bound is counted in cycles rather than in time, because this is
+	 * the function that works out what a cycle is worth -- there is no
+	 * clock to time it against yet. Five billion is longer than 50 ms on
+	 * any processor that exists: about eight tenths of a second at 6 GHz,
+	 * five seconds at 1 GHz. Long enough that a slow machine is never cut
+	 * off, short enough that a machine without the chip still boots. */
+	while (!(inb(PIT_GATE2) & 0x20)) {
+		if (rdtsc() - start > 5000000000ULL) {
+			outb(PIT_GATE2, (u8)(gate & ~0x03));
+			return 0;	/* every caller already handles this */
+		}
+	}
 
 	end = rdtsc();
 
@@ -278,9 +296,32 @@ u64 arch_wall_ns(void)
 	/* Bit 7 of register A is set while the clock is mid-update, and reading
 	 * during an update gives a time that is partly old and partly new --
 	 * which at midnight on the last day of a month is a date that never
-	 * existed. */
-	while (cmos_read(0x0A) & 0x80)
-		;
+	 * existed.
+	 *
+	 * **This loop could not end on a machine with no CMOS.** An x86 port
+	 * with nothing behind it reads as 0xFF, and 0xFF has bit 7 set, so the
+	 * condition is permanently true -- not usually true, not true on a
+	 * slow machine: true by construction, for ever. Legacy RTCs are
+	 * disappearing from laptops and the FADT has a flag for their absence.
+	 *
+	 * The bound is a count rather than a deadline because the clock this
+	 * would consult is the one being read. An update takes under two
+	 * milliseconds by specification and each pass here is two port reads,
+	 * so a hundred thousand passes is orders of magnitude more than enough
+	 * and still finite.
+	 *
+	 * Zero is returned on giving up, and `time_wall_ns` already knows what
+	 * to do with it: fall back to the time the firmware gave us before its
+	 * mappings went away. That path was built for exactly this machine and
+	 * had no way to be reached. */
+	{
+		unsigned spins = 0;
+
+		while (cmos_read(0x0A) & 0x80) {
+			if (++spins > 100000)
+				return 0;
+		}
+	}
 
 	sec   = cmos_read(0x00);
 	min   = cmos_read(0x02);

@@ -413,6 +413,12 @@ void arch_storage_probe(void);
 struct pci_device;
 
 bool nvme_attach(const struct pci_device *d);
+
+/* In core/sdhci.c. The disk soldered into a machine with no drive bay: an SD
+ * host controller with an eMMC part on it, which is what every laptop below a
+ * certain price has instead of a slot. Declines quietly on a controller with an
+ * empty socket, because that is an ordinary thing for a machine to have. */
+bool sdhci_attach(const struct pci_device *d);
 bool ahci_attach(const struct pci_device *d);
 
 /* One line saying how the architecture went looking, printed above the devices

@@ -6641,6 +6641,71 @@ reason: two tests, two media, each naming the reader that has to run.
 
 The two transcripts quoted in `docs/KERNEL.md` say what stage 2 says now.
 
+### KF-214 — Two waits on legacy chips that a real machine is allowed not to have, neither of them bounded
+
+- **Found:** 14 September 2026, on **the first boot of this kernel on real
+  hardware** — a Gateway GWTC116-2BL, Celeron N4020, AMI Aptio V, UEFI 2.7. The
+  loader ran, the kernel started, the boot report printed as far as the kernel
+  heap summary and stopped. Photographed off the panel, because the machine has
+  no serial port and everything the verification rig reads over a wire has to be
+  read with eyes here.
+- **Cost:** the kernel does not finish booting on a machine without an 8254 PIT.
+  Not a wrong answer — no answer, no console, nothing further, for ever.
+- **Where it had to be.** Nothing prints between `heap_print_summary()` and
+  `time_print_summary()`, which is six calls. The AML parser was cleared by
+  reading it: it already refuses a term that consumed nothing and bounds its
+  depth at sixteen. That leaves two loops, both in
+  `arch/x86_64/time.c`, both waiting on a legacy chip with no exit:
+
+  - `while (!(inb(PIT_GATE2) & 0x20))` — the channel-2 output bit. The 8254 has
+    been optional on Intel platforms for years and firmware can leave it off;
+    port 0x61 then reads back a constant and that bit never rises.
+  - `while (cmos_read(0x0A) & 0x80)` — the update-in-progress bit. **A port with
+    nothing behind it reads 0xFF, and 0xFF has bit 7 set**, so the condition is
+    not usually true or true on a slow machine: it is true by construction and
+    cannot become false.
+
+- **The second is the more alarming and the less likely here.** The firmware's
+  own setup screen displayed a system date, so that machine's CMOS answers. The
+  PIT is the suspect. Both are bounded because both are wrong, and which one
+  actually hung is a question for the next boot rather than for reasoning.
+- **Status:** fixed, kernel 0.2.18.
+
+### What was done
+
+The PIT wait gives up after five billion cycles — counted in cycles rather than
+in time because this is the function that works out what a cycle is worth, and
+there is no clock yet to time it against. That is about eight tenths of a second
+at 6 GHz and five seconds at 1 GHz: long enough that a slow machine is never cut
+off, short enough that a machine without the chip still boots. The CMOS wait
+gives up after a hundred thousand passes, which is orders of magnitude past the
+two milliseconds an update takes.
+
+### Every fallback already existed, and none of them could be reached
+
+This is the part worth keeping. `arch_monotonic_ns` checks `tsc_khz` and returns
+zero. `x86_time_print_source` prints *"not calibrated"* when it is zero.
+`time_wall_ns` falls back to the time the firmware gave us before its mappings
+went away — which is **exactly what the runtime-services call built for audit row
+2.1 exists to provide**, and its own note says it "answers the machine where
+those read nothing".
+
+Three correct fallbacks, written on three different days, for precisely this
+machine. All of them dead code, because the only step in the chain that could
+not fail was the measurement itself. **Not a guard that cannot fire — a failure
+path that cannot be entered.** The fix adds no new fallback: it makes the
+existing ones reachable.
+
+### Why no test could have found it
+
+Every machine in the verification matrix is QEMU, and QEMU always provides both
+chips. There is no flag that removes them. A rig that boots twenty-nine times on
+hardware that always answers cannot discover a wait on hardware that does not,
+and the count going up would have said nothing about it.
+
+That is checkpoint 17's whole argument, and this is the first entry in the
+register that only a physical machine could have produced.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

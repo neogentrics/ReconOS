@@ -762,6 +762,31 @@ check_for "suspend      :" "  PVH, and it says what cannot suspend" \
 		-drive "file=$DISK,format=raw,if=none,id=n0" \
 		-device nvme,serial=recon0,drive=n0
 
+# The disk a machine with no drive bay has: an SD host controller, which is what
+# an eMMC part is wired to. Every laptop below a certain price has this instead
+# of a slot, and the kernel had no driver for it until 3.1.
+#
+# **Asserted on the partition offsets rather than on a device appearing.** The
+# first version of this driver found the controller, identified the card, and
+# reported a 64 MB card as 30 GB -- every CSD field read eight bits from where it
+# lives, because an R2 response arrives without its low byte. A check for "mmc0
+# exists" passes that. A check that says where the partitions are does not.
+if command -v sgdisk >/dev/null 2>&1; then
+	SDCARD=$(mktemp -u)/card.img
+	mkdir -p "$(dirname "$SDCARD")"
+	truncate -s 64M "$SDCARD"
+	sgdisk -n 1:2048:+8M  -t 1:ef00 -c 1:ESP  "$SDCARD" >/dev/null 2>&1
+	sgdisk -n 2:20480:+16M -t 2:8300 -c 2:data "$SDCARD" >/dev/null 2>&1
+
+	check_for "slice mmc0 2 20480" "  PVH, an SD host controller" \
+		qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+			-device sdhci-pci,id=sd \
+			-drive "file=$SDCARD,format=raw,if=none,id=card" \
+			-device sd-card,drive=card,bus=sd-bus
+
+	rm -rf "$(dirname "$SDCARD")"
+fi
+
 # And SATA, which is what the machines between the IDE era and the NVMe one
 # have -- roughly everything built between 2005 and 2020, which is most of what
 # this will actually be installed on for some years yet.
