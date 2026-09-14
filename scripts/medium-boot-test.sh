@@ -129,6 +129,46 @@ else
 	fail=$((fail + 1))
 fi
 
+# --- and does it know which stick it came from ------------------------------
+#
+# Compared against what is actually on the disk rather than against the shape
+# of the line. A check that accepts anything GUID-shaped passes just as happily
+# when the loader has named a different volume, which is KF-213 exactly: the
+# pattern matched, the answer was about something else, and the run was green.
+#
+# Both firmwares, because they arrive at this by entirely different routes --
+# UEFI walks its own device path for a hard-drive node; BIOS has the drive the
+# firmware left in DL and the block it found the EFI partition at. A test of
+# one of them is a test of one of them.
+want_lba=$(sgdisk -i 2 "$IMG" 2>/dev/null |
+	awk '/^First sector:/ { print $3; exit }')
+want_guid=$(sgdisk -i 2 "$IMG" 2>/dev/null |
+	sed -n 's/^Partition unique GUID: //p' | tr 'A-Z' 'a-z')
+
+say "UEFI says which partition it booted from"
+if [ -z "$want_guid" ] || [ -z "$want_lba" ]; then
+	echo "SKIPPED -- sgdisk could not read the medium's partition 2"
+elif echo "$uefi" | grep -qa "booted from  : block $want_lba, partition ${want_guid%%-*}-$(echo "$want_guid" | cut -d- -f2)-$(echo "$want_guid" | cut -d- -f3)"; then
+	echo "block $want_lba, and the GUID the disk carries"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- disk says block $want_lba, $want_guid"
+	echo "$uefi" | grep -a 'booted from' | sed 's/^/      /' | head -2
+	fail=$((fail + 1))
+fi
+
+say "and BIOS says that block by another route"
+if [ -z "$want_lba" ]; then
+	echo "SKIPPED -- sgdisk could not read the medium's partition 2"
+elif echo "$bios" | grep -qa "booted from  : block $want_lba of drive"; then
+	echo "block $want_lba, reached a different way"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- disk says block $want_lba"
+	echo "$bios" | grep -a 'booted from' | sed 's/^/      /' | head -2
+	fail=$((fail + 1))
+fi
+
 # --- reading the stick it came from -----------------------------------------
 #
 # This assertion used to say the opposite. Until checkpoint 11b the kernel
