@@ -32,6 +32,8 @@ REPO = 'neogentrics/ReconOS'
 # "accounts" is worse than no label, because somebody filtering by area then
 # trusts the filter.
 AREA = {
+    'KF-226': 'startup', 'KF-227': 'storage', 'KF-228': 'storage',
+    'KF-229': 'storage', 'BG-193': 'storage',
     # Keyed by the whole identifier, not by the number.
     #
     # It was keyed by the number while one sequence served both tracks. When

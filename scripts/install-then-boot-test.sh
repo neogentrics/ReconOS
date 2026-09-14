@@ -230,8 +230,32 @@ fi
 # said since it was written that "a test that leaves the disk modified is a test
 # that can only be run once" -- and puts back every byte it borrows. Nothing was
 # checking whether the tests above it did the same.
+#
+# --- Why this is its own boot and not the BIOS one ---
+#
+# It used to be asked of `$bios_boot`, and could not have failed. Over BIOS the
+# kernel does not find the disk it booted from -- KF-192, open -- so the boot
+# report reads `root : none found; file calls will say so`, the five tests that
+# need a volume say so, and a boot that never touched a volume was counted as
+# "passed, second boot on this volume".
+#
+# The fault it was written to catch was sitting there the whole time: five
+# self-tests create a file with a fixed name and none cleared it first, so
+# every second boot of an installed disk reported five FAILs (KF-229). It took
+# booting the installed disk twice by hand to see it.
+#
+# Hence the guard below. A check that quietly becomes vacuous is worse than one
+# that is missing, so this one says so rather than passing.
 say "and they pass again, on a volume already written to"
-if self_tests_passed "$bios_boot" "second boot on this volume"; then
+again=$(timeout 90 qemu-system-x86_64 -bios "$OVMF" -m 512M -nographic \
+	-drive "file=$W/target.img,format=raw,if=none,id=t0" \
+	-device nvme,serial=target,drive=t0 2>&1 | tr -d '\r')
+
+if ! echo "$again" | grep -qaE 'root +: +nvme'; then
+	echo "NO VOLUME UNDER IT"
+	echo "$again" | grep -aE 'root +:' | sed 's/^/      /' | head -3
+	fail=$((fail + 1))
+elif self_tests_passed "$again" "second boot on this volume"; then
 	pass=$((pass + 1))
 else
 	fail=$((fail + 1))
