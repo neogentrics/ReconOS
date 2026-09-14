@@ -131,6 +131,13 @@ AREA = {
     'KF-209': 'kernel',
     'KF-210': 'build',
     'KF-211': 'kernel',
+    # Added by the desktop session on 14 September: both were left
+    # without a line and make-bug-register.py refuses to run until every
+    # entry has one. KF-212 is a stage 2 that no longer fits in the 64KB
+    # real mode can address -- a size limit on a build artefact, which is
+    # where 'build' has gone before; KF-213 is a test that could not read
+    # the loader it was testing.
+    'KF-212': 'build', 'KF-213': 'build',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
