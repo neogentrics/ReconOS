@@ -107,6 +107,10 @@ enum elf_result elf_load(struct addrspace *as, const void *image, u64 len,
 extern const unsigned char user_elf_image[];
 extern const u64 user_elf_image_len;
 
+/* The second program: the same loader, a different language. */
+extern const unsigned char paint_elf_image[];
+extern const u64 paint_elf_image_len;
+
 bool elf_self_test(void);
 
 #endif /* RECON_KERNEL_ELF_H */

@@ -1049,6 +1049,111 @@ bool user_elf_test(void)
 	return false;
 }
 
+/*
+ * --- A program written in C ---
+ *
+ * The desktop is ninety thousand lines of C, and until this test every program
+ * that had ever run in ring 3 on this kernel was assembly. That is not a
+ * difference of degree: assembly can be written against a system call by hand,
+ * and C needs a stack that is aligned the way the ABI says, a data segment its
+ * globals actually live in, and a compiler that has not replaced a loop with a
+ * call to something that is not there.
+ *
+ * So this runs `user/paint.c`, built by the same compiler as the kernel with
+ * the kernel's flags removed, linked against nothing. It asks the screen's
+ * size, refuses a kernel whose description is a different size from the
+ * structure it was built against, maps /dev/fb0, fills it, and reads back four
+ * markers placed through `pitch`.
+ *
+ * **Every marker is placed through pitch and never through width times four.**
+ * On this emulator the two are equal, which is exactly why a program that got
+ * it wrong would pass here and shear on a laptop -- so the two markers on the
+ * right-hand edge are the ones that would move, and they are read back.
+ */
+bool user_c_program_test(void)
+{
+	static const char *const why[] = {
+		"it exited 0, which is not one of its codes -- so it never"
+		" reached its own exit call",			/* 0 */
+	};
+	static const struct {
+		i64 code;
+		const char *what;
+	} named[] = {
+		{ 60, "the kernel's screen description is a different size"
+		      " from the one the program was built against" },
+		{ 61, "SYS_SCREEN refused" },
+		{ 62, "/dev/fb0 would not open" },
+		{ 63, "SYS_MAP refused" },
+		{ 64, "the screen's numbers do not describe a screen" },
+		{ 65, "a pixel did not read back -- the mapping is not the"
+		      " screen, or pitch was not honoured" },
+	};
+
+	u64 exits_before  = exits;
+	u64 calls_before  = calls_served;
+	u64 faults_before = faults;
+	enum elf_result r = ELF_OK;
+	struct thread *t;
+	u64 deadline;
+	size_t i;
+
+	/*
+	 * No screen is not a failure. A serial-only boot is a real
+	 * configuration this kernel supports, and a test that failed there
+	 * would make every headless verification run red for a reason that is
+	 * not a fault.
+	 */
+	{
+		struct fb_info info;
+
+		if (fbdev_describe(&info) != SYS_OK) {
+			kputs("  a C program: no screen on this machine, so"
+			      " nothing to draw on\n");
+			return true;
+		}
+	}
+
+	t = user_elf_create("paint-c", paint_elf_image, paint_elf_image_len,
+			    &r);
+	if (!t) {
+		kprintf("  a C program: could not start it%s%s\n",
+			r == ELF_OK ? "" : " -- ",
+			r == ELF_OK ? "" : elf_why(r));
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  a C program: it never reached its exit call\n");
+		say_how_far_it_got(t, calls_before, faults_before);
+		return false;
+	}
+
+	if (last_exit_code == 55) {
+		kprintf("  a C program: compiled from C, loaded, and its"
+			" pixels are on the screen\n");
+		return true;
+	}
+
+	for (i = 0; i < sizeof(named) / sizeof(named[0]); i++) {
+		if (last_exit_code == named[i].code) {
+			kprintf("  a C program: %s\n", named[i].what);
+			return false;
+		}
+	}
+
+	if (last_exit_code == 0)
+		kprintf("  a C program: %s\n", why[0]);
+	else
+		kprintf("  a C program: exited with %ld, which is not one of"
+			" its own codes\n", (long)last_exit_code);
+	return false;
+}
+
 /* The three calls the desktop asked for, exercised from ring 3.
  *
  * From ring 3 specifically, and not by calling the handlers directly, because

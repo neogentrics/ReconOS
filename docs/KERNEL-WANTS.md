@@ -16,6 +16,83 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## The console and a program both own the screen
+
+**Where:** `kernel/user/paint.c`, the first ReconOS program written in C, on
+14 September 2026. Found by photographing the panel rather than by reading the
+serial line, which said the program had succeeded — and it had.
+
+A program opens `/dev/fb0`, is told the geometry by `SYS_SCREEN`, maps it with
+`SYS_MAP` and fills it. That all works. Then the program exits, the kernel
+prints its next self-test line, and **the framebuffer console draws straight
+over the top of the picture** — not all of it, only the cells it has characters
+in, so what is left is a screen with the program's background showing round the
+edges of a block of kernel text.
+
+There is no arbitration. Both are writing to the same pixels through different
+paths, and the last writer wins.
+
+**Why this is fatal for the desktop rather than untidy.** The compositor owns
+every pixel: it decides what is on the screen, and something else drawing into
+the middle of that is not a cosmetic problem, it is the compositor being wrong
+about what is displayed. It will not redraw over the damage, because nothing
+told it there was any. A kernel log line during a login screen would sit there
+until something else happened to repaint that region.
+
+**What would replace it:** a way for the program that has mapped `/dev/fb0` to
+be the one that draws. Not a lock in the general sense — the simplest thing
+that would do is for the console to stop painting to the *panel* while the
+framebuffer is mapped, and keep painting to serial, which is where anybody
+debugging is reading anyway. Give it back when the descriptor is closed or the
+program exits, so a program that dies does not leave a machine with no console.
+
+The desktop does not need to *share* the screen with the console. It needs the
+console to stop, and it needs the stopping to be tied to something the kernel
+can observe rather than to a promise the program makes.
+
+**Whose side:** `core/`. Nothing about it names a machine — it is a rule about
+which of two writers is allowed to touch a mapping, and both of them are
+already portable.
+
+---
+
+## Nothing in user mode can start a program
+
+**Where:** everywhere, the moment there is more than one thing to run. Hit on
+14 September 2026 while writing the C environment: there is a `crt0`, a syscall
+header and a program that draws, and no way for that program to be started by
+anything except the kernel deciding to start it.
+
+The kernel loads and runs an ELF — `core/elf.c` does the whole job, and it does
+it well enough that a C program with two segments and a `.bss` runs correctly.
+What is missing is the call. There is no `fork`, no `exec`, no `spawn` and no
+`wait`, so the set of programs that can run is the set the kernel was compiled
+knowing about.
+
+**Why this is the one that blocks everything else.** A desktop is not one
+program. It is a compositor that starts a shell, a shell that starts
+applications, and a session that restarts what dies. Every one of those is a
+program starting another program and being told when it ends. Until that call
+exists, the most the desktop can be on this kernel is a single binary with
+everything linked into it — which is what it is on Linux today, and is the
+thing the move to Wayland clients was meant to stop.
+
+**What would replace it:** whatever shape suits the kernel. `fork` is not
+required and arguably not wanted — copy-on-write of a whole address space to
+immediately discard it is a lot of machinery for what is almost always
+`spawn`. A call that takes a path, an argument vector and an environment and
+returns something to wait on would do everything the desktop needs, and it
+avoids `fork`'s hard cases entirely.
+
+The one thing the desktop does need alongside it is **a way to be told a child
+has ended and what its exit code was**, because a session that restarts what
+dies has to know that something died.
+
+**Whose side:** `core/` for the call and the process work; `arch/` only for
+whatever entering a new address space costs on each machine.
+
+---
+
 ## Creating a file with a mode
 
 **Where:** `src/recon_tls.c`, generating the private key for remote access.
