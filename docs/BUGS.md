@@ -6932,6 +6932,45 @@ answer" are different faults that looked identical.
 reports 131072 blocks and its GPT still reads back as `slice mmc0 1 2048 18431`
 and `slice mmc0 2 20480 53247`.
 
+### KF-221 - The AML parser stopped at the first conditional, thirty-seven bytes into a real machine's namespace
+
+- **Found:** 14 September 2026, on the Gateway:
+  `aml : 0 names, 0 devices, 0 methods stepped over` and
+  `aml : stopped at byte 37 on opcode a0 -- the namespace is partial`.
+- **Cost:** the kernel learns nothing about a real machine from ACPI. No `_S5`,
+  so `power off : the machine can only be halted`. No sleep states, so
+  `this machine declares no way to suspend`. No devices from the namespace at
+  all.
+- **What it was.** Opcode `0xA0` is `IfOp`. The parser knew every *declaration*
+  -- Scope, Method, Device, Name, Package and the rest -- and nothing from the
+  statement family. Firmware routinely wraps declarations in
+  `If (OSYS >= ...)`, so the first conditional in a twenty-five-table namespace
+  ended the walk. QEMU's table has none at the top level, which is why twenty-
+  nine boots a run never met one.
+- **Status:** fixed, kernel 0.2.26.
+
+### What was done
+
+`If`, `Else` and `While` all carry a PkgLength, which is the shape `Method`
+already has, so they are stepped over the same way. The line this parser draws
+does not move: it still records what the machine *declares* and never runs what
+it *does*.
+
+### And the cost is counted rather than hidden
+
+**Firmware does declare things inside conditionals**, and stepping over the `If`
+steps over them too. Entering the body instead would mean reading one arm of a
+branch whose condition cannot be evaluated here and presenting what was found as
+fact -- wrong, and wrong silently, which is worse than absent and said aloud.
+
+So the blocks are counted, and the boot prints how many were not entered when
+there were any. A namespace partial for a stated reason is the same answer this
+parser already gives when it meets an opcode it does not know; this turns the
+reason from a full stop into a number.
+
+**Verified not to have changed the table that already worked**: QEMU still
+reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -61,6 +61,14 @@ struct aml_state {
 	unsigned devices;
 	struct aml_device device[AML_MAX_DEVICES];
 
+	/* Conditional blocks walked past without entering.
+	 *
+	 * Not an error and not nothing: whatever they declare is missing from
+	 * everything below, so a reader comparing this namespace against a
+	 * machine needs the number to know how much of the table was not
+	 * looked at. */
+	unsigned conditionals;
+
 	/* The sleep states this machine declares, indexed by their number.
 	 *
 	 * Each is a package of small integers naming what to write to the two
