@@ -1,69 +1,40 @@
-Asked for as "redesign the entire layout of the browser -- it doesn't have a
-lot of buttons and features". It had three: back, forward and reload, with an
-address bar. Everything below is what a window with one page in it turns into
-when it can hold several.
+"That points at a place on this page, which this cannot jump to yet" was the
+viewer's answer to every #anchor on the web, including the one link whose
+entire purpose is to be followed: "Skip to content", which exists for people
+who cannot use a mouse.
 
-Tabs. The structural change, and the one everything else sits on. A window
-was a page: one document, one history, one set of fetches. It is now a window
-that *owns* pages, and the split is exactly at the toolbar -- the tab owns the
-document and the work, the window owns the chrome around it.
+Three pieces. An address keeps what follows the hash -- out of the path,
+because that is not part of what is asked of the server, and out of the
+formatted address, because two addresses differing only after the hash are the
+same document and comparing them with the fragment in would fetch the page
+again for every anchor on it. A document records its named places: every
+id, and the block it lands on, which is the finest thing a viewer can scroll
+to. And the viewer arrives, on the draw after the click, because where a
+block *is* is only known during the pass that lays the page out.
 
-The part worth writing down is that every fetch is handed the tab, not the
-window. A page finishing in a background tab lands in its own tab instead of
-overwriting whatever is in front of you, and the same rule stops a background
-page rewriting the address bar or the window's title. Twelve to a window, each
-one heap-allocated -- an image table and a history is a quarter of a megabyte,
-and twelve of those inside the window struct would be three megabytes of
-window whether or not anybody opened a second tab.
+A link naming a place the page does not have says so, rather than doing
+nothing -- a link that appears dead is indistinguishable from one this has
+failed to handle. A bare #, which pages use for links only script gives
+meaning to, goes to the top, which is what a browser does.
 
-Closing the last tab empties it rather than closing the window. A browser that
-vanishes when you close a tab is a browser people lose work in.
+And the bug that was in the way (BG-168). href="#main" parsed to an empty
+fragment, because the fragment is pulled out by searching for a hash in the
+*path* -- and the path that branch writes is the base's, whose own hash was
+stripped when the base was parsed. Every link within a page named no place at
+all, and the viewer correctly did what that means: went to the top of the page
+you were already at the top of.
 
-A toolbar with the controls a browser has. Home, and a stop that is the
-same button as reload -- one question, "is this page still coming?", whose
-answer is never both, where two buttons would leave one of them always dead.
+There was no suite for reading an address, and there could not easily have
+been one. The parser sat in recon_http.c beside the fetching, so testing it
+meant linking sockets, TLS, the registry and a Wayland event loop. An address
+parser that cannot be tested without a socket is one nobody tests. It is
+src/recon_url.c now -- 250 lines that open nothing -- and tests/test_url.c
+covers it: full addresses, fragments, resolution against the page a link was
+written on, and the fact that two places on one page format as the same
+address.
 
-A padlock that says only what it knows. Closed for TLS, open for plain
-HTTP, and absent before anything has loaded. It is deliberately not a claim
-about the site: "the connection was encrypted" is the only thing this can
-actually know, and dressing that up as "this page is safe" would be a lie told
-by the browser rather than by the site. Drawn rather than typed, because the
-system font has the arrows, the star, the house and the triple bar this
-toolbar uses and does not have U+1F512 -- and a security indicator that is
-sometimes invisible is worse than none, since its absence is what says "not
-secure".
-
-Bookmarks, kept in /Users/Shared/Web/bookmarks.txt as url<tab>label --
-a tab because a title has spaces in it and an address does not, so the split
-needs no quoting and no escape rules to get wrong. The star adds and removes:
-one control answering one question, where a separate remove would be a second
-control that is only ever right when the first is wrong. The bar turns itself
-on when the first bookmark is kept, because a bookmark you cannot see is one
-you will not believe was saved.
-
-Find on page, with the matches marked *behind* the words rather than by
-recolouring them -- a page already uses colour to mean things, and a match
-that recolours a word competes with whatever the page was saying. The current
-match takes the accent and the others a wash of it, so "which one am I on"
-reads without counting. The count comes out of the same pass that draws the
-page: counting separately means walking the document again with a second idea
-of what a word is, and the two disagree the moment one is changed.
-
-Zoom, per tab, 50% to 250%. It multiplies whatever the kind and the
-stylesheet settled on rather than replacing it, so a heading at 150% is half
-again as big as *that heading*. The percentage appears in the status bar only
-when it is not 100%, and clicking it puts it back -- a number that is always
-there is a number that never means anything.
-
-A menu, and the keys: Ctrl+T, Ctrl+W, Ctrl+F, Ctrl+D, Ctrl+L, Ctrl+R,
-Ctrl+plus, Ctrl+minus, Ctrl+0, F3, Escape. The shortcuts are read before any
-field sees the key -- letting the address bar have Ctrl+T first would type a
-"t" instead of opening a tab. Entries that cannot do anything are drawn and
-greyed rather than hidden: a menu whose entries come and go is one nobody can
-learn the shape of, and "why is this grey" has an answer where "where did it
-go" does not.
-
-The tab strip and the menu rows both go through recon_widget -- the tab look
-and the menu highlight already existed there, which is what that layer is for.
+Find on page also goes to the match now rather than marking one that may be
+off screen, a third of the way down the window and only when it is not already
+visible.
 
 ---

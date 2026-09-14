@@ -326,6 +326,21 @@ bool user_elf_test(void);
  * on a serial-only boot rather than a failure. */
 bool user_c_program_test(void);
 
+/*
+ * Start the first program that is not a test, and **do not wait for it**.
+ *
+ * Every other user program this kernel runs is a self-test: it is created, it
+ * is waited on, its exit code is read, and the boot carries on. This one is
+ * the opposite in every respect -- it draws a screen and stays up, so waiting
+ * for it would be waiting for the machine to be switched off.
+ *
+ * Returns false when there is nothing to draw on or the program would not
+ * load. Neither is fatal: a serial-only boot is a configuration this kernel
+ * supports, and a machine with no screen has nowhere to put a first-boot
+ * screen.
+ */
+bool user_start_first_screen(void);
+
 /* The largest program that can be loaded from a path. Bounded because the
  * image is read into the kernel's memory before it is parsed, and a file that
  * does not fit is refused rather than loaded from its first bytes. */

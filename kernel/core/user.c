@@ -1070,6 +1070,52 @@ bool user_elf_test(void)
  * it wrong would pass here and shear on a laptop -- so the two markers on the
  * right-hand edge are the ones that would move, and they are read back.
  */
+/*
+ * --- The first program that is not a test ---
+ *
+ * `hello.S` proved the loader. `paint.c` proved that C compiled against these
+ * headers runs here at all. Both exit with a code this kernel reads, which is
+ * what makes them tests.
+ *
+ * `recon_init` is what somebody sees. It asks SYS_MACHINE what the machine is,
+ * SYS_SCREEN how the display is arranged, SYS_LIST what is on the volume, and
+ * draws a screen a person standing in front of a computer that has just
+ * started can read. Then it yields forever, because there is nothing to hand
+ * the screen to.
+ *
+ * **It is not waited for.** Every other user program here is created, waited
+ * on and read; waiting for this one would be waiting for the machine to be
+ * switched off.
+ */
+bool user_start_first_screen(void)
+{
+	enum elf_result r = ELF_OK;
+	struct thread *t;
+	struct fb_info info;
+
+	/*
+	 * No screen is not a failure. A serial-only boot is a real
+	 * configuration this kernel supports, and a machine with no display
+	 * has nowhere to put a first-boot screen -- so it says so and the
+	 * boot carries on.
+	 */
+	if (fbdev_describe(&info) != SYS_OK) {
+		kputs("no screen on this machine, so nothing to draw on\n");
+		return false;
+	}
+
+	t = user_elf_create("recon-init", init_elf_image, init_elf_image_len,
+			    &r);
+	if (!t) {
+		kprintf("the first screen could not be started%s%s\n",
+			r == ELF_OK ? "" : " -- ",
+			r == ELF_OK ? "" : elf_why(r));
+		return false;
+	}
+
+	return true;
+}
+
 bool user_c_program_test(void)
 {
 	static const char *const why[] = {

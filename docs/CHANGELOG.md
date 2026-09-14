@@ -9,6 +9,217 @@ way for the two to disagree.
 
 ---
 
+## v0.4.25 — ReconOS is on the screen
+
+Until this version every program that had ever run in ring 3 on the ReconOS
+kernel was a self-test. `hello.S` proved the loader. `paint.c` proved that C
+compiled against these headers runs here at all and that a framebuffer is
+written through its **pitch** and not through width times four. Both end by
+exiting with a code the kernel reads, which is what makes them tests.
+
+**`userland/init/recon_init.c` is what somebody sees.** It asks `SYS_MACHINE`
+what the machine is, `SYS_SCREEN` how the display is arranged and `SYS_LIST`
+what is on the volume, draws a screen a person standing in front of a computer
+that has just started can read, and stays up.
+
+Booted in QEMU, the screen it drew said: 1 processor found and 1 in use;
+511.8 MiB with 508.8 MiB free; `QEMU Virtual CPU version 2.5+`; 2560 x 1440 at
+10240 bytes a row; and *no volume this kernel can read*, because no disk was
+attached. Every one of those came out of the kernel through a system call. On
+real hardware they become the machine's own.
+
+### It is the first customer of the C library
+
+Every string on that screen goes through `snprintf`. That is the point of the
+last four versions: a library that passes 3.6 million comparisons against
+glibc is a suite of functions, and a library something is **built on** is a
+library. `recon_init` links `string.c`, `printf.c`, `ctype.c`, `stdlib.c`,
+`stdio.c` and `syscalls.c` and allocates nothing, because there is still no
+allocator -- every buffer is sized at compile time, the same discipline
+`libc/stdio.c` already follows.
+
+It needed one thing the two self-tests did not: **vectors**. `USERCFLAGS`
+turns SSE off, which is right for the kernel and was inherited by the user
+programs without anybody needing otherwise -- `paint.c` has no floating point
+in it. `snprintf` does: `%f` exists, and on x86_64 a function taking a double
+cannot be *compiled* without SSE whether or not anything calls it. Allowing it
+is safe and not an assumption: `struct thread` carries 576 bytes of vector
+state and `sched_switch` saves and restores it on every switch. KF-146 is the
+entry about that buffer being sixteen bytes too small, which is a fault that
+only exists because the state is real.
+
+### The drawing is tested without a kernel, and that is deliberate
+
+`userland/init/screen.c` takes a buffer, a description of how it is arranged
+and some facts. It makes no system call and does not know one exists -- so the
+host renders exactly the picture the machine will render, in a millisecond,
+and `recon_init_screen_tests` checks it. **306,797 checks** across nine
+resolutions from 320x200 to 4K.
+
+Finding out what the first screen ReconOS ever draws looks like should not
+require writing a stick, walking to a machine and turning it on.
+
+**Every canvas in that suite has padding on the end of each row, and the suite
+checks that nothing touched it.** This is the one thing a photograph cannot
+catch: on a screen where bytes per row happen to equal width times four -- which
+is most emulators -- a program that confuses the two draws a *perfect* picture
+and shears on the first laptop. The real framebuffer in QEMU turned out to be
+2560 x 1440 with 10240 bytes a row, where the two are equal; the padding is
+what says the code would survive a screen where they are not.
+
+### Three faults, and one of them needed an eye
+
+**BG-190** -- the text drawer checked its text for null and not its canvas, and
+segmentation-faulted on the suite's first run. Beside it, `panel_w - line * 2`
+is unsigned, so a canvas narrower than its own margins gave four billion rather
+than a negative, and the fill loop after it would have run until the machine
+was switched off. A blank screen is a far better failure than one that appears
+to have hung.
+
+**BG-191** -- the panel was sized to the display and the content filled the top
+third of it. Every check passed; it still looked wrong, and the only thing that
+said so was looking at the rendering. Same lineage as BG-174.
+
+**BG-192** -- a test that could not pass: the canvas is filled with a guard byte
+to catch a stride fault, and the text tests asked whether pixels were non-zero.
+It announced itself only because the answer was obviously wrong. Had the check
+been the other way round it would have passed on a canvas where nothing was
+ever drawn. **A test that cannot pass and a test that cannot fail are the same
+fault from opposite sides, and only one of them tells you.**
+
+### And the console still owns the screen
+
+The first boot came back with the panel showing through a hole in the kernel's
+boot log -- the conflict `docs/KERNEL-WANTS.md` has had an entry for since
+`paint.c`. **Moving the call after the kernel's last message was not enough**,
+and that is the part worth keeping: the console does not only draw when it is
+handed something new, it repaints its window when it scrolls. One `kputs` after
+the program started put the whole log back on top of a screen that had just
+been drawn.
+
+What works today is `main.c` starting the program as its last statement with
+**nothing printed after it at all**, not even a success line. That is an
+arrangement rather than a fix and it holds for exactly as long as there is one
+program. It is written where somebody would look, because the ordering makes
+the fault invisible rather than absent -- the next person to add a diagnostic
+print after that line will not find out what they broke until they photograph a
+machine.
+
+### What it asks the kernel for next
+
+A new entry, and a small one: **a program has to be inside the kernel image to
+run at all.** `recon_init` is 121 KiB of `.rodata` in a 539 KiB kernel, carried
+by `.incbin` beside the two self-tests. Changing a string on the first-boot
+screen means rebuilding and reflashing a kernel.
+
+Every piece of the alternative is already built -- `SYS_OPEN`, `SYS_READ` and
+`user_elf_create` all exist and are exercised. What is missing is the few lines
+that read `/System/init.elf` into a buffer and hand it to the loader instead of
+handing it a pointer into `.rodata`. **That is much smaller than process
+creation and worth separating from it**: a kernel that can start one named
+program from a volume is a system somebody can install a new version of.
+
+---
+
+## v0.4.24 — the maths, and the difference between close and right
+
+ReconOS could not draw a letter. Not for want of a font or a rasteriser: the
+rasteriser is `third_party/stb_truetype.h` and it calls `sqrt`, `floor`,
+`ceil`, `pow`, `fmod`, `acos` and `cos`, and on a kernel with no glibc under it
+there was nothing to answer them. The maths library is not a calculator's
+luxury; it sits between this system and its first glyph.
+
+**Twenty functions, 3,613,874 checks against the host's, and no failures.**
+
+### Two standards, because these functions are two kinds
+
+**Eight have an exactly right answer and are held to bit-for-bit equality** --
+`fabs`, `floor`, `ceil`, `round`, `fmod`, `ldexp`, `lrintf`, and `sqrt`. The
+last is exact for free: IEEE 754 requires square root to be correctly rounded
+and both architectures have the instruction, so `sqrt` here is `sqrtsd` and
+nothing else. Verified in the object file rather than assumed.
+
+Bit-for-bit catches what `==` cannot. `floor(-0.4)` is **-0.0**, and a caller
+who divides by it gets negative infinity rather than positive. The two compare
+equal.
+
+**Twelve are approximations**, held to a bound in units in the last place --
+and the suite **prints the worst error it found** for each rather than only
+whether it stayed under the line, because a tolerance nobody looks inside is a
+tolerance that can grow by a factor of a thousand and still pass. Measured:
+
+| | ulp | | ulp | | ulp |
+| --- | --- | --- | --- | --- | --- |
+| `exp` | 1 | `sin` | 2 | `asin` | 3 |
+| `log` | 3 | `cos` | 2 | `acos` | 3 |
+| `log10` | 2 | `tan` | 4 | `atan` | 2 |
+| `pow` | 17 | | | `atan2` | 3 |
+| `cbrt` | 4 | | | | |
+
+Every bound in the suite is that figure rounded up to the next even number.
+They were set **after** the runs. Setting them first would have been setting
+them from hope.
+
+### Four faults, and every one was a wrong answer rather than a close one
+
+**BG-186 -- the reduction subtracted the same piece of pi/2 twice.** 860 **billion**
+ulp at three pi. `PIO2_1T` is the tail of `PIO2_1` and `PIO2_2` is the leading
+part of that same tail; they are alternatives, not a chain. Fixing that left a
+second fault underneath: `k * pi/2` is only exact while k has under twenty
+bits, so everything past about 1e6 was still wrong and no test of small angles
+could see it. The reduction now runs in **2,048 bits of 2/pi**, in integer
+arithmetic where nothing rounds. `scripts/gen-two-over-pi.py` computes that
+table and checks it against the published expansion before writing it;
+`check.sh` regenerates and compares it, like the help pages.
+
+**BG-187 -- a ten-bit hole between two doubles.** The reduction accumulates 126
+bits and has to get them into doubles; taking the top half as
+`(double)(acc >> 63)` **rounds**, so bits 53 to 62 were in neither piece. Only
+visible near a multiple of pi, where those are the only significant bits there
+are. Three pieces of 42 instead, each of which a double holds exactly. `sin`
+and `cos` are 2 ulp out to **1e300** now, and the suite prints that sweep so
+the limit is a measurement rather than a claim.
+
+**BG-188 -- `pow(1, nan)` and `pow(-8, 3)`.** One to any power is one,
+including to a power that is not a number; the check for a base of one came
+after the check for a NaN, and the order is the whole of what decides it. And
+`exp(3 * log 8)` returned 511.99999999999994, which is what somebody notices
+first. A small integer power is repeated squaring now -- bounded at 8, because
+squaring costs a rounding per doubling and at a power of 60 it was 33 ulp where
+the logarithm was 17.
+
+**BG-189 -- `cbrt` overflowed in its own last step.** `guess * (cube + 2x) /
+(2cube + x)` multiplies before it divides, so the numerator at x = 1e300 is
+1e100 times 3e300 and there is no such double. **Found by printing the
+intermediates**, which mattered: the formula was right, and reading it again
+would have kept saying so.
+
+### And `pow` is honestly the weak one
+
+Seventeen units where everything else is two to four, and it is inherent rather
+than unfinished. `pow` is exp(y * log x), and exp turns an error in its
+argument into the same *relative* error in its answer -- so log's own last bit
+gets multiplied by y before it reaches the result. At y = 40 that was **576
+ulp**. Carrying log to a hundred bits, in two doubles, took it to 17; the rest
+would need exp carried the same way. Seventeen units is two parts in 1e15 --
+the last two digits of sixteen, where a calculator shows fifteen.
+
+### What it unblocked
+
+`scripts/check-userland.sh` is at **11 of 11**, and the new one is
+`src/recon_expr.c` -- the calculator's expression grammar, 459 lines, which
+holds seventeen maths functions in a table of function pointers and therefore
+could not compile until they existed. **ReconOS can do arithmetic with no glibc
+underneath it.**
+
+A sweep of all seventy-nine sources says where the rest stand, and the picture
+is now one word wide: **fourteen are blocked on nothing but `malloc`,
+`calloc` or `free`**. Three want `assert.h`, three want `errno.h`, four want
+`dirent.h`, and the remainder want Wayland, DRM or xkbcommon, which are Linux
+and always were.
+
+---
+
 ## v0.4.23 — the calendar, and a measurement that asks the linker
 
 ### Dates

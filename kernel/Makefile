@@ -283,6 +283,41 @@ USER_ELF := $(BUILD)/user/hello.elf
 # a trade in the wrong direction.
 PAINT_ELF := $(BUILD)/user/paint.elf
 
+# And the third, which is not a test.
+#
+# `hello.S` proves the loader and `paint.c` proves the language. This one is
+# what somebody sees: it asks the machine what it is, asks the screen how it is
+# arranged, asks the volume what is on it, and draws a screen a person standing
+# in front of a computer that has just started can read.
+#
+# It is the first program built against `userland/libc/` rather than against
+# nothing, which is the point of having built that library.
+INIT_ELF := $(BUILD)/user/recon_init.elf
+
+# Its own flags, and the difference from USERCFLAGS is one line: **vectors are
+# allowed**.
+#
+# USERCFLAGS turns SSE off, which is right for the kernel's own code and was
+# inherited by the user programs without anybody needing it to be otherwise --
+# `paint.c` has no floating point in it. `snprintf` does: `%f` exists in
+# `userland/libc/printf.c`, and on x86_64 a function that takes a double cannot
+# even be *compiled* without SSE, whether or not anything calls it.
+#
+# Allowing it is safe here and not an assumption: `struct thread` carries 576
+# bytes of vector state and `sched_switch` saves and restores it on every
+# switch. See KF-146, which is the entry about that buffer being sixteen bytes
+# too small -- a fault that only exists because the state is real.
+#
+# Deferred with = rather than := on purpose: this appears above where
+# USERCFLAGS is defined, and an immediate expansion here would capture an
+# empty variable and silently build the program with no include path at all.
+INITCFLAGS = $(filter-out -mno-sse -mno-sse2 -mno-mmx -mno-80387,$(USERCFLAGS))
+
+INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
+	     ../userland/libc/string.c ../userland/libc/printf.c \
+	     ../userland/libc/ctype.c ../userland/libc/stdlib.c \
+	     ../userland/libc/stdio.c ../userland/libc/syscalls.c
+
 # --- Rules -------------------------------------------------------------------
 
 .PHONY: all all-arches run clean check-portable info
@@ -367,10 +402,29 @@ $(PAINT_ELF): user/paint.c ../userland/crt0.S ../userland/include/recon.h \
 		$(BUILD)/user/crt0.o $(BUILD)/user/paint.o
 	@echo "  built $@"
 
+# The first program that is a system rather than a self-test.
+#
+# Built from ../userland entirely: the program, the drawing, and the C library
+# it is the first real customer of. Nothing under kernel/ is compiled into it.
+$(INIT_ELF): $(INIT_SRCS) ../userland/crt0.S ../userland/include/recon.h \
+	     user/user.ld
+	@mkdir -p $(dir $@)
+	@rm -f $(BUILD)/user/init-*.o
+	@set -e; for s in $(INIT_SRCS); do \
+		o=$(BUILD)/user/init-`basename $$s .c`.o; \
+		$(CC) $(INITCFLAGS) -I../boot/include -I../userland/init \
+			-c $$s -o $$o; \
+	done
+	$(CC) $(ASFLAGS) -I../userland/include -c ../userland/crt0.S \
+		-o $(BUILD)/user/crt0-for-init.o
+	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ \
+		$(BUILD)/user/crt0-for-init.o $(BUILD)/user/init-*.o
+	@echo "  built $@"
+
 # The blob that carries them into the kernel image. `.incbin` rather than
 # objcopy's `-I binary`, because objcopy names its symbols after the path it
 # was given and that name changes when the build directory does.
-$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF) $(PAINT_ELF)
+$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF) $(PAINT_ELF) $(INIT_ELF)
 
 -include $(OBJS:.o=.d)
 

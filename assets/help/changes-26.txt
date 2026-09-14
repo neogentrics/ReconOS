@@ -1,5 +1,9 @@
-A text clipboard. Cut, copy and paste work in Notepad, in every text field
-in the system, and into the Terminal. Before this, text could not be moved
-from one place to another at all.
+Programs arrive as packages. A .rpk is a folder with a manifest in it,
+so a program can bring an icon and other files rather than being one file of
+code. Installing writes a receipt naming everything it placed, and removing
+takes back exactly that. The receipt is written before the program is loaded,
+so one that refuses to load can be rolled back instead of leaving files
+nothing knows about.
 
-Notepad can select text — with the mouse, or Shift and the arrow keys.
+Find in Notepad. Ctrl+F opens a bar above the status line. It ignores
+case and wraps around the end of the document.

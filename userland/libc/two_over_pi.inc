@@ -1,0 +1,23 @@
+/*
+ * 2/pi to 2048 bits, as 64 words of 32. **Generated** by
+ * scripts/gen-two-over-pi.py -- do not edit.
+ *
+ * That script checks what it computes against the published
+ * hexadecimal expansion before writing, because a table of this
+ * shape is wrong in its tenth word or not at all, and being
+ * wrong in its tenth word makes every large angle wrong in a way
+ * no test of small angles could see.
+ */
+static const unsigned int TWO_OVER_PI[64] = {
+	0xA2F9836EU, 0x4E441529U, 0xFC2757D1U, 0xF534DDC0U, 0xDB629599U, 0x3C439041U,
+	0xFE5163ABU, 0xDEBBC561U, 0xB7246E3AU, 0x424DD2E0U, 0x06492EEAU, 0x09D1921CU,
+	0xFE1DEB1CU, 0xB129A73EU, 0xE88235F5U, 0x2EBB4484U, 0xE99C7026U, 0xB45F7E41U,
+	0x3991D639U, 0x835339F4U, 0x9C845F8BU, 0xBDF9283BU, 0x1FF897FFU, 0xDE05980FU,
+	0xEF2F118BU, 0x5A0A6D1FU, 0x6D367ECFU, 0x27CB09B7U, 0x4F463F66U, 0x9E5FEA2DU,
+	0x7527BAC7U, 0xEBE5F17BU, 0x3D0739F7U, 0x8A5292EAU, 0x6BFB5FB1U, 0x1F8D5D08U,
+	0x56033046U, 0xFC7B6BABU, 0xF0CFBC20U, 0x9AF4361DU, 0xA9E39161U, 0x5EE61B08U,
+	0x6599855FU, 0x14A06840U, 0x8DFFD880U, 0x4D732731U, 0x06061556U, 0xCA73A8C9U,
+	0x60E27BC0U, 0x8C6B47C4U, 0x19C367CDU, 0xDCE8092AU, 0x8359C476U, 0x8B961CA6U,
+	0xDDAF44D1U, 0x5719053EU, 0xA5FF0705U, 0x3F7E33E8U, 0x32C2DE4FU, 0x98327DBBU,
+	0xC33D26EFU, 0x6B1E5EF8U, 0x9F3A1F35U, 0xCAF27F1DU,
+};

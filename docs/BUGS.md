@@ -6647,6 +6647,8 @@ The two transcripts quoted in `docs/KERNEL.md` say what stage 2 says now.
 
 ### KF-214 — Two waits on legacy chips that a real machine is allowed not to have, neither of them bounded
 
+[#448](https://github.com/neogentrics/ReconOS/issues/448)
+
 - **Found:** 14 September 2026, on **the first boot of this kernel on real
   hardware** — a Gateway GWTC116-2BL, Celeron N4020, AMI Aptio V, UEFI 2.7. The
   loader ran, the kernel started, the boot report printed as far as the kernel
@@ -6712,6 +6714,8 @@ register that only a physical machine could have produced.
 
 ### KF-215 — The boot menu drew over itself, and highlighted something that was not going to happen
 
+[#449](https://github.com/neogentrics/ReconOS/issues/449)
+
 - **Found:** 14 September 2026, in a photograph of the first real-hardware boot.
   Two faults on one screen, both invisible in the rig.
 - **Cost:** the first thing anybody sees of this operating system was unreadable
@@ -6752,6 +6756,8 @@ lands on any screen. Verified by photograph at 800x600, 1280x800 and 1920x1200.
 
 ### KF-216 — The loader drew on a fifth of the screen the machine had
 
+[#450](https://github.com/neogentrics/ReconOS/issues/450)
+
 - **Found:** 14 September 2026, from the firmware's own setup screen. Its VBT
   names the panel `eDP AUO B125HAN02.201` -- **1920x1080**. The loader reported
   `framebuffer : 800x600`.
@@ -6791,6 +6797,8 @@ Measured: 1280x800 to 1920x1200 under OVMF, with the kernel and a ring-3 program
 both receiving the larger one.
 
 ### KF-217 — A clock that returns zero for ever makes every timeout in the kernel infinite
+
+[#451](https://github.com/neogentrics/ReconOS/issues/451)
 
 - **Found:** 14 September 2026, on the second real-hardware boot, with KF-214's
   fix in. The Gateway got past the kernel heap and printed the whole Time
@@ -6859,6 +6867,8 @@ one failure a plausible number hides.
 
 ### KF-218 — The boot processor assumed it had a tick, and on a machine with no 8254 it had none
 
+[#452](https://github.com/neogentrics/ReconOS/issues/452)
+
 - **Found:** 14 September 2026, on the third real-hardware boot. The kernel ran
   all the way to its self-tests and reported
   `tick : 100 Hz, 0 so far` with `cpu 0 : online, hw 0x0, 0 ticks, 0 switches`.
@@ -6890,6 +6900,8 @@ on the thing it was reasoning about rather than on the belief that the thing is
 always true.
 
 ### KF-219 — Two commands carry no checksum, and the driver asked the controller to check one
+
+[#453](https://github.com/neogentrics/ReconOS/issues/453)
 
 - **Found:** 14 September 2026, on the same boot.
   `sdhci: a card is present and answered neither as SD nor as eMMC`, twice --
@@ -6976,7 +6988,8 @@ reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 - **Found:** 14 September 2026, on the Gateway:
   `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
   internal eMMC. The USB stick it had booted from was attached, carried
-  `econos`, and was passed over.
+  `
+econos`, and was passed over.
 - **Cost:** a diagnostic file written to the wrong disk, and unreachable -- the
   point of writing it is that somebody can pull the medium out and read it
   somewhere else, which an internal eMMC does not allow.
@@ -6984,7 +6997,8 @@ reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
   needs to answer is *"is this the volume I booted from"*. Those were the same
   question right up until two disks qualified, and the internal one was
   enumerated first.
-- **It said yes honestly.** `econos` really was on that eMMC -- KF-220 had
+- **It said yes honestly.** `
+econos` really was on that eMMC -- KF-220 had
   created it there on the previous boot, when the identification step still
   called `fat32_mkpath`. Fixing KF-220 stopped directories appearing on disks
   that had no business carrying one; it did not change which disk wins once two
@@ -7944,6 +7958,152 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built the way a release is. Putting the small buffer back makes six suites
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
+
+### BG-192 — A test that could not pass, on a canvas full of a guard byte
+
+[#458](https://github.com/neogentrics/ReconOS/issues/458)
+
+- **Found in** v0.4.25, on the first run of `recon_init_screen_tests`.
+- **What it was** every canvas the suite draws on is filled with `0xA5` first,
+  so that a program using `width * 4` as its row stride writes into the slack
+  at the end of a row and is caught. Then the text tests asked whether a pixel
+  was **non-zero** to decide whether a glyph had drawn anything -- and every
+  pixel was non-zero before a glyph was drawn. "A space draws nothing" could
+  not pass.
+- **It announced itself only because the answer was obviously wrong.** Had the
+  check been `== 0` instead of `!= 0`, it would have passed on a canvas where
+  nothing was ever drawn, for the same reason, and the suite would have
+  reported that a font works when there was no font. **A test that cannot pass
+  and a test that cannot fail are the same fault from opposite sides**, and
+  only one of them tells you.
+- **Fixed in** v0.4.25. The pixel area is cleared before each text test and the
+  padding is left alone, which is the one arrangement where both questions --
+  did this glyph draw, and did anything touch the slack -- have an answer.
+
+### BG-191 — The first screen's panel was sized to the display, not to what was on it
+
+[#459](https://github.com/neogentrics/ReconOS/issues/459)
+
+- **Found in** v0.4.25. **Found by looking at the rendering.** Every check in
+  the suite passed: the accent rule was drawn, there was text on the panel,
+  nothing touched the padding, and it held at nine resolutions from 320x200 to
+  4K.
+- **What it was** the panel took three quarters of the screen's height and the
+  content filled the top third of that, leaving a large empty box under eight
+  lines of text. On a 1280x800 screen the panel was 600 pixels tall and the
+  writing stopped at 200.
+- **Why nothing caught it.** Every assertion was about whether things were
+  drawn; none was about whether the box fitted them. That is not an oversight
+  in the tests so much as a limit of them -- "is this the right size" is a
+  judgement, and the thing that makes it is an eye.
+- **Fixed in** v0.4.25 by counting the lines that will be drawn and building
+  the panel around them, so a machine with more to say gets a taller panel
+  rather than a fuller one.
+- **Same lineage as BG-174**, which was a text box measured against the line it
+  had just made three lines tall. Both are a thing measured against the wrong
+  thing, both drew perfectly, and both were found by looking at a picture.
+
+### BG-190 — The text drawer guarded the text and not the surface
+
+[#460](https://github.com/neogentrics/ReconOS/issues/460)
+
+- **Found in** v0.4.25, by the first run of the suite, as a segmentation fault.
+- **What it was** `recon_screen_text` checked its `text` argument for null and
+  not its `canvas`, and `put_pixel` reads the canvas's width before it does
+  anything else. The suite passes a null canvas on purpose, because this is the
+  first thing a stranger's machine runs and **the framebuffer description comes
+  from firmware** -- which says surprising things.
+- **A second one beside it, which would not have crashed.** `panel_w - line * 2`
+  is unsigned, so on a canvas narrower than its own margins it is not negative,
+  it is four billion -- and the fill loop after it runs until somebody turns the
+  machine off. A screen that is merely blank is a far better failure than one
+  that appears to have hung, and on a first boot the difference is whether
+  anybody tries again.
+- **Fixed in** v0.4.25. Both functions check the surface, and a canvas too
+  small to hold anything gets its background drawn and nothing else.
+
+### BG-189 — `cbrt` overflowed in its own last step, at both ends of the range
+
+[#454](https://github.com/neogentrics/ReconOS/issues/454)
+
+- **Found in** v0.4.24, before any of it had run. **Found by** the maths suite,
+  and then diagnosed by **printing the intermediates** rather than by reading
+  the formula again -- which mattered, because the formula was right.
+- **What it was** the final Halley step was written
+  `guess * (cube + 2x) / (2cube + x)`. That multiplies before it divides, so at
+  x = 1e300 the numerator is 1e100 times 3e300 and there is no such double:
+  infinity divided by 3e300 is infinity. At the other end the same line
+  underflowed to zero, and at `DBL_MAX` the cube overflowed before the step
+  began. The ratio is always about one; only the spelling was astronomical.
+- **A second fault underneath it.** A subnormal has no exponent to read, so it
+  is scaled into the normals first -- and the borrowed shift was given back
+  where the exponent was computed and **not** where the value was used again.
+  `cbrt(1e-308)` came out 3.5e-68 against a true 2.15e-103: not an inaccuracy,
+  a different number by thirty-five orders of magnitude.
+- **Fixed in** v0.4.24 by removing the possibility rather than the instance:
+  the argument is reduced to its mantissa, [1, 2), before any iteration runs,
+  so no intermediate is ever more than a few times one. Measured at 4 ulp.
+
+### BG-188 — `pow(1, nan)` was not a number, and `pow(-8, 3)` was not -512
+
+[#455](https://github.com/neogentrics/ReconOS/issues/455)
+
+- **Found in** v0.4.24. **Found by** the special-case half of the maths suite,
+  which asserts the answers a reader should be able to see without running it.
+- **What it was** two separate things about the number one. `pow(1, y)` is 1
+  for **every** y including a NaN -- required, surprising, and decided entirely
+  by whether the check for a base of one comes before or after the check for a
+  NaN. It came after.
+- **And an integer power was not an integer.** `exp(3 * log(8))` has no reason
+  to land on 512 and did not: it returned 511.99999999999994, which is the kind
+  of wrong somebody notices on the first thing they type into a calculator.
+- **Fixed in** v0.4.24. A small integer power is repeated squaring, which is
+  exact whenever the answer is. **The bound on it was measured, not chosen**:
+  squaring costs about a rounding per doubling, so at a power of 60 it was
+  33 ulp where the logarithm was 17, and at 8 it is three. Eight it is.
+
+### BG-187 — Two doubles cannot hold 126 bits, and the split had a ten-bit hole
+
+[#456](https://github.com/neogentrics/ReconOS/issues/456)
+
+- **Found in** v0.4.24. **Found by** the maths suite measuring 4,598 ulp in
+  `sin` at three pi -- after the reduction had already been fixed once and
+  improved by eight orders of magnitude.
+- **What it was** the argument reduction accumulates into 126 bits and then has
+  to get them into doubles. Taking the top half as `(double)(acc >> 63)` looks
+  right and is not: converting a 63-bit integer to a double **rounds**, so bits
+  53 to 62 were in neither the high part nor the low one. A ten-bit hole in the
+  middle of the number.
+- **Where it showed is the tell.** Only near a multiple of pi, where the
+  remainder is small and those middle bits are the only significant ones there
+  are. Anywhere else they are below the answer's last place and nothing
+  notices.
+- **Fixed in** v0.4.24. Three pieces of 42 bits, each of which a double holds
+  exactly, so nothing falls between them. `sin` and `cos` are 2 ulp everywhere
+  now, out to 1e300.
+
+### BG-186 — The argument reduction subtracted the same piece of pi/2 twice
+
+[#457](https://github.com/neogentrics/ReconOS/issues/457)
+
+- **Found in** v0.4.24, before any of it had run. **Found by** the maths suite
+  on its first run: **860,948,872,375 ulp** in `sin` at three pi, which is not
+  an inaccurate answer, it is a wrong one.
+- **What it was** pi/2 is carried in pieces so that the subtraction keeps its
+  bits. `PIO2_1T` is the tail of `PIO2_1`, and `PIO2_2` is the **leading part
+  of that same tail** -- they are two alternative refinements, not a chain. The
+  reduction subtracted both, taking pi/2's tail off twice.
+- **And fixing it was not enough.** With the chain correct, `k * PIO2_1` is
+  still only exact while k has under twenty bits, so anything past about 1e6
+  was still wrong -- which no test of small angles could see and which the
+  suite measured directly, because it sweeps out to 1e300 on purpose.
+- **Fixed in** v0.4.24 by doing the reduction in the bits the argument demands:
+  2/pi to two thousand of them, in integer arithmetic where nothing rounds.
+  `scripts/gen-two-over-pi.py` computes the table and **checks it against the
+  published hexadecimal expansion before writing it**, because a constant of
+  that shape is wrong in its tenth word or not at all, and being wrong in its
+  tenth word makes every large angle wrong invisibly. `scripts/check.sh`
+  regenerates and compares it, the same as the help pages.
 
 ### BG-185 — The fix for BG-182 corrected the list, not the method
 

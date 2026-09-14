@@ -86,6 +86,8 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.25** | **ReconOS is on the screen.** The first program on its own kernel that is a system rather than a self-test: it asks the machine what it is, the display how it is arranged and the volume what is on it, and draws a screen somebody can read. The first thing built on `userland/libc/` rather than against nothing. Its drawing is a separate file that makes no system call, so the host renders exactly what the machine renders and 306,797 checks hold it -- with padding on every row of every canvas, because a program that confuses pitch with width times four draws a perfect picture on an emulator |
+| **0.4.24** | The maths: twenty functions, 3,613,874 checks against the host's, none failing. Eight held to bit-for-bit equality and twelve to a bound in units in the last place that the suite measures and prints rather than merely asserts. Four faults, every one a wrong answer rather than a close one -- including an argument reduction 860 billion units out at three pi, now done in 2,048 bits of 2/pi. It is what lets ReconOS draw a letter: the font rasteriser calls seven of them |
 | **0.4.23** | Dates: the two clocks, the calendar and `strftime`, held against the host's across two and a half centuries. Two more desktop sources compile with no glibc under them. And the coverage figure moved from a grep to the linker -- `nm` on the object files knows the external surface exactly, where a list of expected names finds only what is on it and could never have found `puts`, which the compiler puts there by rewriting a `printf` |
 | **0.4.22** | A C library of ReconOS's own, for the day there is no glibc underneath: strings and memory, `snprintf`, the character classes, numbers out of text, and the file layer. 2,473 of the 3,113 library calls in `src/` are answered by it, counted rather than estimated. Held against the library it replaces by compiling both into one program and making every call twice -- 511,000 checks. Nine of the desktop's own sources already compile with every system header directory removed. Three faults found before any of it ran, BG-179 to BG-181, every one of them the reference accepting something this refused |
 | **0.4.6 - 0.4.21** | The web viewer becomes a browser: a parser checked against fifteen hundred cases nobody here wrote, stylesheets, tables with columns, text alignment, links to a place on a page, History and Bookmarks as pages, forms that submit, and cookies with four things they are not allowed to do. Packages say who made them and the signature is checked. A fuzzer that learns. And the configuration that actually ships, built for the first time |
@@ -946,7 +948,7 @@ scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
 boot/         reconboot — the UEFI bootloader, its own build (clang, PE)
 kernel/       the kernel — phase 2, its own build
-userland/     the C library and crt0 for programs running on that kernel
+userland/     the C library, crt0 and the first program to run on that kernel
 third_party/  vendored dependencies (stb)
 docs/         roadmap, bug register, module interface, development notes
 ```
