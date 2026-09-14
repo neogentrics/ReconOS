@@ -182,6 +182,23 @@ enum {
 	 * one in order to get the easy one. */
 	SYS_POWER,
 
+	/* (path, path_len, mode) -> 0, or why not.
+	 *
+	 * The desktop has had a layout since v0.1.0 -- /System, /Programs,
+	 * /Users -- and no way to build it. `reconfs_create` has taken a type
+	 * since the format was written; what was missing was a way to ask for
+	 * one.
+	 *
+	 * **A call of its own rather than a bit in SYS_CREATE's mode**, and
+	 * the reason is that a mode comes straight from a program. A high bit
+	 * meaning "directory" is one an uninitialised variable or a shifted
+	 * constant can set, and the program would be told it succeeded. A
+	 * number cannot be reached by getting a permission wrong.
+	 *
+	 * The parent must exist: making /a/b/c where /a/b does not is ENOENT
+	 * rather than three directories nobody asked for. */
+	SYS_MKDIR,
+
 	SYS_MAX
 };
 

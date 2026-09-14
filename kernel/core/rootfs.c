@@ -318,6 +318,74 @@ abort:
 	return st;
 }
 
+/* A directory, which is the same transaction with nothing written into it.
+ *
+ * Deliberately not `rootfs_create_file` with a flag. The two share the walk,
+ * the existence check and the rebuild, and they differ in the one argument
+ * that decides what the thing *is* -- and a shared function taking a type from
+ * its caller is how a caller that meant a file ends up with a directory. The
+ * duplication is eleven lines and it cannot be got wrong by passing a wrong
+ * value.
+ */
+enum reconfs_status rootfs_create_directory(const char *path, u32 mode)
+{
+	if (read_only)
+		return RECONFS_ERR_READ_ONLY;
+
+	struct reconfs *fs = rootfs();
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 made = 0, dir = 0, new_root = 0;
+	u64 existing = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	/* Walked before the transaction opens, for the reason the file version
+	 * gives: the parent and "does this exist already" are questions about
+	 * the committed tree. */
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	/* Refused even when what is there is already a directory. "It exists"
+	 * and "I made it" are different answers, and an installer that cannot
+	 * tell them apart cannot tell a fresh disk from one it has written to
+	 * before. A caller that wants either is free to ignore EXISTS; one that
+	 * needed to know cannot recover the fact afterwards. */
+	if (reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+			   &existing) == RECONFS_OK && existing)
+		return RECONFS_ERR_EXISTS;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_create(txn, fs, chain.dirs[chain.count - 1], leaf,
+			    RECONFS_TYPE_DIR, mode, &made, &dir);
+	if (st != RECONFS_OK)
+		goto abort_dir;
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort_dir;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort_dir:
+	reconfs_txn_abort(txn);
+	return st;
+}
+
 enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 				       const void *data, u32 len)
 {
@@ -552,6 +620,65 @@ bool rootfs_self_test(void)
 			       sizeof(content)) == RECONFS_OK) {
 		kputs("  rootfs: creating the same name twice was allowed\n");
 		ok = false;
+	}
+
+	/* --- directories, which the volume had no way to grow ---------------
+	 *
+	 * A directory that can be made and not used is an entry with a type
+	 * field. So this makes one, puts a file in it, and reads that file back
+	 * through the whole path -- the one assertion here that could not pass
+	 * on a filesystem that records the type and ignores it.
+	 */
+	st = rootfs_create_directory("/selftest-dir", 0755);
+	if (st != RECONFS_OK) {
+		kprintf("  rootfs: could not make a directory (%d)\n", (int)st);
+		ok = false;
+	} else {
+		static const char inside[] = "a file that lives in it";
+		char readback[64];
+		u32 n = 0;
+
+		if (rootfs_create_directory("/selftest-dir", 0755) == RECONFS_OK) {
+			kputs("  rootfs: making the same directory twice was "
+			      "allowed\n");
+			ok = false;
+		}
+
+		/* A parent that is not there. Refused rather than built, so a
+		 * caller that mistyped a path gets an error instead of a tree
+		 * it did not ask for. */
+		if (rootfs_create_directory("/selftest-dir/nope/deeper",
+					    0755) == RECONFS_OK) {
+			kputs("  rootfs: made a directory under a parent that "
+			      "does not exist\n");
+			ok = false;
+		}
+
+		/* And a file is not somewhere things live. */
+		if (rootfs_create_directory("/mode-test/under",
+					    0755) == RECONFS_OK) {
+			kputs("  rootfs: made a directory inside a file\n");
+			ok = false;
+		}
+
+		st = rootfs_create_file("/selftest-dir/inside", 0644, inside,
+					sizeof(inside));
+		if (st != RECONFS_OK) {
+			kprintf("  rootfs: could not put a file in it (%d)\n",
+				(int)st);
+			ok = false;
+		} else {
+			kmemset(readback, 0, sizeof(readback));
+			st = rootfs_read_file("/selftest-dir/inside", readback,
+					      sizeof(readback), &n, 0);
+
+			if (st != RECONFS_OK || n != sizeof(inside) ||
+			    kmemcmp(readback, inside, sizeof(inside)) != 0) {
+				kputs("  rootfs: the file in the directory did "
+				      "not read back as it was written\n");
+				ok = false;
+			}
+		}
 	}
 
 	kmemset(back, 0, sizeof(back));

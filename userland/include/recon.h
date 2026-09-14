@@ -77,7 +77,8 @@ enum {
 	SYS_SIGRETURN,
 	SYS_MAP,
 	SYS_SCREEN,
-	SYS_POWER
+	SYS_POWER,
+	SYS_MKDIR
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
@@ -298,6 +299,25 @@ static inline i64 recon_screen(struct recon_screen *into, u64 length)
 static inline i64 recon_power(u64 action)
 {
 	return RECON_CALL1(SYS_POWER, action);
+}
+
+/*
+ * Make a directory. Returns 0, or why not.
+ *
+ * The parent has to exist: asking for "/System/Fonts" before "/System" is
+ * SYS_ENOENT rather than two directories nobody asked for. `SYS_EEXIST` where
+ * the name is taken -- including where what is there is already a directory,
+ * because "it exists" and "I made it" are different answers and an installer
+ * that cannot tell them apart cannot tell a fresh disk from one it has already
+ * written to.
+ *
+ * A call of its own rather than a flag in `recon_create`'s mode: a mode is a
+ * number a program computes, and a high bit meaning "directory" is one a
+ * shifted constant can set by accident.
+ */
+static inline i64 recon_mkdir(const char *path, u64 path_len, u64 mode)
+{
+	return RECON_CALL3(SYS_MKDIR, path, path_len, mode);
 }
 
 /* --- The small amount of C library a freestanding program cannot do without --- */

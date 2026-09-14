@@ -650,6 +650,37 @@ i64 user_status_from_reconfs(enum reconfs_status st)
 	}
 }
 
+/* Make a directory.
+ *
+ * Same guards as sys_create and for the same reasons: a length that does not
+ * fit the buffer is refused rather than truncated, the range is checked before
+ * anything is copied out of it, and the copy is terminated here at the length
+ * given -- so a path with an embedded zero is short rather than a way to get
+ * one string past a check and have a different one used.
+ */
+static i64 sys_mkdir(u64 path, u64 path_len, u64 mode, u64 a3, u64 a4, u64 a5)
+{
+	char kpath[CREATE_PATH_MAX];
+	enum reconfs_status st;
+
+	(void)a3; (void)a4; (void)a5;
+
+	if (path_len == 0 || path_len >= sizeof(kpath))
+		return SYS_EINVAL;
+
+	if (!user_range_ok(path, path_len)) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	kmemcpy(kpath, (const void *)(uintptr_t)path, (size_t)path_len);
+	kpath[path_len] = '\0';
+
+	st = rootfs_create_directory(kpath, (u32)mode);
+
+	return st == RECONFS_OK ? SYS_OK : user_status_from_reconfs(st);
+}
+
 static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 		      u64 a5)
 {
@@ -861,6 +892,7 @@ const struct personality personality_recon = {
 		[SYS_MAP]      = sys_map,
 		[SYS_SCREEN]   = sys_screen,
 		[SYS_POWER]    = sys_power,
+		[SYS_MKDIR]    = sys_mkdir,
 	},
 };
 

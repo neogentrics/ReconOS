@@ -112,6 +112,24 @@ enum reconfs_status rootfs_remove_file(const char *path);
 enum reconfs_status rootfs_replace_file(const char *path, const void *data,
 					u32 len);
 
+/* Makes a directory, and nothing else.
+ *
+ * The same transaction as creating a file, minus the contents: the entry and
+ * its mode become visible together or not at all.
+ *
+ * **Refused rather than replaced**, for the reason stated below about files,
+ * and refused rather than quietly accepted when the name is already a
+ * directory -- "it exists" and "I made it" are different answers and an
+ * installer that cannot tell them apart cannot tell a fresh disk from one it
+ * has already written to.
+ *
+ * The parent must exist. Creating `/a/b/c` where `/a/b` does not is
+ * RECONFS_ERR_NOENT rather than three directories nobody asked for: a call
+ * that makes more than it was asked to make is one whose failures are worse
+ * than its refusals.
+ */
+enum reconfs_status rootfs_create_directory(const char *path, u32 mode);
+
 enum reconfs_status rootfs_create_file(const char *path, u32 mode,
 				       const void *data, u32 len);
 
