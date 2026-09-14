@@ -217,11 +217,10 @@ Restart reaches the architecture first -- 0xCF9 and the 8042 on x86_64, PSCI
 `acpi.c` had parsed since the FADT was parsed and which nothing had ever read.
 Both routes were watched to work and both are in the verification matrix.
 
-**One thing is owed and is written into the code as owed:** there is no test
-that a program *without* the capability is refused. That is the
-safety-critical half and it cannot be asked from a kernel thread, which holds
-every capability by construction -- the first draft of that test would have
-turned the machine off on every boot. It needs a real user program.
+**And the refusal is tested**, by a ring-3 program on both architectures that
+asks to stop the machine without holding the capability and must be told no.
+Watched to fail: with the check taken out of `power_off`, the guest stops in
+the middle of its own self-tests and the log ends one line early.
 
 <details><summary>What this section originally said</summary>
 
