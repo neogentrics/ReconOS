@@ -52,6 +52,7 @@
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/time.h>
 #include <recon/kernel/timer.h>
 #include <recon/kernel/work.h>
@@ -217,6 +218,7 @@ void kmain(void)
 	input_init();
 	block_print_summary();
 	display_print_summary();
+	suspend_print_summary();
 
 	/* What the devices can do about interrupts, printed here rather than
 	 * beside the processors.
@@ -315,6 +317,8 @@ void kmain(void)
 		user_framebuffer_test() ? "pass" : "FAIL");
 	kprintf("  a tick that stops  : %s\n",
 		power_idle_self_test() ? "pass" : "FAIL");
+	kprintf("  stopping, and starting again : %s\n",
+		suspend_self_test() ? "pass" : "FAIL");
 	kprintf("  something arrives : %s\n",
 		user_signal_test() ? "pass" : "FAIL");
 	kprintf("  somebody else's disk : %s\n",

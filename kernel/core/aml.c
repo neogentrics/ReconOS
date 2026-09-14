@@ -259,10 +259,13 @@ static bool data_object(struct cursor *c, u64 *value, bool *is_integer)
 	}
 }
 
-/* The two values inside \_S5_'s package, which is a package of small integers
- * and is parsed here rather than by the generic stepper because they are
- * wanted rather than skipped. */
-static void read_s5_package(struct cursor *c)
+/* The two values inside a \_Sx_ package, which is a package of small integers
+ * and is parsed here rather than by the generic stepper because they are wanted
+ * rather than skipped.
+ *
+ * `which` is the digit: 5 for off, 3 for suspend to RAM. They have identical
+ * shape, which is the whole reason this takes a parameter now. */
+static void read_sleep_package(struct cursor *c, unsigned which)
 {
 	u32 len;
 	struct cursor inner;
@@ -292,12 +295,12 @@ static void read_s5_package(struct cursor *c)
 	count = *inner.p++;
 
 	if (count >= 1 && data_object(&inner, &v, &is_int) && is_int) {
-		state.s5_typ_a = (u8)v;
+		state.sleep[which].typ_a = (u8)v;
 
 		if (count >= 2 && data_object(&inner, &v, &is_int) && is_int)
-			state.s5_typ_b = (u8)v;
+			state.sleep[which].typ_b = (u8)v;
 
-		state.have_s5 = true;
+		state.sleep[which].have = true;
 	}
 }
 
@@ -344,9 +347,15 @@ static bool term(struct cursor *c, int depth, char *device_name)
 
 		state.names++;
 
-		/* The two names worth reading rather than stepping over. */
-		if (same(name, "_S5")) {
-			read_s5_package(c);
+		/* The names worth reading rather than stepping over.
+		 *
+		 * Any \_Sx rather than \_S5 alone: they are one shape, and the
+		 * machine declaring S3 is how a kernel learns it can suspend at
+		 * all. A machine that declares none has said something true and
+		 * is not a parse failure. */
+		if (name[0] == '_' && name[1] == 'S' &&
+		    name[2] >= '1' && name[2] <= '5' && name[3] == '\0') {
+			read_sleep_package(c, (unsigned)(name[2] - '0'));
 			return true;
 		}
 
@@ -597,10 +606,37 @@ void aml_print_summary(void)
 			"the namespace is partial\n",
 			state.stopped_at, state.stopped_on_opcode);
 
-	if (state.have_s5)
+	if (state.sleep[5].have)
 		kprintf("  power off    : sleep state 5, values %u and %u\n",
-			state.s5_typ_a, state.s5_typ_b);
+			state.sleep[5].typ_a, state.sleep[5].typ_b);
 	else
 		kputs("  power off    : no _S5 in this table; the machine can "
 		      "only be halted\n");
+
+	/* And every other state it declares.
+	 *
+	 * A kernel that only ever asked about S5 cannot tell *this machine
+	 * cannot suspend* from *nobody looked*, and those want different things
+	 * done about them. S3 is the one suspend needs; the rest are printed
+	 * because the parser now costs nothing to read them and a machine
+	 * offering S1 or S4 is worth knowing about before something asks. */
+	{
+		unsigned i;
+		unsigned said = 0;
+
+		for (i = 1; i <= 4; i++) {
+			if (!state.sleep[i].have)
+				continue;
+
+			kputs(said++ ? ", " : "  sleep states : ");
+			kprintf("S%u (%u/%u)", i, state.sleep[i].typ_a,
+				state.sleep[i].typ_b);
+		}
+
+		if (said)
+			kputs("\n");
+		else
+			kputs("  sleep states : none besides off -- this machine "
+			      "declares no way to suspend\n");
+	}
 }

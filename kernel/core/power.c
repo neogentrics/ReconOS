@@ -217,7 +217,7 @@ enum power_result power_off(void)
 	if (!acpi_fadt(&fadt) || !fadt.pm1a_control)
 		return POWER_NO_REGISTER;
 
-	if (!a->have_s5)
+	if (!a->sleep[5].have)
 		return POWER_NO_SLEEP_STATE;
 
 	/* The second register first, where there is one.
@@ -230,11 +230,11 @@ enum power_result power_off(void)
 	 * every machine anybody tests on has one. */
 	if (fadt.pm1b_control)
 		arch_acpi_write_control(fadt.pm1b_control,
-					(u16)(((u32)a->s5_typ_b << SLP_TYP_SHIFT) |
+					(u16)(((u32)a->sleep[5].typ_b << SLP_TYP_SHIFT) |
 					      SLP_EN));
 
 	if (!arch_acpi_write_control(fadt.pm1a_control,
-				     (u16)(((u32)a->s5_typ_a << SLP_TYP_SHIFT) |
+				     (u16)(((u32)a->sleep[5].typ_a << SLP_TYP_SHIFT) |
 					   SLP_EN)))
 		return POWER_UNSUPPORTED;
 

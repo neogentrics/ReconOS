@@ -13,6 +13,7 @@
  * driver that gets the overflow check wrong writes to the wrong sector and says
  * it succeeded.
  */
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/block.h>
 #include <recon/kernel/wait.h>
@@ -198,6 +199,13 @@ struct block_device *block_register(const char *name, const struct block_ops *op
 	d->ops         = ops;
 	d->driver      = driver;
 	d->present     = true;
+
+	/* Declared to the suspend layer with no ops, which is the honest
+	 * state: this holds hardware state and nothing here can bring it
+	 * back yet. Recorded rather than remembered, so the list of what
+	 * would not survive a suspend is generated from what is actually in
+	 * the machine. */
+	suspend_declare(d->name, 0);
 
 	return d;
 }

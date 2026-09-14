@@ -1,5 +1,6 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/vm.h>
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/smbios.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
@@ -356,4 +357,34 @@ bool arch_acpi_write_control(u64 address, u16 value)
 	(void)address;
 	(void)value;
 	return false;
+}
+
+/* --- suspend ---------------------------------------------------------------
+ *
+ * Both of these are honest refusals, and the refusal is in this file rather
+ * than in core/ because *why* it cannot is architectural.
+ *
+ * This architecture does not do it this way at all. There is no ACPI sleep
+ * register here; suspend is PSCI SYSTEM_SUSPEND, the same firmware interface
+ * the secondaries are started through. The sleep-type values mean nothing on
+ * this side and are taken only so that one caller serves both.
+ */
+int arch_suspend_possible(void)
+{
+	/* No armed wake source. A machine told to sleep with nothing able to
+	 * wake it does sleep -- and the next thing that happens is somebody
+	 * holding the power button. Refused before anything is stopped. */
+	return SUSPEND_NO_WAKE;
+}
+
+int arch_suspend_to_ram(u16 typ_a, u16 typ_b)
+{
+	(void)typ_a;
+	(void)typ_b;
+
+	/* Unreachable while arch_suspend_possible refuses, and present so that
+	 * the seam has both halves from the start: the caller's ordering was
+	 * written against this signature and a function invented afterwards
+	 * gets its arguments wrong. */
+	return SUSPEND_NO_WAKE;
 }

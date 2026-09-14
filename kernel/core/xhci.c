@@ -40,6 +40,7 @@
  * cycle bit that flips each time the ring wraps. Getting that wrong produces a
  * driver that reads the same completion for ever, or one that never sees any.
  */
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/block.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
@@ -1921,6 +1922,14 @@ bool xhci_attach(const struct pci_device *d)
 	}
 
 	x->ports_enabled = enabled;
+
+	/* Declared to the suspend layer with no ops, which is the honest
+	 * state: this holds hardware state and nothing here can bring it
+	 * back yet. Recorded rather than remembered, so the list of what
+	 * would not survive a suspend is generated from what is actually in
+	 * the machine. */
+	suspend_declare("xhci", 0);
+
 	controller_count++;
 
 	kprintf("  xhci         : %u slots, %u ports, %u scratchpad page%s, "

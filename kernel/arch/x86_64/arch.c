@@ -6,6 +6,7 @@
 
 #include "x86_64.h"
 
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/smbios.h>
 
 /* Port I/O is in x86_64.h, which this already includes. */
@@ -413,4 +414,37 @@ bool arch_acpi_write_control(u64 address, u16 value)
 	__asm__ volatile("outw %0, %1"
 			 : : "a"(value), "Nd"((u16)address));
 	return true;
+}
+
+/* --- suspend ---------------------------------------------------------------
+ *
+ * Both of these are honest refusals, and the refusal is in this file rather
+ * than in core/ because *why* it cannot is architectural.
+ *
+ * The pieces this needs: the FACS, whose firmware waking vector is where the
+ * processor resumes -- in real mode, which this architecture already has a
+ * trampoline for, because SMP bring-up needs the same transition. Then the
+ * state firmware destroys: CR0, CR3, CR4, EFER, the GDT and IDT, the MSRs
+ * behind syscall and FS/GS, and the local APIC. And a wake source, which is
+ * the piece being built next: an RTC alarm, so the kernel can wake itself and
+ * this can be tested without somebody at a monitor.
+ */
+int arch_suspend_possible(void)
+{
+	/* No armed wake source. A machine told to sleep with nothing able to
+	 * wake it does sleep -- and the next thing that happens is somebody
+	 * holding the power button. Refused before anything is stopped. */
+	return SUSPEND_NO_WAKE;
+}
+
+int arch_suspend_to_ram(u16 typ_a, u16 typ_b)
+{
+	(void)typ_a;
+	(void)typ_b;
+
+	/* Unreachable while arch_suspend_possible refuses, and present so that
+	 * the seam has both halves from the start: the caller's ordering was
+	 * written against this signature and a function invented afterwards
+	 * gets its arguments wrong. */
+	return SUSPEND_NO_WAKE;
 }

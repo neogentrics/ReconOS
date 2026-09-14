@@ -38,6 +38,7 @@
  *     pointer that stops at the edge of the screen, and a wrapped one is a
  *     pointer that jumps to the other side of it.
  */
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/input.h>
 #include <recon/kernel/xhci.h>
 #include <recon/kernel/vfs.h>
@@ -276,6 +277,13 @@ struct file *input_open(unsigned flags, i64 *error)
 
 void input_init(void)
 {
+	/* Declared to the suspend layer with no ops, which is the honest
+	 * state: this holds hardware state and nothing here can bring it
+	 * back yet. Recorded rather than remembered, so the list of what
+	 * would not survive a suspend is generated from what is actually in
+	 * the machine. */
+	suspend_declare("input", 0);
+
 	head = count = 0;
 	kmemset(held, 0, sizeof(held));
 	arch_input_probe();

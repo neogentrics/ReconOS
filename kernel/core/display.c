@@ -25,6 +25,7 @@
  * are", which is the whole of what a framebuffer console and, later, a
  * compositor need from it.
  */
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
@@ -329,6 +330,14 @@ bool display_attach(const struct pci_device *d)
 	disp->present = true;
 
 	display_count++;
+
+	/* Declared to the suspend layer with no ops, which is the honest
+	 * state: this holds hardware state and nothing here can bring it
+	 * back yet. Recorded rather than remembered, so the list of what
+	 * would not survive a suspend is generated from what is actually in
+	 * the machine. */
+	suspend_declare(disp->name, 0);
+
 	if (!primary)
 		primary = disp;
 

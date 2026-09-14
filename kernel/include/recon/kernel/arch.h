@@ -201,4 +201,23 @@ void arch_vector_restore(const void *area);
  * machine that does that is a machine this returns false for. */
 bool arch_acpi_write_control(u64 address, u16 value);
 
+/* --- suspend ---------------------------------------------------------------
+ *
+ * Whether this machine could sleep and come back, asked **before** anything is
+ * stopped. Everything the architecture can find out while the machine is still
+ * whole belongs here: a refusal after the disk controller has been quiesced is
+ * a worse machine than a refusal before it.
+ *
+ * Returns SUSPEND_OK when it could. Today both architectures answer
+ * SUSPEND_NO_WAKE, because neither has an armed wake source and a machine told
+ * to sleep with nothing to wake it does not come back. */
+int arch_suspend_possible(void);
+
+/* Write the sleep value and, on the far side, be the kernel again.
+ *
+ * `typ_a` and `typ_b` are what the machine's own description says S3 is -- read
+ * from \_S3, not assumed. This does not return until the machine has woken,
+ * and everything the processor forgot in between is this function's problem. */
+int arch_suspend_to_ram(u16 typ_a, u16 typ_b);
+
 #endif /* RECON_KERNEL_ARCH_H */

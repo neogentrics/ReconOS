@@ -36,6 +36,10 @@
 
 #include <recon/kernel/types.h>
 
+/* S0 through S5. Indexed by the digit, so the zeroth is never used and
+ * `sleep[3]` is the state spelled \_S3. */
+#define AML_SLEEP_STATES 6
+
 #define AML_MAX_DEVICES 64
 #define AML_NAME_LEN    5	/* four characters and a terminator */
 #define AML_HID_LEN     16
@@ -57,13 +61,22 @@ struct aml_state {
 	unsigned devices;
 	struct aml_device device[AML_MAX_DEVICES];
 
-	/* \_S5, the sleep state that is "off". Two values written to the power
-	 * management control registers. Without these a kernel cannot turn the
-	 * machine off; it can only halt it, which leaves it drawing power with
-	 * the fans running. */
-	bool have_s5;
-	u8 s5_typ_a;
-	u8 s5_typ_b;
+	/* The sleep states this machine declares, indexed by their number.
+	 *
+	 * Each is a package of small integers naming what to write to the two
+	 * power-management control registers. \_S5 is "off" -- without it a
+	 * kernel can only halt, which leaves the machine drawing power with the
+	 * fans running. \_S3 is "suspend to RAM", and it is the same shape,
+	 * which is why this is a table rather than a second pair of fields.
+	 *
+	 * Indexed 0..5 with 0 unused, so `sleep[3]` is \_S3 and reads the way it
+	 * is spelled. A state the machine does not declare has `have` false, and
+	 * that is a fact about the machine rather than a failure to parse. */
+	struct aml_sleep_state {
+		bool have;
+		u8 typ_a;
+		u8 typ_b;
+	} sleep[AML_SLEEP_STATES];
 
 	unsigned names;			/* how many named objects were seen */
 	unsigned methods;		/* how many method bodies were stepped over */

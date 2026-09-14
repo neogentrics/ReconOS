@@ -18,6 +18,7 @@
  * else either. A network that can take the machine down by talking to it is
  * not a network stack, and the bound is what makes the difference.
  */
+#include <recon/kernel/suspend.h>
 #include <recon/kernel/net.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/console.h>
@@ -98,6 +99,13 @@ struct net_device *netdev_register(const char *name,
 
 	if (mac)
 		d->mac = *mac;
+
+	/* Declared to the suspend layer with no ops, which is the honest
+	 * state: this holds hardware state and nothing here can bring it
+	 * back yet. Recorded rather than remembered, so the list of what
+	 * would not survive a suspend is generated from what is actually in
+	 * the machine. */
+	suspend_declare(d->name, 0);
 
 	return d;
 }

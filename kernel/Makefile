@@ -71,6 +71,13 @@
 # goes up is a version that has stopped saying anything. That reasoning still
 # explains 0.1.0; it is not what decides 0.2.0.
 #
+# **0.2.14 on 13 September 2026: the suspend framework.** No bug, and chosen
+# rather than compelled -- the same call as 0.2.5, and for the same reason. Every
+# boot now says by name what would not survive a suspend, which is a different
+# machine from one that did not know. Suspend itself still refuses, deliberately:
+# there is no wake source, and a machine told to sleep with nothing to wake it
+# does not come back.
+#
 # **0.2.13 on 13 September 2026, for KF-210.** The crash-consistency test proves
 # its checker against a known-good image before believing any round, and made
 # that image by booting the guest and killing it after six seconds measured from
@@ -170,7 +177,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.13
+VERSION := 0.2.14
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
