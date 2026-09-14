@@ -1,2 +1,3 @@
-The network, seen but not implemented. ReconOS has no kernel, so it has no
-network stack of its own; it reports the host's, and says so on screen.
+Connections that carry data, with a rule about which programs may open
+one. Screen capture on Print Screen. Installing and removing programs.
+Wallpapers the system draws for itself.

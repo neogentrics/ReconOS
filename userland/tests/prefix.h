@@ -92,4 +92,31 @@
 #define localtime_r   recon_localtime_r
 #define strftime      recon_strftime
 
+/*
+ * The maths functions. `recon_math_isnan` and its three companions are not
+ * renamed and do not need to be: they are already ours, and the classifiers
+ * the caller writes -- isnan, isinf, isfinite, signbit -- are macros in both
+ * libraries rather than symbols, so there is nothing for a linker to confuse.
+ */
+#define fabs        recon_fabs
+#define sqrt        recon_sqrt
+#define floor       recon_floor
+#define ceil        recon_ceil
+#define round       recon_round
+#define fmod        recon_fmod
+#define ldexp       recon_ldexp
+#define lrintf      recon_lrintf
+#define exp         recon_exp
+#define log         recon_log
+#define log10       recon_log10
+#define pow         recon_pow
+#define sin         recon_sin
+#define cos         recon_cos
+#define tan         recon_tan
+#define asin        recon_asin
+#define acos        recon_acos
+#define atan        recon_atan
+#define atan2       recon_atan2
+#define cbrt        recon_cbrt
+
 #endif /* RECON_LIBC_PREFIX_H */

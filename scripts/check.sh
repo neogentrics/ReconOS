@@ -193,9 +193,11 @@ trap 'rm -rf "$GENERATED_TMP"' EXIT
 
 cp -r "$REPO_DIR/assets/help" "$GENERATED_TMP/help-was"
 cp "$REPO_DIR/docs/ERRORS.md" "$GENERATED_TMP/errors-was.md"
+cp "$REPO_DIR/userland/libc/two_over_pi.inc" "$GENERATED_TMP/twopi-was.inc"
 
 "$REPO_DIR/scripts/make-help.sh" >/dev/null
 "$REPO_DIR/scripts/make-errors.sh" >/dev/null
+python3 "$REPO_DIR/scripts/gen-two-over-pi.py" >/dev/null
 
 generated_drift=0
 if ! diff -r -q "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help" >/dev/null; then
@@ -205,6 +207,11 @@ if ! diff -r -q "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help" >/dev/null; th
 fi
 if ! diff -q "$GENERATED_TMP/errors-was.md" "$REPO_DIR/docs/ERRORS.md" >/dev/null; then
     echo "== docs/ERRORS.md is not what include/recon_errors.def generates"
+    generated_drift=1
+fi
+if ! diff -q "$GENERATED_TMP/twopi-was.inc" \
+        "$REPO_DIR/userland/libc/two_over_pi.inc" >/dev/null; then
+    echo "== userland/libc/two_over_pi.inc is not what its generator writes"
     generated_drift=1
 fi
 
@@ -219,11 +226,13 @@ fi
 rm -rf "$REPO_DIR/assets/help"
 cp -r "$GENERATED_TMP/help-was" "$REPO_DIR/assets/help"
 cp "$GENERATED_TMP/errors-was.md" "$REPO_DIR/docs/ERRORS.md"
+cp "$GENERATED_TMP/twopi-was.inc" "$REPO_DIR/userland/libc/two_over_pi.inc"
 
 if [ "$generated_drift" = "1" ]; then
     echo
     echo "The generated files have drifted from their sources. Run"
-    echo "scripts/make-help.sh and scripts/make-errors.sh and commit what"
+    echo "scripts/make-help.sh, scripts/make-errors.sh and"
+    echo "scripts/gen-two-over-pi.py and commit what"
     echo "changes -- the running system has been telling somebody something"
     echo "that stopped being true."
     exit 1

@@ -79,9 +79,16 @@ if [ ! -d "$BUILTIN" ]; then
 	exit 1
 fi
 
-# Nine of seventy-nine, and every one of them verified by this script rather
-# than by a sweep. Seven more are one header away; see above.
+# Eleven of seventy-nine, and every one of them verified by this script rather
+# than by a sweep.
+#
+# src/recon_expr.c is the newest and the one worth naming: the calculator holds
+# seventeen maths functions in a table of function pointers, so it could not
+# build until userland/libc/math.c existed. It is also the largest file on this
+# list at 459 lines, and it evaluates an expression grammar -- which is to say
+# ReconOS can now do arithmetic with no glibc underneath it.
 FILES="
+src/recon_expr.c
 src/recon_url.c
 src/recon_version.c
 src/recon_data.c
@@ -111,7 +118,7 @@ for f in $FILES; do
 	# compiler turning a byte loop into a call to memcpy -- the same reason
 	# CMakeLists passes -fno-builtin to libc/ itself.
 	if ! "$CC" -c "$f" -o "$out/$(basename "$f").o" \
-		-std=c11 -ffreestanding -fno-builtin \
+		-std=c11 -ffreestanding -fno-builtin -fno-math-errno \
 		-nostdinc \
 		-isystem "$BUILTIN" \
 		-I userland/include \

@@ -155,6 +155,9 @@ AREA = {
     # 'storage' rather than 'build': the header is recon_fs.h and the
     # people who would filter for it are the ones who own that file.
     'BG-184': 'storage',
+    # The maths library. 'build' with the rest of userland/.
+    'BG-186': 'build', 'BG-187': 'build', 'BG-188': 'build',
+    'BG-189': 'build',
 }
 
 def is_fixed(body):

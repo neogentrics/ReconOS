@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.23
+    VERSION 0.4.24
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -746,7 +746,8 @@ add_executable(recon_libc_file_tests
     userland/libc/ctype.c
     userland/libc/stdlib.c
     userland/libc/stdio.c
-    userland/libc/time.c)
+    userland/libc/time.c
+    userland/libc/math.c)
 
 # Every source under libc/, and only those. `hostsys.c` is excluded on purpose:
 # it has to see the host's own <stdlib.h> and <unistd.h> unrenamed, and it
@@ -758,8 +759,9 @@ set_source_files_properties(
     userland/libc/stdlib.c
     userland/libc/stdio.c
     userland/libc/time.c
+    userland/libc/math.c
     PROPERTIES COMPILE_OPTIONS
-    "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin")
+    "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
 # There is deliberately no `-I userland/include` on either of these targets.
 # Those headers exist so desktop source can say `#include <stdio.h>` and get
@@ -768,8 +770,21 @@ set_source_files_properties(
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
 
+# The maths, in a program of its own.
+#
+# Separate because it needs no hostsys.c -- math.c makes no system call and
+# opens nothing, so the one thing the other two suites need a kernel stand-in
+# for, this one does not. It links against the host math library because the
+# *reference* half of every comparison is the host's.
+add_executable(recon_libc_math_tests
+    userland/tests/test_libc_math.c
+    userland/libc/math.c)
+
+target_link_libraries(recon_libc_math_tests PRIVATE m)
+
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_file_tests)
+add_test(NAME libc_math COMMAND recon_libc_math_tests)
 
 # The same parser against markup nobody here wrote.
 #
