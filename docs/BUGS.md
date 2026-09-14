@@ -7109,6 +7109,59 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-227 - Three timers did not fire, once, on one path of twenty-eight
+
+- **Found:** 14 September 2026, by matrix 48, on `PVH, an SD host controller`
+  and no other path:
+
+  ```
+  timer: 0 of 3 timers fired
+  timer: a timer filed on the second wheel never came down to the first
+  something later    : FAIL
+  ```
+
+  Sixty of sixty-one self-tests passed on that boot, including `clock and
+  tick`. Every other path in the run was green at 61 of 61.
+
+- **Cost:** unknown, and that is the entry. If it is the rig, it is a red run
+  on a green tree and the cost is whoever reads it next. If it is the kernel,
+  it is every filed timer in the machine not arriving -- sleeps that never end,
+  timeouts that never fire -- which is the same surface KF-204 and KF-206 were
+  about, from the other direction.
+
+- **Not reproduced, and the attempt is worth recording.** Fifty-six boots of
+  the identical kernel on the identical path:
+
+  | how                              | failures |
+  |----------------------------------|----------|
+  | on its own, eight times          | 0 of 8   |
+  | twelve at once, three rounds     | 0 of 36  |
+  | four at once, three rounds       | 0 of 12  |
+
+  The second row exists because the first attempt used four concurrent guests
+  and the matrix reaches ten to twelve. **A load generator weaker than the load
+  is KF-210's fault exactly** -- a measurement that reports "no effect" is a
+  claim about the instrument at least as much as about the thing measured. It
+  still did not reproduce at twelve, on a sixteen-core machine, which may mean
+  the load is not the variable or may mean the matrix's mixture of disk work
+  and boots is not twelve identical guests.
+
+- **No rate is claimed.** One observation is not a frequency. KF-211 is the
+  entry about writing "about one boot in twelve" from a single failure and
+  withdrawing it when twelve boots of the *unfixed* kernel came back clean, and
+  the cost of that was a proof that could not distinguish a fix from a
+  non-fix.
+
+- **What it is not.** The timer self-test runs *before* everything that landed
+  between the last green run of this path and this one -- SYS_MKDIR, the
+  ring-3 power program, the format self-test, KF-226's fix. Attributing it to
+  them has an ordering problem, and matrix 47 ran the same path green on a tree
+  three commits behind.
+
+- **Status:** open, unreproduced. The next observation is what makes this
+  diagnosable; until then there is nothing to fix and a guess would be worse
+  than the gap.
+
 ### KF-226 - kprintf reads the width on a number and throws it away
 
 - **Found:** 14 September 2026, by matrix 47, on an assertion added three
