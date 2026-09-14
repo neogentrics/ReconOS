@@ -69,11 +69,23 @@
  */
 static bool is_our_medium(struct fat32 *fs)
 {
-	u32 ignored;
+	struct fat32_entry e;
 
-	/* The directory is the *identification*. The file still goes in the
-	 * root, where somebody will find it without being told. */
-	return fat32_mkpath(fs, "reconos", &ignored) == FAT32_OK;
+	/* **`fat32_walk`, not `fat32_mkpath`.**
+	 *
+	 * The first version of this asked mkpath, whose own documentation says
+	 * it "makes every component of a path exist" -- so the *identification*
+	 * would have created `\reconos` on the first writable FAT32 volume it
+	 * looked at, and then recognised the directory it had just made as
+	 * proof the volume was ours. On somebody's Windows EFI partition.
+	 *
+	 * A test that establishes the condition it is testing for is not a
+	 * test, and this one contradicted the promise written at the top of
+	 * this file. Walking reads and creates nothing. */
+	if (fat32_walk(fs, "reconos", &e) != FAT32_OK)
+		return false;
+
+	return e.is_dir;
 }
 
 void klog_save_to_medium(void)
