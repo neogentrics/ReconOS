@@ -32,8 +32,6 @@ REPO = 'neogentrics/ReconOS'
 # "accounts" is worse than no label, because somebody filtering by area then
 # trusts the filter.
 AREA = {
-    'KF-226': 'startup', 'KF-227': 'storage', 'KF-228': 'storage',
-    'KF-229': 'storage', 'BG-193': 'storage',
     # Keyed by the whole identifier, not by the number.
     #
     # It was keyed by the number while one sequence served both tracks. When
@@ -152,6 +150,24 @@ AREA = {
     'KF-219': 'storage',
     'KF-221': 'kernel',
     'KF-222': 'storage',
+    # Fourth time, 14 September. Read off the titles: KF-223 is USB root
+    # ports asked what was attached before they had power, KF-224 is a
+    # memory map read wrongly.
+    'KF-223': 'kernel',
+    'KF-224': 'kernel',
+    # It parses now: its heading put three words between the number
+    # and the dash, so make-bug-register.py counted the entry and
+    # could not read it. 'display' because what it changes is what
+    # reaches the panel.
+    'KF-225': 'display',
+    # The desktop session's own, same day. KF-226 is 'startup' rather than
+    # 'storage' because the fault is in the scheduler and storage is only
+    # where it showed: a driver that polls and yields is one caller of it,
+    # and labelling it by the symptom would file a scheduling fault where
+    # nobody looking for one would find it.
+    'KF-226': 'startup',
+    'KF-227': 'storage', 'KF-228': 'storage', 'KF-229': 'storage',
+    'BG-193': 'storage',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

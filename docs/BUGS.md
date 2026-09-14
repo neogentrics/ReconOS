@@ -7112,7 +7112,7 @@ usable regions, from the same rounding, so the two cannot drift apart.
 The boot report prints the memory line **only when the two differ**, because on a
 machine with no hole it would be a line saying the same thing twice.
 
-### KF-225 is not a bug - the panel gets a summary and the wire keeps everything
+### KF-225 — Not a bug: the panel gets a summary and the wire keeps everything
 
 Asked for rather than found: the boot report is long, and on a machine that runs
 all the way a user program now paints over it before anybody can read it.
@@ -7280,6 +7280,38 @@ program instead, which is the same fight from the other side. That one belongs i
   of the five clears back out: the run goes red and names `files carry a mode`.
   The count moved from *59 passed* on a volume-less boot to *65 passed, second
   boot on this volume*.
+
+### A note for the kernel session, 14 September 2026 — KF-225 and kernel 0.2.30
+
+**Not an entry. A collision, recorded before it grows.**
+
+The bug register Artifact was republished at 17:17 UTC on 14 September from a
+tree that has not been pushed. Comparing that page line by line against the one
+generated from this file says three things:
+
+- Its **KF-225** is *"The BIOS loader says it filled the whole handoff and fills
+  eleven fields of sixteen"*, fixed in kernel 0.2.30. The KF-225 on `main` — and
+  above, in this file — is *"the panel gets a summary and the wire keeps
+  everything"*, which arrived in commit `8f8b03c`. **The panel entry is not in
+  that page at all**, so the number has been reused rather than the entry
+  amended.
+- Its **KF-223** carries a further fix, also in 0.2.30, that is not here.
+- Its **kernel version is 0.2.30**, and this branch has used 0.2.30 through
+  0.2.34 for `SYS_MKDIR` and KF-226 to KF-229, pushed to `main` as `3e058d9`.
+
+Per the rule this file already sets out for the one time numbers were allocated
+twice: **`main` keeps its numbers**, being the sequence that is published. So
+KF-226 to KF-229 and kernel 0.2.30 to 0.2.34 are taken, and the BIOS-handoff
+fault wants **KF-230** and a version above 0.2.34. The panel entry keeps
+KF-225. Its heading was changed here — from `KF-225 is not a bug - ...` to
+`KF-225 — Not a bug: ...` — for a reason unrelated to any of this:
+`make-bug-register.py` matches a dash straight after the identifier, counted 294
+headings, parsed 293, and refused to write until it did.
+
+The Artifact was **not republished over that version**, deliberately: it holds
+two entries this file does not, and overwriting it would have lost the only copy
+outside an unpushed working tree. It will be correct again the first time it is
+regenerated after that tree is pushed.
 
 ## Labels
 
