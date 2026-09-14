@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.22
+    VERSION 0.4.23
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -745,7 +745,8 @@ add_executable(recon_libc_file_tests
     userland/libc/printf.c
     userland/libc/ctype.c
     userland/libc/stdlib.c
-    userland/libc/stdio.c)
+    userland/libc/stdio.c
+    userland/libc/time.c)
 
 # Every source under libc/, and only those. `hostsys.c` is excluded on purpose:
 # it has to see the host's own <stdlib.h> and <unistd.h> unrenamed, and it
@@ -756,6 +757,7 @@ set_source_files_properties(
     userland/libc/ctype.c
     userland/libc/stdlib.c
     userland/libc/stdio.c
+    userland/libc/time.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin")
 

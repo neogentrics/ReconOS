@@ -42,6 +42,16 @@ size_t strcspn(const char *text, const char *stop);
  * run on two cores at once.
  */
 char *strtok_r(char *text, const char *separators, char **save);
+
+/*
+ * Two GNU extensions rather than standard functions, each here for one
+ * caller: `recon_html.c` finds the end of a comment in a page that may hold a
+ * zero byte, and `recon_http.c` looks for "chunked" in a header whose value is
+ * case-insensitive by specification.
+ */
+void *memmem(const void *haystack, size_t haystack_length,
+	     const void *needle, size_t needle_length);
+char *strcasestr(const char *haystack, const char *needle);
 char *strncat(char *to, const char *from, size_t length);
 
 #endif /* RECON_STRING_H */

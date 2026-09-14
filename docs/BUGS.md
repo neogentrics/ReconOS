@@ -7531,6 +7531,79 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-185 — The fix for BG-182 corrected the list, not the method
+
+[#445](https://github.com/neogentrics/ReconOS/issues/445)
+
+- **Found in** v0.4.23. **Found by** `nm` on the desktop's object files, run
+  because the count was about to be quoted a third time and had been wrong
+  twice.
+- **What it was** BG-182 found three functions missing from a coverage sweep
+  and added them to the list the sweep greps for. **The list was not the
+  fault.** A grep for names somebody wrote down finds every call of a function
+  on the list and none of a function that is not, whatever is on it -- so the
+  corrected list then missed `gmtime_r`, `localtime_r`, and **sixteen of the
+  twenty** floating-point functions the desktop references. It had reported
+  maths as four calls. It is twenty symbols.
+- **And one of them could not have been found by any grep.** `src/main.c` calls
+  `printf` with a string literal containing no conversions in it, and the
+  compiler rewrites that into `puts`. The desktop needs a function **whose name
+  appears nowhere in its source.** Reading the file cannot see that either.
+- **Why it kept happening.** A fix that corrects the *input* to a broken method
+  leaves the method broken, and looks exactly like a fix -- the number moves,
+  the new entries appear, and the next thing it cannot see is still invisible.
+  BG-182's own entry says a measurement that shares its premises with the thing
+  it measures can only agree with it; adding names to the premise is not
+  leaving it.
+- **Fixed in** v0.4.23. `scripts/measure-libc.py` reads the symbol tables
+  instead: every object file carries what it needs and what it has, and the
+  difference is the external surface exactly. Two numbers now, because there
+  are two questions -- 52 of 132 symbols, and 2,473 of 3,113 call sites, with
+  the names for the second coming out of the first. The script **fails** if any
+  symbol it finds has no line in its table, so a name cannot go missing from
+  the arithmetic a fourth time.
+
+### BG-184 — A public header pulled in a system header it does not use
+
+[#446](https://github.com/neogentrics/ReconOS/issues/446)
+
+- **Found in** v0.4.23. **Found by** `scripts/check-userland.sh` refusing to
+  compile `src/recon_access.c`, which has nothing to do with file modes.
+- **What it was** `include/recon_fs.h` includes `<sys/types.h>`. Every type in
+  its thirty-odd declarations is `size_t`, `bool` or `time_t`, all of which
+  come from the three includes above it. The two files that actually want
+  `mode_t` -- `src/recon_fs.c` and `src/recon_control.c` -- both already
+  include `<sys/stat.h>`, which defines it.
+- **Why one line matters.** A public header's includes are inherited by
+  everything that reads it, so this made every consumer of the filesystem
+  interface depend on a header it has no use for. On Linux that costs nothing
+  and is invisible. Compiling for a kernel that has no `<sys/types.h>`, it was
+  the whole of what stood between two desktop sources and building.
+- **Fixed in** v0.4.23, by deleting the line. `recon_url.c` and the nine that
+  already built are now ten, and nothing else moved.
+
+### BG-183 — `%C` and `%F` were written from the standard's wording, not the reference's behaviour
+
+[#447](https://github.com/neogentrics/ReconOS/issues/447)
+
+- **Found in** v0.4.23, before any of it had run. **Found by** the first run of
+  the new calendar suite, on year 1 -- one of four dates in a corpus chosen for
+  being awkward rather than plausible.
+- **What it was** POSIX describes `%C` as "the century as a decimal number",
+  which reads as two digits, and `%F` as `%Y-%m-%d`, which reads as a
+  four-digit year. Both were written that way. The reference pads neither:
+  year 1 is `1-01-01` and its century is `0`, not `0001-01-01` and `00`. A
+  probe settled it rather than an argument, and turned up a second difference
+  nobody had asked about -- `%C` is **floored**, so year -1 gives `-1` where
+  `-1 / 100` in C is `0`.
+- **This is the fourth time on this library** that a standard's description and
+  the reference's behaviour have come apart, and the rule has not changed: the
+  goal is that the desktop prints the same thing it printed on Linux yesterday,
+  not that it satisfies a document.
+- **Fixed in** v0.4.23. Both unpadded, `%C` floored, and the corpus gained
+  seven more years with fewer than four digits -- it had reached year 1 by
+  accident, and that accident found both faults.
+
 ### BG-182 — Three functions were missing, and the measurement could not see them
 
 [#444](https://github.com/neogentrics/ReconOS/issues/444)

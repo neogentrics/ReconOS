@@ -23,7 +23,7 @@ unavoidably: `malloc` has nothing to be built on.
 
 This is first on the list because it is the one currently stopping work rather
 than the one that will stop the most. The C library is written and checked —
-86,160 comparisons against the host's, and nine of the desktop's own sources
+511,000 comparisons against the host's, and nine of the desktop's own sources
 now compile with no glibc underneath them — and the next function in the file
 cannot be written at all.
 

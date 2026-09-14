@@ -57,6 +57,13 @@ unsigned long fwrite(const void *from, unsigned long size,
 char *fgets(char *into, int room, FILE *f);
 int fgetc(FILE *f);
 
+/*
+ * A line to standard output. Nothing in the desktop calls it by name: the
+ * compiler rewrites a `printf` with no conversions in it into this, which is
+ * why it is here and why no grep of the source could have said so.
+ */
+int puts(const char *text);
+
 int fseek(FILE *f, long offset, int from);
 long ftell(FILE *f);
 void rewind(FILE *f);

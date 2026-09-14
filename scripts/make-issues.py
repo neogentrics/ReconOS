@@ -150,7 +150,11 @@ AREA = {
     # the toolchain layer the desktop is compiled against, which is
     # where BG-090 and BG-170 went for the same reason.
     'BG-179': 'build', 'BG-180': 'build', 'BG-181': 'build',
-    'BG-182': 'build',
+    'BG-182': 'build', 'BG-183': 'build', 'BG-185': 'build',
+    # A public header reaching for a system header it does not use.
+    # 'storage' rather than 'build': the header is recon_fs.h and the
+    # people who would filter for it are the ones who own that file.
+    'BG-184': 'storage',
 }
 
 def is_fixed(body):

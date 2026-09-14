@@ -39,7 +39,13 @@ char *strstr(const char *haystack, const char *needle);
 size_t strspn(const char *text, const char *of);
 size_t strcspn(const char *text, const char *stop);
 char *strtok_r(char *text, const char *separators, char **save);
+void *memmem(const void *haystack, size_t haystack_length,
+	     const void *needle, size_t needle_length);
+char *strcasestr(const char *haystack, const char *needle);
 char *strncat(char *to, const char *from, size_t length);
+
+/* stdio.c */
+int puts(const char *text);
 
 /* printf.c */
 int snprintf(char *to, size_t room, const char *format, ...);
@@ -78,6 +84,14 @@ char *getenv(const char *name);
  * POSIX instead. `userland/tests/hostsys.c` provides that version; on ReconOS
  * they are the inline system calls.
  */
+/*
+ * The two clocks, in nanoseconds, and they answer different questions.
+ * `recon_sys_time` never goes backwards and means nothing outside this boot;
+ * `recon_sys_walltime` is the date and can jump.
+ */
+long long recon_sys_time(void);
+long long recon_sys_walltime(void);
+
 long recon_sys_open(const char *path, unsigned long flags);
 long recon_sys_read(int fd, void *into, unsigned long length);
 long recon_sys_write(int fd, const void *from, unsigned long length);
@@ -90,5 +104,22 @@ long recon_sys_close(int fd);
 
 #define RECON_O_READ  (1u << 0)
 #define RECON_O_WRITE (1u << 1)
+
+/*
+ * --- Time is not declared here ---
+ *
+ * `libc/time.c` includes `userland/include/time.h` directly, which is the one
+ * place in this library that reads a public header, and it is deliberate.
+ *
+ * The rule at the top of this file exists so the differential build cannot
+ * compare a function against itself -- `libc/string.c` including <string.h>
+ * would get whichever of the two copies the include path put first. That
+ * cannot happen with <time.h>: nothing puts the host's on the library's
+ * include path, and `prefix.h` arrives by `-include`, so it is processed
+ * before that header and renames what it declares on the way past.
+ *
+ * What it buys is one definition of `struct tm` and one of `time_t` rather
+ * than two that have to be kept byte-identical by hand.
+ */
 
 #endif /* RECON_LIBC_INTERNAL_H */

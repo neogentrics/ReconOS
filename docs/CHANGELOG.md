@@ -9,6 +9,111 @@ way for the two to disagree.
 
 ---
 
+## v0.4.23 — the calendar, and a measurement that asks the linker
+
+### Dates
+
+`userland/include/time.h` and `libc/time.c`: the two clocks, the calendar, and
+`strftime`. **436,012 checks against the host's**, including a sweep of
+`gmtime_r` every seven hours and thirteen minutes across two and a half
+centuries in both directions, and every conversion `strftime` claims at every
+buffer size around the answer.
+
+The corpus is the dates a calendar is actually wrong on rather than a range of
+plausible ones: the century that is divisible by four and is not a leap year,
+the second either side of an epoch, the day a 32-bit `time_t` stops, year 1 and
+year 9999. A sweep of ordinary timestamps agrees with anything.
+
+**The two clocks stay two calls.** `clock_gettime(CLOCK_MONOTONIC, ...)`
+reaches `SYS_TIME`, which never goes backwards and means nothing outside this
+boot; `time()` reaches `SYS_WALLTIME`, which is the date and can jump. Neither
+can reach the other, and an unknown clock is refused rather than answered from
+whichever is nearer — a duration measured across a clock correction comes out
+negative, and a negative duration is a number that gets used.
+
+**`localtime_r` is `gmtime_r`, deliberately, and it costs nothing.** There is
+no host to ask on this kernel and no zone database to read, so UTC is the only
+true answer — and `src/recon_clock.c` already applies ReconOS's own zone to its
+own civil-date arithmetic, under a comment from months ago saying exactly why
+it does not call `localtime`. The difference is asserted in the suite rather
+than skipped, along with `%Z` being `UTC` where the host's C locale says `GMT`.
+
+**Two faults, and both were the standard's wording rather than the
+reference's behaviour.** `%C` and `%F` were written as two- and four-digit
+padded fields, because that is how POSIX describes them. The suite disagreed on
+year 1, and a probe settled it: glibc pads neither, and floors `%C` rather than
+truncating it, so year -1 gives `-1` where `-1 / 100` in C is `0`. The goal
+here has never been to match a document; it is that the desktop prints the same
+thing it printed on Linux yesterday.
+
+**And the suite was checked against itself again.** Four faults introduced one
+at a time — the century leap gone, the leap-day shift in `tm_yday` gone, the
+weekday off by one, floored division truncated instead — caught at 7, 8143,
+40111 and 120622 failures. The century leap is the interesting one: seven
+checks out of 436,012, and every one of them is a date somebody put in the
+corpus on purpose.
+
+### A measurement that has never heard of the list
+
+The coverage figure in v0.4.22 was a grep for a list of function names.
+**BG-182 is the record of what that is worth**, and correcting it by hand was
+not enough: the corrected list then missed `gmtime_r`, `localtime_r`, and
+sixteen of the twenty floating-point functions the desktop references.
+
+It could never have found `puts` at all. `src/main.c` calls `printf` with a
+string literal containing no conversions in it, and the compiler rewrites that
+into `puts` — so **the desktop needs a function whose name appears nowhere in
+its source.** No grep can see that. Reading the file cannot see it.
+
+`scripts/measure-libc.py` asks the linker instead. Every object file carries a
+table of the symbols it needs and a table of the symbols it has; the difference
+is the external surface, exactly, and `nm` reads both in one command. It gives
+two numbers because there are two questions:
+
+- **52 of the 132 C library symbols** the desktop references. That is the
+  completeness measure: 80 missing symbols is 80 functions to write.
+- **2,473 of 3,113 call sites** in `src/`. That is where the weight is — and
+  the names it counts now come out of `nm` rather than out of a list.
+
+Three functions came out of that first run and are written and checked:
+`memmem` (`recon_html.c`, finding the end of a comment in a page that may hold
+a zero byte), `strcasestr` (`recon_http.c`, spotting a chunked transfer), and
+`puts`.
+
+### Two more desktop sources build with no glibc under them
+
+`src/recon_url.c` joins the nine, so `scripts/check-userland.sh` is at
+**10 of 10**. `src/recon_access.c` turned out to want xkbcommon as well and is
+in the group waiting on that.
+
+It found something on the way: **`include/recon_fs.h` includes
+`<sys/types.h>` and does not use it.** Every type in its thirty-odd
+declarations is `size_t`, `bool` or `time_t`. The two files that actually want
+`mode_t` both already include `<sys/stat.h>`. One line in a public header,
+inherited by everything that reads it, and it was the whole of what stood
+between `recon_access.c` and a freestanding compile.
+
+### What is left, by what it needs
+
+| | symbols | call sites |
+| --- | --- | --- |
+| an allocator | 5 | 430 |
+| files and directories | 21 | 96 |
+| sockets | 19 | 44 |
+| an errno | 1 | 43 |
+| loading a module at run time | 4 | 12 |
+| processes and signals | 6 | 8 |
+| floating-point maths | 20 | 5 |
+| an environment | 1 | 2 |
+| the rest of stdio | 3 | 0 |
+
+The allocator is still the wall and is still first in `docs/KERNEL-WANTS.md`.
+What the linker changed is the shape of the rest: **floating-point maths is
+twenty functions**, not the four a grep found, and it is a self-contained
+afternoon that needs nothing from the kernel at all.
+
+---
+
 ## v0.4.22 — a C library of our own, checked against the one it replaces
 
 Every library call the desktop makes today reaches glibc. When the desktop is

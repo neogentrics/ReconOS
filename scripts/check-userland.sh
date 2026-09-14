@@ -46,11 +46,14 @@
 #                              these files need their drawing half separated
 #                              from their compositor half before they can move.
 #
-#   src/recon_access.c       include/recon_fs.h and include/recon_cookie.h
-#   src/recon_url.c            reach <time.h>. The kernel has the two clocks
-#                              already (SYS_TIME and SYS_WALLTIME, 8 September)
-#                              so this is a userland/include/time.h waiting to
-#                              be written, not a kernel ask.
+#   src/recon_access.c       also reaches include/recon_ui.h, and so wants
+#                              xkbcommon as well -- it is in the group above.
+#                              It was the reason userland/include/time.h got
+#                              written, though, and src/recon_url.c came with
+#                              it: both were blocked only on <time.h> arriving
+#                              through recon_fs.h and recon_cookie.h, and
+#                              recon_fs.h turned out to be pulling in
+#                              <sys/types.h> it does not use at all.
 #
 #   src/recon_stb.c          the vendored stb shim, which wants third_party/
 #                              on the include path and a hosted <math.h>.
@@ -79,6 +82,7 @@ fi
 # Nine of seventy-nine, and every one of them verified by this script rather
 # than by a sweep. Seven more are one header away; see above.
 FILES="
+src/recon_url.c
 src/recon_version.c
 src/recon_data.c
 src/recon_image.c

@@ -215,9 +215,27 @@ static inline i64 recon_getpid(void)
 	return RECON_CALL0(SYS_GETPID);
 }
 
+/*
+ * Nanoseconds since this machine started, and it never goes backwards.
+ *
+ * Means nothing outside this boot. A caller measuring how long something took
+ * uses this one.
+ */
 static inline i64 recon_time(void)
 {
 	return RECON_CALL0(SYS_TIME);
+}
+
+/*
+ * Nanoseconds since 1970, and it can jump.
+ *
+ * The date. A caller stamping a file uses this one. Collapsing the two into a
+ * single call is how a duration comes out negative, which is why the kernel
+ * offers two -- see the comment on `sys_walltime` in kernel/core/user.c.
+ */
+static inline i64 recon_walltime(void)
+{
+	return RECON_CALL0(SYS_WALLTIME);
 }
 
 static inline void recon_yield(void)
