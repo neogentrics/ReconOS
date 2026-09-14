@@ -746,6 +746,22 @@ check_for nvme0n1 "  PVH, NVMe" \
 		-drive "file=$DISK,format=raw,if=none,id=n0" \
 		-device nvme,serial=recon0,drive=n0
 
+# The suspend summary is printed, on a machine that has a disk to lose.
+#
+# Its self-test is counted with the others and would go red if the registry
+# broke -- but **the deliverable is the printed line**, the machine saying by
+# name what would not survive, and nothing asserted that it appears at all.
+# Remove the call to suspend_print_summary and every other path here still
+# passes.
+#
+# The label rather than today's answer: this line is printed whether the machine
+# can suspend or cannot, so the assertion does not need rewriting on the day the
+# answer changes -- which is the day nobody would think to look at it.
+check_for "suspend      :" "  PVH, and it says what cannot suspend" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF" \
+		-drive "file=$DISK,format=raw,if=none,id=n0" \
+		-device nvme,serial=recon0,drive=n0
+
 # And SATA, which is what the machines between the IDE era and the NVMe one
 # have -- roughly everything built between 2005 and 2020, which is most of what
 # this will actually be installed on for some years yet.
