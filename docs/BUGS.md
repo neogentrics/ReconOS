@@ -7146,6 +7146,46 @@ boot log.
   the load is not the variable or may mean the matrix's mixture of disk work
   and boots is not twelve identical guests.
 
+- **The obvious mechanism, measured and ruled out.** `wait_for_tick` waits for
+  `time_ticks()` to reach `start + 10` and the test then requires three timers
+  filed at +2, +4 and +7 to have fired. **Since KF-204 those are two different
+  quantities**: the tick count is derived from the monotonic counter and
+  advances continuously, while the wheel's hand moves only when `timer_tick`
+  runs. `timer.c` says so itself, two functions above, as the reason KF-206
+  exists:
+
+  > it advances continuously while the hand only moves when `timer_tick` runs
+  > -- so between two interrupts the clock reads up to one tick ahead
+
+  That is KF-206 from one side; the other side would be this entry. If the hand
+  can fall **three** ticks behind the clock -- enough that the wait ends before
+  the +2 timer is due -- then `0 of 3 timers fired` is not a broken wheel, it is
+  a wheel nobody has turned yet.
+
+  So the gap was instrumented and measured at the moment the wait ends:
+
+  | load                        | boots | worst gap |
+  |-----------------------------|-------|-----------|
+  | one guest at a time         | 3     | 0 ticks   |
+  | sixteen concurrent guests   | 64    | 1 tick    |
+
+  **One tick, which is the documented steady state**, on a sixteen-core machine
+  running sixteen guests. Nothing approaching the three the theory needs, and no
+  failure in any of the sixty-seven boots. The hypothesis is not supported.
+
+- **And the instrument could not have told the difference anyway**, which is
+  worth more than the result. It read `time_ticks()` and `wheel_now` one after
+  the other, without a lock, so a timer interrupt landing between the two reads
+  moves the second. Several samples came back with the hand apparently *ahead*
+  of the clock -- `t - wheel_now` wrapping to 2^64-1 -- which looks like a
+  violated invariant and is fully explained by reading two moving numbers
+  separately.
+
+  It is not evidence of anything, and the difference between "the hand overran"
+  and "my two reads did not happen at the same instant" is exactly the
+  difference an instrument has to be able to state. This one could not. Recorded
+  so the next attempt samples them under the timer lock instead of repeating it.
+
 - **No rate is claimed.** One observation is not a frequency. KF-211 is the
   entry about writing "about one boot in twelve" from a single failure and
   withdrawing it when twelve boots of the *unfixed* kernel came back clean, and
