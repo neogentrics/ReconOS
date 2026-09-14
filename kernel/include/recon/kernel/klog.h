@@ -62,6 +62,16 @@ u32 klog_read(void *out, u32 max);
 u32 klog_held(void);
 bool klog_wrapped(void);
 
+/* Writes everything the kernel has said onto the medium it booted from, as
+ * econosootlog.txt on that medium's own FAT32 volume.
+ *
+ * For machines with no serial port, which is every laptop: the rig reads a
+ * wire and a laptop has none, so the alternative is photographing a panel and
+ * losing whatever scrolled. See core/klog_save.c for what it refuses to write
+ * to and why it cannot report a hang.
+ */
+void klog_save_to_medium(void);
+
 void klog_print_summary(void);
 bool klog_self_test(void);
 

@@ -493,6 +493,17 @@ void kmain(void)
 	install_plan_run();
 	install_execute_run();
 
+	/* Everything said so far, onto the medium it was said on.
+	 *
+	 * **Last, and after every other summary**, so the file holds the whole
+	 * report rather than the part printed before it. On a machine with a
+	 * serial port this is redundant; on a laptop it is the only way the
+	 * report survives being looked at, and every diagnosis on real hardware
+	 * so far has come from photographing a panel and losing what scrolled.
+	 *
+	 * Before power-off, because that does not return. */
+	klog_save_to_medium();
+
 	/* Asked for on the command line, and last, because it does not return.
 	 *
 	 * It exists to be *tested*: an emulator told to power off exits, and its
