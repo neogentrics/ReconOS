@@ -92,7 +92,7 @@ void klog_save_to_medium(void)
 {
 	char *buf;
 	u32 held;
-	unsigned i;
+	unsigned i, pass;
 
 	held = klog_held();
 	if (!held) {
@@ -112,18 +112,40 @@ void klog_save_to_medium(void)
 
 	held = klog_read(buf, held);
 
-	/* Every block device, in order, until one turns out to be ours.
+	/* **Removable media first, then everything else.**
 	 *
-	 * Not "the device we booted from", because the kernel is not told which
-	 * that was -- the loader hands over a kernel, not a device handle. What
-	 * it can do is recognise the medium by its contents, which is the same
-	 * question asked in a way the machine can answer. */
+	 * The kernel is not told which device it booted from -- the loader
+	 * hands over a kernel, not a device handle -- so the medium is
+	 * recognised by its contents. That answers "is this a ReconOS volume",
+	 * which was the same question as "is this the one I booted from" right
+	 * up until the moment two disks qualified.
+	 *
+	 * On the first machine where two did, it wrote to the internal eMMC
+	 * while the stick it had booted from sat beside it: the internal disk
+	 * was enumerated first, and it said yes honestly, because KF-220 had
+	 * created `\reconos` on it the boot before.
+	 *
+	 * A stick is removable and a soldered eMMC is not, so the two passes
+	 * put the right one first -- and a machine that was *installed to* its
+	 * own disk still finds itself on the second pass, because it has no
+	 * removable medium to prefer.
+	 *
+	 * **A preference, not an answer.** Two ReconOS sticks and this picks
+	 * the first. The real fix is for the loader to say which device it read
+	 * the kernel from, which it knows and currently discards at the
+	 * handoff. That is a ReconBoot protocol change and is deliberately not
+	 * something to do quietly. */
+	for (pass = 0; pass < 2; pass++)
 	for (i = 0; i < BLOCK_MAX_DEVICES; i++) {
 		struct block_device *dev = block_device_at(i);
 		struct fat32 fs;
 		enum fat32_status st;
 
 		if (!dev || dev->read_only)
+			continue;
+
+		/* Pass 0 takes only removable media; pass 1 takes the rest. */
+		if (dev->removable != (pass == 0))
 			continue;
 
 		if (fat32_mount(dev, &fs) != FAT32_OK)

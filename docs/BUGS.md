@@ -6971,6 +6971,46 @@ reason from a full stop into a number.
 **Verified not to have changed the table that already worked**: QEMU still
 reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 
+### KF-222 - The boot log went to the machine's internal disk while the stick it booted from sat beside it
+
+- **Found:** 14 September 2026, on the Gateway:
+  `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
+  internal eMMC. The USB stick it had booted from was attached, carried
+  `econos`, and was passed over.
+- **Cost:** a diagnostic file written to the wrong disk, and unreachable -- the
+  point of writing it is that somebody can pull the medium out and read it
+  somewhere else, which an internal eMMC does not allow.
+- **What it was.** The check asks *"is this a ReconOS volume"*. The question it
+  needs to answer is *"is this the volume I booted from"*. Those were the same
+  question right up until two disks qualified, and the internal one was
+  enumerated first.
+- **It said yes honestly.** `econos` really was on that eMMC -- KF-220 had
+  created it there on the previous boot, when the identification step still
+  called `fat32_mkpath`. Fixing KF-220 stopped directories appearing on disks
+  that had no business carrying one; it did not change which disk wins once two
+  of them do.
+- **Status:** fixed, kernel 0.2.27.
+
+### What was done
+
+Two passes: removable media, then everything else. `sdhci.c` marks an eMMC part
+non-removable and an SD card removable, USB storage is removable, NVMe and AHCI
+are not -- so a stick wins wherever one exists, and a machine that was
+*installed to* its own disk still finds itself on the second pass because it has
+no removable medium to prefer.
+
+Proved in both directions. With a USB stick and an NVMe disk carrying identical
+ReconOS volumes, it writes to `usb0p2`. With only the NVMe, it writes to
+`nvme0n1p2`.
+
+### It is a preference, not an answer
+
+Two ReconOS sticks in one machine and this picks the first, with no way to know
+which one it came from. **The real fix is for the loader to say.** It knows
+exactly which device it read the kernel from and discards that at the handoff --
+which is a ReconBoot protocol change, deliberately awkward in this project, and
+written down here rather than done quietly.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because
