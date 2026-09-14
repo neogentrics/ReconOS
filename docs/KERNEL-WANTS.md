@@ -22,9 +22,10 @@ Ordered by how sharply it is felt, not by how hard it would be.
 unavoidably: `malloc` has nothing to be built on.
 
 This is first on the list because it is the one currently stopping work rather
-than the one that will stop the most. The string and formatting half of the C
-library is written and checked — 73,510 comparisons against the host's —
-and the next function in the file cannot be written at all.
+than the one that will stop the most. The C library is written and checked —
+86,160 comparisons against the host's, and nine of the desktop's own sources
+now compile with no glibc underneath them — and the next function in the file
+cannot be written at all.
 
 **What the desktop does today, measured rather than estimated:**
 

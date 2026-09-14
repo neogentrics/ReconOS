@@ -38,6 +38,8 @@ char *strrchr(const char *text, int value);
 char *strstr(const char *haystack, const char *needle);
 size_t strspn(const char *text, const char *of);
 size_t strcspn(const char *text, const char *stop);
+char *strtok_r(char *text, const char *separators, char **save);
+char *strncat(char *to, const char *from, size_t length);
 
 /* printf.c */
 int snprintf(char *to, size_t room, const char *format, ...);
@@ -61,6 +63,7 @@ long long atoll(const char *text);
 double atof(const char *text);
 long strtol(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
+unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
 int abs(int value);
 void qsort(void *base, size_t count, size_t size,

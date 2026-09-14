@@ -143,6 +143,7 @@ AREA = {
     # the toolchain layer the desktop is compiled against, which is
     # where BG-090 and BG-170 went for the same reason.
     'BG-179': 'build', 'BG-180': 'build', 'BG-181': 'build',
+    'BG-182': 'build',
 }
 
 def is_fixed(body):

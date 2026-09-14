@@ -7531,6 +7531,38 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
 
+### BG-182 — Three functions were missing, and the measurement could not see them
+
+[#444](https://github.com/neogentrics/ReconOS/issues/444)
+
+- **Found in** v0.4.22. **Found by** `scripts/check-userland.sh`, written the
+  same day: take glibc away with `-nostdinc`, give the compiler its own headers
+  and `userland/include` and nothing else, and ask it to build the desktop's
+  own sources.
+- **What it was** `strtok_r` is called on **44 sites** in `src/` and the ReconOS
+  C library did not have it. Nor `strncat`, nor `strtoull`. The desktop would
+  have failed to link, eventually, on a build nobody had run yet.
+- **Why nothing said so.** The library's coverage was measured by listing the
+  functions it was expected to need and counting those. **That method finds
+  every call of a function on the list and none of a function that is not on
+  it** -- so the numerator and the denominator were short by exactly the same
+  49 calls, and the fraction looked right. It reported 2,430 of 2,997. The
+  truth was 2,479 of 3,089.
+- **This is the shape of the whole class**, and it has happened here before in
+  other clothes: BG-173 was found by adding a field to a `describe` and reading
+  it, BG-174 by taking a photograph. Every one of them was invisible to a
+  reading of the code and to a number derived from the same assumptions the
+  code was written under. **A measurement that shares its premises with the
+  thing it measures can only agree with it.**
+- **Fixed in** v0.4.22. All three are written and held against the reference
+  like everything else here -- `strtok_r` over twelve subjects and six
+  separator sets, comparing the tokens *and* the buffer afterwards, because a
+  split that returns the right words while chopping the string in different
+  places has broken the caller's next pass over it.
+- **And the instrument is permanent.** `check-userland.sh` is the fifth pass of
+  `scripts/check.sh`. Nine of the desktop's seventy-nine sources compile with
+  no glibc under them today, and that number cannot quietly go down.
+
 ### BG-181 — `strtod` had no reading for "inf" or "nan"
 
 [#441](https://github.com/neogentrics/ReconOS/issues/441)

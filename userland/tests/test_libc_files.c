@@ -53,6 +53,7 @@ int recon_tolower(int c);
 int recon_atoi(const char *text);
 long recon_strtol(const char *text, char **end, int base);
 unsigned long recon_strtoul(const char *text, char **end, int base);
+unsigned long long recon_strtoull(const char *text, char **end, int base);
 double recon_strtod(const char *text, char **end);
 int recon_abs(int value);
 void recon_qsort(void *base, size_t count, size_t size,
@@ -237,6 +238,32 @@ static void test_the_number_parsing(void)
 			same_long((long)umine, (long)utheirs, "strtoul", text);
 			same_long(mine_end - text, their_end - text,
 				  "strtoul stopped in the same place", text);
+
+			/*
+			 * `strtoull` saturates at the 64-bit limit whatever a
+			 * `long` happens to be, which on this host is the same
+			 * number -- so the corpus that matters here is the one
+			 * straddling it: 18446744073709551615 and the value
+			 * one past it are both in the list above.
+			 */
+			{
+				unsigned long long wmine =
+					recon_strtoull(text, &mine_end, base);
+				unsigned long long wtheirs =
+					strtoull(text, &their_end, base);
+
+				g_checks++;
+				if (wmine != wtheirs) {
+					g_failures++;
+					printf("  FAIL: strtoull on \"%s\""
+					       " base %d\n    ReconOS: %llu"
+					       "   reference: %llu\n",
+					       text, base, wmine, wtheirs);
+				}
+				same_long(mine_end - text, their_end - text,
+					  "strtoull stopped in the same place",
+					  text);
+			}
 		}
 	}
 

@@ -337,3 +337,75 @@ size_t strcspn(const char *text, const char *stop)
 	}
 	return n;
 }
+
+/*
+ * --- Splitting a string ---
+ *
+ * Forty-four call sites, and every one of them the reentrant spelling. That is
+ * not an accident of style: `strtok` keeps its place in a static, so two
+ * loops walking two strings at once destroy each other, and a compositor is
+ * full of places where one parse calls something that parses.
+ *
+ * **There is deliberately no `strtok` here.** The desktop does not call it,
+ * and adding it would put a hidden static in a library that is going to be
+ * linked into a system where the same code can run on two cores. A caller who
+ * wants it can pass their own `save`.
+ *
+ * It writes into the string it is given -- that is what makes it cheap and
+ * what makes it dangerous, and it is worth saying out loud rather than leaving
+ * to be discovered: a caller handing this a string literal is writing to
+ * read-only memory.
+ */
+char *strtok_r(char *text, const char *separators, char **save)
+{
+	char *start;
+
+	if (save == NULL) {
+		return NULL;
+	}
+	if (text == NULL) {
+		text = *save;
+	}
+	if (text == NULL) {
+		return NULL;
+	}
+
+	/* Leading separators are not an empty token. Two separators in a row
+	 * produce one break, which is the behaviour every caller here is
+	 * relying on when it splits on "{space}" and does not want to handle
+	 * runs of them. */
+	text += strspn(text, separators);
+	if (*text == '\0') {
+		*save = text;
+		return NULL;
+	}
+
+	start = text;
+	text += strcspn(text, separators);
+	if (*text == '\0') {
+		*save = text;
+	} else {
+		*text = '\0';
+		*save = text + 1;
+	}
+	return start;
+}
+
+/*
+ * At most `length` characters from `from`, and then a terminator -- so the
+ * most it writes is `length + 1` bytes past the end of what is already there,
+ * which is the part that surprises people about this function and the reason
+ * it is only on two call sites.
+ */
+char *strncat(char *to, const char *from, size_t length)
+{
+	char *at = to + strlen(to);
+	size_t n = 0;
+
+	while (n < length && from[n] != '\0') {
+		at[n] = from[n];
+		n++;
+	}
+	at[n] = '\0';
+	return to;
+}

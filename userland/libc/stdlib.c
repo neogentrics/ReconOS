@@ -168,6 +168,26 @@ unsigned long strtoul(const char *text, char **end, int base)
 	return negative ? (unsigned long)(0 - v) : (unsigned long)v;
 }
 
+/*
+ * Three call sites, all of them reading a size that a `long` might not hold on
+ * a 32-bit build. It is a separate function rather than a cast of `strtoul`
+ * because the saturation is different: this one stops at the 64-bit limit
+ * whatever a `long` happens to be.
+ */
+unsigned long long strtoull(const char *text, char **end, int base)
+{
+	int negative;
+	int overflowed;
+	unsigned long long v;
+
+	v = parse(text, end, base, &negative, ~0ULL, &overflowed);
+
+	if (overflowed) {
+		return ~0ULL;
+	}
+	return negative ? (unsigned long long)(0 - v) : v;
+}
+
 int atoi(const char *text)
 {
 	return (int)strtol(text, (char **)0, 10);

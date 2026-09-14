@@ -35,4 +35,13 @@ char *strstr(const char *haystack, const char *needle);
 size_t strspn(const char *text, const char *of);
 size_t strcspn(const char *text, const char *stop);
 
+/*
+ * The reentrant spelling only. Forty-four call sites in the desktop and every
+ * one of them uses it; plain `strtok` keeps its place in a static, which is
+ * the wrong thing to put in a library this system will link into code that can
+ * run on two cores at once.
+ */
+char *strtok_r(char *text, const char *separators, char **save);
+char *strncat(char *to, const char *from, size_t length);
+
 #endif /* RECON_STRING_H */

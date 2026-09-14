@@ -36,6 +36,8 @@
 #define strstr      recon_strstr
 #define strspn      recon_strspn
 #define strcspn     recon_strcspn
+#define strtok_r    recon_strtok_r
+#define strncat     recon_strncat
 
 #define snprintf    recon_snprintf
 #define vsnprintf   recon_vsnprintf
@@ -56,6 +58,7 @@
 #define atof        recon_atof
 #define strtol      recon_strtol
 #define strtoul     recon_strtoul
+#define strtoull    recon_strtoull
 #define strtod      recon_strtod
 #define abs         recon_abs
 #define qsort       recon_qsort

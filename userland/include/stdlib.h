@@ -25,6 +25,7 @@ double atof(const char *text);
 
 long strtol(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
+unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
 
 int abs(int value);

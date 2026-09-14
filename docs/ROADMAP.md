@@ -130,29 +130,34 @@ is that it was built rather than assembled.
 #### The piece between the two phases: a C library
 
 The two phases meet at a boundary nobody had named. Phase 1 is 107,000 lines
-of C that call into glibc 2,997 times. Phase 2 is a kernel with no glibc under
+of C that call into glibc 3,089 times. Phase 2 is a kernel with no glibc under
 it and no intention of acquiring one. Neither half was going to produce the
 thing that joins them, so `userland/` is it.
 
 **Where it is now.** Strings and memory, `snprintf` and `vsnprintf`, the
 character classes, numbers out of text, `qsort`, and the stdio file layer --
-**2,430 of those 2,997 calls**, counted rather than estimated. Plus `crt0.S`
+**2,479 of those 3,089 calls**, counted rather than estimated. Plus `crt0.S`
 and the syscall boundary as inline functions, which is what let a C program
 open `/dev/fb0`, map it, and draw through its pitch on the real kernel.
 
 **What it is held to.** Not "does it work" -- the reference. Both libraries are
 compiled into one program, ReconOS's renamed by a `-include prefix.h`, and
-every call is made twice with the answers compared: 83,246 checks. This matters
+every call is made twice with the answers compared: 86,160 checks. This matters
 more than the code does. These functions fail silently or not at all, and the
 three faults the suite found on its first run were all the same shape -- the
 reference accepting a spelling this refused, returning a different number
 without complaint. None would have been found by reading the code, and none
 would have been found by a test written from memory of what the function does.
 
-**What stops the desktop being built on it: `malloc`, and only `malloc`.** Of
-the 567 calls left over, 430 are the allocator. The other 137 are directory
-calls, sockets, time and the rest of stdio -- all of them small, and several
-already have kernel support to build on. The allocator is first on the list in
+**Nine of the desktop's own sources already build with no glibc underneath**,
+verified by compiling them with every system header directory removed
+(`scripts/check-userland.sh`, the fifth pass of `scripts/check.sh`). Seven more
+are one header away, and only one of those seven is the library's fault.
+
+**What stops the rest: `malloc`, and mostly only `malloc`.** Of the 610 calls
+left over, 430 are the allocator. The other 180 are directory calls,
+`strerror`, sockets, time and the rest of stdio -- all of them small, and
+several already have kernel support to build on. The allocator is first on the list in
 [KERNEL-WANTS.md](KERNEL-WANTS.md) for that reason: it is not the hardest thing
 the kernel owes this side, it is the one thing everything else is behind.
 

@@ -17,9 +17,21 @@ to answer those calls. This version is that something: `userland/libc/`, a
 freestanding C library, and the harness that proves it behaves the way the one
 it replaces behaves.
 
-**Measured now: 2,430 of the 2,997 library calls in `src/` are answered by
-it.** Not chosen -- counted, by walking every `.c` and `.h` in the tree with
-comments stripped. The top of that list is the shape of this system: `snprintf`
+**Measured now: 2,479 of the 3,089 library calls in `src/` are answered by
+it.** Not chosen -- counted, and then *corrected*, which is the part worth
+keeping: the first count listed the functions the library was expected to need
+and counted those, which finds every call of a function on the list and none of
+a function that is not. It reported 2,430 of 2,997 and was wrong in both
+numbers.
+
+What corrected it was taking glibc away -- `scripts/check-userland.sh`
+compiles the desktop's own sources with `-nostdinc`, the compiler's own headers
+and `userland/include`, and nothing else. Seven of the sixteen files the sweep
+called ready did not build, and three functions turned out to be simply absent:
+`strtok_r` on **44 call sites**, `strncat`, `strtoull`. All three are written
+and checked against the reference now. The script is the fifth pass of
+`scripts/check.sh`, so a header cannot drift away from the code meant to
+include it again without something saying so. The top of that list is the shape of this system: `snprintf`
 915 times, `strcasecmp` 357, `strlen` 211, `strcmp` 139. A desktop is mostly
 text being compared and formatted.
 
@@ -36,7 +48,7 @@ warns.
 So there is no test here that says what these functions should do. Both
 libraries are compiled into one program -- ReconOS's renamed by a
 `-include prefix.h` so the two can coexist -- and every call is made twice and
-the answers compared. **83,246 checks, and the reference is the referee.**
+the answers compared. **86,160 checks, and the reference is the referee.**
 
 The corpus is deliberately the cases nobody writing from memory reaches for:
 empty strings, overlapping ranges, embedded NULs, lengths of zero, bytes above
@@ -97,6 +109,12 @@ returned without complaint.
 - **BG-181** -- `inf` and `nan` were read as nothing at all. A file of
   measurements round-tripping through ReconOS would have had its infinities
   quietly become zeros.
+- **BG-182** -- `strtok_r`, `strncat` and `strtoull` were absent, and the
+  coverage measurement could not see them: it counted the functions it already
+  knew to look for, so the numerator and denominator were short by the same 49
+  calls and the fraction looked right. **A measurement that shares its premises
+  with the thing it measures can only agree with it.** Taking glibc away and
+  asking a compiler was the instrument that disagreed.
 
 **One fault was in the test rather than the library**, and it is worth
 recording because the correction went the other way. The first run reported 254
@@ -111,12 +129,32 @@ believing the reply. It now holds the defined domain to exact equality and
 multi-byte character into the second half of a different one is the one outcome
 that corrupts text rather than merely differing.
 
-### What stops the desktop being built on it
+### Nine desktop sources build with no glibc under them
 
-`malloc`. Of the 567 calls this library does not answer, **430 are the
+Not a claim -- a compile. `recon_ocr.c`, `recon_crypt.c`, `recon_smtp_message.c`
+and six others build against these headers and the compiler's own, with every
+system header directory removed.
+
+The seven that do not each name something the port still needs, and only one of
+those is the library's fault. Four reach `<xkbcommon/xkbcommon.h>` through
+`recon_ui.h` -- a real Wayland dependency, and those files want their drawing
+half separated from their compositor half before they can move. Two reach
+`<time.h>` through `recon_fs.h` and `recon_cookie.h`, which is a
+`userland/include/time.h` waiting to be written rather than a kernel ask: the
+kernel has had both clocks since 8 September.
+
+### What stops the rest being built on it
+
+`malloc`. Of the 610 calls this library does not answer, **430 are the
 allocator** -- `free` 311, `calloc` 80, `malloc` 34. Everything else left over
-is small: 56 directory calls, 37 socket calls, 21 for time, 15 for the rest of
-stdio, 4 for processes, 4 for floating-point maths.
+is small: 56 directory calls, 43 for `strerror`, 37 socket calls, 21 for time,
+15 for the rest of stdio, 4 for processes, 4 for floating-point maths.
+
+`strerror` is the interesting one of those, because it is not waiting on the
+kernel: the kernel already returns negative error numbers and
+`userland/include/recon.h` names them, so the table is ours to write. All 43
+calls are in three files that are blocked on the allocator anyway, so it
+waits.
 
 `userland/include/stdlib.h` therefore has **no `malloc` declaration at all**.
 A caller fails to *link* rather than getting a stub that returns NULL and a

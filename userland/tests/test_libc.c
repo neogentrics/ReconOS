@@ -50,6 +50,8 @@ char *recon_strrchr(const char *text, int value);
 char *recon_strstr(const char *haystack, const char *needle);
 size_t recon_strspn(const char *text, const char *of);
 size_t recon_strcspn(const char *text, const char *stop);
+char *recon_strtok_r(char *text, const char *separators, char **save);
+char *recon_strncat(char *to, const char *from, size_t length);
 
 int recon_snprintf(char *to, size_t room, const char *format, ...);
 
@@ -631,6 +633,127 @@ static void test_where_it_differs_on_purpose(void)
 	      "a value past the fixed-point range says so");
 }
 
+/*
+ * --- Splitting, and appending with a limit ---
+ *
+ * These three were missing and nothing said so. The library's coverage was
+ * measured by listing the functions it was expected to need and counting those
+ * -- which finds every call of a function on the list and none of a function
+ * that is not on it. `strtok_r` is on forty-four call sites in `src/`.
+ *
+ * What found them was `scripts/check-userland.sh`: taking glibc away and
+ * asking a compiler to build the desktop's own sources against these headers.
+ * The instrument answered in one run what the measurement could not answer at
+ * all, because the measurement could only see what it already knew to look
+ * for. Same lesson as BG-173 and BG-174, in a different shape.
+ */
+static void test_splitting(void)
+{
+	static const char *const SUBJECTS[] = {
+		"",
+		"one",
+		"one two three",
+		"  leading",
+		"trailing  ",
+		"   ",
+		"a,,b",
+		",,,",
+		",a,",
+		"one\ttwo\nthree",
+		"nosep",
+		"a b  c   d",
+	};
+	static const char *const SEPARATORS[] = {
+		" ", ",", " \t\n", "", "abc", ",;",
+	};
+	size_t i;
+	size_t j;
+
+	printf("strtok_r, over strings that are mostly separators\n");
+
+	for (i = 0; i < sizeof(SUBJECTS) / sizeof(SUBJECTS[0]); i++) {
+		for (j = 0; j < sizeof(SEPARATORS) / sizeof(SEPARATORS[0]);
+		     j++) {
+			char mine[64];
+			char theirs[64];
+			char *my_save = NULL;
+			char *their_save = NULL;
+			char *a;
+			char *b;
+			int n;
+
+			/*
+			 * Two copies, because this writes into what it is
+			 * given. Comparing the *buffers* afterwards matters as
+			 * much as comparing the tokens: a split that returns
+			 * the right words while leaving the string chopped in
+			 * different places has broken the caller's next pass
+			 * over it.
+			 */
+			recon_strcpy(mine, SUBJECTS[i]);
+			strcpy(theirs, SUBJECTS[i]);
+
+			a = recon_strtok_r(mine, SEPARATORS[j], &my_save);
+			b = strtok_r(theirs, SEPARATORS[j], &their_save);
+
+			for (n = 0; n < 16; n++) {
+				g_checks++;
+				if ((a == NULL) != (b == NULL)) {
+					g_failures++;
+					printf("  FAIL: strtok_r disagreed"
+					       " about the end of \"%s\" on"
+					       " \"%s\", token %d\n",
+					       SUBJECTS[i], SEPARATORS[j], n);
+					break;
+				}
+				if (a == NULL) {
+					break;
+				}
+				g_checks++;
+				if (strcmp(a, b) != 0) {
+					g_failures++;
+					printf("  FAIL: strtok_r on \"%s\" by"
+					       " \"%s\", token %d\n"
+					       "    ReconOS: \"%s\"  "
+					       "reference: \"%s\"\n",
+					       SUBJECTS[i], SEPARATORS[j], n,
+					       a, b);
+					break;
+				}
+				a = recon_strtok_r(NULL, SEPARATORS[j],
+						   &my_save);
+				b = strtok_r(NULL, SEPARATORS[j], &their_save);
+			}
+
+			check(memcmp(mine, theirs, sizeof(mine)) == 0,
+			      "the string was chopped in the same places");
+		}
+	}
+
+	printf("strncat, at every length around the edges\n");
+
+	for (i = 0; i < 12; i++) {
+		char mine[32];
+		char theirs[32];
+		size_t length;
+
+		for (length = 0; length < 12; length++) {
+			memset(mine, '#', sizeof(mine));
+			memset(theirs, '#', sizeof(theirs));
+			recon_strcpy(mine, "base");
+			strcpy(theirs, "base");
+
+			recon_strncat(mine, "0123456789", length);
+			strncat(theirs, "0123456789", length);
+
+			/* The whole buffer, not the string -- the bytes past
+			 * the terminator are where an off-by-one shows. */
+			check(memcmp(mine, theirs, sizeof(mine)) == 0,
+			      "strncat wrote the same bytes");
+		}
+	}
+}
+
 int main(void)
 {
 	printf("ReconOS C library, against the host's\n\n");
@@ -645,6 +768,7 @@ int main(void)
 	test_printf_the_rest();
 	test_printf_fractions();
 	test_the_inexact_decimals();
+	test_splitting();
 	test_where_it_differs_on_purpose();
 
 	printf("\n%d checks, %d failures\n", g_checks, g_failures);
