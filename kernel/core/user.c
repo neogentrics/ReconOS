@@ -763,14 +763,73 @@ static i64 sys_power(u64 action, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
  */
 bool user_power_test(void)
 {
-	i64 r = syscall_dispatch(SYS_POWER, 0xBEEF, 0, 0, 0, 0, 0);
+	extern const unsigned char user_test_power[];
+	extern const u64 user_test_power_len;
 
-	if (r == SYS_EINVAL)
+	u64 exits_before = exits;
+	struct thread *t;
+	u64 deadline;
+	i64 r;
+
+	/* From here first, where it is safe to ask: an action this kernel does
+	 * not know must be refused rather than defaulted to "off". */
+	r = syscall_dispatch(SYS_POWER, 0xBEEF, 0, 0, 0, 0, 0);
+	if (r != SYS_EINVAL) {
+		kprintf("  power: an unknown action answered %ld, wanted "
+			"EINVAL\n", (long)r);
+		return false;
+	}
+
+	/* And then the half that needs a process, which is why it is a
+	 * program: a kernel thread holds every capability by construction and
+	 * would be obeyed rather than refused.
+	 *
+	 * What it proves is *a program that does not hold CAP_SHUTDOWN is
+	 * refused*. It asks to drop the capability first, which is a no-op
+	 * today -- `process_create` starts a process with none -- and then
+	 * reads back what it still holds and asks nothing of the machine
+	 * unless the capability is genuinely gone. That guard cannot fire
+	 * today. It is there because this runs on every path in the matrix,
+	 * and the day a process starts with capabilities is not a day to find
+	 * out that this program powers off every guest. */
+	t = user_thread_create("no-shutdown", user_test_power,
+			       user_test_power_len);
+	if (!t) {
+		kputs("  power: could not start the program that asks\n");
+		return false;
+	}
+
+	deadline = time_monotonic_ns() + 2000000000ULL;
+	while (exits == exits_before && time_monotonic_ns() < deadline)
+		sched_yield();
+
+	if (exits == exits_before) {
+		kputs("  power: the program never reached its exit call\n");
+		return false;
+	}
+
+	switch (last_exit_code) {
+	case 60:
 		return true;
-
-	kprintf("  power: an unknown action answered %ld, wanted EINVAL\n",
-		(long)r);
-	return false;
+	case 2:
+		/* Unreachable while a process starts with no capabilities,
+		 * which is today. Reported as a failure rather than a pass
+		 * because if it ever does happen, the refusal went untested --
+		 * and the program stopping rather than asking is the only
+		 * reason the machine is still here to print this. */
+		kputs("  power: CAP_SHUTDOWN was held after being dropped, so "
+		      "the refusal went untested -- and the program was right "
+		      "to stop rather than ask\n");
+		return false;
+	case 1:
+		kputs("  power: a program without CAP_SHUTDOWN was not "
+		      "refused\n");
+		return false;
+	default:
+		kprintf("  power: the program exited with %ld, which is not "
+			"one of its own codes\n", (long)last_exit_code);
+		return false;
+	}
 }
 
 const struct personality personality_recon = {

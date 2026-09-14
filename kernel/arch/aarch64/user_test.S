@@ -413,3 +413,73 @@ user_fb_program_end:
 	.global user_fb_program_len
 user_fb_program_len:
 	.quad	user_fb_program_end - user_fb_program
+
+
+/* --- asking to stop the machine without the right to --------------------
+ *
+ * SYS_POWER is behind CAP_SHUTDOWN, and the kernel cannot test that refusal on
+ * itself: a kernel thread's capabilities are the absence of a process rather
+ * than a field, so `capability_drop` is a documented no-op there and
+ * `capable(CAP_SHUTDOWN)` stays true. Asked to be refused, it would be obeyed.
+ *
+ * So the question is put by a process, which holds capabilities in a field.
+ *
+ * **What is actually being proved, stated exactly.** `process_create` gives a
+ * process `(uid == UID_KERNEL) ? CAP_ALL : 0`, so this program starts holding
+ * *nothing*. The drop below is therefore a no-op today. It is written anyway
+ * because it is what a real program does -- give up what it will not need --
+ * and because the line after it is not a no-op and never will be.
+ *
+ * **The read-back is the safety argument.** `sys_dropcap` returns what is
+ * still held, and this asks nothing of the machine unless CAP_SHUTDOWN is
+ * genuinely gone. That branch cannot be taken today, and saying so is the
+ * point: this program runs inside the self-tests on every path in the matrix,
+ * and a version that asked first and checked afterwards would power off
+ * twenty-eight guests the first day a process started with capabilities.
+ *
+ * So the assertion is *a program that does not hold CAP_SHUTDOWN is refused*,
+ * which is the property that matters, and the guard is there for a day that
+ * has not come.
+ */
+	.global user_test_power
+user_test_power:
+	/* dropcap(CAP_SHUTDOWN). Bit 2, so the value is 4. */
+	mov	x0, #4
+	mov	x8, #17			/* SYS_DROPCAP */
+	svc	#0
+
+	/* x0 is what is still held. Z is set when the bit is clear, so a
+	 * branch on "not equal" is a branch on "the drop did not take". */
+	tst	x0, #4
+	b.ne	.Lpower_still_held
+
+	/* Now it must refuse, and this is the assertion. */
+	mov	x0, #0			/* POWER_ACTION_OFF */
+	mov	x8, #25			/* SYS_POWER */
+	svc	#0
+
+	/* cmn adds, so this sets Z when x0 is exactly -12, which is SYS_EPERM.
+	 * The same idiom the facts program uses for SYS_EFAULT. */
+	cmn	x0, #12
+	b.ne	.Lpower_wrong
+
+	mov	x0, #60			/* refused, as it must be */
+	b	.Lpower_exit
+.Lpower_still_held:
+	mov	x0, #2
+	b	.Lpower_exit
+.Lpower_wrong:
+	mov	x0, #1
+.Lpower_exit:
+	mov	x8, #0			/* SYS_EXIT */
+	svc	#0
+.Lpower_hang:
+	b	.Lpower_hang
+
+	.global user_test_power_end
+user_test_power_end:
+
+	.balign 8
+	.global user_test_power_len
+user_test_power_len:
+	.quad	user_test_power_end - user_test_power

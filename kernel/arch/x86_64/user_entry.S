@@ -615,3 +615,52 @@ user_test_facts_end:
 	.global user_test_facts_len
 user_test_facts_len:
 	.quad	user_test_facts_end - user_test_facts
+
+
+/* --- asking to stop the machine without the right to --------------------
+ *
+ * The aarch64 copy carries the reasoning; this is the same program in the
+ * other instruction set. The two things worth repeating: a process starts
+ * holding no capabilities at all, so the drop is a no-op and what is proved is
+ * that a program *without* CAP_SHUTDOWN is refused -- and the read-back is
+ * still checked, because this runs in the self-tests on every path in the
+ * matrix and a version that asked first would power off every guest the first
+ * day that changed.
+ */
+	.global user_test_power
+user_test_power:
+	movq	$4, %rdi		/* CAP_SHUTDOWN */
+	movq	$17, %rax		/* SYS_DROPCAP */
+	syscall
+
+	/* What is still held. If the bit is there, stop rather than ask. */
+	testq	$4, %rax
+	jnz	.Lpower_still_held
+
+	movq	$0, %rdi		/* POWER_ACTION_OFF */
+	movq	$25, %rax		/* SYS_POWER */
+	syscall
+
+	cmpq	$-12, %rax		/* SYS_EPERM */
+	jne	.Lpower_wrong
+
+	movq	$60, %rdi		/* refused, as it must be */
+	jmp	.Lpower_exit
+.Lpower_still_held:
+	movq	$2, %rdi
+	jmp	.Lpower_exit
+.Lpower_wrong:
+	movq	$1, %rdi
+.Lpower_exit:
+	movq	$0, %rax		/* SYS_EXIT */
+	syscall
+.Lpower_hang:
+	jmp	.Lpower_hang
+
+	.global user_test_power_end
+user_test_power_end:
+
+	.balign 8
+	.global user_test_power_len
+user_test_power_len:
+	.quad	user_test_power_end - user_test_power
