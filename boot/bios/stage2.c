@@ -234,7 +234,43 @@ struct dap {
 static struct dap dap;
 static u8 sector[512];
 
-static int disk_read(u8 drive, u64 lba, u16 count, void *buf)
+/* --- what size are this drive's sectors ------------------------------------
+ *
+ * 512 on every hard disk and 2048 on every CD. Everything above `disk_read`
+ * counts in 512-byte blocks -- the GPT is at block 1, the partition entry names
+ * the ESP's first block, FAT32 counts clusters in them -- and none of it should
+ * have to know what it is running on. So the difference is absorbed here.
+ *
+ * Asked once. AH=48h is a real interrupt and `read_file` calls `disk_read`
+ * thousands of times; the answer cannot change while the machine runs.
+ */
+static u16 sector_bytes;	/* 0 until asked */
+
+/* One optical sector, and it lives at a fixed low address rather than in BSS.
+ *
+ * Everything in stage 2 must fit below 0x10000 -- real mode with a zero
+ * segment addresses 64KB and every pointer here is an offset into it -- and the
+ * linker enforces that. Two more kilobytes of BSS pushed it over, which it said
+ * plainly rather than producing a loader that wrapped.
+ *
+ * 0x1000 is clear of the interrupt table and the BIOS data area below it, and
+ * clear of the stack, which starts at 0x7000 and grows down with twenty
+ * kilobytes to spare. It is inside the range the handoff already hands the
+ * kernel as the bootloader's own, so nothing has to be told about it. */
+static u8 *const big = (u8 *)0x1000;
+#define BIG_MAX 2048u
+
+struct drive_params {
+	u16 size;
+	u16 flags;
+	u32 cylinders, heads, sectors_per_track;
+	u64 total_sectors;
+	u16 bytes_per_sector;
+} __attribute__((packed));
+
+static struct drive_params params;
+
+static int raw_read(u8 drive, u64 lba, u16 count, void *buf)
 {
 	u16 ax = 0x4200;
 	int failed;
@@ -252,6 +288,80 @@ static int disk_read(u8 drive, u64 lba, u16 count, void *buf)
 			     : "memory");
 
 	return !failed;
+}
+
+static void learn_sector_size(u8 drive)
+{
+	u16 ax = 0x4800;
+	int failed;
+
+	params.size = sizeof(params);
+
+	__asm__ __volatile__("int $0x13"
+			     : "=@ccc"(failed), "+a"(ax)
+			     : "d"((u16)drive), "S"(&params)
+			     : "memory");
+
+	/* A drive that will not say is taken as 512, which is what this loader
+	 * assumed unconditionally before and is right for every disk. An answer
+	 * that is not a sane power of two is treated the same way: a wrong
+	 * number here turns every later read into a read of somewhere else. */
+	if (failed || params.bytes_per_sector < 512 ||
+	    params.bytes_per_sector > BIG_MAX)
+		sector_bytes = 512;
+	else
+		sector_bytes = params.bytes_per_sector;
+}
+
+static int disk_read(u8 drive, u64 lba, u16 count, void *buf)
+{
+	u16 per, shift;
+	u8 *out = buf;
+
+	if (!sector_bytes)
+		learn_sector_size(drive);
+
+	/* The ordinary case, and the one every hard disk takes: hand the
+	 * request straight to the firmware with nothing in between. */
+	if (sector_bytes == 512)
+		return raw_read(drive, lba, count, buf);
+
+	/* A shift, not a division.
+	 *
+	 * `lba` is 64 bits and this is a freestanding 16-bit build with no
+	 * libgcc: `lba / per` asks the linker for __udivdi3, which does not
+	 * exist here. Every sector size is a power of two, so the shift is
+	 * exact rather than an approximation -- and the linker refusing was a
+	 * better way to find that out than a slow divide would have been.
+	 *
+	 * 512 -> 0, 2048 -> 2, 4096 -> 3. */
+	shift = 0;
+	for (per = (u16)(sector_bytes / 512); per > 1; per >>= 1)
+		shift++;
+
+	per = (u16)(1u << shift);
+
+	while (count) {
+		u64 which = lba >> shift;	/* the real sector holding it */
+		u16 off   = (u16)(lba & (per - 1));
+		u16 take  = (u16)(per - off);	/* how much of it we want */
+		u16 i;
+
+		if (take > count)
+			take = count;
+
+		if (!raw_read(drive, which, 1, big))
+			return 0;
+
+		for (i = 0; i < (u16)(take * 512); i++)
+			out[i] = big[off * 512 + i];
+
+		out   += take * 512;
+		lba   += take;
+		count -= take;
+	}
+
+	return 1;
 }
 
 /* --- finding the EFI partition ---------------------------------------------
@@ -318,6 +428,126 @@ static u64 find_esp(u8 drive)
 
 		if (same16(&sector[off], esp_type))
 			return *(u64 *)&sector[off + 32];
+	}
+
+	return 0;
+}
+
+/* --- finding the boot volume on a disc --------------------------------------
+ *
+ * A disc has no partition table. xorriso decides where things land and there
+ * is no GPT to walk -- but a bootable disc has to tell the *firmware* where its
+ * boot images are, and that table is readable by anyone.
+ *
+ * So on optical media the EFI System Partition is a file in the ISO, and its
+ * first block is read out of the El Torito boot catalogue: the same entry the
+ * UEFI firmware follows to find BOOTX64.EFI. **One volume, one copy, both
+ * firmwares reading the same bytes** -- which is what an appended GPT partition
+ * was supposed to achieve and did not, because the firmware here would not
+ * follow a boot entry that pointed into one. (scripts/make-disc.sh records the
+ * measurement: three discs differing in one thing each, and only the one whose
+ * EFI image was a file in the ISO tree booted.)
+ *
+ * **Which medium this is, is asked of the medium, not guessed from the sector
+ * size.** An ISO 9660 volume says so: "CD001" at block 16, where the standard
+ * puts the primary volume descriptor and nothing else ever does. A disk is
+ * silent there and goes down the GPT path. Neither is a fallback from the
+ * other failing.
+ */
+
+/* Volume descriptors are 2048 bytes each and start at block 16. In this
+ * loader's units -- disk_read speaks 512-byte blocks whatever the medium's
+ * real sectors are -- that is block 64, four apiece. */
+#define ISO_VD_FIRST	64u
+#define ISO_VD_STRIDE	4u
+#define ISO_VD_LIMIT	16u	/* descriptors to look at before giving up */
+
+static int iso_id(const u8 *b)
+{
+	return b[1] == 'C' && b[2] == 'D' && b[3] == '0' &&
+	       b[4] == '0' && b[5] == '1';
+}
+
+/* Does this medium say it is an ISO 9660 volume? */
+static int is_iso9660(u8 drive)
+{
+	if (!disk_read(drive, ISO_VD_FIRST, 1, sector))
+		return 0;
+
+	return sector[0] == 0x01 && iso_id(sector);	/* primary descriptor */
+}
+
+/* Returns the first block of the EFI boot image, in this loader's 512-byte
+ * units, or zero if this disc carries no UEFI El Torito entry.
+ *
+ * Zero is safe as "none" here for the same reason it is in find_esp: block
+ * zero cannot be the start of anything this loader wants. */
+static u64 find_eltorito(u8 drive)
+{
+	u32 catalogue = 0;
+	u32 i;
+	u8 platform;
+
+	/* The boot record descriptor: type 0, and its system identifier says
+	 * which specification. Walked rather than assumed to be block 17,
+	 * because the order of the descriptors is the image builder's choice
+	 * and a terminator (type 255) can arrive first. */
+	for (i = 1; i < ISO_VD_LIMIT; i++) {
+		if (!disk_read(drive, ISO_VD_FIRST + i * ISO_VD_STRIDE, 1,
+			       sector))
+			return 0;
+
+		if (!iso_id(sector))
+			return 0;
+		if (sector[0] == 0xFF)			/* terminator */
+			return 0;
+		if (sector[0] != 0x00)
+			continue;
+
+		if (sector[7] == 'E' && sector[8] == 'L' && sector[9] == ' ' &&
+		    sector[10] == 'T' && sector[11] == 'O') {
+			catalogue = *(u32 *)&sector[0x47];
+			break;
+		}
+	}
+
+	if (!catalogue)
+		return 0;
+
+	/* The catalogue is one 2048-byte block of 32-byte entries.
+	 *
+	 * The first is a validation entry, and **its platform byte belongs to
+	 * the default entry that follows it** -- so it is read here rather than
+	 * skipped. Without it the default entry, which is the BIOS image and
+	 * also starts with 0x88, would be indistinguishable from the UEFI one
+	 * and this would hand back stage 2's own boot image. */
+	platform = 0xFF;
+
+	for (i = 0; i < 4; i++) {
+		u32 e;
+
+		if (!disk_read(drive, (u64)catalogue * 4 + i, 1, sector))
+			return 0;
+
+		for (e = 0; e < 512; e += 32) {
+			u8 *ent = &sector[e];
+
+			if (ent[0] == 0x01) {		/* validation */
+				platform = ent[1];
+				continue;
+			}
+
+			if (ent[0] == 0x90 || ent[0] == 0x91) {	/* section */
+				platform = ent[1];
+				continue;
+			}
+
+			if (ent[0] != 0x88)		/* not bootable */
+				continue;
+
+			if (platform == 0xEF)		/* UEFI */
+				return (u64)(*(u32 *)&ent[8]) * 4;
+		}
 	}
 
 	return 0;
@@ -1427,6 +1657,26 @@ void enter_long_mode(u32 entry_lo, u32 entry_hi, u32 handoff, u32 pml4);
 
 static u64 esp_lba;
 
+/* Where the FAT32 volume holding the kernel starts, and what kind of medium
+ * this is.
+ *
+ * **A dispatch, not a fallback.** Asking the GPT reader first and trying El
+ * Torito when it came back empty would also work today, and would be wrong the
+ * first time a disk turns up with no EFI partition: it would go looking for a
+ * boot catalogue on a hard disk and act on whatever those bytes happened to
+ * say. The medium states which it is, and exactly one reader runs.
+ */
+static u64 find_boot_volume(u8 drive, const char **kind)
+{
+	if (is_iso9660(drive)) {
+		*kind = "disc";
+		return find_eltorito(drive);
+	}
+
+	*kind = "disk";
+	return find_esp(drive);
+}
+
 void stage2_main(u32 boot_drive)
 {
 	print("stage2 ok, drive 0x");
@@ -1441,18 +1691,26 @@ void stage2_main(u32 boot_drive)
 	print_dec(e820_usable_mb());
 	print(" MB usable\n");
 
-	esp_lba = find_esp((u8)boot_drive);
-	if (!esp_lba) {
-		/* Said plainly, because on a machine where this happens the
-		 * kernel is unreachable and the reason is worth more than a
-		 * halt. */
-		print("esp: none found -- no EFI partition on this disk\n");
-		goto done;
-	}
+	{
+		const char *kind = "disk";
 
-	print("esp: block ");
-	print_dec((u32)esp_lba);
-	print("\n");
+		esp_lba = find_boot_volume((u8)boot_drive, &kind);
+		if (!esp_lba) {
+			/* Said plainly, because on a machine where this
+			 * happens the kernel is unreachable and the reason is
+			 * worth more than a halt. */
+			print("esp: none found on this ");
+			print(kind);
+			print("\n");
+			goto done;
+		}
+
+		print("esp: ");
+		print(kind);
+		print(", block ");
+		print_dec((u32)esp_lba);
+		print("\n");
+	}
 
 	if (!fat_mount((u8)boot_drive, (u32)esp_lba)) {
 		print("esp: not a FAT32 volume this loader can read\n");

@@ -1414,6 +1414,31 @@ else
 	FAILED_PATHS+=("install medium")
 fi
 
+# --- the same software, on the other kind of medium -------------------------
+#
+# A disc is not a stick with a different cable. Its sectors are 2048 bytes, it
+# has no partition table, and where a disk keeps a GPT it keeps an El Torito
+# boot catalogue -- three places the loaders can be wrong while every stick
+# test above still passes. Both firmwares and both architectures, off one ISO.
+
+printf '%-46s' "  the install disc boots on both firmwares"
+
+disc_out=$(sh scripts/disc-boot-test.sh 2>&1)
+disc_rc=$?
+
+if [ "$disc_rc" -eq 0 ]; then
+	echo "$(echo "$disc_out" | grep -oE '[0-9]+ of [0-9]+: the disc.*' | head -1)"
+	passes=$((passes + 1))
+elif [ "$disc_rc" -eq 2 ]; then
+	echo "skipped, xorriso is not installed"
+	skipped=$((skipped + 1))
+else
+	echo "FAILED"
+	echo "$disc_out" | sed 's/^/      /' | head -14
+	failures=$((failures + 1))
+	FAILED_PATHS+=("install disc")
+fi
+
 # --- the stick, read and written --------------------------------------------
 #
 # Checkpoint 11b. The medium test above proves the kernel can read the stick it

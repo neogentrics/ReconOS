@@ -18,13 +18,23 @@
 # because the first attempt gave them the same name and one medium could carry
 # only one architecture.
 #
-# Usage: scripts/make-medium.sh [output.img]
+# Usage: scripts/make-medium.sh [output.img] [size]
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 OUT=${1:-reconos-medium.img}
+
+# 512 MiB by default: room for both architectures with space to spare, and
+# small enough to write to a stick quickly.
+#
+# Asked for rather than fixed, because scripts/make-disc.sh appends this whole
+# partition to an ISO and 512 MiB of mostly-zero FAT makes a half-gigabyte disc
+# out of four megabytes of software. **The size is the only thing it varies**:
+# what goes in, what it is called, and that there is no cmdline file are still
+# decided here and nowhere else.
+SIZE=${2:-512M}
 
 for t in sgdisk mkfs.vfat mcopy mmd; do
 	command -v "$t" >/dev/null 2>&1 || { echo "need $t" >&2; exit 2; }
@@ -53,10 +63,8 @@ done
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT INT TERM
 
-# 512 MiB: room for both architectures with space to spare, and small enough to
-# write to a stick quickly.
 rm -f "$OUT"
-truncate -s 512M "$OUT"
+truncate -s "$SIZE" "$OUT"
 
 sgdisk -n 1:2048:+1M   -t 1:ef02 -c 1:"BIOS boot"    "$OUT" >/dev/null
 sgdisk -n 2:0:0        -t 2:ef00 -c 2:"ReconOS Boot" "$OUT" >/dev/null

@@ -94,8 +94,44 @@ _start:
 	cmpw	$0xAA55, %bx
 	jne	err_ext
 
+/* --- how big is a sector on this thing? ----------------------------------- */
+/*
+ * 512 on every hard disk and 2048 on every CD, and the difference is the whole
+ * of why booting from a disc used to stop here with E:S2: the LBA below is in
+ * 512-byte units, and on a disc that named a block four megabytes past the one
+ * we wanted.
+ *
+ * AH=48h reports it. A drive that will not answer is taken as 512, which is
+ * what this code assumed unconditionally before and is right for every disk.
+ */
+	movw	$params, %si
+	movw	$0x1E, (%si)		/* the buffer's size, as the call wants */
+	movb	boot_drive, %dl
+	movb	$0x48, %ah
+	int	$0x13
+	jc	read_stage2		/* no answer: leave the LBA in 512s */
+
+	movw	0x18(%si), %cx		/* bytes per sector */
+	cmpw	$512, %cx
+	jbe	read_stage2
+
+/* Halve the block number and round the count up, once per doubling of the
+ * sector size. 2048 goes round twice; a 4096-byte sector would go three times
+ * and is the reason this is a loop rather than a shift by two. */
+1:	shrw	$1, %cx
+	cmpw	$512, %cx
+	jbe	read_stage2
+
+	shrl	$1, stage2_lba		/* the high half is zero on any medium */
+	movw	stage2_count, %ax
+	incw	%ax			/* round up: a partial sector is a read */
+	shrw	$1, %ax
+	movw	%ax, stage2_count
+	jmp	1b
+
 /* --- read stage 2 --------------------------------------------------------- */
 
+read_stage2:
 	movw	$dap, %si
 	movb	boot_drive, %dl
 	movb	$0x42, %ah
@@ -231,6 +267,12 @@ stage2_count:
 	.globl	stage2_lba
 stage2_lba:
 	.quad	2048		/* patched by the installer */
+
+/* What AH=48h fills in. Thirty bytes, and only one of them is read: the
+ * bytes-per-sector at offset 0x18. */
+	.align 4
+params:
+	.space	30, 0
 
 /* Where the two patchable numbers are, said by stage 1 itself.
  *
