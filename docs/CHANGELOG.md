@@ -9,6 +9,122 @@ way for the two to disagree.
 
 ---
 
+## v0.4.22 — a C library of our own, checked against the one it replaces
+
+Every library call the desktop makes today reaches glibc. When the desktop is
+built for the ReconOS kernel there will be no glibc under it, and something has
+to answer those calls. This version is that something: `userland/libc/`, a
+freestanding C library, and the harness that proves it behaves the way the one
+it replaces behaves.
+
+**Measured now: 2,430 of the 2,997 library calls in `src/` are answered by
+it.** Not chosen -- counted, by walking every `.c` and `.h` in the tree with
+comments stripped. The top of that list is the shape of this system: `snprintf`
+915 times, `strcasecmp` 357, `strlen` 211, `strcmp` 139. A desktop is mostly
+text being compared and formatted.
+
+### The test is the point, not the code
+
+Writing `strlen` is an afternoon. Writing a `strlen` that behaves *exactly* as
+the one it replaces, across every input the desktop will ever hand it, is the
+part that can go wrong quietly -- and every one of these functions fails
+quietly. A `strcmp` that returns the wrong **sign** still sorts, backwards. A
+`snprintf` that rounds `%.2f` the wrong way at a half is wrong in a way nobody
+writing a test from memory would think to check. Neither crashes. Neither
+warns.
+
+So there is no test here that says what these functions should do. Both
+libraries are compiled into one program -- ReconOS's renamed by a
+`-include prefix.h` so the two can coexist -- and every call is made twice and
+the answers compared. **83,246 checks, and the reference is the referee.**
+
+The corpus is deliberately the cases nobody writing from memory reaches for:
+empty strings, overlapping ranges, embedded NULs, lengths of zero, bytes above
+127, the most negative integer, a precision longer than the string, a width
+shorter than the number.
+
+### What it now covers
+
+- **Strings and memory**, and `snprintf`/`vsnprintf` -- the most-called
+  function in ReconOS, with flags, width, precision and length modifiers, and
+  an unknown conversion written back verbatim rather than swallowed.
+- **Character classes**, ASCII only and permanently so: ReconOS's text is
+  UTF-8, where a non-ASCII character is two or more bytes, so "is this byte a
+  letter" has no useful answer above 127 and a table that said yes would
+  encourage the per-byte reasoning that breaks on the first accented name.
+- **Numbers out of text** -- `strtol`, `strtoul`, `strtod`, `atoi`, `qsort`.
+- **The file layer** -- `fopen` and the eleven stdio functions the desktop
+  actually calls, on a fixed table of sixteen streams with their buffers inside
+  them, because there is no allocator to put them anywhere else. The
+  seventeenth `fopen` is refused cleanly, and the suite checks that it is.
+
+### How the file half is testable at all
+
+It should not be. The buffering is the interesting part, and the way to find
+out whether `fseek` from the current position accounts for what is sitting
+unread in the buffer would normally be to boot a kernel and look at the
+consequences -- which is exactly the class of fault that does not announce
+itself. A file read four bytes short looks like a file that is four bytes
+short.
+
+`userland/tests/hostsys.c` answers the five primitives `stdio.c` is built on
+with POSIX calls instead of ReconOS system calls. So the same buffering code
+that will run on the kernel reads a real file here, and is held against what
+the host's stdio returns for the same file: the same bytes, the same counts,
+the same position after every operation, at seven item sizes and nine buffer
+sizes.
+
+**And the suite was checked against itself**, because a file-layer suite that
+passes on its first run deserves suspicion rather than satisfaction. Three
+faults were introduced deliberately -- `fgets` dropping the newline it stops
+on, `fseek` handing a relative offset straight to the kernel, `isprint`
+accepting one byte too many -- and the suite caught all three, at 9, 40 and 1
+failures. Then they were taken back out.
+
+### Three faults, before any of it ran
+
+All three are the same shape: the reference accepted something this refused,
+and a refusal in these functions is not a failure -- it is a different number,
+returned without complaint.
+
+- **BG-179** -- `strtol("0b101", NULL, 0)` is 5 on every machine the desktop is
+  built on today, because C23 added the binary prefix and glibc has shipped it
+  since 2.38. This read 0 and consumed one character.
+- **BG-180** -- `strtod("0x1F")` is 31.0 and the standard requires it. This
+  returned 0.0. The hexadecimal path is now there and is the one exact path in
+  the function: four bits a digit, so the mantissa is an integer and the
+  scaling is by a power of two.
+- **BG-181** -- `inf` and `nan` were read as nothing at all. A file of
+  measurements round-tripping through ReconOS would have had its infinities
+  quietly become zeros.
+
+**One fault was in the test rather than the library**, and it is worth
+recording because the correction went the other way. The first run reported 254
+disagreements on `toupper` and `tolower` for arguments below -1 -- the negative
+numbers a signed `char` produces for every byte above 127. The reference maps
+`-128` to `128`; this returns `-128` unchanged. The standard defines neither:
+the argument has to be representable as an `unsigned char` or be `EOF`, and
+those are not. So the test was asking a question that has no right answer and
+believing the reply. It now holds the defined domain to exact equality and
+**asserts ReconOS's deliberate answer separately, with the reason** -- above
+127 there is no character to be the case of, and mapping the first byte of a
+multi-byte character into the second half of a different one is the one outcome
+that corrupts text rather than merely differing.
+
+### What stops the desktop being built on it
+
+`malloc`. Of the 567 calls this library does not answer, **430 are the
+allocator** -- `free` 311, `calloc` 80, `malloc` 34. Everything else left over
+is small: 56 directory calls, 37 socket calls, 21 for time, 15 for the rest of
+stdio, 4 for processes, 4 for floating-point maths.
+
+`userland/include/stdlib.h` therefore has **no `malloc` declaration at all**.
+A caller fails to *link* rather than getting a stub that returns NULL and a
+crash somewhere else an hour later. The ask is written up in
+`docs/KERNEL-WANTS.md`, first on the list.
+
+---
+
 ## v0.4.21 — cookies, and the four things they are not allowed to do
 
 Forms could sign you in and the answer came back with a session the next

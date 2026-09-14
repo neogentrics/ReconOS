@@ -40,4 +40,38 @@
 #define snprintf    recon_snprintf
 #define vsnprintf   recon_vsnprintf
 
+#define isalnum     recon_isalnum
+#define isalpha     recon_isalpha
+#define isdigit     recon_isdigit
+#define isspace     recon_isspace
+#define isupper     recon_isupper
+#define islower     recon_islower
+#define isxdigit    recon_isxdigit
+#define isprint     recon_isprint
+#define toupper     recon_toupper
+#define tolower     recon_tolower
+
+#define atoi        recon_atoi
+#define atoll       recon_atoll
+#define atof        recon_atof
+#define strtol      recon_strtol
+#define strtoul     recon_strtoul
+#define strtod      recon_strtod
+#define abs         recon_abs
+#define qsort       recon_qsort
+#define getenv      recon_getenv
+#define exit        recon_libc_exit
+
+#define fopen       recon_fopen
+#define fclose      recon_fclose
+#define fflush      recon_fflush
+#define fread       recon_fread
+#define fwrite      recon_fwrite
+#define fgets       recon_fgets
+#define fgetc       recon_fgetc
+#define fseek       recon_fseek
+#define ftell       recon_ftell
+#define rewind      recon_rewind
+#define fprintf     recon_fprintf
+
 #endif /* RECON_LIBC_PREFIX_H */

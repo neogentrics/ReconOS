@@ -139,6 +139,10 @@ AREA = {
     'BG-171': 'applications', 'BG-172': 'display', 'BG-173': 'input',
     'BG-174': 'display', 'BG-175': 'help', 'BG-176': 'network',
     'BG-177': 'network', 'BG-178': 'network',
+    # The C library. 'build' rather than 'kernel': these are faults in
+    # the toolchain layer the desktop is compiled against, which is
+    # where BG-090 and BG-170 went for the same reason.
+    'BG-179': 'build', 'BG-180': 'build', 'BG-181': 'build',
 }
 
 def is_fixed(body):
