@@ -145,6 +145,21 @@ fi
 # partitions make-medium.sh put there, at the offsets it put them at. Those
 # bytes are 1 MiB into the device and cannot be produced by accident.
 
+# The BIOS path has a screen now, which it did not until 2.2 was built.
+#
+# Asserted on the *BIOS* boot specifically: the UEFI one gets its framebuffer
+# from GOP and has since checkpoint 4, so checking it here would pass whatever
+# VBE did. This is the machine that had no screen at all.
+say "and the machine with no UEFI gets a screen"
+if echo "$bios" | grep -qaE 'framebuffer  : [0-9]+x[0-9]+, pitch [0-9]+ BGRA'; then
+	echo "$(echo "$bios" | grep -oaE '[0-9]+x[0-9]+, pitch [0-9]+ BGRA' | head -1)"
+	pass=$((pass + 1))
+else
+	echo "FAILED -- VBE set no mode on an adapter that offers several"
+	echo "$bios" | grep -a 'framebuffer' | head -2 | sed 's/^/      /'
+	fail=$((fail + 1))
+fi
+
 say "and reads the stick it came from"
 if echo "$uefi" | grep -qaE '^table usb0 gpt 2'; then
 	slices=$(echo "$uefi" | grep -acE '^slice usb0 ')

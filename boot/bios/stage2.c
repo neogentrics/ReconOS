@@ -1080,6 +1080,212 @@ static int find_kernel_entry(u32 lowest, u32 highest, u64 *entry_out)
 	return 0;
 }
 
+
+/* --- VBE: asking the firmware for a framebuffer ----------------------------
+ *
+ * The last thing that needs the BIOS, and therefore the last thing done before
+ * long mode. See the note above `vbe_pick` for which mode and why.
+ */
+
+struct vbe_info {
+	char sig[4];		/* "VESA" */
+	u16  version;
+	u32  oem;
+	u32  caps;
+	u32  modes;		/* FAR pointer: segment in the high half */
+	u16  memory_64k;
+	u8   rest[492];
+} __attribute__((packed));
+
+struct vbe_mode {
+	u16 attributes;		/* bit 4 graphics, bit 7 linear framebuffer */
+	u8  win_a, win_b;
+	u16 granularity, win_size;
+	u16 seg_a, seg_b;
+	u32 win_func;
+	u16 pitch;
+	u16 width, height;
+	u8  w_char, y_char, planes, bpp;
+	u8  banks, memory_model, bank_size, image_pages, reserved0;
+	u8  red_mask, red_pos, green_mask, green_pos;
+	u8  blue_mask, blue_pos, rsv_mask, rsv_pos;
+	u8  directcolor;
+	u32 framebuffer;	/* the physical address, which is the whole point */
+	u32 off_screen;
+	u16 off_screen_size;
+	u8  rest[206];
+} __attribute__((packed));
+
+static struct vbe_info vinfo;
+static struct vbe_mode vmode;
+
+/* ES:DI has to point at the buffer, and the BIOS is free to return with ES
+ * holding anything. Saved and restored, because the C around this assumes a
+ * zero segment for every pointer it forms. */
+static u16 vbe_query(u16 ax, u16 cx, void *buf)
+{
+	u16 ret;
+
+	__asm__ __volatile__(
+		"pushw %%es\n\t"
+		"pushw %%ds\n\t"
+		"popw %%es\n\t"		/* ES = DS = 0, which is where buf is */
+		"int $0x10\n\t"
+		"popw %%es"
+		: "=a"(ret)
+		: "a"(ax), "c"(cx), "D"(buf)
+		: "cc", "memory");
+
+	return ret;
+}
+
+static u16 vbe_set(u16 mode)
+{
+	u16 ret;
+
+	__asm__ __volatile__("int $0x10"
+			     : "=a"(ret)
+			     : "a"((u16)0x4F02), "b"(mode)
+			     : "cc", "memory");
+	return ret;
+}
+
+/* One word from anywhere in the first megabyte.
+ *
+ * The mode list is reached through a far pointer and usually lives in the video
+ * ROM around 0xC0000, which is past what a 16-bit offset can name. A segment
+ * override is the only way to read it, and FS is used because nothing else in
+ * this file touches it. */
+static u16 peek16(u32 linear)
+{
+	u16 seg = (u16)(linear >> 4);
+	u16 off = (u16)(linear & 0x0F);
+	u16 v;
+
+	__asm__ __volatile__(
+		"pushw %%fs\n\t"
+		"movw %[s], %%fs\n\t"
+		"movw %%fs:(%%bx), %[v]\n\t"
+		"popw %%fs"
+		: [v] "=&r"(v)
+		: [s] "r"(seg), "b"(off)
+		: "memory");
+
+	return v;
+}
+
+/* The largest mode that fits inside the console's window.
+ *
+ * Bounded rather than maximised: `fbcon` draws into 1920x1200 however large the
+ * screen is (KF-203), so a bigger mode buys pixels nothing will use until there
+ * is a compositor, and costs memory bandwidth on a machine old enough not to
+ * have UEFI.
+ *
+ * Chosen by walking what this machine offers rather than asking for a size and
+ * hoping: a BIOS with 1024x768 and no 1280x800 should give a screen rather than
+ * nothing. Returns 0 when none of them will do, which is a fact about the
+ * machine and not a failure.
+ */
+#define VBE_MAX_W 1920u
+#define VBE_MAX_H 1200u
+
+static u16 vbe_pick(u32 *base, u16 *w, u16 *h, u16 *pitch)
+{
+	u32 list;
+	u16 best = 0;
+	u32 best_area = 0;
+	unsigned i;
+
+	for (i = 0; i < sizeof(vinfo); i++)
+		((u8 *)&vinfo)[i] = 0;
+
+	vinfo.sig[0] = 'V'; vinfo.sig[1] = 'B';
+	vinfo.sig[2] = 'E'; vinfo.sig[3] = '2';
+
+	if (vbe_query(0x4F00, 0, &vinfo) != 0x004F)
+		return 0;
+
+	if (vinfo.sig[0] != 'V' || vinfo.sig[1] != 'E' ||
+	    vinfo.sig[2] != 'S' || vinfo.sig[3] != 'A')
+		return 0;
+
+	list = ((vinfo.modes >> 16) << 4) + (vinfo.modes & 0xFFFF);
+
+	for (i = 0; i < 512; i++) {
+		u16 mode = peek16(list + i * 2);
+		u32 area;
+
+		if (mode == 0xFFFF)
+			break;
+
+		if (vbe_query(0x4F01, mode, &vmode) != 0x004F)
+			continue;
+
+		/* A linear framebuffer, graphics, and thirty-two bits. Each is
+		 * a separate reason the mode is no use, and every one of them
+		 * is true of modes a machine will happily offer. */
+		if (!(vmode.attributes & (1u << 7)))
+			continue;
+		if (!(vmode.attributes & (1u << 4)))
+			continue;
+		if (vmode.bpp != 32)
+			continue;
+		if (!vmode.framebuffer)
+			continue;
+
+		if (vmode.width > VBE_MAX_W || vmode.height > VBE_MAX_H)
+			continue;
+
+		area = (u32)vmode.width * vmode.height;
+		if (area <= best_area)
+			continue;
+
+		best      = mode;
+		best_area = area;
+		*base     = vmode.framebuffer;
+		*w        = vmode.width;
+		*h        = vmode.height;
+		*pitch    = vmode.pitch;
+	}
+
+	return best;
+}
+
+/* Asks for a screen, and says what happened either way.
+ *
+ * Returns zero where there is none, which every caller already handles: the
+ * kernel has booted with no framebuffer on every aarch64 path since it existed,
+ * because AAVMF provides none. */
+static u32 vbe_setup(u16 *w, u16 *h, u16 *pitch)
+{
+	u32 base = 0;
+	u16 mode = vbe_pick(&base, w, h, pitch);
+
+	if (!mode) {
+		print("  framebuffer  : this firmware offers no linear "
+		      "32-bit mode\n");
+		return 0;
+	}
+
+	/* Bit 14 asks for the linear framebuffer rather than the banked
+	 * window. Without it the mode is set and the address is useless. */
+	if (vbe_set((u16)(mode | 0x4000)) != 0x004F) {
+		print("  framebuffer  : the firmware refused the mode it "
+		      "offered\n");
+		return 0;
+	}
+
+	print("  framebuffer  : ");
+	print_dec(*w);
+	print("x");
+	print_dec(*h);
+	print(", pitch ");
+	print_dec(*pitch);
+	print(" BGRA\n");
+
+	return base;
+}
+
 /* --- the handoff -----------------------------------------------------------
  *
  * The same structure the UEFI loader fills in, at a fixed address below the
@@ -1175,11 +1381,32 @@ static u32 build_handoff(void)
 	h->region_count = n;
 	h->regions      = REGIONS_ADDR;
 
-	/* No framebuffer. VBE could provide one and does not yet, and a
-	 * framebuffer this loader has not set up is one the kernel must not be
-	 * told about: NONE is the honest answer, and the kernel already handles
-	 * it because AAVMF gives none either. */
-	h->framebuffer.format = RECONBOOT_PIXEL_NONE;
+	/* The screen, if the firmware had one to give.
+	 *
+	 * Asked for here rather than earlier because INT 10h stops working the
+	 * moment this loader leaves real mode, and this is the last place it
+	 * still can. A machine that offers no linear 32-bit mode gets NONE,
+	 * which is the honest answer and one the kernel has always handled --
+	 * every aarch64 path boots that way, because AAVMF gives none either.
+	 *
+	 * BGRA because that is what every VBE direct-colour mode this loader
+	 * will accept lays out, and the mode search refuses anything that is
+	 * not 32 bits a pixel. */
+	{
+		u16 w = 0, ht = 0, pitch = 0;
+		u32 fb = vbe_setup(&w, &ht, &pitch);
+
+		if (fb) {
+			h->framebuffer.base   = fb;
+			h->framebuffer.size   = (u64)pitch * ht;
+			h->framebuffer.width  = w;
+			h->framebuffer.height = ht;
+			h->framebuffer.pitch  = pitch;
+			h->framebuffer.format = RECONBOOT_PIXEL_BGRA;
+		} else {
+			h->framebuffer.format = RECONBOOT_PIXEL_NONE;
+		}
+	}
 
 	/* No RSDP and no device tree from here yet. Finding ACPI means scanning
 	 * the EBDA and the region below 1MB for "RSD PTR ", which is its own
