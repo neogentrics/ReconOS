@@ -262,6 +262,36 @@ void acpi_print_summary(void)
 			t->signature[2], t->signature[3]);
 	}
 	kputs("\n");
+
+	/* What this machine offers for *waking*, which is a different question
+	 * from what it offers for switching off and has three separate answers.
+	 *
+	 * The control register can put a machine to sleep on its own. Coming
+	 * back needs two more things: somewhere to resume to, which is the
+	 * FACS's waking vector, and something allowed to do the waking, which
+	 * is armed in the event block's enable half. A kernel missing either
+	 * should say which rather than report that suspend is unavailable. */
+	{
+		struct acpi_fadt_facts f;
+
+		if (!acpi_fadt(&f))
+			return;
+
+		kputs("  waking       : ");
+
+		if (f.facs)
+			kprintf("resume vector in FACS at %p", (void *)(uintptr_t)f.facs);
+		else
+			kputs("no FACS, so there is nowhere to resume to");
+
+		if (f.pm1a_event)
+			kprintf(", event block at %x (%u bytes)",
+				f.pm1a_event, f.pm1_event_width);
+		else
+			kputs(", and no event block, so nothing can be armed");
+
+		kputs("\n");
+	}
 }
 
 /* --- The FADT, and the four questions worth asking it ---------------------
@@ -293,17 +323,22 @@ void acpi_print_summary(void)
  */
 
 /* Offsets into the FADT, from the ACPI specification. */
+#define FADT_FIRMWARE_CTRL	36	/* the FACS, where the waking vector lives */
 #define FADT_DSDT		40
 #define FADT_SMI_CMD		48
 #define FADT_ACPI_ENABLE	52
+#define FADT_PM1A_EVT		56	/* status, then enable, each half the block */
+#define FADT_PM1B_EVT		60
 #define FADT_PM1A_CNT		64
 #define FADT_PM1B_CNT		68
+#define FADT_PM1_EVT_LEN	88	/* the whole block: status and enable together */
 #define FADT_PM1_CNT_LEN	89
 #define FADT_CENTURY		108
 #define FADT_IAPC_BOOT_ARCH	109
 #define FADT_FLAGS		112
 #define FADT_RESET_REG		116
 #define FADT_RESET_VALUE	128
+#define FADT_X_FIRMWARE_CTRL	132
 #define FADT_X_DSDT		140
 
 #define IAPC_8042_PRESENT	(1u << 1)
@@ -348,6 +383,27 @@ bool acpi_fadt(struct acpi_fadt_facts *out)
 		out->dsdt = (paddr_t)v;
 	else if (fadt_read(t, FADT_DSDT, 4, &v))
 		out->dsdt = (paddr_t)v;
+
+	/* The FACS, preferring the 64-bit pointer for the same reason as the
+	 * DSDT: a machine with memory above four gigabytes can put it there. */
+	if (fadt_read(t, FADT_X_FIRMWARE_CTRL, 8, &v) && v)
+		out->facs = (paddr_t)v;
+	else if (fadt_read(t, FADT_FIRMWARE_CTRL, 4, &v))
+		out->facs = (paddr_t)v;
+
+	/* The event block, which is where a wake source is armed.
+	 *
+	 * `pm1a_control` alone can put the machine to sleep and cannot arrange
+	 * for it to come back -- the enable register is the half that says what
+	 * may wake it, and the status register is how a woken kernel finds out
+	 * which one did. The block is split down the middle: the first half is
+	 * status, the second is enable, and the length covers both. */
+	if (fadt_read(t, FADT_PM1A_EVT, 4, &v))
+		out->pm1a_event = (u32)v;
+	if (fadt_read(t, FADT_PM1B_EVT, 4, &v))
+		out->pm1b_event = (u32)v;
+	if (fadt_read(t, FADT_PM1_EVT_LEN, 1, &v))
+		out->pm1_event_width = (u8)v;
 
 	if (fadt_read(t, FADT_PM1A_CNT, 4, &v))
 		out->pm1a_control = (u32)v;

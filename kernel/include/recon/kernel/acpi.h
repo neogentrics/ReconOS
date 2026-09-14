@@ -89,6 +89,25 @@ struct acpi_fadt_facts {
 	u32 pm1b_control;		/* zero on most machines */
 	u8  pm1_control_width;		/* bytes */
 
+	/* Where the processor resumes from a suspend.
+	 *
+	 * The FACS carries the firmware waking vector: the address firmware
+	 * jumps to when the machine wakes, in real mode on this architecture.
+	 * Zero on a machine that published no FACS, which is a machine that
+	 * cannot be suspended and resumed. */
+	paddr_t facs;
+
+	/* The event block -- status in the first half, enable in the second.
+	 *
+	 * This is the half of power management that turning the machine *off*
+	 * never needed. The control register says "sleep"; the enable register
+	 * says what is allowed to end it, and without one a machine told to
+	 * sleep does not come back. The status register is how a kernel that
+	 * woke finds out which source fired. */
+	u32 pm1a_event;
+	u32 pm1b_event;
+	u8  pm1_event_width;		/* the whole block, both halves */
+
 	u32 smi_command;		/* how to ask firmware for ACPI mode */
 	u8  acpi_enable;
 
