@@ -2134,7 +2134,7 @@ not to have the second copy.
 #### Finding the kernel
 
 ```
-esp: block 4096
+esp: disk, block 4096
 kernel: kernel-x86_64.elf, 708976 bytes, cluster 3
 ```
 
@@ -2218,7 +2218,7 @@ Booting from Hard Disk...
 ReconOS
 stage2 ok, drive 0x80
 e820: 7 regions, 255 MB usable
-esp: block 4096
+esp: disk, block 4096
 kernel: kernel-x86_64.elf, 709000 bytes
 signature: good
 handing over: entry 0x001000ef

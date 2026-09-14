@@ -214,10 +214,23 @@ if command -v sgdisk >/dev/null 2>&1 && command -v mkfs.vfat >/dev/null 2>&1; th
 
 	gpt=$(boot "$W/gpt.img")
 
+	# **The medium is part of the assertion, not noise in front of it.**
+	#
+	# Stage 2 chooses between the GPT and an El Torito boot catalogue by
+	# asking the medium which it is, and prints the answer -- `disk` here,
+	# `disc` in disc-boot-test.sh. Matching `esp: .*block` instead would
+	# keep passing if that dispatch picked the wrong reader and found
+	# something plausible, which is the one failure this line is placed to
+	# catch.
+	#
+	# It also states the shape of a fault this test already had: the pattern
+	# was `^esp: block ` and stage 2 gained a field, so the run reported
+	# `said 'nothing'` about a boot whose next line read `esp: disk, block
+	# 4096`. The loader was right and the test could not read it.
 	say "finds the EFI partition in a real GPT"
-	found=$(echo "$gpt" | sed -n 's/^esp: block \([0-9]*\).*/\1/p')
+	found=$(echo "$gpt" | sed -n 's/^esp: disk, block \([0-9]*\).*/\1/p')
 	if [ -n "$found" ] && [ "$found" = "$esp_start" ]; then
-		echo "block $found, which is where sgdisk put it"
+		echo "block $found, read as a disk, where sgdisk put it"
 		pass=$((pass + 1))
 	else
 		echo "FAILED -- said '${found:-nothing}', sgdisk says $esp_start"

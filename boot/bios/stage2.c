@@ -885,12 +885,25 @@ static int copy_high(u32 dest, const void *src, u16 bytes)
 
 /* --- reading the kernel ---------------------------------------------------- */
 
-/* One cluster at a time. Sixteen kilobytes is the largest cluster this will
- * accept, which covers an EFI partition up to about eight gigabytes; anything
- * larger is refused by name rather than read incorrectly. The buffer has to
- * live below 0x10000 with everything else, which is what sets the ceiling. */
-#define CLUSTER_MAX 16384
-static u8 cluster_buf[CLUSTER_MAX];
+/* Eight sectors at a time, whatever the cluster size is.
+ *
+ * This was one whole cluster, in sixteen kilobytes of a sixty-four kilobyte
+ * loader, and that was a convenience rather than a requirement: the file was
+ * already read a sector at a time into it, and holding the whole cluster only
+ * saved repeating the hash and the block move. The directory walker a few
+ * hundred lines up states the principle -- *a sector at a time, so no buffer
+ * has to be as large as a cluster* -- and this did not follow it.
+ *
+ * Four kilobytes is the floor rather than a guess: the page-table builder below
+ * assembles a 4KB table in this same buffer, and a second one of its own would
+ * put stage 2 back against the limit.
+ *
+ * **A ceiling was deleted here, not raised.** The old buffer refused any volume
+ * whose clusters were bigger than it -- an EFI partition above about eight
+ * gigabytes, by name. A cluster no longer has to fit in anything. */
+#define CHUNK_MAX  4096
+#define CHUNK_SECS (CHUNK_MAX / 512)
+static u8 chunk_buf[CHUNK_MAX];
 
 /* Hashed on the way past, not afterwards.
  *
@@ -903,31 +916,42 @@ static u8 cluster_buf[CLUSTER_MAX];
 static u32 read_file(u8 drive, u32 cluster, u32 size, u32 dest,
 		     struct sha256_ctx *ctx)
 {
-	u32 cluster_bytes = (u32)sectors_per_cluster * 512;
 	u32 done = 0;
 
-	if (cluster_bytes > CLUSTER_MAX)
-		return 0;
-
 	while (cluster && done < size) {
-		u32 want = size - done;
-		u8 s;
+		u32 base = cluster_lba(cluster);
+		u8 s = 0;
 
-		if (want > cluster_bytes)
-			want = cluster_bytes;
+		/* Through the cluster in chunks, so a volume with 32KB clusters
+		 * reads the same way as one with 4KB and neither needs a buffer
+		 * its own size. */
+		while (s < sectors_per_cluster && done < size) {
+			u8 take = (u8)(sectors_per_cluster - s);
+			u32 want;
+			u8 i;
 
-		for (s = 0; s < sectors_per_cluster; s++)
-			if (!disk_read(drive, cluster_lba(cluster) + s, 1,
-				       &cluster_buf[(u32)s * 512]))
+			if (take > CHUNK_SECS)
+				take = CHUNK_SECS;
+
+			for (i = 0; i < take; i++)
+				if (!disk_read(drive, base + s + i, 1,
+					       &chunk_buf[(u32)i * 512]))
+					return done;
+
+			want = size - done;
+			if (want > (u32)take * 512)
+				want = (u32)take * 512;
+
+			if (ctx)
+				sha256_update(ctx, chunk_buf, want);
+
+			if (!copy_high(dest + done, chunk_buf, (u16)want))
 				return done;
 
-		if (ctx)
-			sha256_update(ctx, cluster_buf, want);
+			done += want;
+			s = (u8)(s + take);
+		}
 
-		if (!copy_high(dest + done, cluster_buf, (u16)want))
-			return done;
-
-		done += want;
 		cluster = fat_next(drive, cluster);
 	}
 
@@ -944,29 +968,39 @@ static u32 read_file(u8 drive, u32 cluster, u32 size, u32 dest,
  * the kernel. */
 static u32 read_small(u8 drive, u32 cluster, u32 size, u8 *out, u32 max)
 {
-	u32 cluster_bytes = (u32)sectors_per_cluster * 512;
 	u32 done = 0;
 
-	if (size > max || cluster_bytes > CLUSTER_MAX)
+	if (size > max)
 		return 0;
 
 	while (cluster && done < size) {
-		u32 want = size - done;
-		u32 i;
-		u8 s;
+		u32 base = cluster_lba(cluster);
+		u8 s = 0;
 
-		if (want > cluster_bytes)
-			want = cluster_bytes;
+		while (s < sectors_per_cluster && done < size) {
+			u8 take = (u8)(sectors_per_cluster - s);
+			u32 want, i;
+			u8 j;
 
-		for (s = 0; s < sectors_per_cluster; s++)
-			if (!disk_read(drive, cluster_lba(cluster) + s, 1,
-				       &cluster_buf[(u32)s * 512]))
-				return done;
+			if (take > CHUNK_SECS)
+				take = CHUNK_SECS;
 
-		for (i = 0; i < want; i++)
-			out[done + i] = cluster_buf[i];
+			for (j = 0; j < take; j++)
+				if (!disk_read(drive, base + s + j, 1,
+					       &chunk_buf[(u32)j * 512]))
+					return done;
 
-		done += want;
+			want = size - done;
+			if (want > (u32)take * 512)
+				want = (u32)take * 512;
+
+			for (i = 0; i < want; i++)
+				out[done + i] = chunk_buf[i];
+
+			done += want;
+			s = (u8)(s + take);
+		}
+
 		cluster = fat_next(drive, cluster);
 	}
 
@@ -1078,9 +1112,11 @@ static int verify(struct sha256_ctx *ctx, u32 dir, u8 drive)
 #define PT_HUGE    0x080
 
 /* One table at a time, assembled in a buffer that is reachable and then block
- * moved to where the CPU will walk it. cluster_buf is reused: the kernel has
+ * moved to where the CPU will walk it. chunk_buf is reused: the kernel has
  * been read by the time this runs, and a second 4KB of bss would put stage 2
- * within a few hundred bytes of the limit the linker script enforces. */
+ * within a few hundred bytes of the limit the linker script enforces -- which
+ * is not hypothetical, since adding the El Torito reader put it 208 bytes over
+ * and stopped the build. */
 static void put64(u8 *buf, u32 index, u64 value)
 {
 	u32 *p = (u32 *)(buf + index * 8);
@@ -1103,31 +1139,31 @@ static u32 build_page_tables(void)
 
 	/* The top level: one entry, covering the first 512GB of address space,
 	 * of which the four below describe the first four gigabytes. */
-	clear4k(cluster_buf);
-	put64(cluster_buf, 0, (u64)(PT_BASE + 0x1000) | PT_PRESENT | PT_WRITE);
-	if (!copy_phys(PT_BASE, (u32)cluster_buf, 4096))
+	clear4k(chunk_buf);
+	put64(chunk_buf, 0, (u64)(PT_BASE + 0x1000) | PT_PRESENT | PT_WRITE);
+	if (!copy_phys(PT_BASE, (u32)chunk_buf, 4096))
 		return 0;
 
-	clear4k(cluster_buf);
+	clear4k(chunk_buf);
 	for (i = 0; i < 4; i++)
-		put64(cluster_buf, i,
+		put64(chunk_buf, i,
 		      (u64)(PT_BASE + 0x2000 + i * 0x1000) | PT_PRESENT |
 		      PT_WRITE);
-	if (!copy_phys(PT_BASE + 0x1000, (u32)cluster_buf, 4096))
+	if (!copy_phys(PT_BASE + 0x1000, (u32)chunk_buf, 4096))
 		return 0;
 
 	/* Four directories of 512 entries, each entry a 2MB page: four
 	 * gigabytes, identity mapped. The kernel replaces all of it with its
 	 * own map as soon as it is running. */
 	for (t = 0; t < 4; t++) {
-		clear4k(cluster_buf);
+		clear4k(chunk_buf);
 		for (i = 0; i < 512; i++)
-			put64(cluster_buf, i,
+			put64(chunk_buf, i,
 			      ((u64)(t * 512 + i) << 21) | PT_PRESENT |
 			      PT_WRITE | PT_HUGE);
 
 		if (!copy_phys(PT_BASE + 0x2000 + t * 0x1000,
-			       (u32)cluster_buf, 4096))
+			       (u32)chunk_buf, 4096))
 			return 0;
 	}
 
