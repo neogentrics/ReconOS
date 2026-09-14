@@ -160,11 +160,39 @@ enum {
 	 */
 	SYS_SCREEN,
 
+	/* (action) -- does not return on a machine that obeys.
+	 *
+	 * The desktop's Shut Down and Restart exist, are drawn, and have had
+	 * nothing to call: there were twenty-six system calls and none of them
+	 * was about power, while `power_off()` had been reachable from the
+	 * kernel command line and nowhere else.
+	 *
+	 * Behind CAP_SHUTDOWN, which was already defined, already tracked, and
+	 * already listed in the boot report -- the permission half of this was
+	 * built before the thing it guards.
+	 *
+	 * **It refuses with a reason.** A program told only "no" cannot tell
+	 * *this machine has no ACPI* from *you are not allowed*, and those need
+	 * different words on a screen. The reasons map to distinct errors
+	 * rather than collapsing into one failure.
+	 *
+	 * Suspend is deliberately not here. Off and restart are a request the
+	 * firmware honours or does not; suspend is a contract with every driver
+	 * about state, and putting it in this call would be asking for the hard
+	 * one in order to get the easy one. */
+	SYS_POWER,
+
 	SYS_MAX
 };
 
 /* Negative returns are errors, which is the convention every system that has
  * to report one through a single register arrives at. */
+/* What SYS_POWER is being asked for. Named rather than 0 and 1, because a
+ * call site reading `sys_power(1)` is one nobody can check, and the two
+ * outcomes differ by whether the machine comes back. */
+#define POWER_ACTION_OFF     0
+#define POWER_ACTION_RESTART 1
+
 #define SYS_OK          0
 #define SYS_ENOSYS    (-1)	/* no such call in this personality */
 #define SYS_EFAULT    (-2)	/* the caller passed an address it does not own */
@@ -199,6 +227,20 @@ enum {
  * moment later. Collapsing them turns a busy machine into a broken
  * program. */
 #define SYS_ENOMEM   (-14)
+
+/* Why a machine would not stop. Separate numbers because they send whoever
+ * reads them somewhere completely different: one is a machine that cannot,
+ * one is a program that may not, and one is a kernel that has not been taught
+ * this architecture. A single failure would make a desktop say "could not shut
+ * down" to all three. */
+#define SYS_ENOPOWER (-15)	/* this machine gave no way to do it */
+#define SYS_ENOSTATE (-16)	/* its description names no such state */
+/* Not SYS_ENOSYS, which is taken and means something else entirely: "no
+ * such call in this personality". This is a call that exists, on a
+ * machine this kernel has no way to stop. The collision was caught by
+ * -Werror on the first build, which is where a name that means two
+ * things should be caught. */
+#define SYS_ENOMECH  (-17)	/* this kernel cannot reach it here */
 
 enum reconfs_status;
 
@@ -298,6 +340,15 @@ bool user_self_test(void);
  * see whether the pixels are there. True on a machine with no screen, which is
  * most of the verification matrix and is not a failure. */
 bool user_framebuffer_test(void);
+
+/* Whether SYS_POWER is reachable by number and refuses an action it does not
+ * know rather than defaulting to stopping the machine.
+ *
+ * Not whether a program without CAP_SHUTDOWN is refused, which is the more
+ * important question and cannot be asked from a kernel thread: a kernel thread
+ * holds every capability by construction, so it would be obeyed rather than
+ * refused. See the comment on the implementation. */
+bool user_power_test(void);
 
 /* A program that signals itself, handles it, and carries on. */
 bool user_signal_test(void);

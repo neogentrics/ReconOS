@@ -24,6 +24,7 @@
  * and the 32-bit ones take different argument widths. */
 #define PSCI_CPU_ON     0xC4000003u
 #define PSCI_SYSTEM_OFF 0x84000008u
+#define PSCI_SYSTEM_RESET 0x84000009u
 
 #define PSCI_SUCCESS            0
 #define PSCI_NOT_SUPPORTED      (-1)
@@ -119,6 +120,23 @@ bool arch_power_off(void)
 		return false;
 
 	psci_call(PSCI_SYSTEM_OFF, 0, 0, 0, psci_use_hvc);
+
+	return false;
+}
+
+/* And restarting it, which is the same interface one function number along.
+ *
+ * Everything said above about SYSTEM_OFF holds here without change: the probe
+ * is the SMP one and has to have run, the call does not return on a machine
+ * that obeys, and reaching the line after it means firmware declined. Written
+ * beside its twin rather than somewhere tidier, because the two share every
+ * word of their reasoning and separating them is how one of them gets fixed. */
+bool arch_restart(void)
+{
+	if (!psci_available)
+		return false;
+
+	psci_call(PSCI_SYSTEM_RESET, 0, 0, 0, psci_use_hvc);
 
 	return false;
 }

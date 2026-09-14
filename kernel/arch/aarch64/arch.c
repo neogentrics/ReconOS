@@ -2,6 +2,7 @@
 #include <recon/kernel/vm.h>
 #include <recon/kernel/suspend.h>
 #include <recon/kernel/smbios.h>
+#include <recon/kernel/acpi.h>
 #include <recon/kernel/arch.h>
 #include <recon/kernel/boot.h>
 #include <recon/kernel/kstring.h>
@@ -352,6 +353,35 @@ void arch_vector_restore(const void *area)
 /* There are no I/O ports on this architecture. An ARM machine is powered off
  * through PSCI, which is a firmware call and a different mechanism entirely --
  * so this refuses rather than writing somewhere that looks like a port. */
+/* The reset register, where a machine has one.
+ *
+ * Memory only, and I/O space is refused rather than approximated: there are no
+ * I/O ports on this architecture. `in` and `out` are x86 instructions, which is
+ * the entire reason `make check-portable` exists -- so a FADT claiming an I/O
+ * reset register here is describing a machine this is not, and writing
+ * *somewhere* would be worse than saying no.
+ *
+ * PCI configuration space is refused on both architectures for the same reason:
+ * reaching it needs a bus, a device and a function this function was not
+ * given. */
+bool arch_acpi_write_reset(u64 address, u8 space, u8 value)
+{
+	volatile u8 *at;
+
+	if (!address || space != ACPI_SPACE_MEMORY)
+		return false;
+
+	at = (volatile u8 *)phys_to_virt((paddr_t)address);
+
+	if (!vm_lookup((vaddr_t)(uintptr_t)at) &&
+	    !vm_map((vaddr_t)(uintptr_t)at, (paddr_t)address & ~0xFFFull,
+		    PAGE_SIZE, VM_READ | VM_WRITE | VM_GLOBAL))
+		return false;
+
+	*at = value;
+	return true;
+}
+
 bool arch_acpi_write_control(u64 address, u16 value)
 {
 	(void)address;

@@ -1,6 +1,8 @@
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/fbdev.h>
 #include <recon/kernel/user.h>
+
+#include <recon/kernel/power.h>
 #include <recon/kernel/signal.h>
 #include <recon/kernel/identity.h>
 #include <recon/kernel/process.h>
@@ -683,6 +685,94 @@ static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 	return user_status_from_reconfs(st);
 }
 
+/* Stopping or restarting the machine, which the desktop has been unable to
+ * ask for since it had a Shut Down button.
+ *
+ * Everything under this is already built: `power_off` and `power_restart` both
+ * check CAP_SHUTDOWN themselves and both return an `enum power_result` saying
+ * which of four things went wrong. This function's whole job is to refuse an
+ * action it does not recognise and to carry those reasons out to user mode
+ * without flattening them.
+ *
+ * **Flattening them is the thing this must not do.** A desktop that shows
+ * "could not shut down" for a machine with no ACPI, for a program that was not
+ * given the capability, and for an architecture this kernel cannot stop is a
+ * desktop nobody can act on. Three sentences, three numbers.
+ *
+ * An unknown action is EINVAL rather than a default to "off". A program asking
+ * for something this kernel has not heard of is a program from a later version
+ * than this one, and turning the machine off because it asked for something
+ * else is the worst possible reading of it.
+ */
+static i64 sys_power(u64 action, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	enum power_result r;
+
+	(void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+
+	switch (action) {
+	case POWER_ACTION_OFF:
+		r = power_off();
+		break;
+	case POWER_ACTION_RESTART:
+		r = power_restart();
+		break;
+	default:
+		return SYS_EINVAL;
+	}
+
+	/* Reached only where it did not happen. */
+	switch (r) {
+	case POWER_REFUSED:       return SYS_EPERM;
+	case POWER_NO_REGISTER:   return SYS_ENOPOWER;
+	case POWER_NO_SLEEP_STATE: return SYS_ENOSTATE;
+	case POWER_UNSUPPORTED:   return SYS_ENOMECH;
+	case POWER_OK:
+	default:                  return SYS_EIO;
+	}
+}
+
+/* Can a program reach SYS_POWER, and is an action this kernel does not know
+ * refused rather than obeyed?
+ *
+ * Driven through `syscall_dispatch` with the number, not by calling
+ * `sys_power`. That is the point rather than a detail: `sys_power` is static,
+ * and what is being asserted is that the number arrives there. Calling the
+ * function directly would prove the function works and say nothing about
+ * whether any program can reach it -- BG-055 exactly, *code written, compiled,
+ * shipped and never once run*.
+ *
+ * **An unknown action must not default to "off".** A program built against a
+ * later kernel, asking for something this one has never heard of, would stop
+ * the machine. EINVAL is the only safe reading of a request that cannot be
+ * understood.
+ *
+ * --- what is deliberately not here, and what it would have cost -------------
+ *
+ * The other half -- *a program without CAP_SHUTDOWN is refused* -- is the
+ * safety-critical one and cannot be asked from here. The first draft of this
+ * test dropped the capability and called SYS_POWER with a real action,
+ * expecting EPERM. It would have **turned the machine off on every boot**:
+ * `identity.c` states that a kernel thread's capabilities are the absence of a
+ * process rather than a field, so `capability_drop` is a documented no-op here
+ * and `capable(CAP_SHUTDOWN)` is true. The refusal would not have come; the
+ * obedience would have.
+ *
+ * Testing it needs a real process, which needs a user program, which is
+ * assembly in two architectures. Owed rather than skipped quietly.
+ */
+bool user_power_test(void)
+{
+	i64 r = syscall_dispatch(SYS_POWER, 0xBEEF, 0, 0, 0, 0, 0);
+
+	if (r == SYS_EINVAL)
+		return true;
+
+	kprintf("  power: an unknown action answered %ld, wanted EINVAL\n",
+		(long)r);
+	return false;
+}
+
 const struct personality personality_recon = {
 	.name = "ReconOS",
 	.table = {
@@ -711,6 +801,7 @@ const struct personality personality_recon = {
 		[SYS_LIST]     = sys_list,
 		[SYS_MAP]      = sys_map,
 		[SYS_SCREEN]   = sys_screen,
+		[SYS_POWER]    = sys_power,
 	},
 };
 

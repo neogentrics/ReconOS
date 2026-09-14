@@ -210,6 +210,24 @@ void arch_vector_restore(const void *area);
  * machine that does that is a machine this returns false for. */
 bool arch_acpi_write_control(u64 address, u16 value);
 
+/* Write the FADT's reset register, wherever the FADT says it lives.
+ *
+ * Three address spaces are possible and the value is one byte in all of them:
+ * 0 is memory, 1 is an I/O port, 2 is PCI configuration space. An architecture
+ * that cannot reach the one it is handed returns false rather than writing
+ * somewhere else -- a reset written to the wrong place is an arbitrary byte
+ * into an arbitrary device.
+ */
+bool arch_acpi_write_reset(u64 address, u8 space, u8 value);
+
+/* Restart the machine the way this architecture does it, where it has a way.
+ *
+ * The same shape and the same reasoning as arch_power_off: a machine booted
+ * from a device tree has no ACPI at all, so a portable path through the FADT
+ * correctly reports that it cannot and leaves the machine running. Does not
+ * return where it works; false means it did not. */
+bool arch_restart(void);
+
 /* --- suspend ---------------------------------------------------------------
  *
  * Whether this machine could sleep and come back, asked **before** anything is

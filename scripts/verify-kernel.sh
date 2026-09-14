@@ -509,6 +509,59 @@ check_power_off() {
 	passes=$((passes + 1))
 }
 
+# And restarting, which is a different mechanism on every machine.
+#
+# `power_restart` reaches the architecture first and the FADT's reset register
+# second, and the two architectures share none of it: x86_64 writes 0xCF9 and
+# pulses the 8042, aarch64 calls PSCI SYSTEM_RESET. So both are asked, because
+# a green run on one says nothing about the other -- and until this existed,
+# the whole path had one caller (SYS_POWER) that no test can invoke without
+# ending the guest, which is a path nobody has run.
+#
+# `-no-reboot` is what makes it assertable: with it, a guest that resets exits
+# instead of coming back round, and the exit is something a script can read.
+check_restart() {
+	local label=$1
+	shift
+	printf '%-46s' "  $label"
+
+	timeout 25 "$@" -append restart >"$WORK/restart.log" 2>&1
+	local rc=$?
+
+	if [ "$rc" -eq 124 ]; then
+		echo "FAILED -- it was still running when the clock ran out"
+		tr -d '\r' < "$WORK/restart.log" | tail -3 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label")
+		return
+	fi
+
+	if tr -d '\r' < "$WORK/restart.log" | grep -qE 'kernel fault|PANIC'; then
+		echo "FAILED -- it stopped, but by falling over"
+		tr -d '\r' < "$WORK/restart.log" | tail -4 | sed 's/^/      /'
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label")
+		return
+	fi
+
+	# The positive question, for KF-207's reason. On success the guest dies
+	# inside power_restart and "Restarting." is the last thing in the log;
+	# on every failure one of the `restart:` lines follows it.
+	local last
+	last=$(tr -d '\r' < "$WORK/restart.log" | grep -v '^[[:space:]]*$' | tail -1)
+
+	if [ "$last" != "Restarting." ]; then
+		echo "FAILED -- it stopped, but not by restarting"
+		echo "      the log ends: $last"
+		failures=$((failures + 1))
+		FAILED_PATHS+=("$label")
+		return
+	fi
+
+	echo "the guest reset itself, exit $rc"
+	passes=$((passes + 1))
+}
+
 # Boots against one partition fixture and compares what the kernel read with
 # what wrote the disk. A different kind of check from the ones above: those
 # count self-tests the kernel ran on itself, and this one holds the kernel's
@@ -558,6 +611,13 @@ echo "Building."
 make -C kernel ARCH=x86_64  >/dev/null || { echo "x86_64 kernel build FAILED"; exit 1; }
 make -C kernel ARCH=aarch64 >/dev/null || { echo "aarch64 kernel build FAILED"; exit 1; }
 make -C kernel check-portable >/dev/null || { echo "core/ is no longer portable"; exit 1; }
+
+# The two system call lists, which are duplicated on purpose and checked here
+# because nothing else can check them. A call inserted anywhere but the end of
+# the kernel's enumeration shifts every number after it, and a program built
+# against the other header then reaches the next call along **and is told it
+# succeeded**. Nothing faults and nothing logs; the first symptom is data.
+python3 scripts/check-syscall-numbers.py || { echo "the system call numbers disagree"; exit 1; }
 
 X64_ELF=$ROOT/kernel/build/x86_64/reconos-kernel.elf
 ARM_IMG=$ROOT/kernel/build/aarch64/reconos-kernel.img
@@ -959,6 +1019,18 @@ echo "the machine, described"
 
 check_acpi
 check_power_off
+check_restart "and can restart itself" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot \
+		-kernel "$X64_ELF"
+
+# And the other architecture, which shares not one line of the mechanism: a
+# PSCI SYSTEM_RESET firmware call against a write to a chipset register.
+# `arch_power_off` is already the entry about why a portable path is not enough
+# here -- a machine booted from a device tree has no ACPI at all to reach --
+# and restarting has exactly the same shape.
+check_restart "and so can the other architecture" \
+	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
+		-no-reboot -kernel "$ARM_IMG"
 
 echo "partition tables"
 

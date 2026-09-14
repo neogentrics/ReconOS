@@ -76,7 +76,8 @@ enum {
 	SYS_SIGMASK,
 	SYS_SIGRETURN,
 	SYS_MAP,
-	SYS_SCREEN
+	SYS_SCREEN,
+	SYS_POWER
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
@@ -96,6 +97,9 @@ enum {
 #define SYS_EPERM    (-12)
 #define SYS_EPIPE    (-13)
 #define SYS_ENOMEM   (-14)
+#define SYS_ENOPOWER (-15)
+#define SYS_ENOSTATE (-16)
+#define SYS_ENOMECH  (-17)
 
 /*
  * What a file is opened for.
@@ -263,6 +267,37 @@ static inline i64 recon_map(int fd, u64 length)
 static inline i64 recon_screen(struct recon_screen *into, u64 length)
 {
 	return RECON_CALL2(SYS_SCREEN, into, length);
+}
+
+/* What to ask the machine to do. The two differ by whether it comes back, so
+ * they are named: a call site reading `recon_power(1)` is one nobody can
+ * check. */
+#define POWER_ACTION_OFF     0
+#define POWER_ACTION_RESTART 1
+
+/*
+ * Stop the machine, or restart it. Does not return on a machine that obeys.
+ *
+ * Needs the `shutdown` capability -- `recon_getcaps()` says whether this
+ * process still holds it, and `recon_dropcap()` is how a program that will
+ * never need it gives it up.
+ *
+ * **Every failure says which failure it is**, because a person looking at a
+ * screen needs different words for each:
+ *
+ *   SYS_EPERM     this program was not given the capability
+ *   SYS_ENOPOWER  the machine's firmware named no way to do it
+ *   SYS_ENOSTATE  its description declares no such state
+ *   SYS_ENOMECH   this kernel cannot reach it on this architecture
+ *   SYS_EINVAL    that is not an action this kernel knows
+ *
+ * Suspend is not one of the actions, and that is deliberate rather than
+ * pending: off and restart are a request the firmware honours or does not,
+ * while suspend is a contract with every driver about state.
+ */
+static inline i64 recon_power(u64 action)
+{
+	return RECON_CALL1(SYS_POWER, action);
 }
 
 /* --- The small amount of C library a freestanding program cannot do without --- */

@@ -38,7 +38,23 @@ bool power_idle_self_test(void);
 /* Does not return on a machine that obeys. */
 enum power_result power_off(void);
 
+/* Restarting it, which is a different mechanism with the same shape.
+ *
+ * Not folded into power_off with a flag: the two share the capability check
+ * and nothing else. Turning off is an ACPI sleep transition described by the
+ * vendor's own bytecode; restarting is a byte written to a register the FADT
+ * names, or the architecture's own route. A single function would be a switch
+ * with two unrelated halves and one set of comments trying to describe both.
+ *
+ * Does not return on a machine that obeys. */
+enum power_result power_restart(void);
+
 /* The same, with the reason printed. */
 void power_off_or_say_why(void);
+
+/* And for restarting, which needs its own because the reasons read differently:
+ * "no power management register" and "no reset register" are different
+ * sentences about different fields of the same table. */
+void power_restart_or_say_why(void);
 
 #endif /* RECON_KERNEL_POWER_H */

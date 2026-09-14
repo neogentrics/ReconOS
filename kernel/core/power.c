@@ -269,6 +269,55 @@ enum power_result power_off(void)
 	return POWER_REFUSED;
 }
 
+/* Restarting, which shares this file with power_off and almost nothing else.
+ *
+ * Same capability, same ordering argument, a different mechanism at every step.
+ * Not folded into power_off behind a flag: the two would be a switch with two
+ * unrelated halves and one set of comments trying to describe both.
+ *
+ * The architecture first, for the reason power_off states above and which is
+ * not a preference between equals: **a machine booted from a device tree has
+ * no ACPI at all**, so a portable path through the FADT is correct and useless
+ * there. PSCI is aarch64's answer; 0xCF9 and the 8042 are x86's.
+ *
+ * Then the FADT's reset register -- `reset_address`, `reset_address_space` and
+ * `reset_value`, which acpi.c has parsed since the FADT was parsed and
+ * **which nothing has ever read**. That is KF-186's shape exactly: a number
+ * recorded on every boot, printed nowhere, used by nothing. It is used now.
+ */
+enum power_result power_restart(void)
+{
+	struct acpi_fadt_facts fadt;
+
+	if (!capable(CAP_SHUTDOWN))
+		return POWER_REFUSED;
+
+	if (arch_restart())
+		return POWER_REFUSED;
+
+	if (!acpi_fadt(&fadt) || !fadt.reset_address)
+		return POWER_NO_REGISTER;
+
+	if (!arch_acpi_write_reset(fadt.reset_address,
+				   fadt.reset_address_space,
+				   fadt.reset_value))
+		return POWER_UNSUPPORTED;
+
+	/* And then it waits, for the reason spelled out at length above: the
+	 * write completes and the processor carries on, and the transition
+	 * happens somewhere between one instruction and the next. Returning
+	 * straight away would report a refusal by a machine in the middle of
+	 * obeying, which is KF-162 exactly. */
+	{
+		u64 deadline = arch_monotonic_ns() + 200000000ull;
+
+		while (arch_monotonic_ns() < deadline)
+			arch_cpu_relax();
+	}
+
+	return POWER_REFUSED;
+}
+
 void power_off_or_say_why(void)
 {
 	enum power_result r;
@@ -294,6 +343,47 @@ void power_off_or_say_why(void)
 		kputs("  power: the machine was told to turn off and did "
 		      "not\n");
 		break;
+	default:
+		break;
+	}
+}
+
+/* The same for a restart, and the reasons are not the same sentences.
+ *
+ * "No power management register" and "no reset register" are different fields
+ * of the same table, and a person reading one of them should not have to work
+ * out which was meant. The `restart:` prefix rather than `power:` is not
+ * cosmetic either: the check that asserts power-off works reads the *last*
+ * line of the log, and a restart printing under the same word would be a line
+ * that check could confuse for its own (KF-207 is the entry about what that
+ * costs).
+ */
+void power_restart_or_say_why(void)
+{
+	enum power_result r;
+
+	kputs("\nRestarting.\n");
+
+	r = power_restart();
+
+	switch (r) {
+	case POWER_NO_REGISTER:
+		kputs("  restart: this machine's firmware published no reset "
+		      "register, and this architecture has no way of its "
+		      "own\n");
+		break;
+	case POWER_UNSUPPORTED:
+		kputs("  restart: the reset register is somewhere this kernel "
+		      "cannot write to\n");
+		break;
+	case POWER_REFUSED:
+		kputs("  restart: the machine was told to restart and did "
+		      "not\n");
+		break;
+	case POWER_NO_SLEEP_STATE:
+		/* Not reachable from power_restart, which never looks at a
+		 * sleep state. Listed so that the compiler's exhaustiveness
+		 * check keeps working if a reason is ever added. */
 	default:
 		break;
 	}

@@ -416,6 +416,77 @@ bool arch_acpi_write_control(u64 address, u16 value)
 	return true;
 }
 
+/* The reset register is one byte, unlike the control register above, and can
+ * be in any of three places. Memory and I/O are reachable here; PCI
+ * configuration space is refused rather than approximated, because reaching it
+ * means a bus, a device and a function this function was not given.
+ */
+bool arch_acpi_write_reset(u64 address, u8 space, u8 value)
+{
+	if (!address)
+		return false;
+
+	if (space == ACPI_SPACE_IO) {
+		if (address > 0xFFFF)
+			return false;
+		__asm__ volatile("outb %0, %1"
+				 : : "a"(value), "Nd"((u16)address));
+		return true;
+	}
+
+	if (space == ACPI_SPACE_MEMORY) {
+		volatile u8 *at = (volatile u8 *)phys_to_virt((paddr_t)address);
+
+		if (!vm_lookup((vaddr_t)(uintptr_t)at) &&
+		    !vm_map((vaddr_t)(uintptr_t)at, (paddr_t)address & ~0xFFFull,
+			    PAGE_SIZE, VM_READ | VM_WRITE | VM_GLOBAL))
+			return false;
+
+		*at = value;
+		return true;
+	}
+
+	return false;
+}
+
+/* This architecture's own way, for a machine whose FADT names no reset
+ * register -- which is most virtual machines and some real ones.
+ *
+ * 0xCF9 is the PCI reset control register, and the sequence matters: bit 1 is
+ * SYS_RST and bit 2 is RST_CPU, and the reset happens on the transition of bit
+ * 2 from 0 to 1. Writing 0x06 in one go works on most chipsets and not all, so
+ * bit 1 is set on its own first and the transition is made deliberately.
+ *
+ * Then the 8042, which is how this was done before there was a chipset
+ * register for it and is still wired on machines that have a keyboard
+ * controller at all. Pulsing its output line 0 drives RESET.
+ *
+ * Neither returns on a machine that obeys. Both are tried because a machine
+ * that ignores the first is not a machine that ignores the second, and the
+ * cost of trying is a byte.
+ */
+bool arch_restart(void)
+{
+	unsigned spin;
+
+	__asm__ volatile("outb %0, %1" : : "a"((u8)0x02), "Nd"((u16)0x0CF9));
+	__asm__ volatile("outb %0, %1" : : "a"((u8)0x06), "Nd"((u16)0x0CF9));
+
+	/* A reset is not instantaneous and the next write would race it. This
+	 * is deliberately a bounded spin rather than a sleep: the scheduler may
+	 * not be in a state to sleep in by the time somebody asks for this, and
+	 * a sleep that never returns looks exactly like a reset that worked. */
+	for (spin = 0; spin < 1000000; spin++)
+		__asm__ volatile("pause");
+
+	__asm__ volatile("outb %0, %1" : : "a"((u8)0xFE), "Nd"((u16)0x0064));
+
+	for (spin = 0; spin < 1000000; spin++)
+		__asm__ volatile("pause");
+
+	return false;
+}
+
 /* --- suspend ---------------------------------------------------------------
  *
  * Both of these are honest refusals, and the refusal is in this file rather

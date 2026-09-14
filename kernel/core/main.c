@@ -84,6 +84,18 @@ static bool asked_for_poweroff(void)
 	return boot_cmdline_has("poweroff");
 }
 
+/* And `restart`, for the same reason and with the same argument.
+ *
+ * `power_restart` is reached from user mode through SYS_POWER, which is where
+ * it is meant to be used from -- and a path whose only caller is a system call
+ * no test can invoke without ending the guest is a path nobody has run. This
+ * is how it gets run: an emulator told to restart, with -no-reboot, exits, and
+ * its exit is something a script can assert on. */
+static bool asked_for_restart(void)
+{
+	return boot_cmdline_has("restart");
+}
+
 void kmain(void)
 {
 	arch_early_init();
@@ -367,6 +379,8 @@ void kmain(void)
 		user_self_test() ? "pass" : "FAIL");
 	kprintf("  the boundary holds : %s\n",
 		user_boundary_test() ? "pass" : "FAIL");
+	kprintf("  asking to stop     : %s\n",
+		user_power_test() ? "pass" : "FAIL");
 	kprintf("  a program from a file : %s\n",
 		user_elf_test() ? "pass" : "FAIL");
 
@@ -533,6 +547,9 @@ void kmain(void)
 	 * presses it. */
 	if (asked_for_poweroff())
 		power_off_or_say_why();
+
+	if (asked_for_restart())
+		power_restart_or_say_why();
 
 	kputs("\nThe kernel has nothing else to do.\n");
 

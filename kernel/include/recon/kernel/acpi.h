@@ -80,6 +80,14 @@ bool acpi_pci_ecam(u64 *base, u8 *start_bus, u8 *end_bus);
  * the specification says the legacy devices are then assumed present -- and the
  * safe direction is to look and find nothing rather than to skip and be wrong
  * about a machine that has a keyboard. */
+/* ACPI's generic address structure names where a register lives, and the
+ * numbers are the specification's. Named because `space == 1` at a call site is
+ * a number nobody can check, and writing a reset value into the wrong address
+ * space is an arbitrary byte into an arbitrary device. */
+#define ACPI_SPACE_MEMORY  0
+#define ACPI_SPACE_IO      1
+#define ACPI_SPACE_PCI     2
+
 struct acpi_fadt_facts {
 	bool present;
 
@@ -114,7 +122,7 @@ struct acpi_fadt_facts {
 	u8  century_register;		/* a CMOS index, or zero for none */
 
 	u64 reset_address;
-	u8  reset_address_space;	/* 0 memory, 1 I/O port, 2 PCI config */
+	u8  reset_address_space;	/* one of ACPI_SPACE_*, below */
 	u8  reset_value;
 
 	bool has_8042;			/* a PS/2 controller worth probing for */
