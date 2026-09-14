@@ -59,6 +59,22 @@ LDFLAGS := -subsystem:efi_application -nodefaultlib -dll -entry:efi_main
 
 SRCS := $(wildcard src/*.c)
 OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
+
+# The trampoline, named rather than globbed.
+#
+# Both architectures' files define `reloc_trampoline`, so `src/*.S` would link
+# two of them and fail -- and naming it means this line says which one is being
+# built instead of it depending on what is in the directory.
+ASM  := src/reloc_$(ARCH).S
+OBJS += $(BUILD)/reloc_$(ARCH).o
+
+# The trampoline, named rather than globbed.
+#
+# Both architectures' files define `reloc_trampoline`, so `src/*.S` would link
+# two of them and fail -- and naming it means this line says which one is being
+# built instead of it depending on what is in the directory.
+ASM  := src/reloc_$(ARCH).S
+OBJS += $(BUILD)/reloc_$(ARCH).o
 EFI  := $(BUILD)/$(EFI_NAME)
 
 KERNEL_ELF := ../kernel/build/$(ARCH)/reconos-kernel.elf
@@ -86,6 +102,9 @@ $(EFI): $(OBJS)
 # "signature : not checked (built without a key)" and ran an unsigned kernel,
 # and the test that generated the key was satisfied because the loader it tested
 # was not the loader it had just asked for. (KF-133)
+$(BUILD)/reloc_$(ARCH).o: $(ASM) | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD)/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@

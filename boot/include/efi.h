@@ -55,6 +55,7 @@ typedef UINT64    EFI_VIRTUAL_ADDRESS;
 #define EFI_LOAD_ERROR            0x8000000000000001ULL
 #define EFI_INVALID_PARAMETER     0x8000000000000002ULL
 #define EFI_UNSUPPORTED           0x8000000000000003ULL
+#define EFI_OUT_OF_RESOURCES      0x8000000000000009ULL
 /* LocateHandle's search types. */
 #define AllHandles		0
 #define ByRegisterNotify	1

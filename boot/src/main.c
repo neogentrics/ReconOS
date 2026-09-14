@@ -396,6 +396,31 @@ static void read_initrd(EFI_FILE_PROTOCOL *root)
 	print(" KB\n");
 }
 
+/* --- placing the kernel without standing in its way -----------------------
+ *
+ * See src/reloc_$(ARCH).S for the trampoline itself and why it has to be
+ * somewhere else. This is the table it walks and the page it is copied to.
+ *
+ * Sixteen segments is more than any kernel this loader will meet -- ours has
+ * three -- and it is a visible number rather than a list that grows to whatever
+ * a malformed ELF asks for.
+ */
+#define RELOC_MAX 16
+
+struct reloc_move {
+	uint64_t dest;
+	uint64_t src;
+	uint64_t len;
+};
+
+/* One more than the moves, because the trampoline stops at a zero length. */
+static struct reloc_move reloc_table[RELOC_MAX + 1];
+static UINTN            reloc_moves;
+static uint64_t         reloc_at;	/* where the trampoline was put */
+
+extern uint8_t reloc_trampoline[];
+extern uint8_t reloc_trampoline_end[];
+
 static void *read_kernel(UINTN *size_out)
 {
 	EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -606,51 +631,20 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 		}
 	}
 
-	/* **Is the kernel about to land on us?**
+	/* **The kernel no longer has to land clear of this loader.**
 	 *
-	 * The kernel goes where its ELF says -- 0x100000 upward, fixed. This
-	 * loader is wherever the firmware decided to put it, which is a choice
-	 * nothing here influences and firmware is not obliged to explain. They
-	 * have never overlapped. Nothing has ever checked, and the failure if
-	 * they ever did would be this loader overwriting its own code part way
-	 * through the copy below, then running whatever the kernel had just
-	 * written over it.
+	 * There was a check here, and it was right: the kernel goes where its
+	 * ELF says and this loader goes wherever firmware decided, and copying
+	 * one over the other while the second is still running is a machine
+	 * that executes whatever the kernel just wrote. It compared the two
+	 * ranges and refused.
 	 *
-	 * That is unlikely and it is not impossible, and the difference between
-	 * the two is a bounds check. The BIOS path needs none of this: stage 1
-	 * at 0x7C00 and stage 2 below 0x10000 are pinned, and the kernel starts
-	 * at 1 MB, so the gap cannot close.
+	 * A correct refusal is still a machine that will not start. The copy
+	 * happens from the trampoline now, after ExitBootServices, when nothing
+	 * needs this loader to exist any more -- so there is nothing left to
+	 * refuse and the check has been deleted rather than kept as reassurance
+	 * about a condition that no longer matters.
 	 */
-	{
-		EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
-		EFI_LOADED_IMAGE_PROTOCOL *self;
-
-		if (BS->HandleProtocol(IMAGE, &li_guid,
-				       (void **)&self) == EFI_SUCCESS &&
-		    self->ImageSize) {
-			uint64_t lo = (uint64_t)(uintptr_t)self->ImageBase;
-			uint64_t hi = lo + self->ImageSize;
-
-			/* Two ranges overlap when each begins before the other
-			 * ends. Written out rather than as a distance, because
-			 * a distance between unsigned addresses is the wrong
-			 * answer in one direction and nobody notices which. */
-			if (lowest < hi && lo < highest) {
-				print("\nreconboot: the kernel wants ");
-				print_hex(lowest);
-				print(" to ");
-				print_hex(highest);
-				print("\nand this loader is at ");
-				print_hex(lo);
-				print(" to ");
-				print_hex(hi);
-				print(".\nCopying it would overwrite this "
-				      "loader while it is running.\n");
-				fail("placing the kernel clear of the loader",
-				     EFI_LOAD_ERROR);
-			}
-		}
-	}
 
 	for (unsigned i = 0; i < eh->phnum; i++) {
 		struct elf64_phdr *ph = (struct elf64_phdr *)
@@ -659,24 +653,127 @@ static uint64_t load_kernel(void *image, UINTN image_size, uint64_t *entry_out)
 		if (ph->type != PT_LOAD || ph->memsz == 0)
 			continue;
 
-		copy((void *)(uintptr_t)ph->paddr,
-		     (uint8_t *)image + ph->offset, ph->filesz);
-		zero((void *)(uintptr_t)(ph->paddr + ph->filesz),
-		     ph->memsz - ph->filesz);
+		/* **Recorded, not copied.**
+		 *
+		 * Both halves wait. A segment landing on this loader while it
+		 * is still needed is a machine that runs whatever the kernel
+		 * just wrote -- and the zeroing writes to the same range, so
+		 * doing that one now would be the same fault with a smaller
+		 * blast radius. Two entries, one table, and the trampoline
+		 * walks it after ExitBootServices.
+		 *
+		 * A zero source means fill. */
+		if (reloc_moves + 2 > RELOC_MAX)
+			fail("a kernel with more segments than this loader "
+			     "can place", EFI_LOAD_ERROR);
+
+		if (ph->filesz) {
+			reloc_table[reloc_moves].dest = ph->paddr;
+			reloc_table[reloc_moves].src  = (uint64_t)(uintptr_t)
+				((uint8_t *)image + ph->offset);
+			reloc_table[reloc_moves].len  = ph->filesz;
+			reloc_moves++;
+		}
+
+		if (ph->memsz > ph->filesz) {
+			reloc_table[reloc_moves].dest = ph->paddr + ph->filesz;
+			reloc_table[reloc_moves].src  = 0;
+			reloc_table[reloc_moves].len  = ph->memsz - ph->filesz;
+			reloc_moves++;
+		}
+	}
+
+	/* --- somewhere to run the copy from ---------------------------------
+	 *
+	 * Allocated here because `AllocatePages` is a boot service and there
+	 * are none after ExitBootServices, and the trampoline runs after it.
+	 *
+	 * **Asked for anywhere, and then checked.** The first version asked for
+	 * a page below one megabyte, reasoning that the kernel starts at
+	 * 0x100000 and never goes lower. That is true on x86_64 and it is a
+	 * statement about x86_64: on the aarch64 board QEMU emulates, memory
+	 * begins at 0x40000000 and there is nothing below a megabyte to
+	 * allocate. The firmware answered EFI_INVALID_PARAMETER and the loader
+	 * halted -- on the disc, on the second architecture, which is the only
+	 * path that was going to ask.
+	 *
+	 * So the address is the firmware's choice, exactly as the loader's own
+	 * was, and the property that matters is checked rather than arranged: a
+	 * trampoline the kernel copies over is precisely the fault this whole
+	 * arrangement exists to prevent, arriving one level further in.
+	 *
+	 * A page that does overlap is **kept, not freed**, so the next request
+	 * cannot be answered with it again. They cost one page each, they are
+	 * EfiLoaderCode, and the kernel reclaims that memory as soon as it has
+	 * read the map.
+	 */
+	{
+		UINTN bytes = (UINTN)(reloc_trampoline_end - reloc_trampoline);
+		UINTN tries;
+		UINTN i;
+
+		if (bytes > 4096)
+			fail("a trampoline larger than the page it runs in",
+			     EFI_LOAD_ERROR);
+
+		for (tries = 0; tries < 16 && !reloc_at; tries++) {
+			EFI_PHYSICAL_ADDRESS at = 0;
+			EFI_STATUS s;
+
+			s = BS->AllocatePages(AllocateAnyPages, EfiLoaderCode,
+					      1, &at);
+			if (EFI_ERROR(s))
+				fail("claiming a page for the copy", s);
+
+			if (at < highest && lowest < at + 4096)
+				continue;	/* held, so it is not offered again */
+
+			reloc_at = at;
+		}
+
+		if (!reloc_at)
+			fail("sixteen pages for the copy and every one of them "
+			     "where the kernel lands", EFI_OUT_OF_RESOURCES);
+
+		for (i = 0; i < bytes; i++)
+			((uint8_t *)(uintptr_t)reloc_at)[i] =
+				reloc_trampoline[i];
 	}
 
 	/* Find where to jump. Not the ELF entry point -- that belongs to the
 	 * 32-bit trampoline the other boot protocols arrive through. The kernel
 	 * carries a header naming its 64-bit entry, and it is found by scanning
-	 * the loaded image for the magic. */
-	for (uint64_t p = lowest; p + sizeof(struct reconboot_kernel_header) <= highest;
-	     p += 8) {
-		struct reconboot_kernel_header *h =
-			(struct reconboot_kernel_header *)(uintptr_t)p;
+	 * for the magic.
+	 *
+	 * **Scanned in the image, not at the destination**, and that changed
+	 * when the copy moved to the trampoline: there is nothing between
+	 * `lowest` and `highest` yet, so scanning there finds nothing and says
+	 * the kernel has no header. It did; nobody had put it there.
+	 *
+	 * The value read is an absolute address the kernel was linked with, so
+	 * it does not depend on where it is read from -- only the looking
+	 * does. */
+	for (unsigned i = 0; i < eh->phnum; i++) {
+		struct elf64_phdr *ph = (struct elf64_phdr *)
+			((uint8_t *)image + eh->phoff + i * eh->phentsize);
+		uint8_t *seg;
+		uint64_t off;
 
-		if (h->magic == RECONBOOT_MAGIC && h->version == RECONBOOT_VERSION) {
-			*entry_out = h->entry;
-			return highest;
+		if (ph->type != PT_LOAD || ph->filesz == 0)
+			continue;
+
+		seg = (uint8_t *)image + ph->offset;
+
+		for (off = 0; off + sizeof(struct reconboot_kernel_header)
+			      <= ph->filesz; off += 8) {
+			struct reconboot_kernel_header *h =
+				(struct reconboot_kernel_header *)(seg + off);
+
+			if (h->magic == RECONBOOT_MAGIC &&
+			    h->version == RECONBOOT_VERSION) {
+				*entry_out = h->entry;
+				return highest;
+			}
 		}
 	}
 
@@ -914,9 +1011,17 @@ static void exit_and_jump(struct reconboot *bi, uint64_t entry)
 	 */
 #if defined(__x86_64__)
 	{
+		/* Into the trampoline, not the kernel: the segments have not
+		 * been copied yet and it is the thing that copies them. The
+		 * three arguments are the table, the handoff and where to go
+		 * when it is done -- and it clears every other register before
+		 * it goes, because this code cannot, having just set three. */
 		register uint64_t arg __asm__("rdi") =
+			(uint64_t)(uintptr_t)reloc_table;
+		register uint64_t han __asm__("rsi") =
 			(uint64_t)(uintptr_t)bi;
-		register uint64_t tgt __asm__("rax") = entry;
+		register uint64_t dst __asm__("rdx") = entry;
+		register uint64_t tgt __asm__("rax") = reloc_at;
 
 		/* Nothing is declared clobbered because nothing runs
 		 * afterwards: this jump does not return, so the compiler has
@@ -926,9 +1031,6 @@ static void exit_and_jump(struct reconboot *bi, uint64_t entry)
 		 * declaration. */
 		__asm__ volatile(
 			"xorl %%ebx, %%ebx\n"
-			"xorl %%ecx, %%ecx\n"
-			"xorl %%edx, %%edx\n"
-			"xorl %%esi, %%esi\n"
 			"xorl %%ebp, %%ebp\n"
 			"xorl %%r8d, %%r8d\n"
 			"xorl %%r9d, %%r9d\n"
@@ -940,21 +1042,23 @@ static void exit_and_jump(struct reconboot *bi, uint64_t entry)
 			"xorl %%r15d, %%r15d\n"
 			"jmpq *%%rax"
 			:
-			: "r"(arg), "r"(tgt)
+			: "r"(arg), "r"(han), "r"(dst), "r"(tgt)
 			: "memory");
 	}
 #elif defined(__aarch64__)
 	{
+		/* The same three, in the AAPCS registers. */
 		register uint64_t arg __asm__("x0") =
+			(uint64_t)(uintptr_t)reloc_table;
+		register uint64_t han __asm__("x1") =
 			(uint64_t)(uintptr_t)bi;
+		register uint64_t dst __asm__("x2") = entry;
 
 		/* x16 is the intra-procedure-call scratch register, which is
 		 * exactly what a jump through a register is meant to use. */
-		register uint64_t tgt __asm__("x16") = entry;
+		register uint64_t tgt __asm__("x16") = reloc_at;
 
 		__asm__ volatile(
-			"mov x1, #0\n"
-			"mov x2, #0\n"
 			"mov x3, #0\n"
 			"mov x4, #0\n"
 			"mov x5, #0\n"
@@ -984,7 +1088,7 @@ static void exit_and_jump(struct reconboot *bi, uint64_t entry)
 			"mov x30, #0\n"
 			"br x16"
 			:
-			: "r"(arg), "r"(tgt)
+			: "r"(arg), "r"(han), "r"(dst), "r"(tgt)
 			: "memory");
 	}
 #else
