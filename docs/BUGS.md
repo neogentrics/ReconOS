@@ -6464,6 +6464,8 @@ would also produce.
 
 ### KF-211 — Entering user mode on aarch64 is interruptible, and the interrupt overwrites where user mode was going to start
 
+[#438](https://github.com/neogentrics/ReconOS/issues/438)
+
 - **Found:** 13 September 2026, by matrix 41, on `device tree, a program draws
   on the screen`:
   `user program fault: instruction abort from a lower EL at 0xffffffffc00bfe9c`.
