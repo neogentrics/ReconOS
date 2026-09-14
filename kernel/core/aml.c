@@ -45,6 +45,16 @@ static struct aml_state state;
 #define OP_EXT_PREFIX	0x5B
 #define OP_ONES		0xFF
 
+/* The statement opcodes that can appear where declarations do.
+ *
+ * Firmware wraps device and name declarations in conditionals -- `If (OSYS >=
+ * ...)` around a whole block is ordinary -- so a parser that stops at the first
+ * one stops at byte 37 of a real table. All three carry a PkgLength, which is
+ * the same shape `Method` has, so all three are stepped over the same way. */
+#define OP_IF		0xA0
+#define OP_ELSE		0xA1
+#define OP_WHILE	0xA2
+
 /* Second byte of a two-byte opcode. */
 #define EXT_MUTEX	0x01
 #define EXT_EVENT	0x02
@@ -422,6 +432,30 @@ static bool term(struct cursor *c, int depth, char *device_name)
 		return true;
 	}
 
+	case OP_IF:
+	case OP_ELSE:
+	case OP_WHILE: {
+		if (!pkg_length(c, &len))
+			return false;
+		if ((size_t)(c->end - c->p) < len)
+			return false;
+
+		/* **Stepped over, and counted because it costs something.**
+		 *
+		 * The body may declare devices and names, and skipping it skips
+		 * them. Entering it would mean reading one arm of a branch whose
+		 * condition cannot be evaluated here and presenting what was
+		 * found as fact -- wrong, and wrong silently, which is worse
+		 * than absent and said aloud.
+		 *
+		 * So the count is reported and the namespace is described as
+		 * partial for a stated reason, which is the same answer this
+		 * parser gives to an opcode it does not know. */
+		state.conditionals++;
+		c->p += len;
+		return true;
+	}
+
 	case OP_ALIAS:
 		return name_string(c, NULL) && name_string(c, NULL);
 
@@ -597,6 +631,16 @@ void aml_print_summary(void)
 
 	kprintf("  aml          : %u names, %u devices, %u methods stepped "
 		"over\n", state.names, state.devices, state.methods);
+
+	/* **Only when there were any**, because a line reporting zero of
+	 * something on every machine that has none is a line people stop
+	 * reading -- and this one matters on the machines where it is not
+	 * zero. Whatever those blocks declare is missing from every count
+	 * above it. */
+	if (state.conditionals)
+		kprintf("  aml          : %u conditional block(s) not entered, "
+			"so anything declared inside them is not above\n",
+			state.conditionals);
 
 	/* Said out loud, because a partial namespace that reports itself as a
 	 * namespace is worse than no namespace: everything that asks it a
