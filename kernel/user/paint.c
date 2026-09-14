@@ -28,7 +28,7 @@
  *     prove.
  */
 
-#include "recon.h"
+#include <recon.h>
 
 /* The exit codes. 55 for success, and not 0, for the reason hello.S gives:
  * the kernel reads this out of a field that is zero before the program runs

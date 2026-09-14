@@ -713,6 +713,32 @@ target_include_directories(recon_cookie_tests PRIVATE
 
 add_test(NAME cookies COMMAND recon_cookie_tests)
 
+# The C library the desktop will be built against when it runs on our kernel.
+#
+# Compiled *for the host*, with every function renamed by `prefix.h`, so that
+# ReconOS's implementation and the system's are in one program and can be
+# compared directly. That is the only kind of test worth having for these:
+# a `strcmp` returning the wrong sign still sorts, backwards, and would pass
+# any test written from memory of what it should do.
+#
+# -fno-builtin matters and is not belt and braces. Without it the compiler
+# recognises the byte loop inside `memcpy` and replaces it with a call to
+# `memcpy`, which builds and then recurses until the stack is gone.
+add_executable(recon_libc_tests
+    userland/tests/test_libc.c
+    userland/libc/string.c
+    userland/libc/printf.c)
+
+set_source_files_properties(
+    userland/libc/string.c userland/libc/printf.c
+    PROPERTIES COMPILE_OPTIONS
+    "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin")
+
+target_include_directories(recon_libc_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/userland/include")
+
+add_test(NAME libc COMMAND recon_libc_tests)
+
 # The same parser against markup nobody here wrote.
 #
 # Every other suite in this project was written by whoever wrote the code it

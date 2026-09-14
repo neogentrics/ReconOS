@@ -346,16 +346,23 @@ $(USER_ELF): user/hello.S user/user.ld
 # assume.
 USERCFLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror -ffreestanding \
 	      -fno-stack-protector -fno-builtin -fno-pic -fno-pie \
-	      -fno-asynchronous-unwind-tables -Iuser
+	      -fno-asynchronous-unwind-tables -I../userland/include
 
 ifeq ($(ARCH),x86_64)
 USERCFLAGS += -m64 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387
 endif
 
-$(PAINT_ELF): user/paint.c user/crt0.S user/recon.h user/user.ld
+# The program is the kernel's -- it is a self-test -- but the environment it
+# is built against is the *desktop's*, in ../userland. That is the right way
+# round: a C runtime is not a kernel component, and there being one copy of
+# `recon.h` rather than one per program is what stops a system call number
+# drifting between two of them.
+$(PAINT_ELF): user/paint.c ../userland/crt0.S ../userland/include/recon.h \
+	      user/user.ld
 	@mkdir -p $(dir $@)
 	$(CC) $(USERCFLAGS) -c user/paint.c -o $(BUILD)/user/paint.o
-	$(CC) $(ASFLAGS) -Iuser -c user/crt0.S -o $(BUILD)/user/crt0.o
+	$(CC) $(ASFLAGS) -I../userland/include -c ../userland/crt0.S \
+		-o $(BUILD)/user/crt0.o
 	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ \
 		$(BUILD)/user/crt0.o $(BUILD)/user/paint.o
 	@echo "  built $@"
