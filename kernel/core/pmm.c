@@ -37,6 +37,19 @@ static struct spinlock pmm_lock = SPINLOCK_INIT("pmm");
 
 static size_t bitmap_bytes;
 static size_t total_pages;
+
+/* How many of those pages are actually memory.
+ *
+ * `total_pages` is the distance from the lowest usable address to the highest,
+ * which is what the bitmap has to span in order to address anything in it. On a
+ * machine whose RAM sits either side of an MMIO hole -- any machine with a TOLUD
+ * below its installed memory, which is most laptops -- that span is larger than
+ * the memory, and reporting it as the memory overstates it. Measured at 6.0 GiB
+ * against 4 GiB installed, by a program that drew it on the screen.
+ *
+ * Counted in the same loop that frees the usable regions, so the two cannot
+ * disagree. */
+static size_t usable_pages;
 static size_t free_pages;
 
 /* The address the bitmap's first bit describes.
@@ -174,6 +187,7 @@ void pmm_init(void)
 
 	kmemset(bitmap, 0xFF, bitmap_bytes);
 	free_pages = 0;
+	usable_pages = 0;
 
 	/* Now give back what the firmware said we may have. Partial pages at
 	 * either end are dropped rather than rounded outward: rounding a usable
@@ -188,9 +202,17 @@ void pmm_init(void)
 		start = PAGE_ALIGN_UP(r->base);
 		end   = PAGE_ALIGN_DOWN(r->base + r->size);
 
-		if (end > start)
-			mark_free(page_index(start),
-				  (size_t)((end - start) / PAGE_SIZE));
+		if (end > start) {
+			size_t n = (size_t)((end - start) / PAGE_SIZE);
+
+			mark_free(page_index(start), n);
+
+			/* Counted here and nowhere else, from the same regions
+			 * and the same rounding that decide what is freed.
+			 * A second pass over the map would be a second author
+			 * for one fact. */
+			usable_pages += n;
+		}
 	}
 
 	/* Two things the allocator must never hand out. The bitmap, because it
@@ -396,6 +418,7 @@ void pmm_remap(void)
 }
 
 size_t pmm_total_pages(void)     { return total_pages; }
+size_t pmm_usable_pages(void)    { return usable_pages; }
 size_t pmm_free_page_count(void) { return free_pages; }
 
 void pmm_print_summary(void)
@@ -406,6 +429,16 @@ void pmm_print_summary(void)
 	kprintf("  page size    : %lu bytes\n", (u64)PAGE_SIZE);
 	kprintf("  pages        : %lu total, %lu free, %lu used\n",
 		(u64)total_pages, (u64)free_pages, (u64)used);
+
+	/* Only where they differ, which is where it matters: a machine with a
+	 * hole in its physical address space spans more than it has, and the
+	 * line above describes the span. */
+	if (usable_pages != total_pages)
+		kprintf("  memory       : %lu MB in %lu page(s); the span above "
+			"is larger because this machine's memory has a hole in "
+			"it\n",
+			(u64)(usable_pages * PAGE_SIZE) / (1024 * 1024),
+			(u64)usable_pages);
 	kprintf("  free         : %lu MB\n",
 		(u64)(free_pages * PAGE_SIZE) / (1024 * 1024));
 	kprintf("  describes    : %p upward, %lu MB\n",

@@ -503,7 +503,10 @@ static i64 sys_machine(u64 buf, u64 len, u64 a2, u64 a3, u64 a4, u64 a5)
 	m.processors_found  = smp_cpu_count();
 	m.processors_online = smp_cpus_online();
 
-	m.memory_bytes      = (u64)pmm_total_pages() * PAGE_SIZE;
+	/* The memory, not the span it is scattered across. A program asking a
+	 * machine how much memory it has does not want the size of the hole in
+	 * the middle of it (KF-224). */
+	m.memory_bytes      = (u64)pmm_usable_pages() * PAGE_SIZE;
 	m.memory_free_bytes = (u64)pmm_free_page_count() * PAGE_SIZE;
 
 	m.entropy_bits = random_entropy_bits();

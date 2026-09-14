@@ -25,6 +25,17 @@
  * interleave and would cost four times as much doing it. */
 static struct spinlock console_lock = SPINLOCK_INIT("console");
 
+/* Whether the panel is being spared the detail. Never affects the serial port
+ * or the ring -- see kputc. Not locked: it is written twice in a boot, by the
+ * boot processor, outside anything that could race it, and a torn read of a
+ * bool would at worst print one extra line. */
+static bool screen_quiet;
+
+void console_screen_quiet(bool quiet)
+{
+	screen_quiet = quiet;
+}
+
 void kputc(char c)
 {
 	/* The console speaks lines; the hardware speaks bytes. A serial terminal
@@ -42,14 +53,24 @@ void kputc(char c)
 	 * before reading. */
 	klog_putc(c);
 
-	/* And the screen, where there is one.
+	/* And the screen, where there is one and where it is wanted.
 	 *
-	 * Both surfaces get everything, rather than one being chosen: the rig
-	 * reads the serial port and a person reads the screen, and a message
-	 * that went to only one of them is a message somebody did not get. It
-	 * costs a call that returns immediately on a machine with no
-	 * framebuffer, which is every aarch64 boot in the matrix. */
-	fbcon_putc(c);
+	 * This used to read: *both surfaces get everything, rather than one
+	 * being chosen -- the rig reads the serial port and a person reads the
+	 * screen, and a message that went to only one of them is a message
+	 * somebody did not get.* That was right while the screen was the only
+	 * way a person could read the report. It is not any more: the report
+	 * writes itself to the medium now, and on a machine that boots all the
+	 * way a user program paints over the panel before anybody can look.
+	 *
+	 * **Only the panel is gated.** The serial port above keeps everything,
+	 * because the verification rig reads it and a rig that cannot see is a
+	 * rig that cannot fail. The ring keeps everything, because the file is
+	 * the instrument. And the gate is closed only around the closing
+	 * summaries -- everything a driver says while starting, which is where
+	 * every refusal is printed, reaches the panel regardless. */
+	if (!screen_quiet)
+		fbcon_putc(c);
 }
 
 /* The whole of the output path, without the lock. Everything that already holds

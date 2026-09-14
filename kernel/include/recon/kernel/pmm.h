@@ -65,6 +65,16 @@ void pmm_remap(void);
 void pmm_free_pages(paddr_t page, size_t count);
 
 size_t pmm_total_pages(void);
+
+/* How many of those pages are memory.
+ *
+ * `pmm_total_pages` is the span the bitmap covers -- the distance from the
+ * lowest usable address to the highest -- which is what the allocator's bounds
+ * are written against. On a machine whose RAM sits either side of an MMIO hole
+ * that span is larger than the memory, so anything answering "how much does
+ * this machine have" wants this one instead. Measured wrong once, at 6.0 GiB on
+ * a machine with 4 GiB. */
+size_t pmm_usable_pages(void);
 size_t pmm_free_page_count(void);
 
 void pmm_print_summary(void);

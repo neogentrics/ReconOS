@@ -7073,6 +7073,73 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-224 - The machine reported six gigabytes of memory and has four
+
+- **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
+  `memory  6.0 GiB, 3.8 GiB free`. The firmware's own setup says
+  `Total Memory 4096 MB`, and `Max TOLUD [2 GB]` -- so that machine's RAM sits
+  either side of a large hole in the physical address space.
+- **Cost:** every program that asks the machine how much memory it has is told
+  the size of the address range the memory is scattered across. The desktop is
+  about to be built against that number.
+- **What it was.**
+
+  ```
+  total_pages = (PAGE_ALIGN_UP(highest) - base_paddr) / PAGE_SIZE;
+  ```
+
+  Exactly right for a bitmap, which must be able to *address* every page in the
+  span including the ones that are not memory, and a wrong answer to "how much
+  memory is there". `SYS_MACHINE` handed it to programs as though it were one.
+  The holes are marked used, which is why the free figure looked sane.
+
+- **A correction worth recording.** The first diagnosis said QEMU's memory is
+  contiguous, so the span and the RAM were always equal there. **They are not
+  equal**: a QEMU boot reports 130,804 pages of span against 128,686 of memory,
+  a difference of about eight megabytes -- the legacy region below one. The bug
+  has been present in every run since the allocator was written and was simply
+  too small to notice. The laptop's hole is two gigabytes, which is not.
+- **Status:** fixed, kernel 0.2.29.
+
+### What was done
+
+Two numbers, because they are two facts. `pmm_total_pages` keeps its meaning and
+its name -- the span the bitmap covers, which the allocator's bounds are written
+against and which must not change. `pmm_usable_pages` is new and is what a
+program asking about memory wants. It is counted in the same loop that frees the
+usable regions, from the same rounding, so the two cannot drift apart.
+
+The boot report prints the memory line **only when the two differ**, because on a
+machine with no hole it would be a line saying the same thing twice.
+
+### KF-225 is not a bug - the panel gets a summary and the wire keeps everything
+
+Asked for rather than found: the boot report is long, and on a machine that runs
+all the way a user program now paints over it before anybody can read it.
+
+`kputc` sends every character to the serial port, the log ring and the screen,
+and its comment gave the reason: *a message that went to only one of them is a
+message somebody did not get*. That was right while the screen was the only way
+a person could read the report, and stopped being right the day the report began
+writing itself to the medium.
+
+So **only the panel is gated**. The serial port keeps everything, because the rig
+reads it and a rig that cannot see is a rig that cannot fail -- measured at 321
+lines with the gate on against 322 with `verbose`, the difference being the
+command line itself. The ring keeps everything, because the file is the
+instrument now.
+
+And the gate closes around the *closing summaries only*. Everything a driver says
+while starting still reaches the panel, which is deliberate: `sdhci: a card is
+present and answered neither as SD nor as eMMC` found KF-219 and `0 connected`
+found KF-223, and a quiet mode able to hide either would have cost more than it
+saved.
+
+**No second summary was added.** The desktop's own program already draws one, and
+draws it last on purpose; printing more text after it would paint over the
+program instead, which is the same fight from the other side. That one belongs in
+`KERNEL-WANTS.md`, where it already is.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because
