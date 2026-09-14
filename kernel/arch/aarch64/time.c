@@ -540,7 +540,7 @@ void arch_time_init(void)
 	aarch64_timer_cpu_init();
 }
 
-void aarch64_time_print_source(void)
+void arch_time_print_source(void)
 {
 	kprintf("  counter      : %lu MHz generic timer, fixed by the architecture\n",
 		timer_hz / 1000000);

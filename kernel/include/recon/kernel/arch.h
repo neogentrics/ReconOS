@@ -60,6 +60,15 @@ void arch_console_putc(char c);
  * TIME_TICK_HZ. Interrupts are enabled by the time this returns. */
 void arch_time_init(void);
 
+/* Says where this machine's clock comes from and whether it can be believed.
+ *
+ * Architecture-specific because the answer is: x86_64 has a counter whose rate
+ * has to be discovered and may not be discoverable, aarch64 has one the
+ * architecture fixes. Printed as part of the Time summary rather than kept for
+ * a debugger, because "the clock is not calibrated" explains every timeout in
+ * the machine behaving strangely and is otherwise invisible. */
+void arch_time_print_source(void);
+
 /* Nanoseconds since arch_time_init(). Never decreases. */
 u64 arch_monotonic_ns(void);
 

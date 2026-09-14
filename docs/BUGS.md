@@ -6786,6 +6786,73 @@ asks what it recorded.
 Measured: 1280x800 to 1920x1200 under OVMF, with the kernel and a ring-3 program
 both receiving the larger one.
 
+### KF-217 — A clock that returns zero for ever makes every timeout in the kernel infinite
+
+- **Found:** 14 September 2026, on the second real-hardware boot, with KF-214's
+  fix in. The Gateway got past the kernel heap and printed the whole Time
+  section:
+  `monotonic : 0.000 s since boot` · `tick : 100 Hz, 0 so far`. Then it stopped
+  again, one line after `apic: x2APIC, so processor identifiers are 32-bit, and
+  this path is UNTESTED`.
+- **Cost:** every bounded wait in the kernel becomes unbounded, on any machine
+  whose counter cannot be calibrated. AHCI, NVMe, SDHCI, xHCI, SMP — each one
+  hangs, and each looks like a bug in a different driver.
+- **What it was.** KF-214 made the PIT calibration *fail* instead of hanging,
+  and a failed calibration left `tsc_khz` at zero, and `arch_monotonic_ns`
+  answered zero whenever `tsc_khz` was zero. Every deadline in this kernel is
+  built and tested the same way:
+
+  ```
+  u64 deadline = time_monotonic_ns() + 1000000000ULL;   /* 0 + 1e9 */
+  while (cond && time_monotonic_ns() < deadline)        /* 0 < 1e9, always */
+  ```
+
+  **Fifty-seven of those, across twenty-four files.** None of them is wrong.
+
+- **The first fix was correct and insufficient, and the second could not have
+  been seen without it.** KF-214 turned one hang into a class of hangs, and the
+  class was only visible because the machine got far enough to print a clock
+  reading of zero.
+- **Status:** fixed, kernel 0.2.21.
+
+### What was done
+
+**The processor is asked before anything is measured.** CPUID leaf 15h states
+the counter's rate as a ratio against the core crystal and leaf 16h states the
+base frequency; both have existed since Skylake and Goldmont, which is to say on
+every processor that might also lack a PIT. The measurement against the PIT
+stays as the fallback it should always have been — it is what an older part
+needs, and it is what worked when this was written.
+
+**And a clock that has stopped is worse than no clock.** If neither CPUID nor
+the PIT answers, `rdtsc` still counts, so the uncalibrated clock reports elapsed
+cycles as though they were nanoseconds. That rate is correct on no processor and
+within a small factor on every one — which is the right trade, because a timeout
+that fires at the wrong moment is a driver reporting a fault, and a timeout that
+never fires is a machine that stops with nothing on the screen. It is not passed
+off as a measurement: the boot report says `UNCALIBRATED` and says why.
+
+### Two reporters that were never called
+
+`x86_time_print_source` and `aarch64_time_print_source` were both written, both
+declared, and **both called from nowhere at all**. On the Gateway the x86 one
+would have printed `not calibrated` directly above the monotonic reading of
+0.000, and this entire diagnosis would have been on the screen instead of in a
+photograph of one.
+
+They have a name in the architecture interface now — `arch_time_print_source` —
+and `time_print_summary` calls it, which is where somebody looking at the clock
+already is. **A report nobody calls is not a report.**
+
+### The CPUID branch has still never run
+
+No QEMU processor model exposes leaf 15h with usable values: `max`,
+`Skylake-Client` and `Icelake-Server` all fall through to the PIT. So the branch
+that will run on the Gateway has executed nowhere, and it is labelled that way in
+the boot report — with its inputs, the crystal and the ratio, printed beside the
+answer. A wrong ratio produces a clock that is confidently wrong, which is the
+one failure a plausible number hides.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

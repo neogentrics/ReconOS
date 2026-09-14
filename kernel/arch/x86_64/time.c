@@ -44,6 +44,16 @@ static inline u64 rdtsc(void)
 static u64 tsc_at_boot;
 static u64 tsc_khz;
 
+/* Whether tsc_khz came from the processor or from a measurement -- printed,
+ * because the two have different failure modes and a reader deserves to know
+ * which one produced the number. */
+static bool tsc_from_cpuid;
+
+/* What leaf 15h said, kept so the boot can show its working. Zero when the
+ * leaf was absent or silent and the PIT was used instead. */
+static u32 tsc_crystal_hz, tsc_ratio_num, tsc_ratio_den;
+static u32 tsc_base_mhz;
+
 /* --- The 8259 interrupt controllers --------------------------------------
  *
  * Two chips, cascaded, and their default vectors overlap the CPU's own
@@ -198,6 +208,56 @@ static void pit_start_tick(void)
  * Channel 2 is used rather than channel 0 because channel 2's gate can be
  * driven directly from a port, so the measurement needs no interrupt -- which
  * matters, because this runs before any interrupt handler exists. */
+/* What the processor says its counter runs at, in kHz, or zero if it declines.
+ *
+ * Leaf 15h gives the ratio between the counter and the core crystal: EBX/EAX,
+ * with ECX the crystal in hertz. ECX is frequently zero even when the ratio is
+ * right -- the crystal is then a documented constant per processor family, and
+ * 19.2 MHz is the one for the Atom-derived parts that are also the parts most
+ * likely to have no PIT. Using it where ECX is silent is the specification's own
+ * instruction, not an assumption about this machine.
+ *
+ * Leaf 16h is the fallback inside the fallback: the base frequency in MHz. It
+ * is a nominal figure rather than the counter's exact rate, so it is only
+ * reached when 15h says nothing.
+ */
+static u64 tsc_khz_from_cpuid(void)
+{
+	u32 max_leaf, a, b, c, d;
+
+	cpuid_count(0, 0, &max_leaf, &b, &c, &d);
+
+	if (max_leaf >= 0x15) {
+		cpuid_count(0x15, 0, &a, &b, &c, &d);
+
+		/* a is the denominator and b the numerator. A zero in either
+		 * means the leaf is present and has nothing to say. */
+		if (a && b) {
+			u64 crystal = c;
+
+			if (!crystal)
+				crystal = 19200000ULL;	/* Atom-family default */
+
+			tsc_crystal_hz = (u32)crystal;
+			tsc_ratio_num  = b;
+			tsc_ratio_den  = a;
+
+			return (crystal / 1000ULL) * (u64)b / (u64)a;
+		}
+	}
+
+	if (max_leaf >= 0x16) {
+		cpuid_count(0x16, 0, &a, &b, &c, &d);
+
+		if (a & 0xFFFF) {		/* base frequency, MHz */
+			tsc_base_mhz = a & 0xFFFF;
+			return (u64)tsc_base_mhz * 1000ULL;
+		}
+	}
+
+	return 0;
+}
+
 static u64 calibrate_tsc(void)
 {
 	const unsigned ms = 50;
@@ -360,8 +420,26 @@ u64 arch_monotonic_ns(void)
 {
 	u64 elapsed = rdtsc() - tsc_at_boot;
 
+	/* **Never a clock that has stopped.**
+	 *
+	 * This returned zero when the counter was uncalibrated, which is honest
+	 * about the rate and catastrophic about everything else: a deadline is
+	 * built as `now + n` and tested as `now < deadline`, so a `now` that is
+	 * always zero is a wait that never ends. There are fifty-seven such
+	 * deadlines in this kernel and every one of them became unbounded on
+	 * the first machine that had no PIT.
+	 *
+	 * So the raw counter is reported as though it ran at one gigahertz.
+	 * That rate is correct on no processor and within a small factor on
+	 * every one, which is exactly the right trade here: a timeout that
+	 * fires at the wrong moment is a driver reporting a fault, and a
+	 * timeout that never fires is a machine that stops with nothing on the
+	 * screen.
+	 *
+	 * It is not passed off as a measurement. `time_is_calibrated()` answers
+	 * false and the boot report says so on the line above. */
 	if (!tsc_khz)
-		return 0;
+		return elapsed;
 
 	/* Multiply before dividing, and in a widened form, so that a machine
 	 * that has been up for an hour does not overflow: at 3GHz an hour is
@@ -419,7 +497,17 @@ void arch_time_init(void)
 
 	arch_cpu_caps(&caps);
 
-	tsc_khz = calibrate_tsc();
+	/* **Asked, then measured.** The processor's own answer is exact and
+	 * costs one instruction; the measurement against the PIT is what older
+	 * parts need and what a machine with no 8254 cannot provide. Doing them
+	 * in this order means the machine that has no PIT never depends on one.
+	 */
+	tsc_khz = tsc_khz_from_cpuid();
+	tsc_from_cpuid = tsc_khz != 0;
+
+	if (!tsc_khz)
+		tsc_khz = calibrate_tsc();
+
 	tsc_at_boot = rdtsc();
 
 	if (!caps.invariant_timer)
@@ -432,8 +520,37 @@ void arch_time_init(void)
 	__asm__ volatile("sti");
 }
 
-void x86_time_print_source(void)
+void arch_time_print_source(void)
 {
-	kprintf("  counter      : %lu MHz time stamp counter, %s\n",
-		tsc_khz / 1000, tsc_khz ? "calibrated against the PIT" : "not calibrated");
+	if (!tsc_khz) {
+		kprintf("  counter      : UNCALIBRATED -- neither CPUID nor the "
+			"PIT would say, so elapsed cycles are reported as "
+			"nanoseconds and every timeout here is approximate\n");
+		return;
+	}
+
+	if (!tsc_from_cpuid) {
+		kprintf("  counter      : %lu MHz time stamp counter, measured "
+			"against the PIT\n", tsc_khz / 1000);
+		return;
+	}
+
+	/* **The working, not just the answer**, because nothing has been able
+	 * to test this branch: no QEMU processor model exposes leaf 15h with
+	 * usable values, so every verification run takes the PIT path instead.
+	 * A wrong ratio here produces a clock that is confidently wrong, which
+	 * is the one failure a plausible number hides. Printing the inputs
+	 * means the first machine to take the branch proves it. */
+	if (tsc_ratio_num)
+		kprintf("  counter      : %lu MHz time stamp counter, from "
+			"CPUID 15h (%lu Hz crystal x %lu / %lu) -- UNTESTED "
+			"until a machine reports it\n",
+			tsc_khz / 1000, (unsigned long)tsc_crystal_hz,
+			(unsigned long)tsc_ratio_num,
+			(unsigned long)tsc_ratio_den);
+	else
+		kprintf("  counter      : %lu MHz time stamp counter, from "
+			"CPUID 16h (%lu MHz base) -- UNTESTED until a machine "
+			"reports it\n",
+			tsc_khz / 1000, (unsigned long)tsc_base_mhz);
 }

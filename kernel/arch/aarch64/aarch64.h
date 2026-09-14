@@ -92,7 +92,8 @@ void aarch64_timer_cpu_init(void);
  * packed into one value, which is what PSCI is given to start a processor.
  * Sparse, and never an array index -- arch_cpu_id() is the index. */
 u64 arch_cpu_affinity(void);
-void aarch64_time_print_source(void);
+/* arch_time_print_source lives in recon/kernel/arch.h now: it is part of the
+ * interface every architecture provides, not an aarch64 extra. */
 
 /* Reads the memory and the command line out of a flattened device tree.
  * Returns false if the blob is not one. */

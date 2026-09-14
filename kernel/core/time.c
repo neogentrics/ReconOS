@@ -214,6 +214,17 @@ void time_print_summary(void)
 	u64 wall = time_wall_ns();
 
 	kprintf("\nTime\n");
+
+	/* Where the clock comes from, before what it says.
+	 *
+	 * Both architectures have had a function for exactly this since their
+	 * timers were written, and **neither was ever called from anywhere**.
+	 * On the first machine whose counter could not be calibrated, that line
+	 * would have said so directly above a monotonic reading of 0.000, and
+	 * the diagnosis would have been on the screen rather than in a
+	 * photograph of one. */
+	arch_time_print_source();
+
 	kprintf("  monotonic    : ");
 	print_ns(time_monotonic_ns());
 	kprintf(" since boot\n");

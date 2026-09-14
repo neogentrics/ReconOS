@@ -12,13 +12,6 @@
 #include <recon/kernel/random.h>
 #include <recon/kernel/kstring.h>
 
-static void cpuid_count(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
-{
-	__asm__ volatile("cpuid"
-			 : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
-			 : "a"(leaf), "c"(sub));
-}
-
 /* Appends a name to the human-readable list, space separated, never
  * overrunning. Silently stops when full: the list is for a person to read and
  * a truncated one is better than a corrupted one. */

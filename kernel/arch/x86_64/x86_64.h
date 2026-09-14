@@ -116,7 +116,8 @@ bool x86_msix_enable(const struct pci_device *d, unsigned entry, u8 vector,
 bool x86_msi_self_test(void);
 
 extern volatile unsigned x86_msi_test_arrivals;
-void x86_time_print_source(void);
+/* arch_time_print_source lives in recon/kernel/arch.h now: it is part of
+ * the interface every architecture provides, not an x86 extra. */
 
 /* Each translates one boot protocol's account of the machine into the kernel's
  * own. Returns false if the structure did not look like what it claimed. */
@@ -243,5 +244,17 @@ unsigned x86_tlb_shootdowns_sent(void);
 
 /* E820's numbering, which both protocols above borrow. */
 void x86_add_e820_region(u64 base, u64 len, u32 e820_type);
+
+/* CPUID, as a function rather than as inline assembly at each call site.
+ *
+ * Here rather than in cpu.c because time.c asks leaf 15h what the counter runs
+ * at -- and an instruction wrapper copied into a second file is a second place
+ * to get the register constraints wrong. */
+static inline void cpuid_count(u32 leaf, u32 sub, u32 *a, u32 *b, u32 *c, u32 *d)
+{
+	__asm__ volatile("cpuid"
+			 : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+			 : "a"(leaf), "c"(sub));
+}
 
 #endif /* RECON_ARCH_X86_64_H */
