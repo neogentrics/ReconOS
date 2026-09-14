@@ -161,6 +161,27 @@ void sched_init(void)
 	idle_over_work = 0;
 }
 
+/* The boot thread, once the boot sequence is over.
+ *
+ * See sched.h for why this is a correctness fix and not a tidy-up. The one
+ * line that matters is `idle_for`: with it set, `pick_next` stops handing this
+ * thread turns while a program is ready to run, and `idle_over_work` starts
+ * counting if anything ever does.
+ *
+ * Under the ring lock, because `idle_for` is read by every processor's
+ * `pick_next` and a half-written field is a thread that is neither work nor
+ * idle. */
+void sched_this_thread_is_now_idle(void)
+{
+	u64 flags = spin_lock_irq(&ring_lock);
+	struct thread *me = this_cpu()->current;
+
+	me->idle_for = (int)arch_cpu_id();
+	me->pinned_to = (int)arch_cpu_id();
+
+	spin_unlock_irq(&ring_lock, flags);
+}
+
 /* A secondary processor joining. It arrives already running on a stack of its
  * own, so like the boot processor it adopts rather than creates -- and the
  * thread it adopts is the idle thread made for it in advance, which is already

@@ -583,6 +583,8 @@ void pagecache_run(void)
 	if (!rootfs())
 		return;
 
+	rootfs_clear_before_test(path);
+
 	/* Writes on every boot, by design -- it has to rewrite a file to prove
 	 * the cache noticed. That is exactly what a recovery boot must not do,
 	 * and this test writing during recovery is what the recovery harness

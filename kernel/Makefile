@@ -314,6 +314,7 @@ INIT_ELF := $(BUILD)/user/recon_init.elf
 INITCFLAGS = $(filter-out -mno-sse -mno-sse2 -mno-mmx -mno-80387,$(USERCFLAGS))
 
 INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
+	     ../userland/init/layout.c \
 	     ../userland/libc/string.c ../userland/libc/printf.c \
 	     ../userland/libc/ctype.c ../userland/libc/stdlib.c \
 	     ../userland/libc/stdio.c ../userland/libc/syscalls.c

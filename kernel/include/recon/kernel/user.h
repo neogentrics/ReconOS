@@ -160,6 +160,25 @@ enum {
 	 */
 	SYS_SCREEN,
 
+	/* (path, path length, mode) -> SYS_OK, or why not.
+	 *
+	 * Makes one directory. **The parents must already exist** -- making
+	 * them implicitly would mean a typo in a path silently building a
+	 * tree, which is the rule SYS_CREATE follows for the same reason.
+	 *
+	 * Separate from SYS_CREATE rather than a bit in its mode, because
+	 * SYS_CREATE takes a pointer and a length for the contents and a
+	 * directory has none. Folding them together would mean two arguments
+	 * that are meaningless half the time and a run-time refusal for
+	 * something the shape of the call could refuse outright.
+	 *
+	 * Refuses rather than replacing if anything is already at that name,
+	 * **including a file**: a caller laying a structure onto a volume that
+	 * already has one has to be told, not have a file quietly become a
+	 * directory.
+	 */
+	SYS_MKDIR,
+
 	SYS_MAX
 };
 

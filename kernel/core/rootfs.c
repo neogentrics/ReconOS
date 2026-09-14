@@ -75,14 +75,67 @@ void rootfs_init(void)
 	}
 }
 
+/* The inode a path names, for a caller that only means to read it.
+ *
+ * `reconfs_walk_path` refuses a path with no leaf on it -- "/" or "///" -- and
+ * that is right for every caller that is naming something to create, remove or
+ * open, because "/" is not one of those. It is wrong for a caller naming
+ * something to read: the root is a directory, it has an owner, and both are
+ * questions with answers.
+ *
+ * The two readers below each had a branch for the leafless case and neither
+ * could reach it, since the walk returns an error for exactly the path that
+ * would have left the leaf empty. Listing the root of a volume had therefore
+ * never worked: it came back as ERR_NAME, vfs.c reported EIO, and the
+ * first-boot screen printed "no volume this kernel can read" on a machine
+ * that had written ten directories to that volume seconds earlier.
+ *
+ * One helper rather than the same special case twice, so that the root cannot
+ * become listable and unownable, or the reverse.
+ */
+static enum reconfs_status inode_to_read(struct reconfs *fs, const char *path,
+					 u64 *out)
+{
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	const char *p = path;
+	u64 child = 0;
+
+	if (!path || !out)
+		return RECONFS_ERR_NAME;
+
+	while (*p == '/')
+		p++;
+
+	if (!*p) {
+		*out = fs->root_inode;
+		return RECONFS_OK;
+	}
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	st = reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf, &child);
+	if (st != RECONFS_OK)
+		return st;
+	if (!child)
+		return RECONFS_ERR_NOT_FOUND;
+
+	*out = child;
+	return RECONFS_OK;
+}
+
 enum reconfs_status rootfs_list(const char *path, char *names, u64 names_len,
 				u64 *needed, unsigned *count)
 {
 	struct reconfs *fs = rootfs();
-	struct reconfs_path chain;
-	char leaf[RECONFS_NAME_MAX + 1];
 	enum reconfs_status st;
-	u64 dir, child = 0;
+	u64 dir = 0;
 	unsigned n = 0;
 	u64 *blocks;
 	char *scratch;
@@ -95,29 +148,9 @@ enum reconfs_status rootfs_list(const char *path, char *names, u64 names_len,
 	if (!fs)
 		return RECONFS_ERR_NOT_MOUNTED;
 
-	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	st = inode_to_read(fs, path, &dir);
 	if (st != RECONFS_OK)
 		return st;
-
-	/* The root is the one path with no leaf: its parent chain ends at it.
-	 * Every other path names something inside the directory the chain ends
-	 * at, and that something has to be looked up before it can be read. */
-	if (!leaf[0]) {
-		dir = chain.count ? chain.dirs[chain.count - 1]
-				  : fs->root_inode;
-	} else {
-		if (chain.count == 0)
-			return RECONFS_ERR_NAME;
-
-		st = reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
-				    &child);
-		if (st != RECONFS_OK)
-			return st;
-		if (!child)
-			return RECONFS_ERR_NOT_FOUND;
-
-		dir = child;
-	}
 
 	/* Read into our own buffers and copy out only if it all fits.
 	 * `reconfs_list` refuses a directory larger than the buffers it is
@@ -393,25 +426,42 @@ abort:
 	return st;
 }
 
-/* The inode's own fields, read once.
+/* A directory, in one commit.
  *
- * rootfs_read_file already loads the inode when a caller wants the mode, so
- * this is the same walk with the other two fields taken out of it as well --
- * not a second way of finding a file, which would be a second way of being
- * wrong about where one is. */
-enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
-				    u32 *gid, u64 *dossier)
+ * `rootfs_create_file` without the write step, and the two are written out
+ * separately rather than sharing a body with a flag: the shared version would
+ * be three branches on "is this a directory" inside one function, which is the
+ * shape that eventually gets one of them wrong.
+ *
+ * What makes an empty directory here is an inode with `type` of
+ * RECONFS_TYPE_DIR and a size of zero, which is exactly what `reconfs_create`
+ * writes and exactly what `reconfs_format` writes for the root. There is no
+ * initial content to lay down -- no "." and no ".." -- because a dirent stream
+ * in this format does not carry them: a directory knows its parent through the
+ * `parent` field in its own inode, which `reconfs_create` fills in.
+ */
+enum reconfs_status rootfs_create_directory(const char *path, u32 mode)
 {
+	if (read_only)
+		return RECONFS_ERR_READ_ONLY;
+
 	struct reconfs *fs = rootfs();
+	struct reconfs_txn *txn;
 	struct reconfs_path chain;
 	char leaf[RECONFS_NAME_MAX + 1];
-	struct reconfs_inode *inode;
 	enum reconfs_status st;
-	u64 dir, child = 0;
+	u64 made = 0, dir = 0, new_root = 0;
+	u64 existing = 0;
 
 	if (!fs)
 		return RECONFS_ERR_NOT_MOUNTED;
 
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	/* Walked before the transaction opens, for the same two reasons the
+	 * file create walks first: to find the parent, and to answer "is
+	 * something already there" while the tree is still the committed one. */
 	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
 	if (st != RECONFS_OK)
 		return st;
@@ -419,13 +469,72 @@ enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
 	if (chain.count == 0)
 		return RECONFS_ERR_NAME;
 
-	dir = chain.dirs[chain.count - 1];
+	/* Refused rather than replaced -- and this catches a *file* of that
+	 * name too, which is the case worth being explicit about: a caller
+	 * building a layout on a volume that already has one must be told,
+	 * not have a file quietly become a directory. */
+	if (reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+			   &existing) == RECONFS_OK && existing)
+		return RECONFS_ERR_EXISTS;
 
-	st = reconfs_lookup(fs, dir, leaf, &child);
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_create(txn, fs, chain.dirs[chain.count - 1], leaf,
+			    RECONFS_TYPE_DIR, mode, &made, &dir);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	/* The parent moved, so every directory above it is rewritten up to the
+	 * root -- copy-on-write's cost, and one call rather than a loop each
+	 * caller writes for itself. */
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort:
+	reconfs_txn_abort(txn);
+	return st;
+}
+
+/* The inode's own fields, read once.
+ *
+ * rootfs_read_file already loads the inode when a caller wants the mode, so
+ * this is the same walk with the other two fields taken out of it as well --
+ * not a second way of finding a file, which would be a second way of being
+ * wrong about where one is. */
+void rootfs_clear_before_test(const char *path)
+{
+	/* The answer is deliberately dropped. On a volume that does not hold
+	 * the name -- which is every first boot -- there is nothing to clear
+	 * and nothing to report, and a test that cared would be a test of
+	 * removal rather than of what follows. */
+	(void)rootfs_remove_file(path);
+}
+
+enum reconfs_status rootfs_owner_of(const char *path, u32 *mode, u32 *uid,
+				    u32 *gid, u64 *dossier)
+{
+	struct reconfs *fs = rootfs();
+	struct reconfs_inode *inode;
+	enum reconfs_status st;
+	u64 child = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	/* Through the same helper the listing uses, so that "/" has an owner
+	 * for exactly the callers it has a listing for. Before this the root
+	 * had neither, and the permission check on a listing of it was
+	 * therefore skipped -- quietly, because the check is written as "if
+	 * the owner is known and forbids it". */
+	st = inode_to_read(fs, path, &child);
 	if (st != RECONFS_OK)
 		return st;
-	if (!child)
-		return RECONFS_ERR_NOT_FOUND;
 
 	inode = kzalloc(fs->block_size);
 	if (!inode)
@@ -538,6 +647,11 @@ bool rootfs_self_test(void)
 		kputs("  rootfs: no filesystem on this machine to test against\n");
 		return true;
 	}
+
+	/* Both names, because both are created below and either one left over
+	 * from a previous boot fails this test. */
+	rootfs_clear_before_test("/mode-test");
+	rootfs_clear_before_test("/mode-test-2");
 
 	st = rootfs_create_file("/mode-test", 0600, content, sizeof(content));
 	if (st != RECONFS_OK) {

@@ -555,6 +555,19 @@ void kmain(void)
 	 */
 	user_start_first_screen();
 
+	/* And from here this thread is not work any more.
+	 *
+	 * Said before the loop rather than assumed by it. The scheduler has
+	 * always known how to keep an idle thread out of the round, and this
+	 * thread was never marked as one -- so a program that yielded handed
+	 * its turn to a thread that sleeps for up to a second, and every
+	 * NVMe completion waited for a timer instead of for the drive. One
+	 * directory on an installed volume took seventy seconds.
+	 *
+	 * Nothing below may block. `wait_sleep` refuses an idle thread, which
+	 * is the rule saying so and not a limitation to work around. */
+	sched_this_thread_is_now_idle();
+
 	/* The idle loop, and the first thing in the kernel that has to be right
 	 * about the project's central claim: it sleeps until hardware wakes it,
 	 * rather than spinning.

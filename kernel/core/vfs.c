@@ -475,11 +475,13 @@ static i64 reconfs_list_path(const char *rest, char *names, u64 names_len,
 
 	st = rootfs_list(rest, names, names_len, &needed, count);
 
-	if (st == RECONFS_ERR_NOT_FOUND)
-		return SYS_ENOENT;
-
+	/* The shared mapping, which is what opening and mapping a file on this
+	 * same volume already use. The version that stood here knew about
+	 * "not found" and called everything else EIO -- so a directory with
+	 * more names in it than the listing buffers hold, or a path too deep,
+	 * reached a program as "the disk failed". */
 	if (st != RECONFS_OK)
-		return SYS_EIO;
+		return user_status_from_reconfs(st);
 
 	return (i64)needed;
 }
@@ -1007,6 +1009,8 @@ bool vfs_file_self_test(void)
 		return true;
 	}
 
+	rootfs_clear_before_test("/descriptor-test");
+
 	f = file_open_path("/descriptor-test", OPEN_WRITE | OPEN_CREATE, 0600,
 			   &err);
 	if (!f) {
@@ -1141,6 +1145,8 @@ bool vfs_mmap_self_test(void)
 		kputs("  vfs: no volume to map a file from\n");
 		return true;
 	}
+
+	rootfs_clear_before_test("/mapped-test");
 
 	f = file_open_path("/mapped-test", OPEN_WRITE | OPEN_CREATE, 0600,
 			   &err);

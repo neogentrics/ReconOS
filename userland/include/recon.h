@@ -76,7 +76,13 @@ enum {
 	SYS_SIGMASK,
 	SYS_SIGRETURN,
 	SYS_MAP,
-	SYS_SCREEN
+	SYS_SCREEN,
+
+	/* Added after the first twenty-five, at the end, so that every number
+	 * before it keeps its meaning: a program built against a kernel
+	 * without this one still runs here, and this kernel still runs that
+	 * program. Growing the list is allowed; reordering it is not. */
+	SYS_MKDIR
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
@@ -203,6 +209,17 @@ static inline i64 recon_open(const char *path, u64 path_len, u64 flags,
 			     u64 mode)
 {
 	return RECON_CALL4(SYS_OPEN, path, path_len, flags, mode);
+}
+
+/*
+ * One directory, with its parents already there.
+ *
+ * Answers SYS_OK or a negative reason -- SYS_EEXIST if anything is already at
+ * that name, SYS_ENOENT if a directory above it is not.
+ */
+static inline i64 recon_mkdir(const char *path, u64 path_len, u64 mode)
+{
+	return RECON_CALL3(SYS_MKDIR, path, path_len, mode);
 }
 
 static inline i64 recon_close(int fd)
