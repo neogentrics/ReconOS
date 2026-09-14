@@ -7595,27 +7595,41 @@ program instead, which is the same fight from the other side. That one belongs i
 
 ### A note for the kernel session, 14 September 2026 — KF-225 and kernel 0.2.30
 
-**Not an entry. A collision, recorded before it grows.**
+**Not an entry. A collision, recorded while it is three numbers and not fifty.**
 
-The bug register Artifact was republished at 17:17 UTC on 14 September from a
-tree that has not been pushed. Comparing that page line by line against the one
-generated from this file says three things:
+Noticed at 17:17 UTC on 14 September, when the bug register Artifact was
+republished from a tree that had not been pushed yet and its KF-225 turned out
+to be a different fault. `origin/kernel` was pushed about three hours later, so
+this is now a measurement rather than an inference from a rendered page:
+comparing the headings in this file on `origin/main` against `origin/kernel`,
+**three identifiers name two different faults each.**
 
-- Its **KF-225** is *"The BIOS loader says it filled the whole handoff and fills
-  eleven fields of sixteen"*, fixed in kernel 0.2.30. The KF-225 on `main` — and
-  above, in this file — is *"the panel gets a summary and the wire keeps
-  everything"*, which arrived in commit `8f8b03c`. **The panel entry is not in
-  that page at all**, so the number has been reused rather than the entry
-  amended.
-- Its **KF-223** carries a further fix, also in 0.2.30, that is not here.
-- Its **kernel version is 0.2.30**, and this branch has used 0.2.30 through
-  0.2.34 for `SYS_MKDIR` and KF-226 to KF-229, pushed to `main` as `3e058d9`.
+| number | `main` — published, with an issue | `origin/kernel` |
+|---|---|---|
+| KF-225 | Not a bug: the panel gets a summary and the wire keeps everything | The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen |
+| KF-226 | The boot thread never stopped being work, so every drive completion waited for a timer | `kprintf` reads the width on a number and throws it away |
+| KF-227 | The root of a volume could not be listed | Three timers did not fire, once, on one path of twenty-eight |
+
+Every identifier on `origin/kernel` also exists on `main`; `main` additionally
+holds BG-193, KF-228 and KF-229. **The panel entry is not on the kernel branch
+at all**, so KF-225 was reused rather than amended.
+
+**And the versions collide too.** `origin/kernel` uses kernel 0.2.30 for the
+BIOS-handoff fix; `main` used 0.2.30 through 0.2.34 for `SYS_MKDIR` and KF-226
+to KF-229, pushed as `3e058d9`.
 
 Per the rule this file already sets out for the one time numbers were allocated
-twice: **`main` keeps its numbers**, being the sequence that is published. So
-KF-226 to KF-229 and kernel 0.2.30 to 0.2.34 are taken, and the BIOS-handoff
-fault wants **KF-230** and a version above 0.2.34. The panel entry keeps
-KF-225. Its heading was changed here — from `KF-225 is not a bug - ...` to
+twice: **`main` keeps its numbers**, being the sequence that is published — and
+in this case the one that already has issues on the tracker, [#461](https://github.com/neogentrics/ReconOS/issues/461)
+for KF-226 and [#462](https://github.com/neogentrics/ReconOS/issues/462) for
+KF-227. So KF-226 to KF-229 and kernel 0.2.30 to 0.2.34 are taken, and the
+three kernel-branch faults want **KF-230, KF-231 and KF-232** and a version
+above 0.2.34.
+
+**`make-issues.py` matches by title, so running it from the kernel branch
+before renumbering files a second issue called KF-226 and a second called
+KF-227.** That is precisely how two issues came to be titled `BG-085`, which is
+recorded a few hundred lines above this one. Its heading was changed here — from `KF-225 is not a bug - ...` to
 `KF-225 — Not a bug: ...` — for a reason unrelated to any of this:
 `make-bug-register.py` matches a dash straight after the identifier, counted 294
 headings, parsed 293, and refused to write until it did.
