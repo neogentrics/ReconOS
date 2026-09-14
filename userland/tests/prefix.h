@@ -37,6 +37,8 @@
 #define strspn      recon_strspn
 #define strcspn     recon_strcspn
 #define strtok_r    recon_strtok_r
+#define memmem      recon_memmem
+#define strcasestr  recon_strcasestr
 #define strncat     recon_strncat
 
 #define snprintf    recon_snprintf
@@ -76,5 +78,18 @@
 #define ftell       recon_ftell
 #define rewind      recon_rewind
 #define fprintf     recon_fprintf
+#define puts        recon_puts
+
+/*
+ * time() is renamed to recon_libc_time rather than recon_time, because
+ * recon_time already exists: it is the SYS_TIME inline in recon.h, and
+ * syscalls.c calls it. Same reason exit() became recon_libc_exit.
+ */
+#define time          recon_libc_time
+#define clock_gettime recon_clock_gettime
+#define difftime      recon_difftime
+#define gmtime_r      recon_gmtime_r
+#define localtime_r   recon_localtime_r
+#define strftime      recon_strftime
 
 #endif /* RECON_LIBC_PREFIX_H */

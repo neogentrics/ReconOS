@@ -1,6 +1,6 @@
 /*
- * The file layer, the number parsing and the character classes, all checked
- * against the host's.
+ * The file layer, the number parsing, the character classes and the calendar,
+ * all checked against the host's.
  *
  * The `FILE` half is the reason `userland/tests/hostsys.c` exists. Without it
  * the only way to find out whether `fgets` keeps its newline, or whether
@@ -18,9 +18,12 @@
 #define _GNU_SOURCE
 
 #include <ctype.h>
+#include <locale.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 /* ReconOS's, renamed by prefix.h when libc/ was compiled. */
@@ -38,6 +41,29 @@ int recon_fgetc(struct recon_stream *f);
 int recon_fseek(struct recon_stream *f, long offset, int from);
 long recon_ftell(struct recon_stream *f);
 void recon_rewind(struct recon_stream *f);
+
+/*
+ * The time half, and note what is *not* declared here: a struct.
+ *
+ * These take the **host's** `struct tm`. ReconOS's has the same nine fields in
+ * the same order and nothing more, and glibc's carries two GNU extensions
+ * after them which nothing here writes -- so handing one to the other is safe,
+ * and it turns "do the layouts agree" from a thing to be asserted into a thing
+ * the suite finds out. A field in the wrong order does not read as a style
+ * difference; it reads as a wrong date on the first run.
+ */
+int recon_puts(const char *text);
+
+long long recon_libc_time(long long *out);
+int recon_clock_gettime(int which, struct timespec *into);
+double recon_difftime(long long later, long long earlier);
+struct tm *recon_gmtime_r(const long long *when, struct tm *into);
+struct tm *recon_localtime_r(const long long *when, struct tm *into);
+size_t recon_strftime(char *into, size_t room, const char *format,
+		      const struct tm *parts);
+
+#define RECON_CLOCK_REALTIME  0
+#define RECON_CLOCK_MONOTONIC 1
 
 int recon_isalnum(int c);
 int recon_isalpha(int c);
@@ -670,6 +696,61 @@ static void test_writing_a_file(void)
 	unlink("/tmp/recon-libc-theirs.txt");
 }
 
+/*
+ * `puts` writes to standard output, so it cannot be compared against the
+ * host's the way everything else here is -- both would write to the same
+ * place and neither could see what the other put there.
+ *
+ * What can be checked is what actually matters about it: that it appends the
+ * newline, which is the entire difference between it and a write, and that it
+ * refuses a null pointer rather than faulting on one. The bytes are read back
+ * off the descriptor by pointing standard output at a file for the duration.
+ */
+static void test_puts(void)
+{
+	static const char PATH[] = "/tmp/recon-libc-puts.txt";
+	int saved;
+	int redirected;
+	FILE *back;
+	char got[128];
+	size_t n;
+
+	printf("puts, which nothing in the desktop calls by name\n");
+
+	check(recon_puts(NULL) < 0, "a null pointer is refused, not followed");
+
+	fflush(stdout);
+	saved = dup(1);
+	redirected = open(PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (saved < 0 || redirected < 0) {
+		check(0, "could not redirect standard output");
+		return;
+	}
+	dup2(redirected, 1);
+
+	recon_puts("first");
+	recon_puts("");
+	recon_puts("third with a caf\xC3\xA9");
+
+	fflush(stdout);
+	dup2(saved, 1);
+	close(saved);
+	close(redirected);
+
+	back = fopen(PATH, "rb");
+	if (back == NULL) {
+		check(0, "could not read back what puts wrote");
+		return;
+	}
+	n = fread(got, 1, sizeof(got) - 1, back);
+	got[n] = '\0';
+	fclose(back);
+	unlink(PATH);
+
+	check(strcmp(got, "first\n\nthird with a caf\xC3\xA9\n") == 0,
+	      "puts wrote each line with a newline after it");
+}
+
 static void test_what_it_refuses(void)
 {
 	struct recon_stream *f;
@@ -726,9 +807,365 @@ static void test_what_it_refuses(void)
 	unlink(FIXTURE);
 }
 
+/* --- Time --- */
+
+/*
+ * The corpus is the awkward dates rather than a range of plausible ones.
+ *
+ * A calendar is wrong at boundaries or nowhere: the day a leap second is not,
+ * the century that is divisible by four and is not a leap year, the second
+ * before an epoch, the day a year ends on a Sunday. A sweep of ordinary
+ * timestamps agrees with anything.
+ */
+static const long long MOMENTS[] = {
+	0LL,			/* the epoch, a Thursday */
+	1LL, -1LL, 59LL, 60LL, 61LL,
+	86399LL, 86400LL, 86401LL,
+	-86399LL, -86400LL, -86401LL,
+
+	/* 1970 and the years around it, from both sides. */
+	31535999LL, 31536000LL,		/* 1970-12-31 / 1971-01-01 */
+	-2208988800LL,			/* 1900-01-01, not a leap year */
+	-2203891200LL,			/* 1900-03-01 */
+
+	/* The leap day that is, and the century leap that is not. */
+	951782400LL,			/* 2000-02-29 */
+	951868800LL,			/* 2000-03-01 */
+	4107542400LL,			/* 2100-02-28 */
+	4107628800LL,			/* 2100-03-01 -- 2100 is not a leap */
+
+	/* Where a 32-bit time_t stops, and one second either side. */
+	2147483647LL, 2147483648LL, -2147483648LL, -2147483649LL,
+
+	/* Far out, but inside what the reference will answer for. */
+	253402300799LL,			/* 9999-12-31 23:59:59 */
+	-62135596800LL,			/* 0001-01-01 00:00:00 */
+
+	/*
+	 * Years with fewer than four digits, which is where %Y, %C and %F
+	 * stop agreeing with what the standard's wording suggests. The
+	 * corpus reached year 1 by accident and that accident found two
+	 * faults; these are here so it is no longer an accident.
+	 */
+	-62104233600LL,		/* 0001-12-31 */
+	-62009884800LL,		/* 0005-01-01 */
+	-60589296000LL,		/* 0050-01-01 */
+	-59011459200LL,		/* 0100-01-01 */
+	-52540358400LL,		/* 0305-01-01 */
+	-30641760000LL,		/* 0999-01-01 */
+	-30610224000LL,		/* 1000-01-01 */
+
+	/* And a few ordinary ones, because the ordinary case has to work too. */
+	1757808000LL, 1000000000LL, 1234567890LL, -1234567890LL,
+};
+
+#define MOMENT_COUNT (sizeof(MOMENTS) / sizeof(MOMENTS[0]))
+
+static void same_field(int mine, int theirs, const char *field, long long when)
+{
+	g_checks++;
+	if (mine != theirs) {
+		g_failures++;
+		printf("  FAIL: %s at %lld\n    ReconOS: %d   reference: %d\n",
+		       field, when, mine, theirs);
+	}
+}
+
+static void check_one_moment(long long when)
+{
+	struct tm mine;
+	struct tm theirs;
+	time_t host_when = (time_t)when;
+
+	memset(&mine, 0, sizeof(mine));
+	memset(&theirs, 0, sizeof(theirs));
+
+	if (gmtime_r(&host_when, &theirs) == NULL) {
+		return;		/* outside what the reference answers for */
+	}
+	g_checks++;
+	if (recon_gmtime_r(&when, &mine) == NULL) {
+		g_failures++;
+		printf("  FAIL: gmtime_r refused %lld and the reference did"
+		       " not\n", when);
+		return;
+	}
+
+	same_field(mine.tm_sec, theirs.tm_sec, "tm_sec", when);
+	same_field(mine.tm_min, theirs.tm_min, "tm_min", when);
+	same_field(mine.tm_hour, theirs.tm_hour, "tm_hour", when);
+	same_field(mine.tm_mday, theirs.tm_mday, "tm_mday", when);
+	same_field(mine.tm_mon, theirs.tm_mon, "tm_mon", when);
+	same_field(mine.tm_year, theirs.tm_year, "tm_year", when);
+	same_field(mine.tm_wday, theirs.tm_wday, "tm_wday", when);
+	same_field(mine.tm_yday, theirs.tm_yday, "tm_yday", when);
+	same_field(mine.tm_isdst, theirs.tm_isdst, "tm_isdst", when);
+}
+
+static void test_the_calendar(void)
+{
+	size_t i;
+	long long step;
+
+	printf("gmtime_r, on the dates a calendar is wrong on\n");
+
+	for (i = 0; i < MOMENT_COUNT; i++) {
+		check_one_moment(MOMENTS[i]);
+		/* And a second either side of each, because an off-by-one in
+		 * the floored division only shows on a boundary. */
+		check_one_moment(MOMENTS[i] - 1);
+		check_one_moment(MOMENTS[i] + 1);
+	}
+
+	/*
+	 * Then a sweep: every 7 hours 13 minutes and 11 seconds across two
+	 * and a half centuries, forwards and backwards from the epoch. The
+	 * odd stride is so the sample does not land on the same hour or the
+	 * same weekday twice in a row -- a stride of a day would agree with a
+	 * calendar that had the week wrong.
+	 */
+	printf("gmtime_r, swept across two and a half centuries\n");
+	step = 7LL * 3600 + 13 * 60 + 11;
+	for (i = 0; i < 20000; i++) {
+		check_one_moment((long long)i * step);
+		check_one_moment(-(long long)i * step);
+	}
+}
+
+/*
+ * Every conversion this library claims, one per entry, plus the shapes that
+ * are about the format string rather than about the date.
+ */
+static const char *const FORMATS[] = {
+	"%Y", "%y", "%C", "%m", "%d", "%e", "%H", "%I", "%M", "%S", "%j",
+	"%p", "%a", "%A", "%b", "%h", "%B", "%F", "%D", "%T", "%R", "%z",
+	"%n", "%t", "%%",
+
+	/* The three the desktop actually uses. */
+	"%Y-%m-%d %H%M%S",
+	"%Y-%m-%d %H:%M:%S",
+	"%e %B %Y at %H:%M",
+
+	/* And the awkward ones. */
+	"", "no conversions at all", "%", "%%%", "a%Yb",
+	"%Y%m%d%H%M%S", "%A, %e %B %Y at %I:%M %p",
+};
+
+#define FORMAT_COUNT (sizeof(FORMATS) / sizeof(FORMATS[0]))
+
+static void test_formatting_a_date(void)
+{
+	size_t i;
+	size_t j;
+
+	/*
+	 * Explicitly the C locale. It is already the default at program start,
+	 * and saying so removes the one way this suite could pass or fail
+	 * because of something outside it: `%A` and `%B` are a locale's names,
+	 * and this library has only the C locale's.
+	 */
+	setlocale(LC_ALL, "C");
+
+	printf("strftime, every conversion against the host's\n");
+
+	for (i = 0; i < MOMENT_COUNT; i++) {
+		struct tm parts;
+		time_t host_when = (time_t)MOMENTS[i];
+
+		memset(&parts, 0, sizeof(parts));
+		if (gmtime_r(&host_when, &parts) == NULL) {
+			continue;
+		}
+
+		for (j = 0; j < FORMAT_COUNT; j++) {
+			char mine[256];
+			char theirs[256];
+			size_t a;
+			size_t b;
+
+			memset(mine, '#', sizeof(mine));
+			memset(theirs, '#', sizeof(theirs));
+
+			a = recon_strftime(mine, sizeof(mine), FORMATS[j],
+					   &parts);
+			b = strftime(theirs, sizeof(theirs), FORMATS[j],
+				     &parts);
+
+			same_long((long)a, (long)b,
+				  "strftime returned the same length",
+				  FORMATS[j]);
+			g_checks++;
+			if (strcmp(mine, theirs) != 0) {
+				g_failures++;
+				printf("  FAIL: strftime \"%s\" at %lld\n"
+				       "    ReconOS: \"%s\"\n"
+				       "    reference: \"%s\"\n",
+				       FORMATS[j], MOMENTS[i], mine, theirs);
+			}
+		}
+	}
+
+	/*
+	 * And what it does when it does not fit, which is the part callers
+	 * get wrong: zero, and the contents are unspecified. Both libraries
+	 * are held to returning zero at the same room, which is the only part
+	 * of that a caller can rely on.
+	 */
+	printf("strftime, at every buffer size around the answer\n");
+	{
+		struct tm parts;
+		time_t host_when = 1757808000;
+		size_t room;
+
+		memset(&parts, 0, sizeof(parts));
+		gmtime_r(&host_when, &parts);
+
+		for (room = 1; room < 40; room++) {
+			char mine[64];
+			char theirs[64];
+			size_t a;
+			size_t b;
+
+			memset(mine, '#', sizeof(mine));
+			memset(theirs, '#', sizeof(theirs));
+
+			a = recon_strftime(mine, room, "%Y-%m-%d %H:%M:%S",
+					   &parts);
+			b = strftime(theirs, room, "%Y-%m-%d %H:%M:%S",
+				     &parts);
+
+			same_long((long)a, (long)b,
+				  "strftime agreed about whether it fitted",
+				  NULL);
+			if (a != 0 && b != 0) {
+				check(strcmp(mine, theirs) == 0,
+				      "and wrote the same thing when it did");
+			}
+			/* Whatever happened, it did not write past the end. */
+			check(mine[room] == '#',
+			      "strftime wrote nothing past the room it was"
+			      " given");
+		}
+	}
+}
+
+/*
+ * Two places this deliberately does not match, both asserted rather than
+ * skipped -- the same rule `test_libc.c` follows.
+ */
+static void test_where_time_differs_on_purpose(void)
+{
+	struct tm parts;
+	time_t host_when = 1757808000;
+	long long when = 1757808000LL;
+	char mine[64];
+	char theirs[64];
+	struct tm local;
+	struct tm utc;
+
+	printf("the two places time deliberately does not match\n");
+
+	memset(&parts, 0, sizeof(parts));
+	gmtime_r(&host_when, &parts);
+
+	/*
+	 * One: %Z is "UTC", where the host's C locale says "GMT" for a time
+	 * produced by gmtime. GMT is a zone with a history and this system is
+	 * not in it -- what it has is a count of seconds since 1970, and the
+	 * name for that is UTC.
+	 */
+	recon_strftime(mine, sizeof(mine), "%Z", &parts);
+	strftime(theirs, sizeof(theirs), "%Z", &parts);
+	check(strcmp(mine, "UTC") == 0, "%Z is UTC here");
+	check(strcmp(mine, theirs) != 0,
+	      "and that is a difference from the reference, not a match");
+
+	/*
+	 * Two: localtime_r is gmtime_r. On this kernel there is no host to ask
+	 * and no zone database to read, so UTC is the only true answer. The
+	 * desktop is unaffected -- recon_clock.c applies ReconOS's own zone to
+	 * its own arithmetic and never comes through here.
+	 */
+	memset(&local, 0, sizeof(local));
+	memset(&utc, 0, sizeof(utc));
+	recon_localtime_r(&when, &local);
+	recon_gmtime_r(&when, &utc);
+	check(memcmp(&local, &utc, sizeof(local)) == 0,
+	      "localtime_r is gmtime_r, deliberately");
+}
+
+/*
+ * The two clocks cannot be compared against a reference -- they read a clock,
+ * and the answer is different every time. What can be checked is the property
+ * each one exists to have.
+ */
+static void test_the_two_clocks(void)
+{
+	struct timespec a;
+	struct timespec b;
+	long long mine;
+	time_t theirs;
+	int i;
+
+	printf("the two clocks, held to the property each one is for\n");
+
+	/* The wall clock agrees with the host's, because on this build it is
+	 * the host's -- within a second, because two calls are two moments. */
+	mine = recon_libc_time(NULL);
+	theirs = time(NULL);
+	check(mine >= (long long)theirs - 1 && mine <= (long long)theirs + 1,
+	      "time() is the same second the reference reports");
+
+	/* And writing through the pointer agrees with returning it. */
+	{
+		long long through = 0;
+		long long returned = recon_libc_time(&through);
+
+		check(through == returned,
+		      "time() writes what it returns");
+	}
+
+	/* The monotonic clock does not go backwards, which is the whole of
+	 * what it is for. Checked across enough calls that a wrap or a
+	 * sign error would have to show. */
+	check(recon_clock_gettime(RECON_CLOCK_MONOTONIC, &a) == 0,
+	      "the monotonic clock answers");
+	for (i = 0; i < 20000; i++) {
+		check(recon_clock_gettime(RECON_CLOCK_MONOTONIC, &b) == 0,
+		      "the monotonic clock answers every time");
+		if (b.tv_sec < a.tv_sec ||
+		    (b.tv_sec == a.tv_sec && b.tv_nsec < a.tv_nsec)) {
+			g_checks++;
+			g_failures++;
+			printf("  FAIL: the monotonic clock went backwards\n");
+			break;
+		}
+		a = b;
+	}
+
+	/* Nanoseconds stay inside a second. A split that let them out would
+	 * make every duration computed from them wrong by a second, sometimes. */
+	check(a.tv_nsec >= 0 && a.tv_nsec < 1000000000L,
+	      "the nanosecond part is inside a second");
+
+	/* An unknown clock is refused rather than answered from the nearer
+	 * one, which is the failure the kernel offers two calls to prevent. */
+	check(recon_clock_gettime(99, &a) != 0, "an unknown clock is refused");
+	check(recon_clock_gettime(RECON_CLOCK_MONOTONIC, NULL) != 0,
+	      "and so is nowhere to put the answer");
+
+	/* difftime, which is arithmetic and can be checked exactly. */
+	check(recon_difftime(100, 40) == difftime(100, 40), "difftime");
+	check(recon_difftime(40, 100) == difftime(40, 100),
+	      "difftime, backwards");
+	check(recon_difftime(-2208988800LL, 253402300799LL) ==
+	      difftime((time_t)-2208988800LL, (time_t)253402300799LL),
+	      "difftime across the whole range");
+}
+
 int main(void)
 {
-	printf("ReconOS C library: files, numbers and characters\n\n");
+	printf("ReconOS C library: files, numbers, characters and dates\n\n");
 
 	test_the_character_classes();
 	test_the_bytes_the_standard_does_not_define();
@@ -738,6 +1175,11 @@ int main(void)
 	test_reading_a_file();
 	test_writing_a_file();
 	test_what_it_refuses();
+	test_puts();
+	test_the_calendar();
+	test_formatting_a_date();
+	test_where_time_differs_on_purpose();
+	test_the_two_clocks();
 
 	printf("\n%d checks, %d failures\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;

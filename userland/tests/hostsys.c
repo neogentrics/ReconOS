@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
+#include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -66,6 +67,39 @@ long recon_sys_seek(int fd, long long offset, int from)
 long recon_sys_close(int fd)
 {
 	return (long)close(fd);
+}
+
+/*
+ * The host's two clocks, answering the same two questions.
+ *
+ * `CLOCK_MONOTONIC` and `CLOCK_REALTIME` are the host's names for exactly the
+ * split ReconOS makes with two system calls, which is the whole reason this
+ * file can stand in for the kernel at all: the distinction is not ReconOS's
+ * invention, it is the one every system with a clock has had to make.
+ *
+ * A failure answers zero rather than a negative number. Nothing above this
+ * checks, because on the kernel these cannot fail -- and a negative
+ * nanosecond count would be read as a date in 1969, which is the wrong kind
+ * of wrong to introduce here in order to report an impossibility.
+ */
+long long recon_sys_time(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+		return 0;
+	}
+	return (long long)now.tv_sec * 1000000000LL + (long long)now.tv_nsec;
+}
+
+long long recon_sys_walltime(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_REALTIME, &now) != 0) {
+		return 0;
+	}
+	return (long long)now.tv_sec * 1000000000LL + (long long)now.tv_nsec;
 }
 
 void recon_sys_exit(int code)

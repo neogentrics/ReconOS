@@ -52,6 +52,9 @@ size_t recon_strspn(const char *text, const char *of);
 size_t recon_strcspn(const char *text, const char *stop);
 char *recon_strtok_r(char *text, const char *separators, char **save);
 char *recon_strncat(char *to, const char *from, size_t length);
+void *recon_memmem(const void *haystack, size_t haystack_length,
+		   const void *needle, size_t needle_length);
+char *recon_strcasestr(const char *haystack, const char *needle);
 
 int recon_snprintf(char *to, size_t room, const char *format, ...);
 
@@ -754,6 +757,107 @@ static void test_splitting(void)
 	}
 }
 
+/*
+ * --- The two GNU extensions ---
+ *
+ * Both found by `nm` on the desktop's object files rather than by a grep of
+ * its source, which is the same instrument that found `puts` -- and `puts` is
+ * the one that could not have been found any other way, because the source
+ * says `printf`.
+ */
+static void test_the_gnu_extensions(void)
+{
+	static const char HAY[] =
+		"the quick brown fox\0jumps over\0the lazy dog";
+	static const char *const NEEDLES[] = {
+		"", "t", "the", "The", "THE", "fox", "FOX", "dog", "cat",
+		"the lazy", "the quick brown fox", "jumps over",
+		"o", "oo", " ", "  ", "g", "z",
+	};
+	size_t i;
+	size_t j;
+
+	printf("memmem, over a haystack with zero bytes in it\n");
+
+	/*
+	 * The haystack deliberately contains embedded NULs, which is the whole
+	 * reason `recon_html.c` uses `memmem` rather than `strstr`: a page is
+	 * bytes, and a byte can be zero.
+	 */
+	for (i = 0; i < sizeof(NEEDLES) / sizeof(NEEDLES[0]); i++) {
+		size_t n = strlen(NEEDLES[i]);
+		size_t length;
+
+		/* Every haystack length from nothing to the whole thing, so
+		 * the case where the needle runs off the end is tried at
+		 * every offset rather than once. */
+		for (length = 0; length <= sizeof(HAY); length++) {
+			const void *mine = recon_memmem(HAY, length,
+							NEEDLES[i], n);
+			const void *theirs = memmem(HAY, length,
+						    NEEDLES[i], n);
+
+			g_checks++;
+			if (mine != theirs) {
+				g_failures++;
+				printf("  FAIL: memmem for \"%s\" in %zu"
+				       " bytes\n    ReconOS: %+ld  "
+				       "reference: %+ld\n",
+				       NEEDLES[i], length,
+				       mine ? (long)((const char *)mine - HAY)
+				            : -1L,
+				       theirs ? (long)((const char *)theirs
+						       - HAY) : -1L);
+			}
+		}
+	}
+
+	printf("strcasestr, in both cases and neither\n");
+
+	{
+		static const char *const HAYS[] = {
+			"", "a", "Transfer-Encoding: chunked",
+			"transfer-encoding: CHUNKED",
+			"TRANSFER-ENCODING: Chunked",
+			"chunked", "CHUNKED", "chunk", "unchunked",
+			"aaa", "AAA", "aAaA",
+		};
+
+		for (i = 0; i < sizeof(HAYS) / sizeof(HAYS[0]); i++) {
+			for (j = 0; j < sizeof(NEEDLES) / sizeof(NEEDLES[0]);
+			     j++) {
+				const char *mine =
+					recon_strcasestr(HAYS[i], NEEDLES[j]);
+				const char *theirs =
+					strcasestr(HAYS[i], NEEDLES[j]);
+
+				g_checks++;
+				if (mine != theirs) {
+					g_failures++;
+					printf("  FAIL: strcasestr \"%s\" in"
+					       " \"%s\"\n    ReconOS: %+ld  "
+					       "reference: %+ld\n",
+					       NEEDLES[j], HAYS[i],
+					       mine ? (long)(mine - HAYS[i])
+					            : -1L,
+					       theirs ? (long)(theirs - HAYS[i])
+					              : -1L);
+				}
+			}
+		}
+
+		/* And the one the caller actually asks, in the three cases a
+		 * real server sends it in. */
+		check(recon_strcasestr("Transfer-Encoding: chunked",
+				       "chunked") != NULL &&
+		      recon_strcasestr("Transfer-Encoding: CHUNKED",
+				       "chunked") != NULL &&
+		      recon_strcasestr("Transfer-Encoding: identity",
+				       "chunked") == NULL,
+		      "the header recon_http.c actually reads");
+	}
+}
+
 int main(void)
 {
 	printf("ReconOS C library, against the host's\n\n");
@@ -769,6 +873,7 @@ int main(void)
 	test_printf_fractions();
 	test_the_inexact_decimals();
 	test_splitting();
+	test_the_gnu_extensions();
 	test_where_it_differs_on_purpose();
 
 	printf("\n%d checks, %d failures\n", g_checks, g_failures);

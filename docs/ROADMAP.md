@@ -130,36 +130,46 @@ is that it was built rather than assembled.
 #### The piece between the two phases: a C library
 
 The two phases meet at a boundary nobody had named. Phase 1 is 107,000 lines
-of C that call into glibc 3,089 times. Phase 2 is a kernel with no glibc under
+of C that call into glibc 3,113 times. Phase 2 is a kernel with no glibc under
 it and no intention of acquiring one. Neither half was going to produce the
 thing that joins them, so `userland/` is it.
 
 **Where it is now.** Strings and memory, `snprintf` and `vsnprintf`, the
 character classes, numbers out of text, `qsort`, and the stdio file layer --
-**2,479 of those 3,089 calls**, counted rather than estimated. Plus `crt0.S`
+**2,473 of those 3,113 calls**, counted rather than estimated. Plus `crt0.S`
 and the syscall boundary as inline functions, which is what let a C program
 open `/dev/fb0`, map it, and draw through its pitch on the real kernel.
 
 **What it is held to.** Not "does it work" -- the reference. Both libraries are
 compiled into one program, ReconOS's renamed by a `-include prefix.h`, and
-every call is made twice with the answers compared: 86,160 checks. This matters
+every call is made twice with the answers compared: 511,000 checks. This matters
 more than the code does. These functions fail silently or not at all, and the
 three faults the suite found on its first run were all the same shape -- the
 reference accepting a spelling this refused, returning a different number
 without complaint. None would have been found by reading the code, and none
 would have been found by a test written from memory of what the function does.
 
-**Nine of the desktop's own sources already build with no glibc underneath**,
+**Ten of the desktop's own sources already build with no glibc underneath**,
 verified by compiling them with every system header directory removed
-(`scripts/check-userland.sh`, the fifth pass of `scripts/check.sh`). Seven more
-are one header away, and only one of those seven is the library's fault.
+(`scripts/check-userland.sh`, the fifth pass of `scripts/check.sh`). Five more
+are one header away, and all five want xkbcommon -- a real Wayland dependency,
+which means their drawing half has to come apart from their compositor half
+before they can move.
 
-**What stops the rest: `malloc`, and mostly only `malloc`.** Of the 610 calls
-left over, 430 are the allocator. The other 180 are directory calls,
-`strerror`, sockets, time and the rest of stdio -- all of them small, and
-several already have kernel support to build on. The allocator is first on the list in
-[KERNEL-WANTS.md](KERNEL-WANTS.md) for that reason: it is not the hardest thing
-the kernel owes this side, it is the one thing everything else is behind.
+**And the figures come from `nm` rather than from a grep**, because two counts
+written by hand were wrong in the same direction (BG-182, and then again). The
+linker knows the external surface exactly; a list of expected names finds only
+what is already on it, and could never have found `puts` at all -- the compiler
+puts that one there, rewriting a `printf` with no conversions in it.
+
+**What stops the rest: `malloc`, and the shape of what is behind it.** Five
+symbols and 430 call sites are the allocator. Then 21 symbols of files and
+directories, 19 of sockets, one for `strerror` -- which is ours to write, since
+the kernel already returns the error numbers -- and **twenty floating-point
+functions**, which a grep had reported as four and which need nothing from the
+kernel at all. The allocator is first on the list in
+[KERNEL-WANTS.md](KERNEL-WANTS.md) because it is the one thing everything else
+is behind, not because it is the hardest.
 
 ### Decided along the way
 

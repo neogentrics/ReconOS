@@ -262,6 +262,41 @@ unsigned long fwrite(const void *from, unsigned long size, unsigned long count,
 	return done / size;
 }
 
+/*
+ * A line to standard output, and **nothing in the desktop calls it.**
+ *
+ * It is here because the linker asked for it. `src/main.c` calls `printf`
+ * with a string literal containing no conversions, and the compiler rewrites
+ * that into `puts` -- so the desktop needs a function whose name does not
+ * appear anywhere in its source. A grep could not have found this and neither
+ * could reading the file; `nm` on the object file found it in one command.
+ *
+ * The newline is part of the contract and is the whole difference from
+ * `fputs`, which this library does not have.
+ */
+int puts(const char *text)
+{
+	unsigned long length;
+
+	if (text == NULL) {
+		return -1;
+	}
+	length = (unsigned long)strlen(text);
+
+	if (length != 0 && fwrite(text, 1, length, recon_stdout) != length) {
+		return -1;
+	}
+	if (fwrite("\n", 1, 1, recon_stdout) != 1) {
+		return -1;
+	}
+
+	/* Any non-negative number. The reference returns a count that is not
+	 * specified further, so a caller relying on which one has a bug
+	 * either way -- and zero is the one that cannot be mistaken for a
+	 * length. */
+	return 0;
+}
+
 int fprintf(struct recon_stream *f, const char *format, ...)
 {
 	/*

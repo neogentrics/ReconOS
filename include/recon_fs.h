@@ -18,7 +18,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <time.h>
-#include <sys/types.h>
 
 #define RECON_PATH_MAX 1024
 #define RECON_NAME_MAX 256

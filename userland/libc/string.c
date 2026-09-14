@@ -339,6 +339,62 @@ size_t strcspn(const char *text, const char *stop)
 }
 
 /*
+ * Find a run of bytes inside a run of bytes.
+ *
+ * A GNU extension rather than a standard function, and it is here because
+ * `src/recon_html.c` uses it to find the end of a comment -- where the
+ * haystack is a whole page that may contain a zero byte, so `strstr` is the
+ * wrong tool and not a slower one.
+ *
+ * An empty needle matches at the start, which is what the reference does and
+ * is the answer a caller looping over matches needs in order to terminate.
+ */
+void *memmem(const void *haystack, size_t haystack_length,
+	     const void *needle, size_t needle_length)
+{
+	const unsigned char *h = (const unsigned char *)haystack;
+	const unsigned char *n = (const unsigned char *)needle;
+	size_t i;
+
+	if (needle_length == 0) {
+		return (void *)haystack;
+	}
+	if (haystack_length < needle_length) {
+		return NULL;
+	}
+
+	for (i = 0; i + needle_length <= haystack_length; i++) {
+		if (h[i] == n[0] && memcmp(h + i, n, needle_length) == 0) {
+			return (void *)(h + i);
+		}
+	}
+	return NULL;
+}
+
+/*
+ * `strstr` that does not care about case.
+ *
+ * Also a GNU extension, and also here for one caller: `src/recon_http.c`
+ * looks for "chunked" in a Transfer-Encoding header, and a header's value is
+ * case-insensitive by the specification that defines it.
+ */
+char *strcasestr(const char *haystack, const char *needle)
+{
+	size_t i;
+	size_t n = strlen(needle);
+
+	if (n == 0) {
+		return (char *)haystack;
+	}
+	for (i = 0; haystack[i] != '\0'; i++) {
+		if (strncasecmp(haystack + i, needle, n) == 0) {
+			return (char *)(haystack + i);
+		}
+	}
+	return NULL;
+}
+
+/*
  * --- Splitting a string ---
  *
  * Forty-four call sites, and every one of them the reentrant spelling. That is
