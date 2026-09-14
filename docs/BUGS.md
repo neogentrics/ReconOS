@@ -5321,8 +5321,27 @@ recovery wrote nothing                      the disk is byte for byte
 - **Cost:** none yet, and that is the problem. The page-cache invalidation test
   -- written the same day, and the entire point of the commit before it -- has
   never run in a verification matrix.
-- **Status:** open. The assertion is written and syntax-checked; it lands with
-  the fix.
+- **Status:** fixed. `scripts/install-then-boot-test.sh` installs onto a blank
+  disk and boots the result, and asserts the self-tests pass **with a volume
+  under them** -- then boots the same disk again and asserts them a second
+  time, on a volume that has already been written to. Its own comment states
+  the fact this entry is about:
+
+  > both are the same installed disk, so the second boot is the only place in
+  > the whole matrix where a ReconFS volume is mounted that something has
+  > already written to. Every other path attaches sixty-four megabytes of
+  > zeroes, on which the five tests that need a volume print "no volume on
+  > this machine" and are counted as having run.
+
+  **The diagnosis below is still true of every other path**, and deliberately
+  so: giving all twenty-eight of them a formatted volume would make the block
+  layer's tests depend on what the last run left behind, which is the thing
+  the zeroes are for. One path covers the five; the rest stay blank.
+
+  Recorded on 14 September, having been walked into from the other side: a new
+  directory self-test passed on a blank disk without executing a line of
+  itself, which is this entry one layer along. The register page had been
+  asking for whoever knew to add the line, rather than guessing.
 
 `scripts/verify-kernel.sh` gives every boot path sixty-four megabytes of zeroes,
 deliberately and with the reason written down:
