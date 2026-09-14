@@ -273,6 +273,16 @@ KERNEL := $(BUILD)/reconos-kernel.elf
 # when the filesystem half arrives, the loader does not change.
 USER_ELF := $(BUILD)/user/hello.elf
 
+# And the second one, which is written in C.
+#
+# hello.S proves the *loader*: two segments, a .bss, and a register convention.
+# This proves the *language* -- that a program compiled from the same C the
+# desktop is written in runs here at all. It is a separate program rather than
+# a rewrite of the first because the first tests things a C program cannot
+# check from inside itself, and losing those to prove something else would be
+# a trade in the wrong direction.
+PAINT_ELF := $(BUILD)/user/paint.elf
+
 # --- Rules -------------------------------------------------------------------
 
 .PHONY: all all-arches run clean check-portable info
@@ -321,10 +331,46 @@ $(USER_ELF): user/hello.S user/user.ld
 	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ $(BUILD)/user/hello.o
 	@echo "  built $@"
 
-# The blob that carries it into the kernel image. `.incbin` rather than
+# --- The C program ---
+#
+# Built with the kernel's own compiler and *not* with the kernel's flags: the
+# kernel is compiled -mcmodel=kernel, which places code in the top two
+# gigabytes, and a user program lives at 0x400000. Passing the kernel's flags
+# to a user program is the kind of mistake that links and then faults on the
+# first instruction.
+#
+# -ffreestanding says there is no library underneath. -fno-stack-protector
+# because the guard needs a runtime that does not exist. -fno-builtin so the
+# compiler does not replace a loop with a call to something unlinkable --
+# memset and memcpy are provided by the program and are the only two it may
+# assume.
+USERCFLAGS := -std=c11 -O2 -g -Wall -Wextra -Werror -ffreestanding \
+	      -fno-stack-protector -fno-builtin -fno-pic -fno-pie \
+	      -fno-asynchronous-unwind-tables -I../userland/include
+
+ifeq ($(ARCH),x86_64)
+USERCFLAGS += -m64 -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -mno-80387
+endif
+
+# The program is the kernel's -- it is a self-test -- but the environment it
+# is built against is the *desktop's*, in ../userland. That is the right way
+# round: a C runtime is not a kernel component, and there being one copy of
+# `recon.h` rather than one per program is what stops a system call number
+# drifting between two of them.
+$(PAINT_ELF): user/paint.c ../userland/crt0.S ../userland/include/recon.h \
+	      user/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USERCFLAGS) -c user/paint.c -o $(BUILD)/user/paint.o
+	$(CC) $(ASFLAGS) -I../userland/include -c ../userland/crt0.S \
+		-o $(BUILD)/user/crt0.o
+	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ \
+		$(BUILD)/user/crt0.o $(BUILD)/user/paint.o
+	@echo "  built $@"
+
+# The blob that carries them into the kernel image. `.incbin` rather than
 # objcopy's `-I binary`, because objcopy names its symbols after the path it
 # was given and that name changes when the build directory does.
-$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF)
+$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF) $(PAINT_ELF)
 
 -include $(OBJS:.o=.d)
 

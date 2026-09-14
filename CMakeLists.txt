@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.21
+    VERSION 0.4.22
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -712,6 +712,62 @@ target_include_directories(recon_cookie_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 add_test(NAME cookies COMMAND recon_cookie_tests)
+
+# The C library the desktop will be built against when it runs on our kernel.
+#
+# Compiled *for the host*, with every function renamed by `prefix.h`, so that
+# ReconOS's implementation and the system's are in one program and can be
+# compared directly. That is the only kind of test worth having for these:
+# a `strcmp` returning the wrong sign still sorts, backwards, and would pass
+# any test written from memory of what it should do.
+#
+# -fno-builtin matters and is not belt and braces. Without it the compiler
+# recognises the byte loop inside `memcpy` and replaces it with a call to
+# `memcpy`, which builds and then recurses until the stack is gone.
+add_executable(recon_libc_tests
+    userland/tests/test_libc.c
+    userland/libc/string.c
+    userland/libc/printf.c)
+
+# The file layer, the number parsing and the character classes, in a second
+# program because the first one already has a `main`.
+#
+# `hostsys.c` is what makes the FILE half testable at all: it answers the five
+# primitives `stdio.c` is built on with POSIX calls instead of ReconOS system
+# calls, so the same buffering code that will run on the kernel can be made to
+# read a real file here and be held against what the host's stdio returns for
+# the same file. `userland/libc/syscalls.c` -- the real ones -- is deliberately
+# *not* in this list; it is the one file that could not be in it.
+add_executable(recon_libc_file_tests
+    userland/tests/test_libc_files.c
+    userland/tests/hostsys.c
+    userland/libc/string.c
+    userland/libc/printf.c
+    userland/libc/ctype.c
+    userland/libc/stdlib.c
+    userland/libc/stdio.c)
+
+# Every source under libc/, and only those. `hostsys.c` is excluded on purpose:
+# it has to see the host's own <stdlib.h> and <unistd.h> unrenamed, and it
+# defines the `recon_sys_*` names, which prefix.h does not touch.
+set_source_files_properties(
+    userland/libc/string.c
+    userland/libc/printf.c
+    userland/libc/ctype.c
+    userland/libc/stdlib.c
+    userland/libc/stdio.c
+    PROPERTIES COMPILE_OPTIONS
+    "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin")
+
+# There is deliberately no `-I userland/include` on either of these targets.
+# Those headers exist so desktop source can say `#include <stdio.h>` and get
+# ReconOS's; putting them on the include path *here* would hand the same header
+# to the test file, and the comparison would become the implementation against
+# itself. The library's own sources include "internal.h" by relative path and
+# never need the public headers -- which is the whole reason internal.h exists.
+
+add_test(NAME libc COMMAND recon_libc_tests)
+add_test(NAME libc_files COMMAND recon_libc_file_tests)
 
 # The same parser against markup nobody here wrote.
 #

@@ -6557,6 +6557,8 @@ the one instruction under test rather than two different kernels.
 
 ### KF-212 — Stage 2 with a signing key compiled in no longer fits in the 64KB real mode can address
 
+[#439](https://github.com/neogentrics/ReconOS/issues/439)
+
 - **Found:** 14 September 2026, by matrix 43, on `the BIOS path refuses an
   unsigned kernel`: `stage 2 did not build`. Reproduced by hand in one command
   — `ld.lld: error: stage 2 has grown past the 64KB real mode can address`,
@@ -6610,6 +6612,8 @@ to fit in anything, so there is nothing left to refuse and the check is gone
 rather than kept with a bigger number beside it.
 
 ### KF-213 — A test could not read the loader it was testing, and reported the loader had found nothing
+
+[#440](https://github.com/neogentrics/ReconOS/issues/440)
 
 - **Found:** 14 September 2026, by matrix 43, on `a machine with no UEFI runs
   our loader`:
@@ -7813,6 +7817,101 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built the way a release is. Putting the small buffer back makes six suites
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
+
+### BG-182 — Three functions were missing, and the measurement could not see them
+
+[#444](https://github.com/neogentrics/ReconOS/issues/444)
+
+- **Found in** v0.4.22. **Found by** `scripts/check-userland.sh`, written the
+  same day: take glibc away with `-nostdinc`, give the compiler its own headers
+  and `userland/include` and nothing else, and ask it to build the desktop's
+  own sources.
+- **What it was** `strtok_r` is called on **44 sites** in `src/` and the ReconOS
+  C library did not have it. Nor `strncat`, nor `strtoull`. The desktop would
+  have failed to link, eventually, on a build nobody had run yet.
+- **Why nothing said so.** The library's coverage was measured by listing the
+  functions it was expected to need and counting those. **That method finds
+  every call of a function on the list and none of a function that is not on
+  it** -- so the numerator and the denominator were short by exactly the same
+  49 calls, and the fraction looked right. It reported 2,430 of 2,997. The
+  truth was 2,479 of 3,089.
+- **This is the shape of the whole class**, and it has happened here before in
+  other clothes: BG-173 was found by adding a field to a `describe` and reading
+  it, BG-174 by taking a photograph. Every one of them was invisible to a
+  reading of the code and to a number derived from the same assumptions the
+  code was written under. **A measurement that shares its premises with the
+  thing it measures can only agree with it.**
+- **Fixed in** v0.4.22. All three are written and held against the reference
+  like everything else here -- `strtok_r` over twelve subjects and six
+  separator sets, comparing the tokens *and* the buffer afterwards, because a
+  split that returns the right words while chopping the string in different
+  places has broken the caller's next pass over it.
+- **And the instrument is permanent.** `check-userland.sh` is the fifth pass of
+  `scripts/check.sh`. Nine of the desktop's seventy-nine sources compile with
+  no glibc under them today, and that number cannot quietly go down.
+
+### BG-181 — `strtod` had no reading for "inf" or "nan"
+
+[#441](https://github.com/neogentrics/ReconOS/issues/441)
+
+- **Found in** v0.4.22, before any of it had run. **Found by** widening the
+  corpus while fixing BG-180 -- not by the first run, which never asked. Worth
+  saying plainly: this one was found because a fault of the same shape had just
+  been found, and the question "what else does the reference accept that this
+  refuses" was asked once rather than about one function.
+- **What it was** the reference reads `inf`, `infinity` and `nan` as numbers,
+  in any mixture of cases, and returns infinity or not-a-number. This read them
+  as nothing at all: zero returned, nothing consumed.
+- **Why it is not academic.** `strtod` here reads files of measurements, and
+  anything that can produce a measurement can produce an infinity -- a division
+  that ran out of range, a sensor at its limit, a value this library's own
+  `%f` would have to print. A file round-tripping through ReconOS would have
+  had its infinities silently become zeros, which is the direction that looks
+  like data rather than like an error.
+- **Fixed in** v0.4.22. Both words are read, case-insensitively, with
+  `infinity` beating `inf` and both losing to a caller who wrote `info`. A
+  parenthesised tag after `nan` is part of the number when it closes and is not
+  when it does not.
+- **The comparison needed fixing too**, and this is the part worth keeping:
+  not-a-number compares false against everything including itself, so
+  `|mine - theirs| > bound` is **false in exactly the cases where the two
+  disagree most**. The tolerance check the suite already had would have passed
+  silently on a `strtod` that returned not-a-number for every input in the
+  corpus. Infinity and not-a-number are now compared first and by hand.
+
+### BG-180 — `strtod` refused hexadecimal, so "0x1F" was zero followed by an x
+
+[#442](https://github.com/neogentrics/ReconOS/issues/442)
+
+- **Found in** v0.4.22, before any of it had run. **Found by** the first run of
+  `recon_libc_file_tests`, which reads the same corpus with both libraries.
+- **What it was** the standard requires `strtod` to accept `0x` followed by
+  hexadecimal digits, an optional point, and an optional `p` binary exponent.
+  This accepted none of it: `strtod("0x1F")` returned 0.0 and stopped after one
+  character, where the reference returns 31.0 and consumes four.
+- **Fixed in** v0.4.22. The hexadecimal path is now there, and it is the one
+  path in this function that is **exact** -- hexadecimal digits are four bits
+  each, so the mantissa is an integer and the scaling is by a power of two,
+  and neither step loses anything. The decimal path still carries the caveat
+  `printf.c` states at length, and now the file says which is which.
+
+### BG-179 — `strtol` read "0b101" as zero, where the reference reads five
+
+[#443](https://github.com/neogentrics/ReconOS/issues/443)
+
+- **Found in** v0.4.22, before any of it had run. **Found by** the first run of
+  `recon_libc_file_tests`, on bases 0 and 2.
+- **What it was** C23 added the `0b` binary prefix to `strtol` and glibc has
+  shipped it since 2.38, so `strtol("0b101", NULL, 0)` is 5 on every machine
+  the desktop is currently built on. This read the leading `0`, stopped at the
+  `b`, and returned 0 having consumed one character.
+- **This is the class the whole differential arrangement exists for.** Nothing
+  failed. Nothing warned. A number was quietly a different number, and no test
+  written from memory of what `strtol` does would have thought to try a
+  spelling its author did not know existed. The reference knew.
+- **Fixed in** v0.4.22, under the same rule as the hexadecimal prefix beside
+  it: `0b` is only a prefix when a binary digit follows it, so `0b` alone stays
+  the number zero followed by a `b`.
 
 ### BG-178 — A Max-Age longer than a long could hold was added to the clock
 

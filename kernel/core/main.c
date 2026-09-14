@@ -369,6 +369,9 @@ void kmain(void)
 		user_boundary_test() ? "pass" : "FAIL");
 	kprintf("  a program from a file : %s\n",
 		user_elf_test() ? "pass" : "FAIL");
+
+	kprintf("  a program written in C : %s\n",
+		user_c_program_test() ? "pass" : "FAIL");
 	kprintf("  machine facts      : %s\n",
 		user_facts_test() ? "pass" : "FAIL");
 	kprintf("  block devices      : %s\n",

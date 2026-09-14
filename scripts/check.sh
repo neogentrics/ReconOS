@@ -1,5 +1,6 @@
 #!/bin/bash
-# Run every test suite under the address and undefined-behaviour sanitizers.
+# Run every test suite under the address and undefined-behaviour sanitizers,
+# then four more passes over things a suite cannot see.
 #
 # Separate from the ordinary build because the sanitizers make everything two
 # to three times slower and change the memory layout, which is exactly why they
@@ -228,5 +229,25 @@ if [ "$generated_drift" = "1" ]; then
     exit 1
 fi
 echo "the generated files match their sources"
+
+# --- Fifth: the desktop, with no glibc underneath it ---
+#
+# The differential suites prove the C library answers what the host's answers.
+# They prove nothing about whether the *headers* are usable from the desktop's
+# own source -- whether a declaration matches its call sites, whether something
+# is missing that nothing noticed because glibc was quietly supplying it.
+#
+# The first run of this found three functions that were simply absent, one of
+# them on forty-four call sites. It is here so that a header can no longer
+# drift away from the code meant to include it without something saying so.
+echo
+echo "Checking that the desktop still compiles with no libc under it"
+if ! "$REPO_DIR/scripts/check-userland.sh"; then
+    echo
+    echo "The ReconOS C library no longer builds the desktop sources it was"
+    echo "building. Either a header lost a declaration, or a source grew a"
+    echo "call to something that does not exist on this kernel yet."
+    exit 1
+fi
 
 echo "clean"

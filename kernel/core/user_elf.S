@@ -30,3 +30,23 @@ user_elf_image_end:
 	.global user_elf_image_len
 user_elf_image_len:
 	.quad	user_elf_image_end - user_elf_image
+
+/* And the second program, which is written in C.
+ *
+ * Carried the same way and loaded by the same loader, which is the point: the
+ * loader cannot tell what language a program was written in, and this is the
+ * file that proves it was never asked to.
+ */
+	.balign 16
+
+	.global paint_elf_image
+paint_elf_image:
+	.incbin "paint.elf"
+
+	.global paint_elf_image_end
+paint_elf_image_end:
+
+	.balign 8
+	.global paint_elf_image_len
+paint_elf_image_len:
+	.quad	paint_elf_image_end - paint_elf_image

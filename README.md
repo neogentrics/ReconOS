@@ -86,6 +86,8 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.22** | A C library of ReconOS's own, for the day there is no glibc underneath: strings and memory, `snprintf`, the character classes, numbers out of text, and the file layer. 2,479 of the 3,089 library calls in `src/` are answered by it, counted rather than estimated. Held against the library it replaces by compiling both into one program and making every call twice -- 86,160 checks. Nine of the desktop's own sources already compile with every system header directory removed. Three faults found before any of it ran, BG-179 to BG-181, every one of them the reference accepting something this refused |
+| **0.4.6 - 0.4.21** | The web viewer becomes a browser: a parser checked against fifteen hundred cases nobody here wrote, stylesheets, tables with columns, text alignment, links to a place on a page, History and Bookmarks as pages, forms that submit, and cookies with four things they are not allowed to do. Packages say who made them and the signature is checked. A fuzzer that learns. And the configuration that actually ships, built for the first time |
 | **0.4.5** | A framework for how every control looks and behaves, versioned on its own so it can be fixed without arguing about the system's number. The taskbar in a scene layer of its own, above every window, because it is how you reach everything else. Icon sets that belong to a skin and can be improved after they are installed. Two more skins -- Smoked, and Metallic in eight metals -- and a tint that carries its own lightness rather than borrowing the palette's. The skin list split four ways, so choosing a look is choosing between looks. A Start menu search that finds settings, places and files rather than programs and help. Twenty-two faults, BG-137 to BG-158 |
 | **0.4.0** | ReconOS makes a sound, shows a picture, and can be seen through: `recon_audio`, a codec registry, WAV written from the specification, our own MP4 demuxer, and video playing with the sound device as the clock. Colour conversion and scaling are ours; H.264 is borrowed, in a module. A Media Player, a web viewer, an icon for every kind of file. And the decision about what an application is once there is a kernel, settled with a measurement. Glass in six colours, four wallpapers made for it, and a clock in the corner with the date under it. Text read out of a picture — including a screenshot of its own desktop — by drawing the shapes it is looking for. A theme protocol, so a client that is not part of this program can look like the desktop it is on. Mail that sends. An expression grammar with its own tests, and a grapher on top of it. A filesystem call that creates a file already private rather than tightening it afterwards |
 | **0.3.0** | TLS both ways — the port, and outgoing with the far end verified. Mail over IMAP and POP3. A clock, Photos, a Calendar. The Calculator gains five modes. Applets update on their own. A fixed-width terminal with colour schemes. Screen resolution. The kernel begins, alongside |
@@ -943,16 +945,25 @@ scripts/      build, run, package and install
 assets/       wallpaper and icons loaded at runtime
 boot/         reconboot — the UEFI bootloader, its own build (clang, PE)
 kernel/       the kernel — phase 2, its own build
+userland/     the C library and crt0 for programs running on that kernel
 third_party/  vendored dependencies (stb)
 docs/         roadmap, bug register, module interface, development notes
 ```
 
 ## Bugs
 
-Eighty-one faults have been found in ReconOS so far. Every one of them has a
-number -- `BG-001` upward, assigned in the order it was found and never
-reused -- and an entry in [docs/BUGS.md](docs/BUGS.md) saying what was
-actually wrong rather than what it looked like.
+**A hundred and eighty-one faults in the desktop and eighty-six in the
+kernel** have been found in ReconOS so far. Every one of them has a number --
+`BG-001` upward on the desktop, `KF-` on the kernel, assigned in the order it
+was found and never reused -- and an entry in [docs/BUGS.md](docs/BUGS.md)
+saying what was actually wrong rather than what it looked like.
+
+Two prefixes rather than one because for a while there were two registers: the
+desktop and the kernel are built by separate sessions sharing a repository,
+both took the next number from the copy in front of them, and twelve numbers
+named twenty-four different faults. The kernel's twelve were renumbered and the
+file records that it happened, because a register that quietly tidies its own
+history is not one.
 
 A commit says what changed. It does not say something was broken, that
 somebody hit it, or that it is fixed now. The register does, and the
@@ -1070,6 +1081,64 @@ every time something lands, which is what the blueprint audit is for.
 - [docs/BUGS.md](docs/BUGS.md) — every fault, what it actually was, and how it
   surfaced. The kernel's share is the majority of the register.
 
+
+## The C library
+
+Everything in `src/` calls into glibc today. On the ReconOS kernel there is no
+glibc, so `userland/libc/` is what those calls will reach instead: strings and
+memory, `snprintf` and `vsnprintf`, the character classes, numbers out of text,
+`qsort`, and the eleven stdio functions the desktop actually uses.
+
+**2,479 of the 3,089 library calls in `src/` are answered by it.** That number
+is counted, by walking every `.c` and `.h` with comments stripped, and its
+shape is the shape of this system: `snprintf` 915 times, `strcasecmp` 357,
+`strlen` 211, `strcmp` 139. A desktop is mostly text being compared and
+formatted.
+
+### Why it is tested the way it is
+
+These functions fail quietly or not at all. A `strcmp` returning the wrong
+*sign* still sorts, backwards. A `snprintf` that rounds `%.2f` the wrong way at
+a half is wrong in a way nobody writing a test from memory would think to
+check. So there is no test here asserting what these functions should do.
+
+Both libraries are compiled into one program -- ReconOS's renamed by a
+`-include prefix.h` so the two can coexist -- and every call is made twice and
+the answers compared. **86,160 checks, with the library being replaced as the
+referee.** Where ReconOS differs on purpose, the difference is asserted rather
+than skipped.
+
+The file layer gets the same treatment through `userland/tests/hostsys.c`,
+which answers the five primitives `stdio.c` is built on with POSIX calls. So
+the same buffering code that will run on the kernel reads a real file here and
+is held against the host's stdio for the same file: the same bytes, the same
+counts, the same position after every operation.
+
+### Nine desktop sources build with no glibc under them
+
+`scripts/check-userland.sh` compiles them with `-nostdinc`, the compiler's own
+headers and `userland/include`, and nothing else -- so it is a compile rather
+than a claim, and it is the fifth pass of `scripts/check.sh` so it cannot rot.
+
+Its first run is why the figure above is 2,479 and not the 2,430 a sweep had
+reported: the sweep counted the functions it already knew to look for, so it
+could not see `strtok_r`, which is on 44 call sites and was simply absent.
+
+### What is missing, and it is mostly one thing
+
+`malloc`. Of the 610 calls the library does not answer, **430 are the
+allocator**. Everything else left is small: 56 directory calls, 43 for
+`strerror`, 37 socket calls, 21 for time, 15 for the rest of stdio.
+
+`userland/include/stdlib.h` has no `malloc` declaration at all, so a caller
+fails to *link* rather than getting a stub that returns nothing and crashes
+somewhere else an hour later. The ask is first on the list in
+[docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md).
+
+```bash
+cmake --build build --target recon_libc_tests recon_libc_file_tests
+./build/recon_libc_tests && ./build/recon_libc_file_tests
+```
 
 ## Where this is going
 

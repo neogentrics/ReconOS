@@ -16,6 +16,156 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## There is no way for a program to ask for memory
+
+**Where:** writing `userland/libc/`, on 14 September 2026. Hit immediately and
+unavoidably: `malloc` has nothing to be built on.
+
+This is first on the list because it is the one currently stopping work rather
+than the one that will stop the most. The C library is written and checked —
+86,160 comparisons against the host's, and nine of the desktop's own sources
+now compile with no glibc underneath them — and the next function in the file
+cannot be written at all.
+
+**What the desktop does today, measured rather than estimated:**
+
+| | |
+|---|---|
+| `malloc` | 34 call sites |
+| `calloc` | 80 |
+| `realloc` | 4 |
+| `free` | 312 |
+| `strdup` | 1 |
+
+`free` outnumbering the allocations three to one is not an error in the count:
+most of what is allocated is freed on several different paths out of the same
+function.
+
+**And the sizes, which decide what shape the call has to be.** One parsed web
+page:
+
+```
+  text        1,048,576     runs      800,000     blocks     112,000
+  links       4,096,000     forms     135,424     fields     339,968
+  options       593,920
+
+  one page    7,125,888 bytes    largest single allocation  4,096,000
+  twelve tabs    81 MiB
+```
+
+So this is **not** a call that hands out a page. The largest single request is
+just under four megabytes — the link table, two thousand addresses of two
+kilobytes each — and a browser window with twelve tabs open is eighty-one
+megabytes live. An allocator that could only ask for one page at a time would
+make four hundred calls to open one page of Wikipedia.
+
+**What would replace it:** anonymous memory, and **a way to give it back**.
+
+The giving back is not a refinement to add later. A tab that is closed releases
+6.8 MiB, and without release a window where twelve tabs have been opened and
+closed has lost eighty-one megabytes that nothing can reclaim. On a machine
+with 512 MiB that is a browser that dies after sixty tabs and cannot say why.
+
+The smallest thing that would work reuses what is already there: the kernel
+reserves and demand-pages a stack for every process, so the mechanism for "a
+range that exists and whose pages appear when touched" is built and tested.
+`SYS_MAP` with no file — an fd of -1, or its own number — returning such a
+range, and a companion that releases one, is two calls over machinery that
+exists.
+
+**What it does not need, so that it does not get built:**
+
+- **Not `brk`.** A single growing break is the wrong shape for an allocator
+  that frees in the middle, which this one will: those 312 frees are not in
+  reverse order of the allocations.
+- **Not protection flags yet.** Every one of the 430 sites wants readable and
+  writable, and nothing in the desktop wants an executable allocation — if it
+  ever did, that would be a decision to argue about rather than a flag to pass.
+- **Not file-backed mapping yet.** The desktop maps exactly one thing, and it
+  is `/dev/fb0`, which already works.
+
+**Whose side:** `core/`. Address spaces, reservation and demand paging are all
+there and all portable; nothing about this names a machine.
+
+---
+
+## The console and a program both own the screen
+
+**Where:** `kernel/user/paint.c`, the first ReconOS program written in C, on
+14 September 2026. Found by photographing the panel rather than by reading the
+serial line, which said the program had succeeded — and it had.
+
+A program opens `/dev/fb0`, is told the geometry by `SYS_SCREEN`, maps it with
+`SYS_MAP` and fills it. That all works. Then the program exits, the kernel
+prints its next self-test line, and **the framebuffer console draws straight
+over the top of the picture** — not all of it, only the cells it has characters
+in, so what is left is a screen with the program's background showing round the
+edges of a block of kernel text.
+
+There is no arbitration. Both are writing to the same pixels through different
+paths, and the last writer wins.
+
+**Why this is fatal for the desktop rather than untidy.** The compositor owns
+every pixel: it decides what is on the screen, and something else drawing into
+the middle of that is not a cosmetic problem, it is the compositor being wrong
+about what is displayed. It will not redraw over the damage, because nothing
+told it there was any. A kernel log line during a login screen would sit there
+until something else happened to repaint that region.
+
+**What would replace it:** a way for the program that has mapped `/dev/fb0` to
+be the one that draws. Not a lock in the general sense — the simplest thing
+that would do is for the console to stop painting to the *panel* while the
+framebuffer is mapped, and keep painting to serial, which is where anybody
+debugging is reading anyway. Give it back when the descriptor is closed or the
+program exits, so a program that dies does not leave a machine with no console.
+
+The desktop does not need to *share* the screen with the console. It needs the
+console to stop, and it needs the stopping to be tied to something the kernel
+can observe rather than to a promise the program makes.
+
+**Whose side:** `core/`. Nothing about it names a machine — it is a rule about
+which of two writers is allowed to touch a mapping, and both of them are
+already portable.
+
+---
+
+## Nothing in user mode can start a program
+
+**Where:** everywhere, the moment there is more than one thing to run. Hit on
+14 September 2026 while writing the C environment: there is a `crt0`, a syscall
+header and a program that draws, and no way for that program to be started by
+anything except the kernel deciding to start it.
+
+The kernel loads and runs an ELF — `core/elf.c` does the whole job, and it does
+it well enough that a C program with two segments and a `.bss` runs correctly.
+What is missing is the call. There is no `fork`, no `exec`, no `spawn` and no
+`wait`, so the set of programs that can run is the set the kernel was compiled
+knowing about.
+
+**Why this is the one that blocks everything else.** A desktop is not one
+program. It is a compositor that starts a shell, a shell that starts
+applications, and a session that restarts what dies. Every one of those is a
+program starting another program and being told when it ends. Until that call
+exists, the most the desktop can be on this kernel is a single binary with
+everything linked into it — which is what it is on Linux today, and is the
+thing the move to Wayland clients was meant to stop.
+
+**What would replace it:** whatever shape suits the kernel. `fork` is not
+required and arguably not wanted — copy-on-write of a whole address space to
+immediately discard it is a lot of machinery for what is almost always
+`spawn`. A call that takes a path, an argument vector and an environment and
+returns something to wait on would do everything the desktop needs, and it
+avoids `fork`'s hard cases entirely.
+
+The one thing the desktop does need alongside it is **a way to be told a child
+has ended and what its exit code was**, because a session that restarts what
+dies has to know that something died.
+
+**Whose side:** `core/` for the call and the process work; `arch/` only for
+whatever entering a new address space costs on each machine.
+
+---
+
 ## Creating a file with a mode
 
 **Where:** `src/recon_tls.c`, generating the private key for remote access.

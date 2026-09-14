@@ -318,6 +318,14 @@ struct thread *user_elf_create(const char *name, const void *image, u64 len,
  * its own segments arrived correctly. */
 bool user_elf_test(void);
 
+/* Runs a program compiled from C -- not assembly -- which asks the screen's
+ * size, maps /dev/fb0 and draws through `pitch`. What it proves is not that a
+ * program can draw, which checkpoint 21 settled, but that a program written in
+ * the language the desktop is written in can be built for this kernel and run
+ * on it. Returns true on a machine with no screen, which is the honest answer
+ * on a serial-only boot rather than a failure. */
+bool user_c_program_test(void);
+
 /* The largest program that can be loaded from a path. Bounded because the
  * image is read into the kernel's memory before it is parsed, and a file that
  * does not fit is refused rather than loaded from its first bytes. */
