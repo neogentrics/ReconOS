@@ -7537,6 +7537,23 @@ program instead, which is the same fight from the other side. That one belongs i
 
 ### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
 
+> **It was six, and the sixth was written the same day.** The kernel session
+> added a directory self-test creating `/selftest-dir` and
+> `/selftest-dir/inside` with no removal, hours before this entry reached a
+> branch it could see. Matrix 51 -- the first run after the two were merged --
+> failed on the one path that boots an installed disk twice, with this entry's
+> own symptom: `files carry a mode : FAIL`, on the second boot only.
+>
+> Fixed the same way, through `rootfs_clear_before_test`, with the inner file
+> cleared before the directory because `reconfs_remove` refuses a directory that
+> still has entries.
+>
+> Worth recording rather than quietly fixing: **the fault was reintroduced by
+> somebody who had not read this entry, into a test whose whole purpose is to
+> catch faults.** The helper's own comment says it is *not a general "delete if
+> present"* so that the next person has to think; the next person was writing in
+> parallel and had nothing to read.
+
 [#464](https://github.com/neogentrics/ReconOS/issues/464)
 
 - **Found in** kernel 0.2.29, by booting an installed disk twice. The second

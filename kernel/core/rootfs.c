@@ -675,6 +675,17 @@ bool rootfs_self_test(void)
 	 * through the whole path -- the one assertion here that could not pass
 	 * on a filesystem that records the type and ignores it.
 	 */
+	/* Cleared first, or this passes exactly once per volume -- which is
+	 * KF-229, and this test was written the same day as the fix for it
+	 * without either side being able to see the other. Matrix 51 caught it
+	 * on the one path that boots an installed disk twice.
+	 *
+	 * The inner file before the directory, because `reconfs_remove` refuses
+	 * a directory that still has entries: *a recursive delete is a decision
+	 * for the layer that knows whether the user meant it.* */
+	rootfs_clear_before_test("/selftest-dir/inside");
+	rootfs_clear_before_test("/selftest-dir");
+
 	st = rootfs_create_directory("/selftest-dir", 0755);
 	if (st != RECONFS_OK) {
 		kprintf("  rootfs: could not make a directory (%d)\n", (int)st);
