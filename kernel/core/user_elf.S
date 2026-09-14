@@ -50,3 +50,28 @@ paint_elf_image_end:
 	.global paint_elf_image_len
 paint_elf_image_len:
 	.quad	paint_elf_image_end - paint_elf_image
+
+/* And the third, which is not a test.
+ *
+ * The other two run, prove something and exit. This one draws what somebody
+ * sees and then stays. It is carried the same way and loaded by the same
+ * loader, which is what makes it ordinary -- the loader has never been told
+ * which of these is a test.
+ *
+ * It will not be carried here for long. A program belongs on a volume, and the
+ * only reason this one is inside the kernel image is that nothing can yet ask
+ * for a program to be started. `docs/KERNEL-WANTS.md` has the entry.
+ */
+	.balign 16
+
+	.global init_elf_image
+init_elf_image:
+	.incbin "recon_init.elf"
+
+	.global init_elf_image_end
+init_elf_image_end:
+
+	.balign 8
+	.global init_elf_image_len
+init_elf_image_len:
+	.quad	init_elf_image_end - init_elf_image

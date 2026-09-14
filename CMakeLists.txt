@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.24
+    VERSION 0.4.25
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -781,6 +781,26 @@ add_executable(recon_libc_math_tests
     userland/libc/math.c)
 
 target_link_libraries(recon_libc_math_tests PRIVATE m)
+
+# The first screen ReconOS draws, rendered on the host.
+#
+# userland/init/screen.c makes no system call and knows nothing about a
+# kernel, which is the whole reason it is a separate file: the picture a
+# machine will show can be produced here in a millisecond instead of by
+# writing a stick and walking to a machine.
+#
+# Every canvas it draws on has padding on the end of each row, and the suite
+# checks that nothing touched it -- because on a screen where bytes per row
+# happen to equal width times four, a program that confuses the two draws a
+# perfect picture and shears on the first laptop.
+add_executable(recon_init_screen_tests
+    userland/tests/test_init_screen.c
+    userland/init/screen.c)
+
+target_include_directories(recon_init_screen_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
+
+add_test(NAME first_screen COMMAND recon_init_screen_tests)
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_file_tests)

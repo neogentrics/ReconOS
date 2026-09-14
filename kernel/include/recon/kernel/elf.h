@@ -111,6 +111,15 @@ extern const u64 user_elf_image_len;
 extern const unsigned char paint_elf_image[];
 extern const u64 paint_elf_image_len;
 
+/* And the first program that is not a test. Carried the same way and loaded by
+ * the same loader, which has never been told which of these is which.
+ *
+ * It will not live here for long: a program belongs on a volume, and the only
+ * reason this one is inside the kernel image is that nothing can yet ask for a
+ * program to be started. See docs/KERNEL-WANTS.md. */
+extern const unsigned char init_elf_image[];
+extern const u64 init_elf_image_len;
+
 bool elf_self_test(void);
 
 #endif /* RECON_KERNEL_ELF_H */

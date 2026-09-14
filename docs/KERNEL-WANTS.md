@@ -123,9 +123,151 @@ The desktop does not need to *share* the screen with the console. It needs the
 console to stop, and it needs the stopping to be tied to something the kernel
 can observe rather than to a promise the program makes.
 
+**Hit again on 14 September, and worse, by `userland/init/recon_init.c`** --
+the first program on this kernel that is a screen somebody reads rather than a
+self-test. It draws a panel with the machine's own facts on it and then stays
+up.
+
+The first boot came back with the program's panel showing through a hole in
+the kernel's boot log, exactly as above. Moving the call after the kernel's
+last message was **not enough**, and that is the part worth recording: the
+console does not only draw when it is handed something new. It repaints its
+window when it scrolls. A single `kputs` after the program started was enough
+to put the whole log back on top of a screen that had just been drawn.
+
+What works today is that `main.c` starts the program as its **last statement,
+with nothing printed after it at all** -- not even a success line. That is an
+arrangement, not a fix, and it holds for exactly as long as there is one
+program. It is written down in `core/main.c` where somebody would look.
+
+**And the ordering makes the fault invisible rather than absent**, which is the
+worse shape: the screen looks right, so the next person to add a diagnostic
+print after that line will not find out what they broke until they photograph
+a machine.
+
 **Whose side:** `core/`. Nothing about it names a machine — it is a rule about
 which of two writers is allowed to touch a mapping, and both of them are
 already portable.
+
+---
+
+## Nothing can make a directory, so the volume has no shape
+
+**Where:** working out what `userland/init/recon_init.c` could say about
+storage, 14 September 2026. It asks `SYS_LIST` what is at the root of the
+volume and reports the count, and on a freshly installed machine the honest
+answer is zero -- the installer formats the System partition and writes nothing
+into it.
+
+**The desktop has a layout and cannot build it.** `include/recon_fs.h` has
+described it since v0.1.0 and it is deliberately Windows-shaped: `/System` for
+the operating system's own files, `/Programs` for installed applications,
+`/Users` for documents, with the rule that a full disk of programs must not be
+able to stop the system booting. Every one of those is a directory, and there
+is no way to create one.
+
+**What already exists, which is most of it.** `reconfs_create` takes a `type`
+argument and `RECONFS_TYPE_DIR` is defined beside `RECONFS_TYPE_FILE`; the
+format has directories, `reconfs_readdir` walks them, and `reconfs_lookup`
+resolves a name in one. FAT32 has `fat32_mkdir` already and the installer uses
+it on the ESP.
+
+**What is missing is the two layers above that.** `core/rootfs.c` exposes
+`rootfs_create_file`, `rootfs_read_file`, `rootfs_replace_file`,
+`rootfs_remove_file` and `rootfs_list` -- and no `rootfs_create_directory`.
+`SYS_CREATE` therefore makes files only, and a program has no way to ask for
+anything else.
+
+**What would replace it:** `rootfs_create_directory(path, mode)` over the
+`reconfs_create` that is already there, and a system call that reaches it --
+either a `SYS_MKDIR` or a directory bit in `SYS_CREATE`'s mode, whichever the
+kernel would rather own. The desktop does not care which; it cares that
+`/System` can exist.
+
+**And then the installer can write a system rather than a bootloader.** Today
+it writes an ESP with a loader and a kernel, formats a System partition and
+stops. With directories it can put the layout on the volume, and the machine
+that boots afterwards has somewhere for a program to live.
+
+**Whose side:** `core/`. Nothing about it names a machine.
+
+---
+
+## Nothing in user mode can ask the machine to turn off
+
+**Where:** 14 September 2026. Named directly: *"you said you couldn't build
+the actual power system because you needed the kernel."*
+
+**The kernel can do it.** `core/power.c` has `power_off()`, it returns an
+`enum power_result` saying why when it cannot, and `power_off_or_say_why()`
+wraps it. KF-162 is the entry about it reporting a refusal while the machine
+was in the middle of obeying, which is a fault that only exists because the
+path works. It is reachable **from the kernel command line** and from nowhere
+else.
+
+**Nothing in user mode can reach it.** There are twenty-five system calls and
+none of them is about power. So the desktop's Shut Down, Restart, Sign Out and
+Lock -- all of which exist, are drawn, and work on Linux today -- have nothing
+to call.
+
+**What would replace it:** one call, with an argument saying which of *off* and
+*restart* is wanted, and **the capability check already written**. `SYS_GETCAPS`
+and `SYS_DROPCAP` exist and the boot report already lists `shutdown` among the
+capabilities a process holds -- so the permission half of this is built and
+being tracked, and the thing it guards does not exist yet.
+
+Two notes on shape, from the desktop's side:
+
+- **It must be able to refuse and say why.** `power_result` already
+  distinguishes the reasons; a program that asks a machine to turn off and gets
+  a plain failure cannot tell "this machine has no ACPI" from "you are not
+  allowed", and those need different words on a screen.
+- **Sleep is a different question and can wait.** Shutdown and restart are a
+  request the firmware either honours or does not. Suspend is a contract with
+  every driver about state, and asking for it in the same call would be asking
+  for the hard one to get the easy one.
+
+**Whose side:** the call is `core/`; what it reaches is already split properly,
+with `arch/` doing the machine-specific part.
+
+---
+
+## A program has to be inside the kernel image to run at all
+
+**Where:** `userland/init/recon_init.c`, 14 September 2026, which is the first
+ReconOS program that is a system rather than a self-test -- it reads the
+machine's facts and draws the screen somebody sees on a first boot.
+
+It is carried into the kernel as bytes. `kernel/core/user_elf.S` has a third
+`.incbin` beside `hello.elf` and `paint.elf`, the kernel links it into
+`.rodata`, and `main.c` starts it by pointer. That works and it is how the two
+self-tests before it worked, which is the whole problem: **a self-test belongs
+in the kernel image and a program does not.**
+
+What it costs today, and it is already real:
+
+- **121 KiB of the kernel image** is one program's ELF, and the kernel is
+  539 KiB of text. A second program doubles the overhead of having any.
+- **Changing the screen means rebuilding and reflashing the kernel.** On real
+  hardware that is a stick, a reboot and a firmware menu for a change to a
+  string.
+- **The installer writes a bootloader and a kernel to a disk and nothing
+  else.** The System partition is formatted and empty. There is no way to put
+  a program on it that would ever be run.
+
+**What would replace it:** the kernel loading an ELF from the volume at the end
+of boot -- `/System/init.elf`, or whatever the layout settles on -- through the
+VFS it already has. Every piece is built: `SYS_OPEN`, `SYS_READ` and
+`user_elf_create` all exist and are exercised. What is missing is the four
+lines that read a file into a buffer and hand it to the loader instead of
+handing it a pointer into `.rodata`.
+
+This is **much smaller than process creation** and worth separating from it. A
+kernel that can start one named program from a volume is a system somebody can
+install a new version of; a kernel that can only start what was compiled into
+it is a kernel with a demo in it.
+
+**Whose side:** `core/`. Nothing about it names a machine.
 
 ---
 

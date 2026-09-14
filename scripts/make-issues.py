@@ -138,6 +138,18 @@ AREA = {
     # where 'build' has gone before; KF-213 is a test that could not read
     # the loader it was testing.
     'KF-212': 'build', 'KF-213': 'build',
+    # Added by the desktop session, 14 September. Third time: the
+    # kernel session writes the entry and this table is in a file the
+    # desktop session owns, so an entry arrives with no line here and
+    # make-bug-register.py refuses to run. Read off the titles.
+    'KF-214': 'kernel',
+    'KF-215': 'startup',
+    'KF-216': 'startup',
+    'KF-217': 'kernel',
+    'KF-218': 'kernel',
+    'KF-219': 'storage',
+    'KF-221': 'kernel',
+    'KF-222': 'storage',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
@@ -158,6 +170,9 @@ AREA = {
     # The maths library. 'build' with the rest of userland/.
     'BG-186': 'build', 'BG-187': 'build', 'BG-188': 'build',
     'BG-189': 'build',
+    # The first screen. 'display' -- these are about what is drawn,
+    # which is where somebody filtering for them would look.
+    'BG-190': 'display', 'BG-191': 'display', 'BG-192': 'display',
 }
 
 def is_fixed(body):

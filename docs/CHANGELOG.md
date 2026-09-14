@@ -9,6 +9,118 @@ way for the two to disagree.
 
 ---
 
+## v0.4.25 — ReconOS is on the screen
+
+Until this version every program that had ever run in ring 3 on the ReconOS
+kernel was a self-test. `hello.S` proved the loader. `paint.c` proved that C
+compiled against these headers runs here at all and that a framebuffer is
+written through its **pitch** and not through width times four. Both end by
+exiting with a code the kernel reads, which is what makes them tests.
+
+**`userland/init/recon_init.c` is what somebody sees.** It asks `SYS_MACHINE`
+what the machine is, `SYS_SCREEN` how the display is arranged and `SYS_LIST`
+what is on the volume, draws a screen a person standing in front of a computer
+that has just started can read, and stays up.
+
+Booted in QEMU, the screen it drew said: 1 processor found and 1 in use;
+511.8 MiB with 508.8 MiB free; `QEMU Virtual CPU version 2.5+`; 2560 x 1440 at
+10240 bytes a row; and *no volume this kernel can read*, because no disk was
+attached. Every one of those came out of the kernel through a system call. On
+real hardware they become the machine's own.
+
+### It is the first customer of the C library
+
+Every string on that screen goes through `snprintf`. That is the point of the
+last four versions: a library that passes 3.6 million comparisons against
+glibc is a suite of functions, and a library something is **built on** is a
+library. `recon_init` links `string.c`, `printf.c`, `ctype.c`, `stdlib.c`,
+`stdio.c` and `syscalls.c` and allocates nothing, because there is still no
+allocator -- every buffer is sized at compile time, the same discipline
+`libc/stdio.c` already follows.
+
+It needed one thing the two self-tests did not: **vectors**. `USERCFLAGS`
+turns SSE off, which is right for the kernel and was inherited by the user
+programs without anybody needing otherwise -- `paint.c` has no floating point
+in it. `snprintf` does: `%f` exists, and on x86_64 a function taking a double
+cannot be *compiled* without SSE whether or not anything calls it. Allowing it
+is safe and not an assumption: `struct thread` carries 576 bytes of vector
+state and `sched_switch` saves and restores it on every switch. KF-146 is the
+entry about that buffer being sixteen bytes too small, which is a fault that
+only exists because the state is real.
+
+### The drawing is tested without a kernel, and that is deliberate
+
+`userland/init/screen.c` takes a buffer, a description of how it is arranged
+and some facts. It makes no system call and does not know one exists -- so the
+host renders exactly the picture the machine will render, in a millisecond,
+and `recon_init_screen_tests` checks it. **306,797 checks** across nine
+resolutions from 320x200 to 4K.
+
+Finding out what the first screen ReconOS ever draws looks like should not
+require writing a stick, walking to a machine and turning it on.
+
+**Every canvas in that suite has padding on the end of each row, and the suite
+checks that nothing touched it.** This is the one thing a photograph cannot
+catch: on a screen where bytes per row happen to equal width times four -- which
+is most emulators -- a program that confuses the two draws a *perfect* picture
+and shears on the first laptop. The real framebuffer in QEMU turned out to be
+2560 x 1440 with 10240 bytes a row, where the two are equal; the padding is
+what says the code would survive a screen where they are not.
+
+### Three faults, and one of them needed an eye
+
+**BG-190** -- the text drawer checked its text for null and not its canvas, and
+segmentation-faulted on the suite's first run. Beside it, `panel_w - line * 2`
+is unsigned, so a canvas narrower than its own margins gave four billion rather
+than a negative, and the fill loop after it would have run until the machine
+was switched off. A blank screen is a far better failure than one that appears
+to have hung.
+
+**BG-191** -- the panel was sized to the display and the content filled the top
+third of it. Every check passed; it still looked wrong, and the only thing that
+said so was looking at the rendering. Same lineage as BG-174.
+
+**BG-192** -- a test that could not pass: the canvas is filled with a guard byte
+to catch a stride fault, and the text tests asked whether pixels were non-zero.
+It announced itself only because the answer was obviously wrong. Had the check
+been the other way round it would have passed on a canvas where nothing was
+ever drawn. **A test that cannot pass and a test that cannot fail are the same
+fault from opposite sides, and only one of them tells you.**
+
+### And the console still owns the screen
+
+The first boot came back with the panel showing through a hole in the kernel's
+boot log -- the conflict `docs/KERNEL-WANTS.md` has had an entry for since
+`paint.c`. **Moving the call after the kernel's last message was not enough**,
+and that is the part worth keeping: the console does not only draw when it is
+handed something new, it repaints its window when it scrolls. One `kputs` after
+the program started put the whole log back on top of a screen that had just
+been drawn.
+
+What works today is `main.c` starting the program as its last statement with
+**nothing printed after it at all**, not even a success line. That is an
+arrangement rather than a fix and it holds for exactly as long as there is one
+program. It is written where somebody would look, because the ordering makes
+the fault invisible rather than absent -- the next person to add a diagnostic
+print after that line will not find out what they broke until they photograph a
+machine.
+
+### What it asks the kernel for next
+
+A new entry, and a small one: **a program has to be inside the kernel image to
+run at all.** `recon_init` is 121 KiB of `.rodata` in a 539 KiB kernel, carried
+by `.incbin` beside the two self-tests. Changing a string on the first-boot
+screen means rebuilding and reflashing a kernel.
+
+Every piece of the alternative is already built -- `SYS_OPEN`, `SYS_READ` and
+`user_elf_create` all exist and are exercised. What is missing is the few lines
+that read `/System/init.elf` into a buffer and hand it to the loader instead of
+handing it a pointer into `.rodata`. **That is much smaller than process
+creation and worth separating from it**: a kernel that can start one named
+program from a volume is a system somebody can install a new version of.
+
+---
+
 ## v0.4.24 — the maths, and the difference between close and right
 
 ReconOS could not draw a letter. Not for want of a font or a rasteriser: the

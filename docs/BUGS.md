@@ -6988,7 +6988,8 @@ reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
 - **Found:** 14 September 2026, on the Gateway:
   `boot log : 14586 bytes to MMC0P1:\RECONOS-BOOT.TXT`. MMC0P1 is the laptop's
   internal eMMC. The USB stick it had booted from was attached, carried
-  `econos`, and was passed over.
+  `
+econos`, and was passed over.
 - **Cost:** a diagnostic file written to the wrong disk, and unreachable -- the
   point of writing it is that somebody can pull the medium out and read it
   somewhere else, which an internal eMMC does not allow.
@@ -6996,7 +6997,8 @@ reports 155 names, 18 devices, 100 methods, and still finds `_S5`.
   needs to answer is *"is this the volume I booted from"*. Those were the same
   question right up until two disks qualified, and the internal one was
   enumerated first.
-- **It said yes honestly.** `econos` really was on that eMMC -- KF-220 had
+- **It said yes honestly.** `
+econos` really was on that eMMC -- KF-220 had
   created it there on the previous boot, when the identification step still
   called `fat32_mkpath`. Fixing KF-220 stopped directories appearing on disks
   that had no business carrying one; it did not change which disk wins once two
@@ -7908,6 +7910,69 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built the way a release is. Putting the small buffer back makes six suites
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
+
+### BG-192 — A test that could not pass, on a canvas full of a guard byte
+
+[#458](https://github.com/neogentrics/ReconOS/issues/458)
+
+- **Found in** v0.4.25, on the first run of `recon_init_screen_tests`.
+- **What it was** every canvas the suite draws on is filled with `0xA5` first,
+  so that a program using `width * 4` as its row stride writes into the slack
+  at the end of a row and is caught. Then the text tests asked whether a pixel
+  was **non-zero** to decide whether a glyph had drawn anything -- and every
+  pixel was non-zero before a glyph was drawn. "A space draws nothing" could
+  not pass.
+- **It announced itself only because the answer was obviously wrong.** Had the
+  check been `== 0` instead of `!= 0`, it would have passed on a canvas where
+  nothing was ever drawn, for the same reason, and the suite would have
+  reported that a font works when there was no font. **A test that cannot pass
+  and a test that cannot fail are the same fault from opposite sides**, and
+  only one of them tells you.
+- **Fixed in** v0.4.25. The pixel area is cleared before each text test and the
+  padding is left alone, which is the one arrangement where both questions --
+  did this glyph draw, and did anything touch the slack -- have an answer.
+
+### BG-191 — The first screen's panel was sized to the display, not to what was on it
+
+[#459](https://github.com/neogentrics/ReconOS/issues/459)
+
+- **Found in** v0.4.25. **Found by looking at the rendering.** Every check in
+  the suite passed: the accent rule was drawn, there was text on the panel,
+  nothing touched the padding, and it held at nine resolutions from 320x200 to
+  4K.
+- **What it was** the panel took three quarters of the screen's height and the
+  content filled the top third of that, leaving a large empty box under eight
+  lines of text. On a 1280x800 screen the panel was 600 pixels tall and the
+  writing stopped at 200.
+- **Why nothing caught it.** Every assertion was about whether things were
+  drawn; none was about whether the box fitted them. That is not an oversight
+  in the tests so much as a limit of them -- "is this the right size" is a
+  judgement, and the thing that makes it is an eye.
+- **Fixed in** v0.4.25 by counting the lines that will be drawn and building
+  the panel around them, so a machine with more to say gets a taller panel
+  rather than a fuller one.
+- **Same lineage as BG-174**, which was a text box measured against the line it
+  had just made three lines tall. Both are a thing measured against the wrong
+  thing, both drew perfectly, and both were found by looking at a picture.
+
+### BG-190 — The text drawer guarded the text and not the surface
+
+[#460](https://github.com/neogentrics/ReconOS/issues/460)
+
+- **Found in** v0.4.25, by the first run of the suite, as a segmentation fault.
+- **What it was** `recon_screen_text` checked its `text` argument for null and
+  not its `canvas`, and `put_pixel` reads the canvas's width before it does
+  anything else. The suite passes a null canvas on purpose, because this is the
+  first thing a stranger's machine runs and **the framebuffer description comes
+  from firmware** -- which says surprising things.
+- **A second one beside it, which would not have crashed.** `panel_w - line * 2`
+  is unsigned, so on a canvas narrower than its own margins it is not negative,
+  it is four billion -- and the fill loop after it runs until somebody turns the
+  machine off. A screen that is merely blank is a far better failure than one
+  that appears to have hung, and on a first boot the difference is whether
+  anybody tries again.
+- **Fixed in** v0.4.25. Both functions check the surface, and a canvas too
+  small to hold anything gets its background drawn and nothing else.
 
 ### BG-189 — `cbrt` overflowed in its own last step, at both ends of the range
 

@@ -516,7 +516,44 @@ void kmain(void)
 	if (asked_for_poweroff())
 		power_off_or_say_why();
 
-	kputs("\nNothing else is implemented yet. Idling.\n");
+	kputs("\nThe kernel has nothing else to do.\n");
+
+	/* And the first thing on this machine that is not a self-test.
+	 *
+	 * It does not end: it draws what somebody sees and stays up.
+	 * Everything above this line proves the machine works; this is the
+	 * machine working.
+	 *
+	 * **After the last thing the kernel prints**, and that ordering is the
+	 * whole of what makes the screen readable: the console and a program
+	 * both draw on the same framebuffer, so whichever goes last is what
+	 * anybody sees. The first boot had this before the final two lines and
+	 * the console painted straight across it.
+	 *
+	 * That is not a fix, it is an ordering. The fix is the entry in
+	 * docs/KERNEL-WANTS.md about the console and a program both owning the
+	 * screen, and it needs the kernel to be able to give the screen away.
+	 *
+	 * Last also means the boot report is already saved, so a fault in here
+	 * cannot take one with it. */
+	kputs("Idling.\n");
+
+	/*
+	 * **Nothing is printed after this line, and that is the point.**
+	 *
+	 * The console and a program draw on the same framebuffer, so whichever
+	 * goes last is what anybody sees -- and the console does not draw only
+	 * when it is handed something new: a scroll repaints the whole window.
+	 * Moving this call after the final message was not enough, because the
+	 * final message was still a message. The screen somebody sees is the
+	 * screen nothing has written to since.
+	 *
+	 * This is not a fix for the entry in docs/KERNEL-WANTS.md about the
+	 * console and a program both owning the screen. It is an arrangement
+	 * that works while there is exactly one program; the second one will
+	 * need the kernel able to give the screen away.
+	 */
+	user_start_first_screen();
 
 	/* The idle loop, and the first thing in the kernel that has to be right
 	 * about the project's central claim: it sleeps until hardware wakes it,
