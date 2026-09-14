@@ -7003,7 +7003,24 @@ econos` really was on that eMMC -- KF-220 had
   called `fat32_mkpath`. Fixing KF-220 stopped directories appearing on disks
   that had no business carrying one; it did not change which disk wins once two
   of them do.
-- **Status:** fixed, kernel 0.2.27.
+- **Status:** fixed, kernel 0.2.27. **And properly fixed on 14 September**, in
+  0.2.30: this entry says the fix "answers the wrong question -- *is this a
+  ReconOS volume* rather than *is this the one I booted from*", and the reason
+  it could only ask the first was that nothing in the kernel knew the answer to
+  the second. Both loaders knew. The handoff now carries the starting block of
+  the volume the kernel was read from and its GPT partition GUID where there is
+  one, and the boot report prints them:
+
+  ```
+  UEFI    booted from  : block 4096, partition 752853ef-35a4-47f5
+  BIOS    booted from  : block 4096 of drive 0x80 -- no GPT, so this names
+                         a volume only on this disk
+  direct  booted from  : the loader did not say
+  ```
+
+  The GUID matches what `sgdisk -i 2` reports for that medium. Three entry
+  paths, three different and correct answers, which is what makes the line
+  evidence rather than decoration.
 
 ### What was done
 

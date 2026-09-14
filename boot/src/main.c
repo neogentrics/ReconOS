@@ -421,6 +421,81 @@ static uint64_t         reloc_at;	/* where the trampoline was put */
 extern uint8_t reloc_trampoline[];
 extern uint8_t reloc_trampoline_end[];
 
+/* What the firmware said about the volume it loaded us from.
+ *
+ * Kept here rather than written straight into the handoff because the handoff
+ * structure is assembled much later in this file, and the one moment the
+ * device handle is in scope is the moment the volume is opened. A value read
+ * where it is available and used where it is needed.
+ */
+static struct {
+	UINT64  lba;
+	UINT8   guid[16];
+	BOOLEAN have_guid;
+} boot_volume;
+
+/* Walk our own device path for the node that describes a partition.
+ *
+ * A device path is a list of nodes from the root of the bus to the thing at
+ * the end -- PCI, then SATA or USB, then the hard drive, then the file. The
+ * hard-drive node is the one that knows which partition this is, and it is
+ * looked for rather than indexed, because how many nodes come before it
+ * depends on what kind of machine this is.
+ *
+ * Everything is read a byte at a time. Nodes are packed with no padding, so
+ * the UINT64 at HD_PARTITION_START lands at whatever alignment the nodes
+ * before it happened to leave -- which is the same reason the length field two
+ * hundred lines up in efi.h is two UINT8s rather than a UINT16.
+ *
+ * A machine that answers none of this is not an error. It leaves the fields
+ * zero, which is what the kernel reads as "the loader could not tell", and
+ * that is a true statement about a machine booted from something with no
+ * partition table at all.
+ */
+static void find_boot_volume(EFI_HANDLE device)
+{
+	EFI_GUID dp_guid = EFI_DEVICE_PATH_PROTOCOL_GUID;
+	EFI_DEVICE_PATH_PROTOCOL *n;
+	EFI_STATUS s;
+
+	s = BS->HandleProtocol(device, &dp_guid, (void **)&n);
+	if (EFI_ERROR(s))
+		return;
+
+	for (; !dp_is_end(n);
+	     n = (EFI_DEVICE_PATH_PROTOCOL *)((UINT8 *)n + dp_len(n))) {
+		const UINT8 *p = (const UINT8 *)n;
+		UINTN i;
+
+		/* A node shorter than its own header would make the step above
+		 * stand still, and a hard-drive node shorter than the spec says
+		 * has fields this is about to read past the end of. */
+		if (dp_len(n) < sizeof(EFI_DEVICE_PATH_PROTOCOL))
+			return;
+
+		if (n->Type != MEDIA_DEVICE_PATH ||
+		    n->SubType != MEDIA_HARDDRIVE_DP ||
+		    dp_len(n) < HD_NODE_LENGTH)
+			continue;
+
+		for (i = 0; i < 8; i++)
+			boot_volume.lba |=
+				(UINT64)p[HD_PARTITION_START + i] << (i * 8);
+
+		/* The signature field holds a GPT partition GUID only when the
+		 * node says it does. On an MBR disk the same sixteen bytes hold
+		 * a four-byte disk identifier and twelve bytes of nothing, and
+		 * reading that as a GUID would produce an identifier that looks
+		 * unique and is not. */
+		if (p[HD_SIGNATURE_TYPE] == HD_SIGNATURE_GPT_GUID) {
+			for (i = 0; i < 16; i++)
+				boot_volume.guid[i] = p[HD_SIGNATURE + i];
+			boot_volume.have_guid = TRUE;
+		}
+		return;
+	}
+}
+
 static void *read_kernel(UINTN *size_out)
 {
 	EFI_GUID li_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
@@ -447,6 +522,10 @@ static void *read_kernel(UINTN *size_out)
 	s = BS->HandleProtocol(li->DeviceHandle, &fs_guid, (void **)&fs);
 	if (EFI_ERROR(s))
 		fail("opening the filesystem we were loaded from", s);
+
+	/* Asked here because this is the one place the handle exists. Not a
+	 * failure if it answers nothing -- see find_boot_volume. */
+	find_boot_volume(li->DeviceHandle);
 
 	s = fs->OpenVolume(fs, &root);
 	if (EFI_ERROR(s))
@@ -1378,6 +1457,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
 	 * rather than treat as a failure. */
 	boot_info.initrd_base = initrd_base;
 	boot_info.initrd_size = initrd_size;
+
+	/* Copied here rather than in read_kernel, because read_kernel is where
+	 * the device handle exists and this is where the handoff is filled.
+	 * After that call, deliberately: before it, boot_volume holds nothing. */
+	boot_info.boot_part_lba = boot_volume.lba;
+	boot_info.boot_disk     = RECONBOOT_NO_BOOT_DISK;
+	if (boot_volume.have_guid) {
+		UINTN i;
+
+		for (i = 0; i < 16; i++)
+			boot_info.boot_part_guid[i] = boot_volume.guid[i];
+	}
 
 	/* After read_kernel, not before: the command line is read from the
 	 * volume inside that call, and copying it earlier copied a buffer that

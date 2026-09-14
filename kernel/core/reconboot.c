@@ -95,6 +95,16 @@ bool reconboot_parse(paddr_t handoff)
 	if (RECONBOOT_HAS(bi, smbios))
 		boot_info()->smbios = bi->smbios;
 
+	if (RECONBOOT_HAS(bi, boot_disk)) {
+		unsigned i;
+
+		boot_info()->boot_part_lba = bi->boot_part_lba;
+		boot_info()->boot_disk     = bi->boot_disk;
+
+		for (i = 0; i < 16; i++)
+			boot_info()->boot_part_guid[i] = bi->boot_part_guid[i];
+	}
+
 	kstrlcpy(loader_name, bi->loader, sizeof(loader_name));
 	boot_info()->loader = loader_name;
 

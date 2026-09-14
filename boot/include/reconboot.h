@@ -180,6 +180,28 @@ struct reconboot {
 	 * The 3.0 entry point is preferred where both are published, because
 	 * only it can name a table above four gigabytes. */
 	uint64_t smbios;
+
+	/* Which volume this kernel was read from.
+	 *
+	 * KF-222 was a diagnostic file written to the machine's internal disk
+	 * while the stick it booted from sat beside it, and its fix could only
+	 * ask *is this a ReconOS volume* -- because nothing in the kernel knew
+	 * which volume it had come from. The loader knew the whole time.
+	 *
+	 * Two identifiers because either can be missing. The GPT unique
+	 * partition GUID is the question's real answer: unique across every
+	 * disk in the machine, and absent on a machine booted from an MBR disk.
+	 * The starting LBA always exists and is unique only within one disk. A
+	 * kernel given both can say how sure it is rather than guessing. */
+	uint64_t boot_part_lba;		/* 0 where the loader could not tell */
+	uint8_t  boot_part_guid[16];	/* all zero where there is no GPT */
+	uint32_t boot_disk;		/* BIOS drive number, or NO_BOOT_DISK */
 };
+
+/* There is no drive number on a machine with no BIOS, and zero is a real drive
+ * number on one that has. Named rather than written, because `0xFFFFFFFF` in a
+ * comparison is the kind of literal that eventually appears with one F
+ * missing. */
+#define RECONBOOT_NO_BOOT_DISK 0xFFFFFFFFu
 
 #endif /* RECON_RECONBOOT_H */

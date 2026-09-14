@@ -1600,11 +1600,16 @@ static void put_str(u8 *dst, const char *src, u32 max)
 		dst[i++] = 0;
 }
 
+/* Where this loader found the volume it booted from, in blocks from the start
+ * of the drive. Declared up here because build_handoff passes it to the kernel;
+ * it is set once, by stage2_main, before anything reads it. */
+static u64 esp_lba;
+
 /* The structure is filled in through reconboot.h's own declaration rather than
  * by writing at computed offsets. An offset worked out by hand is a number that
  * goes wrong silently the first time somebody adds a field, and this structure
  * is explicitly designed to grow. */
-static u32 build_handoff(void)
+static u32 build_handoff(u8 boot_drive)
 {
 	struct reconboot *h = (struct reconboot *)HANDOFF_ADDR;
 	struct reconboot_region *r = (struct reconboot_region *)REGIONS_ADDR;
@@ -1705,6 +1710,21 @@ static u32 build_handoff(void)
 	 * piece of work; zero says the firmware did not publish one, which is
 	 * true of everything this loader has looked at. */
 
+	/* Which volume this kernel came off, which this loader has known all
+	 * along and never passed on.
+	 *
+	 * `esp_lba` is the block it found the EFI partition at and prints on
+	 * every boot; `boot_drive` is what the firmware left in DL and stage 1
+	 * handed across. Between them they name a volume on this machine.
+	 *
+	 * No GUID. Reading one means reading the GPT partition entry array --
+	 * another disk read, in a loader with eleven kilobytes of room -- and
+	 * the pair above already answers the question on a machine that has
+	 * one disk controller and one BIOS. The kernel is told there is no
+	 * GUID rather than given a wrong one. */
+	h->boot_part_lba = esp_lba;
+	h->boot_disk     = boot_drive;
+
 	put_str((u8 *)h->loader, "reconboot-bios", sizeof(h->loader));
 	put_str((u8 *)h->cmdline, "", sizeof(h->cmdline));
 
@@ -1717,7 +1737,6 @@ static u32 build_handoff(void)
  * its first and last instruction the machine is not running the language. */
 void enter_long_mode(u32 entry_lo, u32 entry_hi, u32 handoff, u32 pml4);
 
-static u64 esp_lba;
 
 /* Where the FAT32 volume holding the kernel starts, and what kind of medium
  * this is.
@@ -1845,7 +1864,7 @@ void stage2_main(u32 boot_drive)
 			goto done;
 		}
 
-		handoff = build_handoff();
+		handoff = build_handoff((u8)boot_drive);
 		pml4 = build_page_tables();
 
 		if (!pml4) {

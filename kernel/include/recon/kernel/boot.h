@@ -109,6 +109,22 @@ struct boot_info {
 	 * table to ask, and the scan below one megabyte answers there. */
 	u64 smbios;
 
+	/* The volume this kernel was read from, as the loader saw it.
+	 *
+	 * `boot_part_lba` is where that partition starts inside its disk, which
+	 * is the same number `struct block_device` keeps in `first_lba` -- so a
+	 * device can be matched against it without converting anything.
+	 * `boot_part_guid` is the GPT unique partition GUID where there is one,
+	 * and is all zero where there is not, which includes every BIOS boot.
+	 *
+	 * An LBA is unique within one disk and a GUID is unique across all of
+	 * them, so a match on the LBA alone is a strong hint and a match on
+	 * both is an answer. Any code deciding something irreversible should
+	 * say which of the two it had. */
+	u64 boot_part_lba;
+	u8  boot_part_guid[16];
+	u32 boot_disk;
+
 	paddr_t acpi_rsdp;	/* 0 if the firmware did not point at one */
 	paddr_t dtb;		/* 0 if there is no device tree */
 };

@@ -303,7 +303,24 @@ struct _EFI_SIMPLE_TEXT_INPUT_PROTOCOL {
 	{ 0x09576e91, 0x6d3f, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } }
 
 #define MEDIA_DEVICE_PATH	0x04
+#define MEDIA_HARDDRIVE_DP	0x01
 #define MEDIA_FILEPATH_DP	0x04
+
+/* A hard-drive node, which is where a partition says what it is.
+ *
+ * Offsets rather than a struct, and read a byte at a time, for the reason
+ * stated above about the length field: device path nodes are packed with no
+ * padding and land at whatever alignment the node before them left. A struct
+ * with a UINT64 in it would be read with an aligned load. */
+#define HD_PARTITION_NUMBER	4	/* UINT32 */
+#define HD_PARTITION_START	8	/* UINT64, in logical blocks */
+#define HD_PARTITION_SIZE	16	/* UINT64 */
+#define HD_SIGNATURE		24	/* 16 bytes */
+#define HD_MBR_TYPE		40	/* UINT8: 1 = MBR, 2 = GPT */
+#define HD_SIGNATURE_TYPE	41	/* UINT8: 1 = MBR id, 2 = GPT GUID */
+#define HD_NODE_LENGTH		42
+
+#define HD_SIGNATURE_GPT_GUID	0x02
 #define END_DEVICE_PATH_TYPE	0x7F
 #define END_ENTIRE_DEVICE_PATH	0xFF
 
