@@ -16,6 +16,78 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
+## There is no way for a program to ask for memory
+
+**Where:** writing `userland/libc/`, on 14 September 2026. Hit immediately and
+unavoidably: `malloc` has nothing to be built on.
+
+This is first on the list because it is the one currently stopping work rather
+than the one that will stop the most. The string and formatting half of the C
+library is written and checked — 73,510 comparisons against the host's —
+and the next function in the file cannot be written at all.
+
+**What the desktop does today, measured rather than estimated:**
+
+| | |
+|---|---|
+| `malloc` | 34 call sites |
+| `calloc` | 80 |
+| `realloc` | 4 |
+| `free` | 312 |
+| `strdup` | 1 |
+
+`free` outnumbering the allocations three to one is not an error in the count:
+most of what is allocated is freed on several different paths out of the same
+function.
+
+**And the sizes, which decide what shape the call has to be.** One parsed web
+page:
+
+```
+  text        1,048,576     runs      800,000     blocks     112,000
+  links       4,096,000     forms     135,424     fields     339,968
+  options       593,920
+
+  one page    7,125,888 bytes    largest single allocation  4,096,000
+  twelve tabs    81 MiB
+```
+
+So this is **not** a call that hands out a page. The largest single request is
+just under four megabytes — the link table, two thousand addresses of two
+kilobytes each — and a browser window with twelve tabs open is eighty-one
+megabytes live. An allocator that could only ask for one page at a time would
+make four hundred calls to open one page of Wikipedia.
+
+**What would replace it:** anonymous memory, and **a way to give it back**.
+
+The giving back is not a refinement to add later. A tab that is closed releases
+6.8 MiB, and without release a window where twelve tabs have been opened and
+closed has lost eighty-one megabytes that nothing can reclaim. On a machine
+with 512 MiB that is a browser that dies after sixty tabs and cannot say why.
+
+The smallest thing that would work reuses what is already there: the kernel
+reserves and demand-pages a stack for every process, so the mechanism for "a
+range that exists and whose pages appear when touched" is built and tested.
+`SYS_MAP` with no file — an fd of -1, or its own number — returning such a
+range, and a companion that releases one, is two calls over machinery that
+exists.
+
+**What it does not need, so that it does not get built:**
+
+- **Not `brk`.** A single growing break is the wrong shape for an allocator
+  that frees in the middle, which this one will: those 312 frees are not in
+  reverse order of the allocations.
+- **Not protection flags yet.** Every one of the 430 sites wants readable and
+  writable, and nothing in the desktop wants an executable allocation — if it
+  ever did, that would be a decision to argue about rather than a flag to pass.
+- **Not file-backed mapping yet.** The desktop maps exactly one thing, and it
+  is `/dev/fb0`, which already works.
+
+**Whose side:** `core/`. Address spaces, reservation and demand paging are all
+there and all portable; nothing about this names a machine.
+
+---
+
 ## The console and a program both own the screen
 
 **Where:** `kernel/user/paint.c`, the first ReconOS program written in C, on
