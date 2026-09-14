@@ -150,6 +150,14 @@ AREA = {
     'KF-219': 'storage',
     'KF-221': 'kernel',
     'KF-222': 'storage',
+    # Added by the kernel session, 14 September -- the note above says this
+    # table lives in a file the desktop session owns and that an entry
+    # arriving without a line here stops make-bug-register.py. It did,
+    # which is the check working. KF-223 is filed under storage for the
+    # same reason KF-219 was: the fault is in a host controller and the
+    # cost is a medium the kernel cannot read.
+    'KF-223': 'storage',
+    'KF-224': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

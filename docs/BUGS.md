@@ -7112,7 +7112,7 @@ usable regions, from the same rounding, so the two cannot drift apart.
 The boot report prints the memory line **only when the two differ**, because on a
 machine with no hole it would be a line saying the same thing twice.
 
-### KF-225 is not a bug - the panel gets a summary and the wire keeps everything
+### Not a bug, 14 September - the panel gets a summary and the wire keeps everything
 
 Asked for rather than found: the boot report is long, and on a machine that runs
 all the way a user program now paints over it before anybody can read it.
