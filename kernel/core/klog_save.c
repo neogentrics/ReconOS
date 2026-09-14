@@ -92,7 +92,7 @@ void klog_save_to_medium(void)
 {
 	char *buf;
 	u32 held;
-	unsigned i, pass;
+	unsigned i, pass, written = 0;
 
 	held = klog_held();
 	if (!held) {
@@ -169,13 +169,14 @@ void klog_save_to_medium(void)
 		kprintf("  boot log     : %u bytes to %s:\\%s%s\n",
 			(unsigned)held, dev->name, KLOG_NAME,
 			klog_wrapped() ? " (oldest lines lost to the ring)" : "");
-		kfree(buf);
-		return;
+		written++;
 	}
 
 	/* Said plainly. A boot that could not save its report and did not
 	 * mention it is a stick somebody pulls out expecting a file. */
-	kputs("  boot log     : no ReconOS medium is writable here, so it "
-	      "stayed in memory\n");
+	if (!written)
+		kputs("  boot log     : no ReconOS medium is writable here, so "
+		      "it stayed in memory\n");
+
 	kfree(buf);
 }

@@ -23,6 +23,17 @@ void kputs(const char *s);
  * report can be read, a missing one cannot. */
 void kputs_unlocked(const char *s);
 
+/* Spare the panel the detail, or stop doing so.
+ *
+ * Affects the framebuffer console only. The serial port and the kernel log ring
+ * always receive everything: the rig reads the first and the boot-log file is
+ * written from the second, and a diagnostic surface that can be turned off is
+ * one that will be off the day it is needed.
+ *
+ * Meant for the closing summaries. Anything printed while drivers are starting
+ * -- which is where refusals appear -- should be outside it. */
+void console_screen_quiet(bool quiet);
+
 RK_PRINTF(1, 2) void kprintf(const char *fmt, ...);
 
 /* The same, without taking the console lock. Only for the fault reporter, for

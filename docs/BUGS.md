@@ -7025,6 +7025,121 @@ exactly which device it read the kernel from and discards that at the handoff --
 which is a ReconBoot protocol change, deliberately awkward in this project, and
 written down here rather than done quietly.
 
+### KF-223 - Root ports were asked what was plugged into them before they had power
+
+- **Found:** 14 September 2026, on the Gateway:
+  `xhci : 16 slots, 16 ports, 576 scratchpad pages, 0 connected, 0 addressed`.
+  Sixteen ports, nothing on any of them, on a machine that had just booted from
+  a USB stick plugged into one of them.
+- **Cost:** **the kernel cannot see the medium it is running from.** No USB
+  storage, no USB input, and no way to install from the stick onto anything. It
+  also explains KF-222's symptom persisting after KF-222 was fixed: there was no
+  removable device to prefer because there was no removable device at all.
+- **What it was.** `reset_port` read PORTSC, gave up if the connect bit was
+  clear, and powered the port in the statement after the one it returned from:
+
+  ```
+  if (!(sc & PORTSC_CCS))
+          return false;
+
+  if (!(sc & PORTSC_PP)) {      <- never reached
+          ... power it ...
+  ```
+
+  **An unpowered port cannot report a connection** -- there is no VBUS for a
+  device to pull up against. So CCS reads zero, so the driver returns, so the
+  port is never powered. A guard whose condition can only become true after the
+  statement it guards.
+
+- **Why no run of the matrix could show it.** QEMU's xHCI model reports the
+  connect bit whatever the power state is, so every emulated port answered
+  before it was powered and the ordering never mattered. Twenty-nine boots a
+  run, none of them able to fail.
+- **Status:** fixed, kernel 0.2.28.
+
+### The right shape was already in this file
+
+The hub code two hundred lines above does it correctly, and says why:
+
+> Power first, every port, then wait once. Waiting per port would be correct and
+> would take fifteen times as long for no benefit: the hub powers them
+> independently and the settle time is the same.
+
+Root ports are the same problem and were never given the same treatment.
+`reset_port` powers before it looks now, so hot-plug behaves too, and the boot
+walk powers the whole set once and settles once rather than paying per port.
+
+**Verified not to have broken the path that worked**: the emulated stick still
+reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
+boot log.
+
+### KF-224 - The machine reported six gigabytes of memory and has four
+
+- **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
+  `memory  6.0 GiB, 3.8 GiB free`. The firmware's own setup says
+  `Total Memory 4096 MB`, and `Max TOLUD [2 GB]` -- so that machine's RAM sits
+  either side of a large hole in the physical address space.
+- **Cost:** every program that asks the machine how much memory it has is told
+  the size of the address range the memory is scattered across. The desktop is
+  about to be built against that number.
+- **What it was.**
+
+  ```
+  total_pages = (PAGE_ALIGN_UP(highest) - base_paddr) / PAGE_SIZE;
+  ```
+
+  Exactly right for a bitmap, which must be able to *address* every page in the
+  span including the ones that are not memory, and a wrong answer to "how much
+  memory is there". `SYS_MACHINE` handed it to programs as though it were one.
+  The holes are marked used, which is why the free figure looked sane.
+
+- **A correction worth recording.** The first diagnosis said QEMU's memory is
+  contiguous, so the span and the RAM were always equal there. **They are not
+  equal**: a QEMU boot reports 130,804 pages of span against 128,686 of memory,
+  a difference of about eight megabytes -- the legacy region below one. The bug
+  has been present in every run since the allocator was written and was simply
+  too small to notice. The laptop's hole is two gigabytes, which is not.
+- **Status:** fixed, kernel 0.2.29.
+
+### What was done
+
+Two numbers, because they are two facts. `pmm_total_pages` keeps its meaning and
+its name -- the span the bitmap covers, which the allocator's bounds are written
+against and which must not change. `pmm_usable_pages` is new and is what a
+program asking about memory wants. It is counted in the same loop that frees the
+usable regions, from the same rounding, so the two cannot drift apart.
+
+The boot report prints the memory line **only when the two differ**, because on a
+machine with no hole it would be a line saying the same thing twice.
+
+### KF-225 is not a bug - the panel gets a summary and the wire keeps everything
+
+Asked for rather than found: the boot report is long, and on a machine that runs
+all the way a user program now paints over it before anybody can read it.
+
+`kputc` sends every character to the serial port, the log ring and the screen,
+and its comment gave the reason: *a message that went to only one of them is a
+message somebody did not get*. That was right while the screen was the only way
+a person could read the report, and stopped being right the day the report began
+writing itself to the medium.
+
+So **only the panel is gated**. The serial port keeps everything, because the rig
+reads it and a rig that cannot see is a rig that cannot fail -- measured at 321
+lines with the gate on against 322 with `verbose`, the difference being the
+command line itself. The ring keeps everything, because the file is the
+instrument now.
+
+And the gate closes around the *closing summaries only*. Everything a driver says
+while starting still reaches the panel, which is deliberate: `sdhci: a card is
+present and answered neither as SD nor as eMMC` found KF-219 and `0 connected`
+found KF-223, and a quiet mode able to hide either would have cost more than it
+saved.
+
+**No second summary was added.** The desktop's own program already draws one, and
+draws it last on purpose; printing more text after it would paint over the
+program instead, which is the same fight from the other side. That one belongs in
+`KERNEL-WANTS.md`, where it already is.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

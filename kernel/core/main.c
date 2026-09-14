@@ -399,6 +399,20 @@ void kmain(void)
 	kprintf("  the network stack  : %s\n",
 		net_self_test() ? "pass" : "FAIL");
 
+	/* From here to the kernel-log summary is per-subsystem detail: lock
+	 * contention, cache hit rates, the timer wheel's reach. It still goes
+	 * to the serial port and into the ring exactly as before -- the rig
+	 * reads all of it, and so does the boot-log file on the medium -- and
+	 * the panel is spared it unless `verbose` is asked for.
+	 *
+	 * **Everything above this line still reaches the panel.** That is where
+	 * drivers say what they found and what refused them, and it is
+	 * deliberate: the lines that found KF-219 and KF-223 were printed by
+	 * drivers starting, not by summaries. A quiet mode that could hide
+	 * either would have cost more than it saved. */
+	if (!boot_cmdline_has("verbose"))
+		console_screen_quiet(true);
+
 	sched_print_summary();
 
 	/* Printed here rather than beside the memory summary, because the
@@ -449,6 +463,10 @@ void kmain(void)
 	irq_print_summary();
 	lock_print_summary();
 	klog_print_summary();
+
+	/* Back on for everything that follows: the self-tests, the boot log's
+	 * own line, and whatever a program draws afterwards. */
+	console_screen_quiet(false);
 
 	/* Only when asked for on the command line, because it writes to every
 	 * block it touches. See core/durability.c: it exists to find out whether
