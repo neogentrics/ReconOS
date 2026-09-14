@@ -7011,6 +7011,54 @@ exactly which device it read the kernel from and discards that at the handoff --
 which is a ReconBoot protocol change, deliberately awkward in this project, and
 written down here rather than done quietly.
 
+### KF-223 - Root ports were asked what was plugged into them before they had power
+
+- **Found:** 14 September 2026, on the Gateway:
+  `xhci : 16 slots, 16 ports, 576 scratchpad pages, 0 connected, 0 addressed`.
+  Sixteen ports, nothing on any of them, on a machine that had just booted from
+  a USB stick plugged into one of them.
+- **Cost:** **the kernel cannot see the medium it is running from.** No USB
+  storage, no USB input, and no way to install from the stick onto anything. It
+  also explains KF-222's symptom persisting after KF-222 was fixed: there was no
+  removable device to prefer because there was no removable device at all.
+- **What it was.** `reset_port` read PORTSC, gave up if the connect bit was
+  clear, and powered the port in the statement after the one it returned from:
+
+  ```
+  if (!(sc & PORTSC_CCS))
+          return false;
+
+  if (!(sc & PORTSC_PP)) {      <- never reached
+          ... power it ...
+  ```
+
+  **An unpowered port cannot report a connection** -- there is no VBUS for a
+  device to pull up against. So CCS reads zero, so the driver returns, so the
+  port is never powered. A guard whose condition can only become true after the
+  statement it guards.
+
+- **Why no run of the matrix could show it.** QEMU's xHCI model reports the
+  connect bit whatever the power state is, so every emulated port answered
+  before it was powered and the ordering never mattered. Twenty-nine boots a
+  run, none of them able to fail.
+- **Status:** fixed, kernel 0.2.28.
+
+### The right shape was already in this file
+
+The hub code two hundred lines above does it correctly, and says why:
+
+> Power first, every port, then wait once. Waiting per port would be correct and
+> would take fifteen times as long for no benefit: the hub powers them
+> independently and the settle time is the same.
+
+Root ports are the same problem and were never given the same treatment.
+`reset_port` powers before it looks now, so hot-plug behaves too, and the boot
+walk powers the whole set once and settles once rather than paying per port.
+
+**Verified not to have broken the path that worked**: the emulated stick still
+reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
+boot log.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

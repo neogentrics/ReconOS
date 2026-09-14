@@ -541,14 +541,27 @@ static bool reset_port(struct xhci *x, unsigned port)
 	u32 sc = op32(x, XHCI_PORTSC(port));
 	u64 deadline;
 
-	if (!(sc & PORTSC_CCS))
-		return false;
-
+	/* **Power before asking.**
+	 *
+	 * These two were the other way round, and the order is the whole bug:
+	 * an unpowered port has no VBUS for a device to pull up against, so it
+	 * reports no connection, so the driver returned before reaching the
+	 * line that would have powered it. A guard whose condition can only
+	 * become true after the statement it guards.
+	 *
+	 * On the first machine whose root ports came out of reset unpowered,
+	 * that was sixteen ports reported empty while the stick the kernel had
+	 * booted from sat in one of them. QEMU reports the connect bit whatever
+	 * the power state is, so no run of the matrix could show it. */
 	if (!(sc & PORTSC_PP)) {
 		op32_set(x, XHCI_PORTSC(port),
 			 (sc & ~PORTSC_RW1CS) | PORTSC_PP);
 		busy_ms(20);
+		sc = op32(x, XHCI_PORTSC(port));
 	}
+
+	if (!(sc & PORTSC_CCS))
+		return false;
 
 	/* Clear the connect-change bit before resetting, so that what is read
 	 * afterwards is this reset's result and not the plug event's. */
@@ -1909,7 +1922,26 @@ bool xhci_attach(const struct pci_device *d)
 	/* Ports are powered and reset here rather than lazily, because a device
 	 * that has not been reset does not answer at all, and "nothing is
 	 * plugged in" and "something is plugged in and has not been spoken to"
-	 * look identical from the register. */
+	 * look identical from the register.
+	 *
+	 * **Powered as a set, and then waited for once.** This is the hub
+	 * code's reasoning two hundred lines up, applied to the ports it was
+	 * never applied to: the controller powers them independently and the
+	 * settle is the same for all of them, so paying it per port costs
+	 * sixteen times as long for nothing. Waiting at all is what a real
+	 * controller needs and an emulated one does not -- a device on a port
+	 * that was dark a moment ago is not detected the instant the rail comes
+	 * up. */
+	for (p = 1; p <= x->max_ports; p++) {
+		u32 sc = op32(x, XHCI_PORTSC(p));
+
+		if (!(sc & PORTSC_PP))
+			op32_set(x, XHCI_PORTSC(p),
+				 (sc & ~PORTSC_RW1CS) | PORTSC_PP);
+	}
+
+	busy_ms(100);
+
 	for (p = 1; p <= x->max_ports; p++) {
 		if (port_arrived(x, p))
 			enabled++;
