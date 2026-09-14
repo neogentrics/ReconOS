@@ -193,7 +193,39 @@ that boots afterwards has somewhere for a program to live.
 
 ---
 
-## Nothing in user mode can ask the machine to turn off
+## ~~Nothing in user mode can ask the machine to turn off~~ -- built, 14 September
+
+**`SYS_POWER`, in kernel 0.2.30.** `recon_power(POWER_ACTION_OFF)` and
+`recon_power(POWER_ACTION_RESTART)` in `userland/include/recon.h`. Behind
+`CAP_SHUTDOWN`, which was already there.
+
+Everything this section asked for, and the reasons it gave are the reasons it
+was built this way:
+
+- **It refuses with a reason.** `SYS_EPERM` (not allowed), `SYS_ENOPOWER` (the
+  firmware named no way), `SYS_ENOSTATE` (no such state declared),
+  `SYS_ENOMECH` (this kernel cannot reach it here), `SYS_EINVAL` (not an action
+  this kernel knows). Five numbers, because "could not shut down" on a screen
+  is not actionable for any of them.
+- **An unknown action does not default to off.** A program built against a
+  later kernel must not stop the machine by asking for something else.
+- **Suspend is not in it**, for the reason stated below: it would be asking for
+  the hard one to get the easy one.
+
+Restart reaches the architecture first -- 0xCF9 and the 8042 on x86_64, PSCI
+`SYSTEM_RESET` on aarch64 -- and the FADT's reset register second, which
+`acpi.c` had parsed since the FADT was parsed and which nothing had ever read.
+Both routes were watched to work and both are in the verification matrix.
+
+**One thing is owed and is written into the code as owed:** there is no test
+that a program *without* the capability is refused. That is the
+safety-critical half and it cannot be asked from a kernel thread, which holds
+every capability by construction -- the first draft of that test would have
+turned the machine off on every boot. It needs a real user program.
+
+<details><summary>What this section originally said</summary>
+
+
 
 **Where:** 14 September 2026. Named directly: *"you said you couldn't build
 the actual power system because you needed the kernel."*
@@ -230,6 +262,7 @@ Two notes on shape, from the desktop's side:
 **Whose side:** the call is `core/`; what it reaches is already split properly,
 with `arch/` doing the machine-specific part.
 
+</details>
 ---
 
 ## A program has to be inside the kernel image to run at all
