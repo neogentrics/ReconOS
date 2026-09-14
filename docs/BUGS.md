@@ -7109,6 +7109,76 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-226 - kprintf reads the width on a number and throws it away
+
+- **Found:** 14 September 2026, by matrix 47, on an assertion added three
+  commits earlier:
+
+  ```
+  UEFI says which partition it booted from   FAILED
+    disk says block 4096, 04c3d311-1343-49a6-93c7-373b11d5669a
+    booted from : block 4096, partition 4c3d311-1343-49a6
+  ```
+
+  Seven hex digits where there are eight. `%02x` of the byte `0x04` printed
+  `4`.
+- **Cost:** twenty-three call sites, and the failure is not uniform -- a byte
+  of `0x4A` prints correctly and `0x04` does not, so output is right until the
+  data happens to be small. The worst of them is `xhci.c`, which prints a USB
+  device as `%04x:%04x`: SanDisk's `0781` has been printing as `781` and
+  Logitech's `046d` as `46d`. **An identifier nobody can look up**, which is
+  the only reason it is printed at all. Also `irq.c`'s vector column, which
+  moves; `aml.c`'s opcode byte; and the GUID above.
+- **What it was.** The parse was right and the use was missing:
+
+  ```
+  put_unsigned(va_arg(ap, unsigned), 16, false, 0);
+                                                ^ the pad, hard-coded
+  ```
+
+  `%02x` was read as width 2 -- the leading zero went through the digit loop,
+  which happens to give the same number -- and then every numeric case passed
+  a literal zero. The width travelled the whole way and was dropped at the last
+  line. `put_unsigned` has zero-padded to `pad` since it was written and
+  nothing ever gave it one.
+
+  **A width parsed and discarded is worse than one refused.** KF-129 is the
+  entry about naming an unsupported conversion and stopping the line, on the
+  grounds that a plausible wrong number is the expensive outcome. This is a
+  *supported* conversion quietly doing half of what it says.
+
+- **The space-padded case was equally silent.** `%-2u` is the one numeric width
+  in the tree that is not zero-padded and it was ignored too. Fixed with the
+  rest, rather than closing the class for hexadecimal and leaving one site of
+  the same class open.
+
+- **And it found a second one on its first run.** The new self-test asked for
+  `%08X` and got
+
+  ```
+  %<unsupported conversion 'X'; the rest of this line is not printed>
+  ```
+
+  `put_unsigned` has taken an `upper` argument since it was written and every
+  caller passed `false`. `core/user.c` uses `%08X` to report a framebuffer that
+  did not arrive where it was asked for -- so that line has been printing a
+  refusal instead of an address, on the one path a person reads when something
+  has already gone wrong. Both cases of hexadecimal work now.
+
+- **How it was caught, which is the part worth keeping.** By an assertion that
+  compares against `sgdisk` reading the actual disk rather than against the
+  shape of the line. A check written as *does this look like a GUID* passes on
+  seven digits. That distinction was written into the commit that added the
+  assertion, about KF-213, and it earned its keep three hours later.
+
+- **There is a test now**, and there was no way to write one before: kprintf
+  has no buffer form, so nothing could compare what it produced against what it
+  should have. The log ring is the way in -- `klog_read` returns the most
+  recent bytes and everything kprintf writes passes through it -- so a line of
+  awkward cases is printed between markers and read back **character for
+  character**.
+- **Status:** fixed, kernel 0.2.31.
+
 ### KF-225 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
 
 - **Found:** 14 September 2026, by appending a field to `struct reconboot` and

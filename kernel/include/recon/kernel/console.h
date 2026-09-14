@@ -34,6 +34,13 @@ void kputs_unlocked(const char *s);
  * -- which is where refusals appear -- should be outside it. */
 void console_screen_quiet(bool quiet);
 
+/* Whether kprintf's widths, flags and padding do what the format says.
+ *
+ * Read back out of the log ring, because this printer has no buffer form --
+ * which is precisely why a width could be parsed and thrown away for
+ * twenty-three call sites without anything noticing (KF-226). */
+bool console_format_self_test(void);
+
 RK_PRINTF(1, 2) void kprintf(const char *fmt, ...);
 
 /* The same, without taking the console lock. Only for the fault reporter, for

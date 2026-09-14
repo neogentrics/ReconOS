@@ -381,6 +381,8 @@ void kmain(void)
 		user_boundary_test() ? "pass" : "FAIL");
 	kprintf("  asking to stop     : %s\n",
 		user_power_test() ? "pass" : "FAIL");
+	kprintf("  the format is kept : %s\n",
+		console_format_self_test() ? "pass" : "FAIL");
 	kprintf("  a program from a file : %s\n",
 		user_elf_test() ? "pass" : "FAIL");
 
