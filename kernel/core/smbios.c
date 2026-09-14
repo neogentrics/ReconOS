@@ -19,11 +19,43 @@
  */
 #include <recon/kernel/smbios.h>
 
+#include <recon/kernel/boot.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/vm.h>
 
 static struct smbios_facts facts;
+
+/* Where the anchor was found, so the summary can say which answer it used.
+ * Not cosmetic: the two sources disagree about nothing on a machine where both
+ * work, so the only way to know the new one is being exercised is to print it.
+ */
+static const char *anchor_source = "nothing";
+
+/* Make a physical range readable, if it is not already.
+ *
+ * The anchor and the table are firmware memory. Whether they fall inside the
+ * direct map is a question about the firmware's memory map, and the answer has
+ * already been no once: reading the legacy ROM region faulted on every boot
+ * path that went through UEFI, because UEFI does not describe it. That was
+ * fixed for the anchor and left standing for the table, which is read through
+ * `phys_to_virt` a few lines below with nothing having mapped it.
+ *
+ * Read-only, because nothing here writes and a mapping that cannot be written
+ * is one fewer thing a stray pointer can damage. */
+static bool make_readable(paddr_t base, u64 len)
+{
+	paddr_t start = base & ~(paddr_t)(PAGE_SIZE - 1);
+	u64 span = (base - start) + len;
+
+	span = (span + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
+
+	if (vm_lookup((vaddr_t)(uintptr_t)phys_to_virt(start)))
+		return true;
+
+	return vm_map((vaddr_t)(uintptr_t)phys_to_virt(start), start,
+		      (size_t)span, VM_READ | VM_GLOBAL);
+}
 
 /* One structure's header. Three bytes of formatted data follow before anything
  * type-specific, and the layout is fixed across every version. */
@@ -100,13 +132,45 @@ static const u8 *next_structure(const u8 *p, const u8 *limit)
 
 void smbios_init(void)
 {
-	paddr_t anchor = arch_smbios_anchor();
+	paddr_t anchor = 0;
 	const u8 *e;
 	const u8 *table, *limit, *p;
 	u64 table_phys = 0;
 	u32 table_len = 0;
 
 	kmemset(&facts, 0, sizeof(facts));
+	anchor_source = "nothing";
+
+	/* The firmware's own answer first.
+	 *
+	 * `arch_smbios_anchor` sweeps the 64 KB below one megabyte sixteen
+	 * bytes at a time, and its comment has said since it was written that
+	 * the configuration table would be the better source -- *it needs no
+	 * scan and it is correct on a machine whose legacy region is not
+	 * populated* -- and that carrying the address through the handoff
+	 * "would mean a protocol version bump".
+	 *
+	 * **It would not, and reconboot.h is the file that says so.** That
+	 * header carries a `size` field and an append-only region under the
+	 * words *appended rather than versioned, which is what `size` is for*,
+	 * precisely because raising the version is expensive. Two fields
+	 * already live there. This is the third. The reason the better source
+	 * went unused was a cost recorded in one file and refuted in another.
+	 *
+	 * The scan stays, and is still the answer on every machine with no
+	 * UEFI. It is no longer the first thing tried on a machine whose
+	 * firmware is willing to say. */
+	if (boot_info()->smbios &&
+	    make_readable((paddr_t)boot_info()->smbios, 32)) {
+		anchor = (paddr_t)boot_info()->smbios;
+		anchor_source = "the firmware's configuration table";
+	}
+
+	if (!anchor) {
+		anchor = arch_smbios_anchor();
+		if (anchor)
+			anchor_source = "a scan below one megabyte";
+	}
 
 	if (!anchor)
 		return;
@@ -144,6 +208,12 @@ void smbios_init(void)
 	/* A length nothing bounds is a walk with no end. Sixteen megabytes is
 	 * far more than any real table and far less than a wrong number. */
 	if (table_len > 16u * 1024 * 1024)
+		return;
+
+	/* Mapped before it is walked. It was not, and the only reason that has
+	 * never faulted is that every table seen so far happened to sit inside
+	 * the direct map. */
+	if (!make_readable((paddr_t)table_phys, table_len))
 		return;
 
 	table = phys_to_virt((paddr_t)table_phys);
@@ -216,4 +286,13 @@ void smbios_print_summary(void)
 		facts.bios_version[0] ? " " : "",
 		facts.bios_version[0] ? facts.bios_version : "",
 		facts.major, facts.minor, facts.structures);
+
+	/* Which of the two sources answered.
+	 *
+	 * Printed because the two agree on every machine where both work, so
+	 * there is no other way to tell whether the new one is being used at
+	 * all. Every emulated path here populates the legacy region, which
+	 * means the scan has never once failed and a silent preference would be
+	 * indistinguishable from a preference that is not taking effect. */
+	kprintf("  found via    : %s\n", anchor_source);
 }

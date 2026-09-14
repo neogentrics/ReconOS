@@ -186,7 +186,7 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.29
+VERSION := 0.2.30
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

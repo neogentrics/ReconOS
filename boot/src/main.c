@@ -942,6 +942,8 @@ static void find_tables(struct reconboot *bi)
 	EFI_GUID acpi20 = EFI_ACPI_20_TABLE_GUID;
 	EFI_GUID acpi10 = EFI_ACPI_10_TABLE_GUID;
 	EFI_GUID dtb    = EFI_DTB_TABLE_GUID;
+	EFI_GUID smb3   = EFI_SMBIOS3_TABLE_GUID;
+	EFI_GUID smb    = EFI_SMBIOS_TABLE_GUID;
 
 	for (UINTN i = 0; i < ST->NumberOfTableEntries; i++) {
 		EFI_CONFIGURATION_TABLE *t = &ST->ConfigurationTable[i];
@@ -955,6 +957,15 @@ static void find_tables(struct reconboot *bi)
 			bi->acpi_rsdp = (uint64_t)(uintptr_t)t->VendorTable;
 		else if (guid_eq(&t->VendorGuid, &dtb))
 			bi->dtb = (uint64_t)(uintptr_t)t->VendorTable;
+
+		/* Same shape as the two ACPI entries above and for the same
+		 * reason: 3.0 wins where both are published, so it is not an
+		 * else-if against itself. A machine with tables above four
+		 * gigabytes can only be read through the newer entry point. */
+		else if (guid_eq(&t->VendorGuid, &smb3))
+			bi->smbios = (uint64_t)(uintptr_t)t->VendorTable;
+		else if (guid_eq(&t->VendorGuid, &smb) && !bi->smbios)
+			bi->smbios = (uint64_t)(uintptr_t)t->VendorTable;
 	}
 }
 

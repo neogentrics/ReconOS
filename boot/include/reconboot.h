@@ -167,6 +167,19 @@ struct reconboot {
 	 * implementation of everything it already has. */
 	uint64_t initrd_base;
 	uint64_t initrd_size;
+
+	/* The SMBIOS entry point, from the firmware's own configuration table,
+	 * or zero.
+	 *
+	 * The kernel can find this by scanning the 64 KB below one megabyte and
+	 * does, on every machine that has no UEFI. The scan is a fallback here
+	 * rather than the method: the legacy region is not populated on every
+	 * UEFI machine, and a firmware that is willing to say where its tables
+	 * are is a better authority than a sweep hoping to find them.
+	 *
+	 * The 3.0 entry point is preferred where both are published, because
+	 * only it can name a table above four gigabytes. */
+	uint64_t smbios;
 };
 
 #endif /* RECON_RECONBOOT_H */

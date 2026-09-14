@@ -497,4 +497,15 @@ typedef struct {
 	{ 0xb1b621d5, 0xf19c, 0x41a5, \
 	  { 0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0 } }
 
+/* Where the SMBIOS tables are, said by the firmware rather than found by
+ * sweeping the ROM region below one megabyte.
+ *
+ * Two GUIDs because there are two entry points. The 3.0 one carries a 64-bit
+ * table address; the older one carries 32 bits, so a machine that put its
+ * tables high and publishes both must be read through the newer. Same
+ * preference the scan already applies to the two anchor strings. */
+#define EFI_SMBIOS3_TABLE_GUID 	{ 0xf2fd1544, 0x9794, 0x4a2c, 	  { 0x99, 0x2e, 0xe5, 0xbb, 0xcf, 0x20, 0xe3, 0x94 } }
+
+#define EFI_SMBIOS_TABLE_GUID 	{ 0xeb9d2d31, 0x2d88, 0x11d3, 	  { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } }
+
 #endif /* RECON_EFI_H */

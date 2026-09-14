@@ -104,6 +104,11 @@ struct boot_info {
 	 * battery-backed clock it is the only source of the date. */
 	u64 runtime_services;
 
+	/* Where the firmware said its SMBIOS tables are, or zero. Zero is
+	 * ordinary rather than a fault: a BIOS machine has no configuration
+	 * table to ask, and the scan below one megabyte answers there. */
+	u64 smbios;
+
 	paddr_t acpi_rsdp;	/* 0 if the firmware did not point at one */
 	paddr_t dtb;		/* 0 if there is no device tree */
 };

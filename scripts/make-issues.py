@@ -158,6 +158,7 @@ AREA = {
     # cost is a medium the kernel cannot read.
     'KF-223': 'storage',
     'KF-224': 'kernel',
+    'KF-225': 'startup',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

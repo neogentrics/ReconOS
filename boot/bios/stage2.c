@@ -1640,6 +1640,32 @@ static u32 build_handoff(void)
 	r[n].reserved = 0;
 	n++;
 
+	/* Cleared before anything is written into it, and this is KF-225.
+	 *
+	 * `size` below says the loader wrote through the whole structure, and
+	 * that is not a description -- it is what `RECONBOOT_HAS` reads to
+	 * decide whether an appended field holds a value. This loader fills
+	 * eleven fields of sixteen. The other five -- `acpi_rsdp`, `dtb`,
+	 * `runtime_services`, `initrd_base`, `initrd_size` -- were never
+	 * written and were never zeroed either: HANDOFF_ADDR is 0x4000, below
+	 * stage 2 at 0x8000 and below the stack at 0x7000, so the entry stub's
+	 * bss sweep does not reach it and nothing else does.
+	 *
+	 * The stub already says what that costs, about its own statics: *on
+	 * this machine that is usually zero, which is the worst case -- it
+	 * would work here and fail on a machine whose firmware used the memory
+	 * for something.* The same sentence, one address lower.
+	 *
+	 * So the comment further down claiming zero means the firmware
+	 * published no RSDP is true now. It was a hope before. */
+	{
+		u8 *p = (u8 *)h;
+		u32 i;
+
+		for (i = 0; i < sizeof(*h); i++)
+			p[i] = 0;
+	}
+
 	h->magic        = RECONBOOT_MAGIC;
 	h->version      = RECONBOOT_VERSION;
 	h->size         = sizeof(*h);

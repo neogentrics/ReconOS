@@ -92,6 +92,9 @@ bool reconboot_parse(paddr_t handoff)
 	if (RECONBOOT_HAS(bi, runtime_services))
 		boot_info()->runtime_services = bi->runtime_services;
 
+	if (RECONBOOT_HAS(bi, smbios))
+		boot_info()->smbios = bi->smbios;
+
 	kstrlcpy(loader_name, bi->loader, sizeof(loader_name));
 	boot_info()->loader = loader_name;
 

@@ -7073,6 +7073,74 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-225 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+
+- **Found:** 14 September 2026, by appending a field to `struct reconboot` and
+  asking what the *other* loader would put in it.
+- **Cost:** on a machine whose firmware leaves anything at `0x4000`, the kernel
+  takes a garbage ACPI root pointer, a garbage device-tree pointer, a garbage
+  runtime-services pointer, and a garbage initrd base and length -- and treats
+  every one of them as a value the loader supplied. The initrd pair is the
+  worst of those: a non-zero base and length registers a RAM-backed block
+  device over arbitrary memory, which the block layer will then read partition
+  tables out of.
+- **What it was.** `size` is not a description. It is the evidence
+  `RECONBOOT_HAS` reads to decide whether an appended field was written:
+
+  ```
+  h->size = sizeof(*h);   /* "I wrote through all of it" */
+  ```
+
+  The BIOS loader sets that and then writes eleven fields. `acpi_rsdp`, `dtb`,
+  `runtime_services`, `initrd_base` and `initrd_size` are never assigned. Two
+  are read unconditionally by the kernel; three are read through the guard,
+  **and the guard passes**, because the loader told it to.
+
+  And nothing zeroes them. Measured from the built loader rather than assumed:
+
+  ```
+  00008000 T _start
+  0000aca4 D __bss_start
+  0000ccd0 B __bss_end
+  ```
+
+  `HANDOFF_ADDR` is `0x4000`. The entry stub's sweep runs from `__bss_start` to
+  `__bss_end`, and the structure is seventeen kilobytes below the bottom of it
+  -- under stage 2 at `0x8000`, under the stack at `0x7000`, in conventional
+  memory that nothing owns.
+
+  **The stub already contains the diagnosis, about its own statics:**
+
+  > whatever the firmware left at those addresses would otherwise be the
+  > initial value of every static in the C. On this machine that is usually
+  > zero, which is the worst case: it would work here and fail on a machine
+  > whose firmware used the memory for something.
+
+  The same sentence, one address lower, never applied. And stage 2 states the
+  consequence as a fact it has no way to know -- *"zero says the firmware did
+  not publish one, which is true of everything this loader has looked at"* --
+  which is a claim about what was looked at, not about what is written.
+
+- **It could not be made to fail here, and that is worth recording.** The
+  attempt was to make the machine into the machine that fails: `-device
+  loader,addr=0x4040,data=0xdeadbeefcafef00d,data-len=8` and five more at the
+  other offsets, which writes those values into guest memory before any code
+  runs. Both builds -- with the clearing loop and without it -- then reported
+  `acpi : no tables` identically. QEMU accepts the option and the poison does
+  not survive: SeaBIOS uses that low memory for itself between reset and the
+  first sector of our loader, so the window this fault lives in cannot be
+  reached from outside the guest.
+
+  So this entry rests on reading and on the symbol table rather than on a
+  failure anybody watched, and it says so. **A fix nobody has seen work is
+  worth less than one they have**, and pretending otherwise is how KF-208
+  happened.
+
+- **The fix** clears the structure before filling it, so `size` becomes true
+  rather than lucky, and so the field appended in the same change lands as zero
+  on a machine with no configuration table to read it from.
+- **Status:** fixed, kernel 0.2.30.
+
 ### KF-224 - The machine reported six gigabytes of memory and has four
 
 - **Found:** 14 September 2026, by a C program drawing it on the laptop's panel:
