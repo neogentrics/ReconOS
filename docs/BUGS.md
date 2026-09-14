@@ -7198,6 +7198,12 @@ boot log.
   them has an ordering problem, and matrix 47 ran the same path green on a tree
   three commits behind.
 
+- **Matrix 50 ran the same path green**, at 61 of 61, on the same tree plus two
+  documentation commits -- so that is one failure and one pass on this path,
+  which is not a rate either. (Matrix 49 was started for the same purpose and
+  is not counted: a sixty-four-guest experiment was run across its first
+  minutes, which is the CPU contention this project already has an entry about
+  reading a result through. It was stopped rather than read.)
 - **Status:** open, unreproduced. The next observation is what makes this
   diagnosable; until then there is nothing to fix and a guess would be worse
   than the gap.
