@@ -160,6 +160,41 @@ enum {
 	 */
 	SYS_SCREEN,
 
+	/* (path, path length, mode) -> SYS_OK, or why not.
+	 *
+	 * Makes one directory. **The parents must already exist** -- making
+	 * them implicitly would mean a typo in a path silently building a
+	 * tree, which is the rule SYS_CREATE follows for the same reason.
+	 *
+	 * Separate from SYS_CREATE rather than a bit in its mode, because
+	 * SYS_CREATE takes a pointer and a length for the contents and a
+	 * directory has none. Folding them together would mean two arguments
+	 * that are meaningless half the time and a run-time refusal for
+	 * something the shape of the call could refuse outright.
+	 *
+	 * Refuses rather than replacing if anything is already at that name,
+	 * **including a file**: a caller laying a structure onto a volume that
+	 * already has one has to be told, not have a file quietly become a
+	 * directory.
+	 */
+
+	/* (path, path_len, mode) -> 0, or why not.
+	 *
+	 * The desktop has had a layout since v0.1.0 -- /System, /Programs,
+	 * /Users -- and no way to build it. `reconfs_create` has taken a type
+	 * since the format was written; what was missing was a way to ask for
+	 * one.
+	 *
+	 * **A call of its own rather than a bit in SYS_CREATE's mode**, and
+	 * the reason is that a mode comes straight from a program. A high bit
+	 * meaning "directory" is one an uninitialised variable or a shifted
+	 * constant can set, and the program would be told it succeeded. A
+	 * number cannot be reached by getting a permission wrong.
+	 *
+	 * The parent must exist: making /a/b/c where /a/b does not is ENOENT
+	 * rather than three directories nobody asked for. */
+	SYS_MKDIR,
+
 	/* (action) -- does not return on a machine that obeys.
 	 *
 	 * The desktop's Shut Down and Restart exist, are drawn, and have had
@@ -181,23 +216,6 @@ enum {
 	 * about state, and putting it in this call would be asking for the hard
 	 * one in order to get the easy one. */
 	SYS_POWER,
-
-	/* (path, path_len, mode) -> 0, or why not.
-	 *
-	 * The desktop has had a layout since v0.1.0 -- /System, /Programs,
-	 * /Users -- and no way to build it. `reconfs_create` has taken a type
-	 * since the format was written; what was missing was a way to ask for
-	 * one.
-	 *
-	 * **A call of its own rather than a bit in SYS_CREATE's mode**, and
-	 * the reason is that a mode comes straight from a program. A high bit
-	 * meaning "directory" is one an uninitialised variable or a shifted
-	 * constant can set, and the program would be told it succeeded. A
-	 * number cannot be reached by getting a permission wrong.
-	 *
-	 * The parent must exist: making /a/b/c where /a/b does not is ENOENT
-	 * rather than three directories nobody asked for. */
-	SYS_MKDIR,
 
 	SYS_MAX
 };

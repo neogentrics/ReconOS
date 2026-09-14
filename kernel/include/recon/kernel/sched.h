@@ -310,6 +310,27 @@ struct thread *sched_current(void);
  * was made for it in advance. Called once, by that processor, on itself. */
 void sched_adopt_idle(struct thread *idle);
 
+/* The calling thread stops being work and becomes this processor's idle
+ * thread. Called once, by the boot thread, when the boot sequence is over and
+ * all it has left to do is wait.
+ *
+ * It is not a tidy-up. Until this is called the boot thread is an ordinary
+ * thread in the round, so a program that yields -- which is what the NVMe
+ * driver does while it waits for a completion -- hands its turn to a thread
+ * whose whole body is `power_idle_wait()`. That sleeps for up to a second, so
+ * the program's next look at the completion queue is a second later, and the
+ * drive answered microseconds after it was asked. Measured on an installed
+ * volume: 69-75 seconds to create one directory, against none for the same
+ * image on virtio-blk, which does not poll.
+ *
+ * After this the existing machinery covers it: `pick_next` takes an idle
+ * thread only when nothing else will have the processor, and `idle_over_work`
+ * counts the times that rule was broken.
+ *
+ * The thread must never block again -- `wait_sleep` refuses an idle thread,
+ * because a blocked idle thread is a processor that has stopped. */
+void sched_this_thread_is_now_idle(void);
+
 /* Arms the deferred reaper. After the worker thread exists, and before
  * anything is allowed to finish. */
 void sched_reaper_init(void);

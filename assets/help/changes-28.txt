@@ -1,5 +1,8 @@
-A text clipboard. Cut, copy and paste work in Notepad, in every text field
-in the system, and into the Terminal. Before this, text could not be moved
-from one place to another at all.
+Removing an account can keep or delete its files. They are two decisions,
+and only one of them can be undone.
 
-Notepad can select text — with the mouse, or Shift and the arrow keys.
+The Start menu's power buttons are icons, in the bottom right. The name of
+whichever one you point at appears on the left.
+
+Buttons have rounded corners where the skin asks for them, and the startup
+screen is slower, because it went past faster than it could be read.

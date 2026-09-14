@@ -187,6 +187,26 @@ the word.
 
 ### Asked for, and done
 
+**The filesystem has a shape** — v0.4.26. Asked for as *"whats next? i would
+like the filesystem"*. `SYS_MKDIR`, and the ten directories
+`include/recon_fs.h` has described since v0.1.0 and nothing could build.
+
+The design decision worth recording is that **the layout is laid down on every
+boot, not on the first one**. A flag saying "this has been done" is a second
+source of truth about the disk, and the disk is right there to ask. Making what
+is missing and leaving what is there means a first boot that lost power half
+way finishes itself on the next start, with no recovery path to write and none
+to test. It also means the check is real: the same code has to produce *laid
+out just now* and *all already there* from the same volume on consecutive
+boots, and it does.
+
+The second decision is that `recon_layout_build` takes the directory-maker as
+a **function pointer**. The list and the order are the part that can be wrong;
+the system call is not. Splitting them puts the part that can be wrong on the
+host, where 100 checks run in a millisecond and a bidirectional comparison
+against the header catches drift either way.
+
+
 **Cookies, and the four things they are not allowed to do** — v0.4.21. Asked
 for as "now do cookies", straight after forms, and it is the thing that was
 left: a form could sign you in and the session did not survive the next link.

@@ -191,6 +191,31 @@ that boots afterwards has somewhere for a program to live.
 
 **Whose side:** `core/`. Nothing about it names a machine.
 
+**Built, 14 September 2026 — as `SYS_MKDIR`, and it took four other faults
+with it.** `rootfs_create_directory(path, mode)` over the `reconfs_create`
+that was already there, a system call of its own rather than a bit in
+`SYS_CREATE`'s mode, and `userland/init/layout.c` holding the ten paths.
+`recon_init` lays them down on **every** boot, making what is missing and
+leaving what is there -- which is the requirement rather than a nicety, since
+a first boot that lost power half way and a second boot that finds everything
+are the same code path. Installed onto a blank 8 GB disk from a real medium
+and booted twice: *10 directories, laid out just now*, then *10 directories,
+all already there*.
+
+`/Apps`, not the `/Programs` this entry named. `include/recon_fs.h` says
+`/Apps` and has since v0.1.0; the paragraph above was written from memory and
+the header was written from the code. The suite compares the two in both
+directions, so the next time they disagree it will be a test failure rather
+than a paragraph.
+
+**Making it work on a real volume is where the cost was**, and none of it was
+in the call. See KF-226 to KF-229: one directory took 69-75 seconds to create
+on an installed NVMe disk and none at all on the same image over virtio-blk;
+the root of a volume could not be listed at all; every refusal from a listing
+reached a program as *the disk failed*; and five self-tests passed exactly
+once per volume -- a fault that had been sitting inside the one check written
+to catch it.
+
 ---
 
 ## ~~Nothing in user mode can ask the machine to turn off~~ -- built, 14 September

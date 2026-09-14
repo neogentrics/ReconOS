@@ -650,37 +650,6 @@ i64 user_status_from_reconfs(enum reconfs_status st)
 	}
 }
 
-/* Make a directory.
- *
- * Same guards as sys_create and for the same reasons: a length that does not
- * fit the buffer is refused rather than truncated, the range is checked before
- * anything is copied out of it, and the copy is terminated here at the length
- * given -- so a path with an embedded zero is short rather than a way to get
- * one string past a check and have a different one used.
- */
-static i64 sys_mkdir(u64 path, u64 path_len, u64 mode, u64 a3, u64 a4, u64 a5)
-{
-	char kpath[CREATE_PATH_MAX];
-	enum reconfs_status st;
-
-	(void)a3; (void)a4; (void)a5;
-
-	if (path_len == 0 || path_len >= sizeof(kpath))
-		return SYS_EINVAL;
-
-	if (!user_range_ok(path, path_len)) {
-		refusals++;
-		return SYS_EFAULT;
-	}
-
-	kmemcpy(kpath, (const void *)(uintptr_t)path, (size_t)path_len);
-	kpath[path_len] = '\0';
-
-	st = rootfs_create_directory(kpath, (u32)mode);
-
-	return st == RECONFS_OK ? SYS_OK : user_status_from_reconfs(st);
-}
-
 static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 		      u64 a5)
 {
@@ -712,6 +681,36 @@ static i64 sys_create(u64 path, u64 path_len, u64 mode, u64 data, u64 len,
 
 	if (st == RECONFS_OK)
 		return (i64)len;
+
+	return user_status_from_reconfs(st);
+}
+
+/* One directory, and its parents must already be there.
+ *
+ * The same path handling as sys_create and for the same reasons: copied into
+ * the kernel's own buffer at the length the caller gave, and terminated here
+ * -- so a path with a zero byte inside it is *short* rather than a way to get
+ * one string past a check and have a different one used.
+ */
+static i64 sys_mkdir(u64 path, u64 path_len, u64 mode, u64 a3, u64 a4, u64 a5)
+{
+	char kpath[CREATE_PATH_MAX];
+	enum reconfs_status st;
+
+	if (path_len == 0 || path_len >= sizeof(kpath))
+		return SYS_EINVAL;
+
+	if (!user_range_ok(path, path_len)) {
+		refusals++;
+		return SYS_EFAULT;
+	}
+
+	kmemcpy(kpath, (const void *)(uintptr_t)path, (size_t)path_len);
+	kpath[path_len] = '\0';
+
+	st = rootfs_create_directory(kpath, (u32)mode);
+	if (st == RECONFS_OK)
+		return SYS_OK;
 
 	return user_status_from_reconfs(st);
 }
@@ -884,6 +883,7 @@ const struct personality personality_recon = {
 		[SYS_MACHINE]  = sys_machine,
 		[SYS_WALLTIME] = sys_walltime,
 		[SYS_CREATE]   = sys_create,
+		[SYS_MKDIR]    = sys_mkdir,
 		[SYS_GETUID]   = sys_getuid,
 		[SYS_GETGID]   = sys_getgid,
 		[SYS_GETCAPS]  = sys_getcaps,
@@ -892,7 +892,6 @@ const struct personality personality_recon = {
 		[SYS_MAP]      = sys_map,
 		[SYS_SCREEN]   = sys_screen,
 		[SYS_POWER]    = sys_power,
-		[SYS_MKDIR]    = sys_mkdir,
 	},
 };
 
@@ -1864,6 +1863,8 @@ bool user_exec_path_test(void)
 		kputs("  user: no volume to put a program on\n");
 		return true;
 	}
+
+	rootfs_clear_before_test(path);
 
 	f = file_open_path(path, OPEN_WRITE | OPEN_CREATE, 0755, &err);
 	if (!f) {

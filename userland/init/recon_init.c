@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "layout.h"
 #include "screen.h"
 
 /*
@@ -102,6 +103,65 @@ static void say_bytes(char *into, size_t room, unsigned long long bytes)
 	}
 }
 
+/* --- Laying the volume out --- */
+
+/*
+ * The one line of this that touches the kernel.
+ *
+ * `layout.c` decides *what* gets made and in what order and knows nothing
+ * about system calls; this hands it the call. That split is what lets the
+ * whole arrangement be checked on the host in a millisecond instead of by
+ * installing onto a disk.
+ */
+static long make_one_directory(const char *path, unsigned long mode)
+{
+	return (long)recon_mkdir(path, recon_strlen(path), (u64)mode);
+}
+
+/*
+ * Build the layout if it is not there, and say what happened in one line.
+ *
+ * Runs on **every** boot, not only the first. A second boot finds everything
+ * already there and does nothing, which is the requirement rather than a
+ * nicety: a first boot that lost power half way has to be able to finish, and
+ * that is the same code path.
+ */
+static void lay_out_the_volume(char *into, size_t room)
+{
+	struct recon_layout_report report;
+	int wanted = recon_layout_count();
+	int present;
+
+	present = recon_layout_build(make_one_directory, SYS_EEXIST, &report);
+
+	if (report.refused != 0) {
+		/*
+		 * Named rather than counted. "1 refused" sends somebody
+		 * looking; "/Users refused (-12)" tells them where and why,
+		 * and this is a screen on a machine with no other way to ask.
+		 */
+		snprintf(into, room, "%d of %d directories -- %s refused (%ld)",
+			 present, wanted, report.first_refused,
+			 report.first_reason);
+		return;
+	}
+
+	if (report.made == 0) {
+		snprintf(into, room, "%d directories, all already there",
+			 present);
+		return;
+	}
+	if (report.already == 0) {
+		snprintf(into, room, "%d directories, laid out just now",
+			 present);
+		return;
+	}
+	/* A mixture means a previous boot did not finish, which is worth
+	 * saying rather than smoothing over. */
+	snprintf(into, room, "%d directories -- %d were missing and are not now",
+		 present, report.made);
+}
+
 /* --- What the volume looks like --- */
 
 /*
@@ -119,25 +179,41 @@ static void say_storage(char *into, size_t room)
 	size_t i;
 
 	got = RECON_CALL4(SYS_LIST, "/", 1, listing, sizeof(listing) - 1);
-	if (got < 0) {
+	if (got == SYS_ENODEV) {
 		snprintf(into, room, "no volume this kernel can read");
 		return;
 	}
-	if ((size_t)got >= sizeof(listing)) {
-		got = (i64)(sizeof(listing) - 1);
+	if (got < 0) {
+		/* The number, not a conclusion drawn from it. This line read
+		 * "no volume this kernel can read" on a machine that had just
+		 * created ten directories on the volume -- true of one refusal
+		 * and printed for every one, which is how a screen comes to
+		 * contradict itself and give nobody anywhere to start. */
+		snprintf(into, room, "a volume, but it would not be listed (%ld)",
+			 (long)got);
+		return;
+	}
+	/* Whole or nothing. The kernel writes a listing only if all of it
+	 * fits, and answers with the size either way -- so a number bigger
+	 * than what was offered means the buffer holds nothing, and counting
+	 * it would be counting whatever was on the stack. */
+	if ((size_t)got > sizeof(listing) - 1) {
+		snprintf(into, room, "%ld bytes of names, more than this asked"
+			 " for", (long)got);
+		return;
 	}
 	listing[got] = '\0';
 
-	/* The kernel answers with one name a line. Counting them is the whole
-	 * of what this needs; showing them is the file manager's job and there
-	 * is not one yet. */
+	/* The names come back NUL-terminated and back to back, which is what
+	 * user.h says and not what this counted: it looked for newlines, found
+	 * none, and reported the single entry its fallback invented. A volume
+	 * with twelve names at its root said "1 entry".
+	 *
+	 * Showing them is the file manager's job and there is not one yet. */
 	for (i = 0; i < (size_t)got; i++) {
-		if (listing[i] == '\n') {
+		if (listing[i] == '\0') {
 			entries++;
 		}
-	}
-	if (entries == 0 && got > 0) {
-		entries = 1;
 	}
 
 	snprintf(into, room, "%d %s at the root of the volume",
@@ -155,6 +231,7 @@ int main(void)
 	char memory_line[96];
 	char display_line[96];
 	char storage_line[96];
+	char layout_line[120];
 	char total[32];
 	char free_bytes[32];
 	i64 answer;
@@ -227,6 +304,8 @@ int main(void)
 		 "%u x %u, %u bytes a row", screen.width, screen.height,
 		 screen.pitch);
 
+	/* Before the listing, because the listing is what proves it worked. */
+	lay_out_the_volume(layout_line, sizeof(layout_line));
 	say_storage(storage_line, sizeof(storage_line));
 
 	memset(&facts, 0, sizeof(facts));
@@ -239,14 +318,16 @@ int main(void)
 	facts.display = display_line;
 	facts.storage = storage_line;
 
-	facts.notes[0] = "This machine is running its own kernel.";
-	facts.notes[1] = "No Linux is underneath it.";
-	facts.notes[2] = "";
+	facts.notes[0] = layout_line;
+	facts.notes[1] = "";
+	facts.notes[2] = "This machine is running its own kernel.";
+	facts.notes[3] = "No Linux is underneath it.";
+	facts.notes[4] = "";
 	if (machine.entropy_bits == 0) {
-		facts.notes[3] = "There is no hardware randomness here, so"
+		facts.notes[5] = "There is no hardware randomness here, so"
 				 " keys would be refused.";
 	} else {
-		facts.notes[3] = "Randomness is available.";
+		facts.notes[5] = "Randomness is available.";
 	}
 
 	/* --- Draw it --- */
@@ -267,6 +348,14 @@ int main(void)
 			 screen.width, screen.height, screen.pitch,
 			 (unsigned long long)screen.bytes,
 			 (unsigned long long)mapped);
+		say(line);
+
+		snprintf(line, sizeof(line), "  the volume: %s\n",
+			 layout_line);
+		say(line);
+
+		snprintf(line, sizeof(line), "  storage: %s\n",
+			 storage_line);
 		say(line);
 	}
 

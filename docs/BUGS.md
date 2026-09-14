@@ -7109,7 +7109,13 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
-### KF-227 - Three timers did not fire, once, on one path of twenty-eight
+### KF-232 - Three timers did not fire, once, on one path of twenty-eight
+
+- **Renumbered on the merge**, from KF-227. Both sessions reached
+  KF-225 on 14 September without being able to see the other's
+  register. The rule applied was that what is already on the shared
+  branch keeps its number, so these three moved and the commit
+  messages that created them still say the old ones.
 
 - **Found:** 14 September 2026, by matrix 48, on `PVH, an SD host controller`
   and no other path:
@@ -7208,7 +7214,13 @@ boot log.
   diagnosable; until then there is nothing to fix and a guess would be worse
   than the gap.
 
-### KF-226 - kprintf reads the width on a number and throws it away
+### KF-231 - kprintf reads the width on a number and throws it away
+
+- **Renumbered on the merge**, from KF-226. Both sessions reached
+  KF-225 on 14 September without being able to see the other's
+  register. The rule applied was that what is already on the shared
+  branch keeps its number, so these three moved and the commit
+  messages that created them still say the old ones.
 
 - **Found:** 14 September 2026, by matrix 47, on an assertion added three
   commits earlier:
@@ -7276,9 +7288,16 @@ boot log.
   recent bytes and everything kprintf writes passes through it -- so a line of
   awkward cases is printed between markers and read back **character for
   character**.
-- **Status:** fixed, kernel 0.2.31.
+- **Status:** fixed, kernel 0.2.36. (Recorded as 0.2.31 in its
+  own commit; see the note on KF-230.)
 
-### KF-225 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+### KF-230 - The BIOS loader says it filled the whole handoff and fills eleven fields of sixteen
+
+- **Renumbered on the merge**, from KF-225. Both sessions reached
+  KF-225 on 14 September without being able to see the other's
+  register. The rule applied was that what is already on the shared
+  branch keeps its number, so these three moved and the commit
+  messages that created them still say the old ones.
 
 - **Found:** 14 September 2026, by appending a field to `struct reconboot` and
   asking what the *other* loader would put in it.
@@ -7344,7 +7363,10 @@ boot log.
 - **The fix** clears the structure before filling it, so `size` becomes true
   rather than lucky, and so the field appended in the same change lands as zero
   on a machine with no configuration table to read it from.
-- **Status:** fixed, kernel 0.2.30.
+- **Status:** fixed, kernel 0.2.35. (Recorded as 0.2.30 in its
+  own commit, and moved here: the desktop session had reached
+  0.2.34 independently, so the two sequences are laid end to end
+  rather than interleaved.)
 
 ### KF-224 - The machine reported six gigabytes of memory and has four
 
@@ -7385,7 +7407,7 @@ usable regions, from the same rounding, so the two cannot drift apart.
 The boot report prints the memory line **only when the two differ**, because on a
 machine with no hole it would be a line saying the same thing twice.
 
-### Not a bug, 14 September - the panel gets a summary and the wire keeps everything
+### KF-225 — Not a bug: the panel gets a summary and the wire keeps everything
 
 Asked for rather than found: the boot report is long, and on a machine that runs
 all the way a user program now paints over it before anybody can read it.
@@ -7412,6 +7434,179 @@ saved.
 draws it last on purpose; printing more text after it would paint over the
 program instead, which is the same fight from the other side. That one belongs in
 `KERNEL-WANTS.md`, where it already is.
+
+### KF-226 — The boot thread never stopped being work, so every drive completion waited for a timer
+
+[#461](https://github.com/neogentrics/ReconOS/issues/461)
+
+- **Found in** kernel 0.2.29, by timing `SYS_MKDIR` on an installed volume.
+  One directory took **69, 74, 69 and 69 seconds**; ten would have taken
+  twelve minutes. The same disk image attached as virtio-blk instead of NVMe
+  took no measurable time at all, which is what said where to look.
+- **What it was** `sched_init` sets the boot thread's `idle_for` to -1 —
+  correctly, and with a paragraph explaining why the zero a `kmemset` would
+  leave is a meaningful and wrong value. Nothing ever changed it. So once
+  `main` reached `for (;;) power_idle_wait()` the boot thread was still an
+  ordinary thread in the round, and `pick_next` handed it turns.
+
+  The NVMe driver polls for a completion and calls `sched_yield()` between
+  looks. On the boot thread that is nearly free: nothing else is runnable, so
+  the yield comes straight back. From a **program's** thread it is not. The
+  next runnable thread was the boot thread, whose whole body is
+  `power_idle_wait()` — which sleeps until the next filed timer or for one
+  second, whichever is sooner. A command the controller finished microseconds
+  after it was asked sat in the completion queue for the rest of that second.
+- **Why it survived** every user program before this one exited in
+  milliseconds without touching a disk, and every kernel write happened on the
+  boot thread, where the yield is free. The first program to write to a volume
+  from a thread of its own was the first one to pay for it.
+
+  **The scheduler already knew how to prevent this.** `pick_next` takes an
+  idle thread only as a last resort, and `idle_over_work` counts the times
+  that rule is broken — an invariant with a number attached, added because
+  giving processor 0 a real idle thread once halved the machine and *every
+  self-test still passed*. None of it applied here, because the thread doing
+  the sleeping was not marked as an idle thread.
+- **The same shape as KF-157 and as the comment above `idle_over_work`**: a
+  fault whose only symptom is how long something takes, against which the
+  entire suite is blind. Nothing failed. The machine was correct and unusable.
+- **Fixed in** kernel 0.2.31. `sched_this_thread_is_now_idle()`, called by
+  `main` between starting the first screen and entering the loop: the boot
+  thread stops being work at the moment it stops doing any. The existing
+  invariant then covers it, so a recurrence is counted rather than measured in
+  seconds.
+- **What is still true:** a driver that polls and yields is still a driver
+  that polls, and `docs/ROADMAP.md` says under Design principles that *nothing
+  polls*. Waiting on the NVMe completion interrupt is the real answer and the
+  driver's own comment says so — *"synchronous for the same reason the block
+  layer is: there is no way for a thread to wait yet"*, which stopped being
+  true when `wait_sleep` arrived. That is a separate change and is not this
+  one.
+
+### KF-227 — The root of a volume could not be listed
+
+[#462](https://github.com/neogentrics/ReconOS/issues/462)
+
+- **Found in** kernel 0.2.29, on the first boot that had both a mounted volume
+  and a program asking what was on it. The first-boot screen said *no volume
+  this kernel can read* on a machine that had created ten directories on that
+  volume three lines earlier.
+- **What it was** `reconfs_walk_path` refuses a path with no leaf on it — `/`
+  or `///` — and returns `RECONFS_ERR_NAME`. That is right for every caller
+  that is naming something to create, remove or open, because `/` is not one
+  of those.
+
+  `rootfs_list` and `rootfs_owner_of` are not those callers. Both had a branch
+  for the leafless case — `rootfs_list`'s even carried a comment saying *the
+  root is the one path with no leaf* — and **neither branch could be reached**,
+  because the walk above it returns an error for exactly the path that would
+  have left the leaf empty.
+- **Why it survived** nothing had ever asked. The kernel's own tests list
+  `/dev/`, which devfs answers, and every other path they use names a file.
+  `recon_init` asking `SYS_LIST` for `/` was the first caller in the system's
+  life, and it arrived one version before there was a volume with anything on
+  it.
+- **And it did not arrive as a listing fault.** It arrived as EIO — see
+  KF-228 — so the screen reported no volume rather than a refused listing, and
+  the two sentences on it contradicted each other.
+- **Fixed in** kernel 0.2.32. One helper, `inode_to_read`, used by both: a
+  path that is nothing but slashes resolves to `fs->root_inode` and everything
+  else walks as before. One helper rather than the same special case twice, so
+  that the root cannot become listable and unownable, or the reverse — and
+  `rootfs_owner_of` answering for `/` means the permission check on a listing
+  of the root is now actually made, where before it was skipped in silence by
+  a check written as *if the owner is known and forbids it*.
+
+### KF-228 — Every refusal from a listing reached a program as "the disk failed"
+
+[#463](https://github.com/neogentrics/ReconOS/issues/463)
+
+- **Found in** kernel 0.2.29, while finding KF-227. The screen said EIO; the
+  disk was fine.
+- **What it was** `reconfs_list_path` in `core/vfs.c` mapped `NOT_FOUND` to
+  `ENOENT` and **everything else to `EIO`**. `user_status_from_reconfs` exists
+  for this and vfs.c already uses it twice, for opening a file and for mapping
+  one; its own comment says the mapping *is a decision — which distinctions a
+  program is allowed to see — and a decision made in three places is three
+  decisions*. This was the third.
+- **What it hid** a directory with more names in it than the listing buffers
+  hold, a path too deep, a volume not mounted, and a path the walk refuses —
+  four different things a caller would act on differently, delivered as one
+  failure that says the hardware broke.
+- **Fixed in** kernel 0.2.33. The shared mapping, like its two neighbours.
+
+### KF-229 — Five self-tests pass exactly once per volume, inside the check written to catch that
+
+[#464](https://github.com/neogentrics/ReconOS/issues/464)
+
+- **Found in** kernel 0.2.29, by booting an installed disk twice. The second
+  boot reported five failures on a machine with nothing wrong with it:
+
+  ```
+  files carry a mode      : FAIL   rootfs: could not create the test file (17)
+  files by descriptor     : FAIL   vfs: the file existed before it was closed
+  a program from a volume : FAIL   user: committing the program failed (-6)
+  a file, mapped          : FAIL   vfs: could not commit the file to map
+  a rewrite is noticed    : FAIL   pagecache: the cached page is not what was written
+  ```
+- **What it was** each of the five creates a file with a fixed name —
+  `/mode-test`, `/descriptor-test`, `/hello.elf`, `/mapped-test`,
+  `/rewritten` — and none removed it first. On the second boot the create is
+  refused because the name is taken.
+- **Why it survived, and this is the part worth keeping.**
+  `scripts/install-then-boot-test.sh` has a check called *"and they pass
+  again, on a volume already written to"*, with a comment saying it is *where
+  a test that leaves a file behind shows itself*. **It could not have failed.**
+  It was asked of the BIOS boot, and over BIOS the kernel does not find the
+  disk it booted from — KF-192, open — so that boot's report reads `root :
+  none found; file calls will say so`, the five tests that need a volume say
+  so, and `self_tests_passed` counted a boot that never touched a volume as a
+  pass. Measured: the BIOS boot's log says `root : none found`, the UEFI
+  boot's says `root : nvme0n1p3`.
+
+  The fault lived for a month inside the one check written to catch it.
+- **Fixed in** kernel 0.2.34. `rootfs_clear_before_test(path)` — named for
+  what it is for, so that the day a test starts depending on the removal
+  itself, the wrong function is obviously the one being used — called by all
+  five before they create anything.
+- **And the check now has a volume under it.** It boots the target a second
+  time under UEFI, and **fails loudly if no volume is mounted** rather than
+  passing, because the way this went wrong was silence. Proved by taking one
+  of the five clears back out: the run goes red and names `files carry a mode`.
+  The count moved from *59 passed* on a volume-less boot to *65 passed, second
+  boot on this volume*.
+
+### A note for the kernel session, 14 September 2026 — KF-225 and kernel 0.2.30
+
+**Not an entry. A collision, recorded before it grows.**
+
+The bug register Artifact was republished at 17:17 UTC on 14 September from a
+tree that has not been pushed. Comparing that page line by line against the one
+generated from this file says three things:
+
+- Its **KF-225** is *"The BIOS loader says it filled the whole handoff and fills
+  eleven fields of sixteen"*, fixed in kernel 0.2.30. The KF-225 on `main` — and
+  above, in this file — is *"the panel gets a summary and the wire keeps
+  everything"*, which arrived in commit `8f8b03c`. **The panel entry is not in
+  that page at all**, so the number has been reused rather than the entry
+  amended.
+- Its **KF-223** carries a further fix, also in 0.2.30, that is not here.
+- Its **kernel version is 0.2.30**, and this branch has used 0.2.30 through
+  0.2.34 for `SYS_MKDIR` and KF-226 to KF-229, pushed to `main` as `3e058d9`.
+
+Per the rule this file already sets out for the one time numbers were allocated
+twice: **`main` keeps its numbers**, being the sequence that is published. So
+KF-226 to KF-229 and kernel 0.2.30 to 0.2.34 are taken, and the BIOS-handoff
+fault wants **KF-230** and a version above 0.2.34. The panel entry keeps
+KF-225. Its heading was changed here — from `KF-225 is not a bug - ...` to
+`KF-225 — Not a bug: ...` — for a reason unrelated to any of this:
+`make-bug-register.py` matches a dash straight after the identifier, counted 294
+headings, parsed 293, and refused to write until it did.
+
+The Artifact was **not republished over that version**, deliberately: it holds
+two entries this file does not, and overwriting it would have lost the only copy
+outside an unpushed working tree. It will be correct again the first time it is
+regenerated after that tree is pushed.
 
 ## Labels
 
@@ -8298,6 +8493,38 @@ been manufactured yet, and BG-090 is what the last of them already cost.
   built the way a release is. Putting the small buffer back makes six suites
   abort in the second pass while the first stays clean, which is the shape of
   the whole class.
+
+### BG-193 — The first-boot screen counted newlines in a listing the kernel separates with NULs, and invented one entry when it found none
+
+[#465](https://github.com/neogentrics/ReconOS/issues/465)
+
+- **Found in** v0.4.26, on the first machine whose volume had anything on it.
+  The screen said **1 entry at the root of the volume**; a reader that is not
+  this kernel said twelve.
+- **What it was** `say_storage` in `userland/init/recon_init.c` counted `'\n'`
+  characters, with a comment saying *the kernel answers with one name a line*.
+  It does not. `SYS_LIST` is documented in `kernel/include/recon/kernel/user.h`
+  as *NUL-terminated and back to back*, and has been since it was written.
+- **The fallback is what made it invisible.** Finding no newlines, the count
+  was zero, and the next two lines read `if (entries == 0 && got > 0) entries
+  = 1`. A count of zero on a volume with files on it is obviously wrong. A
+  count of one is plausible — and this screen had only ever been looked at on
+  machines with no volume at all, where the call returns a refusal and the
+  count is never reached.
+- **It also ignored the whole-or-nothing rule.** The same paragraph of
+  `user.h` says a listing is written only if all of it fits and the answer is
+  the size either way, so a number bigger than the buffer means the buffer
+  holds nothing. The old code clamped that number and counted the buffer
+  anyway, which is counting whatever was on the stack.
+- **Fixed in** v0.4.26. NUL terminators are counted, and a listing too big for
+  the buffer says so — `%ld bytes of names, more than this asked for` — rather
+  than reporting a number. The screen now says *12 entries at the root of the
+  volume*, which is what the independent reader says.
+- **And the line above it says why when it cannot answer**, instead of
+  concluding. `no volume this kernel can read` is now printed only for
+  `ENODEV`; any other refusal prints its number. It was printed for all of
+  them, which is how a screen came to say there was no volume directly under a
+  line saying ten directories had just been created on one.
 
 ### BG-192 — A test that could not pass, on a canvas full of a guard byte
 

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.25
+    VERSION 0.4.26
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -801,6 +801,23 @@ target_include_directories(recon_init_screen_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
 
 add_test(NAME first_screen COMMAND recon_init_screen_tests)
+
+# The shape a ReconOS volume has, checked without one.
+#
+# layout.c is handed the thing that makes a directory, so the suite hands it a
+# fake -- and every decision it makes is checked on the host with no volume, no
+# kernel and no disk.
+#
+# It also reads include/recon_fs.h and requires the two lists of directories to
+# agree in both directions. They cannot be one file: the header is the
+# compositor's and reaches for <time.h> and a filesystem interface a program on
+# this kernel does not have. A real duplication is a thing to test.
+add_executable(recon_init_layout_tests
+    userland/tests/test_init_layout.c
+    userland/init/layout.c)
+
+add_test(NAME volume_layout COMMAND recon_init_layout_tests
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_file_tests)

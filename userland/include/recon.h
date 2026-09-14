@@ -77,8 +77,18 @@ enum {
 	SYS_SIGRETURN,
 	SYS_MAP,
 	SYS_SCREEN,
-	SYS_POWER,
-	SYS_MKDIR
+
+	/* Added after the first twenty-five, at the end, so that every number
+	 * before it keeps its meaning: a program built against a kernel
+	 * without this one still runs here, and this kernel still runs that
+	 * program. Growing the list is allowed; reordering it is not. */
+	SYS_MKDIR,
+
+	/* And after that one, for the same reason it gives: growing
+	 * the list is allowed and reordering it is not. This arrived
+	 * on a branch that had put it *before* SYS_MKDIR, which would
+	 * have moved a number already shipped. */
+	SYS_POWER
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
@@ -210,6 +220,17 @@ static inline i64 recon_open(const char *path, u64 path_len, u64 flags,
 	return RECON_CALL4(SYS_OPEN, path, path_len, flags, mode);
 }
 
+/*
+ * One directory, with its parents already there.
+ *
+ * Answers SYS_OK or a negative reason -- SYS_EEXIST if anything is already at
+ * that name, SYS_ENOENT if a directory above it is not.
+ */
+static inline i64 recon_mkdir(const char *path, u64 path_len, u64 mode)
+{
+	return RECON_CALL3(SYS_MKDIR, path, path_len, mode);
+}
+
 static inline i64 recon_close(int fd)
 {
 	return RECON_CALL1(SYS_CLOSE, fd);
@@ -299,25 +320,6 @@ static inline i64 recon_screen(struct recon_screen *into, u64 length)
 static inline i64 recon_power(u64 action)
 {
 	return RECON_CALL1(SYS_POWER, action);
-}
-
-/*
- * Make a directory. Returns 0, or why not.
- *
- * The parent has to exist: asking for "/System/Fonts" before "/System" is
- * SYS_ENOENT rather than two directories nobody asked for. `SYS_EEXIST` where
- * the name is taken -- including where what is there is already a directory,
- * because "it exists" and "I made it" are different answers and an installer
- * that cannot tell them apart cannot tell a fresh disk from one it has already
- * written to.
- *
- * A call of its own rather than a flag in `recon_create`'s mode: a mode is a
- * number a program computes, and a high bit meaning "directory" is one a
- * shifted constant can set by accident.
- */
-static inline i64 recon_mkdir(const char *path, u64 path_len, u64 mode)
-{
-	return RECON_CALL3(SYS_MKDIR, path, path_len, mode);
 }
 
 /* --- The small amount of C library a freestanding program cannot do without --- */

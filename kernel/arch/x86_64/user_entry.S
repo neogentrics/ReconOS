@@ -638,7 +638,7 @@ user_test_power:
 	jnz	.Lpower_still_held
 
 	movq	$0, %rdi		/* POWER_ACTION_OFF */
-	movq	$25, %rax		/* SYS_POWER */
+	movq	$26, %rax		/* SYS_POWER */
 	syscall
 
 	cmpq	$-12, %rax		/* SYS_EPERM */

@@ -455,7 +455,7 @@ user_test_power:
 
 	/* Now it must refuse, and this is the assertion. */
 	mov	x0, #0			/* POWER_ACTION_OFF */
-	mov	x8, #25			/* SYS_POWER */
+	mov	x8, #26			/* SYS_POWER */
 	svc	#0
 
 	/* cmn adds, so this sets Z when x0 is exactly -12, which is SYS_EPERM.

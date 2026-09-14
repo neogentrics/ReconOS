@@ -186,7 +186,11 @@
 #
 # Written here rather than in a document because this is the line that has to
 # change, and a rule kept anywhere else is a rule read after the fact.
-VERSION := 0.2.31
+# 0.2.36: the desktop session reached 0.2.34 and this one reached 0.2.31, from
+# the same 0.2.29, without either being able to see the other. Two of this
+# session's three bugs were fixes, so they are laid after theirs rather than
+# interleaved -- see KF-230 and KF-231, which say so on their own entries.
+VERSION := 0.2.36
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -314,6 +318,7 @@ INIT_ELF := $(BUILD)/user/recon_init.elf
 INITCFLAGS = $(filter-out -mno-sse -mno-sse2 -mno-mmx -mno-80387,$(USERCFLAGS))
 
 INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
+	     ../userland/init/layout.c \
 	     ../userland/libc/string.c ../userland/libc/printf.c \
 	     ../userland/libc/ctype.c ../userland/libc/stdlib.c \
 	     ../userland/libc/stdio.c ../userland/libc/syscalls.c

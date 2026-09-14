@@ -109,24 +109,37 @@ bool rootfs_is_read_only(void);
  * which is really an erase has to say so. */
 enum reconfs_status rootfs_remove_file(const char *path);
 
+/* Clears a name a self-test is about to create, if it is there.
+ *
+ * A self-test that creates a file with a fixed name passes exactly once per
+ * volume: the second time round the create is refused because the name is
+ * taken, and the test reports a failure on a machine with nothing wrong with
+ * it. Five of them did, and the only machines that ever showed it were the
+ * ones this project exists to make -- an installed disk, booted twice.
+ *
+ * Not a general "delete if present": that belongs to whoever needs it, with
+ * its own name and its own opinion about what a missing file means. This says
+ * what it is for, so that the day a test starts depending on the removal
+ * itself, the wrong function is obviously the one being used. */
+void rootfs_clear_before_test(const char *path);
+
 enum reconfs_status rootfs_replace_file(const char *path, const void *data,
 					u32 len);
 
-/* Makes a directory, and nothing else.
+/* Creates a directory at `path` with `mode`, in one commit.
  *
- * The same transaction as creating a file, minus the contents: the entry and
- * its mode become visible together or not at all.
+ * The same shape as `rootfs_create_file` and deliberately not a flag on it:
+ * a file create takes contents and a directory create cannot, so folding them
+ * together would mean a call with an argument that is meaningless half the
+ * time -- and a caller passing contents to a directory would have to be
+ * refused at run time for something the types could have refused outright.
  *
- * **Refused rather than replaced**, for the reason stated below about files,
- * and refused rather than quietly accepted when the name is already a
- * directory -- "it exists" and "I made it" are different answers and an
- * installer that cannot tell them apart cannot tell a fresh disk from one it
- * has already written to.
+ * **Refuses rather than replacing** if anything is already at that name,
+ * including a file, for the reason `rootfs_create_file` gives.
  *
- * The parent must exist. Creating `/a/b/c` where `/a/b` does not is
- * RECONFS_ERR_NOENT rather than three directories nobody asked for: a call
- * that makes more than it was asked to make is one whose failures are worse
- * than its refusals.
+ * **The parents must already exist.** Making them implicitly would mean a typo
+ * in a path silently building a tree, which is the same rule the file create
+ * follows and the reason `/System/Apps` has to be asked for after `/System`.
  */
 enum reconfs_status rootfs_create_directory(const char *path, u32 mode);
 

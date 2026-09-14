@@ -150,17 +150,35 @@ AREA = {
     'KF-219': 'storage',
     'KF-221': 'kernel',
     'KF-222': 'storage',
-    # Added by the kernel session, 14 September -- the note above says this
-    # table lives in a file the desktop session owns and that an entry
-    # arriving without a line here stops make-bug-register.py. It did,
-    # which is the check working. KF-223 is filed under storage for the
-    # same reason KF-219 was: the fault is in a host controller and the
-    # cost is a medium the kernel cannot read.
-    'KF-223': 'storage',
+    # Fourth time, 14 September. Read off the titles: KF-223 is USB root
+    # ports asked what was attached before they had power, KF-224 is a
+    # memory map read wrongly.
+    'KF-223': 'kernel',
     'KF-224': 'kernel',
-    'KF-225': 'startup',
-    'KF-226': 'kernel',
-    'KF-227': 'kernel',
+    # It parses now: its heading put three words between the number
+    # and the dash, so make-bug-register.py counted the entry and
+    # could not read it. 'display' because what it changes is what
+    # reaches the panel.
+    'KF-225': 'display',
+    # The desktop session's own, same day. KF-226 is 'startup' rather than
+    # 'storage' because the fault is in the scheduler and storage is only
+    # where it showed: a driver that polls and yields is one caller of it,
+    # and labelling it by the symptom would file a scheduling fault where
+    # nobody looking for one would find it.
+    'KF-226': 'startup',
+    'KF-227': 'storage', 'KF-228': 'storage', 'KF-229': 'storage',
+    'BG-193': 'storage',
+    # And the kernel session's own three, renumbered on the merge.
+    #
+    # Both sessions reached KF-225 on the same day: this one had 225 as a BIOS
+    # handoff fault, 226 as a kprintf width and 227 as a timer. All three are
+    # 230, 231 and 232 here. **What is already on the shared branch keeps its
+    # number** -- theirs was pushed to main, this was on a branch only one
+    # session used, and renumbering the published side would have been the
+    # expensive half of the same choice.
+    'KF-230': 'startup',
+    'KF-231': 'kernel',
+    'KF-232': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',
