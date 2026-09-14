@@ -9,6 +9,113 @@ way for the two to disagree.
 
 ---
 
+## v0.4.27 — the kernel starts the system instead of containing it
+
+Said plainly, because it is the thing this version is about:
+
+> *"The system and the kernel are two separate systems when they should be one
+> and the same relying on each other."*
+
+They were separate in a way that can be stated as a build dependency.
+`recon_init` — the program a person sees when a ReconOS machine starts — was
+**121 KiB of `.rodata` inside the kernel image**, pulled in by `.incbin`. The
+installer wrote an EFI partition with a loader and a kernel, formatted a System
+volume, and **put nothing in it**. The ten directories v0.4.26 added were
+empty.
+
+So changing a string on the first-boot screen meant rebuilding and reflashing a
+**kernel**. Not a figure of speech: on real hardware, a stick, a reboot and a
+firmware menu, to change a sentence in a program.
+
+### What was missing was the join, not the parts
+
+Almost everything this needed already existed and had never been connected:
+
+| | |
+|---|---|
+| a kernel that runs a program from a path on the volume | `user_exec_path`, built, and passing a self-test on every boot |
+| a standalone `recon_init.elf` | built, 126,880 bytes |
+| a filesystem that can be written by the installer | `reconfs_mount`, `reconfs_create`, `reconfs_write_named` — all take a volume |
+| a medium that carries a system | no |
+| an installer that writes one | no |
+| a kernel that looks for one | no |
+
+Three of those are now yes.
+
+**The medium carries `/reconos/init.elf`** — the first file on a ReconOS
+install medium that is neither a loader nor a kernel.
+
+**The installer writes it onto the System volume** as `/System/init.elf`. This
+is the first thing the installer has ever written into a **ReconFS** volume;
+every copy before it was FAT32 to FAT32, because everything before it was what
+firmware reads.
+
+**And the kernel asks the volume first**, falling back to the copy inside
+itself and saying which it used. That line matters more than it looks: the
+whole point is that the screen can now come from somewhere other than the
+kernel, and a boot that does not say where it got its program cannot be used to
+tell whether any of this works.
+
+### Creating on a volume that is not the one you booted from
+
+`rootfs_create_file` and `rootfs_create_directory` did exactly the right three
+moves — walk to the parent, act, rewrite the chain to the root — against
+`rootfs()`, which is the one volume an installer must never touch.
+
+So the three moves moved down a layer into `reconfs_place_file` and
+`reconfs_place_directory`, which take the volume as an argument, and the two
+`rootfs_*` entry points became those calls with `rootfs()` filled in. An
+extraction rather than a rewrite: the bodies are the bodies that were there, so
+the suites that covered them cover them still — 67 self-tests, unchanged, on
+the first boot after the move.
+
+### The proof, and why it had to be built this way round
+
+A claim that two things are separate can only be shown by changing one and not
+the other. So:
+
+1. Keep the kernel binary exactly as built.
+2. Change a string in the **program** and rebuild it.
+3. Build a medium carrying the **old kernel** and the **new program**.
+4. Install from it and boot.
+
+```
+kernel kept:   402df0f6403460f0
+program built: 666db5e4b023ed04
+
+the system: /System/init.elf, from the volume
+first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
+
+is the kernel on that disk the one we kept?
+  yes -- byte for byte the kernel built before the program changed
+```
+
+Yesterday that was impossible by construction.
+
+### And the test asserts it, because the fallback is designed to hide it
+
+`scripts/install-then-boot-test.sh` gained an eighth check: **the system it
+runs came off the volume.** Without it the run passes either way — the kernel
+falls back to its built-in copy deliberately and quietly, so an installer that
+stopped writing `/System/init.elf` would still produce a machine that boots,
+draws a screen and reports 67 self-tests passing, and the file would still have
+printed 7 of 7 forever.
+
+That is the shape KF-229 was: a check sitting on top of the fault it was
+written to catch, unable to fail. Taking the program off the medium turns the
+run red and names the reason — `the system: no /System/init.elf (-7), using the
+copy inside the kernel` — while every other check still passes, which is also
+the graceful fallback being shown to work.
+
+### What is still in the kernel image
+
+The copy. It is the fallback for a machine that has not been installed onto —
+every blank disk in the verification rig, and any medium built before this
+existed. Taking it out is a separate decision and wants a machine that can be
+recovered without it.
+
+---
+
 ## v0.4.26 — the volume has a shape, and a second boot finds it
 
 Asked for directly: *"whats next? i would like the filesystem"*, after a night

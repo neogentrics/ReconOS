@@ -190,7 +190,7 @@
 # the same 0.2.29, without either being able to see the other. Two of this
 # session's three bugs were fixes, so they are laid after theirs rather than
 # interleaved -- see KF-230 and KF-231, which say so on their own entries.
-VERSION := 0.2.36
+VERSION := 0.2.37
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)

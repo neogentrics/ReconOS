@@ -53,6 +53,12 @@ mmd   -i "$W/esp.part" ::/EFI ::/EFI/BOOT ::/reconos
 mcopy -i "$W/esp.part" "$LOADER" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$W/esp.part" "$KERNEL" ::/reconos/kernel-x86_64.elf
 
+# And the system, which is what the disk will actually run. Without this the
+# installed machine falls back to the copy inside the kernel -- which is the
+# thing this file exists to stop being the only option.
+INIT=kernel/build/x86_64/user/recon_init.elf
+[ -f "$INIT" ] && mcopy -i "$W/esp.part" "$INIT" ::/reconos/init.elf
+
 # And the BIOS loader, which a real medium carries for the same reason it
 # carries BOOTX64.EFI: the machine this is installed on may have no UEFI in it,
 # and the installer cannot write a loader it was not given.
@@ -177,6 +183,28 @@ say "and its own tests pass, with a volume under them"
 if self_tests_passed "$boot" "first boot on this volume"; then
 	pass=$((pass + 1))
 else
+	fail=$((fail + 1))
+fi
+
+# --- and the part that makes it a system rather than a kernel ---------------
+#
+# The kernel carries a copy of the first-boot program inside its own image and
+# falls back to it when the volume has none -- deliberately, because a machine
+# that has not been installed onto has nowhere else to get one. That fallback
+# is why this has to be asserted rather than observed: without it, an installer
+# that quietly stopped writing `/System/init.elf` would still produce a machine
+# that boots and draws a screen, and this file would still print 7 of 7.
+#
+# `from the volume` is the kernel saying it loaded somebody else's program off
+# somebody else's disk, which is the whole difference between a kernel that
+# *contains* a system and one that *starts* one.
+say "and the system it runs came off the volume"
+if echo "$boot" | grep -qa 'the system: /System/init.elf, from the volume'; then
+	echo "/System/init.elf, not the copy in the kernel"
+	pass=$((pass + 1))
+else
+	echo "FAILED"
+	echo "$boot" | grep -a 'the system:' | sed 's/^/      /' | head -2
 	fail=$((fail + 1))
 fi
 

@@ -193,6 +193,16 @@ enum install_verdict install_execute(struct block_device *disk,
 		if (v != INSTALL_OK)
 			return v;
 
+		/* And the system, onto the volume made above.
+		 *
+		 * After the bootloader, because a machine with a system and no
+		 * loader does not start at all; before the BIOS step, for the
+		 * reason that step gives -- everything reversible happens
+		 * before the one write that changes how the machine boots. */
+		v = install_copy_system(medium, system);
+		if (v != INSTALL_OK)
+			return v;
+
 		/* And the BIOS path, last of all.
 		 *
 		 * Last because it is the only step that writes to the first

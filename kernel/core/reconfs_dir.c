@@ -1858,3 +1858,132 @@ enum reconfs_status reconfs_readdir(struct reconfs *fs, u64 dir_block,
 	entries_free(&e);
 	return RECONFS_ERR_NOT_FOUND;
 }
+
+
+/* --- creating on a named volume -------------------------------------------
+ *
+ * Moved here from rootfs.c rather than copied. rootfs.c owns the *mounted*
+ * volume and the policy that goes with it -- whether it is read-only, who is
+ * asking -- and these two own the three moves, which have nothing to do with
+ * which volume they are made on.
+ */
+
+enum reconfs_status reconfs_place_directory(struct reconfs *fs,
+					    const char *path, u32 mode)
+{
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 made = 0, dir = 0, new_root = 0;
+	u64 existing = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	/* Walked before the transaction opens, for the same two reasons the
+	 * file create walks first: to find the parent, and to answer "is
+	 * something already there" while the tree is still the committed one. */
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	/* Refused rather than replaced -- and this catches a *file* of that
+	 * name too, which is the case worth being explicit about: a caller
+	 * building a layout on a volume that already has one must be told,
+	 * not have a file quietly become a directory. */
+	if (reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+			   &existing) == RECONFS_OK && existing)
+		return RECONFS_ERR_EXISTS;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	st = reconfs_create(txn, fs, chain.dirs[chain.count - 1], leaf,
+			    RECONFS_TYPE_DIR, mode, &made, &dir);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	/* The parent moved, so every directory above it is rewritten up to the
+	 * root -- copy-on-write's cost, and one call rather than a loop each
+	 * caller writes for itself. */
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort:
+	reconfs_txn_abort(txn);
+	return st;
+}
+
+enum reconfs_status reconfs_place_file(struct reconfs *fs, const char *path,
+				       u32 mode, const void *data, u32 len)
+{
+	struct reconfs_txn *txn;
+	struct reconfs_path chain;
+	char leaf[RECONFS_NAME_MAX + 1];
+	enum reconfs_status st;
+	u64 made = 0, dir = 0, new_root = 0;
+	u64 existing = 0;
+
+	if (!fs)
+		return RECONFS_ERR_NOT_MOUNTED;
+
+	if (!path || !*path)
+		return RECONFS_ERR_NAME;
+
+	if (len && !data)
+		return RECONFS_ERR_NAME;
+
+	st = reconfs_walk_path(fs, path, &chain, leaf, sizeof(leaf));
+	if (st != RECONFS_OK)
+		return st;
+
+	if (chain.count == 0)
+		return RECONFS_ERR_NAME;
+
+	if (reconfs_lookup(fs, chain.dirs[chain.count - 1], leaf,
+			   &existing) == RECONFS_OK && existing)
+		return RECONFS_ERR_EXISTS;
+
+	txn = reconfs_txn_begin(fs);
+	if (!txn)
+		return RECONFS_ERR_NOMEM;
+
+	/* Create, then fill, then rebuild the path to the root -- all inside
+	 * one transaction. The mode is set by the create, the contents by the
+	 * write, and *neither is visible* until the commit at the bottom.
+	 * There is no ordering between them a power cut can catch, because
+	 * there is no intermediate state to catch. */
+	st = reconfs_create(txn, fs, chain.dirs[chain.count - 1], leaf,
+			    RECONFS_TYPE_FILE, mode, &made, &dir);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	if (len) {
+		st = reconfs_write_named(txn, fs, dir, leaf, data, len, &dir);
+		if (st != RECONFS_OK)
+			goto abort;
+	}
+
+	st = reconfs_rebuild_path(txn, fs, &chain, dir, &new_root);
+	if (st != RECONFS_OK)
+		goto abort;
+
+	reconfs_txn_set_root(txn, new_root);
+	return reconfs_txn_commit(txn);
+
+abort:
+	reconfs_txn_abort(txn);
+	return st;
+}

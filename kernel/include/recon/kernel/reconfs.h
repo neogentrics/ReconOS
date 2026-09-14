@@ -662,6 +662,29 @@ enum reconfs_status reconfs_move(struct reconfs_txn *txn, struct reconfs *fs,
 				 const char *from, const char *to,
 				 u64 *new_root);
 
+/* Creates a directory, or a file with its contents, on **this** volume.
+ *
+ * The same three moves every create in this filesystem makes -- walk to the
+ * parent, act, rewrite the chain up to the root -- with the volume named
+ * rather than assumed. `rootfs_create_directory` and `rootfs_create_file` are
+ * these two with `rootfs()` filled in.
+ *
+ * They exist separately because the installer writes the system onto a volume
+ * it has just formatted, and that volume is not the one the kernel booted
+ * from. A create that could only reach the mounted root would mean an
+ * installer that could only write to the disk it is running off, which is the
+ * one disk it must not touch.
+ *
+ * Refused rather than replaced if the name is taken, for the reason
+ * rootfs.h gives: a create that silently overwrites is how running a
+ * key-generation routine twice destroys the key that was working.
+ */
+enum reconfs_status reconfs_place_directory(struct reconfs *fs,
+					    const char *path, u32 mode);
+
+enum reconfs_status reconfs_place_file(struct reconfs *fs, const char *path,
+				       u32 mode, const void *data, u32 len);
+
 enum reconfs_status reconfs_rebuild_path(struct reconfs_txn *txn,
 					 struct reconfs *fs,
 					 const struct reconfs_path *chain,
