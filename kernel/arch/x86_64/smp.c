@@ -340,14 +340,36 @@ unsigned arch_smp_discover(u64 *ids, unsigned max)
 	 * frequency is not reported anywhere and has to be measured against a
 	 * clock that is already trusted.
 	 *
-	 * The boot processor does *not* then start its APIC timer. It already
-	 * has a tick, from the 8254, and two timers on one processor is two
-	 * ticks -- a scheduler running at twice the rate it believes, which
-	 * looks like it works. */
+	 * The boot processor does *not* then start its APIC timer **if it
+	 * already has one**. Two timers on one processor is two ticks -- a
+	 * scheduler running at twice the rate it believes, which looks like it
+	 * works -- so the second one is a real hazard and the reasoning stands.
+	 *
+	 * What does not stand is assuming it has a tick at all. That sentence
+	 * used to read "it already has a tick, from the 8254", and on the first
+	 * machine with no working 8254 the boot processor unmasked a line
+	 * nothing drives and reported `0 ticks` through an otherwise complete
+	 * boot.
+	 *
+	 * **So it is counted rather than believed**, and the evidence costs
+	 * nothing: calibrating the APIC timer spends twenty milliseconds, which
+	 * is two ticks at 100 Hz. If none arrived in that window, there is no
+	 * 8254 here and this processor needs the timer the secondaries use. */
 	if (x86_apic_init()) {
+		u64 before;
+
 		remember_apic_id(0, x86_apic_id());
 		cpu_map_ready = true;
+
+		before = time_tick_interrupts();
 		x86_apic_calibrate_timer();
+
+		if (time_tick_interrupts() == before) {
+			kputs("  apic: no tick arrived from the 8254 in 20 ms, "
+			      "so the boot processor takes the APIC timer "
+			      "too\n");
+			x86_apic_start_timer();
+		}
 	}
 
 	return found;

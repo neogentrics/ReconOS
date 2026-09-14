@@ -126,6 +126,16 @@
 #define RESP_136		1u
 #define RESP_48			2u
 #define RESP_48_BUSY		3u
+
+/* **R3 carries no CRC and no command index.** The operating-conditions
+ * register comes back with both fields all ones by definition, so a controller
+ * told to check them finds both wrong and raises an error on a card that
+ * answered perfectly.
+ *
+ * Not a response type in the register -- the hardware still sees a 48-bit
+ * response -- but a different set of checks around it, which is why it is a
+ * flag on the side rather than a fourth value. */
+#define RESP_48_NOCRC		0x10u
 #define CMD_CRC_CHECK		(1u << 3)
 #define CMD_INDEX_CHECK		(1u << 4)
 #define CMD_DATA_PRESENT	(1u << 5)
@@ -320,11 +330,22 @@ static bool command(struct sdhci *h, u8 index, u32 arg, u32 resp,
 	w32(h, SD_ARG, arg);
 	w16(h, SD_TRANSFER_MODE, xfer_mode);
 
-	cmd = (u16)((index << 8) | resp);
-	if (resp != RESP_NONE)
+	cmd = (u16)((index << 8) | (resp & 0x3));
+
+	if ((resp & 0x3) != RESP_NONE)
 		cmd |= CMD_CRC_CHECK | CMD_INDEX_CHECK;
-	if (resp == RESP_136)
-		cmd &= (u16)~CMD_INDEX_CHECK;	/* R2 carries no index */
+
+	/* R2 carries no index: the 136-bit response is the register's contents
+	 * and there is nowhere in it for one. */
+	if ((resp & 0x3) == RESP_136)
+		cmd &= (u16)~CMD_INDEX_CHECK;
+
+	/* R3 carries neither. See the note beside RESP_48_NOCRC -- asking the
+	 * controller to check them is how both identification paths failed on
+	 * the first eMMC part this driver met. */
+	if (resp & RESP_48_NOCRC)
+		cmd &= (u16)~(CMD_CRC_CHECK | CMD_INDEX_CHECK);
+
 	if (data)
 		cmd |= CMD_DATA_PRESENT;
 
@@ -488,7 +509,9 @@ static bool init_mmc(struct sdhci *h)
 	u32 ocr = 0;
 
 	for (;;) {
-		if (!command(h, CMD_SEND_OP_COND_MMC, 0x40FF8000, RESP_48, 0, false))
+		/* R3: no CRC, no index. */
+		if (!command(h, CMD_SEND_OP_COND_MMC, 0x40FF8000,
+			     RESP_48 | RESP_48_NOCRC, 0, false))
 			return false;
 
 		ocr = response(h, 0);
@@ -523,8 +546,10 @@ static bool init_sd(struct sdhci *h)
 	for (;;) {
 		if (!command(h, CMD_APP_CMD, 0, RESP_48, 0, false))
 			return false;
+		/* R3, like CMD1 above. */
 		if (!command(h, ACMD_SEND_OP_COND,
-			     v2 ? 0x40FF8000 : 0x00FF8000, RESP_48, 0, false))
+			     v2 ? 0x40FF8000 : 0x00FF8000,
+			     RESP_48 | RESP_48_NOCRC, 0, false))
 			return false;
 
 		ocr = response(h, 0);
@@ -814,8 +839,16 @@ bool sdhci_attach(const struct pci_device *d)
 		 * carrying on from an unknown state. */
 		if (!command(h, CMD_GO_IDLE, 0, RESP_NONE, 0, false) ||
 		    !init_mmc(h)) {
-			kputs("sdhci: a card is present and answered neither "
-			      "as SD nor as eMMC\n");
+			/* Both paths, and what the controller made of the last
+			 * one. The error status is the only thing that
+			 * distinguishes "the card said no" from "the host
+			 * refused the answer", and on a machine with no serial
+			 * port it is this line or nothing. */
+			kprintf("sdhci: a card is present and answered neither "
+				"as SD nor as eMMC (last error status 0x%x, "
+				"present 0x%x)\n",
+				(unsigned)r16(h, SD_ERR_STATUS),
+				(unsigned)r32(h, SD_PRESENT_STATE));
 			return false;
 		}
 	}

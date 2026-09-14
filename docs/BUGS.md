@@ -6853,6 +6853,81 @@ the boot report — with its inputs, the crystal and the ratio, printed beside t
 answer. A wrong ratio produces a clock that is confidently wrong, which is the
 one failure a plausible number hides.
 
+### KF-218 — The boot processor assumed it had a tick, and on a machine with no 8254 it had none
+
+- **Found:** 14 September 2026, on the third real-hardware boot. The kernel ran
+  all the way to its self-tests and reported
+  `tick : 100 Hz, 0 so far` with `cpu 0 : online, hw 0x0, 0 ticks, 0 switches`.
+- **Cost:** **no preemption and no scheduling**, on a kernel that otherwise
+  booted completely. Every timer filed, never fired; every thread, never
+  switched away from.
+- **What it was, in its own words.** `smp.c` explained the decision:
+
+  > The boot processor does *not* then start its APIC timer. It already has a
+  > tick, from the 8254, and two timers on one processor is two ticks -- a
+  > scheduler running at twice the rate it believes, which looks like it works.
+
+  The second half is correct and still is. The first half is an assumption
+  about the machine, written on hardware where it happened to hold. The boot
+  processor unmasked interrupt line 0 and waited for a chip that is not there.
+
+- **Status:** fixed, kernel 0.2.22.
+
+### What was done
+
+Counted instead of believed, and the evidence costs nothing: calibrating the
+APIC timer already spends twenty milliseconds, which is two ticks at 100 Hz. The
+tick interrupt count is read before and after, and if it has not moved there is
+no 8254 here and the boot processor takes the timer the secondaries use --
+saying so on the line.
+
+The reason for *not* starting a second timer is unchanged. It is now conditional
+on the thing it was reasoning about rather than on the belief that the thing is
+always true.
+
+### KF-219 — Two commands carry no checksum, and the driver asked the controller to check one
+
+- **Found:** 14 September 2026, on the same boot.
+  `sdhci: a card is present and answered neither as SD nor as eMMC`, twice --
+  once for each of the machine's two SD host controllers. So 3.1 found the
+  controllers, brought them up, and saw a card; it was the identification that
+  failed.
+- **Cost:** the internal storage of any machine with an eMMC part is
+  unreachable. That is the disk of the laptop this driver was written for.
+- **The clue was that both paths failed.** SD and eMMC are asked completely
+  different questions and share exactly one thing: `ACMD41` and `CMD1` both
+  return an **R3** response. R3 is the one response the specification defines as
+  carrying *no CRC and no command index* -- both fields are all ones by
+  definition.
+
+  This driver set `CMD_CRC_CHECK | CMD_INDEX_CHECK` on every command with a
+  response. So the controller checked a checksum that was never computed,
+  found it wrong, and raised an error; the command path did exactly what it
+  should with an error, reset, and reported failure. Both branches came back
+  empty on a card that had answered correctly.
+
+- **Why the matrix could not see it.** QEMU's SDHCI model does not enforce
+  response CRC, so the check passed against a card that never computed one.
+  That is the shape `sdhci.c` warns about in its own header: the host side is
+  emulated and the card side is not, and **a check nobody performs is a check
+  nobody fails**.
+- **Status:** fixed, kernel 0.2.23.
+
+### What was done
+
+`RESP_48_NOCRC` is a flag beside the response type rather than a fourth value,
+because the hardware still sees a 48-bit response -- what differs is the checks
+around it. `CMD1` and `ACMD41` ask with it.
+
+The refusal also says what the controller saw now: the error status register and
+the present state, because on a machine with no serial port that line is the
+only instrument there is, and "the card said no" and "the host refused the
+answer" are different faults that looked identical.
+
+**Verified not to have broken the half that worked**: the emulated SD card still
+reports 131072 blocks and its GPT still reads back as `slice mmc0 1 2048 18431`
+and `slice mmc0 2 20480 53247`.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because
