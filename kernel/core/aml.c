@@ -393,7 +393,37 @@ static bool term(struct cursor *c, int depth, char *device_name)
 			c->p = save;
 		}
 
-		return data_object(c, NULL, NULL);
+		/* Kept, not merely stepped over. A method returning `BUF0` is
+		 * the ordinary shape of `_CRS`, and the parser is the only
+		 * thing that knows where `BUF0`'s bytes are.
+		 *
+		 * The object's extent is the distance the step covered, which
+		 * is why this brackets the call rather than asking the object
+		 * how long it is -- most data objects do not carry a length. */
+		{
+			const u8 *from = c->p;
+
+			if (!data_object(c, NULL, NULL))
+				return false;
+
+			if (state.names_kept < AML_MAX_NAMES) {
+				struct aml_name *n =
+					&state.name_obj[state.names_kept];
+
+				kstrlcpy(n->name, name, sizeof(n->name));
+				if (device_name)
+					kstrlcpy(n->device, device_name,
+						 sizeof(n->device));
+				else
+					n->device[0] = '\0';
+
+				n->object = from;
+				n->object_len = (u32)(c->p - from);
+				state.names_kept++;
+			}
+
+			return true;
+		}
 	}
 
 	case OP_SCOPE: {
@@ -420,15 +450,59 @@ static bool term(struct cursor *c, int depth, char *device_name)
 	}
 
 	case OP_METHOD: {
+		const u8 *body_end;
+		char mname[AML_NAME_LEN];
+
 		if (!pkg_length(c, &len))
 			return false;
 		if ((size_t)(c->end - c->p) < len)
 			return false;
 
-		/* Located, counted, and stepped over entire. Its body is
-		 * executable AML and this parser does not execute. */
+		body_end = c->p + len;
+
+		/* `MethodOp PkgLength NameString MethodFlags TermList`. The
+		 * name and the flags are inside the package and the body is
+		 * whatever is left of it -- which is why this reads them here
+		 * rather than stepping over the package whole.
+		 *
+		 * A method whose header will not parse is not a reason to stop
+		 * the walk: the package length is trustworthy on its own, so
+		 * the body can still be stepped over exactly. The method is
+		 * counted and not recorded, which is a smaller loss than a
+		 * namespace that ends here. */
 		state.methods++;
-		c->p += len;
+
+		if (name_string(c, mname) && have(c, 1)) {
+			u8 flags = *c->p++;
+
+			if (state.methods_kept < AML_MAX_METHODS &&
+			    c->p <= body_end) {
+				struct aml_method *m =
+					&state.method[state.methods_kept];
+
+				kstrlcpy(m->name, mname, sizeof(m->name));
+				if (device_name)
+					kstrlcpy(m->device, device_name,
+						 sizeof(m->device));
+				else
+					m->device[0] = '\0';
+
+				/* The low three bits, and only those: the rest
+				 * are the serialise flag and a sync level,
+				 * which say how a method may be entered rather
+				 * than what it is passed. */
+				m->args = (u8)(flags & 0x07);
+				m->body = c->p;
+				m->body_len = (u32)(body_end - c->p);
+
+				state.methods_kept++;
+			}
+		}
+
+		/* Stepped over from the package's own end rather than from
+		 * wherever reading the header left the cursor, so a header this
+		 * did not understand cannot move the walk. */
+		c->p = body_end;
 		return true;
 	}
 
@@ -629,8 +703,17 @@ void aml_print_summary(void)
 		return;
 	}
 
-	kprintf("  aml          : %u names, %u devices, %u methods stepped "
-		"over\n", state.names, state.devices, state.methods);
+	kprintf("  aml          : %u names, %u devices, %u methods\n",
+		state.names, state.devices, state.methods);
+
+	/* Only where the two differ. The cap is a fact about this kernel and
+	 * not about the machine, so a line printing it every boot is one
+	 * nobody reads -- but a machine declaring more methods than this will
+	 * hold is a machine whose namespace is larger than anything below can
+	 * see, and that has to be sayable. */
+	if (state.methods_kept < state.methods)
+		kprintf("  aml          : %u recorded; the rest are past what "
+			"this kernel holds\n", state.methods_kept);
 
 	/* **Only when there were any**, because a line reporting zero of
 	 * something on every machine that has none is a line people stop
