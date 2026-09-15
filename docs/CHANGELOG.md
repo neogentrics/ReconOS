@@ -9,6 +9,75 @@ way for the two to disagree.
 
 ---
 
+## v0.4.29 — errno, and two numberings that meet in one place
+
+One symbol, **43 call sites**, and the only group left that needed nothing at
+all from the kernel: the kernel already answers with numbers, and turning a
+number into a sentence is entirely this side's work.
+
+### The values are Linux's, deliberately
+
+A ReconOS system call answers a negative number of its own -- `SYS_ENOENT` is
+-7 -- and the obvious thing would be to expose those. `userland/include/errno.h`
+says why it does not, and the first reason is the one that would have bitten
+soonest: **the desktop is compiled against both libraries at once, today.**
+`scripts/check-userland.sh` builds individual sources of `src/` with these
+headers while the rest of the program is still built against glibc's. `ENOENT`
+being 7 in one translation unit and 2 in another is a fault that reads as a
+filesystem fault.
+
+The second is that it makes `strerror` testable at all. Every other function in
+this library is held against the host's by asking both the same question, and
+the question `strerror` is asked is a number.
+
+So `libc/errno.c` is the single place the two numberings meet, and being the
+only one is the point of it.
+
+### The messages are glibc's, word for word
+
+Not because the wording is specified -- it is not -- but because a message this
+library invents is a message that differs from the one the same program prints
+today on Linux for the same fault, and somebody will eventually compare two
+logs. It also means the suite can hold all 52 of them to **equality** rather
+than to "is it a non-empty string".
+
+### Where it deliberately disagrees, and how that was found
+
+The suite's first run failed on one case: it had picked 60 as an example of a
+number neither library defines, and 60 is `ENOSTR` -- which glibc knows and
+ReconOS does not, because there are no streams here. `errno.h` says outright
+that a constant defined for a condition that cannot arise is a constant
+somebody writes a branch for, and that branch is never taken and never tested.
+
+That is not a fault, so it did not become a bug entry. It became an
+**assertion**: `ENOSTR`, `ETIME`, `EDQUOT` and `ESTALE` are checked to read
+`Unknown error N` here, with a note saying what glibc calls each. The
+divergence is now recorded in the one place that cannot go stale.
+
+### And the translation cannot go quietly out of date
+
+The suite reads `userland/include/recon.h` -- **the kernel's own list** -- while
+it runs, and compares the highest error number there with what the translation
+covers. A lookup table's failure is going stale, and the cost here is specific:
+an error the table has never heard of falls back to `EIO`, which is a plausible
+wrong answer, and somebody goes to look at a disk that is fine.
+
+Mutation-tested in both directions. Adding an error to the kernel's header:
+*the kernel has 18 error numbers and the translation covers 17*. Adding one to
+the table that the kernel does not have: the same sentence the other way round.
+
+**1,435 checks, 0 failures.**
+
+| | before | now |
+|---|---|---|
+| symbols answered | 77 of 132 | **78 of 132** |
+| call sites answered | 2,908 of 3,113 | **2,951 of 3,113** |
+
+162 call sites left. Files and directories is now the whole of the near-term
+work at 96, then sockets at 44.
+
+---
+
 ## v0.4.28 — the allocator
 
 The last large piece of the C library, and the one every other piece was

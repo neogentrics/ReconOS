@@ -16,6 +16,9 @@
 #ifndef RECON_LIBC_PREFIX_H
 #define RECON_LIBC_PREFIX_H
 
+#define errno       recon_errno
+#define strerror    recon_strerror
+
 #define malloc      recon_malloc
 #define calloc      recon_calloc
 #define realloc     recon_realloc

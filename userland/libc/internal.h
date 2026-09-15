@@ -151,6 +151,25 @@ void recon_malloc_stats(struct recon_malloc_stats *into);
 unsigned recon_malloc_audit(void);
 void recon_malloc_reset(void);
 
+/* --- errno.c --------------------------------------------------------------
+ *
+ * `errno` itself is declared in `userland/include/errno.h`, which this file's
+ * one other exception -- see the note at the bottom -- lets errno.c include
+ * directly.
+ */
+char *strerror(int number);
+
+/* What a system call's answer means in C's numbering. Negative in, `errno`
+ * out; 0 for anything that did not fail. One place, so that every wrapper in
+ * this library has a line for failure rather than a table of its own. */
+int recon_errno_from_status(long status);
+
+/* How many kernel error numbers that translation knows about. Asked by the
+ * suite and compared against the kernel's own list, because a lookup table's
+ * failure is going quietly out of date -- and an untranslated error becomes a
+ * plausible-looking EIO, which sends somebody to look at a disk that is fine. */
+unsigned recon_errno_count(void);
+
 /*
  * --- Time is not declared here ---
  *

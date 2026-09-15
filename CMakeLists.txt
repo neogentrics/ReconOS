@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.28
+    VERSION 0.4.29
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -761,6 +761,7 @@ set_source_files_properties(
     userland/libc/time.c
     userland/libc/math.c
     userland/libc/malloc.c
+    userland/libc/errno.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -770,6 +771,18 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# errno and strerror, in a program of its own.
+#
+# It reads `userland/include/recon.h` while it runs -- the kernel's own list of
+# error numbers -- and compares it with what the translation covers. That is
+# why it has a WORKING_DIRECTORY: the check is worthless if the suite gets its
+# idea of the kernel's errors from the same place the translation did.
+add_executable(recon_libc_errno_tests
+    userland/tests/test_libc_errno.c
+    userland/libc/errno.c
+    userland/libc/printf.c
+    userland/libc/string.c)
 
 # The allocator, in a program of its own.
 #
@@ -841,6 +854,9 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_errno COMMAND recon_libc_errno_tests)
+set_tests_properties(libc_errno PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME libc_malloc COMMAND recon_libc_malloc_tests)
 add_test(NAME libc_math COMMAND recon_libc_math_tests)
 
