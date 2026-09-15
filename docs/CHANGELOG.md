@@ -9,6 +9,98 @@ way for the two to disagree.
 
 ---
 
+## v0.4.30 — files by name, by number, and by directory
+
+Eleven of the twenty-one symbols in the largest group left, and they are the
+eleven that have a system call underneath them already: `open`, `close`,
+`read`, `write`, `lseek`, `mkdir`, `opendir`, `readdir`, `closedir`,
+`realpath` and `sysconf`.
+
+The other ten -- `stat` and its two relatives, `unlink`, `rmdir`, `access`,
+`chmod`, `umask`, `mmap`, `munmap` -- are **declared in the headers and
+deliberately not defined**, so a caller fails to link naming the symbol. Each
+header says what its absentees are waiting for. That is the stance
+`<stdlib.h>` took about `malloc` for as long as there was nothing to build an
+allocator on, and the reason is the same: a stub that answers -1 with a
+plausible errno would have a program ask whether a file exists, be told no,
+create it, and do that every time.
+
+### Everything here is a translation, and the translation is the whole risk
+
+`RECON_O_READ` is 1 and `O_RDONLY` is 0. A wrapper that passed the flags
+through unchanged would open every read-only file for writing and every
+write-only one for reading -- it builds, it passes the first test, and it
+destroys a file on the fourth.
+
+So the suite makes every call twice, once through ReconOS's wrappers and once
+through the host's, on the same files, and requires the same answers. Plus
+three things a comparison cannot see:
+
+- **That the flags are really translated**, by writing through a read-only
+  descriptor and requiring it to fail. Two libraries that got this wrong the
+  same way would agree with each other.
+- **That `realpath` will not climb out of the root.** `/System/../../Users` is
+  `/Users`, not something above the root. That is ReconOS's containment rule,
+  not POSIX's, so there is nothing to compare it against.
+- **That the descriptor limit matches the kernel's**, read out of
+  `kernel/include/recon/kernel/process.h` while the suite runs.
+
+### `readdir` over a call that answers the whole directory at once
+
+`SYS_LIST` returns every name in one call and refuses rather than truncating.
+That is the opposite shape from `readdir`, and it is the better one: a
+directory read in pieces has no guarantee about what a caller sees when it
+changes between two of them, and nothing in the interface can say so.
+
+So `opendir` reads the lot and `readdir` walks it. `d_type` is always
+`DT_UNKNOWN`, which POSIX allows — and which was checked before being relied
+on: **the desktop reads `d_name` at every one of its sites and `d_type` at
+none of them.**
+
+### The stand-in was looser than the thing it stands in for
+
+`userland/tests/hostsys.c` answers the primitives with POSIX so the library can
+run on Linux. It existed for the `FILE` layer, which only ever asked whether a
+result was negative -- so returning POSIX's `-1` was good enough and nobody
+noticed it was not the kernel's contract.
+
+The descriptor layer asks more: it turns that answer into `errno`. Against the
+old stand-in, a file that was not there reported `ENOSYS` instead of `ENOENT`.
+Both failures showed up on the suite's first run.
+
+**A stand-in with a looser contract than the real call is the one way a
+stand-in can be worse than none** — it lets code pass here that would be wrong
+on a machine. All eight primitives now answer with the kernel's numbers.
+
+### And the measurement was hiding five functions
+
+BG-197, and it is the fourth of a family. `measure-libc.py` drops symbols
+starting with `__`, which is right for `__stack_chk_fail` and wrong for
+`__isoc99_sscanf` — glibc's spelling of `sscanf`. Five library functions sat
+behind that filter, and the number was wrong **in both directions**: `errno`,
+the ctype table and `strtoul` are answered and were not counted; `sscanf` and
+`assert` are not answered and were never reported.
+
+Fixed by translating the spelling rather than widening the filter. The script
+then refused to report anything until all three newly-visible names had a line
+in its table, naming them — the guard added in v0.4.28 doing its job.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 2,951 of 3,113 | **3,020 of 3,134** |
+| desktop sources that build with no libc | 11 of 79 | **19 of 79** |
+
+The eight new ones are almost exactly the browser's half of the desktop — the
+HTML parser, the CSS parser, forms, HTTP. Not a coincidence: a parser is
+strings and allocation and very little else.
+
+Sockets is now the largest group left at 44 call sites, then the ten remaining
+file calls at 31, then `sscanf` at 14.
+
+---
+
 ## v0.4.29 — errno, and two numberings that meet in one place
 
 One symbol, **43 call sites**, and the only group left that needed nothing at

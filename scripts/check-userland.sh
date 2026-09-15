@@ -87,6 +87,19 @@ fi
 # build until userland/libc/math.c existed. It is also the largest file on this
 # list at 459 lines, and it evaluates an expression grammar -- which is to say
 # ReconOS can now do arithmetic with no glibc underneath it.
+
+# Added 14 September 2026, after the allocator, errno and the descriptor layer.
+# Offered to the compiler rather than assumed: every file in src/ was tried and
+# these eight built where they had not.
+#
+# Almost exactly the browser's half of the desktop -- the HTML parser, the CSS
+# parser, forms, HTTP -- which is not a coincidence. A parser is strings and
+# allocation and very little else, and that is what arrived.
+#
+# `src/recon_cookie.c` was on this list for an hour and is not now. The probe
+# that found them compiled without `-Werror`, so an implicit declaration of
+# `sscanf` was a warning there and is an error here. The probe was looser than
+# the check it was predicting -- and the check is the one that decides.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -99,6 +112,14 @@ src/recon_crypt.c
 src/recon_sniff.c
 src/recon_smtp_message.c
 src/recon_ocr.c
+src/recon_clip.c
+src/recon_css.c
+src/recon_firewall.c
+src/recon_fonts.c
+src/recon_form.c
+src/recon_html.c
+src/recon_http.c
+src/recon_registry.c
 "
 
 out=$(mktemp -d)

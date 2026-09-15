@@ -18,6 +18,7 @@
  */
 
 #include <recon.h>
+#include <recon_machine.h>
 
 #include "internal.h"
 
@@ -44,6 +45,27 @@ long recon_sys_seek(int fd, long long offset, int from)
 long recon_sys_close(int fd)
 {
 	return (long)recon_close(fd);
+}
+
+long recon_sys_list(const char *path, char *names, unsigned long names_len)
+{
+	return (long)RECON_CALL4(SYS_LIST, path, recon_strlen(path),
+				 names, names_len);
+}
+
+long recon_sys_mkdir(const char *path, unsigned long mode)
+{
+	return (long)recon_mkdir(path, recon_strlen(path), mode);
+}
+
+long recon_sys_page_size(void)
+{
+	struct recon_machine machine;
+
+	if (recon_machine_facts(&machine, sizeof(machine)) < 0)
+		return -1;
+
+	return (long)machine.page_size;
 }
 
 void recon_sys_exit(int code)

@@ -20,16 +20,62 @@
 
 #define _GNU_SOURCE
 
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include "../libc/internal.h"
 
+/*
+ * The host's errno, as the number a ReconOS system call would have answered.
+ *
+ * Every primitive here goes through it. Returning POSIX's -1 instead -- which
+ * this file did until the descriptor layer was written -- is a stand-in with a
+ * *looser contract than the real call*, and that is the one way a stand-in can
+ * be worse than not having one: it lets a wrapper pass here while reporting
+ * the wrong reason on a machine.
+ *
+ * Found by `recon_libc_posix_tests` on its first run: a file that was not
+ * there came back as ENOSYS rather than ENOENT.
+ *
+ * The values are the kernel's, from `userland/include/recon.h`. Written as
+ * numbers because this file must not include that header -- it is the one
+ * file compiled against the *host's* headers, unrenamed, on purpose.
+ */
+static long as_recon_status(void)
+{
+	switch (errno) {
+	case ENOENT:		return -7;	/* SYS_ENOENT */
+	case ENOTDIR:		return -7;
+	case EEXIST:		return -6;	/* SYS_EEXIST */
+	case EBADF:		return -11;	/* SYS_EBADF  */
+	case EACCES:		return -12;	/* SYS_EPERM  */
+	case EPERM:		return -12;
+	case EROFS:		return -12;
+	case EINVAL:		return -3;	/* SYS_EINVAL */
+	case EFAULT:		return -2;	/* SYS_EFAULT */
+	case ENOSPC:		return -8;	/* SYS_ENOSPC */
+	case EMFILE:		return -10;	/* SYS_EMFILE */
+	case ENFILE:		return -10;
+	case ENOMEM:		return -14;	/* SYS_ENOMEM */
+	case EPIPE:		return -13;	/* SYS_EPIPE  */
+	case EAGAIN:		return -4;	/* SYS_EAGAIN */
+	case ESPIPE:		return -3;
+	case ENODEV:		return -5;	/* SYS_ENODEV */
+	default:		return -9;	/* SYS_EIO    */
+	}
+}
+
 long recon_sys_open(const char *path, unsigned long flags)
 {
 	int posix;
+	int fd;
 
 	if ((flags & RECON_O_WRITE) && (flags & RECON_O_READ)) {
 		posix = O_RDWR | O_CREAT;
@@ -39,17 +85,23 @@ long recon_sys_open(const char *path, unsigned long flags)
 		posix = O_RDONLY;
 	}
 
-	return (long)open(path, posix, 0644);
+	fd = open(path, posix, 0644);
+
+	return fd < 0 ? as_recon_status() : (long)fd;
 }
 
 long recon_sys_read(int fd, void *into, unsigned long length)
 {
-	return (long)read(fd, into, (size_t)length);
+	ssize_t n = read(fd, into, (size_t)length);
+
+	return n < 0 ? as_recon_status() : (long)n;
 }
 
 long recon_sys_write(int fd, const void *from, unsigned long length)
 {
-	return (long)write(fd, from, (size_t)length);
+	ssize_t n = write(fd, from, (size_t)length);
+
+	return n < 0 ? as_recon_status() : (long)n;
 }
 
 long recon_sys_seek(int fd, long long offset, int from)
@@ -61,12 +113,14 @@ long recon_sys_seek(int fd, long long offset, int from)
 	} else if (from == RECON_SEEK_END) {
 		whence = SEEK_END;
 	}
-	return (long)lseek(fd, (off_t)offset, whence);
+	off_t where = lseek(fd, (off_t)offset, whence);
+
+	return where < 0 ? as_recon_status() : (long)where;
 }
 
 long recon_sys_close(int fd)
 {
-	return (long)close(fd);
+	return close(fd) < 0 ? as_recon_status() : 0;
 }
 
 /*
@@ -100,6 +154,88 @@ long long recon_sys_walltime(void)
 		return 0;
 	}
 	return (long long)now.tv_sec * 1000000000LL + (long long)now.tv_nsec;
+}
+
+/*
+ * Every name in a directory, in one call, the way SYS_LIST answers.
+ *
+ * Deliberately not "POSIX readdir with a loop around it and whatever falls
+ * out". The kernel's contract is specific and the layer above is written
+ * against it, so this reproduces it exactly:
+ *
+ *   - names NUL-terminated and back to back,
+ *   - the size of the *whole* listing returned whether or not it fitted,
+ *   - and **nothing written at all** unless all of it fits.
+ *
+ * A stand-in that got the last point wrong would let `opendir` pass here while
+ * reading half a directory on a machine.
+ *
+ * `.` and `..` are dropped, because a ReconFS listing has no such entries --
+ * `reconfs_list` walks the names a directory holds and those two are not
+ * among them.
+ */
+long recon_sys_list(const char *path, char *names, unsigned long names_len)
+{
+	DIR *dir = opendir(path);
+	struct dirent *e;
+	unsigned long needed = 0;
+
+	if (!dir) {
+		switch (errno) {
+		case ENOENT:	return -7;	/* SYS_ENOENT */
+		case ENOTDIR:	return -7;
+		case EACCES:	return -12;	/* SYS_EPERM  */
+		default:	return -9;	/* SYS_EIO    */
+		}
+	}
+
+	while ((e = readdir(dir)) != NULL) {
+		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+			continue;
+		needed += strlen(e->d_name) + 1;
+	}
+
+	if (!names || names_len < needed) {
+		closedir(dir);
+		return (long)needed;
+	}
+
+	rewinddir(dir);
+	needed = 0;
+
+	while ((e = readdir(dir)) != NULL) {
+		size_t n;
+
+		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+			continue;
+
+		n = strlen(e->d_name) + 1;
+		memcpy(names + needed, e->d_name, n);
+		needed += n;
+	}
+
+	closedir(dir);
+	return (long)needed;
+}
+
+long recon_sys_mkdir(const char *path, unsigned long mode)
+{
+	if (mkdir(path, (mode_t)mode) != 0) {
+		switch (errno) {
+		case EEXIST:	return -6;	/* SYS_EEXIST */
+		case ENOENT:	return -7;	/* SYS_ENOENT */
+		case EACCES:	return -12;	/* SYS_EPERM  */
+		case ENOSPC:	return -8;	/* SYS_ENOSPC */
+		default:	return -9;	/* SYS_EIO    */
+		}
+	}
+
+	return 0;
+}
+
+long recon_sys_page_size(void)
+{
+	return sysconf(_SC_PAGESIZE);
 }
 
 void recon_sys_exit(int code)

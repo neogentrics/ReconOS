@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.29
+    VERSION 0.4.30
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -762,6 +762,7 @@ set_source_files_properties(
     userland/libc/math.c
     userland/libc/malloc.c
     userland/libc/errno.c
+    userland/libc/posix.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -771,6 +772,25 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# The descriptor layer -- open, read, write, directories -- against the host's.
+#
+# `hostsys.c` is what makes it testable: it answers the eight primitives the
+# library is built on with POSIX, *including a recon_sys_list that behaves like
+# the kernel's* rather than like POSIX readdir. That last point is the one that
+# matters -- a stand-in with a looser contract than the real call would let the
+# layer pass here while reading half a directory on a machine.
+#
+# It reads `kernel/include/recon/kernel/process.h` while it runs, to compare
+# the descriptor limit against the kernel's own, so it has a WORKING_DIRECTORY.
+add_executable(recon_libc_posix_tests
+    userland/tests/test_libc_posix.c
+    userland/tests/hostsys.c
+    userland/libc/posix.c
+    userland/libc/errno.c
+    userland/libc/malloc.c
+    userland/libc/printf.c
+    userland/libc/string.c)
 
 # errno and strerror, in a program of its own.
 #
@@ -854,6 +874,9 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_posix COMMAND recon_libc_posix_tests)
+set_tests_properties(libc_posix PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME libc_errno COMMAND recon_libc_errno_tests)
 set_tests_properties(libc_errno PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

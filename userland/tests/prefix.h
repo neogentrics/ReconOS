@@ -16,6 +16,26 @@
 #ifndef RECON_LIBC_PREFIX_H
 #define RECON_LIBC_PREFIX_H
 
+/* --- the descriptor layer --------------------------------------------------
+ *
+ * `recon_libc_` rather than `recon_`, because `recon_open`, `recon_read`,
+ * `recon_write` and `recon_close` are already taken: they are the system-call
+ * inlines in `userland/include/recon.h`, one layer below these.
+ * `scripts/measure-libc.py` strips both prefixes, so the coverage figure still
+ * reads these as the POSIX names they are.
+ */
+#define open        recon_libc_open
+#define close       recon_libc_close
+#define read        recon_libc_read
+#define write       recon_libc_write
+#define lseek       recon_libc_lseek
+#define mkdir       recon_libc_mkdir
+#define opendir     recon_libc_opendir
+#define readdir     recon_libc_readdir
+#define closedir    recon_libc_closedir
+#define realpath    recon_libc_realpath
+#define sysconf     recon_libc_sysconf
+
 #define errno       recon_errno
 #define strerror    recon_strerror
 

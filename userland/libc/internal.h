@@ -98,6 +98,19 @@ long recon_sys_write(int fd, const void *from, unsigned long length);
 long recon_sys_seek(int fd, long long offset, int from);
 long recon_sys_close(int fd);
 
+/* Every name in a directory, in one call, NUL-terminated and back to back.
+ * Answers the size of the whole listing whether or not it fitted, so asking
+ * with no room is how a caller finds out how much to bring. Whole or nothing:
+ * a caller handed the first half of a directory alongside a success has no way
+ * to know. */
+long recon_sys_list(const char *path, char *names, unsigned long names_len);
+
+long recon_sys_mkdir(const char *path, unsigned long mode);
+
+/* How big a page is, which is the machine's to say rather than a constant in a
+ * header. -1 if it cannot be asked. */
+long recon_sys_page_size(void);
+
 #define RECON_SEEK_SET 0
 #define RECON_SEEK_CUR 1
 #define RECON_SEEK_END 2
@@ -158,6 +171,14 @@ void recon_malloc_reset(void);
  * directly.
  */
 char *strerror(int number);
+
+/* --- posix.c --------------------------------------------------------------
+ *
+ * The types and structs these use are in the public headers, which posix.c
+ * includes by relative path -- the same exception time.c and errno.c take.
+ * Declared here only so the rest of the library can call them.
+ */
+char *realpath(const char *path, char *into);
 
 /* What a system call's answer means in C's numbering. Negative in, `errno`
  * out; 0 for anything that did not fail. One place, so that every wrapper in

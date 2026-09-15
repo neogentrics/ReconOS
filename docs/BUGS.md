@@ -7743,6 +7743,50 @@ regenerated after that tree is pushed.
   being skipped.
 - **The number moved from 34 suites to 40.**
 
+### BG-197 — The coverage measurement was hiding five C library functions behind its `__` filter
+
+[#470](https://github.com/neogentrics/ReconOS/issues/470)
+
+- **Found in** v0.4.30, when `scripts/check-userland.sh` refused a file the
+  coverage figure said nothing was wrong with: `src/recon_cookie.c` needs
+  `sscanf`, and `sscanf` appeared in neither total.
+- **What it was** `measure-libc.py` drops symbols beginning with `__`, which is
+  right for compiler and runtime internals -- `__stack_chk_fail` appears in 74
+  of the desktop's objects and is nobody's C library function.
+
+  But **glibc renames standard functions on the way out.** `sscanf` is emitted
+  as `__isoc99_sscanf`, `strtoul` as `__isoc23_strtoul`, `errno` as a call to
+  `__errno_location`, `isalpha` as a lookup through `__ctype_b_loc`, `assert`
+  as `__assert_fail` and `signal` as `__sysv_signal`. Eight symbols sat behind
+  that filter and five of them were library functions.
+- **The number was wrong in both directions**, which is what made it hard to
+  notice. `errno`, the ctype table and `strtoul` **are** answered and were not
+  being counted. `sscanf` and `assert` are **not** answered and were never
+  reported as missing. The two errors partly cancelled.
+- **The fourth of the family.** BG-182 counted from a list of expected names.
+  BG-185 corrected the list, which corrected nothing. BG-195 defined "the
+  library" as whatever one test target had compiled. This one defined "a C
+  library function" as "a name not starting with two underscores".
+
+  Every time, the measurement's idea of the thing came from the same place the
+  thing did.
+- **Fixed in** v0.4.30 by translating the spelling before deciding, rather than
+  by widening the filter -- a prefix table for the `__isoc99_` and `__isoc23_`
+  families, and a name table for the six that are their own thing. Anything
+  still starting with `__` afterwards is a compiler symbol, which is what the
+  filter was for.
+
+  The script then refused to report a number at all until `sscanf`, `assert`
+  and `signal` had a line in its table, **naming all three** -- the guard added
+  in v0.4.28 doing exactly what it was added for.
+- **And a second, smaller one the same hour.** Nine desktop sources were added
+  to `check-userland.sh` on the strength of a probe that compiled every file in
+  `src/` -- without `-Werror`. The real check has it, so an implicit
+  declaration of `sscanf` was a warning in the probe and an error in the check,
+  and `recon_cookie.c` went on the list and came off it an hour later. **A
+  probe looser than the check it predicts** is the same shape as the stand-in
+  in the entry below.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

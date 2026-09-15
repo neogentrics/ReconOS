@@ -56,6 +56,40 @@ NOT_LIBC_PREFIX = ('wlr_', '_wlr_', 'wl_', 'xkb_', 'pixman_', 'mbedtls_',
 NOT_LIBC_EXACT = {'compress2', 'compressBound', 'crc32', 'uncompress',
                   'inflate', 'deflate'}
 
+# What glibc calls a standard function when it emits a call to it.
+#
+# These are not compiler internals and the `__` filter above should not eat
+# them. `sscanf` really is referenced by seven of the desktop's objects, and
+# for as long as this table did not exist the coverage figure neither counted
+# it as answered nor reported it as missing -- it simply was not there.
+#
+# Both directions were wrong. `errno` and `strtoul` *are* answered and were not
+# being counted; `sscanf` and `assert` are *not* and were not being reported.
+#
+# By prefix where glibc uses one -- the `__isoc99_` and `__isoc23_` families
+# are versioned spellings of the same functions -- and by name for the four
+# that are their own thing. Anything still starting with `__` after this is a
+# compiler or runtime symbol, which is what the filter was for.
+REDIRECTED_PREFIX = ('__isoc99_', '__isoc23_')
+
+REDIRECTED_EXACT = {
+    '__errno_location': 'errno',
+    '__ctype_b_loc': 'isalpha',		# the table behind the ctype macros
+    '__ctype_tolower_loc': 'tolower',
+    '__ctype_toupper_loc': 'toupper',
+    '__assert_fail': 'assert',
+    '__sysv_signal': 'signal',
+}
+
+
+def as_written(name):
+    """The name a program actually wrote, given the one glibc emitted."""
+    for prefix in REDIRECTED_PREFIX:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+
+    return REDIRECTED_EXACT.get(name, name)
+
 # What each symbol the library does not have would take. Assigned by hand,
 # which is safe in a way the old list was not: these names came *out* of the
 # linker rather than going into it, so the table describes what was found
@@ -73,10 +107,13 @@ NEEDS = {
                 'recvfrom setsockopt getsockopt shutdown getaddrinfo '
                 'freeaddrinfo gai_strerror getnameinfo getifaddrs '
                 'freeifaddrs inet_pton inet_ntoa htons htonl'),
-    'processes and signals': 'fork execvp kill raise _exit getsid',
+    'processes and signals': 'fork execvp kill raise _exit getsid signal',
     'loading a module at run time': 'dlopen dlsym dlclose dlerror',
     'an errno': 'strerror',
-    'the rest of stdio': 'feof ferror ungetc',
+    # sscanf is emitted by glibc as `__isoc99_sscanf`, so it sat behind the
+    # `__` filter and was in neither total until 14 September 2026.
+    'the rest of stdio': 'feof ferror ungetc sscanf',
+    'an assertion': 'assert',
     'the rest of string': 'memmem strcasestr',
     'an environment': 'setenv',
 }
@@ -165,7 +202,10 @@ def main():
             % ', '.join(missing))
         return 1
 
-    needed = nm('--undefined-only', desktop)
+    needed = collections.Counter()
+    for name, count in nm('--undefined-only', desktop).items():
+        needed[as_written(name)] += count
+
     provided = set(nm('--defined-only', desktop))
 
     external = sorted(n for n in needed
