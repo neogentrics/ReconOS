@@ -7973,6 +7973,48 @@ regenerated after that tree is pushed.
   that separates the two is *can this be found again tomorrow*, and nothing was
   asking it.
 
+### BG-205 — Five names something is looked up by were cut instead of refused
+
+[#478](https://github.com/neogentrics/ReconOS/issues/478)
+
+- **Found in** v0.4.35, by reading every one of the seventeen truncation
+  warnings a release build reports rather than the one line on the board that
+  summarised them: *"Every one builds a string to display rather than to
+  open."* Five of them do not.
+- **What they were**
+
+  | | what a cut one does |
+  |---|---|
+  | `recon_mailwin.c` — a keyring entry name | two accounts collide and one silently overwrites the other's password |
+  | `recon_cmd.c` — where `move` and `copy` put things | the file lands somewhere else and the command reports success |
+  | `recon_icon_gen.c` — an icon's stamp key | the cache vouches for a different file |
+  | `recon_http.c` — a redirect's `Location` | a different URL is fetched |
+  | `recon_shell.c` — a pinned menu entry | pins something that can never be found again, so it cannot be unpinned or started |
+
+- **The keyring one is the sharpest**, because the comment directly above it
+  already describes the fault a cut reintroduces: *"a single `mail/password`
+  would have them overwriting each other with no sign that anything had
+  happened. Host and user together are what identifies an account everywhere
+  else in this file, so they are what identifies it here."*
+
+  `user` holds 128 bytes and `host` 192; a keyring name holds 128. An address
+  longer than about 122 characters is cut, and two accounts on one host whose
+  usernames share a long enough prefix then produce **the same name**.
+  `recon_keyring_put` overwrites one password with the other and reports
+  success. The failure is silent in both directions: what was stored is gone,
+  and what comes back belongs to somebody else.
+- **Fixed in** v0.4.35. Each of the five refuses now. Four refuse invisibly and
+  correctly — a stamp not written, a redirect not followed, an entry not
+  pinned, a destination reported as too long. The fifth changes what a window
+  offers, so it says why: **VT-J003**, *a password could not be remembered*.
+- **What the rule already said** `include/recon_fs.h` has carried it for
+  months, above `recon_fs_join`: *"A truncated path is not a shortened name for
+  the same file, it is the name of a different one."* `recon_cmd.c` was one of
+  the callers that sentence was written for, and was not using it.
+- **And the count had drifted** — the row said fourteen sites in eleven files;
+  a release build says **seventeen in twelve**. Nothing was counting, which is
+  the same fault as BG-204 one row down the same board.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -1315,8 +1315,14 @@ static void suggested_name(struct recon_notepad *np, char *out, size_t size) {
         snprintf(out, size, "Untitled.txt");
         return;
     }
+    /* The leaf of a path is a name, and `out` is `char[RECON_NAME_MAX]` --
+     * the size a name has. What the compiler cannot see is that the tail of a
+     * `char[RECON_PATH_MAX]` is bounded by the component that produced it.
+     *
+     * And it is a *suggestion*: the file dialog shows it and somebody types
+     * over it, so even a cut one is on screen before it is a filename. */
     const char *leaf = strrchr(np->path, '/');
-    snprintf(out, size, "%s",
+    recon_text_copy(out, size,
         (leaf != NULL && leaf[1] != '\0') ? leaf + 1 : np->path);
 }
 

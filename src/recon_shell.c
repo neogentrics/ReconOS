@@ -593,10 +593,21 @@ static void menu_pin(const char *name) {
         return;
     }
 
+    /*
+     * **Not pinned at all if the name will not fit**, because a pinned entry
+     * is looked up by its name: `menu_is_pinned` compares the whole string, so
+     * a cut one can never be found again -- it cannot be unpinned, and the
+     * program it names cannot be started from it. An entry nothing can act on
+     * is worse than no entry.
+     */
+    if (strlen(name) >= RECON_NAME_MAX) {
+        return;
+    }
+
     /* At the end, because that is where somebody watching it appear expects
      * to find it. Pushing it to the top would move everything they already
      * knew the position of. */
-    snprintf(names[count], RECON_NAME_MAX, "%s", name);
+    recon_text_copy(names[count], RECON_NAME_MAX, name);
     pinned_write(names, count + 1);
 }
 
@@ -878,9 +889,9 @@ static int menu_apps(bool show_all, const char *filter,
              * in a list under Mail and Media Player reads as a program nobody
              * recognises; "Help: Getting around" reads as what it is.
              */
-            snprintf(out[shown].label, sizeof(out[shown].label), "Help: %s",
-                titles[i]);
-            snprintf(out[shown].icon, sizeof(out[shown].icon), "%s",
+            recon_text_printf(out[shown].label, sizeof(out[shown].label),
+                "Help: %s", titles[i]);
+            recon_text_copy(out[shown].icon, sizeof(out[shown].icon),
                 RECON_ICON_HELP);
             out[shown].kind = MENU_KIND_HELP;
             out[shown].where[0] = '\0';
@@ -2254,8 +2265,10 @@ static void context_add_id(struct recon_shell *shell, const char *label,
         return;
     }
     int i = shell->context_item_count++;
-    snprintf(shell->context_items[i].label, sizeof(shell->context_items[i].label),
-        "%s", label);
+    /* A menu label. It is read and clicked, never looked up -- the `id` beside
+     * it is what says which entry this is. */
+    recon_text_copy(shell->context_items[i].label,
+        sizeof(shell->context_items[i].label), label);
     shell->context_items[i].id = id;
     shell->context_items[i].enabled = enabled;
     shell->context_items[i].separator_after = separator;
@@ -2281,8 +2294,10 @@ static void context_add(struct recon_shell *shell, const char *label,
         return;
     }
     int i = shell->context_item_count++;
-    snprintf(shell->context_items[i].label, sizeof(shell->context_items[i].label),
-        "%s", label);
+    /* A menu label. It is read and clicked, never looked up -- the `id` beside
+     * it is what says which entry this is. */
+    recon_text_copy(shell->context_items[i].label,
+        sizeof(shell->context_items[i].label), label);
     shell->context_items[i].id = (uint32_t)action;
     shell->context_items[i].enabled = enabled;
     shell->context_items[i].separator_after = separator;

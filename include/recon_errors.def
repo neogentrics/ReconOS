@@ -246,6 +246,12 @@ RECON_ERROR(J, 002, FAULT,
     "A program stopped answering",
     "It is still running and is not responding. Watchtower can end it.")
 
+RECON_ERROR(J, 003, FAULT,
+    "A password could not be remembered",
+    "The account is named by its user and host together, and this one is too "
+    "long to fit a keyring entry name. The password still works for this "
+    "session; it will have to be typed again next time.")
+
 /* --- K: Input --- */
 
 RECON_ERROR(K, 001, STOP,

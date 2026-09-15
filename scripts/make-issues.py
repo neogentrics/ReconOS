@@ -176,7 +176,7 @@ AREA = {
     'BG-198': 'build', 'BG-199': 'build',
     'BG-200': 'build', 'BG-201': 'build',
     'BG-202': 'build', 'BG-203': 'build',
-    'BG-204': 'build',
+    'BG-204': 'build', 'BG-205': 'build',
     # And the kernel session's own three, renumbered on the merge.
     #
     # Both sessions reached KF-225 on the same day: this one had 225 as a BIOS

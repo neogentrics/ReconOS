@@ -1460,8 +1460,21 @@ static unsigned long crc32_of(const unsigned char *data, size_t length) {
     return crc ^ 0xFFFFFFFFUL;
 }
 
-static void stamp_key(const char *path, char *out, size_t size) {
-    snprintf(out, size, "icons/stamp/%s", path);
+/*
+ * **False when it would not fit.** A registry key holds 128 bytes and a path
+ * holds 1024, so a long enough icon path is cut -- and two different icons
+ * whose paths share a prefix then answer to one key. The stamp recorded for
+ * one would vouch for the bytes of the other, which is the cache saying a file
+ * is untouched when it is somebody else's file entirely.
+ */
+static bool stamp_key(const char *path, char *out, size_t size) {
+    int wanted = snprintf(out, size, "icons/stamp/%s", path);
+
+    if (wanted < 0 || (size_t)wanted >= size) {
+        out[0] = '\0';
+        return false;
+    }
+    return true;
 }
 
 /* What is on disk right now, or 0 for a file that is not there. */
@@ -1493,7 +1506,12 @@ static bool should_write(const char *path, bool overwrite, bool moved_on) {
     }
 
     char key[RECON_REGISTRY_KEY_MAX];
-    stamp_key(path, key, sizeof(key));
+    if (!stamp_key(path, key, sizeof(key))) {
+        /* No key, so no stamp, so it cannot be vouched for -- treated as
+         * somebody's own file, which is the same safe direction the paragraph
+         * below takes for an icon written before stamps existed. */
+        return false;
+    }
 
     const char *recorded = recon_registry_get(RECON_REG_SYSTEM, key, "");
     if (recorded[0] == '\0') {
@@ -1508,7 +1526,15 @@ static bool should_write(const char *path, bool overwrite, bool moved_on) {
 static void record_stamp(const char *path) {
     char key[RECON_REGISTRY_KEY_MAX];
     char value[16];
-    stamp_key(path, key, sizeof(key));
+
+    if (!stamp_key(path, key, sizeof(key))) {
+        /* Nothing recorded rather than something recorded under a name that is
+         * not this file's. The cost is that this icon is never vouched for,
+         * which is one regeneration; the cost of the other is a stamp that
+         * lies about a different file. */
+        return;
+    }
+
     snprintf(value, sizeof(value), "%08lX", crc_of_file(path));
     recon_registry_set(RECON_REG_SYSTEM, key, value);
 }

@@ -248,6 +248,22 @@ if [ "$generated_drift" = "1" ]; then
 fi
 echo "the generated files match their sources"
 
+# --- and nowhere says a string may be cut ---
+#
+# Seventeen such places stood in this build. Five of them were not text at all:
+# a keyring entry name, the destination of `move` and `copy`, an icon's stamp
+# key, a redirect that gets followed, and a pinned menu entry -- names
+# something is looked up by, where a cut one names something else.
+#
+# Zero rather than a threshold, and `include/ReconOS.h` made that argument when
+# it introduced recon_text_copy: a build with fourteen warnings in it is a
+# build where the fifteenth is invisible.
+echo
+echo "Checking that nowhere in the desktop says a string may be cut"
+if ! "$REPO_DIR/scripts/check-truncation.sh"; then
+    exit 1
+fi
+
 # --- and every error code can actually be produced ---
 #
 # A code with no caller is documented, listed by `errors`, lookupable -- and

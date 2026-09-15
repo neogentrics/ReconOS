@@ -9,6 +9,68 @@ way for the two to disagree.
 
 ---
 
+## v0.4.35 — five of them were not text
+
+The board's next row: *"Fourteen places where an optimised build says a path
+may be cut ... Every one builds a string to display rather than to open, which
+is why they were left rather than fixed in the same sweep."*
+
+**There were seventeen, and five of them were not text.** They build a name
+something is then looked up by, and `include/recon_fs.h` has carried the
+sentence about that for months, above `recon_fs_join`: *"A truncated path is
+not a shortened name for the same file, it is the name of a different one."*
+
+| | what a cut one does |
+|---|---|
+| a keyring entry name | two mail accounts collide and one silently overwrites the other's password |
+| where `move` and `copy` put things | the file lands somewhere else and the command reports success |
+| an icon's stamp key | the cache vouches for a different file |
+| a redirect's `Location` | a different URL is fetched |
+| a pinned menu entry | pins something that can never be found again |
+
+### The keyring one
+
+`secret_name` builds `mail/user@host` because — its own comment — *"a single
+`mail/password` would have them overwriting each other with no sign that
+anything had happened."* `user` holds 128 bytes and `host` 192; a keyring name
+holds 128. So an address over about 122 characters is cut, and two accounts on
+one host with a long shared prefix produce **the same name** — which is exactly
+the collision the function exists to prevent, reintroduced by the one line that
+builds it.
+
+All five refuse now. Four refuse invisibly and correctly; the fifth changes what
+a window offers, so it says why — **VT-J003**, *a password could not be
+remembered*.
+
+### And the other twelve say they are text
+
+`include/ReconOS.h` wrote `recon_text_copy` and `recon_text_printf` for exactly
+this, and said why: *"a build with fourteen warnings in it is a build where the
+fifteenth is invisible. This says the same thing in a way that names the intent,
+so what is left on the list is what nobody meant."*
+
+So the desktop is at **zero**, and `scripts/check-truncation.sh` holds it there
+as the seventh pass of `check.sh`. It compiles rather than greps, because the
+warning is the optimiser's and no pattern over the source can tell an
+`snprintf` into a buffer that provably fits from one that does not. And it
+touches `src/` first, because an incremental build compiles nothing and reports
+nothing — a check reading one would pass on any tree whose build directory was
+warm, which is every tree after the first run.
+
+**It says what it does not cover, too.** `-Wall` gives level 1: the compiler
+warns where it can *prove* a cut is reachable. Level 2 assumes any argument can
+be arbitrarily long, and the desktop has **147 sites** at that level — measured,
+not estimated — so it is not a bar this tree holds today. A check whose limits
+are unstated gets read as covering everything.
+
+Both mutations bite: a named cut turned back into a bare `snprintf`, and a new
+one appearing in a file that never had one. The first version of that second
+mutation copied from an unbounded `const char *` and was **not** caught — which
+was the check being honest about level 1, and is why its scope is now written
+down beside it.
+
+---
+
 ## v0.4.34 — every error code has something that can raise it
 
 The checkpoint board asked for *"the seven error codes that have sites"* to be

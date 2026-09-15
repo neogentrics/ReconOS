@@ -396,8 +396,12 @@ void recon_desktop_reload(struct recon_desktop *desktop) {
 
         struct desktop_item *item = &desktop->items[desktop->item_count];
 
-        snprintf(item->name, sizeof(item->name), "%s", entries[i].name);
-        snprintf(item->label, sizeof(item->label), "%s", entries[i].name);
+        /* **Cannot cut**, and said this way so the compiler can see that
+         * too: `struct recon_dirent`'s name and this item's are both
+         * `char[RECON_NAME_MAX]`. The warning was the optimiser being unable
+         * to bound a string inside an array, not a length it had found. */
+        recon_text_copy(item->name, sizeof(item->name), entries[i].name);
+        recon_text_copy(item->label, sizeof(item->label), entries[i].name);
         item->target[0] = '\0';
 
         if (entries[i].kind == RECON_FILE_DIRECTORY) {

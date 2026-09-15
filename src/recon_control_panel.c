@@ -2621,7 +2621,10 @@ static void draw_appearance_wallpapers(struct control_panel *cp,
                         above--;
                     }
                     static char shortened[RECON_PATH_MAX];
-                    snprintf(shortened, sizeof(shortened), "*%s", above);
+                    /* Cutting is the whole point here -- see the paragraph
+                     * above. This names that so the compiler stops guessing. */
+                    recon_text_printf(shortened, sizeof(shortened), "*%s",
+                        above);
                     where = shortened;
                 }
             }

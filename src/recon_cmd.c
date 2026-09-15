@@ -1293,13 +1293,24 @@ static bool destination_for(struct recon_cmd_session *s, const char *from,
     char canonical[RECON_PATH_MAX];
     if (!recon_fs_resolve(s->cwd, to, host, sizeof(host),
             canonical, sizeof(canonical))) {
+        out_err(s, "%s\n", recon_fs_last_error());
         return false;
     }
 
-    if (strcmp(canonical, "/") == 0) {
-        snprintf(out_path, size, "/%s", leaf);
-    } else {
-        snprintf(out_path, size, "%s/%s", canonical, leaf);
+    /*
+     * **recon_fs_join, which refuses rather than cutting**, and which also
+     * handles the root without a branch: "/" joined to "x" is "/x".
+     *
+     * This built the path with snprintf and returned true whatever happened,
+     * so a destination and name too long together produced a *different* path
+     * -- and `cmd_move` went on to rename onto it and report "Moved 'a' to
+     * 'b'". The header above recon_fs_join has said why for months; this was
+     * one of the callers it was written for.
+     */
+    if (!recon_fs_join(out_path, size, canonical, leaf)) {
+        out_err(s, "'%s' and '%s' are too long together to name a file.\n",
+            canonical, leaf);
+        return false;
     }
     return true;
 }
@@ -1312,7 +1323,8 @@ static void cmd_move(struct recon_cmd_session *s, int argc, char **argv) {
 
     char target[RECON_PATH_MAX];
     if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
-        out_err(s, "%s\n", recon_fs_last_error());
+        /* It says what went wrong itself now -- there are two reasons it can
+         * fail and they do not share a message. */
         return;
     }
 
@@ -1331,7 +1343,8 @@ static void cmd_copy(struct recon_cmd_session *s, int argc, char **argv) {
 
     char target[RECON_PATH_MAX];
     if (!destination_for(s, argv[1], argv[2], target, sizeof(target))) {
-        out_err(s, "%s\n", recon_fs_last_error());
+        /* It says what went wrong itself now -- there are two reasons it can
+         * fail and they do not share a message. */
         return;
     }
 

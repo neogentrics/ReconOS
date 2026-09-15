@@ -135,6 +135,7 @@ happened on that machine.
 | --- | --- | --- |
 | **VT-J001** | fault | **A program would not open** — The window could not be built. There was not enough memory, or the program refused to start. |
 | **VT-J002** | fault | **A program stopped answering** — It is still running and is not responding. Watchtower can end it. |
+| **VT-J003** | fault | **A password could not be remembered** — The account is named by its user and host together, and this one is too long to fit a keyring entry name. The password still works for this session; it will have to be typed again next time. |
 
 ## K — Input
 

@@ -1935,7 +1935,10 @@ static void put_field(struct flow *f, int index, int x, int y, int width,
             memset(&shown, 0, sizeof(shown));
             bool is_hint = false;
             const char *text = field_shown(t, index, d, &is_hint);
-            snprintf(shown.text, sizeof(shown.text), "%s",
+            /* What is drawn in the field, not what is submitted --
+             * `t->editing` holds that, and it is the branch above. A value too
+             * long to draw is drawn short; it is still sent whole. */
+            recon_text_copy(shown.text, sizeof(shown.text),
                 is_hint ? "" : text);
             shown.length = (int)strlen(shown.text);
             shown.caret = shown.length;
