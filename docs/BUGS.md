@@ -7787,6 +7787,66 @@ regenerated after that tree is pushed.
   probe looser than the check it predicts** is the same shape as the stand-in
   in the entry below.
 
+### BG-198 — A mutation harness that crashed between mutating and restoring
+
+[#471](https://github.com/neogentrics/ReconOS/issues/471)
+
+- **Found in** v0.4.31, as a library that had passed cleanly an hour earlier
+  failing one case, with the source reported as *identical to the kept copy*.
+- **What it was** two faults in a tool, which between them made correct code
+  look broken.
+
+  `scripts`-adjacent mutation harnesses copy the source aside, mutate it, build,
+  run, and restore. This one **crashed between mutating and restoring**: a
+  mutated build printed the suite's 0xA5 sentinel bytes, which are not UTF-8,
+  and `subprocess` with `text=True` raised on decoding them. The mutation
+  stayed in the tree.
+
+  The next run then took the mutated file as its *original*, could not find
+  that mutation's anchor, said "MUTATION DID NOT APPLY", and faithfully
+  restored the mutation at the end.
+- **And the restore did not force a rebuild.** `rsync --checksum` from the
+  Windows tree brings the correct source back carrying the *Windows*
+  modification time, which is older than the object compiled from the mutated
+  copy -- so `make` does nothing and the next run tests the mutation again.
+  That is the trap `reference_reconos_build_workflow` already records, reached
+  from a direction it did not describe.
+- **Why it cost twenty minutes** the failure was in the one case the source's
+  own comment says must work -- `" nameserver %63s"` against a line with no
+  leading space -- so it read as a real fault in a function written an hour
+  before. A `diff` said the source matched the kept copy, which was true and
+  useless, because the kept copy was the mutated one.
+- **A harness that can leave the tree in a state it invented is worse than no
+  harness**, because what it leaves looks like a fault in the thing being
+  tested rather than in the tool.
+- **Fixed in** v0.4.31. The restore is in a `finally`, the build is forced with
+  `os.utime` before each run, the output is decoded with `errors="replace"`,
+  and **the restore is verified** -- the harness re-runs the suite afterwards
+  and says so if the tree is not as it was.
+
+### BG-199 — The sscanf suite could not tell "stopped" from "skipped"
+
+[#472](https://github.com/neogentrics/ReconOS/issues/472)
+
+- **Found in** v0.4.31, by the mutation harness above, once it worked: four of
+  five mutations were caught and one was missed.
+- **What it was** `libc/scanf.c` stops the scan at a conversion it does not
+  implement, so a caller gets a short count rather than a field in the wrong
+  variable. The suite checked that with `%[a-z]` on `"abc123"`, requiring 0.
+
+  **A version that skipped the conversion instead also returns 0** -- it goes
+  on to match the leftover `a-z]` as literals and fails at the `-`. The test
+  was asserting a number that agrees either way.
+- **Which is the failure the suite's own header calls the one that matters**:
+  not the count, but which variable the next conversion writes to.
+- **Fixed in** v0.4.31 with a case that separates them: an unknown conversion
+  **between** two numbers. Stopping returns 1 and never touches the second
+  variable; skipping returns 2 and puts the second field in it. Not compared
+  against the host, because `%q` is undefined there and an undefined behaviour
+  is not a reference.
+- **Found by mutating the library rather than by reading the test**, which is
+  the whole argument for doing it.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

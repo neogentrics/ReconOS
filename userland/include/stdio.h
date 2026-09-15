@@ -76,4 +76,20 @@ int snprintf(char *to, size_t room, const char *format, ...)
 int vsnprintf(char *to, size_t room, const char *format, va_list args)
 	__attribute__((format(printf, 3, 0)));
 
+/* Reading values back out of text.
+ *
+ * The attribute is `scanf` rather than `printf`, which is not a detail: it is
+ * what lets the compiler check that `%lu` was given an `unsigned long *` and
+ * not an `unsigned long`. A scanner handed a value where it wanted an address
+ * writes through whatever that value happens to be.
+ *
+ * Scansets -- `%[a-z]` -- and `%p` are not implemented. A format holding one
+ * **stops the scan** rather than skipping it, so a caller gets a short count
+ * instead of a field in the wrong variable. See `userland/libc/scanf.c`.
+ */
+int sscanf(const char *text, const char *format, ...)
+	__attribute__((format(scanf, 2, 3)));
+int vsscanf(const char *text, const char *format, va_list args)
+	__attribute__((format(scanf, 2, 0)));
+
 #endif /* RECON_STDIO_H */

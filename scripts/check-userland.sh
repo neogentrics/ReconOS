@@ -96,10 +96,11 @@ fi
 # parser, forms, HTTP -- which is not a coincidence. A parser is strings and
 # allocation and very little else, and that is what arrived.
 #
-# `src/recon_cookie.c` was on this list for an hour and is not now. The probe
-# that found them compiled without `-Werror`, so an implicit declaration of
-# `sscanf` was a warning there and is an error here. The probe was looser than
-# the check it was predicting -- and the check is the one that decides.
+# `src/recon_cookie.c` came off this list for an hour and is back. It needed
+# `sscanf`, which arrived in v0.4.31 -- and the probe that first suggested it
+# compiled without `-Werror`, so an implicit declaration was a warning there
+# and an error here. A predictor with looser rules than the thing it predicts
+# is worth less than no predictor; it now uses these same flags.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -113,6 +114,7 @@ src/recon_sniff.c
 src/recon_smtp_message.c
 src/recon_ocr.c
 src/recon_clip.c
+src/recon_cookie.c
 src/recon_css.c
 src/recon_firewall.c
 src/recon_fonts.c

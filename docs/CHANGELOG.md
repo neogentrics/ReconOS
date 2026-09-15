@@ -9,6 +9,80 @@ way for the two to disagree.
 
 ---
 
+## v0.4.31 — sscanf
+
+Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
+figure: glibc emits it as `__isoc99_sscanf`, which sat behind a filter meant
+for compiler internals (BG-197).
+
+**What the desktop asks for was measured before any of it was written**, by
+reading all fourteen calls: `%d` with widths, `%u` `%lu` `%llu`, `%lx`, `%63s`,
+`%n`, and literal text around them — `MemTotal: %lu kB`, `* %d EXISTS`,
+`%4d-%2d-%2d %2d:%2d %n`. Those fourteen formats open the suite, verbatim, on
+realistic input.
+
+Implemented is that set plus the rest of the integer and floating conversions,
+`*` suppression, and the `hh h l ll z j` modifiers. **Scansets and `%p` are
+not**, and a format holding one **stops the scan** rather than skipping it — so
+a caller gets a short count instead of a field in the wrong variable.
+
+### The failure that matters is not the count
+
+It is assigning the right value to the **wrong variable**. So every case
+declares a block of storage, fills it with a sentinel, runs both libraries on
+identical copies, and compares the whole block — a variable that should not
+have been touched is checked to be untouched.
+
+### Two faults in the tools, and neither in the library
+
+**BG-198.** The mutation harness crashed between mutating and restoring — a
+mutated build printed the sentinel bytes, which are not UTF-8 — and left the
+mutation in the tree. The next run took that as its original and restored it.
+Then `rsync --checksum` brought the correct source back with an older
+modification time than the object, so `make` did nothing and the next run
+tested the mutation again.
+
+The result was a function that had passed cleanly an hour earlier failing the
+one case its own comment says must work, with `diff` reporting the source
+identical to the kept copy — true, and useless, because the kept copy was the
+mutated one. **A harness that can leave the tree in a state it invented is
+worse than no harness.** The restore is now in a `finally`, forces a rebuild,
+and is verified.
+
+**BG-199.** Once the harness worked it caught four of five mutations and missed
+one: an unimplemented conversion being *skipped* rather than stopping. The
+suite tested that with `%[a-z]`, and a version that skipped it would then match
+the leftover `a-z]` as literals and fail anyway — returning the same 0. The
+test was asserting a number that agrees either way, which is the exact failure
+its own header exists to catch. Fixed with an unknown conversion **between**
+two numbers, where stopping and skipping write to different variables.
+
+### And one fault in the library, caught by building it for the machine
+
+`posix.c` called `recon_strlen`. On the host that **compiles and works** —
+`prefix.h` renames `strlen` to precisely that — so every suite passed. It only
+fails where there is no renaming, which is the freestanding build.
+
+`scanf.c` and `posix.c` were added to the program on the disk for exactly this:
+it is the only place the library is compiled with no glibc, the kernel's flags
+and `-Werror`. A library file built only for Linux is a library file that has
+quietly stopped being portable.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,020 of 3,134 | **3,034 of 3,134** |
+| desktop sources with no libc | 19 of 79 | **20 of 79** |
+
+`src/recon_cookie.c` is the twentieth — it came off the list an hour earlier
+for wanting `sscanf`, and has one now.
+
+Sockets is the largest group left at 44 call sites, then the ten remaining file
+calls at 31.
+
+---
+
 ## v0.4.30 — files by name, by number, and by directory
 
 Eleven of the twenty-one symbols in the largest group left, and they are the

@@ -275,7 +275,7 @@ struct dirent *readdir(DIR *dir)
 	if (dir->at >= dir->bytes)
 		return 0;		/* the end, and not an error */
 
-	length = recon_strlen(dir->names + dir->at);
+	length = strlen(dir->names + dir->at);
 
 	/* A name longer than `struct dirent` can hold. Skipped rather than
 	 * truncated: a truncated name is a name that does not open, and a

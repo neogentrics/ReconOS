@@ -51,6 +51,14 @@ int puts(const char *text);
 int snprintf(char *to, size_t room, const char *format, ...);
 int vsnprintf(char *to, size_t room, const char *format, va_list args);
 
+/* scanf.c */
+int sscanf(const char *text, const char *format, ...);
+int vsscanf(const char *text, const char *format, va_list args);
+
+/* scanf.c */
+int sscanf(const char *text, const char *format, ...);
+int vsscanf(const char *text, const char *format, va_list args);
+
 /* ctype.c */
 int isalnum(int c);
 int isalpha(int c);

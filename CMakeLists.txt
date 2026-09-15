@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.30
+    VERSION 0.4.31
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -763,6 +763,7 @@ set_source_files_properties(
     userland/libc/malloc.c
     userland/libc/errno.c
     userland/libc/posix.c
+    userland/libc/scanf.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -772,6 +773,24 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# sscanf, against the host's.
+#
+# The failure that matters for a scanner is assigning the right value to the
+# *wrong variable*, so every case in this suite compares a whole block of
+# storage rather than the fields it expected to be filled -- a variable that
+# should not have been touched is checked to be untouched.
+#
+# Its corpus opens with the desktop's own fourteen formats, verbatim.
+add_executable(recon_libc_scanf_tests
+    userland/tests/test_libc_scanf.c
+    userland/tests/hostsys.c
+    userland/libc/scanf.c
+    userland/libc/stdlib.c
+    userland/libc/ctype.c
+    userland/libc/string.c
+    userland/libc/printf.c
+    userland/libc/math.c)
 
 # The descriptor layer -- open, read, write, directories -- against the host's.
 #
@@ -874,6 +893,7 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_scanf COMMAND recon_libc_scanf_tests)
 add_test(NAME libc_posix COMMAND recon_libc_posix_tests)
 set_tests_properties(libc_posix PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

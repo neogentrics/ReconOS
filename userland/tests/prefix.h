@@ -36,6 +36,9 @@
 #define realpath    recon_libc_realpath
 #define sysconf     recon_libc_sysconf
 
+#define sscanf      recon_sscanf
+#define vsscanf     recon_vsscanf
+
 #define errno       recon_errno
 #define strerror    recon_strerror
 
