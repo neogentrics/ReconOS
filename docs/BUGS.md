@@ -7109,6 +7109,155 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
+
+- **Found:** 15 September 2026, by reading `time_self_test` while looking for
+  KF-232's mechanism. Not by a failure: this check has never failed and cannot.
+
+- **What it was.** The check exists to catch a tick arriving at some rate other
+  than `TIME_TICK_HZ`, and its own comment names the incident it was written
+  for -- the 8254 programmed as a square wave, the I/O APIC counting both
+  transitions, the kernel running at 201 Hz against a 100 Hz constant while
+  every tick-counting test passed. It measured:
+
+  ```c
+  u64 t0 = time_ticks();
+  u64 n0 = time_monotonic_ns();
+  ...
+  rate = (time_ticks() - t0) * 1000000000ULL / elapsed;
+  ```
+
+  `time_ticks()` was the interrupt's own count when that was written. **KF-204
+  made it `arch_monotonic_ns() / tick`** -- derived from the very counter the
+  loop times itself against. Substitute and the whole thing collapses:
+
+  ```
+  rate = (dmono / tick) * 1e9 / dmono  ==  1e9 / tick  ==  TIME_TICK_HZ
+  ```
+
+  **Exactly 100, on every machine, whatever the hardware is doing.** A 201 Hz
+  tick passes it. The one fault it exists to report had become the one fault it
+  could not.
+
+- **Cost.** Unknown and not claimable. Nothing has been measured wrong because
+  of it; what is certain is that the measurement was not being taken. Every
+  conversion in the kernel -- every timer, every sleep, every scheduling slice
+  -- divides by `TIME_TICK_HZ`, and if the hardware disagrees all of them are
+  wrong by one factor and nothing counting ticks notices.
+
+- **How it happened, which is the part worth keeping.** Nobody edited this
+  check. KF-204 changed what `time_ticks()` *meant* -- one author for the tick
+  count, the hardware counter, which was right and fixed a real early-firing
+  bug. This check read like it still worked because the line did not change.
+  **A test can be broken by a change in a file it does not name**, and there is
+  nothing at the call site to see.
+
+- **The fix.** `time_tick_interrupts()` is the interrupt's own count and has
+  existed the whole time; `smp.c` and `power.c` already ask it whether the tick
+  is *alive*. Nothing asked it how *fast*. It does now. The tolerance stays
+  wide -- a loaded guest genuinely loses ticks and a factor of two is what this
+  is for.
+
+- **Status:** fixed, kernel 0.2.40.
+
+### KF-234 - A timer is due before the instant it was asked for
+
+- **Found:** 15 September 2026, by reading `timer_start` while looking for
+  KF-232's mechanism -- and it turned out to *be* KF-232's mechanism, or half
+  of it.
+
+- **What it was.** One line:
+
+  ```c
+  t->expires = now + ticks;      /* now = time_ticks() */
+  ```
+
+  `time_ticks()` is the monotonic counter **truncated** to a tick. It names the
+  tick the caller is *in*, not the instant they asked *at*. So the delay was
+  measured from up to a whole tick in the past, and a 50 ms sleep could come
+  due after 40.
+
+- **Reproduced, which fifty-six boots could not do.** The Gateway printed
+  `a 50 ms sleep took 43132 us`. Under QEMU, with the test asking at a chosen
+  phase rather than wherever the boot happened to reach it:
+
+  ```
+  timer: a 50 ms sleep came back 6540 us early, after 43459 us
+  ```
+
+  **43459 against 43132** -- two hundred microseconds apart, on a different
+  machine, from a fault the emulator had been declared unable to show.
+
+- **So the emulator was never the problem.** KF-232 concluded *a negative
+  result from an emulator is a fact about the emulator*, and that sentence is
+  earned -- KF-214, KF-219 and KF-223 are all faults QEMU cannot produce. It
+  was the wrong conclusion here. Nothing about the hardware was required. What
+  was required was a test that chose **when** it asked. The fifty-six boots
+  were not fifty-six samples; they were one sample taken fifty-six times.
+
+- **The test that finally held, and the two that did not.** Timing a sleep
+  measures a race -- the filing, the tick that runs the callback, the scheduler
+  returning to the thread -- and any of the three can absorb a tick and hide
+  the error:
+
+  - Asking at **nine tenths** of a tick, where the error is largest, passed six
+    times out of six. That phase leaves a tenth of a tick before the count
+    rolls over, `timer_start` reads the clock again just after the test does,
+    and the crossing makes the sleep a whole tick *longer* than asked. **It
+    passed for the opposite of the right reason.**
+  - Asking at **seven tenths** caught it one boot in four.
+  - Printing the phase to find out why made it one in six, because the print
+    took long enough to cross the boundary the test needed not to cross.
+    **The instrument changed the thing it measured, toward health.**
+
+  The phase was never the variable -- measured, it was held to within 25 us
+  across six boots. So the end-to-end timing was abandoned for the promise
+  itself, which is arithmetic and can be checked as arithmetic: file a timer,
+  read `expires` back, cancel it before it can fire, and assert
+  `expires * tick_ns >= asked_ns + ns`. No interrupt, no scheduler, no race,
+  swept across all ten phases of a tick.
+
+  ```
+  timer: a 50 ms timer filed at phase 0/10 is due 77 us before it was asked for
+                                                  84 us
+                                                  90 us
+                                                  96 us
+                                                  85 us
+  ```
+
+  Five of five, and **the error is only 77 us** -- the time between reading the
+  clock and entering `timer_start`. A test that catches the fault by 77
+  microseconds every time is worth more than one that catches it by seven
+  milliseconds a quarter of the time.
+
+- **The fix, and the half of it that is not obvious.** The deadline is the
+  ceiling of the *sum*, in nanoseconds:
+
+  ```c
+  t->expires = (asked_ns + ns + tick_ns - 1) / tick_ns;
+  ```
+
+  A timer may fire late -- a tick is the wheel's resolution. It may never be
+  due before the instant asked for, because a caller who then reads a clock is
+  told yes when it is no, and that is a wrong answer rather than a coarse one.
+
+  The second half: `place()` files relative to `wheel_now`, the hand, and since
+  KF-204 the hand and the clock are different numbers. A deadline correct
+  against the clock can still land at or behind the hand -- into a slot just
+  emptied, where it would sit for a **full turn of the wheel**. A 640 ms nap
+  for a 50 ms request. It needs a clock that has not crossed a tick since the
+  hand last moved, so it is rare; rare is the word this project keeps finding
+  on the far side of a real machine. Hence an explicit floor rather than
+  trusting the arithmetic to imply one.
+
+- **KF-206 moved this same line once already**, from the wheel's hand to the
+  clock, to stop timers firing a tick early. It fixed the *source* and left the
+  *truncation*, so the same class of error survived at smaller magnitude and
+  waited for a machine where the phase was random. **A fix aimed at the
+  instance rather than the class comes back wearing different numbers.**
+
+- **Status:** fixed, kernel 0.2.40.
+
 ### KF-233 - Recovery is offered on every boot, except the boots that go wrong
 
 - **Found:** 14 September 2026, by reading the loader after Joshua reported that
@@ -7339,10 +7488,56 @@ boot log.
   symptom, and saying so before it is measured would be the mistake this entry
   already made once.
 
-- **Status:** open, **reproduced**. Not fixed: what is known is that the clock
-  and the hand diverge on this machine and that interrupt delivery is also
-  failing on it. Which causes which is the next measurement, and this entry has
-  already been wrong once by reasoning past its evidence.
+### And then it was wrong the other way -- 15 September
+
+**The third line was not this bug.** `a 50 ms sleep took 43132 us` is
+**KF-234**: `timer_start` filed deadlines against `time_ticks()`, the monotonic
+counter *truncated* to a tick, so the delay was measured from up to a whole
+tick in the past. It reproduces under QEMU at **43459 us** against the
+Gateway's **43132 us** -- two hundred microseconds apart, on a different
+machine, with no clock divergence anywhere in it.
+
+So the paragraph above, which read that line as *the monotonic clock running
+ahead of real time* and called it the diagnosis, was wrong. **This entry has
+now reasoned past its evidence in both directions**: first ruling the
+clock/hand mechanism out on sixty-seven boots that could not have shown it,
+then ruling it in on one line that turned out to be arithmetic. The lesson is
+not "be less confident" -- it is that a symptom seen once on one machine is a
+symptom, and the mechanism is whatever survives being reproduced on demand.
+
+**And the emulator was never the obstacle.** This entry's own conclusion -- *a
+negative result from an emulator is a fact about the emulator* -- is earned by
+KF-214, KF-219 and KF-223, all faults QEMU cannot produce. It did not apply
+here. QEMU could show KF-234 the whole time; what could not show it was a test
+that let the boot choose when to ask. **Fifty-six boots were one sample taken
+fifty-six times.**
+
+### What is actually left open
+
+The sleep line is gone. These are not:
+
+```
+timer: 0 of 3 timers fired
+timer: a timer filed on the second wheel never came down to the first
+msi: a message was written to the local APIC's window and no interrupt arrived
+```
+
+A timer that never fires is the *opposite* shape from one that fires early, and
+KF-234 cannot cause it: the wheel's hand catches up to the clock and stops, so
+it can lag but never lead. A hand that lags is a hand nobody turned, and
+`timer_tick` is turned by the tick interrupt -- on a machine whose report says
+in the next breath that an interrupt was sent and did not arrive.
+
+That remains a hypothesis and is deliberately not recorded as more. What makes
+it testable now is that KF-234 is out of the way: a rerun on the Gateway with
+0.2.40 either still shows `0 of 3` -- in which case the timer symptom and the
+MSI symptom are the same fault and worth chasing together -- or it does not,
+and this entry was two bugs wearing one number.
+
+- **Status:** open, **narrowed**. The sleep is fixed and was a different bug.
+  What is left is a timer that did not fire beside an interrupt that did not
+  arrive, on the one machine that has ever shown either, and the next
+  measurement is a boot of that machine rather than another argument.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 

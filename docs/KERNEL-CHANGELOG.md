@@ -88,6 +88,48 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.40 -- 15 September 2026 -- two faults found by reading, one of them in a test
+
+**KF-234: a timer was due before the instant it was asked for.** `timer_start`
+filed deadlines at `time_ticks() + ticks`, and `time_ticks()` is the monotonic
+counter *truncated* to a tick -- the tick the caller is in, not the moment they
+asked at. So a 50 ms sleep could come due after 40. The deadline is the ceiling
+of the sum in nanoseconds now, plus an explicit floor above the wheel's hand,
+because a deadline correct against the clock can still land in a slot the hand
+has just emptied and wait a full turn of the wheel there.
+
+This is the Gateway's `a 50 ms sleep took 43132 us` line, and it reproduces
+under QEMU at **43459 us** -- two hundred microseconds apart, on a different
+machine, from a fault fifty-six boots had failed to show. Nothing about the
+hardware was needed. What was needed was a test that chose **when** it asked.
+
+**The test took three attempts and the first two failed in opposite
+directions**, which is recorded in KF-234 because it is the useful part. Asking
+at nine tenths of a tick -- where the error is largest -- passed six times out
+of six, because the tick rolled over during setup and made the sleep a whole
+tick *longer* than asked. Printing the phase to find out why made it rarer
+still: the print crossed the boundary the test needed not to cross. The
+end-to-end timing was then abandoned for the promise itself, which is
+arithmetic: file a timer, read `expires` back, cancel it, assert it is not due
+before `asked + ns`, across all ten phases of a tick. Five boots, five
+failures, at 77-96 us each.
+
+**KF-235: the check that the tick arrives at the assumed rate cannot fail.** It
+compared `time_ticks()` against `time_monotonic_ns()` -- and KF-204 had made the
+first *derived from* the second, so it computed exactly `TIME_TICK_HZ` on every
+machine regardless of hardware. The 201 Hz incident its own comment describes
+would pass it. Nobody edited this check; a change in another file altered what
+its inputs meant. It asks `time_tick_interrupts()` now, which is the interrupt's
+own count and has existed all along.
+
+**KF-232 was corrected rather than closed.** It had attributed the sleep line to
+"the monotonic clock running ahead of real time" -- wrong, and wrong in the
+opposite direction from its earlier ruling-out of the same mechanism. What is
+left open is `0 of 3 timers fired` beside an MSI that was sent and did not
+arrive, which is a different shape and still only ever seen on one machine.
+
+---
+
 ## 0.2.39 -- 15 September 2026 -- memory a program can ask for
 
 `SYS_MAP` with an **fd of -1** returns a demand-paged anonymous range. That was
