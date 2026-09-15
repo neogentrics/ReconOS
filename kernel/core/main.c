@@ -603,7 +603,27 @@ void kmain(void)
 	 * that works while there is exactly one program; the second one will
 	 * need the kernel able to give the screen away.
 	 */
-	user_start_first_screen();
+	/* Unless the command line says not to.
+	 *
+	 * The first screen is a program painting on the framebuffer the console
+	 * writes to, so it covers the boot report. On a machine that found a
+	 * writable ReconOS medium that costs nothing -- the report is in a file
+	 * on the medium. On one that did not, **the screen is the only copy**,
+	 * and it is covered before anybody reads it.
+	 *
+	 * That has now cost three round trips to a laptop, so there is a word
+	 * for it. The command line is read off the medium (KF-131), which means
+	 * asking for this on the next boot is writing `\reconos\cmdline` --
+	 * a file, not a reflash.
+	 *
+	 * It is not a fix for the entry in KERNEL-WANTS about the console and a
+	 * program both owning the screen. It is a way to see the report while
+	 * that is still true. */
+	if (boot_cmdline_has("noinit"))
+		kputs("\nnoinit: the first screen was not started, so this "
+		      "report stays on the screen.\n");
+	else
+		user_start_first_screen();
 
 	/* And from here this thread is not work any more.
 	 *
