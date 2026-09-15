@@ -248,6 +248,28 @@ if [ "$generated_drift" = "1" ]; then
 fi
 echo "the generated files match their sources"
 
+# --- and every error code can actually be produced ---
+#
+# A code with no caller is documented, listed by `errors`, lookupable -- and
+# nothing in the system can report it, so the entry describes a fault that
+# cannot happen.
+#
+# **This is here because the figure went stale rather than wrong.** Seven codes
+# were wired on 12 September and the board went on calling them work for three
+# days, because "34 of 43 reachable" was counted once by hand and never again.
+# The first run of the replacement found three more: boot checks that showed a
+# code on the splash and never wrote it to the log, so somebody who saw
+# VT-L001 start up could not then find it in `errors log`.
+echo
+echo "Checking that every error code has something that can raise it"
+if ! python3 "$REPO_DIR/scripts/check-errors.py"; then
+    echo
+    echo "Either a code has lost the last site that reports it, or a new one"
+    echo "was added with nothing to produce it. scripts/check-errors.py says"
+    echo "which, and carries the list of codes deliberately without a site."
+    exit 1
+fi
+
 # --- Fifth: the desktop, with no glibc underneath it ---
 #
 # The differential suites prove the C library answers what the host's answers.

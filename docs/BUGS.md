@@ -7944,6 +7944,35 @@ regenerated after that tree is pushed.
   with it.* The premise here was the optimisation level, and it was written down
   nowhere at all.
 
+### BG-204 — Three boot checks showed a code on the splash and never wrote it down
+
+[#477](https://github.com/neogentrics/ReconOS/issues/477)
+
+- **Found in** v0.4.34, by `scripts/check-errors.py` on its first run — which is
+  the only run it could have been found on, because nothing had ever counted
+  this.
+- **What it was** the start sequence runs eight checks. Two of them —
+  `boot_check_folders` and `boot_check_accounts` — raise their fault *and* set
+  `*problem` so the splash can show the code. Three others —
+  `boot_check_icons`, `boot_check_appearance`, `boot_check_programs` — set
+  `*problem` only.
+
+  So `VT-L001`, `VT-L002` and `VT-E001` reached a person's eyes and never
+  reached `/System/Logs`. Somebody who watched a start, saw a code go by and
+  then typed `errors log` would not find it — and all three are **FAULT**s,
+  which the table defines as *"reported where it happened"*.
+- **Fixed in** v0.4.34 by raising in the three checks rather than in the
+  consumer that reads `*problem`. The consumer would log `A007` and `C002` a
+  second time on top of the per-item lines they already write, and would add a
+  second mechanism beside the one the file already has. Three checks now do what
+  their two siblings do, with the detail they were already building for the
+  splash.
+- **Why it was invisible** a code that is *shown* looks wired from every angle
+  except the log. It is in the enumeration, it is in `docs/ERRORS.md`, `errors
+  VT-L001` describes it, and a person really does see it. The only question
+  that separates the two is *can this be found again tomorrow*, and nothing was
+  asking it.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

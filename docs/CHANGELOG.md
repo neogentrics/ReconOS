@@ -9,6 +9,56 @@ way for the two to disagree.
 
 ---
 
+## v0.4.34 — every error code has something that can raise it
+
+The checkpoint board asked for *"the seven error codes that have sites"* to be
+wired: `B-001`, `B-002`, `B-005`, `D-002`, `F-001`, `J-002`, `L-003`.
+
+**They were wired already.** `git log -S` puts every one of them in `2b45b53`,
+on 12 September, under the commit message *"Wire the seven error codes that had
+sites and no callers"* — and the board went on calling them work for three days
+afterwards, because the figure beside them, *34 of 43 reachable*, was counted
+once by hand and never counted again.
+
+So the work was not the wiring. **The work was the thing that would have said
+so.**
+
+### What the measurement found on its first run
+
+`scripts/check-errors.py` reads every code out of `include/recon_errors.def`,
+finds every `recon_error_raise` in `src/`, and refuses when the two disagree.
+The true figure is **41 of 43**, and the two without a site are exactly the two
+that were always meant to be:
+
+| | |
+|---|---|
+| `A-006` | the startup checks it reports on do not exist yet |
+| `E-005` | uninstalling is written not to fail, so no path could raise it |
+
+And it found three more (**BG-204**). The start sequence runs eight checks; two
+of them raise their fault *and* show it on the splash, and three show it only.
+`VT-L001`, `VT-L002` and `VT-E001` reached a person's eyes and never reached
+`/System/Logs` — so somebody who watched a start, saw a code and then typed
+`errors log` would not find it. All three are FAULTs, which the table defines as
+*reported where it happened*.
+
+**A code that is shown looks wired from every angle except the log.** It is in
+the enumeration, it is in `docs/ERRORS.md`, `errors VT-L001` describes it, and a
+person really does see it. The one question that separates the two cases is
+*can this be found again tomorrow*, and nothing was asking it.
+
+### Checked in both directions, because that is how the last one went stale
+
+An exception list nobody re-reads is the same fault in a new file. So the
+script refuses four more things besides a code with no site: an **excused** code
+that has since gained one, an excused code that no longer exists, a code raised
+that nothing defines, and a number defined twice. Five mutations, five distinct
+messages, each caught.
+
+The sixth pass of `scripts/check.sh`.
+
+---
+
 ## v0.4.33 — memory a program can ask for
 
 **The first entry in `docs/KERNEL-WANTS.md` is answered.** `SYS_MAP` with an fd

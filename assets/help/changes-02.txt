@@ -1,86 +1,71 @@
-Sockets are the largest group left, and most of it needs a kernel. Nine
-symbols do not, and they were worth taking now rather than waiting: a program
-that parses an address does not need a network, and src/recon_net.c reads
-/proc/net/route and turns the result into dotted quads long before it opens
-anything.
+The first entry in docs/KERNEL-WANTS.md is answered. SYS_MAP with an fd
+of -1 returns a demand-paged anonymous range, and userland/libc/mem_recon.c
+has been sending exactly that call since the allocator was written. Nothing in
+userland/ was rebuilt or relinked for it: the program on the disk already
+linked the allocator, and the call it had always made started working.
 
-htons, htonl, ntohs, ntohl, inet_pton, inet_ntoa, gai_strerror,
-and the three stdio readers feof, ferror and ungetc — plus clearerr and
-assert, which came with them.
+An installed disk, booted by itself, running a program loaded off its own
+volume, now says:
 
-### Byte order is not a byte swap
 
-htons is written as arithmetic on the value, not as a reordering of its
-storage. The two are the same thing only on a little-endian machine — and both
-architectures ReconOS runs on are little-endian, so a byte-swap version would
-agree with glibc on every machine in the rig and be wrong on the first one that
-is not, with nothing able to say so.
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
 
-Which means comparing against the host is not enough here, and the suite
-says so: alongside the comparison, the bytes of the result are required to be
-the value's own bytes, most significant first. That assertion fails on a
-byte-swap implementation even on this machine.
 
-### inet_pton is mostly a refusal
+recon_init allocates sixty-four blocks, frees every other one and takes them
+again -- so the free lists and the coalescing do work rather than a bump upwards
+through fresh memory -- takes one block large enough to need a second range from
+the kernel, reads every one of them back, and audits the heap. The kernel half
+is in docs/KERNEL-CHANGELOG.md under 0.2.39.
 
-Its value is what it turns down. inet_aton reads 010.0.0.1 as octal,
-1.2.3 as a three-part address and a bare 16777217 as a number — and those
-readings are how a check that two strings name the same host is defeated.
+The first ReconOS program that allocates. What its header used to say is
+worth keeping: *"It allocates nothing. There is no allocator on this kernel and
+that is the first entry in docs/KERNEL-WANTS.md."*
 
-So most of the corpus is text that must not parse: leading zeroes,
-hexadecimal, four parts and a trailing dot, a space at either end, a negative
-octet. Every one is put to the host as well, because *both refuse* is a
-stronger statement than *we refuse*.
+### Three functions nothing in ReconOS calls
 
-### feof is the one people use wrongly
+sincos, sqrtf and strtoll appear in no line of this source. The compiler
+writes them. At -O2 and above GCC fuses a sin(x) and a cos(x) of one
+argument into a single sincos, rewrites atoll(s) as strtoll(s, 0, 10) *in
+the caller* — reaching past whatever atoll the library defines — and narrows a
+sqrt whose argument and result are both floats into sqrtf.
 
-It is false after the last byte has been read and true only after a
-further read found nothing. A stream that sets it one read early makes every
-while (!feof(f)) loop drop the last line; one that never sets it makes the
-same loop never end.
+So a release of the desktop needed three symbols that a debug build did not, and
+the coverage measurement had been reading whichever build happened to be in
+build/. That is BG-203, and it is the third time this library has been
+measured by an instrument sharing a premise with it.
 
-That is a question about *timing*, not about a value, so the suite asks the
-flag after every single step on both libraries over one file — the only way
-the timing can be compared rather than asserted from memory.
+The number it changes. v0.4.32 published 3,043 of 3,134 call sites. The
+release build — the one a machine would actually run — says 2,998 of 3,089.
+The measurement now reads the build type out of CMakeCache.txt, prints it with
+the result, and refuses a build that is not a release.
 
-ungetc takes one character, which is all the standard promises. More would
-mean deciding what happens when a caller pushes back characters it never read,
-and what ftell should then say about a position that is partly invented.
+### Two warnings are errors now, and only two
 
-### Three faults, and the first is an old friend
+recon_libc_math_tests reported sqrtf(0) as 1. The square root was right; the
+suite had no prototype for it, so C assumed it returned int and read a
+floating-point register as an integer.
 
-BG-200. struct recon_stream gained a pushed_back field and
-take_stream — which resets every field of a slot before handing it out — was
-not told. Static storage makes an unreset field 0, and 0 is a perfectly
-good character, so every fopen produced a stream that would hand back a NUL
-before the first byte of the file.
-
-That is exactly the fault the kernel's sched_init has a paragraph about: *a
-structure cleared wholesale, and one field whose zero is a meaningful and wrong
-value.* Caught on the first run by the file suite, which compares contents
-rather than return values.
-
-BG-201. assert was put in stdlib.c because that is where exit lives.
-It prints, so it needs stdio.c's streams — and four suites stopped linking. A
-function placed by what it is *about* rather than by what it *needs*.
-
-And one in a test, which is worth as much: the pushback case used the
-shared fixture, which an earlier test deletes when it finishes. It reported
-*the fixture would not open* as though the library had failed. A test that
-depends on the order it runs in will eventually fail for a reason that has
-nothing to do with what it checks; it brings its own file now.
+The compiler had said so, twice, in a build with no -Werror — two lines among
+a few thousand. -Werror=implicit-function-declaration and
+-Werror=implicit-int are errors now. Not -Werror in general, which is a
+policy change across a tree two sessions are working in; these two can only ever
+mean a wrong answer, and the whole tree compiles with no instance of either.
 
 ### Where it leaves things
 
 | | before | now |
 |---|---|---|
-| call sites answered | 3,034 of 3,134 | 3,043 of 3,134 |
-| socket symbols outstanding | 19 | 14 |
+| call sites answered | 3,043 of 3,134 *(debug build)* | 2,998 of 3,089 *(release)* |
+| symbols outstanding | 40 | 37 |
+| the installed-disk boot test | 8 of 8 | 9 of 9 |
 
-91 call sites left, and every one of them now needs the kernel: 35 for the
-sockets that open something, 31 for stat and its relatives, 12 for dlopen,
-11 for processes and signals, 2 for an environment.
+The two call-site figures are not a regression and not comparable: the left one
+counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
+suite 438,496, both clean.
 
-That is the whole of the C library that can be written without the kernel.
+The 91 call sites still missing all need the kernel: 35 for sockets that open
+something, 31 for stat and its relatives, 12 for dlopen, 11 for processes and
+signals, 2 for an environment.
 
 ---
