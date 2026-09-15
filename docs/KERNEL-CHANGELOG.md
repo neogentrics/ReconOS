@@ -88,6 +88,73 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.39 -- 15 September 2026 -- memory a program can ask for
+
+`SYS_MAP` with an **fd of -1** returns a demand-paged anonymous range. That was
+the first entry in `docs/KERNEL-WANTS.md` and the one thing standing between a
+C library that worked on the build machine and one that worked on this one.
+
+**Nothing new underneath it.** A region with no file behind it is already a
+promise that memory will exist as zeroes when the program touches it -- that is
+what a stack is here -- so this is a reservation and a fault handler that both
+already worked, plus a way to ask. Both architectures already route a
+kernel-mode fault at a user address to `vm_fault_user`, so a buffer a program
+passes to a system call faults in on the kernel's behalf without anything being
+told about it.
+
+### One region however far the heap grows
+
+`addrspace_reserve` refuses to merge an adjacent range, and the reason is
+written beside it: two regions quietly joined into one would give a program the
+permissions of whichever was written second.
+
+**That objection is about differing flags.** `addrspace_reserve_more` answers it
+by requiring them to be identical, the ranges to be exactly adjacent, and
+neither side to be file-backed -- under which the joined region covers exactly
+the addresses the two covered with exactly the permissions both had.
+
+It matters because an allocator asks for a megabyte at a time. Without it, a
+program that allocates eight megabytes has spent all of `AS_REGIONS_MAX` on its
+heap and cannot be given a ninth: a cap on how much a program may allocate,
+expressed as a constant chosen to bound an array.
+
+### And the heap still ends where it was asked to end
+
+Reserving one large arena up front and slicing it would also cost one region --
+and would quietly hand a program that ran off the end of an allocation a page of
+zeroes instead of a fault, for as long as the arena lasted, with nothing
+reported. So the join covers what has actually been asked for and not a byte
+more, and the last assertion in the self-test is the page after it being
+refused.
+
+That assertion was, at first, probing the wrong page: the end of a region
+`addrspace_reserve` had made rather than one a join had moved. It passed under a
+mutation that moved the join a page too far. Found by mutation testing, which is
+the only thing that would have found it -- the code was never wrong, the check
+was.
+
+### What it looks like from outside
+
+An installed disk, booted by itself, running a program loaded off its own
+volume:
+
+```
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
+```
+
+`scripts/install-then-boot-test.sh` asserts that line, **present and clean**.
+The version that only looked for a bad line passed on the kernel that handed the
+same address out twice: the allocator put a region onto itself, walked the loop,
+and the program never printed anything at all.
+
+Four mutations, each caught by a different check: an adjacent range never joined
+on, a range with other permissions joined on anyway, the join reaching a page
+past what was asked for, and the same address handed out twice.
+
+**Still no release call.** That is now its own entry in `KERNEL-WANTS.md` rather
+than half of one.
+
 ## 0.2.15 -- 13 September 2026
 
 **KF-211: entering user mode on aarch64 was interruptible, and the interrupt

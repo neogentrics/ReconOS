@@ -361,6 +361,50 @@ bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
 	return true;
 }
 
+bool addrspace_reserve_more(struct addrspace *as, vaddr_t va, u64 size,
+			    unsigned flags)
+{
+	vaddr_t start, end;
+	unsigned i;
+	u64 irq;
+
+	if (!as || !size)
+		return false;
+
+	start = va & ~(vaddr_t)(PAGE_SIZE - 1);
+	end   = (va + size + PAGE_SIZE - 1) & ~(vaddr_t)(PAGE_SIZE - 1);
+
+	/* Rounding up is the step that can wrap, and a wrapped end compares as
+	 * comfortably below the start -- so every test after it passes and the
+	 * region covers the whole address space. */
+	if (end <= start)
+		return false;
+
+	irq = arch_irq_save();
+
+	for (i = 0; i < as->region_count; i++) {
+		struct as_region *r = &as->regions[i];
+
+		/* **All three, and the file test is not redundant.** A
+		 * file-backed region extended by zeroes would be a region whose
+		 * `file_len` no longer says where the file stops and the zeroes
+		 * begin -- the tail would be read from the wrong offset rather
+		 * than left empty. Anonymous only, where there is no offset to
+		 * get wrong. */
+		if (r->end != start || r->flags != flags || r->file)
+			continue;
+
+		r->end = end;
+		arch_irq_restore(irq);
+		return true;
+	}
+
+	arch_irq_restore(irq);
+
+	/* Nothing to continue, so this is the first range of its own run. */
+	return addrspace_reserve(as, start, end - start, flags);
+}
+
 /* One lock for filling a file-backed page.
  *
  * A `struct file` has a position, and filling a page means seeking to an
@@ -1060,6 +1104,152 @@ out:
 	return ok;
 }
 
+/* A heap that grows costs one region, and still ends where it was asked to.
+ *
+ * `SYS_MAP` with no file is what an allocator calls, and it calls it again
+ * every time it runs out -- a megabyte at a time, from an address that
+ * continues where the last one stopped. Without `addrspace_reserve_more` that
+ * is one row of `regions[]` per megabyte and a program that may allocate eight
+ * of them, ever, because `AS_REGIONS_MAX` is 8.
+ *
+ * The last assertion is the one that earns the rest. Reserving one large arena
+ * up front and handing out slices of it would also cost one region, and would
+ * quietly give a program that ran off the end of its heap a page of zeroes
+ * instead of a fault -- for as long as the arena lasted, with nothing reported.
+ * So the run has to end exactly where the asking stopped, and the way to know
+ * it does is to ask for the page after it and be refused.
+ */
+static bool a_heap_grows_in_one_region(void)
+{
+	const unsigned heap = VM_READ | VM_WRITE | VM_USER;
+	const vaddr_t base = USER_MAP_BASE;
+	struct addrspace *as = addrspace_create();
+	struct addrspace *was;
+	volatile u32 *seen;
+	bool ok = true;
+	u64 irq;
+
+	if (!as) {
+		kputs("  addrspace: no space to grow a heap in\n");
+		return false;
+	}
+
+	/* Three in a row, which is what an allocator asking for more looks
+	 * like from here.
+	 *
+	 * **This one bails and the checks below it do not.** A reservation that
+	 * was refused leaves nothing to assert about; a reservation that landed
+	 * in the wrong row leaves every later question still worth asking, and
+	 * the last of them -- that the page after the heap is still refused --
+	 * is the one the whole arrangement rests on. Stopping at the first
+	 * failure made it unreachable exactly when it mattered. */
+	if (!addrspace_reserve_more(as, base, PAGE_SIZE, heap) ||
+	    !addrspace_reserve_more(as, base + PAGE_SIZE, PAGE_SIZE, heap) ||
+	    !addrspace_reserve_more(as, base + 2 * PAGE_SIZE, PAGE_SIZE,
+				    heap)) {
+		kputs("  addrspace: a heap could not be grown\n");
+		ok = false;
+		goto out;
+	}
+
+	if (as->region_count != 1) {
+		kprintf("  addrspace: three adjacent reservations took %u "
+			"regions rather than one -- a program's heap would "
+			"run out of regions by growing\n", as->region_count);
+		ok = false;
+	}
+
+	/* Adjacent, and *not* joined, because the permissions differ. This is
+	 * the case `addrspace_reserve`'s refusal to merge was written about:
+	 * joined, the read-only page would have become writable. */
+	if (!addrspace_reserve_more(as, base + 3 * PAGE_SIZE, PAGE_SIZE,
+				    VM_READ | VM_USER)) {
+		kputs("  addrspace: a read-only range after a heap was "
+		      "refused\n");
+		ok = false;
+		goto out;
+	}
+
+	if (as->region_count != 2) {
+		kprintf("  addrspace: a range with different permissions was "
+			"joined to the heap (%u region(s)) -- the pages before "
+			"it just became writable\n", as->region_count);
+		ok = false;
+	}
+
+	/* And a gap starts a run of its own, rather than swallowing the pages
+	 * in between. */
+	if (!addrspace_reserve_more(as, base + 6 * PAGE_SIZE, PAGE_SIZE,
+				    heap)) {
+		kputs("  addrspace: a range past a gap was refused\n");
+		ok = false;
+		goto out;
+	}
+
+	if (as->region_count != 3) {
+		kprintf("  addrspace: a range two pages past the end was "
+			"joined on anyway (%u region(s)) -- the gap between "
+			"them is now memory\n", as->region_count);
+		ok = false;
+	}
+
+	/* And one more onto the end of that, so the last page of the last
+	 * region is a page a *join* put there.
+	 *
+	 * The refusal below is about where an extension stops, and an
+	 * extension is the only thing that can put the end in the wrong place.
+	 * Probing past a region `addrspace_reserve` made asks the same question
+	 * of a number this function never touches -- which is what it used to
+	 * do, and why moving the join a page too far left it passing. */
+	if (!addrspace_reserve_more(as, base + 7 * PAGE_SIZE, PAGE_SIZE,
+				    heap)) {
+		kputs("  addrspace: the second run could not be grown\n");
+		ok = false;
+		goto out;
+	}
+
+	irq = arch_irq_save();
+	was = addrspace_active();
+	addrspace_activate(as);
+
+	/* The third page: inside the extension, not inside the reservation
+	 * that created the region. Touched for real, so the processor's fault
+	 * handler is what has to agree that the promise was extended. */
+	seen = (volatile u32 *)(base + 2 * PAGE_SIZE);
+
+	if (*seen != 0) {
+		kprintf("  addrspace: fresh heap memory is not zero (it reads "
+			"%x) -- a program would be reading whatever the last "
+			"one left there\n", *seen);
+		ok = false;
+	} else {
+		*seen = 0xC0FFEE01U;
+
+		if (*seen != 0xC0FFEE01U) {
+			kputs("  addrspace: a write to extended heap memory "
+			      "did not stick\n");
+			ok = false;
+		}
+	}
+
+	/* One page past the last thing asked for -- and what is there now got
+	 * there by being joined on. Refused, or the heap does not end where the
+	 * program was told it ends. */
+	if (vm_fault_user(base + 8 * PAGE_SIZE, true)) {
+		kputs("  addrspace: the page after the heap was served -- "
+		      "running off the end of an allocation finds memory "
+		      "instead of a fault\n");
+		ok = false;
+	}
+
+	addrspace_activate(was);
+	arch_irq_restore(irq);
+
+out:
+	addrspace_release(as);
+	return ok;
+}
+
 bool addrspace_self_test(void)
 {
 	struct addrspace *a = addrspace_create();
@@ -1285,6 +1475,9 @@ bool addrspace_self_test(void)
 		ok = false;
 
 	if (ok && !a_shared_mapping_is_shared())
+		ok = false;
+
+	if (ok && !a_heap_grows_in_one_region())
 		ok = false;
 
 done:

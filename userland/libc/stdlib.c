@@ -188,6 +188,45 @@ unsigned long long strtoull(const char *text, char **end, int base)
 	return negative ? (unsigned long long)(0 - v) : v;
 }
 
+/*
+ * The same conversion as `strtol`, and a separate function because the
+ * compiler asks for it by name.
+ *
+ * Nothing in ReconOS writes `strtoll`. What writes it is GCC: `atoll(s)` at
+ * -O2 and above is rewritten into `strtoll(s, 0, 10)` -- a builtin
+ * substitution made in the *caller*, which never reaches the `atoll` below
+ * however carefully that is written. So a release build of the desktop wanted
+ * a symbol that no line of its source mentions, and a debug build did not.
+ *
+ * **On both architectures here a `long` is already 64 bits**, so this is
+ * `strtol` under another name and the saturation is identical. It is written
+ * out rather than defined as a macro because a macro is not a symbol, and a
+ * symbol is exactly what the linker was missing. On a machine where the two
+ * widths differ, this is the one that must not narrow, and the body would then
+ * be `strtoull`'s limit with a sign -- which is why it takes the shared
+ * `parse` directly rather than calling `strtol` and casting.
+ */
+long long strtoll(const char *text, char **end, int base)
+{
+	int negative;
+	int overflowed;
+	unsigned long long limit = 0x7FFFFFFFFFFFFFFFULL;
+	unsigned long long v;
+
+	v = parse(text, end, base, &negative, limit + 1, &overflowed);
+
+	if (negative) {
+		if (overflowed || v > limit + 1) {
+			return (long long)(-limit - 1);
+		}
+		return (long long)(0 - v);
+	}
+	if (overflowed || v > limit) {
+		return (long long)limit;
+	}
+	return (long long)v;
+}
+
 int atoi(const char *text)
 {
 	return (int)strtol(text, (char **)0, 10);
@@ -195,7 +234,7 @@ int atoi(const char *text)
 
 long long atoll(const char *text)
 {
-	return (long long)strtol(text, (char **)0, 10);
+	return strtoll(text, (char **)0, 10);
 }
 
 /*

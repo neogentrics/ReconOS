@@ -1560,3 +1560,49 @@ double cbrt(double x)
 
 	return negative ? -guess : guess;
 }
+
+/* --- Two the compiler asks for and the source never writes ---------------
+ *
+ * Neither `sqrtf` nor `sincos` appears anywhere in ReconOS. GCC puts them
+ * there: a `sqrt` whose argument and result are both floats is narrowed to the
+ * single-precision instruction, and a `sin(x)` and a `cos(x)` of the same
+ * argument are fused into one call that computes both. Both substitutions
+ * happen at -O2 and above and at no optimisation level below it, which is why
+ * a release build of the desktop needed symbols a debug build did not.
+ */
+
+float sqrtf(float x)
+{
+	/*
+	 * The hardware instruction again -- `sqrtss` and `fsqrt` -- for the
+	 * same reason `sqrt` uses it: IEEE 754 requires a correctly rounded
+	 * result and the processor gives one.
+	 *
+	 * Written as the single-precision builtin rather than as
+	 * `(float)sqrt((double)x)`. That form happens to be exactly right for
+	 * square root -- a double carries more than twice a float's
+	 * significand, so the double rounding cannot land on the wrong side --
+	 * but it is right by an argument rather than by construction, and it
+	 * does the work in the wrong precision on the way.
+	 */
+	return __builtin_sqrtf(x);
+}
+
+/*
+ * Both at once.
+ *
+ * Not faster here: it is two calls with a shared argument, and the reduction
+ * of that argument -- the expensive half of either function, and the reason
+ * `two_over_pi.inc` exists -- is done twice. glibc shares it. This does not,
+ * yet, and saying so is better than implying an optimisation that is not here:
+ * what this provides is the **symbol**, so that a program the compiler rewrote
+ * links and computes the right two numbers.
+ *
+ * The sharing is a later change to this one function and to nothing else,
+ * which is the reason it is worth writing it this way now.
+ */
+void sincos(double x, double *sine, double *cosine)
+{
+	*sine = sin(x);
+	*cosine = cos(x);
+}

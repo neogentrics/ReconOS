@@ -82,6 +82,7 @@ int recon_tolower(int c);
 
 int recon_atoi(const char *text);
 long recon_strtol(const char *text, char **end, int base);
+long long recon_strtoll(const char *text, char **end, int base);
 unsigned long recon_strtoul(const char *text, char **end, int base);
 unsigned long long recon_strtoull(const char *text, char **end, int base);
 double recon_strtod(const char *text, char **end);
@@ -262,6 +263,35 @@ static void test_the_number_parsing(void)
 			same_long(mine, theirs, "strtol", text);
 			same_long(mine_end - text, their_end - text,
 				  "strtol stopped in the same place", text);
+
+			/*
+			 * `strtoll`, which no line of ReconOS calls. GCC
+			 * writes the call: `atoll(s)` at -O2 and above becomes
+			 * `strtoll(s, 0, 10)` in the caller, so a release
+			 * build wants a symbol the source never names -- and
+			 * a debug build does not, which is how it went
+			 * unnoticed. Put to the host over the same corpus as
+			 * its siblings, because the saturation at each end is
+			 * the half that is worth getting wrong.
+			 */
+			{
+				long long lmine =
+					recon_strtoll(text, &mine_end, base);
+				long long ltheirs =
+					strtoll(text, &their_end, base);
+
+				g_checks++;
+				if (lmine != ltheirs) {
+					g_failures++;
+					printf("  FAIL: strtoll on \"%s\""
+					       " base %d\n    ReconOS: %lld"
+					       "   reference: %lld\n",
+					       text, base, lmine, ltheirs);
+				}
+				same_long(mine_end - text, their_end - text,
+					  "strtoll stopped in the same place",
+					  text);
+			}
 
 			umine = recon_strtoul(text, &mine_end, base);
 			utheirs = strtoul(text, &their_end, base);

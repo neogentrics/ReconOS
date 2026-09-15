@@ -293,6 +293,65 @@ static i64 sys_seek(u64 fd, u64 offset, u64 from, u64 a3, u64 a4, u64 a5)
 	return n;
 }
 
+/* Memory a program can have because it asked for it, with no file behind it.
+ *
+ * `SYS_MAP` began as a way to put the framebuffer where a program could draw on
+ * it, and a descriptor of -1 is how every other system spells "no file, just
+ * memory". `docs/KERNEL-WANTS.md` asked for it in those words -- *"two calls
+ * over machinery that exists"* -- and the machinery really did exist: this adds
+ * a reservation and the fault handler that has always served the stack serves
+ * the heap without being told about it.
+ *
+ * So there is no allocation here. A reservation costs no physical memory at all
+ * and a page appears when the program writes to it, which is what makes an
+ * allocator that asks for a megabyte at a time affordable on a machine that has
+ * far less than a megabyte to spare per program.
+ *
+ * **-1 rather than a flag or a number of its own.** The library asked with -1
+ * before this existed, because that is the spelling `KERNEL-WANTS` proposed and
+ * the one every other system uses; a number of ours would have been a second
+ * thing to know and a third thing to keep in step. Nothing in `userland/` is
+ * rebuilt or relinked by this landing -- `mem_recon.c` sends exactly the call it
+ * has always sent, and now gets an address back.
+ *
+ * Zeroed, and that is a promise rather than an accident of the fault handler:
+ * `malloc` does not clear what it hands out, so a program reading an
+ * uninitialised allocation must not be reading whatever the last program left in
+ * that page. Untouched pages read from the one shared page of zeroes and a write
+ * is given a fresh page copied from it, so the guarantee holds in both halves.
+ */
+static i64 map_anonymous(struct process *p, u64 length)
+{
+	u64 va, size;
+
+	if (length == 0)
+		return SYS_EINVAL;
+
+	size = (length + PAGE_SIZE - 1) & ~((u64)PAGE_SIZE - 1);
+
+	/* A length within a page of the top rounds up to zero, and a zero size
+	 * would reserve nothing and report an address for it. */
+	if (size < length)
+		return SYS_EINVAL;
+
+	va = p->space->map_next ? p->space->map_next : USER_MAP_BASE;
+
+	/* Non-wrapping, like every other range check here. */
+	if (size > USER_MAP_END - va)
+		return SYS_ENOMEM;
+
+	/* `_more`, so a heap that grows costs one region however far it grows.
+	 * A device mapped in between two heap requests breaks the run and the
+	 * next request starts a second one, which is correct rather than
+	 * unfortunate: the addresses really are not adjacent. */
+	if (!addrspace_reserve_more(p->space, (vaddr_t)va, size,
+				    VM_READ | VM_WRITE | VM_USER))
+		return SYS_ENOMEM;
+
+	p->space->map_next = va + size;
+	return (i64)va;
+}
+
 /* Put a file's memory in the caller's map.
  *
  * The mapping outlives the descriptor on purpose, and that is worth saying
@@ -319,6 +378,12 @@ static i64 sys_map(u64 fd, u64 length, u64 a2, u64 a3, u64 a4, u64 a5)
 
 	if (!p || !p->space)
 		return SYS_EPERM;
+
+	/* No file. Checked before `fd_get`, because -1 is not a descriptor that
+	 * happens to be closed -- it is the caller saying there is no file, and
+	 * answering EBADF for it is what this call used to do. */
+	if ((int)fd == -1)
+		return map_anonymous(p, length);
 
 	f = fd_get(p, (int)fd);
 	if (!f)

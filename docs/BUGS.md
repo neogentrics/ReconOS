@@ -7890,6 +7890,60 @@ regenerated after that tree is pushed.
   library is split by the latter, and every file that has ever been added to it
   is one link error away from being told so.
 
+### BG-202 — A call with no prototype was a warning, and the suite reported the wrong square root
+
+[#475](https://github.com/neogentrics/ReconOS/issues/475)
+
+- **Found in** v0.4.33, by `recon_libc_math_tests`: *`sqrtf(0)` — ReconOS: 1,
+  reference: 0*.
+- **What it was** `test_libc_math.c` declares every `recon_*` prototype it uses
+  by hand, and the two new ones were not added. C then assumes a function it has
+  never seen returns `int`, so the float coming back in a floating-point
+  register was read as an integer and the suite compared a number nobody had
+  computed.
+- **The compiler had said so, twice.** `warning: implicit declaration of
+  function 'recon_sqrtf'` was in the build output for both lines. This build has
+  no `-Werror`, so it was two lines among a few thousand and nothing stopped.
+- **Fixed in** v0.4.33 by declaring both — and by promoting exactly two
+  warnings to errors, `-Werror=implicit-function-declaration` and
+  `-Werror=implicit-int`. Not `-Werror` in general: that is a policy change
+  across a tree two sessions are working in. These two can only ever mean a
+  wrong answer, and the whole tree compiles with no instance of either, so they
+  cost nothing today.
+- **The same shape as the `recon_strlen` fault in v0.4.31**, where a name
+  resolved to something plausible and wrong. A build that reports a fault and
+  carries on has not reported it.
+
+### BG-203 — The coverage measurement read whatever build was lying around
+
+[#476](https://github.com/neogentrics/ReconOS/issues/476)
+
+- **Found in** v0.4.33, by `measure-libc.py`'s own guard: *these have no line in
+  NEEDS — `sincos sqrtf strtoll`*, on the first run after a release build had
+  been configured.
+- **What it was** **the compiler writes calls the source does not contain.** At
+  -O2 and above GCC fuses a `sin(x)` and a `cos(x)` of one argument into
+  `sincos`, rewrites `atoll(s)` as `strtoll(s, 0, 10)` *in the caller* — reaching
+  past whatever `atoll` the library defines — and narrows a `sqrt` whose argument
+  and result are both floats into `sqrtf`.
+
+  So the set of symbols the desktop needs is not a property of the desktop's
+  source. It is a property of the source **and the flags it was built with**.
+  The script had no opinion about the flags, printed nothing about them, and had
+  been reporting three symbols as answered that a release of the same source
+  cannot link without.
+- **What it cost** the published figure. v0.4.32 said 3,043 of 3,134 call sites;
+  the release build says **2,998 of 3,089**, and that is the number a machine
+  actually needs.
+- **Fixed in** v0.4.33: the build type is read out of `CMakeCache.txt`, printed
+  with the result, and a build that is not a release is refused rather than
+  reported. `--any-build-type` shows the other number on purpose, and says which
+  it is.
+- **The third time in this library.** BG-195 and BG-197 were the same sentence:
+  *a measurement that shares a premise with the thing it measures can only agree
+  with it.* The premise here was the optimisation level, and it was written down
+  nowhere at all.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

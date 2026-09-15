@@ -29,11 +29,33 @@ void *calloc(size_t count, size_t each);
 void *realloc(void *p, size_t bytes);
 void free(void *p);
 
+/* --- What a program may ask about its own heap ---------------------------
+ *
+ * Not standard, and `recon_` for that reason. A program that reports memory
+ * use should not have to keep its own running total beside the allocator's,
+ * because the two disagreeing is a bug that can only be found by reading both.
+ *
+ * `recon_malloc_audit` walks the heap and returns the number of things it
+ * found wrong -- a size that disagrees with its footer, a free block that no
+ * list holds, a block that overlaps its neighbour. **Zero is the only good
+ * answer**, and it is a number rather than a bool because which faults and how
+ * many is the whole of what makes one actionable.
+ *
+ * `recon_malloc_refused` counts the times the source said no, which is what
+ * tells a program out of memory apart from a program with a broken heap. On a
+ * kernel with no anonymous memory it was the only number that moved.
+ */
+unsigned recon_malloc_audit(void);
+size_t recon_malloc_held(void);		/* held from the kernel right now */
+size_t recon_malloc_live(void);		/* what blocks in use hold */
+size_t recon_malloc_refused(void);	/* times the kernel said no */
+
 int atoi(const char *text);
 long long atoll(const char *text);
 double atof(const char *text);
 
 long strtol(const char *text, char **end, int base);
+long long strtoll(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
 unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);

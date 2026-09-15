@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.32
+    VERSION 0.4.33
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -35,6 +35,23 @@ add_compile_definitions(WLR_USE_UNSTABLE)
 # twenty-two of those would bury the next real one.
 #
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+
+# Two warnings promoted to errors, and only two.
+#
+# A call with no prototype in front of it is not a style question. C assumes it
+# returns `int`, so a function returning a float is read as an integer and the
+# caller carries on with a number that was never computed -- which is exactly
+# what happened to `recon_sqrtf` in `test_libc_math.c`: the suite reported
+# `sqrtf(0)` as 1 and the fault was in the declaration, not the square root.
+#
+# The compiler had said so both times. Nobody was listening, because this build
+# has no `-Werror` and a warning is one line among a few thousand. Rather than
+# turn every warning into an error -- a policy change across a tree two
+# sessions are working in -- the two that can only ever mean a wrong answer are
+# errors and the rest stay warnings.
+#
+# They cost nothing today: the whole tree compiles with no instance of either.
+add_compile_options(-Werror=implicit-function-declaration -Werror=implicit-int)
 
 #
 # Configure the suites without the compositor.

@@ -122,6 +122,7 @@ int atoi(const char *text);
 long long atoll(const char *text);
 double atof(const char *text);
 long strtol(const char *text, char **end, int base);
+long long strtoll(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
 unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
@@ -215,6 +216,13 @@ struct recon_malloc_stats {
 };
 
 void recon_malloc_stats(struct recon_malloc_stats *into);
+
+/* The three of those a program reads one at a time, through the public header
+ * rather than through this one. Declared here too so malloc.c compiles with
+ * only this in front of it. */
+size_t recon_malloc_held(void);
+size_t recon_malloc_live(void);
+size_t recon_malloc_refused(void);
 unsigned recon_malloc_audit(void);
 void recon_malloc_reset(void);
 

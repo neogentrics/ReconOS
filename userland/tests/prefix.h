@@ -104,6 +104,7 @@
 #define atoll       recon_atoll
 #define atof        recon_atof
 #define strtol      recon_strtol
+#define strtoll     recon_strtoll
 #define strtoul     recon_strtoul
 #define strtoull    recon_strtoull
 #define strtod      recon_strtod
@@ -145,6 +146,8 @@
  */
 #define fabs        recon_fabs
 #define sqrt        recon_sqrt
+#define sqrtf       recon_sqrtf
+#define sincos      recon_sincos
 #define floor       recon_floor
 #define ceil        recon_ceil
 #define round       recon_round

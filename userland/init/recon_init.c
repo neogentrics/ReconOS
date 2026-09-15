@@ -20,10 +20,18 @@
  * proof that the library is a library rather than a suite of functions that
  * pass a suite of tests.
  *
- * It allocates nothing. There is no allocator on this kernel and that is the
- * first entry in `docs/KERNEL-WANTS.md`; everything here is a fixed buffer
- * sized at compile time, which is the same discipline `libc/stdio.c` follows
- * for the same reason.
+ * **And it allocates**, which it could not do until v0.4.33. What this
+ * paragraph used to say is worth keeping: *"It allocates nothing. There is no
+ * allocator on this kernel and that is the first entry in
+ * `docs/KERNEL-WANTS.md`."* The entry was `SYS_MAP` with no file behind it,
+ * and the kernel answers it now.
+ *
+ * Everything this program needs is still a fixed buffer sized at compile time,
+ * which is the same discipline `libc/stdio.c` follows for the same reason. The
+ * allocating is deliberate rather than needed: it is the only thing that runs
+ * the whole path -- `malloc` to `mem_recon.c` to `SYS_MAP` to a region to a
+ * page fault to a page -- on the machine, and it says what happened on the
+ * screen.
  *
  * --- Where the drawing is ---
  *
@@ -37,6 +45,7 @@
 #include <recon_machine.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "layout.h"
@@ -70,6 +79,144 @@
 static void say(const char *text)
 {
 	recon_write(1, text, recon_strlen(text));
+}
+
+
+/* --- Memory this program asked the machine for --------------------------- */
+
+/*
+ * How many blocks, and why a number rather than one allocation.
+ *
+ * One `malloc` that succeeds proves the kernel handed over a range. It says
+ * nothing about the allocator laid out inside that range -- and the allocator
+ * is the part with boundary tags, a footer in the next block's header, and
+ * sixteen free lists, all of which were written against a host that answers
+ * every request and none of which has ever run on a range this kernel gave.
+ */
+#define HEAP_BLOCKS 64
+
+/* Big enough that `malloc` gives it a region of its own rather than carving it
+ * out of a shared one -- which is the path that asks the kernel a *second*
+ * time, and so the only one that can tell a working call from a working first
+ * call. */
+#define HEAP_BIG (512u * 1024u)
+
+/*
+ * Use the heap hard enough to be worth reporting, and say what happened.
+ *
+ * The middle pass is the one that matters. Freeing every other block and
+ * allocating into the holes is what makes the free lists and the coalescing do
+ * work; without it this is a bump allocator walking upwards through memory
+ * nothing has touched, which is the one arrangement that cannot go wrong.
+ *
+ * Every block carries a pattern derived from where it is, so a block handed
+ * out twice, a coalesce that swallowed a neighbour still in use, and a write
+ * that went one block over are all the same observation: the bytes that came
+ * back are not the bytes that went in.
+ */
+static void exercise_the_heap(char *into, size_t room)
+{
+	unsigned char *block[HEAP_BLOCKS];
+	size_t size[HEAP_BLOCKS];
+	unsigned char *big;
+	unsigned i;
+	size_t j;
+	unsigned changed = 0;
+	unsigned faults;
+	size_t held, still_live;
+
+	for (i = 0; i < HEAP_BLOCKS; i++) {
+		size[i] = 24 + (i * 137u) % 900u;
+		block[i] = (unsigned char *)malloc(size[i]);
+
+		if (block[i] == NULL) {
+			snprintf(into, room,
+				 "refused after %u blocks -- this kernel has"
+				 " no memory to hand a program", i);
+			return;
+		}
+
+		for (j = 0; j < size[i]; j++)
+			block[i][j] = (unsigned char)(i + j);
+	}
+
+	/* Half of them back, and the same half taken again. */
+	for (i = 0; i < HEAP_BLOCKS; i += 2) {
+		free(block[i]);
+		block[i] = NULL;
+	}
+
+	for (i = 0; i < HEAP_BLOCKS; i += 2) {
+		size[i] = 40 + (i * 53u) % 700u;
+		block[i] = (unsigned char *)malloc(size[i]);
+
+		if (block[i] == NULL) {
+			snprintf(into, room,
+				 "refused re-using freed memory at block %u",
+				 i);
+			return;
+		}
+
+		for (j = 0; j < size[i]; j++)
+			block[i][j] = (unsigned char)(i + j);
+	}
+
+	big = (unsigned char *)malloc(HEAP_BIG);
+	if (big == NULL) {
+		snprintf(into, room,
+			 "small blocks work and %u KiB was refused",
+			 HEAP_BIG / 1024u);
+		return;
+	}
+	memset(big, 0xA5, HEAP_BIG);
+
+	/* Read back *after* the large one, so a second range that landed on top
+	 * of the first is seen here rather than not at all. */
+	for (i = 0; i < HEAP_BLOCKS; i++) {
+		for (j = 0; j < size[i]; j++) {
+			if (block[i][j] != (unsigned char)(i + j)) {
+				changed++;
+				break;
+			}
+		}
+	}
+
+	for (j = 0; j < HEAP_BIG; j++) {
+		if (big[j] != 0xA5) {
+			changed++;
+			break;
+		}
+	}
+
+	held = recon_malloc_held();
+
+	free(big);
+	for (i = 0; i < HEAP_BLOCKS; i++)
+		free(block[i]);
+
+	still_live = recon_malloc_live();
+	faults = recon_malloc_audit();
+
+	if (changed != 0) {
+		snprintf(into, room,
+			 "%u of %u blocks came back holding different bytes",
+			 changed, HEAP_BLOCKS + 1);
+	} else if (faults != 0) {
+		snprintf(into, room,
+			 "%u blocks survived and the heap does not hold"
+			 " together (%u faults)", HEAP_BLOCKS + 1, faults);
+	} else if (still_live != 0) {
+		snprintf(into, room,
+			 "%llu bytes still counted as in use after everything"
+			 " was freed",
+			 (unsigned long long)still_live);
+	} else {
+		snprintf(into, room,
+			 "%u blocks and %u KiB written, read back and freed;"
+			 " %llu KiB from the kernel",
+			 HEAP_BLOCKS, HEAP_BIG / 1024u,
+			 (unsigned long long)(held / 1024u));
+	}
 }
 
 /* --- Formatting facts a person can read --- */
@@ -232,6 +379,7 @@ int main(void)
 	char display_line[96];
 	char storage_line[96];
 	char layout_line[120];
+	char heap_line[120];
 	char total[32];
 	char free_bytes[32];
 	i64 answer;
@@ -306,6 +454,11 @@ int main(void)
 
 	/* Before the listing, because the listing is what proves it worked. */
 	lay_out_the_volume(layout_line, sizeof(layout_line));
+
+	/* After the framebuffer is mapped, on purpose. The heap is handed the
+	 * addresses after the screen's, so anything that got the two runs
+	 * confused would be drawing into its own allocations. */
+	exercise_the_heap(heap_line, sizeof(heap_line));
 	say_storage(storage_line, sizeof(storage_line));
 
 	memset(&facts, 0, sizeof(facts));
@@ -319,7 +472,7 @@ int main(void)
 	facts.storage = storage_line;
 
 	facts.notes[0] = layout_line;
-	facts.notes[1] = "";
+	facts.notes[1] = heap_line;
 	facts.notes[2] = "This machine is running its own kernel.";
 	facts.notes[3] = "No Linux is underneath it.";
 	facts.notes[4] = "";
@@ -356,6 +509,9 @@ int main(void)
 
 		snprintf(line, sizeof(line), "  storage: %s\n",
 			 storage_line);
+		say(line);
+
+		snprintf(line, sizeof(line), "  the heap: %s\n", heap_line);
 		say(line);
 	}
 

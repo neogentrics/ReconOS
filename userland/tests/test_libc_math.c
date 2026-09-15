@@ -61,6 +61,9 @@ double recon_log(double x);
 double recon_log10(double x);
 double recon_pow(double x, double y);
 double recon_sin(double x);
+/* The two the compiler writes and the source never does. */
+float recon_sqrtf(float x);
+void recon_sincos(double x, double *sine, double *cosine);
 double recon_cos(double x);
 double recon_tan(double x);
 double recon_asin(double x);
@@ -615,6 +618,64 @@ static void test_how_far_the_circle_reaches(void)
 	}
 }
 
+
+/*
+ * The two nothing writes.
+ *
+ * `sqrtf` and `sincos` appear in no line of ReconOS and in every release build
+ * of it: GCC narrows a `sqrt` whose argument and result are both floats, and
+ * fuses a `sin` and a `cos` of the same argument. Both substitutions begin at
+ * -O2, so the symbols a debug build needs and the symbols a release build needs
+ * are different sets -- which is why the coverage report has to read a release.
+ */
+static void test_the_ones_the_compiler_asks_for(void)
+{
+	size_t i;
+
+	printf("the ones the compiler writes and the source does not\n");
+
+	for (i = 0; i < SPECIAL_COUNT; i++) {
+		float x = (float)SPECIALS[i];
+		float mine = recon_sqrtf(x);
+		float theirs = sqrtf(x);
+
+		/*
+		 * Bit for bit, and it has to be: IEEE 754 requires square root
+		 * to be correctly rounded, so there is exactly one right answer
+		 * and a difference of one place is a difference.
+		 *
+		 * The two NaNs are the one exception, as they are for `sqrt`.
+		 */
+		g_checks++;
+		if (mine != theirs && !(mine != mine && theirs != theirs)) {
+			g_failures++;
+			printf("  FAIL: sqrtf(%.9g)\n"
+			       "    ReconOS: %.9g   reference: %.9g\n",
+			       (double)x, (double)mine, (double)theirs);
+		}
+	}
+
+	/*
+	 * And `sincos`, against **our own** sin and cos rather than the host's.
+	 *
+	 * The contract is not "close to the right sine"; the suite above checks
+	 * that already, with a bound, because an approximation is allowed to be
+	 * out in the last place. The contract here is *exactly the pair a
+	 * caller would have got by writing the two calls* -- which is what a
+	 * compiler fusing them is entitled to assume, and what would stop being
+	 * true the day the argument reduction is shared between the halves.
+	 */
+	for (i = 0; i < SPECIAL_COUNT; i++) {
+		double x = SPECIALS[i];
+		double s = 0.0, c = 0.0;
+
+		recon_sincos(x, &s, &c);
+
+		same_bits(s, recon_sin(x), "sincos's sine is sin", x);
+		same_bits(c, recon_cos(x), "sincos's cosine is cos", x);
+	}
+}
+
 int main(void)
 {
 	printf("ReconOS C library: the maths functions\n\n");
@@ -623,6 +684,7 @@ int main(void)
 	test_the_approximations();
 	test_the_cases_that_are_exact_anyway();
 	test_how_far_the_circle_reaches();
+	test_the_ones_the_compiler_asks_for();
 
 	printf("\n%ld checks, %d failures\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;

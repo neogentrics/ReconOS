@@ -92,6 +92,12 @@ int recon_math_signbit(double x);
 
 double fabs(double x);
 double sqrt(double x);
+
+/* Written by the compiler rather than by anybody here -- see the note above
+ * their definitions in `libc/math.c`. Declared so that a source file which
+ * *does* name them gets the right prototype rather than an implicit int. */
+float sqrtf(float x);
+void sincos(double x, double *sine, double *cosine);
 double floor(double x);
 double ceil(double x);
 double round(double x);

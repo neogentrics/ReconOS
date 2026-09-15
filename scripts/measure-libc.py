@@ -40,6 +40,7 @@ import argparse
 import collections
 import glob
 import io
+import io
 import os
 import re
 import subprocess
@@ -145,9 +146,32 @@ def nm(kind, *directories):
     return found
 
 
+def build_type(build):
+    """What CMake was told to build, straight out of its own cache.
+
+    Read rather than assumed, because assuming it is the fault this answers:
+    the script had no opinion about the optimisation level and the answer
+    depends on it entirely.
+    """
+    cache = os.path.join(build, 'CMakeCache.txt')
+
+    if not os.path.isfile(cache):
+        return None
+
+    with io.open(cache, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if line.startswith('CMAKE_BUILD_TYPE:'):
+                return line.split('=', 1)[1].strip()
+
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--build', default='build')
+    ap.add_argument('--any-build-type', action='store_true',
+                    help='report a number from a build that is not a release '
+                         '-- which is a different number, see BG-203')
     args = ap.parse_args()
 
     build = os.path.join(HERE, args.build)
@@ -171,6 +195,34 @@ def main():
     if not libc_dirs:
         sys.stderr.write('no object files for the C library under %s -- '
                          'build first\n' % build)
+        return 1
+
+    # --- and it has to be a release ---------------------------------------
+    #
+    # **The compiler writes calls the source does not contain**, and it starts
+    # doing it at -O2. `sin(x)` and `cos(x)` of the same argument become one
+    # `sincos`; `atoll(s)` becomes `strtoll(s, 0, 10)` in the caller, reaching
+    # past whatever `atoll` this library defines; a `sqrt` whose argument and
+    # result are both floats becomes `sqrtf`.
+    #
+    # So the set of symbols the desktop needs is not a property of the desktop's
+    # source. It is a property of the desktop's source *and the flags it was
+    # built with*, and a measurement that does not say which flags is not a
+    # measurement. All three of those were reported as answered for as long as
+    # this script read whatever build happened to be lying around.
+    kind = build_type(build)
+
+    if not args.any_build_type and (kind or '').lower() != 'release':
+        sys.stderr.write(
+            'the build at %s is %s, and this number is only true of a '
+            'release.\n'
+            'At -O2 and above the compiler emits calls the source does not '
+            'contain -- sincos, strtoll, sqrtf -- and a library measured '
+            'against a debug build links where a release of the same source '
+            'does not.\n'
+            'Configure with -DCMAKE_BUILD_TYPE=Release, or pass '
+            '--any-build-type to see the other number on purpose.\n'
+            % (build, kind if kind else 'of no stated type'))
         return 1
 
     # A source with no object anywhere is the condition that made this wrong
@@ -201,6 +253,10 @@ def main():
             'they define would be counted as missing: %s\n'
             % ', '.join(missing))
         return 1
+
+    print('read from the %s build at %s'
+          % ((kind or 'untyped').lower(), os.path.relpath(build, HERE)))
+    print()
 
     needed = collections.Counter()
     for name, count in nm('--undefined-only', desktop).items():

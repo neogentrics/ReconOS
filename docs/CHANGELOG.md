@@ -9,6 +9,80 @@ way for the two to disagree.
 
 ---
 
+## v0.4.33 — memory a program can ask for
+
+**The first entry in `docs/KERNEL-WANTS.md` is answered.** `SYS_MAP` with an fd
+of -1 returns a demand-paged anonymous range, and `userland/libc/mem_recon.c`
+has been sending exactly that call since the allocator was written. Nothing in
+`userland/` was rebuilt or relinked for it: the program on the disk already
+linked the allocator, and the call it had always made started working.
+
+An installed disk, booted by itself, running a program loaded off its own
+volume, now says:
+
+```
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
+```
+
+`recon_init` allocates sixty-four blocks, frees every other one and takes them
+again -- so the free lists and the coalescing do work rather than a bump upwards
+through fresh memory -- takes one block large enough to need a second range from
+the kernel, reads every one of them back, and audits the heap. The kernel half
+is in `docs/KERNEL-CHANGELOG.md` under 0.2.39.
+
+**The first ReconOS program that allocates.** What its header used to say is
+worth keeping: *"It allocates nothing. There is no allocator on this kernel and
+that is the first entry in `docs/KERNEL-WANTS.md`."*
+
+### Three functions nothing in ReconOS calls
+
+`sincos`, `sqrtf` and `strtoll` appear in no line of this source. **The compiler
+writes them.** At -O2 and above GCC fuses a `sin(x)` and a `cos(x)` of one
+argument into a single `sincos`, rewrites `atoll(s)` as `strtoll(s, 0, 10)` *in
+the caller* — reaching past whatever `atoll` the library defines — and narrows a
+`sqrt` whose argument and result are both floats into `sqrtf`.
+
+So a release of the desktop needed three symbols that a debug build did not, and
+the coverage measurement had been reading whichever build happened to be in
+`build/`. That is BG-203, and it is the third time this library has been
+measured by an instrument sharing a premise with it.
+
+**The number it changes.** v0.4.32 published 3,043 of 3,134 call sites. The
+release build — the one a machine would actually run — says **2,998 of 3,089**.
+The measurement now reads the build type out of `CMakeCache.txt`, prints it with
+the result, and refuses a build that is not a release.
+
+### Two warnings are errors now, and only two
+
+`recon_libc_math_tests` reported `sqrtf(0)` as 1. The square root was right; the
+suite had no prototype for it, so C assumed it returned `int` and read a
+floating-point register as an integer.
+
+The compiler had said so, twice, in a build with no `-Werror` — two lines among
+a few thousand. `-Werror=implicit-function-declaration` and
+`-Werror=implicit-int` are errors now. Not `-Werror` in general, which is a
+policy change across a tree two sessions are working in; these two can only ever
+mean a wrong answer, and the whole tree compiles with no instance of either.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,043 of 3,134 *(debug build)* | **2,998 of 3,089** *(release)* |
+| symbols outstanding | 40 | **37** |
+| the installed-disk boot test | 8 of 8 | **9 of 9** |
+
+The two call-site figures are not a regression and not comparable: the left one
+counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
+suite 438,496, both clean.
+
+The 91 call sites still missing all need the kernel: 35 for sockets that open
+something, 31 for `stat` and its relatives, 12 for `dlopen`, 11 for processes and
+signals, 2 for an environment.
+
+---
+
 ## v0.4.32 — the nine that need nothing from the kernel
 
 Sockets are the largest group left, and most of it needs a kernel. **Nine

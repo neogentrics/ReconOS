@@ -40,7 +40,9 @@ trap 'rm -rf "$W"' EXIT INT TERM
 
 pass=0
 fail=0
-say() { printf '%-46s' "  $1"; }
+# 52, because three of the labels below are longer than 46 and the
+# column of answers had been stepping out to meet them.
+say() { printf '%-52s' "  $1"; }
 
 # --- the install medium, laid out the way a real one is ---------------------
 
@@ -205,6 +207,34 @@ if echo "$boot" | grep -qa 'the system: /System/init.elf, from the volume'; then
 else
 	echo "FAILED"
 	echo "$boot" | grep -a 'the system:' | sed 's/^/      /' | head -2
+	fail=$((fail + 1))
+fi
+
+# --- and the program it started could ask for memory ------------------------
+#
+# `SYS_MAP` with a descriptor of -1 is what an allocator calls, and it answered
+# EBADF until v0.4.33 -- so `malloc` worked on the host and returned NULL here,
+# and every part of the path between the two had been built and none of it had
+# ever been run. `recon_init` allocates sixty-four blocks, frees half, takes
+# them again, takes one large enough to need a second range from the kernel,
+# reads every one of them back and audits the heap.
+#
+# **Present and clean, and absence is a failure.** The version of this that
+# only checked for a bad line passed on the kernel that handed the same address
+# out twice: the allocator put a region onto itself, walked the loop, and the
+# program never printed anything at all. So the match is the good line, not the
+# absence of a bad one.
+say "and the program it ran could ask for memory"
+if echo "$boot" | grep -qa 'the heap: [0-9]* blocks and [0-9]* KiB written, read back and freed'; then
+	echo "$boot" | grep -a 'the heap:' | sed 's/^ *the heap: //' | head -1
+	pass=$((pass + 1))
+else
+	echo "FAILED"
+	if echo "$boot" | grep -qa 'the heap:'; then
+		echo "$boot" | grep -a 'the heap:' | sed 's/^/      /' | head -2
+	else
+		echo "      it never said -- the program did not get that far"
+	fi
 	fail=$((fail + 1))
 fi
 

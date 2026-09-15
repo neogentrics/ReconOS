@@ -16,7 +16,21 @@ Ordered by how sharply it is felt, not by how hard it would be.
 
 ---
 
-## There is no way for a program to ask for memory
+## ~~There is no way for a program to ask for memory~~ — answered, 15 September 2026
+
+> **Answered in kernel 0.2.38 / v0.4.33.** `SYS_MAP` with an fd of -1 returns a
+> demand-paged anonymous range, spelled exactly as this entry proposed, so
+> nothing in `userland/` was rebuilt or relinked for it — `mem_recon.c` sent the
+> call it had always sent and got an address back. An installed disk, booted by
+> itself, now reports `the heap: 64 blocks and 512 KiB written, read back and
+> freed; 1536 KiB from the kernel`.
+>
+> **The release half is still open**, and the browser-tab arithmetic below is
+> why. It is kept as its own entry at the bottom of this file rather than left
+> implied here.
+>
+> The rest of this entry is what it said before it was answered, kept because
+> the measurements in it are what decided the shape of the call.
 
 **Where:** writing `userland/libc/`, on 14 September 2026. Hit immediately and
 unavoidably: `malloc` has nothing to be built on.
@@ -131,6 +145,42 @@ a *supported* configuration, not a degraded one: the allocator keeps the region
 and reuses it, and every scenario in the suite runs that way as well as the
 other. What it costs is a program that cannot shrink -- see the browser tab
 above -- so it is worth having, second.
+
+---
+
+## There is no way for a program to give memory back
+
+**Where:** the other half of the entry above, left open when that one was
+answered on 15 September 2026.
+
+A program can ask for a range and cannot release one. `mem_recon.c`'s
+`give_back` says so rather than pretending, and the allocator treats "cannot
+give back" as a **supported** configuration -- it keeps the region and reuses
+it, and every scenario in the suite runs both ways.
+
+**What it costs is a program that cannot shrink.** A browser tab that is closed
+releases 6.8 MiB to the allocator and none of it to the machine, so a window
+where twelve tabs have been opened and closed is holding eighty-one megabytes
+that nothing else can have. On 512 MiB that is a browser which dies after sixty
+tabs and cannot say why.
+
+**What would answer it:** a call that takes an address and a length and undoes
+what `SYS_MAP` with fd -1 did -- dropping the region, unmapping whatever pages
+it had, and handing them back to `pmm`. The region table already records the
+bounds; what does not exist is the walk that frees the pages of one region
+rather than of a whole address space at teardown.
+
+**One thing it must decide** that the taking side did not have to: `map_next`
+walks upwards and is never reused, deliberately, because a cursor that went
+backwards after an unmap would put a second range where a program still believes
+the first one is. A release call is the thing that makes that comment matter.
+Reusing the addresses needs a free list of ranges; not reusing them means a
+program that takes and releases for long enough walks the 1.75 GiB between
+`USER_MAP_BASE` and `USER_MAP_END` and stops. The first is the right answer and
+the second is an honest place to start, as long as it is chosen rather than
+arrived at.
+
+**Whose side:** `core/`, like the taking.
 
 ---
 

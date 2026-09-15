@@ -1,89 +1,71 @@
-Eleven of the twenty-one symbols in the largest group left, and they are the
-eleven that have a system call underneath them already: open, close,
-read, write, lseek, mkdir, opendir, readdir, closedir,
-realpath and sysconf.
+Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
+figure: glibc emits it as __isoc99_sscanf, which sat behind a filter meant
+for compiler internals (BG-197).
 
-The other ten -- stat and its two relatives, unlink, rmdir, access,
-chmod, umask, mmap, munmap -- are declared in the headers and
-deliberately not defined, so a caller fails to link naming the symbol. Each
-header says what its absentees are waiting for. That is the stance
-<stdlib.h> took about malloc for as long as there was nothing to build an
-allocator on, and the reason is the same: a stub that answers -1 with a
-plausible errno would have a program ask whether a file exists, be told no,
-create it, and do that every time.
+What the desktop asks for was measured before any of it was written, by
+reading all fourteen calls: %d with widths, %u %lu %llu, %lx, %63s,
+%n, and literal text around them — MemTotal: %lu kB, * %d EXISTS,
+%4d-%2d-%2d %2d:%2d %n. Those fourteen formats open the suite, verbatim, on
+realistic input.
 
-### Everything here is a translation, and the translation is the whole risk
+Implemented is that set plus the rest of the integer and floating conversions,
+* suppression, and the hh h l ll z j modifiers. Scansets and %p are
+not, and a format holding one stops the scan rather than skipping it — so
+a caller gets a short count instead of a field in the wrong variable.
 
-RECON_O_READ is 1 and O_RDONLY is 0. A wrapper that passed the flags
-through unchanged would open every read-only file for writing and every
-write-only one for reading -- it builds, it passes the first test, and it
-destroys a file on the fourth.
+### The failure that matters is not the count
 
-So the suite makes every call twice, once through ReconOS's wrappers and once
-through the host's, on the same files, and requires the same answers. Plus
-three things a comparison cannot see:
+It is assigning the right value to the wrong variable. So every case
+declares a block of storage, fills it with a sentinel, runs both libraries on
+identical copies, and compares the whole block — a variable that should not
+have been touched is checked to be untouched.
 
-- That the flags are really translated, by writing through a read-only
-  descriptor and requiring it to fail. Two libraries that got this wrong the
-  same way would agree with each other.
-- That realpath will not climb out of the root. /System/../../Users is
-  /Users, not something above the root. That is ReconOS's containment rule,
-  not POSIX's, so there is nothing to compare it against.
-- That the descriptor limit matches the kernel's, read out of
-  kernel/include/recon/kernel/process.h while the suite runs.
+### Two faults in the tools, and neither in the library
 
-### readdir over a call that answers the whole directory at once
+BG-198. The mutation harness crashed between mutating and restoring — a
+mutated build printed the sentinel bytes, which are not UTF-8 — and left the
+mutation in the tree. The next run took that as its original and restored it.
+Then rsync --checksum brought the correct source back with an older
+modification time than the object, so make did nothing and the next run
+tested the mutation again.
 
-SYS_LIST returns every name in one call and refuses rather than truncating.
-That is the opposite shape from readdir, and it is the better one: a
-directory read in pieces has no guarantee about what a caller sees when it
-changes between two of them, and nothing in the interface can say so.
+The result was a function that had passed cleanly an hour earlier failing the
+one case its own comment says must work, with diff reporting the source
+identical to the kept copy — true, and useless, because the kept copy was the
+mutated one. A harness that can leave the tree in a state it invented is
+worse than no harness. The restore is now in a finally, forces a rebuild,
+and is verified.
 
-So opendir reads the lot and readdir walks it. d_type is always
-DT_UNKNOWN, which POSIX allows — and which was checked before being relied
-on: the desktop reads d_name at every one of its sites and d_type at
-none of them.
+BG-199. Once the harness worked it caught four of five mutations and missed
+one: an unimplemented conversion being *skipped* rather than stopping. The
+suite tested that with %[a-z], and a version that skipped it would then match
+the leftover a-z] as literals and fail anyway — returning the same 0. The
+test was asserting a number that agrees either way, which is the exact failure
+its own header exists to catch. Fixed with an unknown conversion between
+two numbers, where stopping and skipping write to different variables.
 
-### The stand-in was looser than the thing it stands in for
+### And one fault in the library, caught by building it for the machine
 
-userland/tests/hostsys.c answers the primitives with POSIX so the library can
-run on Linux. It existed for the FILE layer, which only ever asked whether a
-result was negative -- so returning POSIX's -1 was good enough and nobody
-noticed it was not the kernel's contract.
+posix.c called recon_strlen. On the host that compiles and works —
+prefix.h renames strlen to precisely that — so every suite passed. It only
+fails where there is no renaming, which is the freestanding build.
 
-The descriptor layer asks more: it turns that answer into errno. Against the
-old stand-in, a file that was not there reported ENOSYS instead of ENOENT.
-Both failures showed up on the suite's first run.
-
-A stand-in with a looser contract than the real call is the one way a
-stand-in can be worse than none — it lets code pass here that would be wrong
-on a machine. All eight primitives now answer with the kernel's numbers.
-
-### And the measurement was hiding five functions
-
-BG-197, and it is the fourth of a family. measure-libc.py drops symbols
-starting with __, which is right for __stack_chk_fail and wrong for
-__isoc99_sscanf — glibc's spelling of sscanf. Five library functions sat
-behind that filter, and the number was wrong in both directions: errno,
-the ctype table and strtoul are answered and were not counted; sscanf and
-assert are not answered and were never reported.
-
-Fixed by translating the spelling rather than widening the filter. The script
-then refused to report anything until all three newly-visible names had a line
-in its table, naming them — the guard added in v0.4.28 doing its job.
+scanf.c and posix.c were added to the program on the disk for exactly this:
+it is the only place the library is compiled with no glibc, the kernel's flags
+and -Werror. A library file built only for Linux is a library file that has
+quietly stopped being portable.
 
 ### Where it leaves things
 
 | | before | now |
 |---|---|---|
-| call sites answered | 2,951 of 3,113 | 3,020 of 3,134 |
-| desktop sources that build with no libc | 11 of 79 | 19 of 79 |
+| call sites answered | 3,020 of 3,134 | 3,034 of 3,134 |
+| desktop sources with no libc | 19 of 79 | 20 of 79 |
 
-The eight new ones are almost exactly the browser's half of the desktop — the
-HTML parser, the CSS parser, forms, HTTP. Not a coincidence: a parser is
-strings and allocation and very little else.
+src/recon_cookie.c is the twentieth — it came off the list an hour earlier
+for wanting sscanf, and has one now.
 
-Sockets is now the largest group left at 44 call sites, then the ten remaining
-file calls at 31, then sscanf at 14.
+Sockets is the largest group left at 44 call sites, then the ten remaining file
+calls at 31.
 
 ---
