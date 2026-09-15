@@ -41,12 +41,48 @@
 #define AML_SLEEP_STATES 6
 
 #define AML_MAX_DEVICES 64
+#define AML_MAX_METHODS 192
+#define AML_MAX_NAMES   256
 #define AML_NAME_LEN    5	/* four characters and a terminator */
 #define AML_HID_LEN     16
+
+/* A method the table declares: what it is called, how many arguments it takes,
+ * and where its body is.
+ *
+ * The body is a pointer into the DSDT rather than a copy. That table is ACPI
+ * reclaim memory reached through `phys_to_virt`, mapped for the life of the
+ * machine -- the same lifetime every other pointer in this file has, and the
+ * reason nothing here owns any memory.
+ *
+ * `device` is the enclosing device's name where there is one, because a machine
+ * has many methods called `_CRS` and the only thing that tells them apart is
+ * what they are inside. */
+struct aml_method {
+	char name[AML_NAME_LEN];
+	char device[AML_NAME_LEN];
+	u8 args;			/* 0 to 7, from the flags byte */
+	const u8 *body;
+	u32 body_len;
+};
 
 struct aml_device {
 	char name[AML_NAME_LEN];	/* its own name segment */
 	char hid[AML_HID_LEN];		/* _HID, decoded; empty if it has none */
+};
+
+/* A named data object -- `Name (BUF0, Buffer () {...})` -- kept as a pointer
+ * to the encoded object rather than a decoded copy.
+ *
+ * Sound only because the evaluator refuses to store to a name. A table built
+ * once at boot describes what the machine *declared*; if a method could write
+ * one, that table would be a stale answer from the first write onward. The
+ * refusal is what makes reading these correct rather than probably correct, and
+ * it is enforced in aml_eval.c's Store. */
+struct aml_name {
+	char name[AML_NAME_LEN];
+	char device[AML_NAME_LEN];
+	const u8 *object;		/* the encoded data object */
+	u32 object_len;
 };
 
 struct aml_state {
@@ -87,7 +123,16 @@ struct aml_state {
 	} sleep[AML_SLEEP_STATES];
 
 	unsigned names;			/* how many named objects were seen */
-	unsigned methods;		/* how many method bodies were stepped over */
+	unsigned names_kept;
+	struct aml_name name_obj[AML_MAX_NAMES];
+
+	/* Every method the table declares, up to the cap, and how many there
+	 * were. The two differ on a machine with more than AML_MAX_METHODS,
+	 * and both are printed: a count that silently equals the cap is a
+	 * machine whose namespace is larger than this kernel will admit. */
+	unsigned methods;
+	unsigned methods_kept;
+	struct aml_method method[AML_MAX_METHODS];
 };
 
 /* Parses the DSDT the FADT points at. Safe on a machine with neither. */

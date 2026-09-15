@@ -46,6 +46,7 @@
 #include <recon/kernel/backtrace.h>
 #include <recon/kernel/klog.h>
 #include <recon/kernel/aml.h>
+#include <recon/kernel/aml_eval.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
@@ -254,6 +255,16 @@ void kmain(void)
 	aml_init();
 	aml_print_summary();
 
+	/* Every zero-argument method run, and the outcomes counted.
+	 *
+	 * A measurement rather than a feature: it says how much of *this*
+	 * machine's description is within reach of the evaluator, which is the
+	 * distance to reading a trackpad's `_CRS` and is different on every
+	 * machine. Safe anywhere -- everything that could affect the machine is
+	 * refused before it happens, so trying all of them cannot change one. */
+	aml_eval_survey();
+	aml_eval_print_summary();
+
 	/* The machine-readable version of the same thing, for the fixture
 	 * harness to compare against what sgdisk and sfdisk say is on the same
 	 * disk. Separate from the summary above on purpose: a format that has
@@ -383,6 +394,8 @@ void kmain(void)
 		user_power_test() ? "pass" : "FAIL");
 	kprintf("  the format is kept : %s\n",
 		console_format_self_test() ? "pass" : "FAIL");
+	kprintf("  running a method   : %s\n",
+		aml_eval_self_test() ? "pass" : "FAIL");
 	kprintf("  a program from a file : %s\n",
 		user_elf_test() ? "pass" : "FAIL");
 
