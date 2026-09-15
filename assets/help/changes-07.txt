@@ -1,76 +1,151 @@
-The viewer could show a search box and could not search with it. That was the
-largest thing missing from it by a distance: a browser you have to leave to go
-and use a browser.
+Every library call the desktop makes today reaches glibc. When the desktop is
+built for the ReconOS kernel there will be no glibc under it, and something has
+to answer those calls. This version is that something: userland/libc/, a
+freestanding C library, and the harness that proves it behaves the way the one
+it replaces behaves.
 
-Every control a page can have. Text boxes, passwords drawn as dots,
-checkboxes, radios grouped by name, <select> with a list that drops down over
-the page, <textarea>, submit and reset buttons, and hidden fields that are
-sent and never drawn. A control is a *run* in the document rather than a block
-of its own, so it sits in the line where the page put it -- "Search for [ ] in
-the menu" is one sentence with a box in the middle of it, which is what it is.
+Measured now: 2,479 of the 3,089 library calls in src/ are answered by
+it. Not chosen -- counted, and then *corrected*, which is the part worth
+keeping: the first count listed the functions the library was expected to need
+and counted those, which finds every call of a function on the list and none of
+a function that is not. It reported 2,430 of 2,997 and was wrong in both
+numbers.
 
-A GET goes; a POST asks first. That split is the whole of what survives of
-the old rule that a viewer able to submit a form could change something on
-somebody's server. A GET is a question: everything it says is in the address,
-asking twice is asking once twice, and it is what every search box on the web
-is. A POST is a statement -- not in the address, not in the history, and asking
-twice may have done the thing twice -- so it says how many answers it is about
-to send, to which host, and whether one of them is a password, and waits to be
-told again. One dialogue between somebody meaning to sign in and somebody's
-first click on a page they have not read.
+What corrected it was taking glibc away -- scripts/check-userland.sh
+compiles the desktop's own sources with -nostdinc, the compiler's own headers
+and userland/include, and nothing else. Seven of the sixteen files the sweep
+called ready did not build, and three functions turned out to be simply absent:
+strtok_r on 44 call sites, strncat, strtoull. All three are written
+and checked against the reference now. The script is the fifth pass of
+scripts/check.sh, so a header cannot drift away from the code meant to
+include it again without something saying so. The top of that list is the shape of this system: snprintf
+915 times, strcasecmp 357, strlen 211, strcmp 139. A desktop is mostly
+text being compared and formatted.
 
-The rules about what is sent are HTML's, and each one has a page that breaks
-without it. An unchecked box is absent entirely rather than empty. A checked
-box with no value of its own sends on. A menu sends its option's *value*, not
-the words shown. Of all the submit buttons on a form, only the one pressed is
-sent, which is how a page tells Save from Delete. Two controls sharing a name
-send twice, in document order, because that is how a page sends a list.
+### The test is the point, not the code
 
-A control a stylesheet has hidden is still part of the form. That changed a
-rule this parser already had: inside something hidden, only the structure is
-followed. Form elements are now the one exception, because what a hidden
-control contributes is not a picture, it is a value -- and half the search
-forms on the web carry a hidden field saying which section is being searched.
-Measured on Wikipedia's article for *HTML form*: twenty-six controls, of which
-six are its search forms and twenty are page furniture.
+Writing strlen is an afternoon. Writing a strlen that behaves *exactly* as
+the one it replaces, across every input the desktop will ever hand it, is the
+part that can go wrong quietly -- and every one of these functions fails
+quietly. A strcmp that returns the wrong sign still sorts, backwards. A
+snprintf that rounds %.2f the wrong way at a half is wrong in a way nobody
+writing a test from memory would think to check. Neither crashes. Neither
+warns.
 
-Every control a pointer can reach, a keyboard reaches too. Tab moves
-through them, Space works whatever has the ring, Enter in a text box sends the
-form it is in, and Escape puts a field back to what the page had. A first
-version stepped only between text boxes, which reads as working until the form
-has a box somebody has to tick.
+So there is no test here that says what these functions should do. Both
+libraries are compiled into one program -- ReconOS's renamed by a
+-include prefix.h so the two can coexist -- and every call is made twice and
+the answers compared. 86,160 checks, and the reference is the referee.
 
-recon_form.c is its own file, and that is the point. These rules decide
-what leaves the machine, and testing them inside the browser meant linking a
-compositor -- the same reason recon_url.c was split out of recon_http.c.
-Forty-eight checks in tests/test_form.c, written against Wikipedia's search
-form and the HTML5 standard's own example form rather than against markup
-invented for the test. The fuzzer now sends every form of every mutated page:
-9,862 cases, up from 7,556.
+The corpus is deliberately the cases nobody writing from memory reaches for:
+empty strings, overlapping ranges, embedded NULs, lengths of zero, bytes above
+127, the most negative integer, a precision longer than the string, a width
+shorter than the number.
 
-POST in recon_http, and what a redirect does to one. A 303 becomes a GET
-with no body, and so do 301 and 302 -- they are *specified* to keep the method
-and are implemented everywhere as though they were 303, and a client that
-followed the specification alone would re-post an order to a server that was
-redirecting to a receipt. 307 and 308 exist to say "again, exactly", and are
-the only two where a body crosses a redirect.
+### What it now covers
 
-And a fourth pass in scripts/check.sh, for a fault that was nobody's
-code. assets/help is generated from this file by a script, and the rule was
-to run it in the same commit -- which held until it did not.
-[BG-175](BUGS.md#bg-175): the Help application inside a running v0.4.19 was
-describing a system that ended at v0.4.5, and nothing said so. The check
-regenerates into a copy, compares, and puts the tree back exactly as it found
-it: a check that repairs what it is checking passes the second time it is run.
+- Strings and memory, and snprintf/vsnprintf -- the most-called
+  function in ReconOS, with flags, width, precision and length modifiers, and
+  an unknown conversion written back verbatim rather than swallowed.
+- Character classes, ASCII only and permanently so: ReconOS's text is
+  UTF-8, where a non-ASCII character is two or more bytes, so "is this byte a
+  letter" has no useful answer above 127 and a table that said yes would
+  encourage the per-byte reasoning that breaks on the first accented name.
+- Numbers out of text -- strtol, strtoul, strtod, atoi, qsort.
+- The file layer -- fopen and the eleven stdio functions the desktop
+  actually calls, on a fixed table of sixteen streams with their buffers inside
+  them, because there is no allocator to put them anywhere else. The
+  seventeenth fopen is refused cleanly, and the suite checks that it is.
 
-Three faults, and how each was found. [BG-174](BUGS.md#bg-174), a textarea
-drawn three times too tall, straight through the buttons under it -- found in
-the first photograph, and invisible to every number, because the page's height
-was correct and only the drawing was wrong. [BG-173](BUGS.md#bg-173), Space on
-a checkbox ticking it and then letting go of the focus, so the next Tab started
-again from the top of the form -- found by asking the window where its focus
-was after each key, because a ticked box looks the same either way.
-[BG-172](BUGS.md#bg-172), a tooltip left explaining a button that had already
-gone; the same fault as BG-089 one level down, and fixed the same way.
+### How the file half is testable at all
+
+It should not be. The buffering is the interesting part, and the way to find
+out whether fseek from the current position accounts for what is sitting
+unread in the buffer would normally be to boot a kernel and look at the
+consequences -- which is exactly the class of fault that does not announce
+itself. A file read four bytes short looks like a file that is four bytes
+short.
+
+userland/tests/hostsys.c answers the five primitives stdio.c is built on
+with POSIX calls instead of ReconOS system calls. So the same buffering code
+that will run on the kernel reads a real file here, and is held against what
+the host's stdio returns for the same file: the same bytes, the same counts,
+the same position after every operation, at seven item sizes and nine buffer
+sizes.
+
+And the suite was checked against itself, because a file-layer suite that
+passes on its first run deserves suspicion rather than satisfaction. Three
+faults were introduced deliberately -- fgets dropping the newline it stops
+on, fseek handing a relative offset straight to the kernel, isprint
+accepting one byte too many -- and the suite caught all three, at 9, 40 and 1
+failures. Then they were taken back out.
+
+### Three faults, before any of it ran
+
+All three are the same shape: the reference accepted something this refused,
+and a refusal in these functions is not a failure -- it is a different number,
+returned without complaint.
+
+- BG-179 -- strtol("0b101", NULL, 0) is 5 on every machine the desktop is
+  built on today, because C23 added the binary prefix and glibc has shipped it
+  since 2.38. This read 0 and consumed one character.
+- BG-180 -- strtod("0x1F") is 31.0 and the standard requires it. This
+  returned 0.0. The hexadecimal path is now there and is the one exact path in
+  the function: four bits a digit, so the mantissa is an integer and the
+  scaling is by a power of two.
+- BG-181 -- inf and nan were read as nothing at all. A file of
+  measurements round-tripping through ReconOS would have had its infinities
+  quietly become zeros.
+- BG-182 -- strtok_r, strncat and strtoull were absent, and the
+  coverage measurement could not see them: it counted the functions it already
+  knew to look for, so the numerator and denominator were short by the same 49
+  calls and the fraction looked right. A measurement that shares its premises
+  with the thing it measures can only agree with it. Taking glibc away and
+  asking a compiler was the instrument that disagreed.
+
+One fault was in the test rather than the library, and it is worth
+recording because the correction went the other way. The first run reported 254
+disagreements on toupper and tolower for arguments below -1 -- the negative
+numbers a signed char produces for every byte above 127. The reference maps
+-128 to 128; this returns -128 unchanged. The standard defines neither:
+the argument has to be representable as an unsigned char or be EOF, and
+those are not. So the test was asking a question that has no right answer and
+believing the reply. It now holds the defined domain to exact equality and
+asserts ReconOS's deliberate answer separately, with the reason -- above
+127 there is no character to be the case of, and mapping the first byte of a
+multi-byte character into the second half of a different one is the one outcome
+that corrupts text rather than merely differing.
+
+### Nine desktop sources build with no glibc under them
+
+Not a claim -- a compile. recon_ocr.c, recon_crypt.c, recon_smtp_message.c
+and six others build against these headers and the compiler's own, with every
+system header directory removed.
+
+The seven that do not each name something the port still needs, and only one of
+those is the library's fault. Four reach <xkbcommon/xkbcommon.h> through
+recon_ui.h -- a real Wayland dependency, and those files want their drawing
+half separated from their compositor half before they can move. Two reach
+<time.h> through recon_fs.h and recon_cookie.h, which is a
+userland/include/time.h waiting to be written rather than a kernel ask: the
+kernel has had both clocks since 8 September.
+
+### What stops the rest being built on it
+
+malloc. Of the 610 calls this library does not answer, 430 are the
+allocator -- free 311, calloc 80, malloc 34. Everything else left over
+is small: 56 directory calls, 43 for strerror, 37 socket calls, 21 for time,
+15 for the rest of stdio, 4 for processes, 4 for floating-point maths.
+
+strerror is the interesting one of those, because it is not waiting on the
+kernel: the kernel already returns negative error numbers and
+userland/include/recon.h names them, so the table is ours to write. All 43
+calls are in three files that are blocked on the allocator anyway, so it
+waits.
+
+userland/include/stdlib.h therefore has no malloc declaration at all.
+A caller fails to *link* rather than getting a stub that returns NULL and a
+crash somewhere else an hour later. The ask is written up in
+docs/KERNEL-WANTS.md, first on the list.
 
 ---

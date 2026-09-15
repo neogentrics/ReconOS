@@ -101,8 +101,17 @@ RELEASE_DIR="${RECONOS_RELEASE_BUILD:-$REPO_DIR/build-release-check}"
 cmake -S "$REPO_DIR" -B "$RELEASE_DIR" \
     -DCMAKE_BUILD_TYPE=Release >/dev/null
 
+# Both trees of tests, because the library's own suites were missing from
+# this pass entirely -- `userland/tests/` was never built optimised, which is
+# the one place an allocator most wants to be: -O2 is where strict aliasing and
+# the optimiser's assumptions about pointers start to matter, and a suite that
+# only ever runs at -O0 cannot see any of it.
+#
+# By rule rather than by a list, which is why every suite's target name has to
+# follow from its file name.
 release_targets=()
-for t in "$REPO_DIR"/tests/test_*.c; do
+for t in "$REPO_DIR"/tests/test_*.c "$REPO_DIR"/userland/tests/test_*.c; do
+    [ -e "$t" ] || continue
     name="recon_$(basename "$t" .c | sed 's/^test_//')_tests"
     release_targets+=("$name")
 done

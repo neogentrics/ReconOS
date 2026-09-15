@@ -1276,6 +1276,7 @@ bool user_start_first_screen(void)
 	enum elf_result r = ELF_OK;
 	struct thread *t;
 	struct fb_info info;
+	i64 err = SYS_OK;
 
 	/*
 	 * No screen is not a failure. A serial-only boot is a real
@@ -1287,6 +1288,34 @@ bool user_start_first_screen(void)
 		kputs("no screen on this machine, so nothing to draw on\n");
 		return false;
 	}
+
+	/* --- the volume first ----------------------------------------------
+	 *
+	 * The copy inside the kernel image is a fallback, not the system. A
+	 * machine that has been installed onto has its own program on its own
+	 * disk, and the point of preferring it is that the two can then be
+	 * built and replaced separately -- which is the difference between a
+	 * kernel that *contains* a system and a kernel that *starts* one.
+	 *
+	 * Any refusal falls through to the built-in copy rather than failing
+	 * the boot: a volume with no program on it is every machine that has
+	 * not been installed onto yet, including every disk in the test rig.
+	 */
+	t = user_exec_path("recon-init", RECON_SYSTEM_INIT, &r, &err);
+	if (t) {
+		kprintf("the system: %s, %s\n", RECON_SYSTEM_INIT,
+			"from the volume");
+		return true;
+	}
+
+	/* Said, and said with the reason, because "it used the built-in copy"
+	 * has two causes that want different actions: there is no program on
+	 * the volume, or there is one and it would not load. The second is a
+	 * broken install and the first is an ordinary machine. */
+	kprintf("the system: no %s (%ld%s%s), using the copy inside the "
+		"kernel\n", RECON_SYSTEM_INIT, (long)err,
+		r == ELF_OK ? "" : ", ",
+		r == ELF_OK ? "" : elf_why(r));
 
 	t = user_elf_create("recon-init", init_elf_image, init_elf_image_len,
 			    &r);

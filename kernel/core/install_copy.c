@@ -32,6 +32,8 @@
 #include <recon/kernel/fat32.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/kstring.h>
+#include <recon/kernel/reconfs.h>
+#include <recon/kernel/rootfs.h>
 
 /* What to copy, expressed as rules rather than a list of names.
  *
@@ -237,6 +239,100 @@ enum install_verdict install_copy_boot(struct block_device *source_esp,
 		"from the medium\n",
 		loaders, loaders == 1 ? "" : "s",
 		kernels, kernels == 1 ? "" : "s");
+	return INSTALL_OK;
+}
+
+/* --- and the system itself -------------------------------------------------
+ *
+ * The first thing the installer has ever written into a **ReconFS** volume.
+ * Everything above this point is FAT32 to FAT32, because everything above this
+ * point is what firmware reads.
+ *
+ * `/System/init.elf` is the program the kernel starts when the boot is over.
+ * Until it was written here the kernel carried a copy of it inside its own
+ * image -- 121 KiB of `.rodata` reached by `.incbin` -- which is what made the
+ * kernel and the system one thing rather than two that rely on each other.
+ *
+ * --- Why a missing program is not a failed install ---
+ *
+ * A medium built before this existed has no `/reconos/init.elf` on it, and a
+ * disk installed from one still boots: the kernel falls back to its built-in
+ * copy and says so. Refusing the whole install would turn a medium that is
+ * merely older into a machine that will not start, which is the wrong way
+ * round -- the bootloader is the file whose absence stops a machine, and that
+ * one is already checked above.
+ */
+enum install_verdict install_copy_system(struct block_device *source_esp,
+					 struct block_device *system_volume)
+{
+	static const char path[] = "/reconos/init.elf";
+
+	struct fat32 src;
+	struct reconfs fs;
+	struct fat32_entry e;
+	enum reconfs_status rst;
+	enum fat32_status fst;
+	u32 got = 0;
+	u8 *image;
+
+	if (fat32_mount(source_esp, &src) != FAT32_OK) {
+		kputs("  the system         : FAILED (the medium's EFI "
+		      "partition could not be read)\n");
+		return INSTALL_IO;
+	}
+
+	if (fat32_walk(&src, path, &e) != FAT32_OK || e.is_dir || !e.size) {
+		kputs("  the system         : none on the medium; the disk "
+		      "will use the copy inside the kernel\n");
+		return INSTALL_OK;
+	}
+
+	image = kzalloc(e.size);
+	if (!image)
+		return INSTALL_IO;
+
+	fst = fat32_read_file(&src, &e, image, e.size, &got);
+	if (fst != FAT32_OK || got != e.size) {
+		kfree(image);
+		kprintf("  the system         : FAILED (%s could not be read "
+			"from the medium)\n", path);
+		return INSTALL_IO;
+	}
+
+	/* Mounted rather than assumed. It was formatted a few lines ago by this
+	 * same run, and mounting it is the cheapest check that the format
+	 * actually produced a volume -- a file written into something that is
+	 * not one would be reported as a successful install. */
+	rst = reconfs_mount(system_volume, &fs);
+	if (rst != RECONFS_OK) {
+		kfree(image);
+		kprintf("  the system         : FAILED (the volume just made "
+			"would not mount: %s)\n", reconfs_strerror(rst));
+		return INSTALL_IO;
+	}
+
+	/* The directory first, and an existing one is not a problem: this runs
+	 * on a volume formatted moments ago, but it is written to be run on one
+	 * that is already laid out too. */
+	rst = reconfs_place_directory(&fs, RECON_DIR_SYSTEM, 0755);
+	if (rst != RECONFS_OK && rst != RECONFS_ERR_EXISTS) {
+		kfree(image);
+		kprintf("  the system         : FAILED (%s: %s)\n",
+			RECON_DIR_SYSTEM, reconfs_strerror(rst));
+		return INSTALL_IO;
+	}
+
+	rst = reconfs_place_file(&fs, RECON_SYSTEM_INIT, 0755, image, e.size);
+	kfree(image);
+
+	if (rst != RECONFS_OK) {
+		kprintf("  the system         : FAILED (%s: %s)\n",
+			RECON_SYSTEM_INIT, reconfs_strerror(rst));
+		return INSTALL_IO;
+	}
+
+	kprintf("  the system         : %s, %u bytes, onto the volume\n",
+		RECON_SYSTEM_INIT, (unsigned)e.size);
 	return INSTALL_OK;
 }
 

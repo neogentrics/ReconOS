@@ -1,5 +1,3 @@
-Windows snap to the edges. Drag one to the left or right edge for that
-half of the screen, or to the top to fill it.
-
-Alt+Tab works again. It had quietly stopped working when ReconOS began
-drawing its own windows.
+Properties tells you what something is: its name, kind, size, where it
+lives and when it last changed. It had been in the menu and greyed out since
+the menus existed.

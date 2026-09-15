@@ -1,35 +1,26 @@
-A table was one line per row with the cells run together by spaces. You could
-read it and you could not scan it: "0.4.13 8 September Package signing" is
-three facts with nothing to say where one ends.
+A sweep of twelve real sites, looking at *what came back* rather than at
+whether anything crashed. Eleven were fine. Wikipedia's "Comparison of
+operating systems" had {{cite web|...}} and [[Lisa OS]] in the middle of
+it -- wiki source, in a rendered article.
 
-Two things had to exist first. A row is a block of its own kind, so a
-viewer can tell which blocks belong to one table -- consecutive rows is what a
-table is, once the tags are gone. A cell marks the run it begins at rather
-than being a block itself: a cell that was a block would get its own line,
-which is the one thing a table exists not to do.
+BG-171. The parser found the end of a tag with memchr for the first >.
+An attribute value may be quoted, and a quoted value may contain anything at
+all -- including > -- and it is still inside the tag. Wikipedia carries the
+wiki source of every reference in a data-mw='{"parts":...}' attribute:
+single-quoted, holding JSON, and that JSON holds escaped HTML. The scan
+stopped at the first > and rendered the rest of the attribute as page text.
 
-That second one needed a change where it was easy to miss. Runs that look the
-same and sit next to each other are merged into one, which is right everywhere
-else and wrong across a cell boundary -- merging loses the boundary, and the
-boundary is the only thing saying where a column ends. A table of plain
-unstyled text, which is most tables, would have come back as a single run and
-could not have been laid out at all.
+411 blocks before, 219 after. Nearly half of what that article appeared to
+say was attribute rather than content.
 
-A column's width is a property of the table, not of any row -- it is the
-widest that column gets anywhere -- so it is measured once over every row
-before the first is drawn. A table wider than the window has all its columns
-scaled down together, which keeps their relative widths: the shape survives
-even when the size cannot.
+Nothing had caught it because every hand-written test uses well-formed markup
+with short attributes -- that is what somebody writing a test writes. The
+html5lib corpus did not catch it either: it tests tree construction, this
+parser builds no tree, so it is only run for the invariants, and "the page
+says something it should not" is not an invariant. It took loading real pages.
 
-<th> records itself as level 1 on the row it is in, which is the field a row
-otherwise has no use for, and that is the whole of what makes the top of a
-table read as a heading rather than as more data.
-
-What this does not do, said plainly: no colspan, no rowspan, no nested
-tables, no borders, and a cell whose text is wider than its share overlaps
-rather than wrapping. Wrapping inside a cell means a row of variable height,
-which means measuring the height before placing the row, which is the whole
-layout problem again one level down. Lining the columns up is most of what a
-table is for and it is the part that can be had honestly.
+The sweep is worth keeping as a habit rather than a script. The other eleven
+sites all rendered, and the RFC 2616 page hit the four-thousand-block ceiling
+and said so, which is the behaviour that ceiling exists for.
 
 ---

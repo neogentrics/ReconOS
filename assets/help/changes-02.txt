@@ -1,109 +1,104 @@
-Until this version every program that had ever run in ring 3 on the ReconOS
-kernel was a self-test. hello.S proved the loader. paint.c proved that C
-compiled against these headers runs here at all and that a framebuffer is
-written through its pitch and not through width times four. Both end by
-exiting with a code the kernel reads, which is what makes them tests.
+Said plainly, because it is the thing this version is about:
 
-userland/init/recon_init.c is what somebody sees. It asks SYS_MACHINE
-what the machine is, SYS_SCREEN how the display is arranged and SYS_LIST
-what is on the volume, draws a screen a person standing in front of a computer
-that has just started can read, and stays up.
+> *"The system and the kernel are two separate systems when they should be one
+> and the same relying on each other."*
 
-Booted in QEMU, the screen it drew said: 1 processor found and 1 in use;
-511.8 MiB with 508.8 MiB free; QEMU Virtual CPU version 2.5+; 2560 x 1440 at
-10240 bytes a row; and *no volume this kernel can read*, because no disk was
-attached. Every one of those came out of the kernel through a system call. On
-real hardware they become the machine's own.
+They were separate in a way that can be stated as a build dependency.
+recon_init — the program a person sees when a ReconOS machine starts — was
+121 KiB of .rodata inside the kernel image, pulled in by .incbin. The
+installer wrote an EFI partition with a loader and a kernel, formatted a System
+volume, and put nothing in it. The ten directories v0.4.26 added were
+empty.
 
-### It is the first customer of the C library
+So changing a string on the first-boot screen meant rebuilding and reflashing a
+kernel. Not a figure of speech: on real hardware, a stick, a reboot and a
+firmware menu, to change a sentence in a program.
 
-Every string on that screen goes through snprintf. That is the point of the
-last four versions: a library that passes 3.6 million comparisons against
-glibc is a suite of functions, and a library something is built on is a
-library. recon_init links string.c, printf.c, ctype.c, stdlib.c,
-stdio.c and syscalls.c and allocates nothing, because there is still no
-allocator -- every buffer is sized at compile time, the same discipline
-libc/stdio.c already follows.
+### What was missing was the join, not the parts
 
-It needed one thing the two self-tests did not: vectors. USERCFLAGS
-turns SSE off, which is right for the kernel and was inherited by the user
-programs without anybody needing otherwise -- paint.c has no floating point
-in it. snprintf does: %f exists, and on x86_64 a function taking a double
-cannot be *compiled* without SSE whether or not anything calls it. Allowing it
-is safe and not an assumption: struct thread carries 576 bytes of vector
-state and sched_switch saves and restores it on every switch. KF-146 is the
-entry about that buffer being sixteen bytes too small, which is a fault that
-only exists because the state is real.
+Almost everything this needed already existed and had never been connected:
 
-### The drawing is tested without a kernel, and that is deliberate
+| | |
+|---|---|
+| a kernel that runs a program from a path on the volume | user_exec_path, built, and passing a self-test on every boot |
+| a standalone recon_init.elf | built, 126,880 bytes |
+| a filesystem that can be written by the installer | reconfs_mount, reconfs_create, reconfs_write_named — all take a volume |
+| a medium that carries a system | no |
+| an installer that writes one | no |
+| a kernel that looks for one | no |
 
-userland/init/screen.c takes a buffer, a description of how it is arranged
-and some facts. It makes no system call and does not know one exists -- so the
-host renders exactly the picture the machine will render, in a millisecond,
-and recon_init_screen_tests checks it. 306,797 checks across nine
-resolutions from 320x200 to 4K.
+Three of those are now yes.
 
-Finding out what the first screen ReconOS ever draws looks like should not
-require writing a stick, walking to a machine and turning it on.
+The medium carries /reconos/init.elf — the first file on a ReconOS
+install medium that is neither a loader nor a kernel.
 
-Every canvas in that suite has padding on the end of each row, and the suite
-checks that nothing touched it. This is the one thing a photograph cannot
-catch: on a screen where bytes per row happen to equal width times four -- which
-is most emulators -- a program that confuses the two draws a *perfect* picture
-and shears on the first laptop. The real framebuffer in QEMU turned out to be
-2560 x 1440 with 10240 bytes a row, where the two are equal; the padding is
-what says the code would survive a screen where they are not.
+The installer writes it onto the System volume as /System/init.elf. This
+is the first thing the installer has ever written into a ReconFS volume;
+every copy before it was FAT32 to FAT32, because everything before it was what
+firmware reads.
 
-### Three faults, and one of them needed an eye
+And the kernel asks the volume first, falling back to the copy inside
+itself and saying which it used. That line matters more than it looks: the
+whole point is that the screen can now come from somewhere other than the
+kernel, and a boot that does not say where it got its program cannot be used to
+tell whether any of this works.
 
-BG-190 -- the text drawer checked its text for null and not its canvas, and
-segmentation-faulted on the suite's first run. Beside it, panel_w - line * 2
-is unsigned, so a canvas narrower than its own margins gave four billion rather
-than a negative, and the fill loop after it would have run until the machine
-was switched off. A blank screen is a far better failure than one that appears
-to have hung.
+### Creating on a volume that is not the one you booted from
 
-BG-191 -- the panel was sized to the display and the content filled the top
-third of it. Every check passed; it still looked wrong, and the only thing that
-said so was looking at the rendering. Same lineage as BG-174.
+rootfs_create_file and rootfs_create_directory did exactly the right three
+moves — walk to the parent, act, rewrite the chain to the root — against
+rootfs(), which is the one volume an installer must never touch.
 
-BG-192 -- a test that could not pass: the canvas is filled with a guard byte
-to catch a stride fault, and the text tests asked whether pixels were non-zero.
-It announced itself only because the answer was obviously wrong. Had the check
-been the other way round it would have passed on a canvas where nothing was
-ever drawn. A test that cannot pass and a test that cannot fail are the same
-fault from opposite sides, and only one of them tells you.
+So the three moves moved down a layer into reconfs_place_file and
+reconfs_place_directory, which take the volume as an argument, and the two
+rootfs_* entry points became those calls with rootfs() filled in. An
+extraction rather than a rewrite: the bodies are the bodies that were there, so
+the suites that covered them cover them still — 67 self-tests, unchanged, on
+the first boot after the move.
 
-### And the console still owns the screen
+### The proof, and why it had to be built this way round
 
-The first boot came back with the panel showing through a hole in the kernel's
-boot log -- the conflict docs/KERNEL-WANTS.md has had an entry for since
-paint.c. Moving the call after the kernel's last message was not enough,
-and that is the part worth keeping: the console does not only draw when it is
-handed something new, it repaints its window when it scrolls. One kputs after
-the program started put the whole log back on top of a screen that had just
-been drawn.
+A claim that two things are separate can only be shown by changing one and not
+the other. So:
 
-What works today is main.c starting the program as its last statement with
-nothing printed after it at all, not even a success line. That is an
-arrangement rather than a fix and it holds for exactly as long as there is one
-program. It is written where somebody would look, because the ordering makes
-the fault invisible rather than absent -- the next person to add a diagnostic
-print after that line will not find out what they broke until they photograph a
-machine.
+1. Keep the kernel binary exactly as built.
+2. Change a string in the program and rebuild it.
+3. Build a medium carrying the old kernel and the new program.
+4. Install from it and boot.
 
-### What it asks the kernel for next
 
-A new entry, and a small one: a program has to be inside the kernel image to
-run at all. recon_init is 121 KiB of .rodata in a 539 KiB kernel, carried
-by .incbin beside the two self-tests. Changing a string on the first-boot
-screen means rebuilding and reflashing a kernel.
+kernel kept:   402df0f6403460f0
+program built: 666db5e4b023ed04
 
-Every piece of the alternative is already built -- SYS_OPEN, SYS_READ and
-user_elf_create all exist and are exercised. What is missing is the few lines
-that read /System/init.elf into a buffer and hand it to the loader instead of
-handing it a pointer into .rodata. That is much smaller than process
-creation and worth separating from it: a kernel that can start one named
-program from a volume is a system somebody can install a new version of.
+the system: /System/init.elf, from the volume
+first screen [BUILT-WITHOUT-THE-KERNEL]: 1920 x 1200, 7680 bytes a row
+
+is the kernel on that disk the one we kept?
+  yes -- byte for byte the kernel built before the program changed
+
+
+Yesterday that was impossible by construction.
+
+### And the test asserts it, because the fallback is designed to hide it
+
+scripts/install-then-boot-test.sh gained an eighth check: the system it
+runs came off the volume. Without it the run passes either way — the kernel
+falls back to its built-in copy deliberately and quietly, so an installer that
+stopped writing /System/init.elf would still produce a machine that boots,
+draws a screen and reports 67 self-tests passing, and the file would still have
+printed 7 of 7 forever.
+
+That is the shape KF-229 was: a check sitting on top of the fault it was
+written to catch, unable to fail. Taking the program off the medium turns the
+run red and names the reason — the system: no /System/init.elf (-7), using the
+copy inside the kernel — while every other check still passes, which is also
+the graceful fallback being shown to work.
+
+### What is still in the kernel image
+
+The copy. It is the fallback for a machine that has not been installed onto —
+every blank disk in the verification rig, and any medium built before this
+existed. Taking it out is a separate decision and wants a machine that can be
+recovered without it.
 
 ---

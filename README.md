@@ -86,6 +86,8 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.28** | **The allocator.** The last large piece of the C library and the one the other 430 call sites were behind -- boundary tags, coalescing, segregated free lists, and regions handed back when nothing in them is in use. It takes its memory from two function pointers rather than a system call it names, so the whole of it runs on the host against three sources no kernel can be made to be: one that releases, one that cannot -- which is what ReconOS has -- and one that refuses. 11,506 checks with the heap audited after every operation, which caught BG-194 on the first run: in the smallest block the free-list links and the footer were the same eight bytes. Two instruments that could not see the allocator were fixed with it, BG-195 and BG-196. 2,908 of 3,113 call sites answered |
+| **0.4.27** | **The kernel starts the system instead of containing it.** `recon_init` was 121 KiB of `.rodata` inside the kernel image and the installer put nothing on the volume it formatted, so changing a string on the first-boot screen meant reflashing a kernel. Now the medium carries `/reconos/init.elf`, the installer writes it to `/System/init.elf` -- the first thing it has ever written into a ReconFS volume -- and the kernel asks the volume before its own copy and says which it used. Proved by keeping a kernel binary, changing the program, and booting a disk that carries the old kernel byte for byte and runs the new program |
 | **0.4.26** | **The volume has a shape, and a second boot finds it.** `SYS_MKDIR`, and the ten directories a ReconOS machine has, laid down on first boot and found already there on every boot after. The list is data and the directory-maker is a function pointer, so the whole arrangement is checked on the host in a millisecond rather than by installing onto a disk. Getting it to run on a real one cost four kernel faults, KF-226 to KF-229, every one invisible to every test in the tree: the boot thread never stopped being work, so a directory took seventy seconds to create on NVMe and none at all on virtio; the root of a volume could not be listed; every refusal from a listing reached a program as "the disk failed"; and five self-tests passed exactly once per volume, inside the one check written to catch exactly that |
 | **0.4.25** | **ReconOS is on the screen.** The first program on its own kernel that is a system rather than a self-test: it asks the machine what it is, the display how it is arranged and the volume what is on it, and draws a screen somebody can read. The first thing built on `userland/libc/` rather than against nothing. Its drawing is a separate file that makes no system call, so the host renders exactly what the machine renders and 306,797 checks hold it -- with padding on every row of every canvas, because a program that confuses pitch with width times four draws a perfect picture on an emulator |
 | **0.4.24** | The maths: twenty functions, 3,613,874 checks against the host's, none failing. Eight held to bit-for-bit equality and twelve to a bound in units in the last place that the suite measures and prints rather than merely asserts. Four faults, every one a wrong answer rather than a close one -- including an argument reduction 860 billion units out at three pi, now done in 2,048 bits of 2/pi. It is what lets ReconOS draw a letter: the font rasteriser calls seven of them |
@@ -1167,8 +1169,8 @@ somewhere else an hour later. The ask is first on the list in
 [docs/KERNEL-WANTS.md](docs/KERNEL-WANTS.md).
 
 ```bash
-cmake --build build --target recon_libc_tests recon_libc_file_tests
-./build/recon_libc_tests && ./build/recon_libc_file_tests
+cmake --build build --target recon_libc_tests recon_libc_files_tests
+./build/recon_libc_tests && ./build/recon_libc_files_tests
 ```
 
 ## Where this is going

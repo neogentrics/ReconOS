@@ -168,6 +168,10 @@ AREA = {
     'KF-226': 'startup',
     'KF-227': 'storage', 'KF-228': 'storage', 'KF-229': 'storage',
     'BG-193': 'storage',
+    # The allocator and the two instruments that could not see it.
+    # 'build' for the last two, where the toolchain-layer faults go --
+    # BG-170 and BG-090 went there for the same reason.
+    'BG-194': 'build', 'BG-195': 'build', 'BG-196': 'build',
     # And the kernel session's own three, renumbered on the merge.
     #
     # Both sessions reached KF-225 on the same day: this one had 225 as a BIOS

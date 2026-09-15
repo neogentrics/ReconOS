@@ -87,6 +87,51 @@ exists.
 **Whose side:** `core/`. Address spaces, reservation and demand paging are all
 there and all portable; nothing about this names a machine.
 
+**The desktop's half is built, 14 September 2026 — this is now one call.**
+
+`userland/libc/malloc.c` is a real allocator: boundary tags, coalescing on both
+sides, free lists segregated by size, and a region handed back when nothing in
+it is in use. 11,506 checks, the heap audited after every operation, run
+against a source that can release and a source that cannot. The library now
+answers **2,908 of the desktop's 3,113 call sites**, up from 2,478.
+
+It takes its memory from two function pointers rather than a system call it
+names, which is why it could be finished and proved before this entry was
+answered.
+
+**What one call has to do**, and there is a caller for it already in
+`userland/libc/mem_recon.c`:
+
+```c
+static void *take(size_t bytes)
+{
+        i64 at = recon_map((int)-1, (u64)bytes);   /* fd -1: no file */
+
+        return at < 0 ? 0 : (void *)(unsigned long)at;
+}
+```
+
+`SYS_MAP` with **fd -1** answering a demand-paged anonymous range of `bytes`,
+at an address the kernel chooses. Today `fd_get` finds nothing and the call is
+refused with EBADF, so `malloc` answers NULL and
+`recon_malloc_stats().refusals` counts it -- which is the honest state of the
+machine rather than a stub pretending otherwise.
+
+**The day that call works, this works with nothing rebuilt.** The program on
+the disk already links the allocator.
+
+**No system call number has been taken for it**, deliberately. Two sessions
+build this kernel and a number claimed in advance by the half that does not own
+`core/` is a number claimed twice -- which happened on 14 September and is
+recorded in `docs/BUGS.md`. If `core/` would rather spell it as a call of its
+own than as an fd of -1, `take` above is the one function that changes.
+
+**The release half can wait.** `give_back` returning "there is no such call" is
+a *supported* configuration, not a degraded one: the allocator keeps the region
+and reuses it, and every scenario in the suite runs that way as well as the
+other. What it costs is a program that cannot shrink -- see the browser tab
+above -- so it is worth having, second.
+
 ---
 
 ## The console and a program both own the screen
@@ -325,6 +370,36 @@ install a new version of; a kernel that can only start what was compiled into
 it is a kernel with a demo in it.
 
 **Whose side:** `core/`. Nothing about it names a machine.
+
+**Built, 14 September 2026 — and the four lines were the smallest part of it.**
+`user_exec_path` already existed and already passed a self-test every boot, so
+the kernel half really was four lines: ask the volume for
+`/System/init.elf`, fall back to the copy inside the image, and **say which
+one ran**.
+
+What took the rest of it was that nothing put a program there. The medium now
+carries `/reconos/init.elf` — the first file on a ReconOS install medium that
+is neither a loader nor a kernel — and the installer writes it onto the System
+volume, which is the first thing the installer has ever written into a ReconFS
+volume at all. That needed `reconfs_place_file` and
+`reconfs_place_directory`: the three moves every create makes, with the volume
+named rather than assumed, because `rootfs_create_file` can only reach the
+volume the kernel booted from and that is the one an installer must not touch.
+
+**Shown rather than asserted.** A kernel binary was kept, a string in the
+program was changed, the program alone was rebuilt, and a medium was made
+carrying the old kernel and the new program. The installed disk booted the
+kernel *byte for byte as kept* and drew the new string. That is the whole
+claim, and before this it was impossible by construction.
+
+`scripts/install-then-boot-test.sh` asserts it as its eighth check, because
+the fallback is designed to be quiet: without the assertion, an installer that
+stopped writing the program would still make a machine that boots and draws
+and passes every other check.
+
+**The copy inside the kernel stays**, as the fallback for a machine that has
+not been installed onto — which is every blank disk in the rig. Taking it out
+is a separate decision and wants a machine that can be recovered without it.
 
 ---
 

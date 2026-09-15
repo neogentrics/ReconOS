@@ -107,6 +107,23 @@ bool rootfs_is_read_only(void);
  *
  * The blocks are released rather than erased. Anything that needs an erase
  * which is really an erase has to say so. */
+/* Where the system's own program lives on a volume.
+ *
+ * `/System` is the layout `include/recon_fs.h` has described since v0.1.0 and
+ * `userland/init/layout.c` creates on every boot. This kernel does not compile
+ * against that header -- it belongs to the desktop, which is a different tree
+ * with different includes -- so the name is written here as well.
+ *
+ * Two copies of a string is a drift waiting to happen, and the thing that
+ * catches this one is not a grep: if they ever disagree, the installer writes
+ * a program into a directory the layout does not make, and
+ * `scripts/install-then-boot-test.sh` says `the system: no /System/init.elf`
+ * on a disk it has just installed. That is a test that fails, on the one path
+ * in the rig that installs and then boots.
+ */
+#define RECON_DIR_SYSTEM   "/System"
+#define RECON_SYSTEM_INIT  "/System/init.elf"
+
 enum reconfs_status rootfs_remove_file(const char *path);
 
 /* Clears a name a self-test is about to create, if it is there.

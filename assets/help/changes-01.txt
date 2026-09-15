@@ -1,125 +1,107 @@
-Asked for directly: *"whats next? i would like the filesystem"*, after a night
-in which the answer to *what is on the volume* was nothing. The installer
-wrote a bootloader, a kernel and an empty formatted partition, and the first
-screen said so honestly: 0 entries at the root of the volume.
+The last large piece of the C library, and the one every other piece was
+waiting behind. Measured rather than guessed: 5 symbols, 430 call sites --
+more than two thirds of everything the desktop still could not link.
 
-include/recon_fs.h has described the layout since v0.1.0 and nothing could
-build it, because nothing in the system could create a directory.
+userland/include/stdlib.h used to open by saying there was no malloc in it,
+so that a caller failed to *link* rather than getting a stub that returned
+nothing and crashed an hour later somewhere else. That paragraph is gone.
 
-### Ten directories, and the second boot is the requirement
+### The memory comes from two function pointers
 
-SYS_MKDIR is the twenty-sixth system call, over a
-rootfs_create_directory(path, mode) built on the reconfs_create that was
-already there. userland/init/layout.c holds the ten paths -- /System with
-Apps, Config, Themes, Icons, Modules and Logs under it, then /Apps, /Users
-and /Temp -- parents before children, mode 0755.
+malloc.c names no system call. It asks a struct recon_memory_source -- take
+a range, give one back -- and everything else is written against those.
 
-recon_init lays them down on every boot, not only the first. That is the
-requirement rather than a nicety: a first boot that lost power half way and a
-second boot that finds everything already there are the same code path, and
-one boot cannot tell them apart. So the program is asked both questions.
-Installed onto a blank 8 GB disk from a real medium, then booted twice:
+This is the same split userland/init/layout.c uses for making directories,
+and it is here for the same reason: the part that can be wrong is the
+allocator, not the call underneath it. With the source behind a pointer the
+whole file runs on the host against the library it replaces, and against three
+sources no kernel can be made to be:
 
+- one that can hand memory back,
+- one that cannot -- which is the configuration ReconOS is actually in, so
+  every scenario runs twice,
+- and one that refuses after a while, which is how the out-of-memory path gets
+  exercised at all.
 
-first boot    the volume: 10 directories, laid out just now
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+Boundary tags, coalescing on both sides, free lists segregated by size, and a
+region handed back when nothing in it is in use. An allocation larger than a
+quarter of a megabyte gets a region of its own and returns the whole thing --
+because KERNEL-WANTS measured a browser tab at 6.8 MiB, and a window where
+twelve tabs have been opened and closed has lost eighty-one megabytes if
+nothing is released.
 
-second boot   the volume: 10 directories, all already there
-              storage: 12 entries at the root of the volume
-              65 self-tests passed, 0 failed
+### 11,506 checks, and the suite earned its keep on the first run
 
+The heap is audited after every operation, not at the end: every block of
+every region, footers against headers, each block's flag about its predecessor
+against whether that block is really in use, no two free blocks side by side,
+and the running counters against a fresh count. A shadow copy of what every
+live block should contain is checked alongside it, because alignment and audit
+would both pass an allocator that hands the same address out twice.
 
-A reader that is not this kernel -- scripts/reconfs-check.py, against the
-partition lifted out of the image -- says the same twelve names.
+It found BG-194 before the allocator had run anywhere else: in the smallest
+block -- 32 bytes, a 16-byte header and a 16-byte payload -- the payload is
+*exactly* the two free-list pointers, and the footer was being written into its
+last eight bytes. Every smallest-size block on a free list had its prev link
+overwritten by its own size. The fix is the layout every allocator of this
+shape uses: the footer lives in the next block's header, and the flags move
+into the low bits of the size.
 
-The list is data and the directory-maker is a function pointer.
-recon_layout_build(make, already_there, &report) knows nothing about system
-calls, so the whole arrangement -- order, refusals, a half-finished previous
-boot, the report it produces -- is checked on the host in a millisecond by
-recon_init_layout_tests, 100 checks, instead of by installing onto a disk.
-The suite also reads include/recon_fs.h and compares the two lists in both
-directions, so a path in the header and not the layout fails, and so does a
-path in the layout and not the header. Mutation-tested three ways; all three
-caught.
+That fault would have been invisible until it was a crash somewhere else
+entirely, minutes later, with no allocator in sight.
 
-And it carries on past a refusal rather than stopping, naming the first one:
-7 of 10 directories -- /System/Apps refused (-9) is a line somebody can act
-on. 1 refused is not.
+### And two instruments that could not see the allocator
 
-### Four faults were in the way, and none of them was in the new call
+BG-195. scripts/measure-libc.py went on reporting 430 call sites
+unanswered while the functions sat in the build, tested, next to it -- because
+it read the objects of *one test target*, and the allocator has a suite of its
+own. That is the third of a family: BG-182 counted from a list of expected
+names, BG-185 corrected the list, and this one defined "the library" as
+whatever one target had compiled. Each time the measurement took its idea of
+the thing from the same place the thing came from.
 
-The call worked on the first try. Making it work on a machine took the rest of
-the day, and every one of these was invisible to every test in the tree.
+Fixed by removing the name rather than correcting it: every object compiled
+from userland/libc/ anywhere counts, and the script now refuses to report a
+number when a library source has no object, naming it. It caught one on its
+first run.
 
-A directory took seventy seconds to create. Not a hang -- 69, 74, 69 and 69
-seconds, measured. The same disk image attached as virtio-blk instead of NVMe
-took none at all, which is what said where to look. The NVMe driver polls for a
-completion and yields between looks; the thread it yielded to was the boot
-thread, which by then is running for (;;) power_idle_wait() and sleeps for up
-to a second. The scheduler already knew how to prevent this -- pick_next
-takes an idle thread only as a last resort and idle_over_work counts the
-times that rule is broken -- and none of it applied, because the boot thread
-was never marked as an idle thread. It is now, from the moment it stops doing
-any work. KF-226.
+BG-196. check.sh builds every suite twice, once sanitized and once the
+way a release is -- and built the second list from the *desktop's* tests only.
+The four suites under userland/tests/ had never been built optimised: the C
+library, the file layer, the maths, and the allocator. -O2 is where strict
+aliasing and pointer provenance start to matter, and an allocator is nothing
+but pointer arithmetic across type boundaries.
 
-The root of a volume could not be listed. reconfs_walk_path refuses a
-path with no leaf, rightly; the two readers that should not care each had a
-branch for the leafless case that the walk made unreachable. Nothing had ever
-asked, because recon_init was the first caller in the system's life. KF-227.
+It surfaced as a fix that would have been dead code, which is the part worth
+keeping: the sanitized pass aborted on the calloc overflow check, because
+under AddressSanitizer the host's calloc is ASan's and ASan kills the process
+rather than returning NULL. Skipping the comparison under a sanitizer would
+have meant skipping it everywhere. 34 suites became 40.
 
-Every refusal from a listing reached a program as "the disk failed." The
-mapping function exists and vfs.c already used it twice; the listing had its
-own two-case version. So the screen said *no volume this kernel can read* three
-lines under *10 directories, laid out just now*, and both sentences came from
-the same volume. KF-228.
+### Where it leaves the library
 
-And five self-tests passed exactly once per volume. Each creates a file
-with a fixed name and none cleared it first, so the second boot of any
-installed disk reported five failures on a machine with nothing wrong with it.
-KF-229.
+| | before | now |
+|---|---|---|
+| symbols answered | 72 of 132 | 77 of 132 |
+| call sites answered | 2,478 of 3,113 | 2,908 of 3,113 |
 
-### The check that was written to catch that, and could not
+205 call sites left. The largest group is files and directories at 96, then
+errno at 43 and sockets at 44.
 
-The last one is worth its own paragraph, because it had been sitting inside
-its own detector for a month.
+### What it needs from the kernel, which is one call
 
-scripts/install-then-boot-test.sh has a check called *"and they pass again,
-on a volume already written to"*, whose comment says it is *where a test that
-leaves a file behind shows itself*. It was asked of the BIOS boot -- and over
-BIOS the kernel does not find the disk it booted from (KF-192, open), so that
-boot's report reads root : none found, the five tests that need a volume say
-so, and a boot that never touched a volume was counted as a pass. Measured
-rather than reasoned: the BIOS log says root : none found; file calls will
-say so; the UEFI log says root : nvme0n1p3.
+mem_recon.c asks SYS_MAP for a range with no file behind it -- fd -1,
+the spelling docs/KERNEL-WANTS.md proposes. Today the kernel finds no such
+descriptor and refuses with EBADF, so malloc answers NULL and
+recon_malloc_stats().refusals counts it. The day the kernel accepts it,
+this works with nothing rebuilt.
 
-The check now boots the target a second time under UEFI, and fails loudly if
-no volume is mounted rather than passing, because the way this went wrong was
-silence. Taking one of the five clears back out turns the run red and names
-files carry a mode, which is how it is known to work. The number moved from
-*59 passed* on a volume-less boot to *65 passed, second boot on this volume*.
+No new system call number is taken here, deliberately: two sessions build this
+kernel, and a number claimed in advance by the half that does not own core/
+is a number claimed twice. That has happened, and it is in docs/BUGS.md.
 
-### And the screen stopped guessing
-
-say_storage counted newlines. SYS_LIST separates names with NULs and always
-has -- user.h says so where it is declared. Finding no newlines it counted
-zero, and a fallback two lines down turned that into 1. A volume with twelve
-names at its root reported one entry, which is a number that looks like a
-measurement. A count of zero would have been obviously wrong; a count of one is
-plausible, and this screen had only ever been looked at on machines with no
-volume at all. BG-193.
-
-The line above it now says *why* when it cannot answer, instead of concluding:
-no volume this kernel can read is printed only for ENODEV, and every other
-refusal prints its number. And the storage line goes down the serial cable
-alongside the other two, because the one fact that turned out to be wrong was
-the one that existed only in pixels.
-
-### What this version is really about
-
-Nothing above is a feature the user can point at. What changed is that a
-ReconOS machine, installed from media onto a blank disk, now starts twice in a
-row and is the same machine both times. Until today there had never been a
-second boot.
+The program on the disk links the allocator already, so the wiring is in place
+and compiled -- and the freestanding build has to keep working for it, which is
+what stops it drifting while it is only ever exercised on the host.
 
 ---

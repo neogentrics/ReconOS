@@ -192,6 +192,14 @@ void install_execute_run(void);
  *
  * A loader with no kernel, or a kernel with no loader, is a failed install
  * rather than a count of files copied. */
+/* Puts the system itself on the volume: `/reconos/init.elf` from the medium
+ * becomes `/System/init.elf` on the freshly formatted System partition.
+ *
+ * A medium with no program on it is not a failure -- the machine falls back to
+ * the copy inside the kernel and says so. See install_copy.c. */
+enum install_verdict install_copy_system(struct block_device *source_esp,
+					 struct block_device *system_volume);
+
 enum install_verdict install_copy_boot(struct block_device *source_esp,
 				       struct block_device *target_esp);
 

@@ -23,6 +23,11 @@ int memcmp(const void *a, const void *b, size_t length);
 void *memchr(const void *in, int value, size_t length);
 
 size_t strlen(const char *text);
+
+/* Declared here and implemented in malloc.c, because it is an allocation that
+ * happens to copy a string rather than a string routine that happens to
+ * allocate: a program with no allocator cannot have it at all. */
+char *strdup(const char *text);
 size_t strnlen(const char *text, size_t most);
 int strcmp(const char *a, const char *b);
 int strncmp(const char *a, const char *b, size_t length);

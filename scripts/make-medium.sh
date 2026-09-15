@@ -81,6 +81,18 @@ mmd -i "$W/esp.part" ::/EFI ::/EFI/BOOT ::/reconos
 mcopy -i "$W/esp.part" "$L64" ::/EFI/BOOT/BOOTX64.EFI
 mcopy -i "$W/esp.part" "$K64" ::/reconos/kernel-x86_64.elf
 
+# The system itself -- the first file on a ReconOS medium that is neither a
+# loader nor a kernel. The installer writes it onto the System volume as
+# /System/init.elf, and the machine that boots afterwards runs *that* rather
+# than the copy compiled into the kernel.
+#
+# Absent is tolerated: a medium made without it still installs, and the disk
+# still boots on the built-in copy and says so.
+INIT=kernel/build/x86_64/user/recon_init.elf
+if [ -f "$INIT" ]; then
+	mcopy -i "$W/esp.part" "$INIT" ::/reconos/init.elf
+fi
+
 # aarch64 if it built. A medium that carries one architecture is still a useful
 # medium; one that silently carries the wrong one is not, which is why each
 # file is named for the architecture it is.

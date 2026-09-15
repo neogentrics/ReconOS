@@ -38,6 +38,7 @@ Requires a completed build, because it reads the object files.
 """
 import argparse
 import collections
+import glob
 import io
 import os
 import re
@@ -89,9 +90,12 @@ def owners():
     return out
 
 
-def nm(kind, directory):
-    objects = [os.path.join(directory, n)
-               for n in sorted(os.listdir(directory)) if n.endswith('.o')]
+def nm(kind, *directories):
+    objects = []
+    for directory in directories:
+        objects += [os.path.join(directory, n)
+                    for n in sorted(os.listdir(directory))
+                    if n.endswith('.o')]
     if not objects:
         return collections.Counter()
     text = subprocess.run(['nm', kind] + objects,
@@ -111,14 +115,55 @@ def main():
 
     build = os.path.join(HERE, args.build)
     desktop = os.path.join(build, 'CMakeFiles/ReconOS.dir/src')
-    libc = os.path.join(build,
-                        'CMakeFiles/recon_libc_file_tests.dir/userland/libc')
 
-    for path, what in ((desktop, 'the desktop'), (libc, 'the C library')):
-        if not os.path.isdir(path):
-            sys.stderr.write('no object files for %s at %s -- build first\n'
-                             % (what, path))
-            return 1
+    # Every object compiled from userland/libc/, wherever in the build tree,
+    # rather than the one test target this script used to name.
+    #
+    # It named `recon_libc_file_tests`; when the allocator arrived in a suite
+    # of its own, the script went on reporting its 430 call sites as
+    # unanswered. A measurement that was wrong and said nothing, which is what
+    # BG-182 and BG-185 were both about.
+    libc_dirs = sorted(glob.glob(
+        os.path.join(build, 'CMakeFiles', '*', 'userland', 'libc')))
+
+    if not os.path.isdir(desktop):
+        sys.stderr.write('no object files for the desktop at %s -- build '
+                         'first\n' % desktop)
+        return 1
+
+    if not libc_dirs:
+        sys.stderr.write('no object files for the C library under %s -- '
+                         'build first\n' % build)
+        return 1
+
+    # A source with no object anywhere is the condition that made this wrong
+    # before, so it is named rather than absorbed.
+    #
+    # Two deliberate exceptions, and they are the same kind of file: the ones
+    # that make system calls, which cannot be compiled for the host at all.
+    # `syscalls.c` is the syscall boundary itself; `mem_recon.c` is where the
+    # allocator gets its memory. Their absence is a fact about the library
+    # rather than a gap in the measurement -- and listing them here is what
+    # makes any *other* absence a refusal to report a number.
+    not_on_the_host = {'syscalls.c', 'mem_recon.c'}
+
+    sources = {os.path.basename(p) for p in
+               glob.glob(os.path.join(HERE, 'userland', 'libc', '*.c'))}
+
+    objects = set()
+    for d in libc_dirs:
+        for o in glob.glob(os.path.join(d, '*.o')):
+            objects.add(os.path.basename(o)[:-len('.o')])
+
+    missing = sorted(c for c in sources
+                     if c not in not_on_the_host and c not in objects)
+
+    if missing:
+        sys.stderr.write(
+            'these library sources have no object in the build, so anything '
+            'they define would be counted as missing: %s\n'
+            % ', '.join(missing))
+        return 1
 
     needed = nm('--undefined-only', desktop)
     provided = set(nm('--defined-only', desktop))
@@ -130,7 +175,7 @@ def main():
 
     # prefix.h renamed everything in the library; recover the plain spelling.
     have = set()
-    for name in nm('--defined-only', libc):
+    for name in nm('--defined-only', *libc_dirs):
         if name.startswith('recon_'):
             plain = name[len('recon_'):]
             if plain.startswith('libc_'):

@@ -1,23 +1,33 @@
 /*
- * <stdlib.h>, and the shape of it is a statement about what this kernel has.
+ * <stdlib.h>.
  *
- * **There is no `malloc` here.** Not because it is hard, but because there is
- * nothing underneath it: a program on this kernel has no way to ask for
- * memory. That is the first entry in `docs/KERNEL-WANTS.md`, with the
- * measurements -- 430 call sites, a largest single request of just under four
- * megabytes, and eighty-one megabytes live for a browser window.
+ * **`malloc` is here now**, and what that sentence replaced is worth keeping:
+ * this header used to say there was no `malloc` in it, so that a caller failed
+ * to *link* rather than getting a stub that returned nothing. 430 call sites
+ * in the desktop were behind that.
  *
- * A program that calls `malloc` therefore fails to **link**, with a message
- * naming the symbol. That is the right failure: the alternative is a stub
- * returning NULL, which every caller would treat as "out of memory" and report
- * as such -- so a desktop built against it would come up insisting the machine
- * was full.
+ * `userland/libc/malloc.c` is a real allocator -- boundary tags, coalescing,
+ * segregated free lists, and regions handed back when nothing in them is in
+ * use. It takes its memory from two function pointers rather than from a
+ * system call it names, which is what lets the whole of it be held against the
+ * allocator it replaces on the host.
+ *
+ * **On ReconOS it needs a call that hands out anonymous memory, and there is
+ * not one yet.** `mem_recon.c` asks `SYS_MAP` for a range with no file behind
+ * it; today the kernel answers EBADF, so `malloc` answers NULL and says so
+ * through `recon_malloc_stats().refusals`. The day that call exists this works
+ * with nothing rebuilt. The entry is still first in `docs/KERNEL-WANTS.md`.
  */
 
 #ifndef RECON_STDLIB_H
 #define RECON_STDLIB_H
 
 #include <stddef.h>
+
+void *malloc(size_t bytes);
+void *calloc(size_t count, size_t each);
+void *realloc(void *p, size_t bytes);
+void free(void *p);
 
 int atoi(const char *text);
 long long atoll(const char *text);
