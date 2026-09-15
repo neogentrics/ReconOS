@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.35
+    VERSION 0.4.36
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1196,6 +1196,30 @@ target_link_libraries(recon_package_sign_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 add_test(NAME package-signatures COMMAND recon_package_sign_tests)
+
+
+# The other half of what a package does: installing it, upgrading it and
+# taking it away. See the header of tests/test_package_install.c for why the
+# module path is tested from the failure side rather than the success side.
+add_executable(recon_package_install_tests
+    tests/test_package_install.c
+    src/recon_package.c
+    src/recon_manifest.c
+    src/recon_sign.c
+    src/recon_crypt.c
+    src/recon_registry.c
+    src/recon_users.c
+    src/recon_version.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_package_install_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_package_install_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+add_test(NAME package-install COMMAND recon_package_install_tests)
 
 
 add_test(NAME malformed-input COMMAND recon_malformed_tests)

@@ -9,6 +9,75 @@ way for the two to disagree.
 
 ---
 
+## v0.4.36 — what installing a package actually does
+
+`recon_package` had **21 checks on reading a manifest and none on doing
+anything with it**, which the signing suite's own opening paragraph had already
+called out: *"the install path -- the one that takes somebody else's shared
+object and loads it into this process -- was the least tested thing in the
+system."* Half of that was answered by the signature tests. This is the other
+half: **73 checks** on installing, upgrading, verifying and removing.
+
+### Why it can run without a display or a kernel
+
+`recon_package_install` copies files, places them, writes settings and writes a
+receipt. The only step needing anything else is `recon_modules_load` at the very
+end, reached only by a package that declares a module — and a package of
+*content*, a wallpaper pack or a set of skins, is a real thing the manifest
+supports that exercises everything up to that line.
+
+The module path is tested from the other side, which is the more interesting
+one: **a package whose code will not load must leave nothing behind.** The
+install has already copied the module, the icon and the wallpaper and written a
+receipt by the time it finds out.
+
+Three symbols of the compositor's are stood in for at link time, and what that
+costs is written in the file rather than left to be discovered: the loader is
+not under test here; what is under test is what install does when a loader
+refuses.
+
+### The claims, and that they bite
+
+Every behaviour `include/recon_package.h` promises fails **silently** when it
+breaks. Nothing crashes if an install quietly overwrites a wallpaper somebody
+chose, or if a failed upgrade takes a working program away — somebody's machine
+is just wrong afterwards. So each claim was broken on purpose to see whether the
+check written for it noticed:
+
+| broken on purpose | caught by |
+|---|---|
+| install records a file it did not place | *removing the package leaves their file behind* |
+| install answers a setting somebody had answered | *the setting they had chosen is still theirs* |
+| a failed module load leaves its files | *the module it copied is gone* |
+| the allow-list lets anything through | *a package that wants /System/Config is refused* |
+| upgrade accepts the same version | *the same version is refused* |
+| installing twice is allowed | *the second is refused* |
+| a failed upgrade does not restore the files | *its own code, not the one that would not load* |
+| a failed upgrade does not restore the receipt | *the program that worked is still installed* |
+
+**The one that could not be broken is worth more than the seven that could.**
+Deleting install's *"leave a file that is already there alone"* check changes
+nothing, because `recon_fs_copy` refuses an existing destination on its own.
+That property has two independent guards, so no mutation of one can show which
+held — which is defence in depth working, and is now written beside the test so
+a green run is not read as proof of install's own check.
+
+### What the suite learned about the code
+
+Two of its first failures were the test being wrong, and both are recorded in it
+rather than quietly fixed:
+
+- **A setting is `key value`, not `key = value`.** `split_two` splits on the
+  first space, the same as `place = file directory` — so `setting = notes.width
+  = 80` set the key to the string `"= 80"`. Caught because the check compares
+  the value rather than asking whether something was written.
+- **Signing refuses a package that brings nothing**, not just installing. The
+  refusal lives in reading the manifest and both paths read it, so a package
+  with an icon and some settings and no files is turned down a step earlier than
+  expected. That is the better place for it, and it has a check of its own now.
+
+---
+
 ## v0.4.35 — five of them were not text
 
 The board's next row: *"Fourteen places where an optimised build says a path
