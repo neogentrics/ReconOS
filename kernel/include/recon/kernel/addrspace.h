@@ -178,6 +178,33 @@ bool addrspace_map_file_shared(struct addrspace *as, vaddr_t va, u64 size,
 bool addrspace_reserve(struct addrspace *as, vaddr_t va, u64 size,
 		       unsigned flags);
 
+/* The same, except that a range which continues an existing reservation
+ * *extends* it rather than taking a second row.
+ *
+ * `addrspace_reserve` refuses to merge, and the reason is written beside it: two
+ * regions quietly joined into one would give a program the permissions of
+ * whichever was written second. **That objection is about differing flags**, and
+ * it is answered here by requiring them to be identical -- along with the range
+ * being exactly adjacent and neither side being backed by a file. Under those
+ * three conditions the joined region covers exactly the addresses the two
+ * covered, with exactly the permissions both had, and there is nothing left for
+ * the merge to get wrong.
+ *
+ * It exists because a heap is asked for a megabyte at a time. Without this, a
+ * program that allocates eight megabytes has spent `AS_REGIONS_MAX` on its heap
+ * alone and cannot be given a ninth -- a cap on how much a program may allocate,
+ * expressed as a number that was chosen to bound a data structure. With it, a
+ * heap that only ever grows upwards costs one row however large it gets.
+ *
+ * What it deliberately does *not* do is round up, reserve ahead, or hand back a
+ * range larger than the one asked for. The region covers what has actually been
+ * asked for and no more, so running off the end of the heap still faults -- the
+ * property that would have been lost by reserving one large arena up front and
+ * slicing it.
+ */
+bool addrspace_reserve_more(struct addrspace *as, vaddr_t va, u64 size,
+			    unsigned flags);
+
 /* Called from the architecture's fault handler when a user program touches an
  * address it does not have. Returns true if the fault was resolved and the
  * instruction should be retried, false if the address was never the program's

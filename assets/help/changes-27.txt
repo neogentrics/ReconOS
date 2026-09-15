@@ -1,27 +1,19 @@
-Errors have codes now. When something goes wrong ReconOS names it —
-VT-A001, VT-G005 — so it can be written down and looked up. errors in
-the Terminal says what a code means, errors log is what has happened on this
-machine, and docs/ERRORS.md is the whole list for when you have a code and
-not a working machine.
+A <br> ends the line, not the heading (BG-162). <br> ended the open
+block and opened a *paragraph*, so every heading, list item and quote on the
+web with a line break in it lost its kind halfway through. Measured on
+gaming.recontowers.com, whose masthead is <h1>Games built to<br>mean
+something.</h1>: the first half came out at heading size and the second at
+body size, in the middle of one sentence. There are now two helpers named for
+what they do -- break_block starts a paragraph, break_line reopens the
+block it just closed -- and the callers say which they mean.
 
-Three kinds: STOP (the system cannot continue and shows a screen with the
-code on it), fault (something failed and the rest carried on), and note
-(written down, nothing broke). If a run stops, the next start says so once,
-with the code.
+An image no longer draws over the status bar (BG-163). The viewer decided
+whether a picture was *visible* and then drew all of it, so one three hundred
+pixels tall whose top sat ten pixels above the last visible row painted the
+other two hundred and ninety over the bar below. The check was written for
+lines of text, where being wrong by less than one line is invisible, and then
+handed to something fifteen times taller. recon_draw_image_clipped takes the
+band of rows it may paint; recon_draw_image is that same call with the
+panel's own height as the band, so the two cannot drift apart.
 
-A firewall. Control Panel → Firewall, and firewall in the Terminal. It
-decides what ReconOS itself opens and accepts: outgoing allowed, incoming
-blocked, and a list of rules where the first match decides. Nine rules ship —
-the incoming ones written down and switched off, so opening one is a switch
-rather than remembering a port number. It is not the host's firewall and does
-not touch it.
-
-The startup screen checks the system instead of only counting it. Every
-folder the system needs, the skins, the accounts, the programs, the firewall —
-each line says what it found, and says the code when what it found is wrong.
-Missing folders are rebuilt rather than only reported.
-
-Remote access, two ways. Over SSH by forwarding the control socket, which
-is encrypted and needs nothing from ReconOS; or over TCP 7420 with a key, which
-is off by default and says plainly that the key crosses the network in the
-clear. The firewall has to allow it either way.
+---

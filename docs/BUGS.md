@@ -7873,6 +7873,207 @@ regenerated after that tree is pushed.
   being skipped.
 - **The number moved from 34 suites to 40.**
 
+### BG-197 — The coverage measurement was hiding five C library functions behind its `__` filter
+
+[#470](https://github.com/neogentrics/ReconOS/issues/470)
+
+- **Found in** v0.4.30, when `scripts/check-userland.sh` refused a file the
+  coverage figure said nothing was wrong with: `src/recon_cookie.c` needs
+  `sscanf`, and `sscanf` appeared in neither total.
+- **What it was** `measure-libc.py` drops symbols beginning with `__`, which is
+  right for compiler and runtime internals -- `__stack_chk_fail` appears in 74
+  of the desktop's objects and is nobody's C library function.
+
+  But **glibc renames standard functions on the way out.** `sscanf` is emitted
+  as `__isoc99_sscanf`, `strtoul` as `__isoc23_strtoul`, `errno` as a call to
+  `__errno_location`, `isalpha` as a lookup through `__ctype_b_loc`, `assert`
+  as `__assert_fail` and `signal` as `__sysv_signal`. Eight symbols sat behind
+  that filter and five of them were library functions.
+- **The number was wrong in both directions**, which is what made it hard to
+  notice. `errno`, the ctype table and `strtoul` **are** answered and were not
+  being counted. `sscanf` and `assert` are **not** answered and were never
+  reported as missing. The two errors partly cancelled.
+- **The fourth of the family.** BG-182 counted from a list of expected names.
+  BG-185 corrected the list, which corrected nothing. BG-195 defined "the
+  library" as whatever one test target had compiled. This one defined "a C
+  library function" as "a name not starting with two underscores".
+
+  Every time, the measurement's idea of the thing came from the same place the
+  thing did.
+- **Fixed in** v0.4.30 by translating the spelling before deciding, rather than
+  by widening the filter -- a prefix table for the `__isoc99_` and `__isoc23_`
+  families, and a name table for the six that are their own thing. Anything
+  still starting with `__` afterwards is a compiler symbol, which is what the
+  filter was for.
+
+  The script then refused to report a number at all until `sscanf`, `assert`
+  and `signal` had a line in its table, **naming all three** -- the guard added
+  in v0.4.28 doing exactly what it was added for.
+- **And a second, smaller one the same hour.** Nine desktop sources were added
+  to `check-userland.sh` on the strength of a probe that compiled every file in
+  `src/` -- without `-Werror`. The real check has it, so an implicit
+  declaration of `sscanf` was a warning in the probe and an error in the check,
+  and `recon_cookie.c` went on the list and came off it an hour later. **A
+  probe looser than the check it predicts** is the same shape as the stand-in
+  in the entry below.
+
+### BG-198 — A mutation harness that crashed between mutating and restoring
+
+[#471](https://github.com/neogentrics/ReconOS/issues/471)
+
+- **Found in** v0.4.31, as a library that had passed cleanly an hour earlier
+  failing one case, with the source reported as *identical to the kept copy*.
+- **What it was** two faults in a tool, which between them made correct code
+  look broken.
+
+  `scripts`-adjacent mutation harnesses copy the source aside, mutate it, build,
+  run, and restore. This one **crashed between mutating and restoring**: a
+  mutated build printed the suite's 0xA5 sentinel bytes, which are not UTF-8,
+  and `subprocess` with `text=True` raised on decoding them. The mutation
+  stayed in the tree.
+
+  The next run then took the mutated file as its *original*, could not find
+  that mutation's anchor, said "MUTATION DID NOT APPLY", and faithfully
+  restored the mutation at the end.
+- **And the restore did not force a rebuild.** `rsync --checksum` from the
+  Windows tree brings the correct source back carrying the *Windows*
+  modification time, which is older than the object compiled from the mutated
+  copy -- so `make` does nothing and the next run tests the mutation again.
+  That is the trap `reference_reconos_build_workflow` already records, reached
+  from a direction it did not describe.
+- **Why it cost twenty minutes** the failure was in the one case the source's
+  own comment says must work -- `" nameserver %63s"` against a line with no
+  leading space -- so it read as a real fault in a function written an hour
+  before. A `diff` said the source matched the kept copy, which was true and
+  useless, because the kept copy was the mutated one.
+- **A harness that can leave the tree in a state it invented is worse than no
+  harness**, because what it leaves looks like a fault in the thing being
+  tested rather than in the tool.
+- **Fixed in** v0.4.31. The restore is in a `finally`, the build is forced with
+  `os.utime` before each run, the output is decoded with `errors="replace"`,
+  and **the restore is verified** -- the harness re-runs the suite afterwards
+  and says so if the tree is not as it was.
+
+### BG-199 — The sscanf suite could not tell "stopped" from "skipped"
+
+[#472](https://github.com/neogentrics/ReconOS/issues/472)
+
+- **Found in** v0.4.31, by the mutation harness above, once it worked: four of
+  five mutations were caught and one was missed.
+- **What it was** `libc/scanf.c` stops the scan at a conversion it does not
+  implement, so a caller gets a short count rather than a field in the wrong
+  variable. The suite checked that with `%[a-z]` on `"abc123"`, requiring 0.
+
+  **A version that skipped the conversion instead also returns 0** -- it goes
+  on to match the leftover `a-z]` as literals and fails at the `-`. The test
+  was asserting a number that agrees either way.
+- **Which is the failure the suite's own header calls the one that matters**:
+  not the count, but which variable the next conversion writes to.
+- **Fixed in** v0.4.31 with a case that separates them: an unknown conversion
+  **between** two numbers. Stopping returns 1 and never touches the second
+  variable; skipping returns 2 and puts the second field in it. Not compared
+  against the host, because `%q` is undefined there and an undefined behaviour
+  is not a reference.
+- **Found by mutating the library rather than by reading the test**, which is
+  the whole argument for doing it.
+
+### BG-200 — A stream opened fresh had a NUL character pushed back
+
+[#473](https://github.com/neogentrics/ReconOS/issues/473)
+
+- **Found in** v0.4.32, on the first run after `ungetc` existed, by
+  `recon_libc_file_tests`: *fread put the same bytes in the buffer* — it did
+  not.
+- **What it was** `ungetc` needs somewhere to keep the character it pushes
+  back, so `struct recon_stream` gained a `pushed_back` field. `take_stream`
+  resets every field of the slot it hands out, and the new one was not in that
+  list.
+
+  The streams are in static storage, so an unreset field is **0** — and 0 is a
+  perfectly good character. Every `fopen` produced a stream that would hand
+  back a NUL before the first real byte of the file.
+- **-1 is the only value that means "nothing"**, so it has to be written
+  explicitly; there is no zero that means absent. That is the same fault the
+  kernel's `sched_init` has a paragraph about: *a structure cleared wholesale,
+  and one field whose zero is a meaningful and wrong value* -- `boot->idle_for`,
+  where 0 meant "processor 0's idle thread".
+- **Why it was caught immediately** the file suite reads the same fixture
+  through both libraries and compares the bytes. A spurious NUL at the front of
+  every file is invisible to a test that checks a return value and fatal to one
+  that compares contents.
+- **Fixed in** v0.4.32, in `take_stream`, beside the other five fields it
+  already resets.
+
+### BG-201 — `assert` in the wrong file made four suites fail to link
+
+[#474](https://github.com/neogentrics/ReconOS/issues/474)
+
+- **Found in** v0.4.32, immediately, as `undefined reference to recon_stderr`.
+- **What it was** `recon_libc_assert` was written into `libc/stdlib.c` because
+  that is where `exit` lives. But it *prints*, so it needs `recon_stderr` and
+  `fprintf` -- which are `stdio.c`'s. Every suite that links the number
+  conversions without the file layer stopped linking.
+- **Fixed in** v0.4.32 by moving it to `stdio.c`, next to the streams it writes
+  to. The dependency it adds there already existed.
+- **Worth its own number rather than a quiet fix**, because the shape recurs:
+  a function placed by *what it is about* rather than by *what it needs*. The
+  library is split by the latter, and every file that has ever been added to it
+  is one link error away from being told so.
+
+### BG-202 — A call with no prototype was a warning, and the suite reported the wrong square root
+
+[#475](https://github.com/neogentrics/ReconOS/issues/475)
+
+- **Found in** v0.4.33, by `recon_libc_math_tests`: *`sqrtf(0)` — ReconOS: 1,
+  reference: 0*.
+- **What it was** `test_libc_math.c` declares every `recon_*` prototype it uses
+  by hand, and the two new ones were not added. C then assumes a function it has
+  never seen returns `int`, so the float coming back in a floating-point
+  register was read as an integer and the suite compared a number nobody had
+  computed.
+- **The compiler had said so, twice.** `warning: implicit declaration of
+  function 'recon_sqrtf'` was in the build output for both lines. This build has
+  no `-Werror`, so it was two lines among a few thousand and nothing stopped.
+- **Fixed in** v0.4.33 by declaring both — and by promoting exactly two
+  warnings to errors, `-Werror=implicit-function-declaration` and
+  `-Werror=implicit-int`. Not `-Werror` in general: that is a policy change
+  across a tree two sessions are working in. These two can only ever mean a
+  wrong answer, and the whole tree compiles with no instance of either, so they
+  cost nothing today.
+- **The same shape as the `recon_strlen` fault in v0.4.31**, where a name
+  resolved to something plausible and wrong. A build that reports a fault and
+  carries on has not reported it.
+
+### BG-203 — The coverage measurement read whatever build was lying around
+
+[#476](https://github.com/neogentrics/ReconOS/issues/476)
+
+- **Found in** v0.4.33, by `measure-libc.py`'s own guard: *these have no line in
+  NEEDS — `sincos sqrtf strtoll`*, on the first run after a release build had
+  been configured.
+- **What it was** **the compiler writes calls the source does not contain.** At
+  -O2 and above GCC fuses a `sin(x)` and a `cos(x)` of one argument into
+  `sincos`, rewrites `atoll(s)` as `strtoll(s, 0, 10)` *in the caller* — reaching
+  past whatever `atoll` the library defines — and narrows a `sqrt` whose argument
+  and result are both floats into `sqrtf`.
+
+  So the set of symbols the desktop needs is not a property of the desktop's
+  source. It is a property of the source **and the flags it was built with**.
+  The script had no opinion about the flags, printed nothing about them, and had
+  been reporting three symbols as answered that a release of the same source
+  cannot link without.
+- **What it cost** the published figure. v0.4.32 said 3,043 of 3,134 call sites;
+  the release build says **2,998 of 3,089**, and that is the number a machine
+  actually needs.
+- **Fixed in** v0.4.33: the build type is read out of `CMakeCache.txt`, printed
+  with the result, and a build that is not a release is refused rather than
+  reported. `--any-build-type` shows the other number on purpose, and says which
+  it is.
+- **The third time in this library.** BG-195 and BG-197 were the same sentence:
+  *a measurement that shares a premise with the thing it measures can only agree
+  with it.* The premise here was the optimisation level, and it was written down
+  nowhere at all.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

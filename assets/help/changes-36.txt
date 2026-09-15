@@ -1,3 +1,5 @@
-Four desktops. Alt+1 to Alt+4 switches between them; the numbers on the
-right of the taskbar do the same. Alt+Shift and a number takes the current
-window with you.
+A text clipboard. Cut, copy and paste work in Notepad, in every text field
+in the system, and into the Terminal. Before this, text could not be moved
+from one place to another at all.
+
+Notepad can select text — with the mouse, or Shift and the arrow keys.

@@ -57,6 +57,17 @@ unsigned long fwrite(const void *from, unsigned long size,
 char *fgets(char *into, int room, FILE *f);
 int fgetc(FILE *f);
 
+/* Two questions, and they are two on purpose: a loop that stops reading cannot
+ * tell from the stopping alone whether the file ended or the disk did. A
+ * caller that treats them the same truncates a file on an I/O error and
+ * reports success. */
+int feof(FILE *f);
+int ferror(FILE *f);
+void clearerr(FILE *f);
+
+/* One character, and one is all the standard promises. See stdio.c. */
+int ungetc(int c, FILE *f);
+
 /*
  * A line to standard output. Nothing in the desktop calls it by name: the
  * compiler rewrites a `printf` with no conversions in it into this, which is
@@ -75,5 +86,21 @@ int snprintf(char *to, size_t room, const char *format, ...)
 	__attribute__((format(printf, 3, 4)));
 int vsnprintf(char *to, size_t room, const char *format, va_list args)
 	__attribute__((format(printf, 3, 0)));
+
+/* Reading values back out of text.
+ *
+ * The attribute is `scanf` rather than `printf`, which is not a detail: it is
+ * what lets the compiler check that `%lu` was given an `unsigned long *` and
+ * not an `unsigned long`. A scanner handed a value where it wanted an address
+ * writes through whatever that value happens to be.
+ *
+ * Scansets -- `%[a-z]` -- and `%p` are not implemented. A format holding one
+ * **stops the scan** rather than skipping it, so a caller gets a short count
+ * instead of a field in the wrong variable. See `userland/libc/scanf.c`.
+ */
+int sscanf(const char *text, const char *format, ...)
+	__attribute__((format(scanf, 2, 3)));
+int vsscanf(const char *text, const char *format, va_list args)
+	__attribute__((format(scanf, 2, 0)));
 
 #endif /* RECON_STDIO_H */

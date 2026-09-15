@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.28
+    VERSION 0.4.33
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -35,6 +35,23 @@ add_compile_definitions(WLR_USE_UNSTABLE)
 # twenty-two of those would bury the next real one.
 #
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+
+# Two warnings promoted to errors, and only two.
+#
+# A call with no prototype in front of it is not a style question. C assumes it
+# returns `int`, so a function returning a float is read as an integer and the
+# caller carries on with a number that was never computed -- which is exactly
+# what happened to `recon_sqrtf` in `test_libc_math.c`: the suite reported
+# `sqrtf(0)` as 1 and the fault was in the declaration, not the square root.
+#
+# The compiler had said so both times. Nobody was listening, because this build
+# has no `-Werror` and a warning is one line among a few thousand. Rather than
+# turn every warning into an error -- a policy change across a tree two
+# sessions are working in -- the two that can only ever mean a wrong answer are
+# errors and the rest stay warnings.
+#
+# They cost nothing today: the whole tree compiles with no instance of either.
+add_compile_options(-Werror=implicit-function-declaration -Werror=implicit-int)
 
 #
 # Configure the suites without the compositor.
@@ -761,6 +778,10 @@ set_source_files_properties(
     userland/libc/time.c
     userland/libc/math.c
     userland/libc/malloc.c
+    userland/libc/errno.c
+    userland/libc/posix.c
+    userland/libc/scanf.c
+    userland/libc/inet.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -770,6 +791,70 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# Addresses and byte order, against the host's.
+#
+# The five of the socket group that need nothing from the kernel. The byte
+# order is the interesting half: comparing `htons` against glibc is weaker than
+# it looks, because both architectures here are little-endian and a version
+# written as a byte swap agrees on every machine in the rig. So the suite also
+# checks the bytes *directly* -- most significant first, which is what network
+# order means on a machine of either endianness.
+add_executable(recon_libc_inet_tests
+    userland/tests/test_libc_inet.c
+    userland/libc/inet.c
+    userland/libc/errno.c
+    userland/libc/printf.c
+    userland/libc/string.c)
+
+# sscanf, against the host's.
+#
+# The failure that matters for a scanner is assigning the right value to the
+# *wrong variable*, so every case in this suite compares a whole block of
+# storage rather than the fields it expected to be filled -- a variable that
+# should not have been touched is checked to be untouched.
+#
+# Its corpus opens with the desktop's own fourteen formats, verbatim.
+add_executable(recon_libc_scanf_tests
+    userland/tests/test_libc_scanf.c
+    userland/tests/hostsys.c
+    userland/libc/scanf.c
+    userland/libc/stdlib.c
+    userland/libc/ctype.c
+    userland/libc/string.c
+    userland/libc/printf.c
+    userland/libc/math.c)
+
+# The descriptor layer -- open, read, write, directories -- against the host's.
+#
+# `hostsys.c` is what makes it testable: it answers the eight primitives the
+# library is built on with POSIX, *including a recon_sys_list that behaves like
+# the kernel's* rather than like POSIX readdir. That last point is the one that
+# matters -- a stand-in with a looser contract than the real call would let the
+# layer pass here while reading half a directory on a machine.
+#
+# It reads `kernel/include/recon/kernel/process.h` while it runs, to compare
+# the descriptor limit against the kernel's own, so it has a WORKING_DIRECTORY.
+add_executable(recon_libc_posix_tests
+    userland/tests/test_libc_posix.c
+    userland/tests/hostsys.c
+    userland/libc/posix.c
+    userland/libc/errno.c
+    userland/libc/malloc.c
+    userland/libc/printf.c
+    userland/libc/string.c)
+
+# errno and strerror, in a program of its own.
+#
+# It reads `userland/include/recon.h` while it runs -- the kernel's own list of
+# error numbers -- and compares it with what the translation covers. That is
+# why it has a WORKING_DIRECTORY: the check is worthless if the suite gets its
+# idea of the kernel's errors from the same place the translation did.
+add_executable(recon_libc_errno_tests
+    userland/tests/test_libc_errno.c
+    userland/libc/errno.c
+    userland/libc/printf.c
+    userland/libc/string.c)
 
 # The allocator, in a program of its own.
 #
@@ -841,6 +926,14 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_inet COMMAND recon_libc_inet_tests)
+add_test(NAME libc_scanf COMMAND recon_libc_scanf_tests)
+add_test(NAME libc_posix COMMAND recon_libc_posix_tests)
+set_tests_properties(libc_posix PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME libc_errno COMMAND recon_libc_errno_tests)
+set_tests_properties(libc_errno PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME libc_malloc COMMAND recon_libc_malloc_tests)
 add_test(NAME libc_math COMMAND recon_libc_math_tests)
 

@@ -40,6 +40,7 @@ import argparse
 import collections
 import glob
 import io
+import io
 import os
 import re
 import subprocess
@@ -55,6 +56,40 @@ NOT_LIBC_PREFIX = ('wlr_', '_wlr_', 'wl_', 'xkb_', 'pixman_', 'mbedtls_',
                    'hb_', 'recon_', '_ITM_', '__', '_GLOBAL_')
 NOT_LIBC_EXACT = {'compress2', 'compressBound', 'crc32', 'uncompress',
                   'inflate', 'deflate'}
+
+# What glibc calls a standard function when it emits a call to it.
+#
+# These are not compiler internals and the `__` filter above should not eat
+# them. `sscanf` really is referenced by seven of the desktop's objects, and
+# for as long as this table did not exist the coverage figure neither counted
+# it as answered nor reported it as missing -- it simply was not there.
+#
+# Both directions were wrong. `errno` and `strtoul` *are* answered and were not
+# being counted; `sscanf` and `assert` are *not* and were not being reported.
+#
+# By prefix where glibc uses one -- the `__isoc99_` and `__isoc23_` families
+# are versioned spellings of the same functions -- and by name for the four
+# that are their own thing. Anything still starting with `__` after this is a
+# compiler or runtime symbol, which is what the filter was for.
+REDIRECTED_PREFIX = ('__isoc99_', '__isoc23_')
+
+REDIRECTED_EXACT = {
+    '__errno_location': 'errno',
+    '__ctype_b_loc': 'isalpha',		# the table behind the ctype macros
+    '__ctype_tolower_loc': 'tolower',
+    '__ctype_toupper_loc': 'toupper',
+    '__assert_fail': 'assert',
+    '__sysv_signal': 'signal',
+}
+
+
+def as_written(name):
+    """The name a program actually wrote, given the one glibc emitted."""
+    for prefix in REDIRECTED_PREFIX:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+
+    return REDIRECTED_EXACT.get(name, name)
 
 # What each symbol the library does not have would take. Assigned by hand,
 # which is safe in a way the old list was not: these names came *out* of the
@@ -73,10 +108,13 @@ NEEDS = {
                 'recvfrom setsockopt getsockopt shutdown getaddrinfo '
                 'freeaddrinfo gai_strerror getnameinfo getifaddrs '
                 'freeifaddrs inet_pton inet_ntoa htons htonl'),
-    'processes and signals': 'fork execvp kill raise _exit getsid',
+    'processes and signals': 'fork execvp kill raise _exit getsid signal',
     'loading a module at run time': 'dlopen dlsym dlclose dlerror',
     'an errno': 'strerror',
-    'the rest of stdio': 'feof ferror ungetc',
+    # sscanf is emitted by glibc as `__isoc99_sscanf`, so it sat behind the
+    # `__` filter and was in neither total until 14 September 2026.
+    'the rest of stdio': 'feof ferror ungetc sscanf',
+    'an assertion': 'assert',
     'the rest of string': 'memmem strcasestr',
     'an environment': 'setenv',
 }
@@ -108,9 +146,32 @@ def nm(kind, *directories):
     return found
 
 
+def build_type(build):
+    """What CMake was told to build, straight out of its own cache.
+
+    Read rather than assumed, because assuming it is the fault this answers:
+    the script had no opinion about the optimisation level and the answer
+    depends on it entirely.
+    """
+    cache = os.path.join(build, 'CMakeCache.txt')
+
+    if not os.path.isfile(cache):
+        return None
+
+    with io.open(cache, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            if line.startswith('CMAKE_BUILD_TYPE:'):
+                return line.split('=', 1)[1].strip()
+
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--build', default='build')
+    ap.add_argument('--any-build-type', action='store_true',
+                    help='report a number from a build that is not a release '
+                         '-- which is a different number, see BG-203')
     args = ap.parse_args()
 
     build = os.path.join(HERE, args.build)
@@ -134,6 +195,34 @@ def main():
     if not libc_dirs:
         sys.stderr.write('no object files for the C library under %s -- '
                          'build first\n' % build)
+        return 1
+
+    # --- and it has to be a release ---------------------------------------
+    #
+    # **The compiler writes calls the source does not contain**, and it starts
+    # doing it at -O2. `sin(x)` and `cos(x)` of the same argument become one
+    # `sincos`; `atoll(s)` becomes `strtoll(s, 0, 10)` in the caller, reaching
+    # past whatever `atoll` this library defines; a `sqrt` whose argument and
+    # result are both floats becomes `sqrtf`.
+    #
+    # So the set of symbols the desktop needs is not a property of the desktop's
+    # source. It is a property of the desktop's source *and the flags it was
+    # built with*, and a measurement that does not say which flags is not a
+    # measurement. All three of those were reported as answered for as long as
+    # this script read whatever build happened to be lying around.
+    kind = build_type(build)
+
+    if not args.any_build_type and (kind or '').lower() != 'release':
+        sys.stderr.write(
+            'the build at %s is %s, and this number is only true of a '
+            'release.\n'
+            'At -O2 and above the compiler emits calls the source does not '
+            'contain -- sincos, strtoll, sqrtf -- and a library measured '
+            'against a debug build links where a release of the same source '
+            'does not.\n'
+            'Configure with -DCMAKE_BUILD_TYPE=Release, or pass '
+            '--any-build-type to see the other number on purpose.\n'
+            % (build, kind if kind else 'of no stated type'))
         return 1
 
     # A source with no object anywhere is the condition that made this wrong
@@ -165,7 +254,14 @@ def main():
             % ', '.join(missing))
         return 1
 
-    needed = nm('--undefined-only', desktop)
+    print('read from the %s build at %s'
+          % ((kind or 'untyped').lower(), os.path.relpath(build, HERE)))
+    print()
+
+    needed = collections.Counter()
+    for name, count in nm('--undefined-only', desktop).items():
+        needed[as_written(name)] += count
+
     provided = set(nm('--defined-only', desktop))
 
     external = sorted(n for n in needed

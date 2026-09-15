@@ -16,6 +16,45 @@
 #ifndef RECON_LIBC_PREFIX_H
 #define RECON_LIBC_PREFIX_H
 
+/* --- the descriptor layer --------------------------------------------------
+ *
+ * `recon_libc_` rather than `recon_`, because `recon_open`, `recon_read`,
+ * `recon_write` and `recon_close` are already taken: they are the system-call
+ * inlines in `userland/include/recon.h`, one layer below these.
+ * `scripts/measure-libc.py` strips both prefixes, so the coverage figure still
+ * reads these as the POSIX names they are.
+ */
+#define open        recon_libc_open
+#define close       recon_libc_close
+#define read        recon_libc_read
+#define write       recon_libc_write
+#define lseek       recon_libc_lseek
+#define mkdir       recon_libc_mkdir
+#define opendir     recon_libc_opendir
+#define readdir     recon_libc_readdir
+#define closedir    recon_libc_closedir
+#define realpath    recon_libc_realpath
+#define sysconf     recon_libc_sysconf
+
+#define htons        recon_htons
+#define htonl        recon_htonl
+#define ntohs        recon_ntohs
+#define ntohl        recon_ntohl
+#define inet_pton    recon_inet_pton
+#define inet_ntoa    recon_inet_ntoa
+#define gai_strerror recon_gai_strerror
+
+#define feof        recon_feof
+#define ferror      recon_ferror
+#define clearerr    recon_clearerr
+#define ungetc      recon_ungetc
+
+#define sscanf      recon_sscanf
+#define vsscanf     recon_vsscanf
+
+#define errno       recon_errno
+#define strerror    recon_strerror
+
 #define malloc      recon_malloc
 #define calloc      recon_calloc
 #define realloc     recon_realloc
@@ -65,6 +104,7 @@
 #define atoll       recon_atoll
 #define atof        recon_atof
 #define strtol      recon_strtol
+#define strtoll     recon_strtoll
 #define strtoul     recon_strtoul
 #define strtoull    recon_strtoull
 #define strtod      recon_strtod
@@ -106,6 +146,8 @@
  */
 #define fabs        recon_fabs
 #define sqrt        recon_sqrt
+#define sqrtf       recon_sqrtf
+#define sincos      recon_sincos
 #define floor       recon_floor
 #define ceil        recon_ceil
 #define round       recon_round

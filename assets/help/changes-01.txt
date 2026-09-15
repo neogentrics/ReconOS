@@ -1,107 +1,71 @@
-The last large piece of the C library, and the one every other piece was
-waiting behind. Measured rather than guessed: 5 symbols, 430 call sites --
-more than two thirds of everything the desktop still could not link.
+The first entry in docs/KERNEL-WANTS.md is answered. SYS_MAP with an fd
+of -1 returns a demand-paged anonymous range, and userland/libc/mem_recon.c
+has been sending exactly that call since the allocator was written. Nothing in
+userland/ was rebuilt or relinked for it: the program on the disk already
+linked the allocator, and the call it had always made started working.
 
-userland/include/stdlib.h used to open by saying there was no malloc in it,
-so that a caller failed to *link* rather than getting a stub that returned
-nothing and crashed an hour later somewhere else. That paragraph is gone.
+An installed disk, booted by itself, running a program loaded off its own
+volume, now says:
 
-### The memory comes from two function pointers
 
-malloc.c names no system call. It asks a struct recon_memory_source -- take
-a range, give one back -- and everything else is written against those.
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
 
-This is the same split userland/init/layout.c uses for making directories,
-and it is here for the same reason: the part that can be wrong is the
-allocator, not the call underneath it. With the source behind a pointer the
-whole file runs on the host against the library it replaces, and against three
-sources no kernel can be made to be:
 
-- one that can hand memory back,
-- one that cannot -- which is the configuration ReconOS is actually in, so
-  every scenario runs twice,
-- and one that refuses after a while, which is how the out-of-memory path gets
-  exercised at all.
+recon_init allocates sixty-four blocks, frees every other one and takes them
+again -- so the free lists and the coalescing do work rather than a bump upwards
+through fresh memory -- takes one block large enough to need a second range from
+the kernel, reads every one of them back, and audits the heap. The kernel half
+is in docs/KERNEL-CHANGELOG.md under 0.2.39.
 
-Boundary tags, coalescing on both sides, free lists segregated by size, and a
-region handed back when nothing in it is in use. An allocation larger than a
-quarter of a megabyte gets a region of its own and returns the whole thing --
-because KERNEL-WANTS measured a browser tab at 6.8 MiB, and a window where
-twelve tabs have been opened and closed has lost eighty-one megabytes if
-nothing is released.
+The first ReconOS program that allocates. What its header used to say is
+worth keeping: *"It allocates nothing. There is no allocator on this kernel and
+that is the first entry in docs/KERNEL-WANTS.md."*
 
-### 11,506 checks, and the suite earned its keep on the first run
+### Three functions nothing in ReconOS calls
 
-The heap is audited after every operation, not at the end: every block of
-every region, footers against headers, each block's flag about its predecessor
-against whether that block is really in use, no two free blocks side by side,
-and the running counters against a fresh count. A shadow copy of what every
-live block should contain is checked alongside it, because alignment and audit
-would both pass an allocator that hands the same address out twice.
+sincos, sqrtf and strtoll appear in no line of this source. The compiler
+writes them. At -O2 and above GCC fuses a sin(x) and a cos(x) of one
+argument into a single sincos, rewrites atoll(s) as strtoll(s, 0, 10) *in
+the caller* — reaching past whatever atoll the library defines — and narrows a
+sqrt whose argument and result are both floats into sqrtf.
 
-It found BG-194 before the allocator had run anywhere else: in the smallest
-block -- 32 bytes, a 16-byte header and a 16-byte payload -- the payload is
-*exactly* the two free-list pointers, and the footer was being written into its
-last eight bytes. Every smallest-size block on a free list had its prev link
-overwritten by its own size. The fix is the layout every allocator of this
-shape uses: the footer lives in the next block's header, and the flags move
-into the low bits of the size.
+So a release of the desktop needed three symbols that a debug build did not, and
+the coverage measurement had been reading whichever build happened to be in
+build/. That is BG-203, and it is the third time this library has been
+measured by an instrument sharing a premise with it.
 
-That fault would have been invisible until it was a crash somewhere else
-entirely, minutes later, with no allocator in sight.
+The number it changes. v0.4.32 published 3,043 of 3,134 call sites. The
+release build — the one a machine would actually run — says 2,998 of 3,089.
+The measurement now reads the build type out of CMakeCache.txt, prints it with
+the result, and refuses a build that is not a release.
 
-### And two instruments that could not see the allocator
+### Two warnings are errors now, and only two
 
-BG-195. scripts/measure-libc.py went on reporting 430 call sites
-unanswered while the functions sat in the build, tested, next to it -- because
-it read the objects of *one test target*, and the allocator has a suite of its
-own. That is the third of a family: BG-182 counted from a list of expected
-names, BG-185 corrected the list, and this one defined "the library" as
-whatever one target had compiled. Each time the measurement took its idea of
-the thing from the same place the thing came from.
+recon_libc_math_tests reported sqrtf(0) as 1. The square root was right; the
+suite had no prototype for it, so C assumed it returned int and read a
+floating-point register as an integer.
 
-Fixed by removing the name rather than correcting it: every object compiled
-from userland/libc/ anywhere counts, and the script now refuses to report a
-number when a library source has no object, naming it. It caught one on its
-first run.
+The compiler had said so, twice, in a build with no -Werror — two lines among
+a few thousand. -Werror=implicit-function-declaration and
+-Werror=implicit-int are errors now. Not -Werror in general, which is a
+policy change across a tree two sessions are working in; these two can only ever
+mean a wrong answer, and the whole tree compiles with no instance of either.
 
-BG-196. check.sh builds every suite twice, once sanitized and once the
-way a release is -- and built the second list from the *desktop's* tests only.
-The four suites under userland/tests/ had never been built optimised: the C
-library, the file layer, the maths, and the allocator. -O2 is where strict
-aliasing and pointer provenance start to matter, and an allocator is nothing
-but pointer arithmetic across type boundaries.
-
-It surfaced as a fix that would have been dead code, which is the part worth
-keeping: the sanitized pass aborted on the calloc overflow check, because
-under AddressSanitizer the host's calloc is ASan's and ASan kills the process
-rather than returning NULL. Skipping the comparison under a sanitizer would
-have meant skipping it everywhere. 34 suites became 40.
-
-### Where it leaves the library
+### Where it leaves things
 
 | | before | now |
 |---|---|---|
-| symbols answered | 72 of 132 | 77 of 132 |
-| call sites answered | 2,478 of 3,113 | 2,908 of 3,113 |
+| call sites answered | 3,043 of 3,134 *(debug build)* | 2,998 of 3,089 *(release)* |
+| symbols outstanding | 40 | 37 |
+| the installed-disk boot test | 8 of 8 | 9 of 9 |
 
-205 call sites left. The largest group is files and directories at 96, then
-errno at 43 and sockets at 44.
+The two call-site figures are not a regression and not comparable: the left one
+counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
+suite 438,496, both clean.
 
-### What it needs from the kernel, which is one call
-
-mem_recon.c asks SYS_MAP for a range with no file behind it -- fd -1,
-the spelling docs/KERNEL-WANTS.md proposes. Today the kernel finds no such
-descriptor and refuses with EBADF, so malloc answers NULL and
-recon_malloc_stats().refusals counts it. The day the kernel accepts it,
-this works with nothing rebuilt.
-
-No new system call number is taken here, deliberately: two sessions build this
-kernel, and a number claimed in advance by the half that does not own core/
-is a number claimed twice. That has happened, and it is in docs/BUGS.md.
-
-The program on the disk links the allocator already, so the wiring is in place
-and compiled -- and the freestanding build has to keep working for it, which is
-what stops it drifting while it is only ever exercised on the host.
+The 91 call sites still missing all need the kernel: 35 for sockets that open
+something, 31 for stat and its relatives, 12 for dlopen, 11 for processes and
+signals, 2 for an environment.
 
 ---

@@ -9,6 +9,404 @@ way for the two to disagree.
 
 ---
 
+## v0.4.33 — memory a program can ask for
+
+**The first entry in `docs/KERNEL-WANTS.md` is answered.** `SYS_MAP` with an fd
+of -1 returns a demand-paged anonymous range, and `userland/libc/mem_recon.c`
+has been sending exactly that call since the allocator was written. Nothing in
+`userland/` was rebuilt or relinked for it: the program on the disk already
+linked the allocator, and the call it had always made started working.
+
+An installed disk, booted by itself, running a program loaded off its own
+volume, now says:
+
+```
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
+```
+
+`recon_init` allocates sixty-four blocks, frees every other one and takes them
+again -- so the free lists and the coalescing do work rather than a bump upwards
+through fresh memory -- takes one block large enough to need a second range from
+the kernel, reads every one of them back, and audits the heap. The kernel half
+is in `docs/KERNEL-CHANGELOG.md` under 0.2.39.
+
+**The first ReconOS program that allocates.** What its header used to say is
+worth keeping: *"It allocates nothing. There is no allocator on this kernel and
+that is the first entry in `docs/KERNEL-WANTS.md`."*
+
+### Three functions nothing in ReconOS calls
+
+`sincos`, `sqrtf` and `strtoll` appear in no line of this source. **The compiler
+writes them.** At -O2 and above GCC fuses a `sin(x)` and a `cos(x)` of one
+argument into a single `sincos`, rewrites `atoll(s)` as `strtoll(s, 0, 10)` *in
+the caller* — reaching past whatever `atoll` the library defines — and narrows a
+`sqrt` whose argument and result are both floats into `sqrtf`.
+
+So a release of the desktop needed three symbols that a debug build did not, and
+the coverage measurement had been reading whichever build happened to be in
+`build/`. That is BG-203, and it is the third time this library has been
+measured by an instrument sharing a premise with it.
+
+**The number it changes.** v0.4.32 published 3,043 of 3,134 call sites. The
+release build — the one a machine would actually run — says **2,998 of 3,089**.
+The measurement now reads the build type out of `CMakeCache.txt`, prints it with
+the result, and refuses a build that is not a release.
+
+### Two warnings are errors now, and only two
+
+`recon_libc_math_tests` reported `sqrtf(0)` as 1. The square root was right; the
+suite had no prototype for it, so C assumed it returned `int` and read a
+floating-point register as an integer.
+
+The compiler had said so, twice, in a build with no `-Werror` — two lines among
+a few thousand. `-Werror=implicit-function-declaration` and
+`-Werror=implicit-int` are errors now. Not `-Werror` in general, which is a
+policy change across a tree two sessions are working in; these two can only ever
+mean a wrong answer, and the whole tree compiles with no instance of either.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,043 of 3,134 *(debug build)* | **2,998 of 3,089** *(release)* |
+| symbols outstanding | 40 | **37** |
+| the installed-disk boot test | 8 of 8 | **9 of 9** |
+
+The two call-site figures are not a regression and not comparable: the left one
+counts a build nobody ships. The maths suite runs 3,614,012 checks and the file
+suite 438,496, both clean.
+
+The 91 call sites still missing all need the kernel: 35 for sockets that open
+something, 31 for `stat` and its relatives, 12 for `dlopen`, 11 for processes and
+signals, 2 for an environment.
+
+---
+
+## v0.4.32 — the nine that need nothing from the kernel
+
+Sockets are the largest group left, and most of it needs a kernel. **Nine
+symbols do not**, and they were worth taking now rather than waiting: a program
+that parses an address does not need a network, and `src/recon_net.c` reads
+`/proc/net/route` and turns the result into dotted quads long before it opens
+anything.
+
+`htons`, `htonl`, `ntohs`, `ntohl`, `inet_pton`, `inet_ntoa`, `gai_strerror`,
+and the three stdio readers `feof`, `ferror` and `ungetc` — plus `clearerr` and
+`assert`, which came with them.
+
+### Byte order is not a byte swap
+
+`htons` is written as arithmetic on the **value**, not as a reordering of its
+storage. The two are the same thing only on a little-endian machine — and both
+architectures ReconOS runs on are little-endian, so a byte-swap version would
+agree with glibc on every machine in the rig and be wrong on the first one that
+is not, with nothing able to say so.
+
+Which means **comparing against the host is not enough here**, and the suite
+says so: alongside the comparison, the bytes of the result are required to be
+the value's own bytes, most significant first. That assertion fails on a
+byte-swap implementation even on this machine.
+
+### `inet_pton` is mostly a refusal
+
+Its value is what it turns down. `inet_aton` reads `010.0.0.1` as octal,
+`1.2.3` as a three-part address and a bare `16777217` as a number — and those
+readings are how a check that two strings name the same host is defeated.
+
+So most of the corpus is text that must **not** parse: leading zeroes,
+hexadecimal, four parts and a trailing dot, a space at either end, a negative
+octet. Every one is put to the host as well, because *both refuse* is a
+stronger statement than *we refuse*.
+
+### `feof` is the one people use wrongly
+
+It is **false** after the last byte has been read and **true** only after a
+further read found nothing. A stream that sets it one read early makes every
+`while (!feof(f))` loop drop the last line; one that never sets it makes the
+same loop never end.
+
+That is a question about *timing*, not about a value, so the suite asks the
+flag after every single step on both libraries over one file — the only way
+the timing can be compared rather than asserted from memory.
+
+`ungetc` takes one character, which is all the standard promises. More would
+mean deciding what happens when a caller pushes back characters it never read,
+and what `ftell` should then say about a position that is partly invented.
+
+### Three faults, and the first is an old friend
+
+**BG-200.** `struct recon_stream` gained a `pushed_back` field and
+`take_stream` — which resets every field of a slot before handing it out — was
+not told. Static storage makes an unreset field **0**, and 0 is a perfectly
+good character, so every `fopen` produced a stream that would hand back a NUL
+before the first byte of the file.
+
+That is exactly the fault the kernel's `sched_init` has a paragraph about: *a
+structure cleared wholesale, and one field whose zero is a meaningful and wrong
+value.* Caught on the first run by the file suite, which compares contents
+rather than return values.
+
+**BG-201.** `assert` was put in `stdlib.c` because that is where `exit` lives.
+It prints, so it needs `stdio.c`'s streams — and four suites stopped linking. A
+function placed by what it is *about* rather than by what it *needs*.
+
+**And one in a test**, which is worth as much: the pushback case used the
+shared fixture, which an earlier test deletes when it finishes. It reported
+*the fixture would not open* as though the library had failed. A test that
+depends on the order it runs in will eventually fail for a reason that has
+nothing to do with what it checks; it brings its own file now.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,034 of 3,134 | **3,043 of 3,134** |
+| socket symbols outstanding | 19 | **14** |
+
+91 call sites left, and every one of them now needs the kernel: 35 for the
+sockets that open something, 31 for `stat` and its relatives, 12 for `dlopen`,
+11 for processes and signals, 2 for an environment.
+
+**That is the whole of the C library that can be written without the kernel.**
+
+---
+
+## v0.4.31 — sscanf
+
+Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
+figure: glibc emits it as `__isoc99_sscanf`, which sat behind a filter meant
+for compiler internals (BG-197).
+
+**What the desktop asks for was measured before any of it was written**, by
+reading all fourteen calls: `%d` with widths, `%u` `%lu` `%llu`, `%lx`, `%63s`,
+`%n`, and literal text around them — `MemTotal: %lu kB`, `* %d EXISTS`,
+`%4d-%2d-%2d %2d:%2d %n`. Those fourteen formats open the suite, verbatim, on
+realistic input.
+
+Implemented is that set plus the rest of the integer and floating conversions,
+`*` suppression, and the `hh h l ll z j` modifiers. **Scansets and `%p` are
+not**, and a format holding one **stops the scan** rather than skipping it — so
+a caller gets a short count instead of a field in the wrong variable.
+
+### The failure that matters is not the count
+
+It is assigning the right value to the **wrong variable**. So every case
+declares a block of storage, fills it with a sentinel, runs both libraries on
+identical copies, and compares the whole block — a variable that should not
+have been touched is checked to be untouched.
+
+### Two faults in the tools, and neither in the library
+
+**BG-198.** The mutation harness crashed between mutating and restoring — a
+mutated build printed the sentinel bytes, which are not UTF-8 — and left the
+mutation in the tree. The next run took that as its original and restored it.
+Then `rsync --checksum` brought the correct source back with an older
+modification time than the object, so `make` did nothing and the next run
+tested the mutation again.
+
+The result was a function that had passed cleanly an hour earlier failing the
+one case its own comment says must work, with `diff` reporting the source
+identical to the kept copy — true, and useless, because the kept copy was the
+mutated one. **A harness that can leave the tree in a state it invented is
+worse than no harness.** The restore is now in a `finally`, forces a rebuild,
+and is verified.
+
+**BG-199.** Once the harness worked it caught four of five mutations and missed
+one: an unimplemented conversion being *skipped* rather than stopping. The
+suite tested that with `%[a-z]`, and a version that skipped it would then match
+the leftover `a-z]` as literals and fail anyway — returning the same 0. The
+test was asserting a number that agrees either way, which is the exact failure
+its own header exists to catch. Fixed with an unknown conversion **between**
+two numbers, where stopping and skipping write to different variables.
+
+### And one fault in the library, caught by building it for the machine
+
+`posix.c` called `recon_strlen`. On the host that **compiles and works** —
+`prefix.h` renames `strlen` to precisely that — so every suite passed. It only
+fails where there is no renaming, which is the freestanding build.
+
+`scanf.c` and `posix.c` were added to the program on the disk for exactly this:
+it is the only place the library is compiled with no glibc, the kernel's flags
+and `-Werror`. A library file built only for Linux is a library file that has
+quietly stopped being portable.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,020 of 3,134 | **3,034 of 3,134** |
+| desktop sources with no libc | 19 of 79 | **20 of 79** |
+
+`src/recon_cookie.c` is the twentieth — it came off the list an hour earlier
+for wanting `sscanf`, and has one now.
+
+Sockets is the largest group left at 44 call sites, then the ten remaining file
+calls at 31.
+
+---
+
+## v0.4.30 — files by name, by number, and by directory
+
+Eleven of the twenty-one symbols in the largest group left, and they are the
+eleven that have a system call underneath them already: `open`, `close`,
+`read`, `write`, `lseek`, `mkdir`, `opendir`, `readdir`, `closedir`,
+`realpath` and `sysconf`.
+
+The other ten -- `stat` and its two relatives, `unlink`, `rmdir`, `access`,
+`chmod`, `umask`, `mmap`, `munmap` -- are **declared in the headers and
+deliberately not defined**, so a caller fails to link naming the symbol. Each
+header says what its absentees are waiting for. That is the stance
+`<stdlib.h>` took about `malloc` for as long as there was nothing to build an
+allocator on, and the reason is the same: a stub that answers -1 with a
+plausible errno would have a program ask whether a file exists, be told no,
+create it, and do that every time.
+
+### Everything here is a translation, and the translation is the whole risk
+
+`RECON_O_READ` is 1 and `O_RDONLY` is 0. A wrapper that passed the flags
+through unchanged would open every read-only file for writing and every
+write-only one for reading -- it builds, it passes the first test, and it
+destroys a file on the fourth.
+
+So the suite makes every call twice, once through ReconOS's wrappers and once
+through the host's, on the same files, and requires the same answers. Plus
+three things a comparison cannot see:
+
+- **That the flags are really translated**, by writing through a read-only
+  descriptor and requiring it to fail. Two libraries that got this wrong the
+  same way would agree with each other.
+- **That `realpath` will not climb out of the root.** `/System/../../Users` is
+  `/Users`, not something above the root. That is ReconOS's containment rule,
+  not POSIX's, so there is nothing to compare it against.
+- **That the descriptor limit matches the kernel's**, read out of
+  `kernel/include/recon/kernel/process.h` while the suite runs.
+
+### `readdir` over a call that answers the whole directory at once
+
+`SYS_LIST` returns every name in one call and refuses rather than truncating.
+That is the opposite shape from `readdir`, and it is the better one: a
+directory read in pieces has no guarantee about what a caller sees when it
+changes between two of them, and nothing in the interface can say so.
+
+So `opendir` reads the lot and `readdir` walks it. `d_type` is always
+`DT_UNKNOWN`, which POSIX allows — and which was checked before being relied
+on: **the desktop reads `d_name` at every one of its sites and `d_type` at
+none of them.**
+
+### The stand-in was looser than the thing it stands in for
+
+`userland/tests/hostsys.c` answers the primitives with POSIX so the library can
+run on Linux. It existed for the `FILE` layer, which only ever asked whether a
+result was negative -- so returning POSIX's `-1` was good enough and nobody
+noticed it was not the kernel's contract.
+
+The descriptor layer asks more: it turns that answer into `errno`. Against the
+old stand-in, a file that was not there reported `ENOSYS` instead of `ENOENT`.
+Both failures showed up on the suite's first run.
+
+**A stand-in with a looser contract than the real call is the one way a
+stand-in can be worse than none** — it lets code pass here that would be wrong
+on a machine. All eight primitives now answer with the kernel's numbers.
+
+### And the measurement was hiding five functions
+
+BG-197, and it is the fourth of a family. `measure-libc.py` drops symbols
+starting with `__`, which is right for `__stack_chk_fail` and wrong for
+`__isoc99_sscanf` — glibc's spelling of `sscanf`. Five library functions sat
+behind that filter, and the number was wrong **in both directions**: `errno`,
+the ctype table and `strtoul` are answered and were not counted; `sscanf` and
+`assert` are not answered and were never reported.
+
+Fixed by translating the spelling rather than widening the filter. The script
+then refused to report anything until all three newly-visible names had a line
+in its table, naming them — the guard added in v0.4.28 doing its job.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 2,951 of 3,113 | **3,020 of 3,134** |
+| desktop sources that build with no libc | 11 of 79 | **19 of 79** |
+
+The eight new ones are almost exactly the browser's half of the desktop — the
+HTML parser, the CSS parser, forms, HTTP. Not a coincidence: a parser is
+strings and allocation and very little else.
+
+Sockets is now the largest group left at 44 call sites, then the ten remaining
+file calls at 31, then `sscanf` at 14.
+
+---
+
+## v0.4.29 — errno, and two numberings that meet in one place
+
+One symbol, **43 call sites**, and the only group left that needed nothing at
+all from the kernel: the kernel already answers with numbers, and turning a
+number into a sentence is entirely this side's work.
+
+### The values are Linux's, deliberately
+
+A ReconOS system call answers a negative number of its own -- `SYS_ENOENT` is
+-7 -- and the obvious thing would be to expose those. `userland/include/errno.h`
+says why it does not, and the first reason is the one that would have bitten
+soonest: **the desktop is compiled against both libraries at once, today.**
+`scripts/check-userland.sh` builds individual sources of `src/` with these
+headers while the rest of the program is still built against glibc's. `ENOENT`
+being 7 in one translation unit and 2 in another is a fault that reads as a
+filesystem fault.
+
+The second is that it makes `strerror` testable at all. Every other function in
+this library is held against the host's by asking both the same question, and
+the question `strerror` is asked is a number.
+
+So `libc/errno.c` is the single place the two numberings meet, and being the
+only one is the point of it.
+
+### The messages are glibc's, word for word
+
+Not because the wording is specified -- it is not -- but because a message this
+library invents is a message that differs from the one the same program prints
+today on Linux for the same fault, and somebody will eventually compare two
+logs. It also means the suite can hold all 52 of them to **equality** rather
+than to "is it a non-empty string".
+
+### Where it deliberately disagrees, and how that was found
+
+The suite's first run failed on one case: it had picked 60 as an example of a
+number neither library defines, and 60 is `ENOSTR` -- which glibc knows and
+ReconOS does not, because there are no streams here. `errno.h` says outright
+that a constant defined for a condition that cannot arise is a constant
+somebody writes a branch for, and that branch is never taken and never tested.
+
+That is not a fault, so it did not become a bug entry. It became an
+**assertion**: `ENOSTR`, `ETIME`, `EDQUOT` and `ESTALE` are checked to read
+`Unknown error N` here, with a note saying what glibc calls each. The
+divergence is now recorded in the one place that cannot go stale.
+
+### And the translation cannot go quietly out of date
+
+The suite reads `userland/include/recon.h` -- **the kernel's own list** -- while
+it runs, and compares the highest error number there with what the translation
+covers. A lookup table's failure is going stale, and the cost here is specific:
+an error the table has never heard of falls back to `EIO`, which is a plausible
+wrong answer, and somebody goes to look at a disk that is fine.
+
+Mutation-tested in both directions. Adding an error to the kernel's header:
+*the kernel has 18 error numbers and the translation covers 17*. Adding one to
+the table that the kernel does not have: the same sentence the other way round.
+
+**1,435 checks, 0 failures.**
+
+| | before | now |
+|---|---|---|
+| symbols answered | 77 of 132 | **78 of 132** |
+| call sites answered | 2,908 of 3,113 | **2,951 of 3,113** |
+
+162 call sites left. Files and directories is now the whole of the near-term
+work at 96, then sockets at 44.
+
+---
+
 ## v0.4.28 — the allocator
 
 The last large piece of the C library, and the one every other piece was

@@ -1,5 +1,2 @@
-One account at a time, properly. Each account gets its own settings, its
-own folders and its own windows.
-
-A Control Panel with the shape of the whole system in it, including the
-parts that are not built, each saying what has to exist first.
+All Programs at the foot of the Start menu lists everything installed. The
+column above it is what this account opens most.

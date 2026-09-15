@@ -1,4 +1,2 @@
-Choose an account, then sign in — two screens rather than one, so nothing
-about how an account signs in is shown before one is chosen.
-
-Updates announce themselves on the first start after one.
+Skins can be installed. theme install takes a skin file and adds it to
+the list; theme remove takes it away.

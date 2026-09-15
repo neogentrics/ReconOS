@@ -51,6 +51,60 @@ int puts(const char *text);
 int snprintf(char *to, size_t room, const char *format, ...);
 int vsnprintf(char *to, size_t room, const char *format, va_list args);
 
+/* inet.c -- the five of the socket group that need nothing from the kernel */
+unsigned short htons(unsigned short value);
+unsigned int htonl(unsigned int value);
+unsigned short ntohs(unsigned short value);
+unsigned int ntohl(unsigned int value);
+int inet_pton(int family, const char *text, void *into);
+const char *gai_strerror(int code);
+
+/* `inet_ntoa` takes a struct by value, so the library's own copy of it is
+ * here. inet.c cannot include <netinet/in.h> without dragging that header's
+ * whole vocabulary into every file that includes internal.h -- and the two
+ * definitions are one line each, compared by the suite. */
+struct recon_in_addr {
+	unsigned int s_addr;
+};
+
+char *inet_ntoa(struct recon_in_addr address);
+
+#define RECON_AF_INET 2
+
+#define RECON_EAI_BADFLAGS	(-1)
+#define RECON_EAI_NONAME	(-2)
+#define RECON_EAI_AGAIN		(-3)
+#define RECON_EAI_FAIL		(-4)
+#define RECON_EAI_FAMILY	(-6)
+#define RECON_EAI_SOCKTYPE	(-7)
+#define RECON_EAI_SERVICE	(-8)
+#define RECON_EAI_MEMORY	(-10)
+#define RECON_EAI_SYSTEM	(-11)
+#define RECON_EAI_OVERFLOW	(-12)
+
+/* stdio.c -- the three streams that exist before anything is opened.
+ *
+ * `stdin` and friends are macros in the public header, which the library does
+ * not include, so the library names the objects themselves. Needed by
+ * `recon_libc_assert`, which is the first thing here that prints on behalf of
+ * a program rather than because one asked it to. */
+struct recon_stream;
+extern struct recon_stream *recon_stdin;
+extern struct recon_stream *recon_stdout;
+extern struct recon_stream *recon_stderr;
+
+int fprintf(struct recon_stream *f, const char *format, ...);
+
+/* stdlib.c, with assert.h's macro in front of it */
+void exit(int code);
+
+void recon_libc_assert(const char *condition, const char *file, int line,
+		       const char *function);
+
+/* scanf.c */
+int sscanf(const char *text, const char *format, ...);
+int vsscanf(const char *text, const char *format, va_list args);
+
 /* ctype.c */
 int isalnum(int c);
 int isalpha(int c);
@@ -68,6 +122,7 @@ int atoi(const char *text);
 long long atoll(const char *text);
 double atof(const char *text);
 long strtol(const char *text, char **end, int base);
+long long strtoll(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
 unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
@@ -97,6 +152,19 @@ long recon_sys_read(int fd, void *into, unsigned long length);
 long recon_sys_write(int fd, const void *from, unsigned long length);
 long recon_sys_seek(int fd, long long offset, int from);
 long recon_sys_close(int fd);
+
+/* Every name in a directory, in one call, NUL-terminated and back to back.
+ * Answers the size of the whole listing whether or not it fitted, so asking
+ * with no room is how a caller finds out how much to bring. Whole or nothing:
+ * a caller handed the first half of a directory alongside a success has no way
+ * to know. */
+long recon_sys_list(const char *path, char *names, unsigned long names_len);
+
+long recon_sys_mkdir(const char *path, unsigned long mode);
+
+/* How big a page is, which is the machine's to say rather than a constant in a
+ * header. -1 if it cannot be asked. */
+long recon_sys_page_size(void);
 
 #define RECON_SEEK_SET 0
 #define RECON_SEEK_CUR 1
@@ -148,8 +216,42 @@ struct recon_malloc_stats {
 };
 
 void recon_malloc_stats(struct recon_malloc_stats *into);
+
+/* The three of those a program reads one at a time, through the public header
+ * rather than through this one. Declared here too so malloc.c compiles with
+ * only this in front of it. */
+size_t recon_malloc_held(void);
+size_t recon_malloc_live(void);
+size_t recon_malloc_refused(void);
 unsigned recon_malloc_audit(void);
 void recon_malloc_reset(void);
+
+/* --- errno.c --------------------------------------------------------------
+ *
+ * `errno` itself is declared in `userland/include/errno.h`, which this file's
+ * one other exception -- see the note at the bottom -- lets errno.c include
+ * directly.
+ */
+char *strerror(int number);
+
+/* --- posix.c --------------------------------------------------------------
+ *
+ * The types and structs these use are in the public headers, which posix.c
+ * includes by relative path -- the same exception time.c and errno.c take.
+ * Declared here only so the rest of the library can call them.
+ */
+char *realpath(const char *path, char *into);
+
+/* What a system call's answer means in C's numbering. Negative in, `errno`
+ * out; 0 for anything that did not fail. One place, so that every wrapper in
+ * this library has a line for failure rather than a table of its own. */
+int recon_errno_from_status(long status);
+
+/* How many kernel error numbers that translation knows about. Asked by the
+ * suite and compared against the kernel's own list, because a lookup table's
+ * failure is going quietly out of date -- and an untranslated error becomes a
+ * plausible-looking EIO, which sends somebody to look at a disk that is fine. */
+unsigned recon_errno_count(void);
 
 /*
  * --- Time is not declared here ---

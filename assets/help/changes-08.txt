@@ -1,72 +1,125 @@
-Forms could sign you in and the answer came back with a session the next
-request did not carry. Now it does: signing in on one page and following a link
-on the next is one visit.
+Asked for directly: *"whats next? i would like the filesystem"*, after a night
+in which the answer to *what is on the volume* was nothing. The installer
+wrote a bootloader, a kernel and an empty formatted partition, and the first
+screen said so honestly: 0 entries at the root of the volume.
 
-A cookie is a piece of somebody else's state kept on your computer and returned
-to them on every visit. That is what makes a session survive a page, and it is
-also the whole mechanism by which browsing is followed around -- the two are
-the same feature, and there is no version of it that is only the first. So
-the interesting content of recon_cookie.h is what it refuses, and none of the
-four is a setting.
+include/recon_fs.h has described the layout since v0.1.0 and nothing could
+build it, because nothing in the system could create a directory.
 
-One: a cookie belongs to the host that set it. The Domain attribute --
-which asks for a cookie to be sent to a whole family of hosts -- is honoured
-only when it names the host itself, and anything wider is *narrowed* to the
-host rather than refused, because narrowing is always safe.
+### Ten directories, and the second boot is the requirement
 
-Honouring it properly means knowing where the registrable part of a name ends,
-that example.co.uk is a site and co.uk is not. That is not derivable from
-the name; it is a list, and a *copy* of that list goes stale in the one
-direction that matters -- a suffix registered after the copy was taken is one
-this would treat as an ordinary domain, so Domain=.something.new would be
-accepted and every site under it would share a cookie. A check that quietly
-weakens as a file ages is worse than one that was never there, because
-nobody is watching it. What the refusal costs is bounded and stated: a cookie
-set on example.com is not sent to www.example.com.
+SYS_MKDIR is the twenty-sixth system call, over a
+rootfs_create_directory(path, mode) built on the reconfs_create that was
+already there. userland/init/layout.c holds the ten paths -- /System with
+Apps, Config, Themes, Icons, Modules and Logs under it, then /Apps, /Users
+and /Temp -- parents before children, mode 0755.
 
-Two: only the document carries them. A page's pictures and stylesheets are
-fetched without cookies, always. This is enforced by the *shape of the call* --
-recon_http_get takes the jar as an argument, so every fetch says at its call
-site whether it is carrying the session, and two of the four say no. Proven
-rather than asserted: a test server that counts image requests recorded the
-picture being fetched twice, once before signing in and once after, and the
-second carried nothing while the document beside it carried all three.
+recon_init lays them down on every boot, not only the first. That is the
+requirement rather than a nicety: a first boot that lost power half way and a
+second boot that finds everything already there are the same code path, and
+one boot cannot tell them apart. So the program is asked both questions.
+Installed onto a blank 8 GB disk from a real medium, then booted twice:
 
-Three: a Secure cookie is never set or sent over an unencrypted
-connection. The same rule, in the same shape, as refusing a redirect from
-https back to http.
 
-Four: nothing is written to disk. A stored session cookie is a key to
-somebody's account sitting in a file. The place for a key here is the keyring,
-which holds 512 bytes per secret and has no consent question in front of it
-yet; both are on the list. Until then this says what is true -- signing in
-lasts as long as the window.
+first boot    the volume: 10 directories, laid out just now
+              storage: 12 entries at the root of the volume
+              65 self-tests passed, 0 failed
 
-HttpOnly is recorded and does nothing, because it hides a cookie from script
-and there is no script. SameSite is recorded and does nothing because this
-sends cookies on no cross-site request at all, which is stricter than
-SameSite=Strict and is not a setting.
+second boot   the volume: 10 directories, all already there
+              storage: 12 entries at the root of the volume
+              65 self-tests passed, 0 failed
 
-A Cookies page, in the menu beside History, listing every site, name,
-value, path and expiry, with the narrowed ones marked -- and one entry that
-forgets them all and says how many went. The values are shown because a viewer
-that offers to tell somebody what is being sent on their behalf and then hides
-the part that matters is not telling them anything.
 
-Three faults, all found before this had spoken to a server.
-[BG-176](BUGS.md#bg-176) is the one worth reading: the expiry parser returned 0
-for a date it could not read, and 0 is a real date -- Thu, 01 Jan 1970
-00:00:00 GMT is epoch zero and is the commonest deletion header on the
-web. So signing out would have left somebody signed in, and it would have
-looked exactly like being signed in.
-[BG-177](BUGS.md#bg-177), a cookie name too long being stored under a name no
-server ever set, from -Wformat-truncation. [BG-178](BUGS.md#bg-178), a
-Max-Age of twenty digits overflowing the clock, from the sanitizer -- fixed
-by clamping to four hundred days, which RFC 6265bis says a user agent must do
-anyway.
+A reader that is not this kernel -- scripts/reconfs-check.py, against the
+partition lifted out of the image -- says the same twelve names.
 
-84 checks in tests/test_cookie.c, and the fuzzer sends mutated
-Set-Cookie headers to five hosts and five paths and checks no cookie ever
-reaches a host that did not set one: 10,788 cases, up from 9,862.
+The list is data and the directory-maker is a function pointer.
+recon_layout_build(make, already_there, &report) knows nothing about system
+calls, so the whole arrangement -- order, refusals, a half-finished previous
+boot, the report it produces -- is checked on the host in a millisecond by
+recon_init_layout_tests, 100 checks, instead of by installing onto a disk.
+The suite also reads include/recon_fs.h and compares the two lists in both
+directions, so a path in the header and not the layout fails, and so does a
+path in the layout and not the header. Mutation-tested three ways; all three
+caught.
+
+And it carries on past a refusal rather than stopping, naming the first one:
+7 of 10 directories -- /System/Apps refused (-9) is a line somebody can act
+on. 1 refused is not.
+
+### Four faults were in the way, and none of them was in the new call
+
+The call worked on the first try. Making it work on a machine took the rest of
+the day, and every one of these was invisible to every test in the tree.
+
+A directory took seventy seconds to create. Not a hang -- 69, 74, 69 and 69
+seconds, measured. The same disk image attached as virtio-blk instead of NVMe
+took none at all, which is what said where to look. The NVMe driver polls for a
+completion and yields between looks; the thread it yielded to was the boot
+thread, which by then is running for (;;) power_idle_wait() and sleeps for up
+to a second. The scheduler already knew how to prevent this -- pick_next
+takes an idle thread only as a last resort and idle_over_work counts the
+times that rule is broken -- and none of it applied, because the boot thread
+was never marked as an idle thread. It is now, from the moment it stops doing
+any work. KF-226.
+
+The root of a volume could not be listed. reconfs_walk_path refuses a
+path with no leaf, rightly; the two readers that should not care each had a
+branch for the leafless case that the walk made unreachable. Nothing had ever
+asked, because recon_init was the first caller in the system's life. KF-227.
+
+Every refusal from a listing reached a program as "the disk failed." The
+mapping function exists and vfs.c already used it twice; the listing had its
+own two-case version. So the screen said *no volume this kernel can read* three
+lines under *10 directories, laid out just now*, and both sentences came from
+the same volume. KF-228.
+
+And five self-tests passed exactly once per volume. Each creates a file
+with a fixed name and none cleared it first, so the second boot of any
+installed disk reported five failures on a machine with nothing wrong with it.
+KF-229.
+
+### The check that was written to catch that, and could not
+
+The last one is worth its own paragraph, because it had been sitting inside
+its own detector for a month.
+
+scripts/install-then-boot-test.sh has a check called *"and they pass again,
+on a volume already written to"*, whose comment says it is *where a test that
+leaves a file behind shows itself*. It was asked of the BIOS boot -- and over
+BIOS the kernel does not find the disk it booted from (KF-192, open), so that
+boot's report reads root : none found, the five tests that need a volume say
+so, and a boot that never touched a volume was counted as a pass. Measured
+rather than reasoned: the BIOS log says root : none found; file calls will
+say so; the UEFI log says root : nvme0n1p3.
+
+The check now boots the target a second time under UEFI, and fails loudly if
+no volume is mounted rather than passing, because the way this went wrong was
+silence. Taking one of the five clears back out turns the run red and names
+files carry a mode, which is how it is known to work. The number moved from
+*59 passed* on a volume-less boot to *65 passed, second boot on this volume*.
+
+### And the screen stopped guessing
+
+say_storage counted newlines. SYS_LIST separates names with NULs and always
+has -- user.h says so where it is declared. Finding no newlines it counted
+zero, and a fallback two lines down turned that into 1. A volume with twelve
+names at its root reported one entry, which is a number that looks like a
+measurement. A count of zero would have been obviously wrong; a count of one is
+plausible, and this screen had only ever been looked at on machines with no
+volume at all. BG-193.
+
+The line above it now says *why* when it cannot answer, instead of concluding:
+no volume this kernel can read is printed only for ENODEV, and every other
+refusal prints its number. And the storage line goes down the serial cable
+alongside the other two, because the one fact that turned out to be wrong was
+the one that existed only in pixels.
+
+### What this version is really about
+
+Nothing above is a feature the user can point at. What changed is that a
+ReconOS machine, installed from media onto a blank disk, now starts twice in a
+row and is the same machine both times. Until today there had never been a
+second boot.
 
 ---

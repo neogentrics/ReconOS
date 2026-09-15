@@ -88,6 +88,137 @@ look exactly the same when it is.
 
 ---
 
+## 0.2.39 -- 15 September 2026 -- memory a program can ask for
+
+`SYS_MAP` with an **fd of -1** returns a demand-paged anonymous range. That was
+the first entry in `docs/KERNEL-WANTS.md` and the one thing standing between a
+C library that worked on the build machine and one that worked on this one.
+
+**Nothing new underneath it.** A region with no file behind it is already a
+promise that memory will exist as zeroes when the program touches it -- that is
+what a stack is here -- so this is a reservation and a fault handler that both
+already worked, plus a way to ask. Both architectures already route a
+kernel-mode fault at a user address to `vm_fault_user`, so a buffer a program
+passes to a system call faults in on the kernel's behalf without anything being
+told about it.
+
+### One region however far the heap grows
+
+`addrspace_reserve` refuses to merge an adjacent range, and the reason is
+written beside it: two regions quietly joined into one would give a program the
+permissions of whichever was written second.
+
+**That objection is about differing flags.** `addrspace_reserve_more` answers it
+by requiring them to be identical, the ranges to be exactly adjacent, and
+neither side to be file-backed -- under which the joined region covers exactly
+the addresses the two covered with exactly the permissions both had.
+
+It matters because an allocator asks for a megabyte at a time. Without it, a
+program that allocates eight megabytes has spent all of `AS_REGIONS_MAX` on its
+heap and cannot be given a ninth: a cap on how much a program may allocate,
+expressed as a constant chosen to bound an array.
+
+### And the heap still ends where it was asked to end
+
+Reserving one large arena up front and slicing it would also cost one region --
+and would quietly hand a program that ran off the end of an allocation a page of
+zeroes instead of a fault, for as long as the arena lasted, with nothing
+reported. So the join covers what has actually been asked for and not a byte
+more, and the last assertion in the self-test is the page after it being
+refused.
+
+That assertion was, at first, probing the wrong page: the end of a region
+`addrspace_reserve` had made rather than one a join had moved. It passed under a
+mutation that moved the join a page too far. Found by mutation testing, which is
+the only thing that would have found it -- the code was never wrong, the check
+was.
+
+### What it looks like from outside
+
+An installed disk, booted by itself, running a program loaded off its own
+volume:
+
+```
+  the heap: 64 blocks and 512 KiB written, read back and freed;
+            1536 KiB from the kernel
+```
+
+`scripts/install-then-boot-test.sh` asserts that line, **present and clean**.
+The version that only looked for a bad line passed on the kernel that handed the
+same address out twice: the allocator put a region onto itself, walked the loop,
+and the program never printed anything at all.
+
+Four mutations, each caught by a different check: an adjacent range never joined
+on, a range with other permissions joined on anyway, the join reaching a page
+past what was asked for, and the same address handed out twice.
+
+**Still no release call.** That is now its own entry in `KERNEL-WANTS.md` rather
+than half of one.
+
+## 0.2.38 -- 15 September 2026 -- a recovery entry that could not disappear
+
+**KF-233.** `menu_discover` added recovery at the bottom of the loader's scan,
+after three `return 0` paths, and its caller shows no menu at all when the count
+is zero. So the one entry that depends on nothing the scan finds was the entry
+the scan's failure removed -- and it is the entry you want precisely when a
+machine is misbehaving. *A recovery environment reachable only when everything
+else already worked is not a recovery environment.*
+
+One line was doing two jobs. Recovery is added **last** so the numbering of the
+disk's systems does not move, which is still right; it is now also added
+**unconditionally**, which is a separate line. The scan is `scan_for_systems`
+and may give up however it likes.
+
+The same fault has a second door: `add_recovery` returns silently when the table
+is full, so eight systems on one machine cost you the ninth entry. The scan is
+bounded by `MENU_SYSTEMS_MAX` now and the slot it leaves is reserved.
+
+`boot-menu-test.sh` asserts recovery is listed and passed in every matrix run
+that contained this bug, because it exercises the path where the scan succeeds
+-- the path that was never broken. **A check nobody performs is a check nobody
+fails.** The three broken paths need firmware that misbehaves, so the new check
+is structural: `scripts/check-menu-recovery.py` asserts `menu_discover` leaves
+by one door with `add_recovery()` before it. Four doors on the old code, one on
+the new, measured both ways.
+
+**Kali is in the table of loaders**, both `shimx64.efi` and `grubx64.efi`. It
+was installed on the machine that found all this and was never going to be
+offered, because seven names find seven systems and an eighth is invisible
+however healthy it is.
+
+**And the menu now says what it did.** Four facts travel in the handoff's
+appended region -- how many entries, drawn or text, whether a key was pressed,
+whether one was chosen -- and the kernel prints them in the boot report, which
+is written to disk. The loader already said this on the firmware console and
+then painted the graphical menu over the same pixels, so on a machine with no
+serial port nobody had ever read it. `menu_known` is separate from all four,
+because a BIOS boot, a GRUB boot and an older loader arrive as zeroes and so
+does a menu that never ran.
+
+```
+boot menu    : 1 entry, drawn on the screen, nobody pressed a key
+```
+
+Matrix 55: 1530 self-tests across every path, no failures, none skipped.
+
+---
+
+## The gap between 0.2.15 and 0.2.38
+
+**Twenty-three versions below this one have no entry here, and they should.**
+0.2.16 through 0.2.37 were this session's, one bug each, and every one of them
+was written up in `docs/BUGS.md` -- which is where the reasoning lives and is
+not the thing that is missing. What is missing is this file doing what its own
+first line says it does.
+
+Named rather than filled. Twenty-three retrospective entries reconstructed from
+the register would be new prose about old work whose account already exists
+somewhere better, and this file has an entry of its own about a document that
+kept asserting something after it stopped being true. Recording the hole is the
+honest version of that lesson; quietly closing the numbers over it is not.
+
+---
+
 ## 0.2.15 -- 13 September 2026
 
 **KF-211: entering user mode on aarch64 was interruptible, and the interrupt

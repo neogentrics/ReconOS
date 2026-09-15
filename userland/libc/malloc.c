@@ -830,3 +830,30 @@ void recon_malloc_reset(void)
 	live_blocks = region_count = 0;
 	takes = gives = refusals = 0;
 }
+
+/* --- What a program can ask about its own heap ---------------------------
+ *
+ * `recon_malloc_stats` fills a structure and is declared in `internal.h`,
+ * which a program must not include -- that header exists so the library's
+ * files can call each other without dragging in the public headers, and the
+ * whole host comparison depends on the two staying apart.
+ *
+ * So the three numbers a program actually reports are readable one at a time
+ * through `<stdlib.h>`. Thin on purpose: no structure to agree about, nothing
+ * to keep in step, and a program built against an older library still links.
+ */
+
+size_t recon_malloc_held(void)
+{
+	return taken_bytes;
+}
+
+size_t recon_malloc_live(void)
+{
+	return live_bytes;
+}
+
+size_t recon_malloc_refused(void)
+{
+	return refusals;
+}
