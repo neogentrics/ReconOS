@@ -190,6 +190,7 @@ AREA = {
     'KF-233': 'startup',
     'KF-234': 'kernel',
     'KF-235': 'kernel',
+    'KF-236': 'kernel',
     # Read off the entries' own titles when the registers were merged;
     # they had no line at all, which files them with no area label.
     'BG-162': 'applications', 'BG-163': 'applications', 'BG-164': 'applications',

@@ -11,6 +11,7 @@
 #include <recon/kernel/random.h>
 #include <recon/kernel/rootfs.h>
 #include <recon/kernel/vfs.h>
+#include <recon/kernel/net.h>
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/vm.h>
@@ -238,6 +239,134 @@ static i64 sys_close(u64 fd, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 
 /* Both ends at once, because a pipe with one end is not a pipe and a program
  * that had to ask twice could be left holding half of one. */
+/* --- sockets ---------------------------------------------------------------
+ *
+ * The socket layer has existed since 12 September with no caller outside its
+ * own self-test. These five calls are the doorway; everything they reach was
+ * already built and already tested.
+ *
+ * A socket is a `struct file`, so there is nothing here for sending, receiving
+ * or closing -- `SYS_WRITE`, `SYS_READ` and `SYS_CLOSE` do those, on the same
+ * descriptor, with the same calls a program uses for a file.
+ */
+static struct socket *socket_for_fd(struct process *p, u64 fd)
+{
+	struct file *f = fd_get(p, (int)fd);
+
+	/* `file_socket` returns null for a descriptor that names something
+	 * else, rather than reading a pipe's private pointer as a socket. The
+	 * type is decided by the ops table, which is the thing that actually
+	 * governs behaviour. */
+	return f ? file_socket(f) : NULL;
+}
+
+static i64 sys_socket(u64 type, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct process *p = caller();
+	struct socket *s;
+	struct file *f;
+	int fd;
+
+	if (type != SOCK_STREAM && type != SOCK_DGRAM)
+		return SYS_EINVAL;
+
+	s = socket_create((int)type);
+	if (!s)
+		return SYS_ENOSPC;
+
+	f = socket_file_create(s);
+	if (!f) {
+		socket_close(s);
+		return SYS_ENOMEM;
+	}
+
+	fd = fd_install(p, f);
+
+	/* Our own reference goes either way: the descriptor holds one now, and
+	 * on failure dropping it is what closes the socket nobody got. */
+	file_release(f);
+
+	if (fd < 0)
+		return SYS_EMFILE;
+
+	return fd;
+}
+
+static i64 sys_bind(u64 fd, u64 addr, u64 port, u64 a3, u64 a4, u64 a5)
+{
+	struct socket *s = socket_for_fd(caller(), fd);
+
+	if (!s)
+		return SYS_EBADF;
+
+	if (port > 0xFFFF)
+		return SYS_EINVAL;
+
+	return socket_bind(s, (ipv4_addr)addr, (u16)port) ? SYS_OK : SYS_EINVAL;
+}
+
+static i64 sys_listen(u64 fd, u64 backlog, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct socket *s = socket_for_fd(caller(), fd);
+
+	if (!s)
+		return SYS_EBADF;
+
+	return socket_listen(s, (unsigned)backlog) ? SYS_OK : SYS_EINVAL;
+}
+
+/* Takes the next waiting connection, or says there is none.
+ *
+ * **EAGAIN rather than blocking.** `socket_accept` returns null when nobody is
+ * waiting, and a call that blocked instead would need a wait queue on the
+ * listener and a way to be interrupted -- neither of which exists yet. A
+ * server polls. That is honest about what this can do, and a program written
+ * against it keeps working when blocking arrives.
+ */
+static i64 sys_accept(u64 fd, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
+{
+	struct process *p = caller();
+	struct socket *s = socket_for_fd(p, fd);
+	struct socket *c;
+	struct file *f;
+	int nfd;
+
+	if (!s)
+		return SYS_EBADF;
+
+	c = socket_accept(s);
+	if (!c)
+		return SYS_EAGAIN;
+
+	f = socket_file_create(c);
+	if (!f) {
+		socket_close(c);
+		return SYS_ENOMEM;
+	}
+
+	nfd = fd_install(p, f);
+	file_release(f);
+
+	if (nfd < 0)
+		return SYS_EMFILE;
+
+	return nfd;
+}
+
+static i64 sys_connect(u64 fd, u64 addr, u64 port, u64 a3, u64 a4, u64 a5)
+{
+	struct socket *s = socket_for_fd(caller(), fd);
+
+	if (!s)
+		return SYS_EBADF;
+
+	if (port > 0xFFFF)
+		return SYS_EINVAL;
+
+	return socket_connect(s, (ipv4_addr)addr, (u16)port)
+		? SYS_OK : SYS_EIO;
+}
+
 static i64 sys_pipe(u64 out, u64 a1, u64 a2, u64 a3, u64 a4, u64 a5)
 {
 	struct file *r = NULL, *w = NULL;
@@ -957,6 +1086,11 @@ const struct personality personality_recon = {
 		[SYS_MAP]      = sys_map,
 		[SYS_SCREEN]   = sys_screen,
 		[SYS_POWER]    = sys_power,
+		[SYS_SOCKET]   = sys_socket,
+		[SYS_BIND]     = sys_bind,
+		[SYS_LISTEN]   = sys_listen,
+		[SYS_ACCEPT]   = sys_accept,
+		[SYS_CONNECT]  = sys_connect,
 	},
 };
 

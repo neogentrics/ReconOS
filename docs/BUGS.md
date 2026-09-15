@@ -7109,6 +7109,40 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-236 - Every PCI address is printed in a form nobody can look up
+
+- **Found:** 15 September 2026, by holding the Gateway's boot report beside
+  `lspci` on the same machine, minutes apart, over SSH.
+
+  ```
+  ReconOS : 0:21.0   8086:31a8  serial bus controller [c/3/30]
+  lspci   : 00:15.0  8086:31a8  USB controller [0c03]
+  ```
+
+  Same device. **0x15 is 21.** `core/pci.c` printed bus, slot and function with
+  `%u:%u.%u` -- decimal -- beside the vendor and device IDs in hex on the same
+  line.
+
+- **Cost.** Nothing in the kernel was wrong: the scan, the class triple and the
+  IDs were all correct. What was wrong is that the address could not be
+  compared against any other tool's output, and comparing it is the only reason
+  it is printed. Every PCI address this kernel has ever printed on a machine
+  with a device past slot 9 has been unlookupable, and nobody noticed because
+  nobody had a second opinion to hold it against until today.
+
+- **KF-231's shape, and found the same way.** That was `%02x` of `0x04`
+  printing `4` -- a GUID and a USB vendor ID that could not be looked up. Both
+  are *a number printed in a form that defeats the purpose of printing it*, and
+  both were caught by comparison against an independent tool rather than by
+  looking at the shape of the line. `sgdisk` caught the first; `lspci` caught
+  this one.
+
+- **Fixed** with `%02x:%02x.%x`, which is what every PCI tool in existence
+  prints. Verified against QEMU's own device list: `00:01.1  8086:7010  IDE
+  controller`.
+
+- **Status:** fixed, kernel 0.2.41.
+
 ### KF-235 - The check that the tick arrives at the rate the kernel assumes cannot fail
 
 - **Found:** 15 September 2026, by reading `time_self_test` while looking for

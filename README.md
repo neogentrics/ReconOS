@@ -1042,6 +1042,38 @@ The standing rule is that **a test that has never been seen to fail is not a
 test yet**. Every checker in the tree has been shown a deliberate fault and
 watched to catch it before any pass it reports is believed.
 
+### What hardware it is aimed at
+
+Read from four running machines on 15 September 2026 -- `lspci`, `lsusb` and
+Windows' own device list -- rather than from a wishlist. A driver is worth
+writing when the part is in the room.
+
+| | desktop | home server | firewall | laptop |
+|---|---|---|---|---|
+| board | MSI PRO B650-P | Gigabyte AB350 | OPNsense 26.1 | GPU Co. GWTC116-2 |
+| CPU | Ryzen 7 7700X | Ryzen 7 1700 | Xeon E3-1225 v3 | Celeron N4020 |
+| ethernet | RTL8125 2.5G | 2x RTL8168 1G | `em0` Intel + `re0` Realtek | none |
+| wifi | MediaTek RZ616 | -- | -- | RTL8723DU (**USB**) |
+| storage | -- | 5 disks, ~14 TB | -- | eMMC, 58 GB |
+
+**Realtek's r8169 family is the first driver target**, and the reason is
+arithmetic rather than preference: RTL8125 on the desktop, two RTL8168 in the
+server, `re0` on the firewall -- **five ports across three machines**, and
+`docs/` already names RTL8139/8169 among the blueprint's NICs. The 8168 is the
+r8169 family; the 8125 is its 2.5 Gb successor and shares most of the
+descriptor layout. Intel's `em0` on the firewall is the e1000 family, which the
+blueprint also names, and is the natural second.
+
+**The server is where a NIC driver should be developed**, not the laptop. Two
+identical wired cards mean a driver can be proven on one while the machine
+stays reachable on the other.
+
+**WiFi is deliberately not first.** Both parts here need a firmware blob and a
+WPA2 supplicant, and the laptop's radio hangs off USB -- so on that machine USB
+is the gate on networking as well as storage.
+
+**Only virtio-net is driven today.** Everything above is a target, not a claim.
+
 ### What it does not have
 
 This is the honest list, and it is the reason the desktop is not on it.

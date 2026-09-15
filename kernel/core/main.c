@@ -427,6 +427,8 @@ void kmain(void)
 		reconfs_layout_self_test() ? "pass" : "FAIL");
 	kprintf("  the network stack  : %s\n",
 		net_self_test() ? "pass" : "FAIL");
+	kprintf("  sockets a program can reach : %s\n",
+		socket_syscall_test() ? "pass" : "FAIL");
 
 	/* From here to the kernel-log summary is per-subsystem detail: lock
 	 * contention, cache hit rates, the timer wheel's reach. It still goes
