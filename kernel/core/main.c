@@ -657,6 +657,7 @@ void kmain(void)
 		block_print_summary();
 		aml_print_summary();
 		boot_print_medium();
+		boot_print_menu();
 		usb_print_summary();
 		aml_eval_print_summary();
 

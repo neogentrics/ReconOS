@@ -67,6 +67,14 @@ BOOLEAN menu_boot(unsigned index, EFI_HANDLE self);
  * this first. */
 BOOLEAN menu_is_recovery(unsigned index);
 
+/* What the last menu_choose observed: RECONBOOT_MENU_* bits.
+ *
+ * Kept by the menu and asked for by the caller, rather than returned through
+ * menu_choose, because menu_choose's return value is *the decision* and the
+ * one place a bootloader must not be clever is the line that decides what
+ * starts. */
+unsigned menu_observed(void);
+
 /* --- The menu, drawn ------------------------------------------------------
  *
  * An attempt, with the text menu behind it. Every reason to say no -- no

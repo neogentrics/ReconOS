@@ -125,6 +125,16 @@ BOOLEAN menu_is_recovery(unsigned index)
 	return index < entry_count && entries[index].device == 0;
 }
 
+/* Set by menu_choose as it goes, read once afterwards. A file-static rather
+ * than an out-parameter threaded through four call sites, because every one of
+ * those sites is on the path that decides what the machine starts. */
+static unsigned observed;
+
+unsigned menu_observed(void)
+{
+	return observed;
+}
+
 /* Is this system already listed on this disk?
  *
  * The rule is one entry per *system*, not one per disk. The first version broke
@@ -162,8 +172,13 @@ static BOOLEAN already_listed(EFI_HANDLE device, const char *label)
  * `exclude` is the handle we were loaded from -- an install medium, usually.
  * Offering "boot the stick you are already booted from" is not a choice, it is
  * a loop.
+ *
+ * Returns nothing and is allowed to give up, which is the whole point of it
+ * being separate: **every way this can fail is a way of finding no other
+ * systems, not a way of having no menu.** Its caller adds recovery afterwards
+ * whatever happens here. KF-233.
  */
-unsigned menu_discover(EFI_HANDLE exclude)
+static void scan_for_systems(EFI_HANDLE exclude)
 {
 	EFI_GUID fs_guid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 	EFI_HANDLE *handles = 0;
@@ -171,20 +186,18 @@ unsigned menu_discover(EFI_HANDLE exclude)
 	EFI_STATUS s;
 	UINTN count, h, k;
 
-	entry_count = 0;
-
 	s = BS->LocateHandle(ByProtocol, &fs_guid, 0, &size, 0);
 	if (s != EFI_BUFFER_TOO_SMALL)
-		return 0;
+		return;
 
 	s = BS->AllocatePool(EfiLoaderData, size, (void **)&handles);
 	if (EFI_ERROR(s))
-		return 0;
+		return;
 
 	s = BS->LocateHandle(ByProtocol, &fs_guid, 0, &size, handles);
 	if (EFI_ERROR(s)) {
 		BS->FreePool(handles);
-		return 0;
+		return;
 	}
 
 	count = size / sizeof(EFI_HANDLE);
@@ -228,10 +241,31 @@ unsigned menu_discover(EFI_HANDLE exclude)
 	}
 
 	BS->FreePool(handles);
+}
 
-	/* Last, so that the numbering of the systems on the disk does not move
-	 * when recovery is added -- somebody who has learned that Windows is 2
-	 * should not find it is 3 after an update. */
+/* What this machine can start, and the promise that it is never nothing.
+ *
+ * Recovery is added **last**, so that the numbering of the systems on the disk
+ * does not move -- somebody who has learned that Windows is 2 should not find
+ * it is 3 after an update.
+ *
+ * And **unconditionally**, which is KF-233. One line used to do both jobs: it
+ * sat at the bottom of the scan, after three paths that returned zero, and the
+ * caller starts ReconOS with no menu at all when this returns zero. So on any
+ * firmware whose handle enumeration did something the scan did not expect, the
+ * one entry that depends on nothing the scan finds was the entry its failure
+ * removed -- and it is the entry you want precisely when the machine is not
+ * behaving. A recovery environment reachable only when everything else already
+ * worked is not a recovery environment.
+ *
+ * "Last" and "only on success" were never the same requirement. They are two
+ * lines now.
+ */
+unsigned menu_discover(EFI_HANDLE exclude)
+{
+	entry_count = 0;
+
+	scan_for_systems(exclude);
 	add_recovery();
 
 	return entry_count;
@@ -306,6 +340,8 @@ int menu_choose(unsigned seconds,
 	drawing = gfx_available(fb);
 	gfx_report(drawing);
 
+	observed = RECONBOOT_MENU_SHOWN | (drawing ? RECONBOOT_MENU_DRAWN : 0);
+
 	/* How long this menu intends to wait, said once, before it waits.
 	 *
 	 * Printed for the test rather than for a person, and that is worth
@@ -351,8 +387,12 @@ int menu_choose(unsigned seconds,
 			    key.UnicodeChar <= '9') {
 				unsigned pick = (unsigned)(key.UnicodeChar - '1');
 
-				if (pick < entry_count)
+				observed |= RECONBOOT_MENU_KEY;
+
+				if (pick < entry_count) {
+					observed |= RECONBOOT_MENU_PICKED;
 					return (int)pick;
+				}
 
 				/* A number nobody offered. Ignored rather than
 				 * treated as the default, because acting on a
@@ -360,6 +400,8 @@ int menu_choose(unsigned seconds,
 				 * than doing nothing. */
 				continue;
 			}
+
+			observed |= RECONBOOT_MENU_KEY;
 
 			if (key.UnicodeChar == '\r' || key.UnicodeChar == '\n')
 				return -1;	/* Enter: get on with it */

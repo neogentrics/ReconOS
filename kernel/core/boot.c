@@ -418,6 +418,43 @@ void boot_print_medium(void)
 		kprintf("  booted from  : the loader did not say\n");
 }
 
+/* What the loader's menu offered, and what was done with it.
+ *
+ * Its own function for boot_print_medium's reason: printed twice, once in place
+ * and once at the end of a boot whose report has scrolled off a small screen.
+ *
+ * **The interesting line is the one that says a menu never ran.** Everything
+ * else here is ordinary bookkeeping; that case is KF-233, where the loader gave
+ * up before offering recovery and then started ReconOS without pausing. The
+ * loader prints as much on the firmware console and immediately draws over it,
+ * so on a laptop this file is the only place it can be read.
+ */
+void boot_print_menu(void)
+{
+	if (!info.menu_known) {
+		/* The usual answer. A BIOS boot, a Multiboot2 boot under GRUB,
+		 * or a ReconBoot older than the field -- none of them have a
+		 * menu of ours to report on, and saying "no menu ran" about
+		 * them would be an accusation rather than a fact. */
+		kprintf("  boot menu    : this loader does not have one\n");
+		return;
+	}
+
+	if (!info.menu_shown) {
+		kprintf("  boot menu    : never offered -- %u entr%s found and "
+			"no menu ran (KF-233)\n", info.menu_entries,
+			info.menu_entries == 1 ? "y" : "ies");
+		return;
+	}
+
+	kprintf("  boot menu    : %u entr%s, %s, %s\n",
+		info.menu_entries, info.menu_entries == 1 ? "y" : "ies",
+		info.menu_drawn ? "drawn on the screen" : "text only",
+		info.menu_picked ? "and one was chosen"
+		: info.menu_key ? "somebody was there and took the default"
+		: "nobody pressed a key");
+}
+
 void boot_print_summary(void)
 {
 	kprintf("\nBoot\n");
@@ -426,6 +463,7 @@ void boot_print_summary(void)
 	kprintf("  loader       : %s\n", info.loader);
 
 	boot_print_medium();
+	boot_print_menu();
 
 	{
 		const char *dirty = 0;

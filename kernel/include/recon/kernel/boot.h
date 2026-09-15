@@ -125,6 +125,31 @@ struct boot_info {
 	u8  boot_part_guid[16];
 	u32 boot_disk;
 
+	/* What the loader's boot menu offered and what happened to it.
+	 *
+	 * Here so the boot report can print it, and the boot report is written
+	 * to disk -- which is the only reason this travels at all. The loader
+	 * says the same thing on the firmware console and then draws the menu
+	 * over it, so on a machine with no serial port nobody ever reads it.
+	 *
+	 * `menu_shown` is separate from `menu_entries` being zero because those
+	 * are different facts: no menu at all means the loader gave up before
+	 * offering anything, which is KF-233's failure, and a menu with entries
+	 * nobody chose is an ordinary boot. A single count says the same number
+	 * for both. */
+	/* Whether the loader said anything about a menu, which is not the same
+	 * as there having been one. The BIOS loader has no menu, GRUB has its
+	 * own, and a ReconBoot older than this field wrote nothing here -- all
+	 * three arrive as zeroes, and zeroes are also what "the menu never
+	 * ran" looks like. Without this flag the report would accuse three
+	 * ordinary loaders of KF-233's fault. */
+	bool menu_known;
+	bool menu_shown;
+	bool menu_drawn;
+	bool menu_key;			/* somebody was at the keyboard */
+	bool menu_picked;		/* and chose an entry */
+	u32  menu_entries;
+
 	paddr_t acpi_rsdp;	/* 0 if the firmware did not point at one */
 	paddr_t dtb;		/* 0 if there is no device tree */
 };
@@ -172,6 +197,7 @@ const char *mem_kind_name(enum mem_kind k);
  * printed twice: in the boot report, and again at the end of a `noinit` boot
  * where a long report has scrolled the first copy off a small screen. */
 void boot_print_medium(void);
+void boot_print_menu(void);
 
 void boot_print_summary(void);
 

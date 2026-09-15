@@ -619,6 +619,11 @@ make -C kernel check-portable >/dev/null || { echo "core/ is no longer portable"
 # succeeded**. Nothing faults and nothing logs; the first symptom is data.
 python3 scripts/check-syscall-numbers.py || { echo "the system call numbers disagree"; exit 1; }
 
+# And the loader's promise that recovery is always on the menu, which no boot
+# here can test: the paths that used to drop it need firmware that misbehaves,
+# and every firmware this script can reach behaves. KF-233.
+python3 scripts/check-menu-recovery.py || { echo "recovery is not offered on every path"; exit 1; }
+
 X64_ELF=$ROOT/kernel/build/x86_64/reconos-kernel.elf
 ARM_IMG=$ROOT/kernel/build/aarch64/reconos-kernel.img
 

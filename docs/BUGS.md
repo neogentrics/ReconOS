@@ -7109,6 +7109,71 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-233 - Recovery is offered on every boot, except the boots that go wrong
+
+- **Found:** 14 September 2026, by reading the loader after Joshua reported that
+  the Gateway's menu "only shows Recon OS. It doesn't even show Recon OS
+  recovery." Whether this is what that machine hit is **not yet known** -- see
+  the last point -- but it is the only path in the loader that produces exactly
+  that screen, and it is wrong on its own account.
+
+- **What it was.** `menu_discover` ends with
+
+  ```c
+  add_recovery();
+  return entry_count;
+  ```
+
+  and its caller in `main.c` does nothing whatever when the count is zero: no
+  menu, no pause, straight into ReconOS. Above that line sat three `return 0`s
+  -- `LocateHandle` not answering `EFI_BUFFER_TOO_SMALL`, `AllocatePool`
+  failing, the second `LocateHandle` failing -- every one of them reached
+  before recovery was ever added.
+
+  So the entry that depends on **nothing the scan finds** was the entry the
+  scan's failure removed. And it is the entry you want precisely when a machine
+  is doing something unexpected. **A recovery environment reachable only when
+  everything else already worked is not a recovery environment.**
+
+- **One line was doing two jobs.** The comment above it explains why recovery is
+  added last -- so that somebody who has learned Windows is 2 does not find it
+  is 3 after an update -- and that reason is good and still holds. But *last*
+  and *only on success* are not the same requirement, and placing the call at
+  the bottom of the scan enforced both. They are two lines now: the scan is
+  `scan_for_systems`, which may give up however it likes, and `menu_discover`
+  calls it and then adds recovery regardless.
+
+- **Cost.** Not measurable from here, and that is the honest answer. Nothing in
+  twenty-eight boot paths has ever taken one of those three exits, so the fault
+  has no observed consequence in QEMU at all. What it has is a shape: the
+  failure mode is *silent*, the thing lost is *the fallback*, and the machines
+  that can trigger it are the machines nobody is holding.
+
+- **The test that passed the whole time.** `boot-menu-test.sh` asserts `offers
+  the recovery environment -- listed, and last`, and it has passed in every
+  matrix run including the ones with this bug in them. It exercises the path
+  where the scan succeeds, which is the path that was never broken. **A check
+  nobody performs is a check nobody fails** -- KF-219's sentence, earned again.
+
+- **So the check is structural**, `scripts/check-menu-recovery.py`: strip the
+  comments from `menu_discover` and assert it leaves by exactly one door with
+  `add_recovery()` before it. Not a proxy for the property; it is the property,
+  asked the only way a machine here can be asked. It reports four doors on the
+  code as it stood and one on the code as it stands, which was checked rather
+  than assumed.
+
+- **What this does not explain.** The Gateway's firmware would have to be
+  failing one of those three calls, and there is no evidence that it is. The
+  loader already prints `menu : waiting 6 s for N entries` and `menu : drawn`
+  before it waits, and both go to the firmware console -- underneath, moments
+  later, the graphical menu the loader paints over them. Nobody has read those
+  two lines on that machine. Until somebody does, the competing explanation is
+  simply that the menu appeared, listed recovery in the dim grey every
+  unselected row is drawn in, and was read past in six seconds. **Both are
+  consistent with what was reported, and the fix above is right either way.**
+
+- **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
+
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
 
 - **Renumbered on the merge**, from KF-227. Both sessions reached
