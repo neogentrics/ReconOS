@@ -38,6 +38,10 @@ unsigned long recon_fwrite(const void *from, unsigned long size,
 			   unsigned long count, struct recon_stream *f);
 char *recon_fgets(char *into, int room, struct recon_stream *f);
 int recon_fgetc(struct recon_stream *f);
+int recon_feof(struct recon_stream *f);
+int recon_ferror(struct recon_stream *f);
+void recon_clearerr(struct recon_stream *f);
+int recon_ungetc(int c, struct recon_stream *f);
 int recon_fseek(struct recon_stream *f, long offset, int from);
 long recon_ftell(struct recon_stream *f);
 void recon_rewind(struct recon_stream *f);
@@ -1163,6 +1167,157 @@ static void test_the_two_clocks(void)
 	      "difftime across the whole range");
 }
 
+/* --- the end, an error, and one character back ---------------------------- */
+
+#define ENDING "/tmp/recon-libc-ending.txt"
+
+/*
+ * `feof` is the function most often used wrongly, and the wrong use turns on
+ * exactly when the flag appears: it is **false** after the last byte has been
+ * read, and **true** only after a further read found nothing.
+ *
+ * A stream that sets it one read early makes every `while (!feof(f))` loop
+ * drop the last line. One that never sets it makes the same loop never end.
+ * So the flag is asked after every single step, on both libraries, over one
+ * file -- which is the only way that timing can be compared rather than
+ * asserted from memory.
+ */
+static void test_the_end_of_a_file(void)
+{
+	struct recon_stream *mine;
+	FILE *theirs;
+	FILE *fixture = fopen(ENDING, "wb");
+	int i;
+
+	if (fixture == NULL) {
+		printf("  could not write the ending fixture\n");
+		return;
+	}
+	fputs("abc", fixture);
+	fclose(fixture);
+
+	mine = recon_fopen(ENDING, "r");
+	theirs = fopen(ENDING, "r");
+
+	if (mine == NULL || theirs == NULL) {
+		check(0, "the ending fixture would not open");
+		return;
+	}
+
+	check(recon_feof(mine) == feof(theirs),
+	      "feof before anything is read");
+	check(recon_ferror(mine) == ferror(theirs),
+	      "ferror before anything is read");
+
+	for (i = 0; i < 3; i++) {
+		int a = recon_fgetc(mine);
+		int b = fgetc(theirs);
+
+		check(a == b, "the character read");
+		check(!!recon_feof(mine) == !!feof(theirs),
+		      "feof after reading a character, including the last");
+	}
+
+	/* The read that finds nothing, which is the one that sets it. */
+	check(recon_fgetc(mine) == fgetc(theirs), "the read past the end");
+	check(!!recon_feof(mine) == !!feof(theirs),
+	      "feof after the read that found nothing");
+	check(!!recon_ferror(mine) == !!ferror(theirs),
+	      "and the end of a file is not an error");
+
+	recon_clearerr(mine);
+	clearerr(theirs);
+	check(!!recon_feof(mine) == !!feof(theirs), "feof after clearerr");
+
+	recon_fclose(mine);
+	fclose(theirs);
+}
+
+/*
+ * One character back, and one is all that is promised.
+ *
+ * The cases worth having are where a pushback meets something else: a read
+ * that must return it before anything from the file, and a seek that must
+ * throw it away -- after a seek it is a character from a position the stream
+ * is no longer at, and handing it back would give the caller a byte from
+ * somewhere else entirely.
+ */
+#define PUSHBACK "/tmp/recon-libc-pushback.txt"
+
+static void test_a_character_back(void)
+{
+	struct recon_stream *mine;
+	FILE *theirs;
+	FILE *fixture;
+	char my_line[64], their_line[64];
+	char *a, *b;
+
+	/* Its own file, not FIXTURE -- `test_what_it_refuses` unlinks that one
+	 * when it is done, so using it here would make this test depend on
+	 * running first, and fail for a reason that has nothing to do with
+	 * pushback. */
+	fixture = fopen(PUSHBACK, "wb");
+	if (fixture == NULL) {
+		printf("  could not write the pushback fixture\n");
+		return;
+	}
+	fputs("first line\nsecond line\n", fixture);
+	fclose(fixture);
+
+	mine = recon_fopen(PUSHBACK, "r");
+	theirs = fopen(PUSHBACK, "r");
+
+	if (mine == NULL || theirs == NULL) {
+		check(0, "the pushback fixture would not open");
+		return;
+	}
+
+	check(recon_fgetc(mine) == fgetc(theirs), "the first character");
+
+	check(recon_ungetc('f', mine) == ungetc('f', theirs),
+	      "putting the character back");
+	check(recon_fgetc(mine) == fgetc(theirs),
+	      "and reading it again");
+
+	/* A character that was never there -- allowed, and both have to agree
+	 * about it. */
+	check(recon_ungetc('Z', mine) == ungetc('Z', theirs),
+	      "a character that was never read can be pushed");
+	check(recon_fgetc(mine) == fgetc(theirs),
+	      "and comes back before anything from the file");
+
+	/* The rest of the line, to be sure no byte of the file was lost. */
+	a = recon_fgets(my_line, sizeof(my_line), mine);
+	b = fgets(their_line, sizeof(their_line), theirs);
+
+	check((a == NULL) == (b == NULL), "a line after a pushback");
+	check(a != NULL && b != NULL && strcmp(my_line, their_line) == 0,
+	      "and it is the same line");
+
+	recon_fclose(mine);
+	fclose(theirs);
+
+	/* And a pushback a seek throws away. */
+	mine = recon_fopen(PUSHBACK, "r");
+	theirs = fopen(PUSHBACK, "r");
+
+	if (mine != NULL && theirs != NULL) {
+		recon_fgetc(mine);
+		fgetc(theirs);
+		recon_ungetc('X', mine);
+		ungetc('X', theirs);
+
+		recon_fseek(mine, 0, SEEK_SET);
+		fseek(theirs, 0, SEEK_SET);
+
+		check(recon_fgetc(mine) == fgetc(theirs),
+		      "a seek throws the pushback away");
+
+		recon_fclose(mine);
+		fclose(theirs);
+	}
+}
+
 int main(void)
 {
 	printf("ReconOS C library: files, numbers, characters and dates\n\n");
@@ -1177,6 +1332,8 @@ int main(void)
 	test_what_it_refuses();
 	test_puts();
 	test_the_calendar();
+	test_the_end_of_a_file();
+	test_a_character_back();
 	test_formatting_a_date();
 	test_where_time_differs_on_purpose();
 	test_the_two_clocks();

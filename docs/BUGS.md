@@ -7847,6 +7847,49 @@ regenerated after that tree is pushed.
 - **Found by mutating the library rather than by reading the test**, which is
   the whole argument for doing it.
 
+### BG-200 — A stream opened fresh had a NUL character pushed back
+
+[#473](https://github.com/neogentrics/ReconOS/issues/473)
+
+- **Found in** v0.4.32, on the first run after `ungetc` existed, by
+  `recon_libc_file_tests`: *fread put the same bytes in the buffer* — it did
+  not.
+- **What it was** `ungetc` needs somewhere to keep the character it pushes
+  back, so `struct recon_stream` gained a `pushed_back` field. `take_stream`
+  resets every field of the slot it hands out, and the new one was not in that
+  list.
+
+  The streams are in static storage, so an unreset field is **0** — and 0 is a
+  perfectly good character. Every `fopen` produced a stream that would hand
+  back a NUL before the first real byte of the file.
+- **-1 is the only value that means "nothing"**, so it has to be written
+  explicitly; there is no zero that means absent. That is the same fault the
+  kernel's `sched_init` has a paragraph about: *a structure cleared wholesale,
+  and one field whose zero is a meaningful and wrong value* -- `boot->idle_for`,
+  where 0 meant "processor 0's idle thread".
+- **Why it was caught immediately** the file suite reads the same fixture
+  through both libraries and compares the bytes. A spurious NUL at the front of
+  every file is invisible to a test that checks a return value and fatal to one
+  that compares contents.
+- **Fixed in** v0.4.32, in `take_stream`, beside the other five fields it
+  already resets.
+
+### BG-201 — `assert` in the wrong file made four suites fail to link
+
+[#474](https://github.com/neogentrics/ReconOS/issues/474)
+
+- **Found in** v0.4.32, immediately, as `undefined reference to recon_stderr`.
+- **What it was** `recon_libc_assert` was written into `libc/stdlib.c` because
+  that is where `exit` lives. But it *prints*, so it needs `recon_stderr` and
+  `fprintf` -- which are `stdio.c`'s. Every suite that links the number
+  conversions without the file layer stopped linking.
+- **Fixed in** v0.4.32 by moving it to `stdio.c`, next to the streams it writes
+  to. The dependency it adds there already existed.
+- **Worth its own number rather than a quiet fix**, because the shape recurs:
+  a function placed by *what it is about* rather than by *what it needs*. The
+  library is split by the latter, and every file that has ever been added to it
+  is one link error away from being told so.
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

@@ -57,6 +57,17 @@ unsigned long fwrite(const void *from, unsigned long size,
 char *fgets(char *into, int room, FILE *f);
 int fgetc(FILE *f);
 
+/* Two questions, and they are two on purpose: a loop that stops reading cannot
+ * tell from the stopping alone whether the file ended or the disk did. A
+ * caller that treats them the same truncates a file on an I/O error and
+ * reports success. */
+int feof(FILE *f);
+int ferror(FILE *f);
+void clearerr(FILE *f);
+
+/* One character, and one is all the standard promises. See stdio.c. */
+int ungetc(int c, FILE *f);
+
 /*
  * A line to standard output. Nothing in the desktop calls it by name: the
  * compiler rewrites a `printf` with no conversions in it into this, which is

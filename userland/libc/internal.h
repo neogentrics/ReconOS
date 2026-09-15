@@ -51,9 +51,55 @@ int puts(const char *text);
 int snprintf(char *to, size_t room, const char *format, ...);
 int vsnprintf(char *to, size_t room, const char *format, va_list args);
 
-/* scanf.c */
-int sscanf(const char *text, const char *format, ...);
-int vsscanf(const char *text, const char *format, va_list args);
+/* inet.c -- the five of the socket group that need nothing from the kernel */
+unsigned short htons(unsigned short value);
+unsigned int htonl(unsigned int value);
+unsigned short ntohs(unsigned short value);
+unsigned int ntohl(unsigned int value);
+int inet_pton(int family, const char *text, void *into);
+const char *gai_strerror(int code);
+
+/* `inet_ntoa` takes a struct by value, so the library's own copy of it is
+ * here. inet.c cannot include <netinet/in.h> without dragging that header's
+ * whole vocabulary into every file that includes internal.h -- and the two
+ * definitions are one line each, compared by the suite. */
+struct recon_in_addr {
+	unsigned int s_addr;
+};
+
+char *inet_ntoa(struct recon_in_addr address);
+
+#define RECON_AF_INET 2
+
+#define RECON_EAI_BADFLAGS	(-1)
+#define RECON_EAI_NONAME	(-2)
+#define RECON_EAI_AGAIN		(-3)
+#define RECON_EAI_FAIL		(-4)
+#define RECON_EAI_FAMILY	(-6)
+#define RECON_EAI_SOCKTYPE	(-7)
+#define RECON_EAI_SERVICE	(-8)
+#define RECON_EAI_MEMORY	(-10)
+#define RECON_EAI_SYSTEM	(-11)
+#define RECON_EAI_OVERFLOW	(-12)
+
+/* stdio.c -- the three streams that exist before anything is opened.
+ *
+ * `stdin` and friends are macros in the public header, which the library does
+ * not include, so the library names the objects themselves. Needed by
+ * `recon_libc_assert`, which is the first thing here that prints on behalf of
+ * a program rather than because one asked it to. */
+struct recon_stream;
+extern struct recon_stream *recon_stdin;
+extern struct recon_stream *recon_stdout;
+extern struct recon_stream *recon_stderr;
+
+int fprintf(struct recon_stream *f, const char *format, ...);
+
+/* stdlib.c, with assert.h's macro in front of it */
+void exit(int code);
+
+void recon_libc_assert(const char *condition, const char *file, int line,
+		       const char *function);
 
 /* scanf.c */
 int sscanf(const char *text, const char *format, ...);

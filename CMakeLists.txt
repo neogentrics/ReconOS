@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.31
+    VERSION 0.4.32
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -764,6 +764,7 @@ set_source_files_properties(
     userland/libc/errno.c
     userland/libc/posix.c
     userland/libc/scanf.c
+    userland/libc/inet.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -773,6 +774,21 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# Addresses and byte order, against the host's.
+#
+# The five of the socket group that need nothing from the kernel. The byte
+# order is the interesting half: comparing `htons` against glibc is weaker than
+# it looks, because both architectures here are little-endian and a version
+# written as a byte swap agrees on every machine in the rig. So the suite also
+# checks the bytes *directly* -- most significant first, which is what network
+# order means on a machine of either endianness.
+add_executable(recon_libc_inet_tests
+    userland/tests/test_libc_inet.c
+    userland/libc/inet.c
+    userland/libc/errno.c
+    userland/libc/printf.c
+    userland/libc/string.c)
 
 # sscanf, against the host's.
 #
@@ -893,6 +909,7 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
 
 add_test(NAME libc COMMAND recon_libc_tests)
 add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_inet COMMAND recon_libc_inet_tests)
 add_test(NAME libc_scanf COMMAND recon_libc_scanf_tests)
 add_test(NAME libc_posix COMMAND recon_libc_posix_tests)
 set_tests_properties(libc_posix PROPERTIES

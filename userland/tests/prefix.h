@@ -36,6 +36,19 @@
 #define realpath    recon_libc_realpath
 #define sysconf     recon_libc_sysconf
 
+#define htons        recon_htons
+#define htonl        recon_htonl
+#define ntohs        recon_ntohs
+#define ntohl        recon_ntohl
+#define inet_pton    recon_inet_pton
+#define inet_ntoa    recon_inet_ntoa
+#define gai_strerror recon_gai_strerror
+
+#define feof        recon_feof
+#define ferror      recon_ferror
+#define clearerr    recon_clearerr
+#define ungetc      recon_ungetc
+
 #define sscanf      recon_sscanf
 #define vsscanf     recon_vsscanf
 

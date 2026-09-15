@@ -70,6 +70,18 @@ struct recon_stream {
 	 * `ftell` has to answer for the caller, so the two are tracked apart.
 	 */
 	long long position;
+
+	/*
+	 * One character of pushback, and one is what the standard promises.
+	 *
+	 * More would mean deciding what happens when a caller pushes back
+	 * characters it never read, and what `ftell` should then say about a
+	 * position that is partly imaginary. One slot has neither question.
+	 *
+	 * -1 for "nothing pushed back", which is why it is an int and not a
+	 * char: every value a char can hold is a value that can be pushed.
+	 */
+	int pushed_back;
 };
 
 /*
@@ -90,9 +102,9 @@ static struct recon_stream g_streams[STREAMS_MAX];
  * sits in a buffer when a program faults is output nobody ever sees -- and the
  * first thing anybody does with a new program is print from it.
  */
-static struct recon_stream g_stdin  = { 0, FLAG_USED | FLAG_READ,  { 0 }, 0, 0, 0 };
-static struct recon_stream g_stdout = { 1, FLAG_USED | FLAG_WRITE, { 0 }, 0, 0, 0 };
-static struct recon_stream g_stderr = { 2, FLAG_USED | FLAG_WRITE, { 0 }, 0, 0, 0 };
+static struct recon_stream g_stdin  = { 0, FLAG_USED | FLAG_READ,  { 0 }, 0, 0, 0, -1 };
+static struct recon_stream g_stdout = { 1, FLAG_USED | FLAG_WRITE, { 0 }, 0, 0, 0, -1 };
+static struct recon_stream g_stderr = { 2, FLAG_USED | FLAG_WRITE, { 0 }, 0, 0, 0, -1 };
 
 struct recon_stream *recon_stdin  = &g_stdin;
 struct recon_stream *recon_stdout = &g_stdout;
@@ -116,6 +128,14 @@ static struct recon_stream *take_stream(void)
 			g_streams[i].used = 0;
 			g_streams[i].at = 0;
 			g_streams[i].position = 0;
+
+			/* **-1, and not left at zero.** Static storage makes
+			 * it 0, and 0 is a character -- so a slot that was
+			 * never reset hands back a NUL before the first byte
+			 * of the file. The same shape as the kernel's
+			 * `idle_for`: a structure cleared wholesale and one
+			 * field whose zero is meaningful and wrong. */
+			g_streams[i].pushed_back = -1;
 			return &g_streams[i];
 		}
 	}
@@ -370,6 +390,14 @@ unsigned long fread(void *into, unsigned long size, unsigned long count,
 	}
 	total = size * count;
 
+	/* The pushback, first and once. Taken here rather than inside the loop
+	 * because there is only ever one of them, and a branch in the loop for
+	 * something true at most once is a branch that is wrong eventually. */
+	if (f->pushed_back >= 0) {
+		p[done++] = (unsigned char)f->pushed_back;
+		f->pushed_back = -1;
+	}
+
 	while (done < total) {
 		unsigned long have = fill(f);
 		unsigned long take;
@@ -404,12 +432,92 @@ int fgetc(struct recon_stream *f)
 	if (f == NULL || !(f->flags & FLAG_READ)) {
 		return -1;
 	}
+
+	/* A character put back comes out again before anything is read.
+	 * Every reader has to do this; one that forgot would make a pushback
+	 * silently disappear, which is worse than not offering the function. */
+	if (f->pushed_back >= 0) {
+		int back = f->pushed_back;
+
+		f->pushed_back = -1;
+		f->position++;
+		return back;
+	}
+
 	if (fill(f) == 0) {
 		return -1;
 	}
 	c = f->buffer[f->at++];
 	f->position++;
 	return (int)c;
+}
+
+/*
+ * Whether the last read reached the end, and whether anything has failed.
+ *
+ * Two questions, and the whole reason they are two: a loop that stops reading
+ * cannot tell from the stopping alone whether the file ended or the disk did.
+ * A caller that treats them the same truncates a file on an I/O error and
+ * reports success.
+ *
+ * The flags have been maintained since this file was written -- set on the
+ * paths that should set them and cleared by `fseek` and `rewind`. What was
+ * missing was any way to ask.
+ */
+int feof(struct recon_stream *f)
+{
+	if (f == NULL) {
+		return 0;
+	}
+
+	return (f->flags & FLAG_EOF) ? 1 : 0;
+}
+
+int ferror(struct recon_stream *f)
+{
+	if (f == NULL) {
+		return 0;
+	}
+
+	return (f->flags & FLAG_ERROR) ? 1 : 0;
+}
+
+void clearerr(struct recon_stream *f)
+{
+	if (f != NULL) {
+		f->flags &= ~(FLAG_EOF | FLAG_ERROR);
+	}
+}
+
+/*
+ * One character back onto the stream.
+ *
+ * **One, and the standard promises only one.** More would mean deciding what
+ * happens when a caller pushes back characters it never read, and what `ftell`
+ * should then say about a position that is partly invented. One slot has
+ * neither question, and the position simply moves back with it.
+ *
+ * Pushing back EOF is defined to do nothing and fail, which is not the same as
+ * an error -- a parser that reaches the end and tries to unread it is behaving
+ * correctly, and gets told the stream is unchanged.
+ *
+ * Clears the end-of-file flag, because there is now a character to read.
+ */
+int ungetc(int c, struct recon_stream *f)
+{
+	if (f == NULL || !(f->flags & FLAG_READ) || c < 0) {
+		return -1;
+	}
+
+	if (f->pushed_back >= 0) {
+		return -1;		/* one at a time, as promised */
+	}
+
+	f->pushed_back = (int)(unsigned char)c;
+	f->flags &= ~FLAG_EOF;
+	f->position--;
+
+	return f->pushed_back;
 }
 
 /*
@@ -501,6 +609,11 @@ int fseek(struct recon_stream *f, long offset, int from)
 	f->used = 0;
 	f->flags &= ~FLAG_EOF;
 
+	/* A seek throws the pushback away, because it was a character at a
+	 * position the stream is no longer at. Keeping it would hand the
+	 * caller a byte from somewhere else in the file. */
+	f->pushed_back = -1;
+
 	if (recon_sys_seek(f->fd, target, from) < 0) {
 		return -1;
 	}
@@ -522,6 +635,7 @@ void rewind(struct recon_stream *f)
 	if (f != NULL) {
 		fseek(f, 0, RECON_SEEK_SET);
 		f->flags &= ~(FLAG_EOF | FLAG_ERROR);
+		f->pushed_back = -1;
 	}
 }
 
@@ -555,3 +669,40 @@ int fclose(struct recon_stream *f)
 	f->fd = -1;
 	return result;
 }
+
+/* --- an assertion that failed --- */
+
+/*
+ * A failed assertion.
+ *
+ * Says what failed, where, and in which function, and then ends the program
+ * with a code the kernel reads. See `userland/include/assert.h` for why it
+ * does not `abort`: there is no shell watching and no core to leave behind, so
+ * the message *is* the record -- and it goes to standard error, which the
+ * kernel puts on the serial line and into its own log, where it survives the
+ * program ending.
+ *
+ * **In stdio.c rather than stdlib.c**, which is where it started. It prints,
+ * and putting it beside `exit` made every suite that links the number
+ * conversions without the file layer fail to link -- a dependency added to
+ * `stdlib.c` for the sake of one function that does not belong there.
+ *
+ * The wording is glibc's shape, so a program asserting on Linux and the same
+ * program asserting here produce lines somebody can compare.
+ */
+void recon_libc_assert(const char *condition, const char *file, int line,
+		       const char *function)
+{
+	fprintf(recon_stderr, "%s:%d: %s: Assertion `%s' failed.\n",
+		file ? file : "?", line, function ? function : "?",
+		condition ? condition : "?");
+
+	/*
+	 * 134, which is what a shell reports for a program killed by SIGABRT
+	 * -- 128 plus the signal. There is no SIGABRT to raise here, and a
+	 * code of our own would mean a script checking for an assertion
+	 * failure having to know which system it ran on.
+	 */
+	exit(134);
+}
+

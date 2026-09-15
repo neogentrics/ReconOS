@@ -9,6 +9,95 @@ way for the two to disagree.
 
 ---
 
+## v0.4.32 — the nine that need nothing from the kernel
+
+Sockets are the largest group left, and most of it needs a kernel. **Nine
+symbols do not**, and they were worth taking now rather than waiting: a program
+that parses an address does not need a network, and `src/recon_net.c` reads
+`/proc/net/route` and turns the result into dotted quads long before it opens
+anything.
+
+`htons`, `htonl`, `ntohs`, `ntohl`, `inet_pton`, `inet_ntoa`, `gai_strerror`,
+and the three stdio readers `feof`, `ferror` and `ungetc` — plus `clearerr` and
+`assert`, which came with them.
+
+### Byte order is not a byte swap
+
+`htons` is written as arithmetic on the **value**, not as a reordering of its
+storage. The two are the same thing only on a little-endian machine — and both
+architectures ReconOS runs on are little-endian, so a byte-swap version would
+agree with glibc on every machine in the rig and be wrong on the first one that
+is not, with nothing able to say so.
+
+Which means **comparing against the host is not enough here**, and the suite
+says so: alongside the comparison, the bytes of the result are required to be
+the value's own bytes, most significant first. That assertion fails on a
+byte-swap implementation even on this machine.
+
+### `inet_pton` is mostly a refusal
+
+Its value is what it turns down. `inet_aton` reads `010.0.0.1` as octal,
+`1.2.3` as a three-part address and a bare `16777217` as a number — and those
+readings are how a check that two strings name the same host is defeated.
+
+So most of the corpus is text that must **not** parse: leading zeroes,
+hexadecimal, four parts and a trailing dot, a space at either end, a negative
+octet. Every one is put to the host as well, because *both refuse* is a
+stronger statement than *we refuse*.
+
+### `feof` is the one people use wrongly
+
+It is **false** after the last byte has been read and **true** only after a
+further read found nothing. A stream that sets it one read early makes every
+`while (!feof(f))` loop drop the last line; one that never sets it makes the
+same loop never end.
+
+That is a question about *timing*, not about a value, so the suite asks the
+flag after every single step on both libraries over one file — the only way
+the timing can be compared rather than asserted from memory.
+
+`ungetc` takes one character, which is all the standard promises. More would
+mean deciding what happens when a caller pushes back characters it never read,
+and what `ftell` should then say about a position that is partly invented.
+
+### Three faults, and the first is an old friend
+
+**BG-200.** `struct recon_stream` gained a `pushed_back` field and
+`take_stream` — which resets every field of a slot before handing it out — was
+not told. Static storage makes an unreset field **0**, and 0 is a perfectly
+good character, so every `fopen` produced a stream that would hand back a NUL
+before the first byte of the file.
+
+That is exactly the fault the kernel's `sched_init` has a paragraph about: *a
+structure cleared wholesale, and one field whose zero is a meaningful and wrong
+value.* Caught on the first run by the file suite, which compares contents
+rather than return values.
+
+**BG-201.** `assert` was put in `stdlib.c` because that is where `exit` lives.
+It prints, so it needs `stdio.c`'s streams — and four suites stopped linking. A
+function placed by what it is *about* rather than by what it *needs*.
+
+**And one in a test**, which is worth as much: the pushback case used the
+shared fixture, which an earlier test deletes when it finishes. It reported
+*the fixture would not open* as though the library had failed. A test that
+depends on the order it runs in will eventually fail for a reason that has
+nothing to do with what it checks; it brings its own file now.
+
+### Where it leaves things
+
+| | before | now |
+|---|---|---|
+| call sites answered | 3,034 of 3,134 | **3,043 of 3,134** |
+| socket symbols outstanding | 19 | **14** |
+
+91 call sites left, and every one of them now needs the kernel: 35 for the
+sockets that open something, 31 for `stat` and its relatives, 12 for `dlopen`,
+11 for processes and signals, 2 for an environment.
+
+**That is the whole of the C library that can be written without the kernel.**
+
+---
+
 ## v0.4.31 — sscanf
 
 Fourteen call sites, and until v0.4.30 it was in neither half of the coverage
