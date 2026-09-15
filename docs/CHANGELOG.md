@@ -9,6 +9,76 @@ way for the two to disagree.
 
 ---
 
+## v0.4.37 — a cell wraps inside its column
+
+The board said *"a long cell sets a wide column and the row runs off the
+side."* **Half of that had already been fixed** — columns are scaled down
+together to fit the window, and have been for a while. What was still true was
+worse and less visible: a cell whose text overran its column pushed the pen
+along, so **every column after it on that row stopped lining up**. The comment
+beside it called that readable, and it is; it is also the table quietly
+stopping being a table half way across.
+
+Three things change, and a table is a table all the way across now:
+
+- a cell's lines break at the end of **its column** rather than at the edge of
+  the window
+- a line that breaks inside a cell starts again at that cell's left edge
+- every cell starts at the top of its row, and the row ends at the bottom of
+  whichever cell reached furthest down
+
+### The wrapper that was written and thrown away
+
+The first attempt was a clean little module — `recon_wrap`, a measuring
+function rather than a font so the host could measure in characters, 836 checks
+against it, and it found two real faults in itself on the first run. One of them
+would have made every row measure as **zero** lines high: `(int)~0U >> 1` is not
+the largest `int`, it is −1.
+
+It was also the wrong shape, and it went in the bin. **`recon_web.c` already
+wraps text** — that is what the word loop does — and the paragraph at the top of
+`flow` says exactly why a second copy is the thing to avoid: *"two copies of a
+word-wrap loop drift, and the drift shows up as a scrollbar that does not reach
+the bottom of the page."* What a cell was missing was never a wrapper. It was a
+right-hand edge.
+
+Recorded because the tests passing is not what makes a piece of code right, and
+836 of them is not an argument for keeping it.
+
+### A column has two widths, and only one was measured
+
+Making cells snap back to their column turned the old misalignment into
+something worse — cells drawn **on top of each other**, which the first
+photograph showed immediately. Columns were being scaled down proportionally,
+which pays no attention to whether the result still holds a word, and a column
+narrower than a word in it now overlaps its neighbour instead of merely running
+past it.
+
+So a column is measured twice:
+
+| | |
+|---|---|
+| the most it wants | its widest whole cell |
+| the least it can be | its widest single **word**, because there is nowhere to break inside one |
+
+Scaling moves each column from the first towards the second in proportion to the
+room it has *spare*, and stops at the floor. A column already at its minimum
+gives up nothing. A table whose minimums do not fit gets its minimums and runs
+over the edge — at that point there is nothing left to give, and squeezing
+further would put the overlap back rather than remove it.
+
+### How it was checked
+
+By photograph, through `scripts/look.sh`, against a page served with one column
+far too narrow for its contents — and then against a table that already fits, to
+show the common case takes the path it always did. The first photograph is what
+found the overlap; no test in the tree would have.
+
+**Still not done**, and the row stays on the board saying so: no colspan, no
+rowspan, no nested tables, no borders.
+
+---
+
 ## v0.4.36 — what installing a package actually does
 
 `recon_package` had **21 checks on reading a manifest and none on doing

@@ -1402,7 +1402,19 @@ static void go_typed(struct web_tab *w) {
 #define COLUMNS_MAX 12
 
 struct columns {
+    /* The most a column wants: its widest whole cell. */
     int width[COLUMNS_MAX];
+
+    /*
+     * The least it can be: its widest single word.
+     *
+     * There is nowhere to break inside a word, so a column narrower than this
+     * has a word sticking out of it -- and since the cell after it starts at
+     * its own column, "sticking out" means "drawn over the next cell". This
+     * is the floor the scaling below will not go past.
+     */
+    int least[COLUMNS_MAX];
+
     int count;
 
     /* Where the table this describes starts, so a row can tell whether the
@@ -2212,6 +2224,43 @@ static int run_width(const struct recon_html_run *r, struct recon_font *font) {
  * which is what a table is once the tags are gone, and is why a row is a kind
  * of its own.
  */
+/*
+ * The widest single word in a run.
+ *
+ * Measured rather than counted: a word's width is a font's business, and
+ * the longest word is not always the widest one.
+ */
+static int widest_word(const struct recon_html_run *r,
+        struct recon_font *font) {
+    int widest = 0;
+    size_t at = 0;
+
+    while (at < r->length) {
+        while (at < r->length && r->text[at] == ' ') {
+            at++;
+        }
+        size_t end = at;
+        while (end < r->length && r->text[end] != ' ') {
+            end++;
+        }
+        if (end > at) {
+            char word[128];
+            size_t take = (end - at) < sizeof(word) - 1
+                ? (end - at) : sizeof(word) - 1;
+            memcpy(word, r->text + at, take);
+            word[take] = '\0';
+
+            int wide = recon_text_width(font, word);
+            if (wide > widest) {
+                widest = wide;
+            }
+        }
+        at = end;
+    }
+
+    return widest;
+}
+
 static void measure_columns(struct flow *f, int first, int size,
         struct columns *out) {
     memset(out, 0, sizeof(*out));
@@ -2249,8 +2298,18 @@ static void measure_columns(struct flow *f, int first, int size,
                     out->count = column + 1;
                 }
             }
-            used += run_width(r,
-                (r->style & RECON_HTML_BOLD) != 0 ? head : font);
+
+            struct recon_font *with =
+                (r->style & RECON_HTML_BOLD) != 0 ? head : font;
+
+            used += run_width(r, with);
+
+            if (column >= 0 && column < COLUMNS_MAX) {
+                int word = widest_word(r, with);
+                if (word > out->least[column]) {
+                    out->least[column] = word;
+                }
+            }
         }
         if (column >= 0 && column < COLUMNS_MAX && used > out->width[column]) {
             out->width[column] = used;
@@ -2272,13 +2331,57 @@ static void measure_columns(struct flow *f, int first, int size,
      */
     int gap = recon_text_width(font, "  ");
     int total_width = 0;
+    int least_total = 0;
     for (int i = 0; i < out->count; i++) {
         out->width[i] += gap;
+        out->least[i] += gap;
+        if (out->least[i] > out->width[i]) {
+            out->least[i] = out->width[i];
+        }
         total_width += out->width[i];
+        least_total += out->least[i];
     }
-    if (total_width > f->width && total_width > 0) {
+
+    if (total_width <= f->width || total_width <= 0) {
+        return;
+    }
+
+    /*
+     * **Towards the least each column can be, and no further.**
+     *
+     * This scaled every column by the same fraction, which keeps their
+     * relative widths and pays no attention to whether the result still holds
+     * a word. It did not show while a cell that overran just pushed the pen
+     * along; now that the cell after it starts at its own column, a column
+     * narrower than a word in it is two cells drawn on top of each other.
+     *
+     * Each column gives up a share of the room it has *spare* rather than a
+     * share of its width, so a column that is already at its minimum gives up
+     * nothing and a column that is mostly slack gives up most of the
+     * difference. The shape of the table still survives; what it survives
+     * against is now a floor.
+     */
+    if (least_total >= f->width) {
+        /*
+         * Not even the minimums fit. They get them and the table runs over
+         * the edge -- there is nothing left to give, and squeezing below a
+         * word would put the overlap back rather than remove it.
+         */
         for (int i = 0; i < out->count; i++) {
-            out->width[i] = out->width[i] * f->width / total_width;
+            out->width[i] = out->least[i];
+        }
+        return;
+    }
+
+    int over = total_width - f->width;
+    int spare = total_width - least_total;
+
+    for (int i = 0; i < out->count; i++) {
+        int room = out->width[i] - out->least[i];
+        int give = (int)(((long)room * over) / spare);
+        out->width[i] -= give;
+        if (out->width[i] < out->least[i]) {
+            out->width[i] = out->least[i];
         }
     }
 }
@@ -2524,6 +2627,24 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     bool cell_pending = false;
 
     /*
+     * --- What makes a row a row rather than a very long line ---
+     *
+     * `row_top` is where every cell starts, and `row_bottom` is how far the
+     * deepest of them reached. Without the first, a cell that wrapped would
+     * push the next one down instead of beside it; without the second, the
+     * block after the table would sit on top of whichever cell was tallest.
+     *
+     * `cell_left` and `cell_right` are the column this cell is in. The right
+     * edge is what the wrapping below breaks against -- the window's edge is
+     * the right answer for a paragraph and the wrong one for a cell, and that
+     * single substitution is the whole of what was missing.
+     */
+    int row_top = y;
+    int row_bottom = y + line_height;
+    int cell_left = indent;
+    int cell_right = f->width;
+
+    /*
      * Where the link being drawn began on this line, and in which face.
      *
      * Outside the run loop, because one link is often several runs: `<a>Free
@@ -2669,8 +2790,43 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                     for (int c = 0; c < cell_index; c++) {
                         wanted += f->columns.width[c];
                     }
-                    if (wanted > x) {
-                        x = wanted;
+
+                    /*
+                     * **Back to the column, and back to the top of the row.**
+                     *
+                     * This used to be `if (wanted > x) x = wanted;` -- move
+                     * the pen forward to the column, and leave it where it was
+                     * if the previous cell had already run past. That is what
+                     * made one over-wide cell cost the alignment of every
+                     * column after it on that row, and the comment here said
+                     * so and called it readable. It is readable; it is also
+                     * the table stopping being a table half way across.
+                     *
+                     * It can go back now because a cell that does not fit is
+                     * wrapped rather than allowed to run on, so there is
+                     * nothing left to run past.
+                     */
+                    if (anything_on_line) {
+                        flush_line(f, &held, align, indent, x);
+                        anything_on_line = false;
+                    }
+
+                    x = wanted;
+                    y = row_top;
+                    cell_left = wanted;
+                    cell_right = wanted + f->columns.width[cell_index];
+
+                    /* The last column ends at the window, not at the sum of
+                     * the measurements -- rounding when the columns were
+                     * scaled down leaves a few pixels over, and a cell that
+                     * wrapped early because of them would look arbitrary. */
+                    if (cell_index == f->columns.count - 1 ||
+                            cell_right > f->width) {
+                        cell_right = f->width;
+                    }
+
+                    if (y + line_height > row_bottom) {
+                        row_bottom = y + line_height;
                     }
                 }
             }
@@ -2684,7 +2840,10 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
 
                 int wide = recon_text_width(font, text);
 
-                if (anything_on_line && x + wide > f->width) {
+                /* The column's edge inside a table, the window's edge
+                 * everywhere else. `cell_right` is `f->width` until a row sets
+                 * it, so a paragraph takes exactly the path it always did. */
+                if (anything_on_line && x + wide > cell_right) {
                     /* The rule ends at the edge of the line it was on. */
                     if (link_from >= 0) {
                         hold_rule(&held, font, link_from, x, y, link_last);
@@ -2697,9 +2856,14 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
                      * line itself is placed.
                      */
                     flush_line(f, &held, align, indent, x);
-                    x = indent;
+                    x = cell_left;
                     y += line_height;
                     anything_on_line = false;
+
+                    /* A cell that wrapped is what makes its row taller. */
+                    if (y + line_height > row_bottom) {
+                        row_bottom = y + line_height;
+                    }
                 }
 
                 bool is_link = (style & RECON_HTML_LINK) != 0 && run->link >= 0;
@@ -2739,6 +2903,14 @@ static void flow_block(struct flow *f, const struct recon_html_block_entry *b) {
     flush_line(f, &held, align, indent, x);
 
     f->height = y + line_height;
+
+    /*
+     * A row is as tall as its tallest cell, and `y` is wherever the *last*
+     * cell happened to stop -- which is the shortest one as often as not.
+     */
+    if (b->kind == RECON_HTML_ROW && row_bottom > f->height) {
+        f->height = row_bottom;
+    }
 
     /* A gap after a block, so paragraphs are paragraphs. Smaller after a
      * list item, because a list is one thing. */
