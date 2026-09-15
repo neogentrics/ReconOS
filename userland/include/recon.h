@@ -88,7 +88,16 @@ enum {
 	 * the list is allowed and reordering it is not. This arrived
 	 * on a branch that had put it *before* SYS_MKDIR, which would
 	 * have moved a number already shipped. */
-	SYS_POWER
+	SYS_POWER,
+
+	/* Appended, and in the same order as the kernel's enum -- the two are
+	 * checked against each other and against the assembly by
+	 * scripts/check-syscall-numbers.py, because nothing else can. */
+	SYS_SOCKET,
+	SYS_BIND,
+	SYS_LISTEN,
+	SYS_ACCEPT,
+	SYS_CONNECT
 };
 
 /* Negative is why not. The names the kernel uses, so a program reporting a
