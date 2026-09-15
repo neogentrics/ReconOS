@@ -105,6 +105,52 @@ long recon_sys_close(int fd);
 #define RECON_O_READ  (1u << 0)
 #define RECON_O_WRITE (1u << 1)
 
+/* --- malloc.c -------------------------------------------------------------
+ *
+ * Where memory comes from, as two function pointers rather than a system call
+ * named in the allocator. See malloc.c for why, and `mem_recon.c` for the
+ * source ReconOS installs.
+ *
+ * `take` answers a range of at least `bytes`, or NULL. `give_back` answers 0
+ * if the range is gone and anything else if it cannot be given back -- which
+ * is not an error: it is the configuration ReconOS is in today, and the
+ * allocator keeps and reuses the range instead.
+ */
+struct recon_memory_source {
+	void *(*take)(size_t bytes);
+	int (*give_back)(void *at, size_t bytes);
+};
+
+void recon_memory_from(const struct recon_memory_source *from);
+
+/* Weak in malloc.c and strong in mem_recon.c: linking the latter is what gives
+ * a program memory from the kernel. */
+void recon_memory_default(void);
+
+void *malloc(size_t bytes);
+void *calloc(size_t count, size_t each);
+void *realloc(void *p, size_t bytes);
+void free(void *p);
+char *strdup(const char *text);
+
+/* What the allocator will say about itself, for the suite and for anything
+ * that wants to report memory use. Counted as it happens rather than derived
+ * by walking the heap, so that `recon_malloc_audit` comparing the two means
+ * something. */
+struct recon_malloc_stats {
+	size_t taken_bytes;	/* held from the source right now */
+	size_t live_bytes;	/* what blocks in use hold */
+	size_t live_blocks;
+	size_t regions;
+	size_t takes;		/* ranges asked for, since the start */
+	size_t gives;		/* ranges actually handed back */
+	size_t refusals;	/* times the source said no */
+};
+
+void recon_malloc_stats(struct recon_malloc_stats *into);
+unsigned recon_malloc_audit(void);
+void recon_malloc_reset(void);
+
 /*
  * --- Time is not declared here ---
  *

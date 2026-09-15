@@ -7409,6 +7409,8 @@ machine with no hole it would be a line saying the same thing twice.
 
 ### KF-225 — Not a bug: the panel gets a summary and the wire keeps everything
 
+[#466](https://github.com/neogentrics/ReconOS/issues/466)
+
 Asked for rather than found: the boot report is long, and on a machine that runs
 all the way a user program now paints over it before anybody can read it.
 
@@ -7638,6 +7640,108 @@ The Artifact was **not republished over that version**, deliberately: it holds
 two entries this file does not, and overwriting it would have lost the only copy
 outside an unpushed working tree. It will be correct again the first time it is
 regenerated after that tree is pushed.
+
+### BG-194 — The free-list links and the footer were the same eight bytes
+
+[#467](https://github.com/neogentrics/ReconOS/issues/467)
+
+- **Found in** v0.4.28, on the **first run** of `recon_libc_malloc_tests`,
+  before the allocator had run anywhere else: five disagreements in the heap
+  after freeing every other of five hundred blocks, and a live block damaged in
+  the torture sequence.
+- **What it was** a block is a 16-byte header and a payload, and the smallest
+  block is 32 bytes -- so its payload is 16 bytes, which is exactly the two
+  list pointers a free block keeps there. The *footer* -- a second copy of the
+  size, so the block after a free one can find where it starts -- was written
+  into the last eight bytes of the block.
+
+  In a 32-byte block, the last eight bytes of the payload **are the second list
+  pointer**. Every smallest-size block that went on a free list had its `prev`
+  link overwritten by its own size, and the list was corrupt from that moment.
+- **What it would have looked like later** nothing, for a while. A corrupt
+  `prev` link only matters when that particular block is unlinked from the
+  middle of its list, and then it writes a pointer through an address made of a
+  size. In a desktop that is a crash somewhere with no allocator in sight,
+  minutes later, in whatever happened to be at that address.
+- **Fixed in** v0.4.28 by the layout every allocator of this shape uses, and
+  the reason they all use it: **the footer lives in the next block's header**,
+  not at the end of this one. That needs a field for it, so the two flags moved
+  into the low bits of the size -- sizes are multiples of sixteen, so four bits
+  were going spare.
+
+  The header stays 16 bytes and the smallest block stays 32. The cost is a mask
+  on every read of a size, which a comment in the first version had explicitly
+  argued against paying. That comment was wrong, and the alternative it was
+  defending is a 48-byte minimum block: sixteen wasted bytes on every small
+  allocation the desktop makes, and it makes 430 of them.
+- **What found it** `recon_malloc_audit()`, called after every operation rather
+  than at the end of a run. It walks every block of every region and checks
+  that what they say about each other agrees -- footers against headers, each
+  block's PREV\_USED against whether the block before it is in use, no two free
+  blocks side by side, and the running counters against a fresh count. Written
+  before the allocator was, for exactly this.
+
+### BG-195 — The library's coverage was measured from one test target's objects
+
+[#468](https://github.com/neogentrics/ReconOS/issues/468)
+
+- **Found in** v0.4.28, immediately after the allocator was written and passing:
+  `scripts/measure-libc.py` went on reporting **430 call sites unanswered** for
+  functions that were sitting in the build, tested, next to it.
+- **What it was** the script read
+  `build/CMakeFiles/recon_libc_file_tests.dir/userland/libc` -- the objects one
+  test target happens to compile. `malloc.c` is in a suite of its own, so it
+  was invisible.
+- **The third of a family**, and that is why it is worth its own number.
+  BG-182: the coverage was counted from a list of expected names, so it found
+  only what was on the list. BG-185: the list was corrected, which corrected
+  nothing, because a corrected list is still a list. This one: the *library*
+  was defined as whatever one target had compiled.
+
+  Each time, a measurement took its idea of the thing it was measuring from the
+  same place the thing came from, and each time it was wrong and silent.
+- **Fixed in** v0.4.28 by removing the name rather than correcting it. Every
+  object compiled from `userland/libc/` anywhere in the build tree counts --
+  **and the script now refuses to report a number at all when a library source
+  has no object**, naming it. Two files are listed as deliberately absent
+  (`syscalls.c` and `mem_recon.c`, the two that make system calls and cannot be
+  compiled for the host), and any third absence stops the run.
+
+  The check found one on its first run, which is the check working.
+- **What it measures now** 77 of 132 symbols and **2,908 of 3,113 call sites**,
+  up from 72 and 2,478.
+
+### BG-196 — Four suites were never built the way a release is
+
+[#469](https://github.com/neogentrics/ReconOS/issues/469)
+
+- **Found in** v0.4.28, while fixing the sanitized pass of `check.sh`.
+- **What it was** `check.sh` runs every suite twice -- once under the
+  sanitizers, once optimised -- and builds the second list from
+  `tests/test_*.c`. That is the **desktop's** tests. The four suites under
+  `userland/tests/` were never in it: the C library, the file layer, the
+  maths, and now the allocator.
+- **Why it matters here more than usually** `-O2` is where strict aliasing and
+  the optimiser's assumptions about pointer provenance begin to apply, and an
+  allocator is nothing but pointer arithmetic across type boundaries. A suite
+  that only ever runs unoptimised cannot see any of that. It is also the pass
+  that caught BG-170 and the `_FORTIFY_SOURCE` class.
+- **How it surfaced** as a fix that would have been dead code. The sanitized
+  pass aborted on this version's `calloc` overflow check, because under
+  AddressSanitizer the host's `calloc` is ASan's and ASan answers an
+  overflowing one by killing the process. The first fix skipped the reference
+  half under a sanitizer -- which, since the release pass did not build this
+  suite at all, would have meant skipping it everywhere.
+
+  **A check that cannot fail**, arrived at while fixing something else. The
+  same shape as KF-229 and BG-192.
+- **Fixed in** v0.4.28. The release pass builds from both trees of tests, by
+  rule rather than by a list -- which required `recon_libc_file_tests` to be
+  renamed `recon_libc_files_tests`, since the rule derives a target name from a
+  file name. And ASan is told `allocator_may_return_null=1` so that it answers
+  like the allocator the desktop will actually link, instead of the comparison
+  being skipped.
+- **The number moved from 34 suites to 40.**
 
 ## Labels
 

@@ -87,6 +87,51 @@ exists.
 **Whose side:** `core/`. Address spaces, reservation and demand paging are all
 there and all portable; nothing about this names a machine.
 
+**The desktop's half is built, 14 September 2026 — this is now one call.**
+
+`userland/libc/malloc.c` is a real allocator: boundary tags, coalescing on both
+sides, free lists segregated by size, and a region handed back when nothing in
+it is in use. 11,506 checks, the heap audited after every operation, run
+against a source that can release and a source that cannot. The library now
+answers **2,908 of the desktop's 3,113 call sites**, up from 2,478.
+
+It takes its memory from two function pointers rather than a system call it
+names, which is why it could be finished and proved before this entry was
+answered.
+
+**What one call has to do**, and there is a caller for it already in
+`userland/libc/mem_recon.c`:
+
+```c
+static void *take(size_t bytes)
+{
+        i64 at = recon_map((int)-1, (u64)bytes);   /* fd -1: no file */
+
+        return at < 0 ? 0 : (void *)(unsigned long)at;
+}
+```
+
+`SYS_MAP` with **fd -1** answering a demand-paged anonymous range of `bytes`,
+at an address the kernel chooses. Today `fd_get` finds nothing and the call is
+refused with EBADF, so `malloc` answers NULL and
+`recon_malloc_stats().refusals` counts it -- which is the honest state of the
+machine rather than a stub pretending otherwise.
+
+**The day that call works, this works with nothing rebuilt.** The program on
+the disk already links the allocator.
+
+**No system call number has been taken for it**, deliberately. Two sessions
+build this kernel and a number claimed in advance by the half that does not own
+`core/` is a number claimed twice -- which happened on 14 September and is
+recorded in `docs/BUGS.md`. If `core/` would rather spell it as a call of its
+own than as an fd of -1, `take` above is the one function that changes.
+
+**The release half can wait.** `give_back` returning "there is no such call" is
+a *supported* configuration, not a degraded one: the allocator keeps the region
+and reuses it, and every scenario in the suite runs that way as well as the
+other. What it costs is a program that cannot shrink -- see the browser tab
+above -- so it is worth having, second.
+
 ---
 
 ## The console and a program both own the screen

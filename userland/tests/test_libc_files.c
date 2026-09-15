@@ -12,7 +12,7 @@
  * So here both libraries open the same file, read it the same way, and are
  * required to return the same bytes, the same counts and the same positions.
  *
- * Run with: ./build/recon_libc_file_tests
+ * Run with: ./build/recon_libc_files_tests
  */
 
 #define _GNU_SOURCE

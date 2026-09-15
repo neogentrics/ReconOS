@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.27
+    VERSION 0.4.28
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -738,7 +738,7 @@ add_executable(recon_libc_tests
 # read a real file here and be held against what the host's stdio returns for
 # the same file. `userland/libc/syscalls.c` -- the real ones -- is deliberately
 # *not* in this list; it is the one file that could not be in it.
-add_executable(recon_libc_file_tests
+add_executable(recon_libc_files_tests
     userland/tests/test_libc_files.c
     userland/tests/hostsys.c
     userland/libc/string.c
@@ -760,6 +760,7 @@ set_source_files_properties(
     userland/libc/stdio.c
     userland/libc/time.c
     userland/libc/math.c
+    userland/libc/malloc.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -769,6 +770,25 @@ set_source_files_properties(
 # to the test file, and the comparison would become the implementation against
 # itself. The library's own sources include "internal.h" by relative path and
 # never need the public headers -- which is the whole reason internal.h exists.
+
+# The allocator, in a program of its own.
+#
+# `mem_recon.c` is deliberately not in this list. It is the one file of the
+# library that makes a system call, and the suite's whole method is to hand the
+# allocator a source it controls: one that can release memory, one that cannot
+# -- which is the configuration ReconOS is in today -- and one that refuses
+# after a while. None of those can be arranged by booting a kernel, and all
+# three are configurations the desktop will meet.
+#
+# It links against nothing but the host's own libc for the reference half:
+# `calloc`'s overflow refusal, `realloc(p, 0)` and `strdup` are all held
+# against what the library this replaces does, because the standard leaves two
+# of those implementation-defined and the desktop will be compiled against one
+# and run on the other.
+add_executable(recon_libc_malloc_tests
+    userland/tests/test_libc_malloc.c
+    userland/libc/malloc.c
+    userland/libc/string.c)
 
 # The maths, in a program of its own.
 #
@@ -820,7 +840,8 @@ add_test(NAME volume_layout COMMAND recon_init_layout_tests
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_test(NAME libc COMMAND recon_libc_tests)
-add_test(NAME libc_files COMMAND recon_libc_file_tests)
+add_test(NAME libc_files COMMAND recon_libc_files_tests)
+add_test(NAME libc_malloc COMMAND recon_libc_malloc_tests)
 add_test(NAME libc_math COMMAND recon_libc_math_tests)
 
 # The same parser against markup nobody here wrote.

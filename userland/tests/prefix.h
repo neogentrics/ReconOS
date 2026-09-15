@@ -16,6 +16,12 @@
 #ifndef RECON_LIBC_PREFIX_H
 #define RECON_LIBC_PREFIX_H
 
+#define malloc      recon_malloc
+#define calloc      recon_calloc
+#define realloc     recon_realloc
+#define free        recon_free
+#define strdup      recon_strdup
+
 #define memcpy      recon_memcpy
 #define memmove     recon_memmove
 #define memset      recon_memset

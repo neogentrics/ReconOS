@@ -9,6 +9,116 @@ way for the two to disagree.
 
 ---
 
+## v0.4.28 — the allocator
+
+The last large piece of the C library, and the one every other piece was
+waiting behind. Measured rather than guessed: **5 symbols, 430 call sites** --
+more than two thirds of everything the desktop still could not link.
+
+`userland/include/stdlib.h` used to open by saying there was no `malloc` in it,
+so that a caller failed to *link* rather than getting a stub that returned
+nothing and crashed an hour later somewhere else. That paragraph is gone.
+
+### The memory comes from two function pointers
+
+`malloc.c` names no system call. It asks a `struct recon_memory_source` -- take
+a range, give one back -- and everything else is written against those.
+
+This is the same split `userland/init/layout.c` uses for making directories,
+and it is here for the same reason: **the part that can be wrong is the
+allocator, not the call underneath it.** With the source behind a pointer the
+whole file runs on the host against the library it replaces, and against three
+sources no kernel can be made to be:
+
+- one that can hand memory back,
+- **one that cannot** -- which is the configuration ReconOS is actually in, so
+  every scenario runs twice,
+- and one that refuses after a while, which is how the out-of-memory path gets
+  exercised at all.
+
+Boundary tags, coalescing on both sides, free lists segregated by size, and a
+region handed back when nothing in it is in use. An allocation larger than a
+quarter of a megabyte gets a region of its own and returns the whole thing --
+because KERNEL-WANTS measured a browser tab at 6.8 MiB, and a window where
+twelve tabs have been opened and closed has lost eighty-one megabytes if
+nothing is released.
+
+### 11,506 checks, and the suite earned its keep on the first run
+
+The heap is audited **after every operation**, not at the end: every block of
+every region, footers against headers, each block's flag about its predecessor
+against whether that block is really in use, no two free blocks side by side,
+and the running counters against a fresh count. A shadow copy of what every
+live block should contain is checked alongside it, because alignment and audit
+would both pass an allocator that hands the same address out twice.
+
+It found **BG-194** before the allocator had run anywhere else: in the smallest
+block -- 32 bytes, a 16-byte header and a 16-byte payload -- the payload is
+*exactly* the two free-list pointers, and the footer was being written into its
+last eight bytes. Every smallest-size block on a free list had its `prev` link
+overwritten by its own size. The fix is the layout every allocator of this
+shape uses: the footer lives in the next block's header, and the flags move
+into the low bits of the size.
+
+That fault would have been invisible until it was a crash somewhere else
+entirely, minutes later, with no allocator in sight.
+
+### And two instruments that could not see the allocator
+
+**BG-195.** `scripts/measure-libc.py` went on reporting 430 call sites
+unanswered while the functions sat in the build, tested, next to it -- because
+it read the objects of *one test target*, and the allocator has a suite of its
+own. That is the third of a family: BG-182 counted from a list of expected
+names, BG-185 corrected the list, and this one defined "the library" as
+whatever one target had compiled. Each time the measurement took its idea of
+the thing from the same place the thing came from.
+
+Fixed by removing the name rather than correcting it: every object compiled
+from `userland/libc/` anywhere counts, and the script now **refuses to report a
+number when a library source has no object**, naming it. It caught one on its
+first run.
+
+**BG-196.** `check.sh` builds every suite twice, once sanitized and once the
+way a release is -- and built the second list from the *desktop's* tests only.
+The four suites under `userland/tests/` had never been built optimised: the C
+library, the file layer, the maths, and the allocator. `-O2` is where strict
+aliasing and pointer provenance start to matter, and an allocator is nothing
+but pointer arithmetic across type boundaries.
+
+It surfaced as a fix that would have been dead code, which is the part worth
+keeping: the sanitized pass aborted on the `calloc` overflow check, because
+under AddressSanitizer the host's `calloc` is ASan's and ASan kills the process
+rather than returning NULL. Skipping the comparison under a sanitizer would
+have meant skipping it everywhere. **34 suites became 40.**
+
+### Where it leaves the library
+
+| | before | now |
+|---|---|---|
+| symbols answered | 72 of 132 | **77 of 132** |
+| call sites answered | 2,478 of 3,113 | **2,908 of 3,113** |
+
+205 call sites left. The largest group is files and directories at 96, then
+`errno` at 43 and sockets at 44.
+
+### What it needs from the kernel, which is one call
+
+`mem_recon.c` asks `SYS_MAP` for a range with **no file behind it** -- fd -1,
+the spelling `docs/KERNEL-WANTS.md` proposes. Today the kernel finds no such
+descriptor and refuses with EBADF, so `malloc` answers NULL and
+`recon_malloc_stats().refusals` counts it. **The day the kernel accepts it,
+this works with nothing rebuilt.**
+
+No new system call number is taken here, deliberately: two sessions build this
+kernel, and a number claimed in advance by the half that does not own `core/`
+is a number claimed twice. That has happened, and it is in `docs/BUGS.md`.
+
+The program on the disk links the allocator already, so the wiring is in place
+and compiled -- and the freestanding build has to keep working for it, which is
+what stops it drifting while it is only ever exercised on the host.
+
+---
+
 ## v0.4.27 — the kernel starts the system instead of containing it
 
 Said plainly, because it is the thing this version is about:
