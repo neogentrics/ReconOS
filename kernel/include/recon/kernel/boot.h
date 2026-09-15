@@ -168,6 +168,11 @@ void boot_finish_regions(void);
 
 const char *boot_firmware_name(enum boot_firmware f);
 const char *mem_kind_name(enum mem_kind k);
+/* Which volume the loader read this kernel from, on its own so it can be
+ * printed twice: in the boot report, and again at the end of a `noinit` boot
+ * where a long report has scrolled the first copy off a small screen. */
+void boot_print_medium(void);
+
 void boot_print_summary(void);
 
 /* Where the kernel image itself sits. Provided by every linker script, and the
