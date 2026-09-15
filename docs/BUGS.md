@@ -7210,9 +7210,53 @@ boot log.
   is not counted: a sixty-four-guest experiment was run across its first
   minutes, which is the CPU contention this project already has an entry about
   reading a result through. It was stopped rather than read.)
-- **Status:** open, unreproduced. The next observation is what makes this
-  diagnosable; until then there is nothing to fix and a guess would be worse
-  than the gap.
+- **Reproduced on real hardware, 14 September**, on the Gateway -- the first
+  machine outside QEMU it has ever run on, and the first boot of it there:
+
+  ```
+  timer: 0 of 3 timers fired
+  timer: a timer filed on the second wheel never came down to the first
+  timer: a 50 ms sleep took 43132 us
+  something later    : FAIL
+  ```
+
+  **The third line is new and it is the diagnosis.** No matrix run has ever
+  printed it. A 50 ms sleep that returns after 43 ms is the monotonic clock
+  running ahead of real time -- and the wheel's hand is turned by the tick
+  interrupt, not by that clock. Both symptoms are then one fact rather than
+  two: the wait ends when `time_ticks()` says ten ticks have passed, and the
+  hand has not turned far enough for a timer filed at +2 to be due.
+
+- **So the mechanism ruled out above is the mechanism.** That section says, in
+  as many words, *if the hand can fall three ticks behind the clock ... `0 of 3
+  timers fired` is not a broken wheel, it is a wheel nobody has turned yet* --
+  and then discards it because sixty-seven boots measured a worst gap of one
+  tick.
+
+  Those measurements were right about QEMU and silent about anywhere else.
+  **The instrument was fine; the machine was the wrong machine.** Which is the
+  same sentence as every other entry found on this laptop: KF-214's wait on a
+  chip QEMU always has, KF-219's CRC QEMU does not enforce, KF-223's port QEMU
+  powers for you. A negative result from an emulator is a fact about the
+  emulator.
+
+- **And it is not alone in that boot.** The same report carries
+
+  ```
+  msi: a message was written to the local APIC's window and no interrupt arrived
+  an interrupt with no wire : FAIL
+  ```
+
+  which is interrupt *delivery* failing on the same machine. Whether the two
+  are one fault is not yet known and is the next thing to find out -- a wheel
+  turned by an interrupt that does not arrive would produce exactly the timer
+  symptom, and saying so before it is measured would be the mistake this entry
+  already made once.
+
+- **Status:** open, **reproduced**. Not fixed: what is known is that the clock
+  and the hand diverge on this machine and that interrupt delivery is also
+  failing on it. Which causes which is the next measurement, and this entry has
+  already been wrong once by reasoning past its evidence.
 
 ### KF-231 - kprintf reads the width on a number and throws it away
 
