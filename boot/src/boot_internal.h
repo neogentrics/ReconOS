@@ -95,6 +95,15 @@ void gfx_report(BOOLEAN used);
  * size a screen against it without a second, drifting number. */
 #define MENU_MAX 8
 
+/* How many of those the *scan* may fill. One fewer, and the difference is
+ * recovery's slot.
+ *
+ * `add_recovery` returns without doing anything when the table is full, which
+ * is KF-233's fault reached by a different door: the entry that is not a system
+ * is the entry a machine full of systems loses. Rarer than the three return
+ * paths and exactly as silent. Reserving the slot is cheaper than noticing. */
+#define MENU_SYSTEMS_MAX (MENU_MAX - 1)
+
 /* How long the menu waits before starting the default.
  *
  * One number for every machine. It used to be two seconds when recovery was

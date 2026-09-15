@@ -63,6 +63,22 @@ static const struct {
 	{ u"\\EFI\\fedora\\shimx64.efi",            "Fedora" },
 	{ u"\\EFI\\arch\\grubx64.efi",              "Arch Linux" },
 
+	/* Added because it is on the machine this loader is being tested on,
+	 * and it was not offered. Both files for Ubuntu's reason: a distribution
+	 * that supports secure boot installs a shim beside its GRUB, and which
+	 * of the two the firmware will accept is not ours to decide.
+	 *
+	 * **The table is the limit here, and it is worth saying so.** Seven
+	 * names find seven systems; an eighth system on the disk is invisible
+	 * to this menu no matter how healthy it is. The firmware's own
+	 * `BootOrder` would find all of them -- and would also list entries for
+	 * disks that have since been removed, which is exactly the stale list
+	 * the comment in `main.c` refuses to keep. Neither is free. For now the
+	 * table grows when a real machine shows it something it missed, and
+	 * this line is the first time that has happened. */
+	{ u"\\EFI\\kali\\shimx64.efi",              "Kali Linux" },
+	{ u"\\EFI\\kali\\grubx64.efi",              "Kali Linux" },
+
 	/* An installed macOS, on a Mac. Apple's firmware is present in that
 	 * case and boot.efi does the rest; on a PC this file is not there and
 	 * nothing is offered, which is the correct outcome rather than a
@@ -202,7 +218,12 @@ static void scan_for_systems(EFI_HANDLE exclude)
 
 	count = size / sizeof(EFI_HANDLE);
 
-	for (h = 0; h < count && entry_count < MENU_MAX; h++) {
+	/* `MENU_SYSTEMS_MAX`, not `MENU_MAX`: the last slot belongs to recovery
+	 * and the scan does not get to spend it. Same fault as KF-233 through a
+	 * different door -- `add_recovery` gives up silently when the table is
+	 * full, so a machine with eight systems on it loses the one entry that
+	 * is not a system. Rarer and identical. */
+	for (h = 0; h < count && entry_count < MENU_SYSTEMS_MAX; h++) {
 		EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs;
 		EFI_FILE_PROTOCOL *root;
 
@@ -219,7 +240,7 @@ static void scan_for_systems(EFI_HANDLE exclude)
 		for (k = 0; k < sizeof(known) / sizeof(known[0]); k++) {
 			EFI_FILE_PROTOCOL *f;
 
-			if (entry_count >= MENU_MAX)
+			if (entry_count >= MENU_SYSTEMS_MAX)
 				break;
 
 			if (EFI_ERROR(root->Open(root, &f,

@@ -7172,6 +7172,27 @@ boot log.
   unselected row is drawn in, and was read past in six seconds. **Both are
   consistent with what was reported, and the fix above is right either way.**
 
+- **The same fault has a second door**, found while checking the first. The
+  table holds `MENU_MAX` entries and `add_recovery()` returns without doing
+  anything when it is full -- so a machine with eight systems on it loses the
+  one entry that is not a system. Rarer than the three return paths and exactly
+  as silent, and the same sentence describes it: the entry that depends on
+  nothing is the entry a full table drops. The scan is bounded by
+  `MENU_SYSTEMS_MAX` now, which is one fewer, and the slot it leaves is
+  recovery's. **Reserving it is cheaper than noticing it is gone.**
+
+- **And the machine in question runs Kali**, which the loader did not know
+  about: `\EFI\kali\` is not one of the seven names in the table, so it was
+  never going to be offered whatever the menu did. That is a gap rather than
+  this bug, and it is a reminder of the table's limit -- seven names find seven
+  systems and an eighth is invisible however healthy it is. Kali is in the
+  table now, both `shimx64.efi` and `grubx64.efi` for Ubuntu's reason. The
+  firmware's own `BootOrder` would find every one of them and would also offer
+  disks that have since been removed, which is the stale list `main.c`
+  deliberately refuses to keep. Neither is free; the table grows when a real
+  machine shows it something it missed, and this is the first time that has
+  happened.
+
 - **Status:** fixed, loader 0.2.38. The Gateway's menu is still unexplained.
 
 ### KF-232 - Three timers did not fire, once, on one path of twenty-eight
