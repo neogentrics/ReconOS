@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.3.0 |
+| **Version** | 0.4.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 180 across five suites |
+| **Checks** | 219 across six suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -46,9 +46,10 @@ architecture document asks for:
 
 | route | what it answers |
 |---|---|
-| `/` | the dashboard — what this machine is, and what this server has done |
-| `/api/status` | the same facts as JSON, from the same structure |
-| `/health` | `ok`, for something that is not a person |
+| `GET /` | the dashboard — what this machine is, what it has done, and a form that renames it |
+| `GET /api/status` | the same facts as JSON, from the same structure |
+| `GET /health` | `ok`, for something that is not a person |
+| `POST /api/name` | renames the machine, validated by the same code that numbers a parallel |
 | anything else | a file from `/System/Web` on the volume, or 404 |
 
 Every number on that page is read from the kernel through `SYS_MACHINE` or
@@ -130,6 +131,7 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_http_serve` | 23 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 30 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
+| `server_http_form` | 39 | decoding a form, and the field that has two values |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -196,6 +198,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.0** | **A write side.** `urlencoded` form decoding, and `POST /api/name` renames the machine — validated by `server_name_split`, so one idea of a legal name serves both renaming and parallel numbering. A field given twice has **no** value, because two values is not an answer and choosing one is how a value walks past a filter. |
 | **0.3.0** | **Streaming, and a promise that is checked.** A handler writes into a sink as it goes, so a response is no longer limited to what a program can hold — the file handler streams and serves files far past the old cap. A declared length that is not delivered closes the connection rather than desynchronising the next request. Chunked for HTTP/1.1, close-delimited for 1.0. |
 | **0.2.0** | **Files off the volume.** A static file handler, as one handler among others rather than the server's middle — MIME by extension, an index for directories, never a listing. It found `open(O_CREAT)` in the C library silently dropping the flag, and a fault of its own reading `mkdir`'s `EEXIST` as failure. |
 | **0.1.0** | **A page served from a ReconOS machine.** The web server runs in ring 3 on the real kernel and answers a client outside it — the first bytes ever moved over an accepted connection on this system. It found `tcp_write` reporting 1194 bytes sent when it had sent 512. |

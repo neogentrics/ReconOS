@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 156 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 219 checks, **running on the machine** |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
@@ -86,7 +86,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | not started | needed before there is a second service |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
-| Structured REST / RPC management API | server | partial | `/api/status` answers real facts; no write side |
+| Structured REST / RPC management API | server | **partial** | reads and one write: `POST /api/name` renames the machine |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |
 | Container runtime | server | **blocked** | no namespaces, no cgroups |
 | Out-of-band IPMI / Redfish | server | not started | |
@@ -100,7 +100,7 @@ the same two things: a static file handler and a JSON API.
 
 | console | status | note |
 |---|---|---|
-| Server Manager dashboard | **partial** | one page, real numbers, served from the machine |
+| Server Manager dashboard | **partial** | one page, real numbers, and a form that changes something |
 | Storage / RAID manager | spec | waits on the kernel's RAID |
 | Network and firewall centre | spec | |
 | Services and daemon inspector | spec | waits on the supervisor |

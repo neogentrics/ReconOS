@@ -35,6 +35,7 @@ Nothing is marked built on the strength of having been written.
 | Request bodies, framed by `Content-Length` | **built** | 64 KiB cap |
 | Static files from the volume | **built** | `files.c` — 30 checks; on the machine |
 | Streaming responses | **built** | `serve.c` — 23 checks; a declared length is a promise |
+| Form decoding, and the write side | **built** | `form.c` — 39 checks; `POST /api/name` renames the machine |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -110,7 +111,7 @@ can run, not by what it can send.
 | **In-process handlers** | **built** | `struct http_route` + `http_handler`. A C function is handed a parsed request and fills a response. This is how the admin console and the REST API are served. |
 | **Static files** | **built** | `server/http/files.c` — one handler among others, as designed. MIME by extension, an index for directories, **never a listing**. Verified reading off ReconFS on the machine. |
 | **JSON / REST APIs** | **built** | demonstrated in the serving suite: a handler returning `application/json` with the raw query string. Needs a JSON writer and parser next. |
-| **Form submission** | **built** (transport) | `POST` bodies arrive whole, with their real length, not NUL-terminated. `application/x-www-form-urlencoded` and `multipart/form-data` decoders are specified, not written. |
+| **Form submission** | **built** | `server/http/form.c` — `urlencoded` decoded, 39 checks. A field given twice has **no** value: see below. `multipart/form-data` is still specified, not written. |
 | **File upload** | specified | needs `multipart/form-data` and streaming to disk; the 64 KiB body cap exists because nothing streams yet. |
 | **File download** | **built** | streams from the volume in 8 KiB blocks. Range requests are still specified, not written. |
 | **Server-sent events** | **unblocked** | the sink it needed now exists; the event framing is not written. |
@@ -155,6 +156,30 @@ The three ways out, in the order they become available:
 3. **Non-blocking sockets and a poll loop.** The right answer. Needs the
    kernel to report readiness on more than a listener; today `accept` is the
    only call that answers `EAGAIN`.
+
+### A field given twice has no value
+
+`a=1&a=2` is legal to send and there is no agreement about what it means.
+Different stacks take the first, the last, both, or join them with a comma.
+**That disagreement is the vulnerability** — where a filter and the thing
+behind it read one request differently, a value walks past the filter. It is
+called HTTP parameter pollution, and it is request smuggling's shape one layer
+up.
+
+So `http_form_get` refuses a duplicated name. It answers NULL, exactly as it
+does for a name that is absent, and `http_form_count` tells the two apart for a
+caller who needs to know. Two values is not an answer, so there is no answer.
+
+`role=user&role=admin` is the case worth picturing.
+
+### `+` is a space here and a plus sign in a path
+
+Two decoders rather than one with a flag. A path decoder used on a form turns
+`1+2` into `1 2`; a form decoder used on a path turns a file named `a+b` into
+`a b`. They look like one encoding and are not, and a flag is a thing a caller
+passes wrong exactly once.
+
+---
 
 ---
 

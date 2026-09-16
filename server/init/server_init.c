@@ -46,6 +46,7 @@
 
 #include "../http/serve.h"
 #include "../http/files.h"
+#include "../http/form.h"
 #include "../include/recon_server.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
@@ -98,11 +99,29 @@ static const char PAGE_HEAD[] =
 	"code{color:#4fb3a5}"
 	"</style>\n<main>\n";
 
-/* The dashboard. One page, real numbers, nothing invented.
+/*
+ * The dashboard. One page, real numbers, nothing invented.
  *
  * This is the console the docx calls the Server Manager dashboard, at the size
  * it can honestly be today: what this machine is, and what this server has
- * done. Every row is read from the kernel or counted here. */
+ * done. Every row is read from the kernel or counted here.
+ *
+ * --- The machine name is written into HTML without escaping, and why that is
+ * safe here ---
+ *
+ * It appears twice below: as the heading, and as the value of an input. Neither
+ * is escaped, and that is safe **only because of what may become a name**:
+ * `handle_set_name` puts every candidate through `server_name_split`, which
+ * accepts letters, digits and the hyphen and refuses everything else -- so a
+ * `<`, a `"` or a `&` cannot reach here.
+ *
+ * That is a real dependency between two functions and it is written down
+ * because it is the kind that breaks silently. **The day the name rules loosen
+ * -- to allow a dot for a fully qualified name, say -- this page becomes a
+ * cross-site scripting hole**, and nothing in the compiler or the suites will
+ * say so. An escaper is the right answer once anything here carries text a
+ * stranger chose; `docs/WEB.md` has it under template rendering.
+ */
 static int handle_dashboard(const struct http_request *r, const char *body,
                             size_t body_len, struct http_response *out,
                             void *ctx)
@@ -128,6 +147,15 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             "<tr><td>requests served</td><td><code>%lu</code></td></tr>\n"
 	             "<tr><td>bytes sent</td><td><code>%lu</code></td></tr>\n"
 	             "</table>\n"
+	             "<form method=\"post\" action=\"/api/name\" "
+	             "style=\"margin-top:28px\">\n"
+	             "<label style=\"color:#737c90\">rename this machine "
+	             "<input name=\"name\" value=\"%s\" "
+	             "style=\"background:#1c2130;color:#d8dce6;border:1px solid "
+	             "#2a3145;padding:6px 8px;font:inherit\"></label>\n"
+	             "<button style=\"background:#4fb3a5;color:#141821;border:0;"
+	             "padding:7px 14px;font:inherit;cursor:pointer\">Set</button>\n"
+	             "</form>\n"
 	             "<p class=\"sub\" style=\"margin-top:28px\">"
 	             "Served by <code>server/http/</code> over the kernel's five "
 	             "socket calls. This page is the first thing to move bytes "
@@ -143,7 +171,8 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             (unsigned long long)(f->machine.memory_bytes >> 20),
 	             (unsigned long long)(f->machine.memory_free_bytes >> 20),
 	             f->machine.page_size / 1024u,
-	             f->served, f->bytes_out);
+	             f->served, f->bytes_out,
+	             f->name);
 
 	if (n < 0 || (size_t)n >= sizeof(page))
 		return HTTP_EBODY_LONG;
@@ -228,10 +257,80 @@ static const struct http_files SITE_FILES = { WEB_ROOT, "index.html" };
  * `/api` claiming `/apifoo` applies to `/` as well, and a site written that way
  * serves its index and nothing else.
  */
+/*
+ * Rename this machine, from a form.
+ *
+ * The first thing on this server that *changes* something, which is why the
+ * validation is the interesting part rather than the storing.
+ *
+ * **The name is checked by `server_name_split`**, the same function that works
+ * out what a parallel of `M16` should be called -- so a name this accepts is a
+ * name the parallel numbering can work with, and there is one idea of a legal
+ * machine name rather than two that drift apart.
+ *
+ * Two of its refusals are accepted here, and that is deliberate. `M16` splits
+ * into a family and a number; `gateway` does not, and answers
+ * `SERVER_EUNNUMBERED`. But a server may perfectly well be called `gateway` --
+ * it simply cannot have a parallel numbered from it, which is a fact about
+ * *later* and not a reason to refuse the name now. Everything else it refuses
+ * -- an illegal character, an over-long name, a name that is only digits --
+ * is refused here too.
+ */
+static int handle_set_name(const struct http_request *r, const char *body,
+                           size_t body_len, struct http_response *out,
+                           void *ctx)
+{
+	static char answer[256];
+	struct server_facts *f = (struct server_facts *)ctx;
+	struct http_form form;
+	struct name_family family;
+	const char *wanted;
+	int rc, n;
+
+	(void)r;
+
+	rc = http_form_parse(body, body_len, &form);
+	if (rc != HTTP_OK)
+		return rc;
+
+	wanted = http_form_get(&form, "name");
+	if (!wanted) {
+		/* Absent, or given twice. `http_form_get` deliberately answers
+		 * the same for both -- see `form.h` -- and either way there is
+		 * no single name to take. */
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: one name field\n", 32);
+		return HTTP_OK;
+	}
+
+	rc = server_name_split(wanted, &family);
+	if (rc != SERVER_OK && rc != SERVER_EUNNUMBERED) {
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: not a machine name\n",
+		                     36);
+		return HTTP_OK;
+	}
+
+	snprintf(f->name, sizeof(f->name), "%s", wanted);
+
+	/* What it is now, read back from where it was stored rather than from
+	 * what was sent. A reply that echoes the request proves the request,
+	 * not the change. */
+	n = snprintf(answer, sizeof(answer),
+	             "{\"role\":\"server\",\"name\":\"%s\",\"numbered\":%s}\n",
+	             f->name, rc == SERVER_OK ? "true" : "false");
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EBODY_LONG;
+
+	http_response_simple(out, 200, "application/json", answer, (size_t)n);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
-	{ "GET", "/",             1, handle_dashboard, 0, &FACTS },
-	{ "GET", "/api/status",   1, handle_status,    0, &FACTS },
-	{ "GET", "/health",       1, handle_health,    0, 0 },
+	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS },
+	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS },
+	{ "GET",  "/health",      1, handle_health,    0, 0 },
+	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */

@@ -943,6 +943,20 @@ add_executable(recon_server_stream_tests
 
 add_test(NAME server_http_stream COMMAND recon_server_stream_tests)
 
+# Decoding a form, and the field that has two values.
+#
+# Pure -- every case is a string literal, no sockets and no files, which is the
+# argument for keeping the decoder in its own file. The case it is really about
+# is `a=1&a=2`: legal to send, and stacks variously take the first, the last,
+# both, or a comma-joined pair. Where a filter and the thing behind it choose
+# differently a value walks past the filter, which is request smuggling's shape
+# one layer up. The answer here is to have no answer.
+add_executable(recon_server_form_tests
+    server/http/form.c
+    server/tests/test_http_form.c)
+
+add_test(NAME server_http_form COMMAND recon_server_form_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the
