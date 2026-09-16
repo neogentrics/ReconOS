@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.51
+    VERSION 0.4.52
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -250,6 +250,7 @@ add_executable(ReconOS
     src/recon_web.c
     src/recon_http.c
     src/recon_url.c
+    src/recon_media.c
     src/recon_form.c
     src/recon_cookie.c
     src/recon_mail.c
@@ -609,6 +610,7 @@ target_include_directories(recon_image_tests PRIVATE
 # and those are the ones that turn one message into two when they are wrong.
 add_executable(recon_smtp_tests
     tests/test_smtp.c
+    src/recon_media.c
     src/recon_smtp_message.c
     # For base64, which is how an attachment travels. Still no network here:
     # recon_crypt is arithmetic on bytes and nothing else.
@@ -800,6 +802,7 @@ add_test(NAME url COMMAND recon_url_tests)
 # four files instead of the whole compositor.
 add_executable(recon_form_tests
     tests/test_form.c
+    src/recon_media.c
     src/recon_form.c
     src/recon_html.c
     src/recon_css.c
@@ -1144,6 +1147,7 @@ add_executable(recon_malformed_tests
     src/recon_url.c
     # And what a form sends, which is the far end of the same journey: a page
     # somebody else wrote deciding which bytes this machine puts on the wire.
+    src/recon_media.c
     src/recon_form.c
     # And cookies, where a header somebody else wrote decides what is sent on
     # every request after it.

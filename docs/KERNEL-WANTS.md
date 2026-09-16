@@ -271,6 +271,46 @@ layer: eight of the eleven symbols are called from `src/recon_fs.c`.
 > was written by counting call sites in the library; the probe knew nothing
 > about that and arrived at the same place.
 
+> ### Corrected the same day: those three do not need `stat`
+>
+> The paragraph above is right about *which functions* and wrong about *what
+> they need*, and the gap between those two is a step nobody took: the probe
+> named three functions, and nobody then asked what the three of them call.
+>
+> Asked now — by walking the call graph transitively from each entry point,
+> because one level of grep reports that `recon_fs_write` calls nothing at all
+> and it is `write_file` underneath that opens the file — the three reach
+> exactly five host calls between them:
+>
+> | | reaches |
+> |---|---|
+> | `recon_fs_write` | `fopen` `fwrite` `fclose` `realpath` |
+> | `recon_fs_append` | `fopen` `fwrite` `fclose` `realpath` |
+> | `recon_fs_mkdir` | `mkdir` `realpath` |
+>
+> **No `stat`. No `lstat`.** Both are reachable only from the parts of
+> `recon_fs.c` a drawing program never enters — listing a directory, deleting,
+> renaming, the recycle bin.
+>
+> And `realpath` is reachable only through `stays_inside`, which exists to stop
+> a path escaping its root **through a symbolic link**. ReconOS cannot make one:
+> there is no command for it, no `SYS_LINK`, and no `S_IFLNK` anywhere in either
+> tree. So on a ReconOS volume that guard is guarding against something that
+> cannot be built — which is an argument for a cheaper `realpath`, not for
+> deleting the guard, because the guard is also what stops `..`.
+>
+> **What this changes for the kernel:** a desktop that draws needs `mkdir` and
+> the four stdio calls, and those are a smaller thing than eleven symbols
+> including `stat`. `stat` is still wanted — the file manager, the shell's
+> `dir`, and the picker this desktop now opens all go through the rest of this
+> file — but it is **no longer the wall between the kernel and a screen with a
+> window on it**. It is the wall between the kernel and a file manager.
+>
+> The measurement is `scripts/fs-reachable.py`, and it is deliberately biased
+> towards over-reporting: anything that looks like a call is counted, comments
+> included. "`stat` is not reachable" from a tool biased that way is worth
+> something; the same answer from a tool biased the other way would not be.
+
 **What the desktop does today, measured with `nm` over its objects rather than
 with a grep** -- a grep counts the word and the linker counts the call:
 

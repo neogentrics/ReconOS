@@ -26,6 +26,7 @@
 #include "recon_fs.h"
 #include "recon_cookie.h"
 #include "recon_css.h"
+#include "recon_filedlg.h"
 #include "recon_form.h"
 #include "recon_html.h"
 #include "recon_http.h"
@@ -399,6 +400,20 @@ struct web_tab {
     int menu_scroll;
 
     /*
+     * The file chooser, and which control it is filling.
+     *
+     * On the tab rather than on the window because it belongs to a form on a
+     * page: switching tabs and coming back should find it where it was, and a
+     * chooser shared between tabs would put a file into whichever form
+     * happened to be in front when it was closed.
+     *
+     * `file_field` is -1 when the chooser is not up. A page cannot open this;
+     * only a click on the control can.
+     */
+    struct recon_filedlg dialog;
+    int file_field;
+
+    /*
      * A POST waiting to be confirmed.
      *
      * `pending_form` is which form, `pending_submitter` which button was
@@ -409,6 +424,18 @@ struct web_tab {
     int pending_form;
     int pending_submitter;
     char *pending_body;
+
+    /*
+     * How long it is, and what it is.
+     *
+     * A url-encoded body is text and `strlen` was enough. A multipart one
+     * carries a file, most of which contain a zero byte, so its length has to
+     * be carried rather than measured -- and its content type names the
+     * boundary, which is different for every submission and must be the same
+     * string the body used.
+     */
+    size_t pending_length;
+    char pending_type[96];
 
     /*
      * Where it goes, both ways: as an address to send to, and as words to
@@ -496,6 +523,19 @@ struct web_field {
      */
     int x, y, w, h;
     bool drawn;
+
+    /*
+     * The file somebody chose for a `type=file` control, as a path.
+     *
+     * **The path stays here.** It is what this viewer needs in order to read
+     * the file at Send, and it is not what goes: the request carries the
+     * file's name and its bytes, because a path tells the far end which
+     * account this is and what the disk looks like.
+     *
+     * Empty when nothing has been chosen, which is where every file control
+     * starts and where Reset puts it back.
+     */
+    char file_path[RECON_PATH_MAX];
 };
 
 /*
@@ -598,8 +638,21 @@ static void fields_free(struct web_tab *t) {
     t->menu_scroll = 0;
     recon_edit_end(&t->editing);
 
+    /*
+     * And the chooser goes with the page that opened it.
+     *
+     * Left up, it would hand a file to a control in the table this function
+     * has just freed, and `file_field` would then be an index into the *next*
+     * page's controls -- the same class of bug as the stale focus this
+     * function exists to prevent, with a file on the end of it.
+     */
+    recon_filedlg_close(&t->dialog);
+    t->file_field = -1;
+
     free(t->pending_body);
     t->pending_body = NULL;
+    t->pending_length = 0;
+    t->pending_type[0] = '\0';
     t->pending_form = -1;
     t->pending_submitter = -1;
     t->pending_where[0] = '\0';
@@ -696,6 +749,7 @@ static struct web_tab *tab_new(struct recon_web *w) {
      * in it would start out with its first control focused. */
     t->focus = -1;
     t->menu_field = -1;
+    t->file_field = -1;
     t->pending_form = -1;
     t->pending_submitter = -1;
 
@@ -1797,6 +1851,22 @@ static const char *field_shown(const struct web_tab *t, int index,
  * near-black; the alternative is a search box that is genuinely invisible on
  * about a third of the modern web.
  */
+/*
+ * The last component of a path.
+ *
+ * What a file control shows, and what goes in the request. Never the path: a
+ * path says which account this is and what the disk looks like, and a page
+ * that asked for a picture has no business learning either.
+ *
+ * `recon_mailwin.c` has four lines like these of its own. Two copies of a
+ * basename cannot disagree about anything, which is the test for whether
+ * something is worth a header between two files; this is not.
+ */
+static const char *name_of_path(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return (slash != NULL && slash[1] != '\0') ? slash + 1 : path;
+}
+
 static void put_field(struct flow *f, int index, int x, int y, int width,
         int height) {
     struct web_tab *t = f->w;
@@ -1861,19 +1931,43 @@ static void put_field(struct flow *f, int index, int x, int y, int width,
          * into it, presses Send, and the server receives a word where it
          * expected a document. A dead button cannot be typed into.
          */
-        bool inert = (d->kind == RECON_HTML_FIELD_BUTTON ||
-            d->kind == RECON_HTML_FIELD_FILE);
+        bool inert = (d->kind == RECON_HTML_FIELD_BUTTON);
+
+        /*
+         * A file control says what it is holding.
+         *
+         * The name and not the path: the path is the viewer's business, and
+         * putting it on a page next to whatever else the page has written
+         * there is how somebody reads their own account name off a screen
+         * they are about to photograph for support.
+         */
+        char file_label[96];
+        const char *label = d->label;
+        if (d->kind == RECON_HTML_FIELD_FILE) {
+            const char *chosen = t->fields[index].file_path;
+            /*
+             * A cut is meant here and cannot be wrong: this is a label on a
+             * button, and a very long filename shortened on screen is still
+             * the right file. What *goes* is `file_path`, which is never cut
+             * -- `recon_text_copy` is how this file says that difference out
+             * loud rather than leaving a warning for somebody to weigh later.
+             */
+            recon_text_copy(file_label, sizeof(file_label),
+                chosen[0] != '\0' ? name_of_path(chosen) : "Choose a file...");
+            label = file_label;
+        }
+
         struct recon_widget_button button = {
             .x = screen_x, .y = screen_y, .w = width, .h = height,
             .id = id,
-            .label = d->label,
+            .label = label,
             .font = font,
             .behind = f->paper,
             .look = (d->kind == RECON_HTML_FIELD_SUBMIT && !d->disabled)
                 ? RECON_WIDGET_ACCENT : RECON_WIDGET_PLAIN,
             .disabled = d->disabled || inert,
             .tip = (d->kind == RECON_HTML_FIELD_FILE)
-                ? "ReconOS's viewer cannot attach a file yet"
+                ? "Choose a file to send with this form"
                 : (inert ? "This button needs JavaScript, which ReconOS's "
                     "viewer does not run" : NULL),
         };
@@ -3981,6 +4075,14 @@ static void web_draw(void *user, struct recon_panel *p, int x, int y, int width,
     if (w->menu_open) {
         draw_menu(w, p, x, bar_y + BAR_HEIGHT, width);
     }
+
+    /*
+     * And the chooser over all of it, because it is the only thing here that
+     * is modal: while it is up, the page underneath is not being worked.
+     */
+    if (recon_filedlg_is_open(&t->dialog)) {
+        recon_filedlg_draw(&t->dialog, p, w->font, x, y, width, height);
+    }
 }
 
 
@@ -4576,6 +4678,31 @@ static void field_toggle(struct web_tab *t, int index) {
 #define FORM_BODY_MAX 8192
 
 /*
+ * And how much one that carries files may carry.
+ *
+ * Eight kilobytes is the right ceiling for a form somebody fills in by hand
+ * and the wrong one for a form somebody attaches a photograph to -- a
+ * photograph is not a long answer, it is a different kind of thing. Four
+ * megabytes covers a picture, a scan or a document and still refuses a film.
+ *
+ * It is a ceiling and not a target: the whole body is built in memory before
+ * any of it is sent, because what is described to somebody and what goes has
+ * to be the same bytes. A viewer that streamed a file as it read it could
+ * not show what it was about to send.
+ */
+#define FORM_UPLOAD_MAX (4 * 1024 * 1024)
+
+/*
+ * How many files one submission may attach.
+ *
+ * Each one is held in memory whole and at once, so this is the number that
+ * decides the worst case rather than the limit above. Eight is more than any
+ * form asks for and few enough that a page with two hundred file controls on
+ * it cannot decide how much this allocates.
+ */
+#define MAX_FILES_READ 8
+
+/*
  * Where a form goes.
  *
  * An empty action is the page's own address, which is what the standard says
@@ -4614,7 +4741,11 @@ static void send_pending(struct web_tab *t) {
     }
 
     char *body = t->pending_body;
+    size_t length = t->pending_length;
+    char type[sizeof(t->pending_type)];
+    snprintf(type, sizeof(type), "%s", t->pending_type);
     t->pending_body = NULL;
+    t->pending_length = 0;
     struct recon_http_url where = t->pending_url;
 
     t->pending_form = -1;
@@ -4637,9 +4768,15 @@ static void send_pending(struct web_tab *t) {
     t->received = 0;
     set_status(t, false, "Sending to %s...", where.host);
 
+    /*
+     * The length is carried rather than measured. A multipart body holds a
+     * file, most of which contain a zero byte, and `strlen` would stop at the
+     * first one -- sending a prefix of the request and reporting no error at
+     * all.
+     */
     t->request = recon_http_post(WEB_APPLICATION, &where,
-        t->owner != NULL ? t->owner->cookies : NULL, NULL, body,
-        strlen(body), &HANDLERS, t);
+        t->owner != NULL ? t->owner->cookies : NULL,
+        type[0] != '\0' ? type : NULL, body, length, &HANDLERS, t);
     free(body);
 
     if (t->request == NULL) {
@@ -4709,36 +4846,110 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
     }
 
     /*
-     * A form that asks for multipart is refused here, before a body exists.
+     * The chosen files, read now rather than when they were chosen.
      *
-     * **Url-encoded is not a degraded multipart body, it is an
-     * unintelligible one.** The server looks for a boundary that is not there
-     * and finds nothing, and the failure it reports is its own -- so somebody
-     * watching this viewer would see a page saying something went wrong, with
-     * no way to learn that what went wrong was the shape of the request.
+     * Between choosing and sending somebody may well have gone and finished
+     * the document, and what should go is the file as it is at Send. The
+     * same decision `recon_mailwin.c` makes for an attachment.
      *
-     * Refused rather than attempted, and said here rather than left to the
-     * far end, because this is the only place that knows why.
-     *
-     * A file field in a form that does *not* ask for multipart is a different
-     * case and goes: the standard has such a form send the file's name rather
-     * than its content, and a browser with no file chosen sends an empty
-     * value -- which is exactly what this sends, so the two requests are the
-     * same request.
+     * The *contents* go to the encoder and the *path* does not. That is not
+     * tidiness: `recon_form_body_multipart` has no way to send a path, so a
+     * later change to this file cannot leak one by accident.
      */
+    char *read_files[MAX_FILES_READ];
+    int read_count = 0;
+    bool unreadable = false;
+    const char *unreadable_name = NULL;
+
     if (f->wants_files) {
+        for (int i = 0; i < t->field_count && !unreadable; i++) {
+            const struct recon_html_field *d = recon_html_field_at(t->page, i);
+            if (d == NULL || d->form != form ||
+                    d->kind != RECON_HTML_FIELD_FILE) {
+                continue;
+            }
+            const char *path = t->fields[i].file_path;
+            if (path[0] == '\0') {
+                continue;   /* Nothing chosen: an empty part, and no read. */
+            }
+            if (read_count >= MAX_FILES_READ) {
+                unreadable = true;
+                unreadable_name = name_of_path(path);
+                break;
+            }
+
+            size_t size = 0;
+            char *bytes = recon_fs_read(NULL, path, &size);
+            if (bytes == NULL) {
+                unreadable = true;
+                unreadable_name = name_of_path(path);
+                break;
+            }
+            read_files[read_count++] = bytes;
+            values[i].file_name = name_of_path(path);
+            values[i].file_bytes = bytes;
+            values[i].file_length = size;
+        }
+    }
+
+    if (unreadable) {
+        for (int i = 0; i < read_count; i++) {
+            free(read_files[i]);
+        }
         free(values);
+        /*
+         * Said here, and nothing sent. A form submitted with one of its files
+         * silently missing is one the server accepts -- and then somebody is
+         * looking at a record with no document attached to it, with nothing
+         * anywhere having reported a problem.
+         */
         set_status(t, true,
-            "This form attaches a file, and ReconOS's viewer cannot attach "
-            "one yet. Nothing was sent.");
+            "'%s' could not be read, so nothing was sent.",
+            unreadable_name != NULL ? unreadable_name : "that file");
         recon_appwin_refresh(t->win);
         return;
     }
 
     int count = 0;
     bool secret = false;
-    char *body = recon_form_body(t->page, form, submitter, values,
-        t->field_count, FORM_BODY_MAX, &count, &secret);
+    size_t length = 0;
+    char type[sizeof(t->pending_type)];
+    char *body = NULL;
+
+    if (f->wants_files) {
+        /*
+         * `multipart/form-data`, and the boundary it chose comes back here
+         * because the header has to name the same string the body used. A
+         * request whose header names a boundary the body does not use is one
+         * the server reads as an empty form -- accepted, and empty.
+         */
+        char boundary[RECON_FORM_BOUNDARY_MAX];
+        body = recon_form_body_multipart(t->page, form, submitter, values,
+            t->field_count, FORM_UPLOAD_MAX, boundary, sizeof(boundary),
+            &length, &count, &secret);
+        if (body != NULL) {
+            snprintf(type, sizeof(type),
+                "multipart/form-data; boundary=%s", boundary);
+        }
+    } else {
+        /*
+         * A file field in a form that does *not* ask for multipart still
+         * goes: the standard has such a form send the file's name rather than
+         * its content, and a browser with no file chosen sends an empty
+         * value -- which is what this sends, so the two requests are the same
+         * request.
+         */
+        body = recon_form_body(t->page, form, submitter, values,
+            t->field_count, FORM_BODY_MAX, &count, &secret);
+        if (body != NULL) {
+            length = strlen(body);
+            snprintf(type, sizeof(type), "application/x-www-form-urlencoded");
+        }
+    }
+
+    for (int i = 0; i < read_count; i++) {
+        free(read_files[i]);
+    }
     free(values);
 
     if (body == NULL) {
@@ -4750,6 +4961,13 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
     }
 
     if (f->method == RECON_HTML_GET) {
+        /*
+         * A GET puts its answers in the address, and an address cannot carry
+         * a file. The standard says so too -- `enctype` is ignored on a GET --
+         * and the shape above has already produced the url-encoded body,
+         * which is the right one. This is only the note saying that is
+         * deliberate and not an oversight.
+         */
         bool fits = recon_form_get_address(&where, body);
         free(body);
         if (!fits) {
@@ -4768,6 +4986,8 @@ static void submit_form(struct web_tab *t, int form, int submitter) {
      * fields. */
     free(t->pending_body);
     t->pending_body = body;
+    t->pending_length = length;
+    snprintf(t->pending_type, sizeof(t->pending_type), "%s", type);
     t->pending_form = form;
     t->pending_submitter = submitter;
     t->pending_url = where;
@@ -4806,6 +5026,9 @@ static void reset_form(struct web_tab *t, int form) {
         snprintf(live->text, sizeof(live->text), "%s", d->value);
         live->on = d->on;
         live->chosen = 0;
+        /* A file quietly still attached after a Reset is a file sent by
+         * accident, so this goes back with everything else. */
+        live->file_path[0] = '\0';
         for (int o = 0; o < d->option_count; o++) {
             const struct recon_html_option *opt =
                 recon_html_option_at(t->page, d->first_option + o);
@@ -4859,6 +5082,20 @@ static void field_pressed(struct recon_web *w, struct web_tab *t, int index) {
         t->menu_scroll = 0;
         break;
 
+    case RECON_HTML_FIELD_FILE:
+        /*
+         * The only way this chooser opens. A page cannot ask for it, cannot
+         * say where it should start, and cannot say what it should show --
+         * somebody clicked the control, and that is the whole of the
+         * permission being granted.
+         */
+        field_blur(t);
+        t->focus = index;
+        t->file_field = index;
+        recon_filedlg_open(&t->dialog, RECON_FILEDLG_OPEN,
+            "Choose a file to send", NULL, NULL);
+        break;
+
     case RECON_HTML_FIELD_SUBMIT:
         submit_form(t, d->form, index);
         break;
@@ -4883,6 +5120,27 @@ static void field_pressed(struct recon_web *w, struct web_tab *t, int index) {
     (void)w;
 }
 
+/*
+ * Put the chosen file on the control that asked for it.
+ *
+ * The path is kept and the file is *not* read. It is read at Send, against
+ * the file as it is then -- the same decision `recon_mailwin.c` made for an
+ * attachment, and for the same reason: between choosing and sending somebody
+ * may well have gone and finished the document.
+ */
+static void file_chosen(struct web_tab *t) {
+    const char *path = recon_filedlg_path(&t->dialog);
+    if (t->file_field < 0 || t->file_field >= t->field_count ||
+            path == NULL || *path == '\0') {
+        t->file_field = -1;
+        return;
+    }
+    struct web_field *live = &t->fields[t->file_field];
+    snprintf(live->file_path, sizeof(live->file_path), "%s", path);
+    set_status(t, false, "'%s' will go with this form.", name_of_path(path));
+    t->file_field = -1;
+}
+
 static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
     struct recon_web *w = user;
     struct web_tab *t = front(w);
@@ -4891,6 +5149,19 @@ static bool web_click(void *user, uint32_t hit, int cx, int cy, bool pressed) {
 
     if (!pressed || hit < RECON_APPWIN_HIT_USER) {
         return false;
+    }
+
+    /* The chooser is modal: while it is up it gets the click, and the page
+     * underneath does not. */
+    if (t != NULL && recon_filedlg_is_open(&t->dialog)) {
+        enum recon_filedlg_result r = recon_filedlg_click(&t->dialog, hit);
+        if (r == RECON_FILEDLG_ACCEPTED) {
+            file_chosen(t);
+        } else if (r == RECON_FILEDLG_CANCELLED) {
+            t->file_field = -1;
+        }
+        recon_appwin_refresh(t->win);
+        return true;
     }
 
     /*
@@ -5181,6 +5452,24 @@ static bool web_key(void *user, recon_keysym sym, uint32_t modifiers) {
     struct recon_web *w = user;
     struct web_tab *t = front(w);
     bool ctrl = (modifiers & RECON_MOD_CTRL) != 0;
+
+    /*
+     * The chooser is modal, and it comes before the shortcuts rather than
+     * after them. Ctrl+W while a chooser is up should not close the tab out
+     * from under it, and a letter typed to filter a list of files should not
+     * also be a command.
+     */
+    if (t != NULL && recon_filedlg_is_open(&t->dialog)) {
+        enum recon_filedlg_result r =
+            recon_filedlg_key(&t->dialog, sym, modifiers);
+        if (r == RECON_FILEDLG_ACCEPTED) {
+            file_chosen(t);
+        } else if (r == RECON_FILEDLG_CANCELLED) {
+            t->file_field = -1;
+        }
+        recon_appwin_refresh(t->win);
+        return true;
+    }
 
     /*
      * --- The shortcuts, before any field gets the key ---

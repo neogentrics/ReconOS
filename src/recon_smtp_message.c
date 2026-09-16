@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "recon_crypt.h"
+#include "recon_media.h"
 #include "recon_smtp.h"
 
 /* --- Checking a letter before it becomes one --- */
@@ -314,52 +315,6 @@ static bool write_address_header(const char *field, const char *name,
  */
 #define BASE64_LINE_BYTES 57
 
-/*
- * What kind of file this is, by its name.
- *
- * Shallow on purpose. Naming a type wrongly means a reader offers the wrong
- * program to open it, which is a nuisance; refusing to name one at all means
- * `application/octet-stream`, which every reader handles by offering to save
- * the file -- which is the right thing to do with something unrecognised.
- *
- * So this covers what somebody actually attaches and falls back honestly for
- * everything else, rather than pretending to a table of a thousand types that
- * would be wrong in more interesting ways.
- */
-static const char *type_for(const char *name) {
-    static const struct { const char *ext; const char *type; } TYPES[] = {
-        { ".txt",  "text/plain"       }, { ".md",   "text/plain"       },
-        { ".csv",  "text/csv"         }, { ".html", "text/html"        },
-        { ".png",  "image/png"        }, { ".jpg",  "image/jpeg"       },
-        { ".jpeg", "image/jpeg"       }, { ".gif",  "image/gif"        },
-        { ".bmp",  "image/bmp"        }, { ".webp", "image/webp"       },
-        { ".pdf",  "application/pdf"  }, { ".zip",  "application/zip"  },
-        { ".wav",  "audio/wav"        }, { ".mp3",  "audio/mpeg"       },
-        { ".mp4",  "video/mp4"        }, { ".json", "application/json" },
-    };
-
-    const char *dot = strrchr(name, '.');
-    if (dot != NULL) {
-        for (size_t i = 0; i < sizeof(TYPES) / sizeof(TYPES[0]); i++) {
-            size_t n = strlen(TYPES[i].ext);
-            if (strlen(dot) == n) {
-                bool same = true;
-                for (size_t j = 0; j < n && same; j++) {
-                    char a = dot[j], b = TYPES[i].ext[j];
-                    if (a >= 'A' && a <= 'Z') {
-                        a = (char)(a - 'A' + 'a');
-                    }
-                    same = (a == b);
-                }
-                if (same) {
-                    return TYPES[i].type;
-                }
-            }
-        }
-    }
-    return "application/octet-stream";
-}
-
 /* Whether `text` contains `needle`, over bytes rather than a C string, so a
  * file with a zero byte in the middle of it is still searched to the end. */
 static bool bytes_contain(const unsigned char *haystack, size_t size,
@@ -598,7 +553,7 @@ size_t recon_smtp_compose(const struct recon_smtp_account *account,
         const struct recon_smtp_attachment *file = &letter->attachment[i];
 
         PUT("--%s\r\n", boundary);
-        PUT("Content-Type: %s; name=\"%s\"\r\n", type_for(file->name),
+        PUT("Content-Type: %s; name=\"%s\"\r\n", recon_media_type(file->name),
             file->name);
         PUT("Content-Transfer-Encoding: base64\r\n");
         PUT("Content-Disposition: attachment; filename=\"%s\"\r\n", file->name);

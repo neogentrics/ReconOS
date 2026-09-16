@@ -9,6 +9,117 @@ way for the two to disagree.
 
 ---
 
+## v0.4.52 — a form can carry a file
+
+The file picker, which was the rest of `form-gaps`. A page that asked for a
+photograph used to get a control drawn dead and a refusal at Send; it now gets
+`multipart/form-data`, and the request was read back off the wire by a parser
+that is not ours.
+
+### The policy, which was a decision before it was code
+
+A viewer that can open a file chooser is a viewer that can be asked to read
+anything on the disk. Four rules, and each one closes something:
+
+| the rule | what it stops |
+|---|---|
+| **A page never names a file.** It says there is a file field; a click opens the chooser | a page that opens a chooser at a path of its choosing |
+| **The page learns the name and the bytes, never the path** | a page reading the account name off `/Users/...` |
+| **The choice does not outlive the submission** — Reset clears it, and so does leaving the page | a file still quietly attached, sent by accident |
+| **Where the chooser may go is the chooser's business** — it browses `recon_fs`, the same confined view every program gets | a viewer with a wider reach than the file manager |
+
+The path is not merely unused: `recon_form_body_multipart` has **no way to send
+one**, so a later change to the viewer cannot leak a path by accident.
+
+### The boundary is derived, not drawn
+
+A multipart body is a small protocol with a delimiter in it, and **a wrong one
+parses** — the server reads it, accepts it, and stores something other than what
+was sent. The dangerous part is the boundary: one that also occurs inside an
+upload splits the request there instead, and somebody who can choose the bytes
+of a file can end the body early and append **fields the person filling in the
+form never saw**.
+
+The usual answer is a long random string and the argument that a collision is
+unlikely. That argument is fine against accident and worthless against somebody
+who has read the file. So the boundary is **checked**: built, looked for in
+every part it will separate, and rebuilt with a different number if it is found.
+Certain rather than probable, for one pass over the content.
+
+`recon_smtp_message.c` reached the same conclusion for a letter, independently,
+some versions ago. Finding that was worth more than the code: two arguments
+arriving at the same place is the nearest thing to a second opinion this
+project gets.
+
+### What it took to believe it
+
+**102 checks and 12 of 12 mutations caught** — but the first pass caught only
+nine, and the three misses were the interesting part:
+
+- **The filename was never searched for the boundary.** A real hole. The test
+  was at fault: it put the boundary in a file's *contents*, which takes a file,
+  and never in its *name*, which takes a suggestion.
+- **The buffer-size check was not load-bearing** — `snprintf` already caught the
+  case the test used. It is not dead, it holds the *contract*; the test now
+  uses a buffer too small to be right and large enough to work by luck, which
+  is the only size that can tell the two apart.
+- **One byte of slack in the fit check was invisible**, and it wrote the
+  terminator one past the end of the allocation. Every other check in the suite
+  has slack in the buffer, and an off-by-one fit test is correct everywhere
+  there is slack. Caught now by asking for the exact length back and demanding
+  that a buffer of exactly that size is refused.
+
+And then the whole path was **run** rather than reasoned about: a server on
+localhost, the desktop driven headless through the chooser, and the request it
+sent handed to Python's `email` parser. Three parts, 338 bytes, the file's zero
+byte intact in the middle of it, the filename with no path in it, and the
+declared length agreeing with the body. A wrong body that passes the encoder's
+own tests is an agreed misunderstanding of the format; a foreign parser is the
+only thing that can catch one.
+
+### And the Recovery page stopped saying something untrue
+
+Control Panel's Recovery page lists five things it cannot offer, with the
+reason for each. One reason had gone stale: *"Needs a boot path of our own.
+ReconOS is started by whatever is underneath it."* ReconOS is started by its own
+loader now, and that loader has a recovery entry.
+
+**The replacement is not "coming soon".** The loader's own comment settles it:
+*"recovery is a decision made in front of the machine"* — the menu choice
+overrides the file on the EFI partition rather than merging with it. So the
+desktop is not going to get a button that restarts into recovery, and that is
+an answer rather than a gap: **a repair mode software can start is one a broken
+program can start**, and the whole point of it is that it is where you go when
+the software is broken.
+
+What the page can do is say it exists and how to reach it, which is what
+somebody standing in front of a machine actually needs. The other four reasons
+were checked as well — this is the second list this week found to be describing
+finished work — and all four are still true.
+
+### Two things that were found on the way
+
+**One media-type table, not two.** `recon_smtp_message.c` had a private one.
+A `.jpeg` that is `image/jpeg` when mailed and `application/octet-stream` when
+uploaded is one fact with two answers, and the second copy is the one nobody
+updates. It moved to `src/recon_media.c` — **a file of its own**, after a first
+attempt put it in `recon_http.c` and the form test showed what that meant:
+anything wanting a media type would link an HTTP client to get one. The same
+trap the port kept hitting, caught this time by a build rather than by a
+reading.
+
+**And `stat` is not the wall it was called.** The linker probe in v0.4.51 named
+`recon_fs_write`, `recon_fs_append` and `recon_fs_mkdir` as all a desktop
+program needs from `recon_fs.c`. Walking the call graph transitively from those
+three — not one level of grep, which reports that `recon_fs_write` calls nothing
+— they reach **`fopen`, `fwrite`, `fclose`, `mkdir` and `realpath`. No `stat`,
+no `lstat`.** Those two are reachable only from the rest of the file.
+
+That corrects what this session told both Joshua and the kernel session.
+`docs/KERNEL-WANTS.md` now says so.
+
+---
+
 ## v0.4.51 — a keyboard and something to read with
 
 Joshua asked how long until the desktop runs on the kernel. Checking rather

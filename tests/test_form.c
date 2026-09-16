@@ -652,6 +652,523 @@ static void test_a_body_too_long_is_refused(void) {
     recon_html_free(d);
 }
 
+/*
+ * What a form sends when it attaches a file.
+ *
+ * A url-encoded body is text and a wrong one looks wrong. A multipart body is
+ * a small protocol with a delimiter in it, and a wrong one **parses** -- the
+ * server reads it, accepts it, and stores something other than what was sent.
+ * So these hold the parts of it that fail quietly.
+ */
+
+/* A page copied off a real upload form: a caption, a file, and a button. */
+static const char UPLOAD[] =
+    "<form action=\"/upload\" method=\"post\" enctype=\"multipart/form-data\">"
+    "<input name=\"caption\" value=\"a cat\">"
+    "<input type=\"file\" name=\"photo\">"
+    "<input type=\"submit\" name=\"go\" value=\"Upload\">"
+    "</form>";
+
+/* Whether `body` contains `needle` over `length` bytes rather than as text. */
+static bool holds(const char *body, size_t length, const char *needle) {
+    size_t n = strlen(needle);
+    if (body == NULL || n == 0 || length < n) {
+        return false;
+    }
+    for (size_t i = 0; i + n <= length; i++) {
+        if (memcmp(body + i, needle, n) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void test_a_file_part_carries_the_bytes(void) {
+    printf("a file part carries the bytes, the name, and the type\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /* A PNG's signature, which has a zero byte in it -- the reason this call
+     * exists rather than the string-returning one. */
+    static const char PNG[] = "\x89PNG\r\n\x1a\n" "\0\0\0\rIHDR";
+    values[1].file_name = "cat.png";
+    values[1].file_bytes = PNG;
+    values[1].file_length = sizeof(PNG) - 1;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    int sent = 0;
+    char *body = recon_form_body_multipart(d, 0, 2, values, count, 4096,
+        boundary, sizeof(boundary), &length, &sent, NULL);
+
+    check(body != NULL, "the body is built");
+    if (body != NULL) {
+        check(sent == 3, "the caption, the file and the button pressed");
+        check(holds(body, length,
+                "Content-Disposition: form-data; name=\"caption\"\r\n\r\n"
+                "a cat\r\n"),
+            "a text part is its name, a blank line, and its value");
+        check(holds(body, length,
+                "Content-Disposition: form-data; name=\"photo\"; "
+                "filename=\"cat.png\"\r\nContent-Type: image/png\r\n\r\n"),
+            "a file part names the file and says what kind it is");
+        check(holds(body, length, PNG),
+            "and the file's own bytes are in it, zero byte and all");
+
+        /*
+         * The one that would be missed by reading the body as a string: it has
+         * a NUL in the middle, so `strlen` stops at the signature and reports
+         * a body about a fifth of its real size. Every part after the photo
+         * would be silently absent from anything measuring it that way.
+         */
+        check(strlen(body) < length,
+            "the length is not the string length -- a file contains zeroes");
+        check(length > 200, "and the real length counts every part");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_the_last_line_closes_it(void) {
+    printf("the body ends with the closing boundary\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    check(body != NULL, "the body is built");
+    if (body != NULL) {
+        char tail[RECON_FORM_BOUNDARY_MAX + 8];
+        snprintf(tail, sizeof(tail), "--%s--\r\n", boundary);
+        size_t n = strlen(tail);
+        check(length >= n && memcmp(body + length - n, tail, n) == 0,
+            "the last line is the boundary with two dashes after it");
+
+        /*
+         * Not decoration. A body whose final delimiter is missing or is the
+         * ordinary one is a body the server reads as still arriving, and it
+         * either waits for the rest or throws the last part away. Either way
+         * the answer somebody typed does not get stored, and nothing about the
+         * request looks wrong.
+         */
+        snprintf(tail, sizeof(tail), "--%s\r\n", boundary);
+        check(!holds(body + length - strlen(tail), strlen(tail), tail),
+            "and it is not the ordinary delimiter, which means 'more coming'");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_the_boundary_is_not_in_the_content(void) {
+    printf("a boundary that occurs in the file is not used\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /*
+     * Somebody uploads a file that contains the boundary this would otherwise
+     * have chosen. That is not a far-fetched file: a saved HTTP request, a
+     * bug report with a request pasted into it, or a second upload captured
+     * from this very program.
+     *
+     * If the boundary were drawn at random and not checked, this body would
+     * split at that point: the server would read the file as ending early and
+     * read whatever follows in the file as further form fields. Fields the
+     * person filling in the form never saw and never agreed to send.
+     */
+    static const char ATTACK[] =
+        "harmless text\r\n"
+        "----ReconOSForm0\r\n"
+        "Content-Disposition: form-data; name=\"role\"\r\n"
+        "\r\n"
+        "administrator\r\n";
+    values[1].file_name = "notes.txt";
+    values[1].file_bytes = ATTACK;
+    values[1].file_length = sizeof(ATTACK) - 1;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    check(body != NULL, "the body is still built");
+    if (body != NULL) {
+        check(strcmp(boundary, "----ReconOSForm0") != 0,
+            "the boundary in the file is not the boundary chosen");
+        check(!holds(ATTACK, sizeof(ATTACK) - 1, boundary),
+            "and the one chosen appears nowhere in the file");
+        check(holds(body, length, ATTACK),
+            "the file is still sent whole, not edited to make room");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_quote_in_a_name_cannot_add_an_attribute(void) {
+    printf("a quote in a filename does not write a second attribute\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /*
+     * A filename is a name somebody chose, or -- through a rename -- one a
+     * page talked them into. Unescaped, this one closes the filename and
+     * opens a `name` of its own, and the server reads one part as two fields.
+     */
+    values[1].file_name = "a\";name=\"role\";x=\"b.txt";
+    values[1].file_bytes = "x";
+    values[1].file_length = 1;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    check(body != NULL, "the body is built");
+    if (body != NULL) {
+        check(holds(body, length,
+                "name=\"photo\"; filename=\"a%22;name=%22role%22;x=%22b.txt\""),
+            "the quotes are escaped and the header has one filename in it");
+        check(!holds(body, length, "name=\"role\""),
+            "so no second field appears out of the filename");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_newline_in_a_name_cannot_add_a_header(void) {
+    printf("a newline in a field name does not write a second header\n");
+
+    /* The name comes from the page here, not from the person: a page that
+     * wants to slip a header past the viewer writes it into `name`. */
+    static const char SNEAKY[] =
+        "<form method=\"post\" enctype=\"multipart/form-data\">"
+        "<input name=\"a&#13;&#10;X-Secret: yes\" value=\"1\">"
+        "</form>";
+    struct recon_html_document *d = recon_html_parse(SNEAKY, sizeof(SNEAKY) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    check(body != NULL, "the body is built");
+    if (body != NULL) {
+        check(!holds(body, length, "\r\nX-Secret: yes"),
+            "the line break is escaped, so no header appears");
+        check(holds(body, length, "%0D%0AX-Secret: yes"),
+            "and the name is sent as the odd name it is, not dropped");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_no_file_chosen_still_sends_the_field(void) {
+    printf("a file field with nothing chosen is still a part\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    int sent = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, &sent, NULL);
+
+    check(body != NULL, "the body is built");
+    if (body != NULL) {
+        /*
+         * An empty part rather than no part, which is what a browser sends.
+         * The server's question is "did this form have a picture field", and
+         * the answer is yes and it was left empty -- a form that omits the
+         * field entirely is one a server can read as an older version of
+         * itself.
+         */
+        check(sent == 2, "the caption and the empty file field");
+        check(holds(body, length,
+                "name=\"photo\"; filename=\"\"\r\n"
+                "Content-Type: application/octet-stream\r\n\r\n\r\n"),
+            "an empty filename, the honest type, and nothing between");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_the_same_rules_decide_what_is_sent(void) {
+    printf("multipart leaves out exactly what url-encoding leaves out\n");
+
+    /*
+     * Two encodings of one form must agree about *which* controls contribute.
+     * They cannot agree by being written twice, so `recon_form_field_sends`
+     * owns the question and both callers ask it -- and this is the check that
+     * they still do.
+     */
+    static const char MIXED[] =
+        "<form method=\"post\" enctype=\"multipart/form-data\">"
+        "<input name=\"kept\" value=\"1\">"
+        "<input name=\"off\" value=\"2\" disabled>"
+        "<input type=\"checkbox\" name=\"unticked\" value=\"3\">"
+        "<input type=\"checkbox\" name=\"ticked\" value=\"4\" checked>"
+        "<input value=\"5\">"
+        "<input type=\"reset\" name=\"clear\" value=\"6\">"
+        "<input type=\"submit\" name=\"save\" value=\"Save\">"
+        "<input type=\"submit\" name=\"drop\" value=\"Delete\">"
+        "</form>";
+    struct recon_html_document *d = recon_html_parse(MIXED, sizeof(MIXED) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    int multi = 0, plain = 0;
+    char *body = recon_form_body_multipart(d, 0, 6, values, count, 4096,
+        boundary, sizeof(boundary), &length, &multi, NULL);
+    char *other = recon_form_body(d, 0, 6, values, count, 4096, &plain, NULL);
+
+    check(body != NULL && other != NULL, "both bodies are built");
+    if (body != NULL && other != NULL) {
+        check(multi == plain && multi == 3,
+            "both send three: the text box, the ticked box, and Save");
+        check(holds(body, length, "name=\"kept\"") &&
+                holds(body, length, "name=\"ticked\"") &&
+                holds(body, length, "name=\"save\""),
+            "and they are the same three");
+        check(!holds(body, length, "name=\"off\"") &&
+                !holds(body, length, "name=\"unticked\"") &&
+                !holds(body, length, "name=\"clear\"") &&
+                !holds(body, length, "name=\"drop\""),
+            "disabled, unticked, reset and the other button stay out");
+    }
+    free(body);
+    free(other);
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_body_too_long_is_refused_not_cut(void) {
+    printf("a file that will not fit is refused, not trimmed\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /*
+     * Three thousand bytes and a terminator, because `holds` takes its needle
+     * as a C string and would otherwise read off the end of this looking for
+     * one. Found by the sanitizers, in the test rather than in the code --
+     * which is the failure a test suite cannot report on itself.
+     */
+    static char BIG[3001];
+    memset(BIG, 'z', sizeof(BIG) - 1);
+    values[1].file_name = "big.txt";
+    values[1].file_bytes = BIG;
+    values[1].file_length = sizeof(BIG) - 1;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 99;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 512,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    /*
+     * The refusal that matters. Half a file uploaded is a file the server
+     * stores, names, and shows back -- a corrupt photo, a truncated document,
+     * a spreadsheet missing its last rows -- with nothing anywhere reporting
+     * a failure. Better that the upload does not happen.
+     */
+    check(body == NULL, "nothing is sent");
+    check(length == 0, "and the length is cleared rather than left stale");
+
+    /* And with room, the same call sends all three thousand bytes. */
+    char *whole = recon_form_body_multipart(d, 0, -1, values, count, 8192,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+    check(whole != NULL && holds(whole, length, BIG),
+        "with room, the whole file goes");
+    free(whole);
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_password_is_still_flagged(void) {
+    printf("a password in a multipart form is still flagged\n");
+
+    static const char LOGIN[] =
+        "<form method=\"post\" enctype=\"multipart/form-data\">"
+        "<input name=\"user\" value=\"jt\">"
+        "<input type=\"password\" name=\"pass\" value=\"hunter2\">"
+        "</form>";
+    struct recon_html_document *d = recon_html_parse(LOGIN, sizeof(LOGIN) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    bool secret = false;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, &secret);
+
+    /* Whatever warns somebody that a form is about to send a password over a
+     * plain connection asks this flag. A form that changed its encoding must
+     * not thereby lose the warning. */
+    check(body != NULL && secret, "the flag says a secret is in it");
+    free(body);
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_buffer_too_small_for_a_boundary(void) {
+    printf("a caller's boundary buffer is checked, not trusted\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    char small[8];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        small, sizeof(small), &length, NULL, NULL);
+
+    /* The header says what size to pass and this is what happens when it is
+     * not passed. A boundary written into a buffer that cannot hold it is a
+     * header naming one delimiter while the body uses another, and a server
+     * reads that as an empty form. */
+    check(body == NULL, "refused rather than a boundary nobody can match");
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_the_boundary_is_not_in_the_filename(void) {
+    printf("a boundary that occurs in the file's name is not used\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /*
+     * The same attack through an easier door. Arranging the *contents* of an
+     * upload takes a file; arranging its *name* takes a page that suggests
+     * one, or a rename somebody was talked into. The name goes into a header
+     * that sits between two delimiters, so a name carrying the delimiter ends
+     * the part from inside the header.
+     */
+    values[1].file_name = "photo----ReconOSForm0.png";
+    values[1].file_bytes = "x";
+    values[1].file_length = 1;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+
+    check(body != NULL, "the body is still built");
+    if (body != NULL) {
+        check(strstr(values[1].file_name, boundary) == NULL,
+            "the boundary chosen does not occur in the name");
+        check(holds(body, length, "filename=\"photo----ReconOSForm0.png\""),
+            "and the name is still sent as it is, not altered to make room");
+        free(body);
+    }
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_a_boundary_buffer_below_the_stated_size(void) {
+    printf("a boundary buffer smaller than the header asks for is refused\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+
+    /*
+     * Twenty bytes. Big enough to hold every boundary this builds -- so it
+     * would work, today, by luck -- and smaller than the size the header tells
+     * callers to pass. The refusal is the contract being enforced rather than
+     * advertised: a caller who sized the buffer by looking at one boundary
+     * finds out now, and not on the day a boundary gets longer.
+     */
+    char narrow[20];
+    size_t length = 99;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        narrow, sizeof(narrow), &length, NULL, NULL);
+
+    check(body == NULL, "refused, though the string would have fitted");
+    check(length == 0, "and the length is cleared");
+
+    free(values);
+    recon_html_free(d);
+}
+
+static void test_an_exact_fit_leaves_room_for_the_terminator(void) {
+    printf("a buffer of exactly the body's length is one byte short\n");
+
+    struct recon_html_document *d = recon_html_parse(UPLOAD, sizeof(UPLOAD) - 1);
+    int count = recon_html_field_count(d);
+    struct recon_form_value *values = defaults_of(d);
+    values[1].file_name = "a.txt";
+    values[1].file_bytes = "hello";
+    values[1].file_length = 5;
+
+    char boundary[RECON_FORM_BOUNDARY_MAX];
+    size_t length = 0;
+    char *body = recon_form_body_multipart(d, 0, -1, values, count, 4096,
+        boundary, sizeof(boundary), &length, NULL, NULL);
+    check(body != NULL && length > 0, "the body is built, and reports a length");
+    free(body);
+
+    /*
+     * The body is kept NUL-terminated on top of its real length, so it needs
+     * `length + 1` bytes and not `length`. Asking for exactly `length` must
+     * fail.
+     *
+     * This is the check that catches an off-by-one in the fit test, and it is
+     * the only shape that can: everywhere else in this suite there is slack in
+     * the buffer, and a fit test that is one byte too generous is correct
+     * everywhere there is slack. What it does on an exact fit is write the
+     * terminator one past the end of the allocation -- a heap overflow that
+     * produces no wrong output at all, and so is invisible to every other
+     * check here.
+     */
+    char *snug = recon_form_body_multipart(d, 0, -1, values, count, length,
+        boundary, sizeof(boundary), NULL, NULL, NULL);
+    check(snug == NULL, "a buffer of exactly the body's length is refused");
+    free(snug);
+
+    size_t again = 0;
+    char *room = recon_form_body_multipart(d, 0, -1, values, count, length + 1,
+        boundary, sizeof(boundary), &again, NULL, NULL);
+    check(room != NULL && again == length, "one more byte, and it fits exactly");
+    free(room);
+
+    free(values);
+    recon_html_free(d);
+}
+
+
 int main(void) {
     printf("ReconOS form tests\n\n");
 
@@ -668,6 +1185,20 @@ int main(void) {
     test_a_file_field_in_an_ordinary_form();
     test_the_address_a_get_makes();
     test_a_body_too_long_is_refused();
+
+    test_a_file_part_carries_the_bytes();
+    test_the_last_line_closes_it();
+    test_the_boundary_is_not_in_the_content();
+    test_a_quote_in_a_name_cannot_add_an_attribute();
+    test_a_newline_in_a_name_cannot_add_a_header();
+    test_no_file_chosen_still_sends_the_field();
+    test_the_same_rules_decide_what_is_sent();
+    test_a_body_too_long_is_refused_not_cut();
+    test_a_password_is_still_flagged();
+    test_a_buffer_too_small_for_a_boundary();
+    test_the_boundary_is_not_in_the_filename();
+    test_a_boundary_buffer_below_the_stated_size();
+    test_an_exact_fit_leaves_room_for_the_terminator();
 
     printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

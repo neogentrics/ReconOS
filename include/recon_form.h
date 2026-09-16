@@ -37,10 +37,34 @@
  * disagree with the page, and then two answers would exist for "is this a
  * checkbox".
  */
+/*
+ * The longest boundary this builds, including its terminator.
+ *
+ * The standard allows seventy; this uses far fewer, and the number is here so
+ * a caller can size the buffer it passes without knowing how.
+ */
+#define RECON_FORM_BOUNDARY_MAX 48
+
 struct recon_form_value {
     const char *text;            /* a text box or a textarea */
     bool on;                     /* a checkbox or a radio */
     int chosen;                  /* which option, for a menu */
+
+    /*
+     * The file somebody chose, for a `type=file` field.
+     *
+     * `file_bytes` and `file_length` are the contents, and `file_name` is what
+     * to call it -- **a name, never a path**. A path tells the page which
+     * account this is and what the disk looks like, and a page that asked for
+     * a picture has no business learning either.
+     *
+     * All three NULL or zero when nothing has been chosen, which is the
+     * ordinary state: a file field starts empty and stays empty unless
+     * somebody picks something.
+     */
+    const char *file_name;
+    const char *file_bytes;
+    size_t file_length;
 };
 
 /*
@@ -107,5 +131,51 @@ char *recon_form_body(const struct recon_html_document *page, int form,
  * then `where` is left as it was.
  */
 bool recon_form_get_address(struct recon_http_url *where, const char *body);
+
+/*
+ * Build the bytes a form sends when it asks for `multipart/form-data`.
+ *
+ * --- why this is a separate call ---------------------------------------
+ *
+ * Two differences from `recon_form_body`, and both are forced rather than
+ * chosen.
+ *
+ * **The result is bytes and not a string.** A file may contain a NUL -- most
+ * do -- so a NUL-terminated result cannot carry one, and `*out_length` is how
+ * long it really is. It is still NUL-terminated on top of that, so anything
+ * that wants to print the text parts can, but the length is the truth.
+ *
+ * **The boundary comes back**, because the caller has to put it in the
+ * `Content-Type` header and the two must be the same string. A request whose
+ * header names a boundary the body does not use is one the server reads as
+ * empty.
+ *
+ * --- the boundary is derived, not invented ------------------------------
+ *
+ * The one rule a boundary has is that it must not occur in the content. This
+ * does not draw a random one and hope: it starts from a fixed prefix and
+ * counts up until it finds one that does not appear anywhere in any part,
+ * which is checkable and therefore checked.
+ *
+ * A random boundary is *probably* absent, and "probably" is doing real work
+ * there -- the content is whatever somebody chose to upload, which may be a
+ * file of multipart requests. Deriving it costs a scan of the parts and
+ * removes the word.
+ *
+ * --- what a file part carries -------------------------------------------
+ *
+ * The name the page gave the field, the name of the file, and the bytes.
+ * **Not the path.** A path says which account this is and what the disk looks
+ * like, and a page that asked for a picture has no business learning either.
+ *
+ * NULL when it will not fit in `limit`, the same refusal as the url-encoded
+ * one and for the same reason: a form arriving with its last two answers
+ * missing is worse than one not arriving, because the server accepts it.
+ */
+char *recon_form_body_multipart(const struct recon_html_document *page,
+    int form, int submitter, const struct recon_form_value *values,
+    int value_count, size_t limit,
+    char *boundary_out, size_t boundary_size,
+    size_t *out_length, int *out_count, bool *out_secret);
 
 #endif /* RECON_FORM_H */

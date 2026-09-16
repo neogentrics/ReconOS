@@ -438,9 +438,26 @@ static const struct pending_item RECOVERY_ITEMS[] = {
       "somewhere to keep it." },
     { "Back up", "Copy what matters somewhere else.",
       "Needs a second volume to copy to. There is one filesystem." },
+    /*
+     * Not pending, and not coming. The reason it used to give -- "needs a
+     * boot path of our own" -- stopped being true when the loader grew a
+     * recovery entry, and what replaced it is a decision rather than a gap.
+     *
+     * `boot/src/main.c`: *"recovery is a decision made in front of the
+     * machine"*, and the menu choice overrides the file on the EFI partition
+     * rather than merging with it. **A recovery environment that software can
+     * put you into is one a broken program can put you into**, and the whole
+     * point of it is that it is where you go when the software is broken.
+     *
+     * So this says where it is instead. Somebody standing in front of a
+     * machine that will not start needs to know the entry is there; a button
+     * in a Control Panel they cannot open would not have helped them.
+     */
     { "Advanced startup", "Start into a screen for repairing the system.",
-      "Needs a boot path of our own. ReconOS is started by whatever is "
-      "underneath it." },
+      "There is one: hold a key at startup and choose ReconOS recovery, the "
+      "last entry in the boot menu. It is deliberately not something this "
+      "page can do for you -- a repair mode software can start is one a "
+      "broken program can start." },
     { "Reset this system", "Put it back the way it was installed.",
       "Needs a copy of the original to put back, kept somewhere a reset "
       "cannot reach." },

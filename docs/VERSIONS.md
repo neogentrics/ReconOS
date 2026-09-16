@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.52** | **A form can carry a file.** The picker, the policy behind it — a page never names a file, and learns the name and bytes but never the path — and a `multipart/form-data` encoder whose boundary is checked against the content rather than drawn at random. Verified end to end: driven headless, sent over a socket, and read back by a parser that is not ours. |
 | **0.4.51** | **A keyboard and something to read with.** The kernel delivers USB HID codes, which name *positions*; the desktop wants meanings, and there is no xkbcommon on a ReconOS machine. That layout is written and mutation-tested. And the medium carries two fonts with their licence, because a machine with no `/usr/share` and no font of its own draws a blank screen. |
 | **0.4.50** | **The host must not show through.** Five functions of `recon_fs.c` had no suite, and the row describing them named work that was already finished. `guest_path` keeps Linux out of the sentences a person reads — and my first test for it went down a path that never reaches it, so it proved nothing. 48.94% to 58.25%, nothing at zero. |
 | **0.4.49** | **A file field was a text box.** `type=file` fell through to the default, so a page asking for a picture got a box somebody could type a filename into — and the form would have gone url-encoded to a server expecting multipart. Drawn dead with a reason now, and a form that asks for multipart is refused rather than sent in a shape nothing can read. |
