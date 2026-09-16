@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.41** | **Four sentences nobody was checking.** `recon_tls.c` had fifteen functions no suite ran, all of them the half that decides whether to believe somebody else — so the suite mints a certificate authority and five certificates with a different fault built into each, and reads what a person would be told. Fifteen at zero, now three. |
 | **0.4.40** | **A cell can cover several columns.** `colspan` is read, measured across the columns it covers and drawn across them — and finding it turned up BG-206, where an empty cell took no column and put every heading in a two-row header under the wrong one. The README’s check-count badge was measured for the first time while it was being edited, and it had drifted from 1,971 to 4,474,929. |
 | **0.4.39** | **The Recycle Bin, which nothing had ever run.** `coverage.sh --zero` listed fourteen functions of `recon_fs.c` that no suite reached, and they were the whole of the bin — the one part of the filesystem whose entire job is that deleting is *recoverable*, and which fails silently when it is not. |
 | **0.4.38** | **Sockets, and the claim nobody could test.** The kernel took five socket numbers and they had no caller; this is the caller. |

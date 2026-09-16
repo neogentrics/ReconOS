@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.40
+    VERSION 0.4.41
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -421,6 +421,27 @@ target_include_directories(recon_tls_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_link_libraries(recon_tls_tests PRIVATE
+    ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+# The other direction: whether to believe somebody else's certificate.
+#
+# A suite of its own rather than more of test_tls.c, because it needs a
+# certificate authority, five certificates with a different fault built into
+# each, and a server to present them -- and because what it holds is different.
+# test_tls.c is about the identity this machine presents; this is about the
+# four sentences somebody reads when a connection is refused, each of which is
+# chosen from a flag mbedTLS sets and none of which anything was checking.
+add_executable(recon_tls_verify_tests
+    tests/test_tls_verify.c
+    src/recon_tls.c
+    src/recon_crypt.c
+    src/recon_fs.c
+    src/recon_error.c)
+
+target_include_directories(recon_tls_verify_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+target_link_libraries(recon_tls_verify_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
 
 # Calendar arithmetic is wrong in 2100 or it is not, and nothing but a test
@@ -1169,6 +1190,7 @@ add_test(NAME registry COMMAND recon_registry_tests)
 add_test(NAME theme COMMAND recon_theme_tests)
 add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME tls COMMAND recon_tls_tests)
+add_test(NAME tls-verify COMMAND recon_tls_verify_tests)
 add_test(NAME clock COMMAND recon_clock_tests)
 add_test(NAME versions COMMAND recon_version_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)

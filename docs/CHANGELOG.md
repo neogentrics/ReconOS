@@ -9,6 +9,127 @@ way for the two to disagree.
 
 ---
 
+## v0.4.41 — four sentences nobody was checking
+
+`recon_tls.c` had **fifteen functions no suite ran**, and they were all of one
+half of the file: the half that decides whether to believe somebody else.
+`test_tls.c` covers the identity this machine *presents* — made once, survives
+a restart, key unreadable by anyone else. Nothing covered the roots it checks
+other people against, or what it says when a check fails.
+
+Verification itself is mbedTLS's, which is right; writing certificate path
+validation again is how a project acquires a vulnerability it cannot find. What
+is ours is the two things either side of it, and both are the kind of claim
+that is wrong quietly.
+
+### The messages are the feature
+
+The header's argument for them:
+
+> *"'Certificate error' leaves somebody with three very different possibilities
+> and no way to tell them apart: their clock is wrong, their bundle is short a
+> root, or somebody is sitting in the middle of the connection. The last of
+> those is the reason this code exists and it deserves its own sentence."*
+
+Four sentences, each chosen from a flag mbedTLS sets — and **which flag it sets
+for a given kind of bad certificate is a fact about mbedTLS rather than
+something to reason out.** So the suite mints a certificate authority and five
+certificates with a different fault built into each, stands up a server to
+present them, and runs a real handshake per scenario over a socket pair:
+
+| what the server presents | what somebody reads |
+|---|---|
+| a valid certificate for **somebody else's name** | *for a different name — either the wrong address, or something is answering in its place* |
+| one that **ran out** | *expired, or this machine's clock is wrong* |
+| one that has **not started** | *not valid yet, which usually means this machine's clock is behind* |
+| one **nothing vouches for** | *nothing this machine trusts has vouched for that certificate* |
+
+The first is the sharpest: that certificate is real, in date, and signed by a
+root this machine trusts. Everything about it is right except *whose* it is.
+
+Elliptic-curve keys rather than RSA purely so it runs in a moment — six keys at
+2048 bits is several seconds of nothing.
+
+### A bundle with a bad entry in it loads anyway
+
+The other half is root loading, and the rule worth holding is the one that
+looks wrong: **a bundle containing entries the library cannot parse is loaded
+without them rather than refused.** Refusing it fails *closed*, which reads as
+the safe choice and is not — a machine that trusts nothing cannot fetch mail,
+so somebody goes looking for the switch that makes it work. Real bundles off
+real machines routinely carry one or two roots mbedTLS will not take.
+
+So the fixture bundle is two real roots and one block that is shaped like a
+certificate and is not: **two loaded, one counted as rejected**, and the count
+is readable through `recon_tls_roots` because this file has no logging in it
+and should gain none.
+
+### There is no way to turn verification off, and that is testable
+
+The header says so and the code says `MBEDTLS_SSL_VERIFY_REQUIRED` rather than
+`OPTIONAL`. The property is not "the flag is set" — with OPTIONAL the handshake
+*finishes* and leaves the result in a flag for somebody to remember to check.
+So what the test holds is that **a connection to an untrusted server does not
+exist at all**: no object, nothing to read or write through, nothing for a
+forgetful caller to use.
+
+### And the bytes, which nothing had ever sent
+
+`recon_tls_read`, `recon_tls_write` and `recon_tls_fd` were at zero — every byte
+the browser and the mail client send. One test opens a connection and uses it,
+and holds the two answers the read path exists to give: **`RECON_TLS_AGAIN`
+when nothing has arrived**, distinct from a fault, because on a non-blocking
+socket that is the ordinary case and its own comment says this used to be a
+loop with the desktop inside it; and **zero for a peer that said goodbye**, so
+"they hung up" is distinguishable from "something broke".
+
+### What moved, and what did not
+
+**33 checks**, and five mutations, all caught:
+
+| the mutation | what the suite says |
+|---|---|
+| the wrong-name sentence removed | 3 failures |
+| expired and not-yet-valid swapped | 4 failures |
+| verification made `OPTIONAL` | 16 failures |
+| rejected roots not counted | 1 failure |
+| one bad root refuses the whole bundle | 15 failures |
+
+**Fifteen functions at zero, now three** — `fail`, and `recon_tls_accept` and
+`recon_tls_connect`, which both run the handshake to completion before
+returning. That is correct for the blocking sockets they are for, and it is
+also why neither can be driven from the same loop as its peer: one of the two
+has to be somewhere else while the other blocks. Covering them means a thread
+or a second process, and everything they do besides the loop is the
+begin-and-step path, which is tested. Written down in the suite rather than
+left to be noticed.
+
+**The percentage did not move at all: 29.27%, before and after.** That is not a
+disappointment, it is the measurement's documented shape — `coverage.sh`
+reports *the most any single suite runs of that file*, because gcov will not
+merge counters. The two suites cover different halves and both land on 29.27%
+of 369 lines, so the maximum is unchanged while twelve functions came off zero.
+**The number that answers the question moved; the number on the row did not**,
+which is worth knowing about that row before reading it again.
+
+### And the mutation harness reported a fault against correct code
+
+Worth recording because it is the third time this shape has appeared. The
+harness restored the source, **verified it byte for byte**, and then ran a
+binary built from the mutation — the restored file arrives from the Windows side
+with an mtime `make` sometimes reads as not newer, and says so: *"Clock skew
+detected. Your build may be incomplete."* It printed one failure against code
+that was right.
+
+BG-198's lesson was *restore in a `finally`, force the rebuild, and check that
+the restore restored*. **Checking the source restored is not checking the
+rebuild happened.** The harness now deletes the object and the executable and
+refuses to report at all unless the binary is newer than the source — and with
+that, one of the five rows changed from 1 failure to 15, so the earlier number
+had been wrong too.
+
+---
+
 ## v0.4.40 — a cell can cover several columns
 
 `colspan` is the part of table layout real pages use constantly and this viewer
