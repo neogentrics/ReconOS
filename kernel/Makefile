@@ -359,7 +359,7 @@ ifeq ($(ROLE),server)
 # next one. What differs is the program in front of them, not the look of it.
 INIT_SRCS := ../server/init/server_init.c \
 	     ../server/http/request.c ../server/http/serve.c \
-	     ../server/http/files.c ../server/http/form.c ../server/http/cache.c ../server/http/range.c ../server/identity.c ../server/service.c \
+	     ../server/http/files.c ../server/http/form.c ../server/http/cache.c ../server/http/range.c ../server/http/escape.c ../server/identity.c ../server/service.c \
 	     ../userland/init/screen.c ../userland/init/layout.c \
 	     $(INIT_LIBC)
 

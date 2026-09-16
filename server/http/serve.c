@@ -109,6 +109,49 @@ static int send_all(int fd, const char *buf, size_t len,
 	return 0;
 }
 
+/* --- what every response carries ------------------------------------------ */
+
+/*
+ * Headers written on every response, by the server rather than by a handler.
+ *
+ * They are site-wide facts, not per-response decisions, so a handler cannot
+ * forget one and a new handler gets them without knowing they exist. That is
+ * the point: a security header that each handler must remember is a security
+ * header that the next handler will not have.
+ *
+ * **`nosniff`** stops a browser guessing a type from content. This server
+ * decides the type from the file's extension -- a statement by whoever put the
+ * file there -- and sniffing overrides that with a statement by whoever wrote
+ * the *contents*. A text file a user uploaded that happens to begin with a tag
+ * is the whole of that attack.
+ *
+ * **`DENY`** keeps the console out of a frame on somebody else's page, where a
+ * click aimed at their button lands on the console's. It is an administrative
+ * interface with a form that changes the machine's name; there is no reason it
+ * should ever be framed.
+ *
+ * **`no-referrer`** stops the console's paths leaking to anything it links to.
+ * An internal address in a Referer header is a small map of the network handed
+ * to whatever the link pointed at.
+ *
+ * --- Content-Security-Policy is deliberately absent ---
+ *
+ * It is the one with the most value and it cannot be added honestly yet. The
+ * dashboard is built with inline `style=` attributes and a `<style>` block, so
+ * any policy this server could ship today would need `'unsafe-inline'` --
+ * which permits exactly the thing CSP exists to stop, while the header's
+ * presence suggests otherwise. A policy that reads as protection and is not is
+ * worse than no policy, because it ends the conversation.
+ *
+ * The page's styles have to move to a served file first. `docs/WEB.md` carries
+ * it, and this comment is here so the next person to reach for CSP finds out
+ * why in the place they would add it.
+ */
+#define SECURITY_HEADERS \
+	"X-Content-Type-Options: nosniff\r\n" \
+	"X-Frame-Options: DENY\r\n" \
+	"Referrer-Policy: no-referrer\r\n"
+
 /* --- the response ------------------------------------------------------- */
 
 void http_response_simple(struct http_response *out, int status,
@@ -137,7 +180,7 @@ static int send_response(int fd, const struct http_request *req,
                          const char *server_name, int keep_alive,
                          int head_only, unsigned long *counter)
 {
-	char head[1024];
+	char head[2048];
 	int n;
 
 	(void)req;
@@ -146,7 +189,8 @@ static int send_response(int fd, const struct http_request *req,
 	             "HTTP/1.1 %d %s\r\n"
 	             "Server: %s\r\n"
 	             "Content-Length: %lu\r\n"
-	             "Connection: %s\r\n",
+	             "Connection: %s\r\n"
+	             SECURITY_HEADERS,
 	             res->status, http_reason(res->status),
 	             server_name ? server_name : "ReconOS",
 	             (unsigned long)res->body_len,
@@ -209,7 +253,7 @@ int http_stream_header(struct http_sink *sink, const char *name,
 int http_stream_begin(struct http_sink *sink, int status,
                       const char *content_type, long length)
 {
-	char head[1024];
+	char head[2048];
 	int n;
 
 	if (!sink || sink->begun)
@@ -231,7 +275,8 @@ int http_stream_begin(struct http_sink *sink, int status,
 		sink->keep_alive = 0;
 
 	n = snprintf(head, sizeof(head),
-	             "HTTP/1.1 %d %s\r\nServer: %s\r\nConnection: %s\r\n",
+	             "HTTP/1.1 %d %s\r\nServer: %s\r\nConnection: %s\r\n"
+	             SECURITY_HEADERS,
 	             status, http_reason(status),
 	             sink->server_name ? sink->server_name : "ReconOS",
 	             sink->keep_alive ? "keep-alive" : "close");

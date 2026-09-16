@@ -1005,6 +1005,18 @@ add_executable(recon_server_range_tests
 
 add_test(NAME server_http_range COMMAND recon_server_range_tests)
 
+# Escaping text for HTML, and the characters people forget.
+#
+# The value is the list, not the algorithm. Every case is a character an
+# escaper handling only `<` and `&` would let through, with what it would then
+# let somebody do -- including the quote that would have closed the dashboard's
+# `value="..."` and turned the rest of the name into attributes.
+add_executable(recon_server_escape_tests
+    server/http/escape.c
+    server/tests/test_http_escape.c)
+
+add_test(NAME server_http_escape COMMAND recon_server_escape_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the

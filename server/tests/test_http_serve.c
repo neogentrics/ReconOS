@@ -236,7 +236,7 @@ int main(void)
 		 * leave. A child that ran forever would hang the suite on any
 		 * failure, and a suite that can hang is a suite that gets
 		 * disabled. */
-		while (served < 12) {
+		while (served < 20) {
 			int rc = http_serve_once(listener, &SITE);
 
 			if (rc < 0)
@@ -296,6 +296,44 @@ int main(void)
 	         reply, sizeof(reply));
 	ok(starts_with(reply, "HTTP/1.1 405 Method Not Allowed\r\n"),
 	   "a real path with the wrong method answers 405, not 404");
+
+	/* --- the security headers, on every kind of response --------------------
+	 *
+	 * They are written by the server rather than by a handler, so that a
+	 * handler cannot forget one. This checks the property that makes that
+	 * worth doing: they are on *everything*, not only on the paths somebody
+	 * remembered to look at.
+	 *
+	 * **It caught the fault it was written for.** The headers went on the
+	 * whole-response path and not the streaming one, because a patch script
+	 * stopped half way through -- so pages carried them and files, 404s and
+	 * 206s did not. Nothing else would have noticed. */
+	{
+		static const char *WANTED[] = {
+			"X-Content-Type-Options: nosniff\r\n",
+			"X-Frame-Options: DENY\r\n",
+			"Referrer-Policy: no-referrer\r\n"
+		};
+		static const char *REQUESTS[] = {
+			"GET / HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n",
+			"GET /api/status HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n",
+			"GET /nothing HTTP/1.1\r\nHost: m\r\nConnection: close\r\n\r\n",
+			"DELETE / HTTP/1.1\r\nHost: m\r\n\r\n",
+			"GET /../etc HTTP/1.1\r\nHost: m\r\n\r\n"
+		};
+		size_t r, h;
+		int all = 1;
+
+		for (r = 0; r < sizeof(REQUESTS) / sizeof(REQUESTS[0]); r++) {
+			exchange(port, REQUESTS[r], reply, sizeof(reply));
+			for (h = 0; h < sizeof(WANTED) / sizeof(WANTED[0]); h++)
+				if (!strstr(reply, WANTED[h]))
+					all = 0;
+		}
+		ok(all,
+		   "every response carries the security headers -- pages, APIs,"
+		   " 404s, 501s and refusals alike");
+	}
 
 	/* --- the refusals reach the wire ------------------------------------- */
 	exchange(port, "GET /../etc/passwd HTTP/1.1\r\nHost: m16\r\n\r\n",

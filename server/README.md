@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.8.0 |
+| **Version** | 0.9.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 358 across nine suites |
+| **Checks** | 380 across ten suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -129,13 +129,14 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
 | `server_http` | 87 | one request, and every way of writing two |
-| `server_http_serve` | 23 | the server over a real socket, `serve.c` unmodified |
+| `server_http_serve` | 24 | the server over a real socket, `serve.c` unmodified |
 | `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
 | `server_http_cache` | 31 | validators, and reading an If-None-Match |
 | `server_service` | 37 | services, their states, and the restart that has to stop |
 | `server_http_range` | 45 | asking for part of a file, and the ways that hands over the wrong part |
+| `server_http_escape` | 21 | escaping text for HTML, and the characters people forget |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -213,6 +214,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.9.0** | **Hardening what is served.** `nosniff`, `DENY` and `no-referrer` on every response, written by the server so no handler can forget one — CSP deliberately left out, because the only policy shippable today would need `'unsafe-inline'` and would read as protection it does not give. And the dashboard escapes the machine name, removing a documented dependency whose safety lived in a validator three files away. |
 | **0.8.0** | **Resuming a download.** `Range`, `If-Range`, 206 and 416, with the real length on the 416 so a client can recover. One range only — a list can ask for ten thousand one-byte pieces from a few hundred bytes of header. `If-Range` compares strongly, because two weakly-equal representations may differ byte for byte and that is exactly what a range depends on. Also: every status phrase now comes from one table the suite walks, after the hand-written list failed twice. |
 | **0.7.0** | **The client side, measured — and it does not work.** `connect` answers `SYS_OK` for a port nothing is listening on and returns before the handshake, so a write straight after it fails. Discovery, a reverse proxy and every outbound connection are blocked, and the TCP sweep this role had written down as the way around the missing broadcast was never possible. The measurement stays in as a standing check, so the day the kernel fixes it somebody finds out without looking. |
 | **0.6.0** | **A service registry, and what it refuses to pretend.** Nothing on this system can start a program, so this supervises what *this process* does rather than daemons — the web server is one service, and discovery and DNS will register beside it without the main loop changing. A failing service is restarted a bounded number of times and then stays failed: restarting forever turns a crash into a crash loop, which reads as healthy and does nothing. |

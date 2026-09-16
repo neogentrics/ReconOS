@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 358 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 380 checks, **running on the machine** |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |

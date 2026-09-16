@@ -47,6 +47,7 @@
 #include "../http/serve.h"
 #include "../http/files.h"
 #include "../http/form.h"
+#include "../http/escape.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 
@@ -117,31 +118,44 @@ static const char PAGE_HEAD[] =
  * it can honestly be today: what this machine is, and what this server has
  * done. Every row is read from the kernel or counted here.
  *
- * --- The machine name is written into HTML without escaping, and why that is
- * safe here ---
+ * --- The machine name is escaped, and it did not used to be ---
  *
- * It appears twice below: as the heading, and as the value of an input. Neither
- * is escaped, and that is safe **only because of what may become a name**:
- * `handle_set_name` puts every candidate through `server_name_split`, which
- * accepts letters, digits and the hyphen and refuses everything else -- so a
- * `<`, a `"` or a `&` cannot reach here.
+ * It appears twice below: as the heading, and as the value of an input. Both
+ * go through `http_escape` now.
  *
- * That is a real dependency between two functions and it is written down
- * because it is the kind that breaks silently. **The day the name rules loosen
- * -- to allow a dot for a fully qualified name, say -- this page becomes a
- * cross-site scripting hole**, and nothing in the compiler or the suites will
- * say so. An escaper is the right answer once anything here carries text a
- * stranger chose; `docs/WEB.md` has it under template rendering.
+ * They did not, and it was *safe* -- because `handle_set_name` runs every
+ * candidate through `server_name_split`, which admits letters, digits and the
+ * hyphen and refuses everything else, so a `<` or a `"` could not reach here.
+ * That safety lived in a function three files away and was recorded only in a
+ * comment at this spot, which said in as many words that **the day the name
+ * rules loosened -- a dot, for a fully qualified name -- this page would become
+ * a cross-site scripting hole with nothing to announce it.**
+ *
+ * A dependency that is true by coincidence and documented in prose is a
+ * dependency waiting to be broken by somebody improving something else. The
+ * escaping is here now and the coincidence no longer matters.
+ *
+ * The `value="..."` on the input is the one that mattered most: a name
+ * containing a quote would have closed the attribute and everything after it
+ * become attributes of the tag. `server/tests/test_http_escape.c` carries that
+ * exact case, reconstructed from this field.
  */
 static int handle_dashboard(const struct http_request *r, const char *body,
                             size_t body_len, struct http_response *out,
                             void *ctx)
 {
 	static char page[HTTP_RESPONSE_MAX];
+	static char safe_name[RECON_NAME_MAX * 6 + 1];
 	struct server_facts *f = (struct server_facts *)ctx;
 	int n;
 
 	(void)r; (void)body; (void)body_len;
+
+	/* Six bytes out for one in, worst case -- a name of nothing but quotes.
+	 * A buffer sized at the name's length would refuse on the first one,
+	 * which is safe and useless. */
+	if (http_escape(f->name, safe_name, sizeof(safe_name)) < 0)
+		return HTTP_EBODY_LONG;
 
 	n = snprintf(page, sizeof(page),
 	             "%s"
@@ -173,7 +187,7 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             "over an accepted connection on this system.</p>\n"
 	             "</main>\n",
 	             PAGE_HEAD,
-	             f->name,
+	             safe_name,
 	             f->machine.architecture[0] ? f->machine.architecture
 	                                        : "unnamed",
 	             f->machine.cpu_model[0] ? f->machine.cpu_model
@@ -183,7 +197,7 @@ static int handle_dashboard(const struct http_request *r, const char *body,
 	             (unsigned long long)(f->machine.memory_free_bytes >> 20),
 	             f->machine.page_size / 1024u,
 	             f->served, f->bytes_out,
-	             f->name);
+	             safe_name);
 
 	if (n < 0 || (size_t)n >= sizeof(page))
 		return HTTP_EBODY_LONG;

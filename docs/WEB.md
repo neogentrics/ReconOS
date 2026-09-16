@@ -39,6 +39,8 @@ Nothing is marked built on the strength of having been written.
 | Conditional requests and caching | **built** | `cache.c` — ETag, `If-None-Match`, 304, `Cache-Control` |
 | Service registry | **built** | `service.c` — the web server is one service; `/api/services` reports them |
 | Range requests and `If-Range` | **built** | `range.c` — 206, 416, `Accept-Ranges`, and a stale `If-Range` sends the whole file |
+| Security headers | **built** | `nosniff`, `DENY`, `no-referrer` on every response; CSP deliberately absent |
+| HTML escaping | **built** | `escape.c` — 21 checks; the dashboard no longer depends on the name validator for its safety |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -123,7 +125,7 @@ can run, not by what it can send.
 | **CGI-style external programs** | **blocked** | nothing in user mode can start a program — `KERNEL-WANTS.md` carries the entry. |
 | **FastCGI / a persistent app backend** | **blocked** | same, plus a socket to talk to it over. |
 | **Reverse proxy to another machine** | **blocked** | `connect` exists and does not work: it answers `SYS_OK` for a closed port and returns before the handshake. Measured 16 September; `KERNEL-WANTS.md` has it. This row previously said *buildable today*, which was wrong — see VF-009. |
-| **Template rendering** | specified | with escaping by default; a template engine that escapes on request is one that is forgotten once. |
+| **Template rendering** | partial | `escape.c` exists and the dashboard uses it. A template engine does not, and when one arrives it must escape by default — one that escapes on request is one that is forgotten once. |
 
 ### The two that shape the others
 
@@ -318,10 +320,28 @@ refactor.
 - **Bounds refuse rather than truncate.** A truncated target is a request for a
   different resource.
 
-Still to decide, and worth deciding before the file handler exists: `Content-
-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, and
-CORS for the API. All four are cheap and all four are hard to add after
-something depends on their absence.
+**Three of these are now sent on every response**, written by the server rather
+than by a handler so a handler cannot forget one:
+
+- `X-Content-Type-Options: nosniff` — this server decides a type from the
+  file's extension, a statement by whoever put the file there. Sniffing
+  overrides that with a statement by whoever wrote the *contents*.
+- `X-Frame-Options: DENY` — an administrative console with a form that renames
+  the machine has no reason to be in anybody's frame.
+- `Referrer-Policy: no-referrer` — an internal path in a `Referer` is a small
+  map of the network handed to whatever the link pointed at.
+
+**`Content-Security-Policy` is deliberately absent, and that is the honest
+answer rather than the lazy one.** It is the most valuable of the four and
+cannot be added truthfully yet: the dashboard is built from inline `style=`
+attributes and a `<style>` block, so any policy shippable today needs
+`'unsafe-inline'` — which permits exactly what CSP exists to stop while the
+header's presence suggests otherwise. A policy that reads as protection and is
+not is worse than none, because it ends the conversation. The page's styles must
+move to a served file first.
+
+`Strict-Transport-Security` waits on TLS, and would be a lie without it.
+CORS for the API is still to decide.
 
 ---
 
