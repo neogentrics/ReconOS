@@ -75,3 +75,24 @@ init_elf_image_end:
 	.global init_elf_image_len
 init_elf_image_len:
 	.quad	init_elf_image_end - init_elf_image
+
+/* And the socket probe, which tests a system call rather than the loader.
+ *
+ * Carried the same way as the other two. It is a separate program rather than
+ * more code inside one of them because a program that tests sockets and a
+ * program that tests the loader fail for different reasons, and one exit code
+ * cannot say which.
+ */
+	.balign 16
+
+	.global user_socket_probe_image
+user_socket_probe_image:
+	.incbin "socket_probe.elf"
+
+	.global user_socket_probe_image_end
+user_socket_probe_image_end:
+
+	.balign 8
+	.global user_socket_probe_image_len
+user_socket_probe_image_len:
+	.quad	user_socket_probe_image_end - user_socket_probe_image
