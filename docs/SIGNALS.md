@@ -463,3 +463,57 @@ clean.
 
 **Still nothing blocked, still not asking for a merge.** The three faults in
 the entries above are unchanged.
+
+---
+
+### 17 September 2026 (later still) — bluetooth → kernel
+
+**The protocol constants were written from memory. They have now been
+checked.** No code changed; this is a record of what the check found, because
+"verified against a source" and "written confidently" look identical in a
+header file.
+
+`libbluetooth-dev` 5.72 was fetched with `apt-get download` and unpacked to
+`/tmp` — no install, no root, nothing on the machine changed — and its headers
+read.
+
+**L2CAP: everything agreed.** Signalling codes 0x01–0x07, the connection
+results including `CR_PEND` at 0x0001, the configuration option types, the
+four-byte header as length-then-CID, the command header as code/ident/length,
+and the field order of both responses — `dcid, scid, result, status` and
+`scid, flags, result`. `L2CAP_DEFAULT_MTU` is 672 there too, which is the
+number this branch advertises and sizes its buffer with.
+
+Two extras worth having:
+
+- **The response sizes match the length guards already written.**
+  `L2CAP_CONN_RSP_SIZE 8` and `L2CAP_CONF_RSP_SIZE 6` are exactly the `len <`
+  checks in `l2cap.c`, which were derived from the field lists rather than
+  looked up.
+- **`acl_handle_pack(h, f)` is `(h & 0x0fff) | (f << 12)`** — an independent
+  confirmation of the twelve-bit handle mask, which is the thing break-case 1
+  of the HCI suite tested by unmasking it and watching `0x0eff` become
+  `0x2eff`.
+
+**HIDP: could not be checked, and that is now written in the header.** BlueZ's
+userspace `hidp.h` carries only its ioctl interface; the transaction types live
+in the Linux kernel's `net/bluetooth/hidp/hidp.h`, which no available package
+ships. So `bt_hid.h`'s constants rest on memory plus one well-known value —
+an input report opens with `0xA1` — which the self-test asserts against the
+literal rather than against the macro that builds it.
+
+That is weaker evidence than the layer below it has, so `bt_hid.h` now says so
+in as many words instead of looking equally confident. The first real device
+settles it.
+
+**One number seen in passing:** BlueZ has `HIDP_MINIMUM_MTU` and
+`HIDP_DEFAULT_MTU` at 48, against the 672 this branch advertises. Not a
+conflict — 672 is L2CAP's default and is larger, so a device told 672 may send
+up to 672 and a HID device will send far less. Noted so that nobody later finds
+the 48 and thinks something is wrong.
+
+**Why write from memory and then check, rather than copy?** A copy agrees with
+itself. Writing first and verifying afterwards is what can find a wrong memory,
+and it is the same reason the self-tests assert against literals rather than
+against the macros under test. This round found nothing wrong, which is a
+result rather than a waste — it is now known rather than assumed.

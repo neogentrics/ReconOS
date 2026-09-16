@@ -48,6 +48,26 @@
  * a driver with one of them has either a mouse that cannot be configured or
  * one that never moves. */
 
+/* --- how much of this file has been checked, and how much has not ---------
+ *
+ * `l2cap.h`'s constants were verified against BlueZ 5.72's headers and all
+ * agreed. **The HIDP constants below could not be**: BlueZ's userspace
+ * `hidp.h` carries only its ioctl interface, and the protocol's transaction
+ * types live in the Linux kernel's own `net/bluetooth/hidp/hidp.h`, which is
+ * not shipped in any package available here.
+ *
+ * So these are written from memory and checked only against each other and
+ * against one well-known value -- an input report opens with 0xA1 -- which the
+ * self-test asserts against the literal rather than against the macro that
+ * builds it.
+ *
+ * That is weaker evidence than the layer below has, and it is recorded here
+ * rather than left to look the same. The first real device settles it: a mouse
+ * whose reports open with something other than 0xA1 means this section is
+ * wrong, and the framing is small enough that being wrong here is cheap to
+ * correct and expensive to not notice.
+ */
+
 /* --- transaction types: the top nibble ------------------------------------ */
 #define HIDP_TRANS_HANDSHAKE		0x0
 #define HIDP_TRANS_HID_CONTROL		0x1

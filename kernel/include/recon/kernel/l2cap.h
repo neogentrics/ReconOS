@@ -19,6 +19,22 @@
  * bytes. There is no connection state machine: nothing can hold a connection
  * until the transport can carry HCI at all, and structure for a connection
  * that cannot exist is structure nothing can check.
+ *
+ * --- Where these numbers come from ---
+ *
+ * Every constant and every field order below was written from memory and then
+ * **checked against BlueZ 5.72's headers** on 17 September 2026 -- `l2cap.h`
+ * and `hci.h` out of `libbluetooth-dev`, read rather than linked against.
+ * All of it agreed: the signalling codes, the connection results, the
+ * configuration option types, `L2CAP_DEFAULT_MTU 672`, the four-byte header as
+ * length-then-CID, the command header as code/ident/length, and the field
+ * order of the connection and configuration responses. The response sizes
+ * there also match the length guards in `l2cap.c` -- 8 for a connection
+ * response, 6 for a configuration one.
+ *
+ * It is worth saying that this was a *check* and not a source. Writing from
+ * memory and then verifying finds a wrong memory; copying would have found
+ * nothing, because a copy agrees with itself.
  */
 #ifndef RECON_KERNEL_L2CAP_H
 #define RECON_KERNEL_L2CAP_H
