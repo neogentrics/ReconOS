@@ -106,7 +106,7 @@ static const struct http_route ROUTES[] = {
 static unsigned long *BYTES;
 
 static struct http_site SITE = {
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0
+	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0, 0, 0
 };
 
 /* --- the client ---------------------------------------------------------- */

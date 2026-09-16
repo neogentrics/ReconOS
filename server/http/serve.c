@@ -301,6 +301,7 @@ int http_stream_begin(struct http_sink *sink, int status,
 		return -1;
 	sink->begun = 1;
 	sink->declared = length;
+	sink->status = status;
 
 	/*
 	 * Choose the framing, and it is the client's version that decides.
@@ -483,6 +484,25 @@ static int send_status(int fd, int status, const char *server_name,
 	return send_response(fd, 0, &res, server_name, 0, 0, counter);
 }
 
+/*
+ * Tell the site what was answered.
+ *
+ * Bytes are the difference in the counter the server was already keeping,
+ * rather than a figure the caller works out -- so the log reports what actually
+ * went on the wire, head included, and cannot disagree with `bytes_sent`.
+ */
+static void note(const struct http_site *site, const struct http_request *req,
+                 int status, unsigned long before)
+{
+	unsigned long now;
+
+	if (!site->log)
+		return;
+
+	now = site->bytes_sent ? *site->bytes_sent : 0;
+	site->log(site->log_ctx, req, status, now - before);
+}
+
 /* --- one connection ------------------------------------------------------ */
 
 static void serve_connection(int fd, const struct http_site *site)
@@ -503,6 +523,11 @@ static void serve_connection(int fd, const struct http_site *site)
 		struct http_response res;
 		int verdict, status, keep, head_only, i, matched = 0;
 		size_t need;
+
+		/* What the counter said before this request, so the log can
+		 * report what this one cost. */
+		unsigned long sent_before =
+			site->bytes_sent ? *site->bytes_sent : 0;
 
 		/* Read until the head is complete. */
 		for (;;) {
@@ -528,6 +553,11 @@ static void serve_connection(int fd, const struct http_site *site)
 		if (verdict != HTTP_OK) {
 			status = http_status_for(verdict);
 			send_status(fd, status, site->server_name, site->bytes_sent);
+
+			/* Logged with no request, because there is none that
+			 * could be described -- and a refused request is
+			 * exactly the entry somebody will come looking for. */
+			note(site, 0, status, sent_before);
 			return;		/* the framing is in doubt; do not
 					 * try to find the next request */
 		}
@@ -656,10 +686,16 @@ static void serve_connection(int fd, const struct http_site *site)
 					return;
 				}
 
-				if (http_stream_end(&sink) != HTTP_OK
-				    || verdict != HTTP_OK)
-					return;	/* the framing is in doubt;
-						 * close rather than reuse */
+				{
+					int done = http_stream_end(&sink);
+
+					note(site, &req, sink.status,
+					     sent_before);
+					if (done != HTTP_OK
+					    || verdict != HTTP_OK)
+						return;	/* framing in doubt;
+							 * close, do not reuse */
+				}
 
 				if (!sink.keep_alive)
 					return;
@@ -726,8 +762,15 @@ static void serve_connection(int fd, const struct http_site *site)
 			keep = 0;
 
 		if (send_response(fd, &req, &res, site->server_name, keep,
-		                  head_only, site->bytes_sent) != 0)
+		                  head_only, site->bytes_sent) != 0) {
+			/* Logged even though the send failed. What was
+			 * attempted is the useful record; a request that
+			 * vanishes from the log because the client went away
+			 * is a request nobody can account for. */
+			note(site, &req, res.status, sent_before);
 			return;
+		}
+		note(site, &req, res.status, sent_before);
 
 		if (!keep)
 			return;

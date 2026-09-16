@@ -50,6 +50,7 @@
 #include "../http/escape.h"
 #include "../include/recon_server.h"
 #include "../service.h"
+#include "../log.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
  * recognises them in the other. The server's own start at 70. */
@@ -94,6 +95,44 @@ static struct server_facts FACTS;
  * beside it, and the loop at the bottom of `main` does not change.
  */
 static struct supervisor SUPERVISOR;
+
+/*
+ * What this machine has answered lately.
+ *
+ * In memory and not on the volume, because appending to a file needs
+ * `O_APPEND` and the C library drops it -- the same fault that stopped
+ * `O_CREAT` working. So this does not survive a reboot, which is a limitation
+ * rather than a design and is written down in `server/log.h` where a reader
+ * looking for yesterday's requests will find it.
+ */
+static struct logbook LOGBOOK;
+
+/*
+ * Record one answered request.
+ *
+ * Called by the server rather than by each handler, so every response is
+ * logged -- including the ones a handler never saw, where a request was refused
+ * before routing. `request` is NULL for those, and that is the entry somebody
+ * will come looking for.
+ */
+static void note_request(void *ctx, const struct http_request *r, int status,
+                         unsigned long bytes)
+{
+	struct logbook *book = (struct logbook *)ctx;
+	char line[LOG_LINE_MAX];
+
+	if (r)
+		snprintf(line, sizeof(line), "%s %s%s%s -> %d, %lu bytes",
+		         r->method, r->target,
+		         r->query[0] ? "?" : "", r->query,
+		         status, bytes);
+	else
+		snprintf(line, sizeof(line),
+		         "(unparsable request) -> %d, %lu bytes",
+		         status, bytes);
+
+	log_write(book, (unsigned long)recon_time(), line);
+}
 
 
 /*
@@ -434,11 +473,63 @@ static int handle_services(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * What this machine has answered lately, as text.
+ *
+ * **Plain text rather than JSON, and that is not laziness.** A log line holds
+ * the request's target, which is a string a client chose: the parser refuses
+ * control bytes and NUL, but `%22` decodes to a quote, so a target may
+ * perfectly legally contain one. Written into JSON without escaping, that
+ * quote ends the string and everything after it becomes structure -- a client
+ * writing entries of its own into the log a reader is looking at.
+ *
+ * The right answer is a JSON escaper, which does not exist yet. Until it does,
+ * this is the same call as the one `serve.c` makes about CSP: ship the honest
+ * thing rather than the one that reads better and is wrong. `docs/WEB.md`
+ * carries the row.
+ *
+ * The dropped count leads, because a reader who does not know entries were lost
+ * will draw conclusions from a log that is missing exactly the burst they are
+ * looking for.
+ */
+static int handle_log(const struct http_request *r, const char *body,
+                      size_t body_len, struct http_response *out, void *ctx)
+{
+	static char text[LOG_ENTRIES_MAX * (LOG_LINE_MAX + 32) + 128];
+	struct logbook *book = (struct logbook *)ctx;
+	size_t held = log_held(book), i;
+	int n, m;
+
+	(void)r; (void)body; (void)body_len;
+
+	n = snprintf(text, sizeof(text),
+	             "held %lu of %d, dropped %lu\n\n",
+	             (unsigned long)held, LOG_ENTRIES_MAX,
+	             log_dropped(book));
+	if (n < 0 || (size_t)n >= sizeof(text))
+		return HTTP_EBODY_LONG;
+
+	for (i = 0; i < held; i++) {
+		const struct log_entry *e = log_at(book, i);
+
+		m = snprintf(text + n, sizeof(text) - (size_t)n, "%lu  %s\n",
+		             e->at, e->line);
+		if (m < 0 || (size_t)(n + m) >= sizeof(text))
+			return HTTP_EBODY_LONG;
+		n += m;
+	}
+
+	http_response_simple(out, 200, "text/plain; charset=utf-8", text,
+	                     (size_t)n);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS },
 	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS },
 	{ "GET",  "/health",      1, handle_health,    0, 0 },
 	{ "GET",  "/api/services", 1, handle_services,  0, &SUPERVISOR },
+	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK },
 	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
@@ -839,6 +930,8 @@ int main(void)
 	site.ctx = &FACTS;
 	site.server_name = "ReconOS";
 	site.bytes_sent = &FACTS.bytes_out;
+	site.log = note_request;
+	site.log_ctx = &LOGBOOK;
 
 	/* --- the services ------------------------------------------------------ */
 

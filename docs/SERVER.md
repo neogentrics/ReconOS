@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 380 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 413 checks, **running on the machine** |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
@@ -63,7 +63,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Kerberos KDC | server | **blocked** | no GSSAPI, no crypto |
 | TLS termination and certificates | server | **blocked** | no TLS, no certificate store |
 | HTTP auth (Basic, session, bearer) | server | spec | **TLS first** — see `docs/WEB.md` §5 |
-| Audit log daemon | server | not started | Event Viewer reads it |
+| Audit log daemon | server | **partial** | `server/log.c` — a ring of recent requests at `GET /api/log`. **In memory only**: appending to a file needs `O_APPEND`, which the C library drops |
 | POSIX ACLs | kernel | partial | uid/gid and caps exist |
 
 ### Storage
@@ -106,7 +106,7 @@ the same two things: a static file handler and a JSON API.
 | Services and daemon inspector | **partial** | `GET /api/services` — state, polls, faults, restarts |
 | Directory and user manager | spec | waits on LDAP |
 | Performance monitor | spec | `SYS_MACHINE` gives some of it today |
-| Event viewer and log explorer | spec | waits on the audit daemon |
+| Event viewer and log explorer | **partial** | `GET /api/log` — every request answered, with the count of any dropped |
 | Task and job scheduler | spec | waits on a timer |
 
 ### Graphical desktop and remote access

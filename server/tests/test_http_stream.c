@@ -158,7 +158,7 @@ static const struct http_route ROUTES[] = {
 static unsigned long *BYTES;
 
 static struct http_site SITE = {
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/stream", 0
+	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/stream", 0, 0, 0
 };
 
 /* --- the client ------------------------------------------------------------ */

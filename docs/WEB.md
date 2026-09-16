@@ -364,11 +364,11 @@ of the things they will read.
 
 | | status |
 |---|---|
-| Access log, structured | specified |
+| Access log | **built** — `server/log.c`, a ring in memory; `GET /api/log` |
 | Error log, separate | specified |
-| Per-request timing | specified |
+| Per-request timing | partial — each entry carries the clock it was recorded at |
 | Feeding the audit daemon | **blocked** — no audit daemon |
-| A metrics endpoint for the dashboard | specified |
+| A metrics endpoint for the dashboard | partial — `/api/status` and `/api/services` |
 
 ---
 

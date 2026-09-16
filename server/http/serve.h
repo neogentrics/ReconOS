@@ -123,6 +123,7 @@ struct http_sink {
 	int  begun;
 	int  minor;		/* the request's HTTP/1.x */
 	long declared;		/* HTTP_LENGTH_UNKNOWN, or the promised length */
+	int  status;		/* what `http_stream_begin` was told to send */
 	unsigned long  written;
 	unsigned long *bytes_sent;
 	const char    *server_name;
@@ -249,6 +250,22 @@ struct http_site {
 	size_t                   route_count;
 	void                    *ctx;
 	const char              *server_name;	/* for the Server header */
+
+	/*
+	 * Called once per request, after it has been answered. May be NULL.
+	 *
+	 * The server calls it rather than each handler, for the reason the
+	 * security headers are written by the server: a log every handler must
+	 * remember is a log the next handler will not write. It sees what was
+	 * actually sent -- the status the client got, including the ones
+	 * produced by a refusal before any handler ran.
+	 *
+	 * `request` may be NULL, for a request too malformed to parse. That is
+	 * exactly the entry worth having, so it is passed rather than skipped.
+	 */
+	void (*log)(void *ctx, const struct http_request *request, int status,
+	            unsigned long bytes);
+	void *log_ctx;
 
 	/* Where to count bytes actually put on the wire, or NULL.
 	 *

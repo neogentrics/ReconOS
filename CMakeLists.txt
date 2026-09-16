@@ -1017,6 +1017,19 @@ add_executable(recon_server_escape_tests
 
 add_test(NAME server_http_escape COMMAND recon_server_escape_tests)
 
+# A ring of recent entries, and the count that stops it lying.
+#
+# A log that drops silently looks complete, reads plausibly, and has lost
+# exactly the entries somebody is hunting for -- because trouble arrives in
+# bursts, and a burst is what overruns a ring. So most of these checks are
+# about the dropped count being right at every boundary, not about entries
+# being stored.
+add_executable(recon_server_log_tests
+    server/log.c
+    server/tests/test_log.c)
+
+add_test(NAME server_log COMMAND recon_server_log_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the
