@@ -34,6 +34,7 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <sys/mman.h>
 
 static int failures;
 static int checks;
@@ -98,8 +99,14 @@ static const struct http_route ROUTES[] = {
 	{ "POST", "/api/echo",    1, handle_echo },
 };
 
-static const struct http_site SITE = {
-	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1"
+/* The byte counter lives in shared memory, because the server runs in the
+ * child and the assertion is made in the parent. A plain global would be
+ * copied by `fork` and the parent would read its own zero -- which would look
+ * exactly like a server that sent nothing. */
+static unsigned long *BYTES;
+
+static struct http_site SITE = {
+	ROUTES, sizeof(ROUTES) / sizeof(ROUTES[0]), 0, "ReconOS/0.1", 0
 };
 
 /* --- the client ---------------------------------------------------------- */
@@ -179,6 +186,20 @@ int main(void)
 
 	printf("the server, over a real socket\n");
 
+	/* The counter must live in memory both processes see. A plain global
+	 * would be copied by `fork`, and the parent would read its own zero --
+	 * which looks exactly like a server that sent nothing. That failure
+	 * would have been indistinguishable from the bug this check exists to
+	 * catch, which is why it is shared rather than returned. */
+	BYTES = mmap(0, sizeof(*BYTES), PROT_READ | PROT_WRITE,
+	             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (BYTES == MAP_FAILED) {
+		printf("  FAIL  no shared page for the byte counter\n");
+		return 1;
+	}
+	*BYTES = 0;
+	SITE.bytes_sent = BYTES;
+
 	/* A busy port is not a failure of this suite. Walk until one is free. */
 	{
 		int tries = 0;
@@ -200,6 +221,16 @@ int main(void)
 	}
 	if (child == 0) {
 		int served = 0;
+
+		/* A hard ceiling on this child's life.
+		 *
+		 * The child outlived the suite once: the parent crashed before
+		 * reaching its `kill`, and the orphan sat on the port holding a
+		 * listener. The next thing to ask that port for a page got an
+		 * answer -- from the wrong process, looking exactly like a
+		 * pass. An orphan that answers is worse than one that hangs,
+		 * because it is indistinguishable from success. */
+		alarm(20);
 
 		/* Serve exactly as many connections as the parent opens, then
 		 * leave. A child that ran forever would hang the suite on any
@@ -308,6 +339,13 @@ int main(void)
 			   "both requests on one connection are answered");
 		}
 	}
+
+	/* The counter the server actually incremented, read from the shared
+	 * page. It is a lower bound on what reached the client and an upper
+	 * bound on nothing -- which is the direction that matters: a server
+	 * reporting bytes it did not send would be worse than one reporting
+	 * none. */
+	ok(*BYTES > 400, "the server counted the bytes it put on the wire");
 
 	kill(child, SIGTERM);
 	waitpid(child, 0, 0);

@@ -30,7 +30,7 @@ Nothing is marked built on the strength of having been written.
 | Request parser | **built** | `server/http/request.c` — 70 checks |
 | Routing and dispatch | **built** | `server/http/serve.c` |
 | Response writer | **built** | `serve.c` — 22 checks over a real socket |
-| Listener, accept, keep-alive | **built** | `serve.c` |
+| Listener, accept, keep-alive | **built** | `serve.c`, verified on the machine |
 | `GET` / `HEAD` / `POST` | **built** | |
 | Request bodies, framed by `Content-Length` | **built** | 64 KiB cap |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
@@ -41,10 +41,18 @@ as the client). The serving suite runs `serve.c` **unmodified** — there is no
 stand-in for the network, because a stand-in is looser than the real call in
 exactly the places a server breaks.
 
-**Nothing has run on ReconOS itself yet.** The kernel's own note says a socket
-descriptor working with `read` and `write` is *argued, not measured*, and this
-server is the thing that will measure it. Until it has, every row above means
-"correct against the host's sockets".
+**It has now run on ReconOS**, 15 September 2026. A request from outside the
+machine reached this server in ring 3 and the answer reached the client whole:
+`/health`, `/api/status` and the dashboard all arrived with the declared length,
+five consecutive times for the largest of them. That settles the kernel's own
+open question -- a socket descriptor working with `read` and `write` was
+*argued, not measured*, and it is measured now.
+
+It also found a fault. `tcp_write` reported 1194 bytes sent when it had sent
+512, so the first page served arrived truncated with `Content-Length` promising
+the rest. `docs/SERVER.md` carries the measurement and the report; the
+workaround is `HTTP_SEND_CHUNK` and should be removed when the kernel is
+fixed.
 
 ---
 

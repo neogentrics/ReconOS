@@ -31,6 +31,31 @@
  * handler that needs to return more than this must wait for it. */
 #define HTTP_RESPONSE_MAX 262144
 
+/*
+ * The largest block handed to `send` in one call.
+ *
+ * **This is a workaround for a kernel fault, not a tuning knob**, and it should
+ * be removed when that fault is fixed rather than kept because it works.
+ *
+ * `tcp_write` in `kernel/core/tcp.c` copies up to 4096 bytes into the
+ * connection's send buffer, transmits only the first `chunk[512]` of them, and
+ * then **returns the number it buffered rather than the number it sent**. A
+ * caller that handles short writes correctly is truncated anyway, because it
+ * was told everything went.
+ *
+ * Measured on 15 September 2026 against the running machine, three responses
+ * on one boot:
+ *
+ *     /health       declared 3     received 3
+ *     /api/status   declared 207   received 207
+ *     /             declared 1194  received 512
+ *
+ * Keeping every call at or under the kernel's own segment size means each one
+ * is transmitted in full before the next is offered, so nothing is left
+ * buffered and unsent. Reported to the kernel session; see `docs/SERVER.md`.
+ */
+#define HTTP_SEND_CHUNK 512
+
 struct http_response {
 	int         status;
 	const char *content_type;	/* NULL means the status carries no body */
@@ -76,6 +101,20 @@ struct http_site {
 	size_t                   route_count;
 	void                    *ctx;
 	const char              *server_name;	/* for the Server header */
+
+	/* Where to count bytes actually put on the wire, or NULL.
+	 *
+	 * A pointer rather than a field, because the site is handed to the
+	 * server as `const` -- it is configuration, and configuration that
+	 * mutates is configuration two readers disagree about. The counter it
+	 * points at is the caller's, and this is the only thing in here that
+	 * moves.
+	 *
+	 * Counted at the point of sending, not from the response's declared
+	 * length: a short write that was retried has still sent those bytes,
+	 * and a figure taken from `body_len` would be what the server meant to
+	 * send rather than what it did. */
+	unsigned long           *bytes_sent;
 };
 
 /* Open a listening socket on `port`, bound to every address.

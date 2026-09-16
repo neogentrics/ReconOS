@@ -1,0 +1,199 @@
+# ReconOS — the server role
+
+A ReconOS machine whose role is **server**: it answers for a network rather
+than sitting in front of a person.
+
+This is one of five roles in `docs/ROLES.md`. The installer puts down the whole
+operating system every time; the role is chosen on the first boot afterwards,
+so a server is **configuration, not a build**. Nothing in here is conditionally
+compiled, and the same medium produces a workstation, a firewall or a NAS
+depending only on what it is told it is.
+
+Branch `server`. This README covers this role; the repository's own `README.md`
+covers the operating system.
+
+---
+
+## At a glance
+
+| | |
+|---|---|
+| **Version** | 0.1.0 |
+| **Runs on** | x86_64 under QEMU, with virtio-net |
+| **Verified** | on the machine, 15 September 2026 |
+| **Checks** | 127 across three suites |
+| **Kernel** | 0.2.41 |
+
+---
+
+## What works right now
+
+**A web server, serving on port 80 from a running ReconOS machine.** Not a
+demonstration that a socket opens — a browser on another machine asks for a
+page and gets one.
+
+```
+$ curl -i http://10.0.2.15/
+HTTP/1.1 200 OK
+Server: ReconOS
+Content-Length: 1194
+Connection: keep-alive
+Content-Type: text/html; charset=utf-8
+```
+
+Three routes, which are the beginning of the administrative console the
+architecture document asks for:
+
+| route | what it answers |
+|---|---|
+| `/` | the dashboard — what this machine is, and what this server has done |
+| `/api/status` | the same facts as JSON, from the same structure |
+| `/health` | `ok`, for something that is not a person |
+
+Every number on that page is read from the kernel through `SYS_MACHINE` or
+counted by the server. Nothing on it is illustrative.
+
+**Parallel naming.** A machine cloning `M16` calls itself `M17`; one cloning
+`srv007` calls itself `srv008`, because a parallel that drops the padding has
+renamed the family rather than joined it. `gateway` is refused outright —
+there is no next `gateway`, and inventing `gateway2` would be this code
+deciding what an operator meant.
+
+---
+
+## What this role proved
+
+The kernel session recorded, in their own words, that a socket descriptor
+working with `read` and `write` was **argued, not measured** — their self-test
+cannot hold a descriptor, because a kernel thread has no process and
+`fd_install` fails there for sockets exactly as it does for pipes.
+
+This role measured it. On 15 September 2026 a request from outside the machine
+reached a program in ring 3, and that program's answer reached the client
+intact. It also found a fault in the doing: `tcp_write` reported it had sent
+1194 bytes when it had sent 512. That is written up in full, with the numbers,
+in `docs/SERVER.md`.
+
+---
+
+## Building and running
+
+The role is a `make` variable, standing in for the first-boot choice that does
+not exist yet. **`make` with nothing said builds the workstation exactly as it
+did before this role existed.**
+
+```bash
+cd kernel
+make ARCH=x86_64 ROLE=server
+```
+
+Then boot it with a card the kernel can actually drive. QEMU's default NIC is
+an Intel e1000 and this kernel drives virtio-net only, so it must be asked for
+by name — otherwise the machine comes up with *no card to configure* and
+nothing listens:
+
+```bash
+qemu-system-x86_64 -kernel build/x86_64/reconos-kernel.elf -m 512M -no-reboot \
+  -display none \
+  -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:80 \
+  -device virtio-net-pci,netdev=n0 \
+  -serial mon:stdio
+```
+
+The machine takes an address by DHCP from QEMU and says so, then says what the
+server is doing:
+
+```
+net: eth0 is 10.0.2.15, via 10.0.2.2
+  the web server: listening on :80 -- 0 requests served, 0 bytes out
+  the web server: 1 served
+```
+
+`curl http://127.0.0.1:8080/` from the host reaches it.
+
+### The suites
+
+They run on the host and need no machine:
+
+```bash
+gcc -std=c11   -Wall -Wextra -Werror -o t1 server/identity.c server/tests/test_identity.c
+gcc -std=c11   -Wall -Wextra -Werror -o t2 server/http/request.c server/tests/test_http.c
+gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/serve.c \
+                                           server/tests/test_http_serve.c
+```
+
+| suite | checks | what it holds |
+|---|---|---|
+| `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
+| `server_http` | 70 | one request, and every way of writing two |
+| `server_http_serve` | 23 | the server over a real socket, `serve.c` unmodified |
+
+**Each was watched failing before it was believed.** The naming suite was run
+against the `atoi` shape its header rejects and nine cases failed; the HTTP
+suite against a parser with the duplicate-length check removed and `..` clamped
+instead of refused, and six failed. A suite nobody has seen fail proves only
+that the code and the suite agree.
+
+---
+
+## Layout
+
+```
+server/
+  README.md          this file
+  identity.c         naming a parallel -- M16 -> M17
+  include/
+    recon_server.h   the role's own interface
+  http/
+    http.h           bounds, verdicts, and what a request is
+    request.c        parsing. No sockets in it, on purpose
+    serve.h          routes, handlers, responses
+    serve.c          the socket loop. No parsing in it, on purpose
+  init/
+    server_init.c    the first program on a server-role machine
+  tests/             the three suites above
+```
+
+The split between `request.c` and `serve.c` is the important one. Parsing is
+what faces an attacker and can be tested exhaustively with string literals;
+serving is what cannot. Neither file contains the other's job.
+
+---
+
+## What is not here
+
+Stated plainly, because a list of features with no list of gaps is a sales
+page. `docs/SERVER.md` carries the full audit and `docs/WEB.md` the web
+server's specification.
+
+- **DNS, DHCP, DDNS and NTP cannot be started at all.** All four are
+  unconnected-datagram protocols and no system call opens an unconnected
+  datagram. Filed at the top of `docs/KERNEL-WANTS.md`; the kernel already has
+  `udp_bind_port`, `socket_sendto` and `socket_recvfrom` working internally,
+  with nothing reaching them from ring 3.
+- **No TLS**, so no HTTP authentication of any kind. A login form served over
+  cleartext is a credential given away, and this role will not offer one.
+- **No static files yet** — the handler is specified, not written.
+- **One connection at a time.** A slow client blocks every other, which is a
+  denial of service costing the attacker one socket. It needs non-blocking
+  sockets, and today `accept` is the only call that reports readiness.
+- **No peer discovery**, so the naming above has nothing to discover yet. It
+  needs broadcast, which needs the same datagram call as DNS.
+
+---
+
+## Version history
+
+Newest first. The number tracks what works, not what is planned.
+
+| Version | What it brought |
+| --- | --- |
+| **0.1.0** | **A page served from a ReconOS machine.** The web server runs in ring 3 on the real kernel and answers a client outside it — the first bytes ever moved over an accepted connection on this system. It found `tcp_write` reporting 1194 bytes sent when it had sent 512. |
+| **0.0.2** | **The web server, and what it refuses.** 92 checks, host-verified: request smuggling by double framing, `%2e%2e%2f` traversal, `%00`, a space before a colon, a CR in a value. Built as a routing table of handlers so a page and an API are the same shape. |
+| **0.0.1** | **The role opened, and a parallel named.** `M16` → `M17`, `srv007` → `srv008`, `gateway` refused. The audit table, and the datagram entry that blocks DNS and DHCP. |
+
+---
+
+*Related: `docs/SERVER.md` (the role and its audit), `docs/WEB.md` (the web
+server in full), `docs/ROLES.md` (all five roles),
+`docs/KERNEL-WANTS.md` (what this role needs next).*

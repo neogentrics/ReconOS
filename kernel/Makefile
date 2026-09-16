@@ -322,15 +322,54 @@ INIT_ELF := $(BUILD)/user/recon_init.elf
 # empty variable and silently build the program with no include path at all.
 INITCFLAGS = $(filter-out -mno-sse -mno-sse2 -mno-mmx -mno-80387,$(USERCFLAGS))
 
-INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
-	     ../userland/init/layout.c \
-	     ../userland/libc/string.c ../userland/libc/printf.c \
+# --- Which role's init goes into this image ----------------------------------
+#
+# `docs/ROLES.md` settles the shape: the installer puts down the whole
+# operating system every time and **the role is chosen on the first boot
+# afterwards**, so a role is configuration rather than a build. This variable
+# stands in for that choice while the mechanism that will make it -- a word in
+# the `cmdline` file on the EFI partition, read by the loader (KF-131) -- does
+# not exist yet.
+#
+# Written as an override with a default rather than as two equal halves, and
+# that is deliberate: `make ARCH=x86_64` with nothing else said builds exactly
+# the bytes it built before this existed. A role that has to be asked for
+# cannot be the cause of a surprise in somebody else's build.
+#
+#   make ARCH=x86_64                 the workstation, unchanged
+#   make ARCH=x86_64 ROLE=server     the server, from ../server/
+#
+# **This is not the switching mechanic.** That belongs with the installer and
+# is not built. This is how the server role is tested before it exists.
+ROLE ?= workstation
+
+# The C library, which every role links and none of them differ over.
+INIT_LIBC := ../userland/libc/string.c ../userland/libc/printf.c \
 	     ../userland/libc/ctype.c ../userland/libc/stdlib.c \
 	     ../userland/libc/stdio.c ../userland/libc/syscalls.c \
 	     ../userland/libc/malloc.c ../userland/libc/mem_recon.c \
 	     ../userland/libc/errno.c ../userland/libc/scanf.c \
 	     ../userland/libc/posix.c ../userland/libc/inet.c \
 	     ../userland/libc/socket.c
+
+ifeq ($(ROLE),server)
+
+# The server role draws with the workstation's `screen.c` and `layout.c` on
+# purpose -- a person who has seen one ReconOS machine should recognise the
+# next one. What differs is the program in front of them, not the look of it.
+INIT_SRCS := ../server/init/server_init.c \
+	     ../server/http/request.c ../server/http/serve.c \
+	     ../server/identity.c \
+	     ../userland/init/screen.c ../userland/init/layout.c \
+	     $(INIT_LIBC)
+
+else
+
+INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
+	     ../userland/init/layout.c \
+	     $(INIT_LIBC)
+
+endif
 
 # --- Rules -------------------------------------------------------------------
 

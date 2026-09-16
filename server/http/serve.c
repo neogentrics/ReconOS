@@ -63,19 +63,47 @@ static int prefix_matches(const char *path, const char *prefix, int exact)
  * does not match its own Content-Length -- which, on a keep-alive connection,
  * desynchronises everything after it.
  */
-static int send_all(int fd, const char *buf, size_t len)
+static int send_all(int fd, const char *buf, size_t len,
+                    unsigned long *counter)
 {
 	size_t sent = 0;
 
+	int stalls = 0;
+
 	while (sent < len) {
-		long n = send(fd, buf + sent, len - sent, 0);
+		size_t want = len - sent;
+		long n;
+
+		/* Never more than the kernel transmits in one segment. See
+		 * HTTP_SEND_CHUNK for the measurement that forced this. */
+		if (want > HTTP_SEND_CHUNK)
+			want = HTTP_SEND_CHUNK;
+
+		n = send(fd, buf + sent, want, 0);
 
 		if (n > 0) {
 			sent += (size_t)n;
+			if (counter)
+				*counter += (unsigned long)n;
+			stalls = 0;
 			continue;
 		}
 		if (n < 0 && (errno == EINTR || errno == EAGAIN))
 			continue;
+
+		/* Zero taken, with bytes still to go.
+		 *
+		 * On this kernel that means the connection's send buffer is
+		 * full and nothing has been acknowledged yet. It is temporary
+		 * and it is not an error -- but it is only temporary if the
+		 * far end is still reading, so this gives up rather than
+		 * spinning forever against a peer that has stopped. A bounded
+		 * retry is the difference between a slow client and a wedged
+		 * server. */
+		if (n == 0 && stalls < 4096) {
+			stalls++;
+			continue;
+		}
 		return -1;
 	}
 	return 0;
@@ -106,7 +134,8 @@ void http_response_simple(struct http_response *out, int status,
  */
 static int send_response(int fd, const struct http_request *req,
                          const struct http_response *res,
-                         const char *server_name, int keep_alive, int head_only)
+                         const char *server_name, int keep_alive,
+                         int head_only, unsigned long *counter)
 {
 	char head[1024];
 	int n;
@@ -147,17 +176,18 @@ static int send_response(int fd, const struct http_request *req,
 	head[n++] = '\r';
 	head[n++] = '\n';
 
-	if (send_all(fd, head, (size_t)n) != 0)
+	if (send_all(fd, head, (size_t)n, counter) != 0)
 		return -1;
 	if (head_only || res->body_len == 0)
 		return 0;
-	return send_all(fd, res->body, res->body_len);
+	return send_all(fd, res->body, res->body_len, counter);
 }
 
 /* An error answered before any handler ran. Kept deliberately plain: an error
  * page that reports what was wrong with the request tells an attacker which of
  * their probes the parser noticed. */
-static int send_status(int fd, int status, const char *server_name)
+static int send_status(int fd, int status, const char *server_name,
+                       unsigned long *counter)
 {
 	struct http_response res;
 	char body[128];
@@ -167,7 +197,7 @@ static int send_status(int fd, int status, const char *server_name)
 	if (n < 0)
 		return -1;
 	http_response_simple(&res, status, "text/plain", body, (size_t)n);
-	return send_response(fd, 0, &res, server_name, 0, 0);
+	return send_response(fd, 0, &res, server_name, 0, 0, counter);
 }
 
 /* --- one connection ------------------------------------------------------ */
@@ -199,7 +229,7 @@ static void serve_connection(int fd, const struct http_site *site)
 			if (verdict != HTTP_PARTIAL)
 				break;
 			if (have >= sizeof(buf)) {
-				send_status(fd, 431, site->server_name);
+				send_status(fd, 431, site->server_name, site->bytes_sent);
 				return;
 			}
 			n = recv(fd, buf + have, sizeof(buf) - have, 0);
@@ -214,7 +244,7 @@ static void serve_connection(int fd, const struct http_site *site)
 
 		if (verdict != HTTP_OK) {
 			status = http_status_for(verdict);
-			send_status(fd, status, site->server_name);
+			send_status(fd, status, site->server_name, site->bytes_sent);
 			return;		/* the framing is in doubt; do not
 					 * try to find the next request */
 		}
@@ -222,7 +252,7 @@ static void serve_connection(int fd, const struct http_site *site)
 		/* Read the body, if one was framed. */
 		need = req.head_length + req.content_length;
 		if (need > sizeof(buf)) {
-			send_status(fd, 413, site->server_name);
+			send_status(fd, 413, site->server_name, site->bytes_sent);
 			return;
 		}
 		while (have < need) {
@@ -263,7 +293,8 @@ static void serve_connection(int fd, const struct http_site *site)
 
 				if (s == 0)
 					s = 500;
-				send_status(fd, s, site->server_name);
+				send_status(fd, s, site->server_name,
+				            site->bytes_sent);
 				return;
 			}
 			matched = 1;
@@ -292,7 +323,7 @@ static void serve_connection(int fd, const struct http_site *site)
 			keep = 0;
 
 		if (send_response(fd, &req, &res, site->server_name, keep,
-		                  head_only) != 0)
+		                  head_only, site->bytes_sent) != 0)
 			return;
 
 		if (!keep)

@@ -44,7 +44,7 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — see `docs/WEB.md`; 92 checks |
+| Web / API server | server | **built** | `server/http/` — 127 checks, **running on the machine** |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
@@ -85,7 +85,7 @@ role's to build and is listed because this role is what will be waiting on it.
 | Configuration clone onto unlike hardware | server | spec | discovery first |
 | Service supervisor | server | not started | needed before there is a second service |
 | Cron / job scheduler | server | **blocked** | no user-mode timer |
-| Structured REST / RPC management API | server | partial | the transport is built; no API yet |
+| Structured REST / RPC management API | server | partial | `/api/status` answers real facts; no write side |
 | Hypervisor daemon | server | not started | needs VT-x from the kernel |
 | Container runtime | server | **blocked** | no namespaces, no cgroups |
 | Out-of-band IPMI / Redfish | server | not started | |
@@ -99,7 +99,7 @@ the same two things: a static file handler and a JSON API.
 
 | console | status | note |
 |---|---|---|
-| Server Manager dashboard | spec | the first page to build |
+| Server Manager dashboard | **partial** | one page, real numbers, served from the machine |
 | Storage / RAID manager | spec | waits on the kernel's RAID |
 | Network and firewall centre | spec | |
 | Services and daemon inspector | spec | waits on the supervisor |
@@ -153,6 +153,74 @@ Filed as its own entry in `docs/KERNEL-WANTS.md`. Until it is answered:
   `server/http/` is the code. It is also what will first prove that a socket
   descriptor moves bytes on this kernel — which nothing has yet, because
   everything so far is verified against the host's sockets.
+
+---
+
+## Reported to the kernel session: a socket write that says it sent more than it did
+
+**Found** 15 September 2026, the first time this role's web server ran on the
+machine. **Not fixed here, and it is not this role's to fix** -- the workaround
+below is in `server/http/serve.h` and should be removed when the kernel is
+fixed rather than kept because it works.
+
+**No number is claimed for it.** `docs/BUGS.md` records what happened on
+6 September, when two sessions each took the next number from the copy of the
+register in front of them and twelve faults were named twice. A `KF` number is
+the kernel session's to assign, so this entry names none.
+
+### What it is
+
+`tcp_write` in `kernel/core/tcp.c:789` copies up to `TCP_BUFFER_SIZE` (4096)
+bytes into the connection's send buffer, transmits only the first
+`chunk[512]` of them, and then **returns `n` -- the number it buffered, not the
+number it sent.**
+
+So `send` reports complete success for a 1194-byte response of which 512 bytes
+were put on the wire. The rest sits in `tx_buf` with nothing to promptly drain
+it: the acknowledgement path at `tcp.c:519` advances `tx_head` and shrinks
+`tx_len` without transmitting what follows, and the only other sender is the
+retransmission timer. A server that closes the connection when its write
+returns success -- which is what a correct server does -- closes before that
+timer fires, and the tail is never sent.
+
+**This is not a caller that mishandled a short write.** `send_all` in
+`serve.c` loops on the returned count and always did. The count was wrong.
+
+### Measured, not deduced
+
+Three responses on one boot, before any change:
+
+| request | declared | received |
+|---|---|---|
+| `/health` | 3 | 3 |
+| `/api/status` | 207 | 207 |
+| `/` | 1194 | **512** |
+
+`curl` ended the third with *transfer closed with 679 bytes remaining to read*.
+512 is `sizeof(chunk)` in `tcp_write`, exactly.
+
+### What would fix it
+
+Either return `send_now` rather than `n`, so a caller's existing short-write
+loop does the right thing -- which is the smaller change and needs nothing from
+the caller -- or keep returning `n` and transmit the next segment when an
+acknowledgement frees window, which is what a send buffer is normally for.
+
+The first is correct today. The second is what a buffer that exists for
+retransmission should eventually do anyway.
+
+### What this role did meanwhile
+
+`HTTP_SEND_CHUNK` in `server/http/serve.h`: no call to `send` is handed more
+than 512 bytes, so each one is transmitted in full before the next is offered.
+After it, on the same machine, declared and received match on every response,
+including five consecutive 1194-byte pages.
+
+**A second fault this uncovered, in this role's own test.** The suite's child
+process outlived a crashed parent and sat holding the port. The next thing to
+ask that port for a page was answered -- by the wrong process, looking exactly
+like a pass. It is now bounded by `alarm(20)`: an orphan that answers is worse
+than one that hangs, because it cannot be told apart from success.
 
 ---
 
