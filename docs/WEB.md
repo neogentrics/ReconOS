@@ -33,6 +33,7 @@ Nothing is marked built on the strength of having been written.
 | Listener, accept, keep-alive | **built** | `serve.c`, verified on the machine |
 | `GET` / `HEAD` / `POST` | **built** | |
 | Request bodies, framed by `Content-Length` | **built** | 64 KiB cap |
+| Static files from the volume | **built** | `files.c` — 29 checks; on the machine |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
 The suites run on the host: `recon_server_http_tests` (parsing) and
@@ -105,7 +106,7 @@ can run, not by what it can send.
 | model | status | note |
 |---|---|---|
 | **In-process handlers** | **built** | `struct http_route` + `http_handler`. A C function is handed a parsed request and fills a response. This is how the admin console and the REST API are served. |
-| **Static files** | specified | one handler among others. Needs `SYS_OPEN`/`SYS_READ` against ReconFS, MIME mapping by extension, and the `..` refusal that already exists in the parser. |
+| **Static files** | **built** | `server/http/files.c` — one handler among others, as designed. MIME by extension, an index for directories, **never a listing**. Verified reading off ReconFS on the machine. |
 | **JSON / REST APIs** | **built** | demonstrated in the serving suite: a handler returning `application/json` with the raw query string. Needs a JSON writer and parser next. |
 | **Form submission** | **built** (transport) | `POST` bodies arrive whole, with their real length, not NUL-terminated. `application/x-www-form-urlencoded` and `multipart/form-data` decoders are specified, not written. |
 | **File upload** | specified | needs `multipart/form-data` and streaming to disk; the 64 KiB body cap exists because nothing streams yet. |
@@ -239,8 +240,8 @@ Each step is chosen so the thing before it is what makes it possible.
 1. **Run it on ReconOS.** Everything above is host-verified only. This is also
    the first measurement of whether a socket descriptor moves bytes on this
    kernel — which has never been shown.
-2. **A static file handler**, over `SYS_OPEN`/`SYS_READ`, with MIME by
-   extension. The traversal refusal is already in place.
+2. ~~**A static file handler**~~ — **built**, 15 September. It found that
+   `open(O_CREAT)` in the C library never creates; see `docs/SERVER.md`.
 3. **Streaming responses.** Before anything that returns a large body, not
    after.
 4. **The admin console's first real page**, served by a handler, reading real

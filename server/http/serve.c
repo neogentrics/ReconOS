@@ -287,7 +287,8 @@ static void serve_connection(int fd, const struct http_site *site)
 			                      req.content_length ?
 			                          buf + req.head_length : 0,
 			                      req.content_length,
-			                      &res, site->ctx);
+			                      &res,
+			                      rt->ctx ? rt->ctx : site->ctx);
 			if (verdict != HTTP_OK) {
 				int s = http_status_for(verdict);
 

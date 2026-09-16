@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.1.0 |
+| **Version** | 0.2.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 127 across three suites |
+| **Checks** | 156 across four suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -49,6 +49,7 @@ architecture document asks for:
 | `/` | the dashboard — what this machine is, and what this server has done |
 | `/api/status` | the same facts as JSON, from the same structure |
 | `/health` | `ok`, for something that is not a person |
+| anything else | a file from `/System/Web` on the volume, or 404 |
 
 Every number on that page is read from the kernel through `SYS_MACHINE` or
 counted by the server. Nothing on it is illustrative.
@@ -127,12 +128,19 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
 | `server_http` | 70 | one request, and every way of writing two |
 | `server_http_serve` | 23 | the server over a real socket, `serve.c` unmodified |
+| `server_http_files` | 29 | serving a file, and every way of serving the wrong one |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
 suite against a parser with the duplicate-length check removed and `..` clamped
 instead of refused, and six failed. A suite nobody has seen fail proves only
 that the code and the suite agree.
+
+The files suite taught that lesson a second time. With `escapes()` removed its
+four traversal cases failed; relaxing the over-size check changed **nothing**,
+because the handler guards that twice and the suite was only exercising one
+half. A check that survives the removal of the thing it checks is not evidence
+about that thing.
 
 ---
 
@@ -173,7 +181,6 @@ server's specification.
   with nothing reaching them from ring 3.
 - **No TLS**, so no HTTP authentication of any kind. A login form served over
   cleartext is a credential given away, and this role will not offer one.
-- **No static files yet** — the handler is specified, not written.
 - **One connection at a time.** A slow client blocks every other, which is a
   denial of service costing the attacker one socket. It needs non-blocking
   sockets, and today `accept` is the only call that reports readiness.
@@ -188,6 +195,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.2.0** | **Files off the volume.** A static file handler, as one handler among others rather than the server's middle — MIME by extension, an index for directories, never a listing. It found `open(O_CREAT)` in the C library silently dropping the flag, and a fault of its own reading `mkdir`'s `EEXIST` as failure. |
 | **0.1.0** | **A page served from a ReconOS machine.** The web server runs in ring 3 on the real kernel and answers a client outside it — the first bytes ever moved over an accepted connection on this system. It found `tcp_write` reporting 1194 bytes sent when it had sent 512. |
 | **0.0.2** | **The web server, and what it refuses.** 92 checks, host-verified: request smuggling by double framing, `%2e%2e%2f` traversal, `%00`, a space before a colon, a CR in a value. Built as a routing table of handlers so a page and an API are the same shape. |
 | **0.0.1** | **The role opened, and a parallel named.** `M16` → `M17`, `srv007` → `srv008`, `gateway` refused. The audit table, and the datagram entry that blocks DNS and DHCP. |

@@ -94,9 +94,9 @@ static int handle_echo(const struct http_request *r, const char *body,
 }
 
 static const struct http_route ROUTES[] = {
-	{ "GET",  "/",            1, handle_root },
-	{ "GET",  "/api/status",  1, handle_status },
-	{ "POST", "/api/echo",    1, handle_echo },
+	{ "GET",  "/",            1, handle_root,   0 },
+	{ "GET",  "/api/status",  1, handle_status, 0 },
+	{ "POST", "/api/echo",    1, handle_echo,   0 },
 };
 
 /* The byte counter lives in shared memory, because the server runs in the

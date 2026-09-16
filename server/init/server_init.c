@@ -36,11 +36,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #include "layout.h"
 #include "screen.h"
 
 #include "../http/serve.h"
+#include "../http/files.h"
 #include "../include/recon_server.h"
 
 /* Return codes, in the workstation's numbering so that a reader of one file
@@ -200,11 +205,148 @@ static int handle_health(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/* Where this role keeps what it serves.
+ *
+ * Under `/System` because it is part of the system rather than a user's, and
+ * named for what it is. It is laid down on first boot the same way the
+ * workstation lays out the rest of the volume -- an init's job is to make the
+ * shape the system expects, not to find it already there. */
+#define WEB_ROOT "/System/Web"
+
+static const struct http_files SITE_FILES = { WEB_ROOT, "index.html" };
+
+/*
+ * The routes, and the order is load-bearing.
+ *
+ * The first match wins, so the three exact routes are checked before the file
+ * handler, and the file handler is last because it is the one that can answer
+ * anything. Reversed, `/api/status` would be looked for on the volume and
+ * answered 404 while the endpoint sat unreachable behind it.
+ *
+ * Its prefix is the empty string, which matches every rooted path. Writing
+ * `"/"` there would match only the root itself -- the boundary rule that stops
+ * `/api` claiming `/apifoo` applies to `/` as well, and a site written that way
+ * serves its index and nothing else.
+ */
 static const struct http_route ROUTES[] = {
-	{ "GET", "/",             1, handle_dashboard },
-	{ "GET", "/api/status",   1, handle_status },
-	{ "GET", "/health",       1, handle_health },
+	{ "GET", "/",             1, handle_dashboard,   &FACTS },
+	{ "GET", "/api/status",   1, handle_status,      &FACTS },
+	{ "GET", "/health",       1, handle_health,      0 },
+	{ "GET", "",              0, http_files_handler,
+	  (void *)&SITE_FILES },
 };
+
+/* --- the volume this role writes to --------------------------------------- */
+
+/*
+ * Make the web root, and put something in it if it is empty.
+ *
+ * Runs every boot and is deliberately safe to: a directory that is already
+ * there is not a failure, and a file that is already there is **not
+ * overwritten**. A server that rewrote its own index on every boot would
+ * silently discard whatever an administrator had put there, which is the kind
+ * of helpfulness that loses somebody's work.
+ *
+ * Returns what it found, for the line on the screen -- 0 if the root could not
+ * be made at all, 1 if it exists, 2 if a default page was written into it.
+ */
+/* Filled in by `lay_out_the_site` so the serial line can report the numbers
+ * the decision was made from, rather than the conclusion drawn from them. Two
+ * calls disagreed about whether a file existed and the conclusion alone could
+ * not say which. */
+static long SITE_OPEN_READ, SITE_OPEN_WRITE;
+static long SITE_WROTE = -1;
+/* A -1 says a call failed and nothing more. Which failure it was decides
+ * whether this is a volume that cannot be written or a directory that was
+ * already there, and those want opposite responses. */
+static long E_OPEN_READ, E_OPEN_WRITE;
+
+static int lay_out_the_site(void)
+{
+	static const char DEFAULT_PAGE[] =
+		"<!doctype html>\n<meta charset=\"utf-8\">\n"
+		"<title>ReconOS</title>\n"
+		"<style>body{background:#141821;color:#d8dce6;"
+		"font:15px/1.6 system-ui,sans-serif;margin:0;padding:40px}"
+		"main{max-width:560px;margin:0 auto}"
+		"h1{color:#4fb3a5;font-size:24px;margin:0 0 6px}"
+		"p{color:#737c90}a{color:#4fb3a5}</style>\n"
+		"<main>\n<h1>It works.</h1>\n"
+		"<p>This file is on the volume, at <code>" WEB_ROOT
+		"/index.html</code>, and was read off the disk to answer your "
+		"request. Replace it with your own.</p>\n"
+		"<p><a href=\"/\">The server dashboard</a> is served by a "
+		"handler rather than from a file.</p>\n</main>\n";
+
+	int fd;
+
+	/*
+	 * Make the directories, and **do not read anything into whether they
+	 * were made or already there.**
+	 *
+	 * This function got that wrong and the fault is worth keeping written
+	 * down, because it is the one this project keeps naming. `mkdir`
+	 * answers -1 with `EEXIST` for a directory that is already present,
+	 * which is the ordinary case on every boot after the first. The code
+	 * here read that -1 as "the web root could not be made", reported
+	 * exactly that on the serial console, and returned before creating the
+	 * page -- so a server with a perfectly good web root spent three boots
+	 * saying it had none, and every file request answered 404.
+	 *
+	 * The numbers said so as soon as they were printed: `errno=17/17`
+	 * against a raw `SYS_EEXIST` of -6 for both paths, while the file
+	 * itself answered `errno=2`. A directory that exists and a file that
+	 * does not is not a failure to report; it is the state this function
+	 * exists to fix.
+	 *
+	 * So the directories are made and their answers discarded. **The only
+	 * question that decides anything is whether the file can be opened**,
+	 * which is the thing actually needed, asked directly.
+	 */
+	mkdir("/System", 0755);
+	mkdir(WEB_ROOT, 0755);
+
+	errno = 0;
+	fd = open(WEB_ROOT "/index.html", O_RDONLY);
+	SITE_OPEN_READ = fd;
+	E_OPEN_READ = errno;
+	if (fd >= 0) {
+		close(fd);
+		return 1;		/* somebody's page is already there */
+	}
+
+	/*
+	 * Created with `SYS_CREATE` rather than `open(O_CREAT)`, and that is a
+	 * workaround for a fault in the C library rather than a preference.
+	 *
+	 * **`recon_flags_from_posix` in `userland/libc/posix.c` translates only
+	 * the access mode.** `O_CREAT`, `O_TRUNC`, `O_EXCL` and `O_APPEND` are
+	 * dropped on the floor, so `open(path, O_WRONLY | O_CREAT, 0644)` never
+	 * creates anything -- it opens an existing file for writing, and for a
+	 * file that is not there it answers `ENOENT`. Which is exactly the
+	 * condition the caller passed `O_CREAT` to fix.
+	 *
+	 * Measured on the machine: `write=-1/e2` for a path whose directory had
+	 * just answered `EEXIST`. Reported in `docs/SERVER.md`; the number is
+	 * the desktop session's to assign, since `posix.c` is theirs.
+	 *
+	 * The kernel has always had the call -- `SYS_CREATE` takes the path and
+	 * the contents together, which suits a file written once at boot better
+	 * than open-then-write would anyway.
+	 */
+	SITE_OPEN_WRITE = (long)recon_call6(SYS_CREATE,
+	                                    (u64)(unsigned long)(WEB_ROOT "/index.html"),
+	                                    sizeof(WEB_ROOT "/index.html") - 1,
+	                                    0644,
+	                                    (u64)(unsigned long)DEFAULT_PAGE,
+	                                    sizeof(DEFAULT_PAGE) - 1, 0);
+	E_OPEN_WRITE = 0;
+	SITE_WROTE = SITE_OPEN_WRITE;
+
+	/* Anything negative is a refusal, and a refusal here means the role has
+	 * nothing to serve. Said rather than drawn over. */
+	return SITE_OPEN_WRITE < 0 ? 0 : 2;
+}
 
 /* --- the screen ----------------------------------------------------------- */
 
@@ -292,6 +434,30 @@ int main(void)
 
 	/* --- the listener, before anything is drawn about it ------------------ */
 
+	{
+		int site = lay_out_the_site();
+
+		/* The numbers, before the conclusion drawn from them.
+		 *
+		 * The conclusion alone said "already there" on a boot where
+		 * the file could not then be read, and one of those two claims
+		 * had to be wrong. A line that reports what each call actually
+		 * answered says which. */
+		snprintf(line, sizeof(line),
+		         "  the web root: read=%ld/e%ld write=%ld/e%ld"
+		         " wrote=%ld\n",
+		         SITE_OPEN_READ, E_OPEN_READ,
+		         SITE_OPEN_WRITE, E_OPEN_WRITE, SITE_WROTE);
+		say(line);
+
+		snprintf(line, sizeof(line),
+		         "  the web root: %s\n",
+		         site == 0 ? WEB_ROOT " could not be made -- files will 404"
+		                   : site == 2 ? WEB_ROOT ", and a default page written"
+		                               : WEB_ROOT ", already there");
+		say(line);
+	}
+
 	listener = http_listen(80);
 	if (listener < 0) {
 		/* Said plainly rather than drawn over. A server role whose
@@ -301,7 +467,8 @@ int main(void)
 		         "The web server could not open port 80.");
 	} else {
 		snprintf(address_line, sizeof(address_line),
-		         "Serving on port 80. Try / and /api/status.");
+		         "Serving on port 80. / and /api/status, and files from "
+		         WEB_ROOT ".");
 	}
 
 	site.routes = ROUTES;

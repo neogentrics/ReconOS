@@ -908,6 +908,22 @@ add_executable(recon_server_serve_tests
 
 add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
 
+# Serving a file, as one handler among others.
+#
+# The handler is called directly with a hand-built request: what is under test
+# is which file gets opened and what comes back, and a listener only makes that
+# slower to ask. The cases that matter are the ones that serve the *wrong* file
+# rather than an error -- a path that climbs out of the root, a directory
+# answered with a listing, a binary file cut at its first zero byte, a file
+# served short with a 200 beside it.
+add_executable(recon_server_files_tests
+    server/http/request.c
+    server/http/serve.c
+    server/http/files.c
+    server/tests/test_http_files.c)
+
+add_test(NAME server_http_files COMMAND recon_server_files_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the

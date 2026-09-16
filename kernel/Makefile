@@ -359,7 +359,7 @@ ifeq ($(ROLE),server)
 # next one. What differs is the program in front of them, not the look of it.
 INIT_SRCS := ../server/init/server_init.c \
 	     ../server/http/request.c ../server/http/serve.c \
-	     ../server/identity.c \
+	     ../server/http/files.c ../server/identity.c \
 	     ../userland/init/screen.c ../userland/init/layout.c \
 	     $(INIT_LIBC)
 
@@ -371,11 +371,42 @@ INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
 
 endif
 
+# --- A role change must rebuild the init -------------------------------------
+#
+# `make` compares timestamps and knows nothing about variables, so switching
+# ROLE leaves `recon_init.elf` newer than every source and it is not rebuilt.
+# The build then reports *Nothing to be done* and the machine boots the other
+# role's program -- which is the exact shape of fault this project keeps
+# naming, because the build says it succeeded and the difference only shows on
+# screen.
+#
+# Found by hitting it: a workstation boot to compare against a server boot ran
+# the server's init, and the comparison it was supposed to settle was silently
+# between a thing and itself.
+#
+# The stamp is named after the role, and making it removes the other roles'
+# stamps. So the file the init depends on genuinely changes when the role does.
+ROLE_STAMP := $(BUILD)/user/.role-$(ROLE)
+
+
+
 # --- Rules -------------------------------------------------------------------
 
 .PHONY: all all-arches run clean check-portable info
 
 all: $(BOOT_IMAGE)
+
+# The stamp's rule lives *below* `all`, and that is not cosmetic.
+#
+# make's default goal is the first target in the file. Written above `all`,
+# this rule became the default goal: `make ARCH=x86_64` touched a stamp,
+# printed "is up to date", exited 0, and built no kernel at all. Found by two
+# roles producing byte-identical images, which they cannot.
+
+$(ROLE_STAMP):
+	@mkdir -p $(dir $@)
+	@rm -f $(BUILD)/user/.role-*
+	@touch $@
 
 $(BUILD)/reconos-kernel.img: $(KERNEL)
 	$(OBJCOPY) -O binary $< $@
@@ -459,7 +490,8 @@ $(PAINT_ELF): user/paint.c ../userland/crt0.S ../userland/include/recon.h \
 #
 # Built from ../userland entirely: the program, the drawing, and the C library
 # it is the first real customer of. Nothing under kernel/ is compiled into it.
-$(INIT_ELF): $(INIT_SRCS) ../userland/crt0.S ../userland/include/recon.h \
+$(INIT_ELF): $(INIT_SRCS) $(ROLE_STAMP) ../userland/crt0.S \
+	     ../userland/include/recon.h \
 	     user/user.ld
 	@mkdir -p $(dir $@)
 	@rm -f $(BUILD)/user/init-*.o

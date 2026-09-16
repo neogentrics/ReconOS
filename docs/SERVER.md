@@ -44,7 +44,8 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 127 checks, **running on the machine** |
+| Web / API server | server | **built** | `server/http/` — 156 checks, **running on the machine** |
+| Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
 | DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
@@ -221,6 +222,76 @@ process outlived a crashed parent and sat holding the port. The next thing to
 ask that port for a page was answered -- by the wrong process, looking exactly
 like a pass. It is now bounded by `alarm(20)`: an orphan that answers is worse
 than one that hangs, because it cannot be told apart from success.
+
+---
+
+## Reported to the desktop session: `open(O_CREAT)` never creates
+
+**Found** 15 September 2026, building the static file handler. **Not fixed
+here** -- `userland/libc/posix.c` belongs to the desktop track. **No number is
+claimed**; a `BG` is theirs to assign, for the reason `docs/BUGS.md` records
+about 6 September.
+
+### What it is
+
+`recon_flags_from_posix` translates the access mode and nothing else:
+
+```c
+switch (flags & O_ACCMODE) {
+case O_WRONLY: out = RECON_O_WRITE;               break;
+case O_RDWR:   out = RECON_O_READ | RECON_O_WRITE; break;
+default:       out = RECON_O_READ;                 break;
+}
+return out;
+```
+
+`O_CREAT`, `O_TRUNC`, `O_EXCL` and `O_APPEND` are dropped. So
+
+    open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644)
+
+opens an existing file for writing and, for a file that is not there, answers
+`ENOENT` -- **which is exactly the condition `O_CREAT` was passed to fix.** The
+caller is told the file does not exist by the call it made to bring it into
+existence.
+
+`O_EXCL` is the sharper one. A caller using `O_CREAT | O_EXCL` is asking for
+"create this, and fail if somebody else got there first" -- the standard way to
+take a lock or claim a name without a race. Here both flags vanish, the call
+opens whatever is already at that path, and the exclusion silently does not
+happen. Nothing reports that the guarantee was not provided.
+
+### Measured
+
+On the machine, for a path whose directory had just answered `EEXIST`:
+
+    the web root: read=-1/e2 write=-1/e2 wrote=-1
+
+`e2` is `ENOENT`, from the call carrying `O_CREAT`.
+
+### What would fix it
+
+Either translate the flags, or **refuse the ones that are not implemented**.
+Refusing is the smaller change and the more honest one, and it is the choice
+this library already makes elsewhere: `sendto`, `recvfrom` and `shutdown` are
+declared and deliberately not defined, so a caller fails to link rather than
+getting a plausible wrong answer. A silently ignored flag is the case that
+rule exists to prevent, and this one got past it because `open` is defined --
+it is the *argument* that is unimplemented, which nothing was checking.
+
+### What this role did meanwhile
+
+`server_init.c` creates its default page with `SYS_CREATE` directly, which
+takes the path and the contents in one call and suits a file written once at
+boot better than open-then-write would anyway. The comment there says it is a
+workaround and names this entry.
+
+**A fault of this role's own, found the same way.** `lay_out_the_site` read
+`mkdir` answering `-1` as "the web root could not be made" -- but `-1` with
+`EEXIST` is the ordinary answer on every boot after the first. A server with a
+perfectly good web root spent three boots reporting it had none and answering
+404 to every file. The directories are made and their answers discarded now;
+the only question that decides anything is whether the file opens, which is the
+thing actually needed, asked directly.
 
 ---
 

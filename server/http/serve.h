@@ -91,9 +91,29 @@ typedef int (*http_handler)(const struct http_request *request,
 
 struct http_route {
 	const char  *method;	/* NULL matches any method */
-	const char  *prefix;	/* matched against the normalised path */
-	int          exact;	/* prefix must be the whole path */
+
+	/* Matched against the normalised path. A prefix match must end on a
+	 * `/` boundary, so a route for `/api` never claims `/apifoo` -- a
+	 * different resource with a similar spelling.
+	 *
+	 * **The empty string matches every path**, which is how a catch-all is
+	 * written. `"/"` is *not* a catch-all: it is the boundary rule doing
+	 * its job, and a route written that way matches only the root itself.
+	 * Worth stating because the wrong one of those two is a site that
+	 * silently serves nothing but its index. */
+	const char  *prefix;
+
+	int          exact;	/* the prefix must be the whole path */
 	http_handler handler;
+
+	/* This route's own context, or NULL to take the site's.
+	 *
+	 * Added when the first site needed two: a dashboard reading the
+	 * machine's facts and a file handler reading its configuration. One
+	 * context for the whole site would have meant a single structure
+	 * holding both, which is two unrelated things kept together because of
+	 * a limitation in the thing that calls them. */
+	void        *ctx;
 };
 
 struct http_site {
