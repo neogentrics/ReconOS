@@ -283,6 +283,17 @@ int recon_panel_height(const struct recon_panel *panel);
 /* The panel's node, for scene ordering and hit-test identification. */
 struct wlr_scene_node *recon_panel_node(struct recon_panel *panel);
 
+/*
+ * Send what the UI layer says to wlroots' log.
+ *
+ * The drawing half has no idea what a log is -- it calls a hook, and the hook
+ * does nothing until somebody sets one, which is right for a library and
+ * wrong for a compositor that has a log right there. Declared here rather
+ * than in the internal header because `main.c` is the caller and it is not
+ * one of the two files that share the panel's insides.
+ */
+void recon_ui_log_to_wlroots(void);
+
 /* --- Drawing --- */
 
 void recon_fill(struct recon_panel *panel, recon_color color);

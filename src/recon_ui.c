@@ -12,21 +12,17 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
-#include <drm_fourcc.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <wlr/interfaces/wlr_buffer.h>
-#include <wlr/types/wlr_buffer.h>
-#include <wlr/types/wlr_scene.h>
-#include <wlr/util/log.h>
 
 #include "recon_clip.h"
 #include "recon_error.h"
 #include "recon_theme.h"
 #include "recon_ui.h"
+#include "recon_ui_internal.h"
 
 /* --- Font --- */
 
@@ -162,7 +158,7 @@ struct recon_font *recon_font_load(const char *path, int pixel_height) {
     }
 
     if (data == NULL) {
-        wlr_log(WLR_ERROR, "ReconOS: no usable font found");
+        recon_ui_say(true, "ReconOS: no usable font found");
         return NULL;
     }
 
@@ -174,7 +170,7 @@ struct recon_font *recon_font_load(const char *path, int pixel_height) {
     font->file_data = data;
 
     if (!stbtt_InitFont(&font->info, data, stbtt_GetFontOffsetForIndex(data, 0))) {
-        wlr_log(WLR_ERROR, "ReconOS: '%s' is not a usable font", path);
+        recon_ui_say(true, "ReconOS: '%s' is not a usable font", path);
         free(data);
         free(font);
         return NULL;
@@ -184,7 +180,7 @@ struct recon_font *recon_font_load(const char *path, int pixel_height) {
     font->scale = stbtt_ScaleForPixelHeight(&font->info, (float)pixel_height);
     stbtt_GetFontVMetrics(&font->info, &font->ascent, &font->descent, &font->line_gap);
 
-    wlr_log(WLR_INFO, "ReconOS: font '%s' at %dpx", path, pixel_height);
+    recon_ui_say(false, "ReconOS: font '%s' at %dpx", path, pixel_height);
     return font;
 }
 
@@ -377,7 +373,7 @@ struct recon_font *recon_font_system(int pixel_height) {
         }
     }
 
-    wlr_log(WLR_ERROR, "ReconOS: no room for a %dpx font; using %dpx",
+    recon_ui_say(true, "ReconOS: no room for a %dpx font; using %dpx",
         pixel_height, pixel_height + best);
     return nearest;
 }
@@ -479,7 +475,7 @@ static struct recon_font *face_at(struct face_cache *cache, int pixel_height) {
         if (font == NULL) {
             if (!cache->complained) {
                 cache->complained = true;
-                wlr_log(WLR_INFO, "ReconOS: %s", cache->complaint);
+                recon_ui_say(false, "ReconOS: %s", cache->complaint);
             }
             return recon_font_system(pixel_height);
         }
@@ -587,49 +583,45 @@ int recon_text_width(struct recon_font *font, const char *text) {
     return width > 0 ? width - g_letter_spacing : 0;
 }
 
+/* --- Saying something --- */
+
+/*
+ * This used to be `wlr_log`, called from inside the font code.
+ *
+ * Five calls, and together with the presentation they were the whole reason
+ * three thousand lines of drawing needed a wayland header. A drawing library
+ * that writes to a log its caller did not ask for is a drawing library with
+ * an opinion about stderr -- so the message goes to whoever set a hook, and
+ * nowhere if nobody did.
+ */
+static void (*g_log)(bool error, const char *message);
+
+void recon_ui_set_log(void (*log)(bool error, const char *message)) {
+    g_log = log;
+}
+
+void recon_ui_say(bool error, const char *format, ...) {
+    if (g_log == NULL) {
+        return;
+    }
+
+    char message[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+
+    g_log(error, message);
+}
+
 /* --- Panel --- */
 
-struct recon_hit_region {
-    int x, y, w, h;
-    uint32_t id;
-
-    /*
-     * Drawn, and explains itself, and cannot be pressed.
-     *
-     * A disabled control still has a region so that pointing at it can say
-     * why it is unavailable. What it must not do is answer a click, and
-     * before this the only way to arrange that was for every application to
-     * remember its own guard next to its own switch statement -- which is
-     * the arrangement that had "Half" shrinking a picture that was already
-     * at its floor in one place and refusing in another.
-     */
-    bool inert;
-
-    /* What this thing is, for the tooltip. Empty for most regions: a control
-     * whose label already says it needs nothing said twice. */
-    char tip[80];
-};
-
-#define MAX_HIT_REGIONS 64
-
-struct recon_panel {
-    struct wlr_scene_buffer *scene_buffer;
-    int width, height;
-    uint32_t *pixels; /* ARGB8888, width*height */
-
-    struct recon_hit_region hits[MAX_HIT_REGIONS];
-    size_t hit_count;
-
-    /*
-     * Which region the pointer is over, and which it went down on.
-     *
-     * Not cleared with the hit list. The regions are rebuilt on every repaint
-     * and these are not: they describe the pointer, which does not stop being
-     * where it is because the window redrew.
-     */
-    uint32_t hot;
-    uint32_t held;
-};
+/*
+ * `struct recon_panel` and the hit list live in recon_ui_internal.h now, so
+ * that the presentation half can see the pixels and the size. Everything
+ * about how a panel reaches a screen went with them -- see that header for
+ * why the seam is where it is.
+ */
 
 void recon_panel_set_hot(struct recon_panel *panel, uint32_t id) {
     if (panel != NULL) {
@@ -668,54 +660,8 @@ bool recon_panel_read(struct recon_panel *panel, int x, int y, int w, int h,
     return true;
 }
 
-/* A wlr_buffer over the panel's pixels, handed to the scene graph. */
-/*
- * A committed buffer owns its pixels outright rather than pointing back at the
- * panel's.
- *
- * Sharing them looks tempting and is wrong twice over. The compositor may
- * still be reading a previously committed buffer while the next frame is being
- * drawn, so a shared block gets overwritten mid-read; and resizing the panel
- * frees that block while those buffers still reference it. Both show up as
- * torn or black rectangles, the second far more violently, because it is a use
- * after free.
- *
- * The cost is a copy per commit, which is nothing next to how rarely a panel
- * commits: only when its contents actually change.
- */
-struct panel_buffer {
-    struct wlr_buffer base;
-    uint32_t *pixels; /* owned by this buffer */
-    size_t stride;
-};
-
-static void panel_buffer_destroy(struct wlr_buffer *wlr_buffer) {
-    struct panel_buffer *buf = wl_container_of(wlr_buffer, buf, base);
-    free(buf->pixels);
-    free(buf);
-}
-
-static bool panel_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
-        uint32_t flags, void **data, uint32_t *format, size_t *stride) {
-    struct panel_buffer *buf = wl_container_of(wlr_buffer, buf, base);
-    *data = buf->pixels;
-    *format = DRM_FORMAT_ARGB8888;
-    *stride = buf->stride;
-    return true;
-}
-
-static void panel_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
-    /* The buffer owns these pixels; nothing else writes to them. */
-}
-
-static const struct wlr_buffer_impl panel_buffer_impl = {
-    .destroy = panel_buffer_destroy,
-    .begin_data_ptr_access = panel_buffer_begin_data_ptr_access,
-    .end_data_ptr_access = panel_buffer_end_data_ptr_access,
-};
-
-struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
-        int width, int height) {
+struct recon_panel *recon_panel_wrap(int width, int height,
+        const struct recon_panel_present *present, void *state) {
     if (width <= 0 || height <= 0) {
         return NULL;
     }
@@ -727,6 +673,9 @@ struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
 
     panel->width = width;
     panel->height = height;
+    panel->present = present;
+    panel->present_state = state;
+
     panel->pixels = calloc((size_t)width * height, sizeof(uint32_t));
     if (panel->pixels == NULL) {
         /*
@@ -743,16 +692,6 @@ struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
         return NULL;
     }
 
-    /* Created with no buffer; commit installs one. */
-    panel->scene_buffer = wlr_scene_buffer_create(parent, NULL);
-    if (panel->scene_buffer == NULL) {
-        recon_error_raise(NULL, RECON_ERR_D002,
-            "the scene refused a buffer for it");
-        free(panel->pixels);
-        free(panel);
-        return NULL;
-    }
-
     return panel;
 }
 
@@ -760,8 +699,8 @@ void recon_panel_destroy(struct recon_panel *panel) {
     if (panel == NULL) {
         return;
     }
-    if (panel->scene_buffer != NULL) {
-        wlr_scene_node_destroy(&panel->scene_buffer->node);
+    if (panel->present != NULL && panel->present->destroy != NULL) {
+        panel->present->destroy(panel->present_state);
     }
     free(panel->pixels);
     free(panel);
@@ -794,138 +733,39 @@ bool recon_panel_resize(struct recon_panel *panel, int width, int height) {
     return true;
 }
 
-/*
- * Write a committed panel to a file when RECONOS_DEBUG_DUMP names a directory.
- *
- * This exists to answer one question that guesswork could not: whether pixels
- * leaving a panel are already wrong, or only become wrong further down. PPM
- * because it needs no encoder.
- */
-static void dump_panel(struct recon_panel *panel, const uint32_t *pixels) {
-    const char *dir = getenv("RECONOS_DEBUG_DUMP");
-    if (dir == NULL || *dir == '\0') {
-        return;
-    }
-
-    static unsigned counter;
-    char path[512];
-    snprintf(path, sizeof(path), "%s/panel-%04u-%dx%d.ppm",
-        dir, counter++, panel->width, panel->height);
-
-    FILE *f = fopen(path, "wb");
-    if (f == NULL) {
-        return;
-    }
-    fprintf(f, "P6\n%d %d\n255\n", panel->width, panel->height);
-    for (size_t i = 0; i < (size_t)panel->width * panel->height; i++) {
-        unsigned char rgb[3] = {
-            (unsigned char)((pixels[i] >> 16) & 0xFF),
-            (unsigned char)((pixels[i] >> 8) & 0xFF),
-            (unsigned char)(pixels[i] & 0xFF),
-        };
-        fwrite(rgb, 1, 3, f);
-    }
-    fclose(f);
-}
-
 void recon_panel_commit(struct recon_panel *panel) {
-    if (panel == NULL || panel->scene_buffer == NULL) {
+    if (panel == NULL || panel->present == NULL ||
+            panel->present->commit == NULL) {
         return;
     }
-
-    struct panel_buffer *buf = calloc(1, sizeof(*buf));
-    if (buf == NULL) {
-        return;
-    }
-
-    size_t count = (size_t)panel->width * panel->height;
-    buf->pixels = malloc(count * sizeof(uint32_t));
-    if (buf->pixels == NULL) {
-        free(buf);
-        return;
-    }
-    /*
-     * Straight alpha becomes premultiplied here, and nowhere else.
-     *
-     * Everything that draws into a panel works in straight alpha, which is
-     * what the arithmetic in recon_color_fade and recon_round_top_corners
-     * assumes and what makes them composable. wlroots renders this buffer
-     * with WLR_RENDER_BLEND_MODE_PREMULTIPLIED, which is a different
-     * agreement: it takes the colour as already scaled by its own alpha and
-     * adds it to what is behind.
-     *
-     * Handed straight alpha it therefore *adds the full colour* of every
-     * transparent pixel. A rounded corner -- alpha 0, RGB still holding the
-     * frame's edge colour -- came out as the edge colour at full strength,
-     * which is why every window looked square with a notch cut in it. Glass
-     * was wrong the same way and looked merely washed out rather than broken.
-     *
-     * Converting at the copy rather than in the drawing code keeps one model
-     * inside the program and one at the boundary, which is the only
-     * arrangement where "what alpha means" has a single answer in each place.
-     */
-    for (size_t i = 0; i < count; i++) {
-        uint32_t px = panel->pixels[i];
-        uint32_t a = (px >> 24) & 0xFFu;
-
-        if (a == 0xFFu) {
-            buf->pixels[i] = px;            /* the ordinary case */
-            continue;
-        }
-        if (a == 0u) {
-            buf->pixels[i] = 0u;            /* nothing there at all */
-            continue;
-        }
-
-        uint32_t r = (((px >> 16) & 0xFFu) * a + 127u) / 255u;
-        uint32_t g = (((px >> 8) & 0xFFu) * a + 127u) / 255u;
-        uint32_t b = ((px & 0xFFu) * a + 127u) / 255u;
-        buf->pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
-    }
-    buf->stride = (size_t)panel->width * 4;
-
-    dump_panel(panel, buf->pixels);
-
-    wlr_buffer_init(&buf->base, &panel_buffer_impl, panel->width, panel->height);
-
-    /* The scene takes its own reference; drop ours so the buffer is released
-     * when the scene is done with it. */
-    wlr_scene_buffer_set_buffer(panel->scene_buffer, &buf->base);
-    wlr_buffer_drop(&buf->base);
-
-    wlr_scene_buffer_set_dest_size(panel->scene_buffer, panel->width, panel->height);
+    panel->present->commit(panel, panel->present_state);
 }
 
 void recon_panel_set_position(struct recon_panel *panel, int x, int y) {
-    if (panel != NULL && panel->scene_buffer != NULL) {
-        wlr_scene_node_set_position(&panel->scene_buffer->node, x, y);
+    if (panel != NULL && panel->present != NULL &&
+            panel->present->set_position != NULL) {
+        panel->present->set_position(panel->present_state, x, y);
     }
 }
 
 void recon_panel_raise_to_top(struct recon_panel *panel) {
-    if (panel != NULL && panel->scene_buffer != NULL) {
-        wlr_scene_node_raise_to_top(&panel->scene_buffer->node);
+    if (panel != NULL && panel->present != NULL &&
+            panel->present->raise_to_top != NULL) {
+        panel->present->raise_to_top(panel->present_state);
     }
 }
 
 void recon_panel_set_enabled(struct recon_panel *panel, bool enabled) {
-    if (panel != NULL && panel->scene_buffer != NULL) {
-        wlr_scene_node_set_enabled(&panel->scene_buffer->node, enabled);
+    if (panel != NULL && panel->present != NULL &&
+            panel->present->set_enabled != NULL) {
+        panel->present->set_enabled(panel->present_state, enabled);
     }
 }
 
 void recon_panel_position(const struct recon_panel *panel, int *x, int *y) {
-    if (panel == NULL || panel->scene_buffer == NULL) {
-        return;
-    }
-    /* Read back from the scene node rather than keeping a copy on the panel.
-     * The node is what actually decides where this is drawn, so a second
-     * record of it could only ever be right or wrong, never authoritative. */
-    if (x != NULL) {
-        *x = panel->scene_buffer->node.x;
-    }
-    if (y != NULL) {
-        *y = panel->scene_buffer->node.y;
+    if (panel != NULL && panel->present != NULL &&
+            panel->present->position != NULL) {
+        panel->present->position(panel->present_state, x, y);
     }
 }
 
@@ -935,13 +775,6 @@ int recon_panel_width(const struct recon_panel *panel) {
 
 int recon_panel_height(const struct recon_panel *panel) {
     return panel != NULL ? panel->height : 0;
-}
-
-struct wlr_scene_node *recon_panel_node(struct recon_panel *panel) {
-    if (panel == NULL || panel->scene_buffer == NULL) {
-        return NULL;
-    }
-    return &panel->scene_buffer->node;
 }
 
 /* --- Drawing --- */

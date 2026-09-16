@@ -9,6 +9,83 @@ way for the two to disagree.
 
 ---
 
+## v0.4.44 — the last inch
+
+`src/recon_ui.c` was three thousand one hundred lines, and **twenty-eight of
+them mentioned wlroots.** Those twenty-eight were enough to keep the other
+three thousand off a compiler with no Linux underneath — and those three
+thousand are the desktop's drawing: every widget, every button, every themed
+fill, every rounded corner, all the text.
+
+**A panel is a pixel buffer.** `uint32_t *pixels`, ARGB8888, width by height.
+Everything above writes into that array and nothing else. What wlroots was
+doing was the *last inch*: handing the array to a scene graph, and moving,
+raising and hiding the node that holds it.
+
+On ReconOS that inch is a write to the framebuffer device. So it is behind a
+table of function pointers now — `struct recon_panel_present` — and the split
+is:
+
+| file | what it is | leaves Linux |
+|---|---|---|
+| `src/recon_ui.c` | 2,947 lines of drawing | **yes** |
+| `src/recon_ui_wlr.c` | the last inch, moved unchanged | no |
+| `src/recon_ui_internal.h` | what a panel is, shared by the two | — |
+
+The same shape as `struct recon_memory_source` in the allocator and the
+make-a-line function `recon_wrap` takes: **put the part that is tied to the
+host behind a seam, and the part that can be wrong on the other side of it.**
+
+### The header needed no change at all
+
+`include/recon_ui.h` only ever *forward-declared* `struct wlr_scene_tree` and
+`struct wlr_scene_buffer`. An incomplete type in a prototype compiles
+anywhere, so the public interface was already portable and nobody had noticed.
+The whole split is inside one `.c` file plus a new one.
+
+### The premultiply went with wlroots, and that is the point
+
+The conversion from straight to premultiplied alpha carried a comment arguing
+it belongs *at the boundary*: *"one model inside the program and one at the
+boundary, which is the only arrangement where 'what alpha means' has a single
+answer in each place."*
+
+That sentence turned out to be the argument for which side of the seam it goes
+on. **Premultiplied is what wlroots wants, not what a screen wants** — a
+framebuffer has nothing to blend against. So it moved, and a future
+presentation writes whatever its screen takes.
+
+### And the font code stopped having an opinion about stderr
+
+Five `wlr_log` calls sat inside the *font* code — the only reason the drawing
+half needed a wayland header besides the presentation. They are
+`recon_ui_say` now, which formats into a buffer and hands it to a hook.
+
+**The hook does nothing when nobody sets one**, which is right for a drawing
+library and wrong for a compositor that has a log right there — so `main.c`
+calls `recon_ui_log_to_wlroots()` immediately after the log exists and before
+anything draws. Without that the messages would not be misdirected, they would
+be *gone*, which is the quiet way a refactor loses something.
+
+### 45 of 45 became 46 of 46
+
+`recon_ui.c` is the largest file to cross, and the one that mattered most: it
+is what every window in the system draws through.
+
+### What proves it did not change the picture
+
+**49 suites, and a photograph.** The suites cover the drawing directly, but the
+thing a refactor of this shape breaks is compositing — and the comment on the
+premultiply says exactly what that looks like when it is wrong: *"every window
+looked square with a notch cut in it."*
+
+So the check is a running desktop: wallpaper, taskbar, two windows, title bars
+with their buttons, rounded corners, the Control Panel's icon grid. Identical.
+A test could have passed with the alpha model on the wrong side of the seam;
+the photograph is what says the corners are still round.
+
+---
+
 ## v0.4.43 — it is the workstation, and its text stays in the box
 
 ### The machine says which of the five it is

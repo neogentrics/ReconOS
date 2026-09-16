@@ -1,161 +1,102 @@
-Every library call the desktop makes today reaches glibc. When the desktop is
-built for the ReconOS kernel there will be no glibc under it, and something has
-to answer those calls. This version is that something: userland/libc/, a
-freestanding C library, and the harness that proves it behaves the way the one
-it replaces behaves.
+### Dates
 
-Measured now: 2,479 of the 3,089 library calls in src/ are answered by
-it. Not chosen -- counted, and then *corrected*, which is the part worth
-keeping: the first count listed the functions the library was expected to need
-and counted those, which finds every call of a function on the list and none of
-a function that is not. It reported 2,430 of 2,997 and was wrong in both
-numbers.
+userland/include/time.h and libc/time.c: the two clocks, the calendar, and
+strftime. 436,012 checks against the host's, including a sweep of
+gmtime_r every seven hours and thirteen minutes across two and a half
+centuries in both directions, and every conversion strftime claims at every
+buffer size around the answer.
 
-What corrected it was taking glibc away -- scripts/check-userland.sh
-compiles the desktop's own sources with -nostdinc, the compiler's own headers
-and userland/include, and nothing else. Seven of the sixteen files the sweep
-called ready did not build, and three functions turned out to be simply absent:
-strtok_r on 44 call sites, strncat, strtoull. All three are written
-and checked against the reference now. The script is the fifth pass of
-scripts/check.sh, so a header cannot drift away from the code meant to
-include it again without something saying so. The top of that list is the shape of this system: snprintf
-915 times, strcasecmp 357, strlen 211, strcmp 139. A desktop is mostly
-text being compared and formatted.
+The corpus is the dates a calendar is actually wrong on rather than a range of
+plausible ones: the century that is divisible by four and is not a leap year,
+the second either side of an epoch, the day a 32-bit time_t stops, year 1 and
+year 9999. A sweep of ordinary timestamps agrees with anything.
 
-### The test is the point, not the code
+The two clocks stay two calls. clock_gettime(CLOCK_MONOTONIC, ...)
+reaches SYS_TIME, which never goes backwards and means nothing outside this
+boot; time() reaches SYS_WALLTIME, which is the date and can jump. Neither
+can reach the other, and an unknown clock is refused rather than answered from
+whichever is nearer — a duration measured across a clock correction comes out
+negative, and a negative duration is a number that gets used.
 
-Writing strlen is an afternoon. Writing a strlen that behaves *exactly* as
-the one it replaces, across every input the desktop will ever hand it, is the
-part that can go wrong quietly -- and every one of these functions fails
-quietly. A strcmp that returns the wrong sign still sorts, backwards. A
-snprintf that rounds %.2f the wrong way at a half is wrong in a way nobody
-writing a test from memory would think to check. Neither crashes. Neither
-warns.
+localtime_r is gmtime_r, deliberately, and it costs nothing. There is
+no host to ask on this kernel and no zone database to read, so UTC is the only
+true answer — and src/recon_clock.c already applies ReconOS's own zone to its
+own civil-date arithmetic, under a comment from months ago saying exactly why
+it does not call localtime. The difference is asserted in the suite rather
+than skipped, along with %Z being UTC where the host's C locale says GMT.
 
-So there is no test here that says what these functions should do. Both
-libraries are compiled into one program -- ReconOS's renamed by a
--include prefix.h so the two can coexist -- and every call is made twice and
-the answers compared. 86,160 checks, and the reference is the referee.
+Two faults, and both were the standard's wording rather than the
+reference's behaviour. %C and %F were written as two- and four-digit
+padded fields, because that is how POSIX describes them. The suite disagreed on
+year 1, and a probe settled it: glibc pads neither, and floors %C rather than
+truncating it, so year -1 gives -1 where -1 / 100 in C is 0. The goal
+here has never been to match a document; it is that the desktop prints the same
+thing it printed on Linux yesterday.
 
-The corpus is deliberately the cases nobody writing from memory reaches for:
-empty strings, overlapping ranges, embedded NULs, lengths of zero, bytes above
-127, the most negative integer, a precision longer than the string, a width
-shorter than the number.
+And the suite was checked against itself again. Four faults introduced one
+at a time — the century leap gone, the leap-day shift in tm_yday gone, the
+weekday off by one, floored division truncated instead — caught at 7, 8143,
+40111 and 120622 failures. The century leap is the interesting one: seven
+checks out of 436,012, and every one of them is a date somebody put in the
+corpus on purpose.
 
-### What it now covers
+### A measurement that has never heard of the list
 
-- Strings and memory, and snprintf/vsnprintf -- the most-called
-  function in ReconOS, with flags, width, precision and length modifiers, and
-  an unknown conversion written back verbatim rather than swallowed.
-- Character classes, ASCII only and permanently so: ReconOS's text is
-  UTF-8, where a non-ASCII character is two or more bytes, so "is this byte a
-  letter" has no useful answer above 127 and a table that said yes would
-  encourage the per-byte reasoning that breaks on the first accented name.
-- Numbers out of text -- strtol, strtoul, strtod, atoi, qsort.
-- The file layer -- fopen and the eleven stdio functions the desktop
-  actually calls, on a fixed table of sixteen streams with their buffers inside
-  them, because there is no allocator to put them anywhere else. The
-  seventeenth fopen is refused cleanly, and the suite checks that it is.
+The coverage figure in v0.4.22 was a grep for a list of function names.
+BG-182 is the record of what that is worth, and correcting it by hand was
+not enough: the corrected list then missed gmtime_r, localtime_r, and
+sixteen of the twenty floating-point functions the desktop references.
 
-### How the file half is testable at all
+It could never have found puts at all. src/main.c calls printf with a
+string literal containing no conversions in it, and the compiler rewrites that
+into puts — so the desktop needs a function whose name appears nowhere in
+its source. No grep can see that. Reading the file cannot see it.
 
-It should not be. The buffering is the interesting part, and the way to find
-out whether fseek from the current position accounts for what is sitting
-unread in the buffer would normally be to boot a kernel and look at the
-consequences -- which is exactly the class of fault that does not announce
-itself. A file read four bytes short looks like a file that is four bytes
-short.
+scripts/measure-libc.py asks the linker instead. Every object file carries a
+table of the symbols it needs and a table of the symbols it has; the difference
+is the external surface, exactly, and nm reads both in one command. It gives
+two numbers because there are two questions:
 
-userland/tests/hostsys.c answers the five primitives stdio.c is built on
-with POSIX calls instead of ReconOS system calls. So the same buffering code
-that will run on the kernel reads a real file here, and is held against what
-the host's stdio returns for the same file: the same bytes, the same counts,
-the same position after every operation, at seven item sizes and nine buffer
-sizes.
+- 52 of the 132 C library symbols the desktop references. That is the
+  completeness measure: 80 missing symbols is 80 functions to write.
+- 2,473 of 3,113 call sites in src/. That is where the weight is — and
+  the names it counts now come out of nm rather than out of a list.
 
-And the suite was checked against itself, because a file-layer suite that
-passes on its first run deserves suspicion rather than satisfaction. Three
-faults were introduced deliberately -- fgets dropping the newline it stops
-on, fseek handing a relative offset straight to the kernel, isprint
-accepting one byte too many -- and the suite caught all three, at 9, 40 and 1
-failures. Then they were taken back out.
+Three functions came out of that first run and are written and checked:
+memmem (recon_html.c, finding the end of a comment in a page that may hold
+a zero byte), strcasestr (recon_http.c, spotting a chunked transfer), and
+puts.
 
-### Three faults, before any of it ran
+### Two more desktop sources build with no glibc under them
 
-All three are the same shape: the reference accepted something this refused,
-and a refusal in these functions is not a failure -- it is a different number,
-returned without complaint.
+src/recon_url.c joins the nine, so scripts/check-userland.sh is at
+10 of 10. src/recon_access.c turned out to want xkbcommon as well and is
+in the group waiting on that.
 
-- BG-179 -- strtol("0b101", NULL, 0) is 5 on every machine the desktop is
-  built on today, because C23 added the binary prefix and glibc has shipped it
-  since 2.38. This read 0 and consumed one character.
-- BG-180 -- strtod("0x1F") is 31.0 and the standard requires it. This
-  returned 0.0. The hexadecimal path is now there and is the one exact path in
-  the function: four bits a digit, so the mantissa is an integer and the
-  scaling is by a power of two.
-- BG-181 -- inf and nan were read as nothing at all. A file of
-  measurements round-tripping through ReconOS would have had its infinities
-  quietly become zeros.
-- BG-182 -- strtok_r, strncat and strtoull were absent, and the
-  coverage measurement could not see them: it counted the functions it already
-  knew to look for, so the numerator and denominator were short by the same 49
-  calls and the fraction looked right. A measurement that shares its premises
-  with the thing it measures can only agree with it. Taking glibc away and
-  asking a compiler was the instrument that disagreed.
+It found something on the way: include/recon_fs.h includes
+<sys/types.h> and does not use it. Every type in its thirty-odd
+declarations is size_t, bool or time_t. The two files that actually want
+mode_t both already include <sys/stat.h>. One line in a public header,
+inherited by everything that reads it, and it was the whole of what stood
+between recon_access.c and a freestanding compile.
 
-One fault was in the test rather than the library, and it is worth
-recording because the correction went the other way. The first run reported 254
-disagreements on toupper and tolower for arguments below -1 -- the negative
-numbers a signed char produces for every byte above 127. The reference maps
--128 to 128; this returns -128 unchanged. The standard defines neither:
-the argument has to be representable as an unsigned char or be EOF, and
-those are not. So the test was asking a question that has no right answer and
-believing the reply. It now holds the defined domain to exact equality and
-asserts ReconOS's deliberate answer separately, with the reason -- above
-127 there is no character to be the case of, and mapping the first byte of a
-multi-byte character into the second half of a different one is the one outcome
-that corrupts text rather than merely differing.
+### What is left, by what it needs
 
-### Nine desktop sources build with no glibc under them
+| | symbols | call sites |
+| --- | --- | --- |
+| an allocator | 5 | 430 |
+| files and directories | 21 | 96 |
+| sockets | 19 | 44 |
+| an errno | 1 | 43 |
+| loading a module at run time | 4 | 12 |
+| processes and signals | 6 | 8 |
+| floating-point maths | 20 | 5 |
+| an environment | 1 | 2 |
+| the rest of stdio | 3 | 0 |
 
-Not a claim -- a compile. recon_ocr.c, recon_crypt.c, recon_smtp_message.c
-and six others build against these headers and the compiler's own, with every
-system header directory removed.
-
-The seven that do not each name something the port still needs, and only one of
-those is the library's fault. Four reach <xkbcommon/xkbcommon.h> through
-recon_ui.h -- a real Wayland dependency, and those files want their drawing
-half separated from their compositor half before they can move. Two reach
-<time.h> through recon_fs.h and recon_cookie.h, which is a
-userland/include/time.h waiting to be written rather than a kernel ask: the
-kernel has had both clocks since 8 September.
-
-### What stops the rest being built on it
-
-malloc. Of the 610 calls this library does not answer, 430 are the
-allocator -- free 311, calloc 80, malloc 34. Everything else left over
-is small: 56 directory calls, 43 for strerror, 37 socket calls, 21 for time,
-15 for the rest of stdio, 4 for processes, 4 for floating-point maths.
-
-strerror is the interesting one of those, because it is not waiting on the
-kernel: the kernel already returns negative error numbers and
-userland/include/recon.h names them, so the table is ours to write. All 43
-calls are in three files that are blocked on the allocator anyway, so it
-waits.
-
-userland/include/stdlib.h therefore has no malloc declaration at all.
-A caller fails to *link* rather than getting a stub that returns NULL and a
-crash somewhere else an hour later. The ask is written up in
-docs/KERNEL-WANTS.md, first on the list.
+The allocator is still the wall and is still first in docs/KERNEL-WANTS.md.
+What the linker changed is the shape of the rest: floating-point maths is
+twenty functions, not the four a grep found, and it is a self-contained
+afternoon that needs nothing from the kernel at all.
 
 ---
-
-The count, which lived only in the version table until 15 September.
-2,473 of the 3,113 library calls in src/ are answered by it -- counted
-with nm over the objects rather than estimated -- and it is held against the
-library it replaces by compiling both into one program and making every call
-twice: 511,000 checks.
-
-Recorded here because the row in docs/VERSIONS.md was the only place those
-three figures existed, and that row is an index line now. A measurement with
-one home is a measurement that goes when the home is tidied.

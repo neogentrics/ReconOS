@@ -176,6 +176,7 @@ src/recon_widget_state.c
 src/recon_ico.c
 src/recon_icons.c
 src/recon_web.c
+src/recon_ui.c
 "
 
 out=$(mktemp -d)

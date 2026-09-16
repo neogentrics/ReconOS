@@ -2847,6 +2847,17 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 int main(int argc, char **argv) {
     wlr_log_init(WLR_DEBUG, NULL);
 
+    /*
+     * The UI layer says things -- about fonts it could not find, and sizes it
+     * could not fit -- and it no longer knows what a log is. Point it at this
+     * one, immediately after the log exists and before anything draws.
+     *
+     * Without this the messages are not misdirected, they are *gone*: the
+     * hook does nothing when nobody has set it, which is right for a drawing
+     * library and wrong for a compositor that has a log right there.
+     */
+    recon_ui_log_to_wlroots();
+
     /* Reap spawned clients automatically so they don't linger as zombies. */
     signal(SIGCHLD, SIG_IGN);
 

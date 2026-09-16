@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.44** | **The last inch.** `recon_ui.c` was 3,100 lines of which 28 mentioned wlroots, and those 28 held the rest off a compiler with no Linux under it. A panel is a pixel buffer; the inch that hands it to a screen is behind a table of function pointers now, and the desktop’s whole drawing layer builds freestanding. |
 | **0.4.43** | **It is the workstation, and its text stays in the box.** `docs/ROLES.md` has five roles and this is one of them, so the screen says which. Photographing that found BG-207 in the same frame — the heap line leaving the panel and running off the edge of the screen, invisible to 306,797 checks because none of them measured the box. |
 | **0.4.42** | **One include held twenty-four files.** `include/recon_ui.h` reached `<xkbcommon/xkbcommon.h>` for a single typedef, and that kept twenty-four sources off a compiler with no Linux under them. `include/recon_key.h` is ReconOS’s own names for the same numbers, held to xkbcommon’s by a sweep of 224,517 comparisons — and the desktop went from 20 to 42 sources that build with no libc at all. |
 | **0.4.41** | **Four sentences nobody was checking.** `recon_tls.c` had fifteen functions no suite ran, all of them the half that decides whether to believe somebody else — so the suite mints a certificate authority and five certificates with a different fault built into each, and reads what a person would be told. Fifteen at zero, now three. |

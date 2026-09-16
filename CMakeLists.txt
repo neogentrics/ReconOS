@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.43
+    VERSION 0.4.44
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -167,6 +167,10 @@ add_executable(ReconOS
     # recon_ui.h used to put twenty-four of these files out of reach of a
     # compiler with no Linux under it.
     src/recon_key.c
+    # The last inch of recon_ui.c: how a panel's pixels reach a screen.
+    # Split out so the three thousand lines of drawing above it stop
+    # needing a wayland header -- see src/recon_ui_internal.h.
+    src/recon_ui_wlr.c
     src/recon_apps.c
     src/recon_avatar.c
     src/recon_modules.c
