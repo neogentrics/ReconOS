@@ -9,6 +9,92 @@ way for the two to disagree.
 
 ---
 
+## v0.4.45 — the other side of the seam
+
+v0.4.44 put a table of function pointers between the desktop's drawing and the
+thing that shows it. **This is the second implementation, and it is the one
+ReconOS uses**: a panel drawn straight onto a screen, with no compositor
+underneath.
+
+    open("/dev/fb0") -> SYS_SCREEN (shape) -> SYS_MAP (address) -> stores
+
+After the map the kernel is not in the path. Drawing is stores to memory, and
+so is this.
+
+**It takes no system calls.** The caller passes the address and the shape it
+already asked the kernel for, so `src/recon_ui_fb.c` does not know what a file
+descriptor is and runs exactly the same against a plain buffer — which is what
+its suite drives it with. The half that can be wrong is arithmetic on pixels,
+and arithmetic on pixels does not need a machine.
+
+A second implementation is also the argument that the seam is in the right
+place: **if it had needed the drawing half to change, the seam had been drawn
+around one implementation.** It needed nothing.
+
+### What it deliberately is not
+
+**There is no z-order, and there cannot be.** A scene graph knows what is in
+front of what and repaints what becomes visible; a direct store knows only
+where the pixels went. `raise_to_top` does nothing and says so — a function
+that quietly fails to raise a window is worse than one that was never offered,
+because the caller stops looking for the reason. Hiding is the same: what was
+underneath does not come back, because nothing here remembers it.
+
+That is the difference between a compositor and a program with a screen, and
+which of those the shell becomes is the board's `addr-space` row, not this
+file's business.
+
+### The pitch, which is the reason SYS_SCREEN exists
+
+Bytes per row is **not** `width * 4` on real hardware — adapters pad rows — and
+it is the one fact about a display a program cannot recover by looking at the
+pixels. So every canvas in the suite is wider in bytes than it is in pixels,
+with the padding filled with a value nothing may write.
+
+Where the two are equal, and they are on most emulators, a program that
+confuses them **draws a perfect picture and shears on the first real laptop**.
+Mutating the row address to `width * 4` fails nine checks here.
+
+A pitch too small to hold a row is refused rather than clamped: every row would
+be written partly over the last one, which reads as a drawing fault rather than
+as a caller who passed a width where bytes were wanted.
+
+### 32 checks, five mutations, all caught — after two that were not
+
+| the mutation | what the suite says |
+|---|---|
+| a row addressed as `width * 4` | 9 failures |
+| source and destination weights swapped | 1 failure |
+| the rounding dropped | 1 failure |
+| no left/right clipping | 1 failure |
+| a pitch too small accepted | 1 failure |
+
+**The blend mutations missed on the first run, and the fault was the test's.**
+It blended half-white over black and accepted anything from 126 to 130 — a
+tolerance I chose, not one the code has. Swapping the weights gives 127 there
+and dropping the rounding gives 128, so both sat inside it. A symmetric input
+over a black background has no asymmetry to lose; it cannot tell those apart.
+It is one exact value now, on a source that is not grey over a ground that is
+not black at an alpha that divides unevenly.
+
+**And a third mutation missed because there was nothing to miss.** Deleting the
+`alpha == 0` early return changed no output at all — worked out afterwards,
+the general formula is exact at *both* ends of the range, for all 256 values,
+which the `+127` rounding is what makes true. Both early returns are shortcuts
+for the common case, not correctness guards, and the comment claiming
+otherwise had been carried over from the wlroots side, where that fault is real
+because that path premultiplies. **The comment was wrong and the mutation is
+what said so.**
+
+### And the sanitizer found a leak the suite could not
+
+6,808 bytes in three allocations: the last check in `test_what_it_refuses`
+makes a panel that succeeds and never let go of it. No visible symptom, no
+failing check — `check.sh` builds every suite twice and that is the run that
+said so.
+
+---
+
 ## v0.4.44 — the last inch
 
 `src/recon_ui.c` was three thousand one hundred lines, and **twenty-eight of

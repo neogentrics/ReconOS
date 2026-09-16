@@ -259,6 +259,26 @@ bool recon_panel_read(struct recon_panel *panel, int x, int y, int w, int h,
     uint32_t *out);
 
 
+/*
+ * A panel that draws straight onto a screen, with no compositor under it.
+ *
+ * The other way of making one, and the reason panels have a presentation seam
+ * at all. `screen` is the address the kernel handed back from SYS_MAP, and
+ * `pitch` is bytes per row from SYS_SCREEN -- **which is not `width * 4`**, and
+ * is the one fact about a display a program cannot recover by looking at the
+ * pixels.
+ *
+ * Nothing about this takes a system call: the caller passes the address and
+ * the shape it already asked for, so the same code runs against a plain buffer
+ * on a host, which is how it is tested.
+ *
+ * There is no z-order -- see the note at the top of src/recon_ui_fb.c. A panel
+ * made this way is drawn where it is told, in the order things are committed.
+ */
+struct recon_panel *recon_panel_on_screen(void *screen, size_t pitch,
+    int screen_width, int screen_height,
+    int x, int y, int width, int height);
+
 struct recon_panel *recon_panel_create(struct wlr_scene_tree *parent,
     int width, int height);
 void recon_panel_destroy(struct recon_panel *panel);

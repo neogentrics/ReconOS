@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.44
+    VERSION 0.4.45
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -171,6 +171,9 @@ add_executable(ReconOS
     # Split out so the three thousand lines of drawing above it stop
     # needing a wayland header -- see src/recon_ui_internal.h.
     src/recon_ui_wlr.c
+    # And the other implementation of that seam: straight onto a screen,
+    # which is what a program on the ReconOS kernel does.
+    src/recon_ui_fb.c
     src/recon_apps.c
     src/recon_avatar.c
     src/recon_modules.c
@@ -430,6 +433,33 @@ target_include_directories(recon_tls_tests PRIVATE
 
 target_link_libraries(recon_tls_tests PRIVATE
     ${MBEDTLS_LIB} ${MBEDX509_LIB} ${MBEDCRYPTO_LIB})
+
+# A panel drawn straight onto a screen, which is what a program on the ReconOS
+# kernel does. It takes no system calls -- the caller passes the address and
+# the shape it already asked the kernel for -- so the same code runs against a
+# plain buffer here, and every canvas in the suite is padded at the end of each
+# row because bytes-per-row is not width times four on real hardware.
+add_executable(recon_ui_fb_tests
+    tests/test_ui_fb.c
+    src/recon_ui_fb.c
+    src/recon_ui.c
+    src/recon_color.c
+    src/recon_clip.c
+    src/recon_theme.c
+    src/recon_error.c
+    src/recon_fs.c
+    src/recon_registry.c
+    # The theme asks who may administer, and the UI asks what a key stands
+    # for. Both come along the way the other suites take what they reach.
+    src/recon_key.c
+    src/recon_users.c
+    src/recon_crypt.c)
+
+target_include_directories(recon_ui_fb_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_ui_fb_tests PRIVATE m)
 
 # The keys, held against the library their numbers came from.
 #
@@ -1218,6 +1248,7 @@ add_test(NAME fonts COMMAND recon_fonts_tests)
 add_test(NAME tls COMMAND recon_tls_tests)
 add_test(NAME tls-verify COMMAND recon_tls_verify_tests)
 add_test(NAME keys COMMAND recon_key_tests)
+add_test(NAME screen-panel COMMAND recon_ui_fb_tests)
 add_test(NAME clock COMMAND recon_clock_tests)
 add_test(NAME versions COMMAND recon_version_tests)
 add_test(NAME accessibility COMMAND recon_access_tests)
