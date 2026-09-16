@@ -9,6 +9,76 @@ way for the two to disagree.
 
 ---
 
+## v0.4.48 — a `#` that ended the command
+
+**The freestanding check had stopped checking, and I broke it.**
+
+`scripts/check-userland.sh` builds its compile line across ten continued lines,
+and two versions ago I put explanatory comments *inside* that continuation. A
+`#` after a line continuation ends the command: the shell joins the lines,
+tokenises, and everything from the comment onwards runs as commands of its own.
+
+    ./scripts/check-userland.sh: line 260: -isystem: command not found
+
+So for three versions this check compiled **without `-Werror`, without
+`-DRECONOS_VERSION`, and without `third_party` on the path**, while its output
+said it had used all three. Every flag after the first comment was silently
+gone.
+
+### The answer it gave was right, and that is luck rather than a defence
+
+The file list is hand-maintained and built from `try_thirdparty.sh`, a sweep
+that spells its flags on one line — so the files it added were measured
+properly even while the check was not measuring anything much. Re-running with
+the continuation fixed: **55 of 55**, unchanged.
+
+**Two instruments, and only the second one was intact.** That is the whole
+reason this was findable, and it is not an argument for having one.
+
+The comments are above the command now, with the trap written where the next
+person will be adding a flag.
+
+### And two real gaps found on the way there
+
+**The library had no `<limits.h>`.** Two vendored headers include it, the
+compiler's own chains to `syslimits.h`, and with `-nostdinc` there is nothing
+to chain to — *"no include path in which to search for limits.h"*. That is not
+the vendored code being awkward: **a C library provides `<limits.h>`** and this
+one did not.
+
+Every value in it is one of the compiler's own predefined macros rather than a
+number typed in, so the header cannot disagree with the compiler it is compiled
+by — which is the failure mode a hand-written one has, and it is silent. The
+minimums are `(-MAX - 1)` rather than literals, because **`-2147483648` is not
+an `int`**: it is `2147483648` negated, which does not fit, so it promotes and
+changes the type of every comparison it takes part in. The same trap the tree
+already has written down about `(int)~0U >> 1`.
+
+`PATH_MAX` is 1024, this system's, deliberately not Linux's 4096 — a difference
+that has bitten this project before, in `recon_fs.c`'s note about an optimised
+glibc aborting the process over a short `realpath` buffer. **29 checks against
+the host's**, because a header of nothing but macros looks like the one file
+that cannot be wrong and is the opposite: a wrong limit is silent.
+
+**And `third_party` was being treated as ours.** With `-I` the compiler holds
+vendored headers to the project's warnings, and `-Werror` then refused
+`src/recon_ocr_match.c` because `stb_truetype.h` defines two functions that
+file does not call. `-isystem` is the mechanism that exists for this and is
+what `THIRD_PARTY.md` already says those files are.
+
+### 53 of 80 became 55
+
+`recon_ocr_match.c` and `recon_stb.c`, both of which had been failing for
+reasons that were not about ReconOS at all.
+
+`recon_codec.c` is the one that did not make it: with `<limits.h>` it got
+further and now wants `<sys/mman.h>`, because `minimp3_ex.h` maps files into
+memory to read them. That is a real dependency and a different question — this
+kernel has `SYS_MAP`, but what that vendored header wants it for is file
+loading, which ReconOS does another way.
+
+---
+
 ## v0.4.47 — signals, and two files left off the list on purpose
 
 The kernel has had `SYS_KILL`, `SYS_SIGACTION`, `SYS_SIGMASK` and

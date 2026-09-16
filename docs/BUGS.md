@@ -8447,6 +8447,34 @@ regenerated after that tree is pushed.
   the first two.
 
 
+### BG-208 — A comment inside a line continuation silently removed half a check's flags
+
+- **Found in** v0.4.48, by running `scripts/check-userland.sh` and reading a
+  line of output that had nothing to do with what was being tested:
+  `-isystem: command not found`.
+- **Was** The check's compile line is built across ten continued lines, and
+  explanatory comments were added *inside* the continuation in v0.4.45. **A
+  `#` after a line continuation ends the command**: the shell joins the lines,
+  tokenises, and the comment runs to the end of the joined line — so every flag
+  after it was dropped, and the lines holding them ran as commands.
+- **What it cost** Three versions of this check compiled **without
+  `-Werror`, without `-DRECONOS_VERSION` and without `third_party` on the
+  include path**, while printing that it had used all three. A check that does
+  not do what it says is the one kind of fault that cannot be caught by
+  reading its output.
+- **And the answer it gave was right**, which is luck and not a defence. The
+  file list is built from `try_thirdparty.sh`, a sweep that spells its flags on
+  one line, so the files added to the list were measured properly the whole
+  time. Re-run with the continuation fixed: 55 of 55, unchanged. **Two
+  instruments, and only the second was intact.**
+- **Fixed in** v0.4.48. Every comment is above the command, and the reason —
+  including this fault — is written where the next person will be adding a
+  flag.
+- **Mine**, introduced by the same landing that fixed a different fault in the
+  same file, which is worth saying plainly: the change that made the check
+  match the build's warning flags is the change that stopped it passing any.
+
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

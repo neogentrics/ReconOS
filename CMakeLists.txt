@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.47
+    VERSION 0.4.48
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -964,6 +964,20 @@ add_executable(recon_libc_signal_tests
     userland/libc/malloc.c)
 
 add_test(NAME libc_signals COMMAND recon_libc_signal_tests)
+
+# <limits.h>, against the host's.
+#
+# A header of nothing but macros, which makes it look like the one file here
+# that could not be wrong. It is the opposite: a wrong limit is silent. Code
+# that checks INT_MAX before doing arithmetic gets a wrong answer and carries
+# on, and nothing that does not look at this header would disagree.
+#
+# No library sources at all -- the test includes the host's <limits.h>, copies
+# its values, undefines them, and includes ReconOS's by relative path.
+add_executable(recon_libc_limits_tests
+    userland/tests/test_libc_limits.c)
+
+add_test(NAME libc_limits COMMAND recon_libc_limits_tests)
 
 # sscanf, against the host's.
 #

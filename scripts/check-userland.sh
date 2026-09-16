@@ -72,9 +72,15 @@
 #                              headers ship in this repository and travel to
 #                              ReconOS with everything else, exactly like the
 #                              icons, so leaving them off was measuring the
-#                              wrong thing. Three more files build because of
-#                              it. recon_stb.c itself still does not: it wants
-#                              a hosted <math.h> as well.
+#                              wrong thing.
+#
+#                              And then it wanted <limits.h>, which this
+#                              library did not have: the compiler's own chains
+#                              to the system's, and with -nostdinc there is
+#                              nothing to chain to. That is not the vendored
+#                              code being awkward -- **a C library provides
+#                              <limits.h>** and this one did not.
+#                              userland/include/limits.h, v0.4.48.
 #
 # --- Two files that are left off on purpose ---
 #
@@ -159,6 +165,8 @@ fi
 # Added 15 September 2026, with userland/include/signal.h -- the kernel has had
 # SYS_KILL, SYS_SIGACTION, SYS_SIGMASK and SYS_SIGRETURN since before the
 # desktop could compile for it at all.
+# Added 15 September 2026 with userland/include/limits.h, and with third_party
+# told to the compiler as vendored rather than as ours.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -217,6 +225,9 @@ src/recon_mailwin.c
 src/recon_ui_fb.c
 
 src/recon_error.c
+
+src/recon_ocr_match.c
+src/recon_stb.c
 "
 
 out=$(mktemp -d)
@@ -232,6 +243,28 @@ for f in $FILES; do
 		continue
 	fi
 
+	# --- the flags, and why each unobvious one is there ---
+	#
+	# **No comments inside the command below.** A `#` after a line
+	# continuation ends the command at that point: the shell joins the
+	# lines, tokenises, and everything after the comment runs as a command
+	# of its own. That is not hypothetical -- it happened here, and this
+	# check spent several versions compiling without `-Werror`, without
+	# `-DRECONOS_VERSION` and without third_party on the path, while
+	# reporting that it had used all three.
+	#
+	# -isystem third_party, not -I: these are vendored and THIRD_PARTY.md
+	# says so. With -I the compiler treats them as ours, and -Werror then
+	# refuses src/recon_ocr_match.c because stb_truetype defines two
+	# functions that file does not call -- not a portability fault, and not
+	# our code to fix.
+	#
+	# -Wno-unused-parameter because CMakeLists.txt sets it. Without it this
+	# check is *stricter* than the build and refuses files that would
+	# build, which is the rule in this file's header wearing the other
+	# shoe: a predictor that does not match the thing it predicts is worth
+	# less than none, in either direction.
+	#
 	# -ffreestanding says there is no hosted library, which also stops the
 	# compiler turning a byte loop into a call to memcpy -- the same reason
 	# CMakeLists passes -fno-builtin to libc/ itself.
@@ -241,17 +274,8 @@ for f in $FILES; do
 		-isystem "$BUILTIN" \
 		-I userland/include \
 		-I include \
-		-I third_party \
+		-isystem third_party \
 		-DRECONOS_VERSION='"0.0.0"' \
-		# The same warning flags the build uses, including the
-		# -Wno-unused-parameter CMakeLists.txt sets deliberately.
-		#
-		# Without it this check was *stricter* than the build and refused
-		# src/recon_explorer.c over two unused callback parameters -- not a
-		# portability fault, and a warning the project has decided not to
-		# care about. **A check stricter than the build rejects files that
-		# would build**, which is the same fault as the one in the header
-		# above wearing the other shoe.
 		-Wall -Wextra -Wno-unused-parameter -Werror \
 		2> "$out/err"; then
 		echo "--- $f does not build without glibc"

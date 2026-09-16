@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.48** | **A `#` that ended the command.** Comments put inside a shell line continuation ended it, so the freestanding check spent three versions compiling without `-Werror` while reporting that it had not. The answer was right anyway, because a second instrument had the flags on one line. Also: the library had no `<limits.h>`, and vendored headers were being held to the project’s warnings. |
 | **0.4.47** | **Signals.** The kernel had four signal calls and nothing in userland could reach them. The restorer is the difficulty — machine code, because there is no C for “return through a system call” — and the layering said where it goes. 30 checks against the host’s, and two files left off the port list on purpose, because compiling is not what that check asks. |
 | **0.4.46** | **The same shape a third time.** Five applications were including the whole compositor for one field — two of them for nothing at all — and the freestanding check turned out to be stricter than the build, rejecting a file over unused callback parameters. 46 of 80 sources build with no Linux under them; 52 do now. |
 | **0.4.45** | **The other side of the seam.** A panel drawn straight onto a screen — what a program on the ReconOS kernel does — and it takes no system calls, so the same code runs against a plain buffer and is tested there. The seam needed nothing changed to take a second implementation, which is the argument that it is in the right place. |
