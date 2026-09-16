@@ -434,3 +434,63 @@ None.
   exactly this trap, about its byte counter, written by this seat. **Reading a
   warning is not the same as applying it**, which is the same shape as VF-010
   and VF-014, and is now three entries in this register.
+
+### VF-017 -- "DNS is blocked" was half true, and the wrong half was believed
+
+- **Found in** `docs/SERVER.md` and `docs/WEB.md`, 16 September 2026. **Found
+  by** reading the kernel's own source before accepting this role's own note.
+- **What it said** DNS and DHCP were both **blocked** on "an unconnected
+  datagram socket", with a section headed *What is blocking the first two
+  services, exactly* explaining that an unconnected datagram socket cannot be
+  opened from user mode.
+- **What is actually true** That covers DHCP, which must broadcast, and a DNS
+  *server*, which must reply to whoever asked. **A resolver is a connected
+  datagram** -- one known server, one question, one answer -- and
+  `kernel/core/socket_file.c` says in as many words: *a connected UDP socket
+  works through `write` today; an unconnected one is refused rather than
+  half-served.*
+- **Measured before anything was built on it**, because this register exists
+  for exactly the opposite mistake:
+
+  ```
+  udp probe: fd=5 connect=0 write=29 read=61 tries=2619
+  udp probe: id=1234 flags=8180 qd=1 an=2 last=104.20.23.154
+  ```
+
+  A real query to 10.0.2.3:53 and a real answer for example.com, on the
+  machine, from a temporary probe that was removed once the resolver replaced
+  it.
+- **Why it belongs here, and why it is the fourth of its kind.** VF-004 was a
+  limitation that had stopped being true. VF-009 was a capability that was
+  never true. VF-014 was a capability described as absent that the code already
+  depended on. This is a blocker **written at the right time about the right
+  thing, whose scope grew in the writing**: two services were grouped under one
+  sentence, the sentence was true of one of them, and nobody asked which.
+- **What it cost** A resolver that could have been written any time after the
+  socket layer landed. `docs/SERVER.md` now carries two rows where it carried
+  one, because the built half and the blocked half of a protocol are not one
+  status.
+- **The habit that keeps working** is reading the source of the thing said to
+  be missing. That is how VF-014 was found and how this was. A document
+  describing another seat's code is a claim about it, and it ages.
+
+### VF-018 -- a failure that reported a number no server had given
+
+- **Found in** `GET /api/resolve` on the machine, minutes after it first
+  worked. **Found by** asking for a name the encoder refuses and reading the
+  whole reply rather than the field that was being tested.
+- **What it was** `dns_resolve` returns before sending anything when a name
+  cannot be encoded, and left the caller's `struct dns_result` untouched. The
+  endpoint printed `"rcode":3` -- a plausible *no such name* -- from whatever
+  the previous request had left on the stack. The number looked exactly like an
+  answer and no server had been asked.
+- **The suite could not have caught it as written.** Every check in
+  `test_dns.c` passed a fresh structure and read only the fields the call fills
+  in, which is the natural way to write a check and the one shape that cannot
+  see this. The check added for it **dirties the structure first**, which is
+  what a real caller does by reusing one.
+- **Why it belongs here** The parse path cleared the structure and the early
+  returns did not, so the safety was in the common case and missing from the
+  exceptional one. That is where this register keeps finding things: 0.10.0's
+  early return that skipped a stylesheet, VF-011's handler failures wearing the
+  client's status. **An exceptional path is the one nobody exercises twice.**

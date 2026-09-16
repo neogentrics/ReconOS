@@ -51,6 +51,7 @@
 #include "../http/json.h"
 #include "../http/multipart.h"
 #include "../auth.h"
+#include "../dns.h"
 #include "../include/recon_server.h"
 #include "../service.h"
 #include "../log.h"
@@ -140,6 +141,20 @@ static struct server_facts FACTS;
  * restriction was not available instead.
  */
 static struct auth GUARD;
+
+/*
+ * Where this machine asks about names.
+ *
+ * 10.0.2.3 is the resolver QEMU's user networking provides, and it is a
+ * stand-in: a real machine learns its resolver from DHCP, which cannot be
+ * written because a broadcast needs an unconnected datagram socket. That half
+ * of the DNS entry in `docs/SERVER.md` is still blocked and the other half
+ * turned out not to be -- see `server/dns.h`.
+ *
+ * So the address is a constant with a reason rather than a guess, and the day
+ * DHCP exists it becomes a field somebody fills in.
+ */
+static struct dns_client RESOLVER;
 
 /*
  * The site's policy, asked by `serve.c` before any route marked `guarded`.
@@ -787,6 +802,137 @@ static int handle_upload(const struct http_request *r, const char *body,
 	return HTTP_OK;
 }
 
+/*
+ * Resolving a name, on behalf of whoever asked.
+ *
+ * --- Why this is a guarded route ---
+ *
+ * An open resolver endpoint is an open resolver. Anyone who can reach it makes
+ * this machine send a query of their choosing to a name server, and the reply
+ * comes back at this machine's expense -- which is the shape of a DNS
+ * amplifier and, less dramatically, a way to use somebody else's server to ask
+ * questions they would rather not ask themselves.
+ *
+ * Reads elsewhere on this server are open because they report facts about this
+ * machine. This one makes the machine *act*, on a target the caller chose, and
+ * that is the line the guard is drawn on rather than the read/write one.
+ */
+static int handle_resolve(const struct http_request *r, const char *body,
+                          size_t body_len, struct http_response *out, void *ctx)
+{
+	static char answer[512];
+	struct dns_client *c = (struct dns_client *)ctx;
+	struct dns_result res;
+	struct http_form q;
+	char name_room[JSON_ROOM(DNS_NAME_MAX)];
+	const char *name, *escaped;
+	unsigned short id;
+	unsigned char seed[2];
+	long got;
+	int rc, n, i;
+
+	(void)body; (void)body_len;
+
+	/*
+	 * The name comes from the query string, which `request.c` keeps raw and
+	 * undecoded -- so it is decoded here with the form decoder, which is the
+	 * one that knows `+` is a space. `form.h` explains why that is a
+	 * separate function from the path decoder.
+	 */
+	rc = http_form_parse(r->query, recon_strlen(r->query), &q);
+	if (rc != HTTP_OK)
+		return rc;
+
+	name = http_form_get(&q, "name");
+	if (!name) {
+		/* Absent, or given twice -- `http_form_get` answers the same
+		 * for both, deliberately. Neither is a name to look up. */
+		http_response_simple(out, 400, "text/plain",
+		                     "400 Bad Request: one name\n", 26);
+		return HTTP_OK;
+	}
+
+	/*
+	 * The identifier, from `SYS_RANDOM`.
+	 *
+	 * **It is one of the few things an off-path attacker has to guess.** A
+	 * counter would make every query's identifier predictable from the last
+	 * one, which turns forging a reply from a guess into arithmetic. If
+	 * randomness fails this refuses rather than falling back to something
+	 * orderly, for the same reason the guard refuses without a secret.
+	 */
+	got = (long)recon_call6(SYS_RANDOM, (u64)(unsigned long)seed,
+	                        sizeof(seed), 0, 0, 0, 0);
+	if (got < (long)sizeof(seed))
+		return HTTP_EINTERNAL;
+	id = (unsigned short)((seed[0] << 8) | seed[1]);
+
+	rc = dns_resolve(c, name, id, &res);
+
+	escaped = as_json(name, name_room, sizeof(name_room));
+	if (!escaped)
+		return HTTP_EINTERNAL;
+
+	if (rc != DNS_OK) {
+		/*
+		 * The verdict by name, not by number, and the server's own
+		 * RCODE beside it. "No such name" and "the server failed" are
+		 * different facts and a caller that treats them alike will
+		 * cache a temporary failure for ever.
+		 */
+		const char *why =
+			rc == DNS_ETRUNCATED ? "truncated" :
+			rc == DNS_EMISMATCH  ? "no matching answer" :
+			rc == DNS_ENAME      ? "not a name" :
+			rc == DNS_ELOOP      ? "bad compression pointer" :
+			rc == DNS_ESERVER    ? "server said no" :
+			                       "malformed";
+
+		n = snprintf(answer, sizeof(answer),
+		             "{\"name\":\"%s\",\"resolved\":false,"
+		             "\"why\":\"%s\",\"rcode\":%d}\n",
+		             escaped, why, res.rcode);
+		if (n < 0 || (size_t)n >= sizeof(answer))
+			return HTTP_EINTERNAL;
+
+		/* 502: this server asked somebody else and did not get a usable
+		 * answer. Not 404 -- the resource here is the lookup, and the
+		 * lookup happened. */
+		http_response_simple(out, 502, "application/json", answer,
+		                     (size_t)n);
+		return HTTP_OK;
+	}
+
+	n = snprintf(answer, sizeof(answer),
+	             "{\"name\":\"%s\",\"resolved\":true,\"ttl\":%lu,"
+	             "\"addresses\":[", escaped, res.ttl);
+	if (n < 0 || (size_t)n >= sizeof(answer))
+		return HTTP_EINTERNAL;
+
+	for (i = 0; (size_t)i < res.count; i++) {
+		unsigned int a = res.addrs[i];
+		int m = snprintf(answer + n, sizeof(answer) - (size_t)n,
+		                 "%s\"%u.%u.%u.%u\"", i ? "," : "",
+		                 (a >> 24) & 0xFF, (a >> 16) & 0xFF,
+		                 (a >> 8) & 0xFF, a & 0xFF);
+
+		if (m < 0 || (size_t)(n + m) >= sizeof(answer))
+			return HTTP_EINTERNAL;
+		n += m;
+	}
+
+	{
+		int m = snprintf(answer + n, sizeof(answer) - (size_t)n, "]}\n");
+
+		if (m < 0 || (size_t)(n + m) >= sizeof(answer))
+			return HTTP_EINTERNAL;
+		n += m;
+	}
+
+	http_response_simple(out, 200, "application/json", answer, (size_t)n);
+	return HTTP_OK;
+}
+
 static const struct http_route ROUTES[] = {
 	{ "GET",  "/",            1, handle_dashboard, 0, &FACTS, 0 },
 	{ "GET",  "/api/status",  1, handle_status,    0, &FACTS, 0 },
@@ -795,6 +941,7 @@ static const struct http_route ROUTES[] = {
 	{ "GET",  "/api/log",     1, handle_log,       0, &LOGBOOK, 0 },
 	{ "POST", "/api/name",    1, handle_set_name,  0, &FACTS, 1 },
 	{ "POST", "/api/upload",  1, handle_upload,    0, 0, 1 },
+	{ "GET",  "/api/resolve", 1, handle_resolve,   0, &RESOLVER, 1 },
 
 	/* Last, and streaming. A file no longer has to fit in a response, so
 	 * the volume can serve something larger than this program's memory. */
@@ -1214,6 +1361,12 @@ int main(void)
 	site.now_ms = clock_ms;
 	site.allow = may_write;
 	site.allow_ctx = &GUARD;
+
+	RESOLVER.server = 0x0A000203u;	/* 10.0.2.3 -- see the declaration */
+	RESOLVER.port = 53;
+	RESOLVER.idle = recon_yield;
+	RESOLVER.now_ms = clock_ms;
+	RESOLVER.timeout_ms = 3000;
 
 	/*
 	 * --- the secret, made once ------------------------------------------

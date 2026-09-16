@@ -1070,6 +1070,21 @@ add_executable(recon_server_auth_tests
 
 add_test(NAME server_auth COMMAND recon_server_auth_tests)
 
+# Asking for an address, and the answers that must not be believed.
+#
+# The audit called DNS blocked on an unconnected datagram socket. True of DHCP
+# and of a DNS *server*; a resolver is a connected datagram, which this kernel
+# has had all along. Measured on the machine before a line was written.
+#
+# Watched failing against two parsers: one that follows compression pointers
+# freely, which does not fail but HANGS, and one that skips the identifier and
+# question checks, which returns DNS_OK four times where a refusal belonged.
+add_executable(recon_server_dns_tests
+    server/dns.c
+    server/tests/test_dns.c)
+
+add_test(NAME server_dns COMMAND recon_server_dns_tests)
+
 # A ring of recent entries, and the count that stops it lying.
 #
 # A log that drops silently looks complete, reads plausibly, and has lost

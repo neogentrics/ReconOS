@@ -44,9 +44,10 @@ role's to build and is listed because this role is what will be waiting on it.
 
 | subsystem | owner | status | note |
 |---|---|---|---|
-| Web / API server | server | **built** | `server/http/` — 606 checks across sixteen suites, several connections at once, writes guarded, running on the machine |
+| Web / API server | server | **built** | `server/http/` — 678 checks across seventeen suites, several connections at once, writes guarded, running on the machine |
 | Static file serving | server | **built** | `server/http/files.c` — read off ReconFS on the machine |
-| DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
+| DNS **resolver** (client) | server | **built** | `server/dns.c` — 72 checks, **resolving real names on the machine**. A resolver is a *connected* datagram, which this kernel has had all along |
+| DNS (authoritative, recursive, split-horizon) | server | **blocked** | a *server* must reply to whoever asked, which needs `recvfrom`. The blocked half; see VF-017 for how the entry came to cover both |
 | DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
 | DDNS | server | **blocked** | follows DNS |
 | NTP / PTP time sync | server | **blocked** | same; and no user-mode timer |
