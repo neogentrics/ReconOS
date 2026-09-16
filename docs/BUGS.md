@@ -8481,6 +8481,10 @@ regenerated after that tree is pushed.
 
 ### BG-209 — A file input was drawn as a text box, and its form sent in the wrong shape
 
+[#482](https://github.com/neogentrics/ReconOS/issues/482)
+
+[#482](https://github.com/neogentrics/ReconOS/issues/482)
+
 - **Found in** v0.4.49, by photographing a page with two file fields on it
   before changing anything.
 - **Was** `<input type="file">` fell through the input-type dispatch in
