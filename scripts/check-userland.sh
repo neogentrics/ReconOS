@@ -34,7 +34,8 @@
 #   **Vendored headers: eight files** want stb_image.h or stb_truetype.h,
 #   which need third_party/ on the include path and a hosted <math.h>.
 #
-#   **One missing thing each: the rest.** realpath (recon_fs.c), pid_t
+#   **One missing thing each: the rest.** realpath (recon_fs.c -- closed in
+#   v0.4.53; it was written and declared in no header), pid_t
 #   (recon_cmd.c, recon_control_panel.c), signal.h, sys/time.h, dlfcn.h,
 #   ifaddrs.h, zlib.h, mbedtls, libdrm. Each names one thing and is worth one
 #   piece of work.
@@ -184,6 +185,7 @@ src/recon_cookie.c
 src/recon_css.c
 src/recon_firewall.c
 src/recon_fonts.c
+src/recon_fs.c
 src/recon_media.c
 src/recon_form.c
 src/recon_html.c

@@ -73,6 +73,23 @@ void qsort(void *base, size_t count, size_t size,
  */
 char *getenv(const char *name);
 
+/*
+ * The path a name really means, with `.`, `..` and repeated slashes resolved.
+ *
+ * Written in `libc/posix.c` and declared nowhere until now. **It is not the
+ * host's `realpath` and the difference matters**: there are no symbolic links
+ * on ReconOS to resolve, and no call that asks whether a path exists, so this
+ * is arithmetic on the string and succeeds for a path that is not there. The
+ * comment above the definition says so in full.
+ *
+ * `into` may be NULL, in which case the result is allocated and the caller
+ * frees it -- which is POSIX, and is what `src/recon_fs.c` relies on for a
+ * reason written out beside the call: the host's version demands a buffer of
+ * at least PATH_MAX, a smaller one is undefined rather than truncated, and an
+ * optimised glibc build **aborts the process** over it.
+ */
+char *realpath(const char *path, char *into);
+
 void exit(int code) __attribute__((noreturn));
 
 #endif /* RECON_STDLIB_H */

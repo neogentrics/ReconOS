@@ -46,6 +46,32 @@ long recon_libc_write(int fd, const void *from, size_t length);
 long long recon_libc_lseek(int fd, long long offset, int whence);
 int recon_libc_mkdir(const char *path, unsigned int mode);
 char *recon_libc_realpath(const char *path, char *into);
+
+/*
+ * The allocator the renamed library uses, so a buffer `recon_libc_realpath`
+ * hands back goes home to the right one. `prefix.h` maps `free` to
+ * `recon_free` for everything in `libc/`, and this file is not compiled with
+ * that prefix -- so `free` here is the host's, and giving it a ReconOS pointer
+ * is two allocators arguing over one address. The first run of these checks
+ * said exactly that: "munmap_chunk(): invalid pointer".
+ */
+void recon_free(void *p);
+
+/*
+ * The allocator's own self-check, which is the only thing that can see a
+ * buffer this library overran.
+ *
+ * The sanitizers cannot: `recon_malloc` gets its memory from the source in
+ * `mem_recon.c` and hands out blocks inside it, so a byte written past the end
+ * of one block lands inside a region ASan was told is entirely in use. A
+ * mutation shortening realpath's allocation by the terminator passed a full
+ * sanitized run with no complaint at all, which is why this is here.
+ *
+ * `recon_malloc_audit` walks the heap and counts what it finds wrong -- a size
+ * that disagrees with its footer, a block overlapping its neighbour. Zero is
+ * the only good answer.
+ */
+unsigned recon_malloc_audit(void);
 long recon_libc_sysconf(int name);
 
 struct recon_dirent {
@@ -417,6 +443,118 @@ static void resolving_paths(void)
 	ok(recon_libc_realpath("System/Apps", into) == NULL,
 	   "a relative path is refused");
 	ok(recon_errno == EINVAL, "with EINVAL, since there is no elsewhere");
+
+	/*
+	 * --- The NULL form, which is the one the desktop uses ---
+	 *
+	 * Every case above passes a buffer, and the desktop passes NULL: POSIX
+	 * says that means "allocate what you need", and `src/recon_fs.c` relies
+	 * on it for a reason written out beside the call -- the host's version
+	 * demands a buffer of at least PATH_MAX, a smaller one is undefined
+	 * rather than truncated, and an optimised glibc aborts the process over
+	 * it, which it once did.
+	 *
+	 * This library refused NULL with EFAULT until v0.4.53, and nothing here
+	 * covered the one calling convention the real system uses.
+	 *
+	 * **What that would have done is the quiet kind of failure.**
+	 * `stays_inside` reads NULL as "not there yet", steps up to the parent
+	 * and asks again, and ends at the root returning false -- which means
+	 * "outside the filesystem". Every write, every mkdir and every open in
+	 * the desktop, refused, each with a sensible message, and nothing
+	 * anywhere pointing at this function.
+	 */
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		char what[256];
+		char *got = recon_libc_realpath(cases[i].given, NULL);
+
+		snprintf(what, sizeof(what),
+			 "allocated: %s resolves to %s, not %s",
+			 cases[i].given, cases[i].want, got ? got : "(null)");
+
+		ok(got && strcmp(got, cases[i].want) == 0, what);
+		recon_free(got);
+	}
+
+	/* The refusals still refuse, and give the buffer back rather than
+	 * leaking one per bad path. The leak is what the sanitizers watch;
+	 * what this checks is that the answer did not change. */
+	recon_errno = 0;
+	ok(recon_libc_realpath("System/Apps", NULL) == NULL,
+	   "a relative path is refused in the allocating form too");
+	ok(recon_errno == EINVAL, "with the same reason");
+
+	recon_errno = 0;
+	ok(recon_libc_realpath(NULL, NULL) == NULL, "and so is no path at all");
+	ok(recon_errno == EFAULT, "with EFAULT, which is what NULL means here");
+
+	/*
+	 * --- Two lengths that land on the allocator's granule ---
+	 *
+	 * These resolve to themselves, unshortened, at 16 and 32 characters.
+	 *
+	 * **They were written to catch a sizing fault and they do not**, which
+	 * is worth saying here rather than leaving for somebody to discover.
+	 * The way to size the allocating form wrongly is to leave out room for
+	 * the terminator, and **nothing in this tree can see that**: the plain
+	 * build cannot, the sanitizers cannot -- `recon_malloc` hands out blocks
+	 * inside one region ASan was told is entirely in use -- and neither can
+	 * the heap audit, because a block at the end of the used area has free
+	 * space after it rather than a neighbour to corrupt. A mutation
+	 * shortening the allocation survives all three.
+	 *
+	 * What makes it right is an argument, and it lives beside the code:
+	 * every rule in the resolver either copies a component or removes one,
+	 * so the output is never longer than the input.
+	 *
+	 * What these two do hold is that a path of exactly that shape resolves
+	 * correctly, which is worth holding on its own.
+	 */
+	{
+		static const char *const SNUG[] = {
+			"/System/Apps/abc",			/* 16 */
+			"/System/Apps/abcdefghijklmnopqrs",	/* 32 */
+		};
+		size_t k;
+
+		for (k = 0; k < sizeof(SNUG) / sizeof(SNUG[0]); k++) {
+			char what[160];
+			char *got = recon_libc_realpath(SNUG[k], NULL);
+
+			snprintf(what, sizeof(what),
+				 "'%s' resolves to itself, unshortened",
+				 SNUG[k]);
+			ok(got && strcmp(got, SNUG[k]) == 0, what);
+			recon_free(got);
+		}
+	}
+
+	/*
+	 * And the heap is intact. This holds the ownership rules -- that what
+	 * is handed back is a real block and goes home to the right allocator --
+	 * and not the sizing, for the reason above.
+	 */
+	ok(recon_malloc_audit() == 0, "the heap is intact after resolving");
+
+	/*
+	 * The result is the caller's, and separate from the last one.
+	 *
+	 * A version that returned a pointer into static storage would pass
+	 * every check above and break the first caller that resolved two paths
+	 * before comparing them -- which is exactly what `stays_inside` does
+	 * against the root it resolved at startup.
+	 */
+	{
+		char *a = recon_libc_realpath("/System/Apps", NULL);
+		char *b = recon_libc_realpath("/Users/x", NULL);
+
+		ok(a != NULL && b != NULL && a != b,
+		   "two resolved paths are two buffers, not one reused");
+		ok(a != NULL && strcmp(a, "/System/Apps") == 0,
+		   "and the first still says what it said");
+		recon_free(a);
+		recon_free(b);
+	}
 }
 
 /* --- what the machine says ------------------------------------------------ */

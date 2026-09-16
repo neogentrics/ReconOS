@@ -76,6 +76,25 @@ int ungetc(int c, FILE *f);
 int puts(const char *text);
 
 int fseek(FILE *f, long offset, int from);
+
+/*
+ * Give a file a different name.
+ *
+ * **Declared and deliberately not defined**, which is the same treatment
+ * `sys/stat.h` gives `stat` and for the same reason: there is no system call
+ * behind it, and a caller should fail to link -- naming `rename` -- rather
+ * than receive a plausible wrong answer. A rename that quietly reported
+ * success would leave somebody looking at a file manager showing the old name
+ * with nothing having gone wrong.
+ *
+ * What it needs is one call. The kernel can already move a directory entry;
+ * `docs/KERNEL-WANTS.md` carries the entry.
+ *
+ * `src/recon_fs.c` names this from `recon_fs_rename` and from the recycle bin.
+ * A program that only draws does not reach either, and does not need this to
+ * exist -- see the note in `docs/KERNEL-WANTS.md` about `--gc-sections`.
+ */
+int rename(const char *from, const char *to);
 long ftell(FILE *f);
 void rewind(FILE *f);
 

@@ -32,6 +32,26 @@
 #define O_APPEND	02000
 
 /*
+ * Refuse to open a symbolic link.
+ *
+ * POSIX's value, and on ReconOS it currently changes nothing, because there
+ * are no symbolic links: no command makes one, there is no `SYS_LINK`, and
+ * `S_IFLNK` appears nowhere in either tree.
+ *
+ * **It is defined as the real bit rather than as 0**, and that is the whole
+ * point of this comment. Defining it as 0 would compile identically today and
+ * would be a trap the day links arrive: every caller asking for this
+ * protection would silently stop asking for it, with nothing in the source
+ * changed to notice. As the real value it is a flag the kernel does not
+ * implement yet -- which is a thing that can be found, and fixed, once.
+ *
+ * `src/recon_fs.c` passes it when writing a file it means to be private, on
+ * the argument that a link put there by somebody else must not redirect the
+ * write.
+ */
+#define O_NOFOLLOW	0400000
+
+/*
  * `open` takes a mode only when it is creating. Declared variadic, as POSIX
  * does, rather than always taking one -- a caller that passes a mode to a
  * plain open is saying something it does not mean, and the compiler should be

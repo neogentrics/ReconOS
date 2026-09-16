@@ -61,7 +61,13 @@ def reach(entry):
     return host, seen
 
 
-ENTRIES = ['recon_fs_write', 'recon_fs_append', 'recon_fs_mkdir']
+# The entry points to walk from. Given on the command line, because the
+# interesting question changes: "what does a program that writes a settings
+# file need" and "what does a program that draws a themed window need" have
+# different answers, and hard-coding one of them is how this tool came to give
+# a confident wrong answer on 16 September.
+ENTRIES = sys.argv[1:] or ['recon_fs_write', 'recon_fs_append',
+                           'recon_fs_mkdir']
 everything = set()
 for e in ENTRIES:
     if e not in bodies:

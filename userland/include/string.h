@@ -59,4 +59,19 @@ void *memmem(const void *haystack, size_t haystack_length,
 char *strcasestr(const char *haystack, const char *needle);
 char *strncat(char *to, const char *from, size_t length);
 
+/*
+ * What an errno value means, in words.
+ *
+ * It lives in `libc/errno.c` beside the numbering it describes, and it has
+ * been written and tested since that file was; it was declared in no header at
+ * all, so every one of the desktop's forty-three call sites was reaching it by
+ * implicit declaration -- which C11 does not allow, and which the freestanding
+ * build reported the moment `recon_fs.c` was offered to it.
+ *
+ * Returns a pointer into static storage. That is what `strerror` has always
+ * been and is why `strerror_r` exists; the note in `libc/errno.c` says when it
+ * starts to matter.
+ */
+char *strerror(int number);
+
 #endif /* RECON_STRING_H */

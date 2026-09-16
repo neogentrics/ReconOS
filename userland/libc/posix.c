@@ -328,22 +328,65 @@ int closedir(DIR *dir)
  * root. `..` at the root stays at the root rather than going above it, which
  * is the containment `include/recon_fs.h` describes and is the one behaviour
  * here that is a refusal rather than a convenience.
+ *
+ * --- `into` may be NULL, and its only caller relies on that ---
+ *
+ * POSIX says a NULL second argument means "allocate what you need and hand it
+ * to me", and this used to refuse it with EFAULT. Nothing on the host noticed,
+ * because on the host this file is not the one being called.
+ *
+ * `src/recon_fs.c` passes NULL, and the comment beside that call says why at
+ * length: the host's version demands a buffer of at least PATH_MAX, a smaller
+ * one is undefined rather than truncated, and an optimised glibc **aborts the
+ * process** over it -- which it did, on the first path the function resolved.
+ *
+ * The failure that would have caused here is the quiet kind. `stays_inside`
+ * reads NULL as "not there yet", steps up to the parent and asks again, and
+ * ends at the root returning **false** -- which means "outside the
+ * filesystem". Every write, every mkdir and every open in the desktop would
+ * have been refused, with a sensible message, and nothing pointing here.
  */
 char *realpath(const char *path, char *into)
 {
 	char *out;
+	char *owned = 0;
 	size_t at = 0;
 	size_t i = 0;
 
-	if (!path || !into) {
+	if (!path) {
 		errno = EFAULT;
 		return 0;
+	}
+
+	/*
+	 * A resolved path is never longer than the one it came from -- every
+	 * rule below either copies a component or removes one, and none adds a
+	 * character that was not there -- so the input's length plus a
+	 * terminator is enough, and there is no second pass to measure what it
+	 * will be. The extra byte is slack over that proof, not part of it.
+	 *
+	 * **This is an argument and not a test, deliberately**, because nothing
+	 * in this tree can test it: a mutation shortening this allocation by
+	 * the terminator survives the plain build, a full sanitized run and the
+	 * heap audit alike -- the allocator aligns to 16, so for most lengths
+	 * there is no fault at all, and where there is one it lands in free
+	 * space rather than on a neighbour. `test_libc_posix.c` says the same
+	 * thing beside the checks that look like they cover this and do not.
+	 */
+	if (!into) {
+		owned = malloc(strlen(path) + 2);
+		if (!owned) {
+			errno = ENOMEM;
+			return 0;
+		}
+		into = owned;
 	}
 
 	if (path[0] != '/') {
 		/* Every path in this system is absolute; there is no working
 		 * directory to resolve a relative one against. See
 		 * <unistd.h> on why `getcwd` is not declared at all. */
+		free(owned);
 		errno = EINVAL;
 		return 0;
 	}

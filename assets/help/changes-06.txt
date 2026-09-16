@@ -1,86 +1,67 @@
-The kernel has had SYS_KILL, SYS_SIGACTION, SYS_SIGMASK and
-SYS_SIGRETURN since before the desktop could compile for it at all. Nothing
-in userland/ could reach them.
+The freestanding check had stopped checking, and I broke it.
 
-userland/include/signal.h and userland/libc/signal.c are the two halves the
-desktop asks for: sending one — End Task is kill(pid, SIGTERM) and the
-second press is SIGKILL — and saying what to do about one, which is
-recon_error.c installing a handler for the four faults that mean the system
-stopped, writing a code somebody can read, and letting the default handler
-finish the job.
+scripts/check-userland.sh builds its compile line across ten continued lines,
+and two versions ago I put explanatory comments *inside* that continuation. A
+# after a line continuation ends the command: the shell joins the lines,
+tokenises, and everything from the comment onwards runs as commands of its own.
 
-### The restorer is the whole of the difficulty
+    ./scripts/check-userland.sh: line 260: -isystem: command not found
 
-SYS_SIGACTION refuses a handler without one, and the kernel's comment says
-why: *"a handler with nowhere to return to runs once and then executes
-whatever follows it in memory."*
+So for three versions this check compiled without -Werror, without
+-DRECONOS_VERSION, and without third_party on the path, while its output
+said it had used all three. Every flag after the first comment was silently
+gone.
 
-So the library has to build one, and it has to be machine code — there is no
-C for "return through a system call". Two instructions per architecture, in
-a top-level __asm__ block rather than a naked function, because naked is
-not available everywhere and a function that merely *looks* empty still gets a
-prologue that would run first.
+### The answer it gave was right, and that is luck rather than a defence
 
-It is not in signal.c, and the layering is what said so. internal.h
-deliberately does not pull in recon.h — the library talks to recon_sys_*,
-not to the raw calls — so signal.c could not see SYS_SIGRETURN and the
-build stopped. The restorer belongs with the system calls: its entire content
-*is* a system call, libc/syscalls.c is the file that has them, and it is the
-file hostsys.c replaces wholesale on a host. Which also answers what the
-host does: it provides one that aborts, because reaching it would mean a
-handler returned through a frame SYS_SIGRETURN did not write.
+The file list is hand-maintained and built from try_thirdparty.sh, a sweep
+that spells its flags on one line — so the files it added were measured
+properly even while the check was not measuring anything much. Re-running with
+the continuation fixed: 55 of 55, unchanged.
 
-The number in that assembly is checked by the compiler. A literal in an
-__asm__ block is exactly the kind of hand-written syscall number
-scripts/check-syscall-numbers.py exists to police and cannot see, so a
-_Static_assert holds it against the enum. If the numbers shift, the file
-stops building rather than returning into the wrong call.
+Two instruments, and only the second one was intact. That is the whole
+reason this was findable, and it is not an argument for having one.
 
-### 30 checks, against the host's
+The comments are above the command now, with the trap written where the next
+person will be adding a flag.
 
-hostsys.c answers the three primitives with POSIX kill and sigaction, so
-a handler installed through ReconOS's signal() is installed with the real
-delivery machinery underneath: raising the signal has to actually run the
-handler, in a real process, at a real moment. Twice, because a handler that
-runs once and then does not is what a missing re-arm looks like.
+### And two real gaps found on the way there
 
-And the differences are held to on purpose:
+The library had no <limits.h>. Two vendored headers include it, the
+compiler's own chains to syslimits.h, and with -nostdinc there is nothing
+to chain to — *"no include path in which to search for limits.h"*. That is not
+the vendored code being awkward: a C library provides <limits.h> and this
+one did not.
 
-- SIGKILL is refused here rather than passed down. The kernel refuses it
-  too — that is the point of one signal that cannot be caught — and refusing at
-  this end means the same errno whichever side says no.
-- Signal zero is refused, not used as POSIX's "does this process exist"
-  probe. The kernel takes a signal to deliver and this is not one.
-- The previous handler is what this library last installed, because
-  SYS_SIGACTION answers whether it accepted a change and not what was there
-  before. Stated in the header, and held by four checks.
+Every value in it is one of the compiler's own predefined macros rather than a
+number typed in, so the header cannot disagree with the compiler it is compiled
+by — which is the failure mode a hand-written one has, and it is silent. The
+minimums are (-MAX - 1) rather than literals, because -2147483648 is not
+an int: it is 2147483648 negated, which does not fit, so it promotes and
+changes the type of every comparison it takes part in. The same trap the tree
+already has written down about (int)~0U >> 1.
 
-What the suite cannot reach is the restorer — glibc has its own and
-hostsys.c drops ours, so every check passes whether that assembly is right or
-wrong. Written into both files rather than left to be assumed: a green suite
-over signals reads like coverage of signals, and this one covers everything
-except the part that is hardest to get right. What settles that is a program
-in ring 3, the same way the socket claim was settled.
+PATH_MAX is 1024, this system's, deliberately not Linux's 4096 — a difference
+that has bitten this project before, in recon_fs.c's note about an optimised
+glibc aborting the process over a short realpath buffer. 29 checks against
+the host's, because a header of nothing but macros looks like the one file
+that cannot be wrong and is the opposite: a wrong limit is silent.
 
-### And _exit, which is the one a handler may call
+And third_party was being treated as ours. With -I the compiler holds
+vendored headers to the project's warnings, and -Werror then refused
+src/recon_ocr_match.c because stb_truetype.h defines two functions that
+file does not call. -isystem is the mechanism that exists for this and is
+what THIRD_PARTY.md already says those files are.
 
-exit here runs no atexit handlers and flushes no streams, so today the two do
-the same thing. Written as its own function anyway, so that when there *is*
-something for exit to run, adding it does not silently add it to the one
-signal handlers are allowed to use.
+### 53 of 80 became 55
 
-### Two files left off the list on purpose
+recon_ocr_match.c and recon_stb.c, both of which had been failing for
+reasons that were not about ReconOS at all.
 
-52 of 80 became 53, not 55, and the two that did not go on are the point.
-
-Both would compile if handed a header. Compiling is not what the check
-asks. It asks whether a file could *run* on ReconOS, and a file that builds
-because it was given a declaration for something this system answers with a
-refusal has a worse answer than one that does not build — it looks ready.
-
-| file | what it wants | why giving it that would be wrong |
-|---|---|---|
-| recon_control.c | <sys/time.h> for struct timeval | it uses it with setsockopt(SO_RCVTIMEO), and this library refuses every setsockopt option. The timeout exists to stop a peer that connects and says nothing from freezing the thread drawing the desktop. Compile it and the freeze comes back with nothing saying so. |
-| recon_procinfo.c | sysconf(_SC_CLK_TCK) | to divide numbers it read out of /proc. There is no /proc here; the file is a Linux scraper top to bottom, and it is on the KERNEL-WANTS list as *Processes*, not on this one. |
+recon_codec.c is the one that did not make it: with <limits.h> it got
+further and now wants <sys/mman.h>, because minimp3_ex.h maps files into
+memory to read them. That is a real dependency and a different question — this
+kernel has SYS_MAP, but what that vendored header wants it for is file
+loading, which ReconOS does another way.
 
 ---

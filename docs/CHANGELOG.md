@@ -9,6 +9,89 @@ way for the two to disagree.
 
 ---
 
+## v0.4.53 — the desktop links, and one symbol is missing
+
+A program that reads its theme off the disk, fills a screen, frames a window,
+writes text in it and makes a directory now **links against ReconOS and nothing
+else** — 146,768 bytes, and the only symbol it cannot resolve is **`stat`**.
+With `stat` stubbed it links with zero undefined symbols, which is how we know
+`stat` is the last thing missing rather than the first.
+
+`src/recon_fs.c` is the 57th source to compile with no Linux under it, and it
+is the one the whole port was waiting on.
+
+### What was actually in the way, which was not what the file said
+
+`docs/KERNEL-WANTS.md` described this as eleven symbols over thirty-one call
+sites. Handing the file to the freestanding compiler rather than reading about
+it turned up **four things**, and **two of them were already written**:
+
+| gap | what was really wrong |
+|---|---|
+| `strerror` | implemented in `libc/errno.c`, declared in no header — all 43 desktop call sites were reaching it by implicit declaration |
+| `realpath` | implemented in `libc/posix.c`, declared in no header |
+| `rename` | no system call; now declared-and-not-defined, the treatment `sys/stat.h` already gives `stat` |
+| `O_NOFOLLOW` | not defined |
+
+`O_NOFOLLOW` is defined as **POSIX's real bit and not as 0**, which compiles
+identically today and is the whole point: ReconOS has no symbolic links, so 0
+would work — and would silently disarm every caller asking for that protection
+on the day links arrive, with nothing in any source changed to notice.
+
+### And one fault underneath, of the quietest kind
+
+`realpath(path, NULL)` returned **EFAULT**. It compiles, it links, it has no
+undefined behaviour, and the function returns cleanly — it just refuses.
+
+`recon_fs.c`'s `stays_inside` passes NULL, reads NULL as *"not there yet"*,
+steps up to the parent and asks again, and ends at the root returning **false**
+— which means *"this path is outside the filesystem"*. So on ReconOS **every
+write, every mkdir and every open in the desktop would have been refused**,
+each with a sensible message, and nothing anywhere pointing at this function.
+
+The caller was right: NULL is POSIX, and the comment beside that call already
+explains why it passes NULL rather than a buffer — the host's version demands
+PATH_MAX, a smaller buffer is undefined rather than truncated, and an optimised
+glibc **aborts the process** over it, which it once did.
+
+---
+
+### The correction: `stat` is the wall after all
+
+**v0.4.52 said it was not, and that was wrong.** How it went wrong is the part
+worth keeping.
+
+An earlier linker probe came back with three unresolved symbols —
+`recon_fs_write`, `recon_fs_append`, `recon_fs_mkdir`. Those three were read as
+*what a desktop needs from `recon_fs.c`*, a call graph was walked from them, no
+`stat` was found, and the conclusion went into the change log, the board, the
+kernel session's inbox and this file.
+
+**Every step of that was sound and the premise was not.** Those were the
+symbols one particular link happened to leave unresolved, not the entry points
+a desktop uses. `recon_theme.c` and `recon_fonts.c` between them call
+**twelve** — `read`, `write`, `append`, `list`, `exists`, `remove`, `copy`,
+`mkdir`, `join`, `resolve`, `unique_name`, `last_error` — and several reach
+`stat`. A correct walk from a false premise is a confident wrong answer.
+
+The fix is not "check harder". **A linker answers this question directly and a
+call-graph walk answers it by inference**, so the walk belongs downstream,
+explaining an answer rather than producing one. `scripts/link-desktop.sh` is
+that linker, and it said `stat` in one line.
+
+`scripts/fs-reachable.py` survives as the explanation of *which* paths reach
+`stat`, and it takes its entry points on the command line now, because
+hard-coding three of them is how it gave the wrong answer.
+
+**Two flags matter, to this and to any real ReconOS link.**
+`-ffunction-sections` with `--gc-sections`: a linker pulls a whole object out
+of an archive, so without them a program that draws would also need `rename`,
+`unlink`, `chmod` and the rest of a file manager. With them it needs what it
+uses — and the difference is measured rather than assumed, because the probe
+runs both ways.
+
+---
+
 ## v0.4.52 — a form can carry a file
 
 The file picker, which was the rest of `form-gaps`. A page that asked for a
