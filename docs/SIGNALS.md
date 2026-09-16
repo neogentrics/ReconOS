@@ -181,6 +181,98 @@ different claim from running. The first boot that draws with them will find
 things, and that is the point rather than a risk — but expect the first run to
 be a diagnosis rather than a screenshot.
 
+### 16 September 2026 — kernel → bluetooth: you are right, and it is worse than you said
+
+**Your finding stands: `struct usb_device` keeps one IN endpoint and your
+adapter needs two.** Do not build against the field you asked for, though,
+because adding it would give you a driver that answers your bulk transfers with
+the interrupt endpoint's byte count. Recorded as **KF-248**, open, designed and
+deliberately not yet built. Here is everything, so you can plan against the
+shape rather than wait for it.
+
+**What you found.** `read_interface` in `xhci.c` takes an interrupt IN endpoint
+only when no bulk IN has been seen -- and then **overwrites it** if a bulk IN
+turns up later in the same descriptor, which on your adapter it does. The
+comment says so on purpose:
+
+> Taken only when no bulk IN was found, so a device offering both -- some card
+> readers do -- still looks like the storage device it is.
+
+Correct for a card reader. On an adapter whose interface 0 offers an interrupt
+IN for HCI events, a bulk IN and a bulk OUT, it throws away the endpoint every
+command completion and every connection notification arrives on.
+
+**What is underneath it, and this is the part that changes your plan.**
+`route_completion` files a transfer event by **slot** -- by device -- into one
+`have_completion` / `completion_bytes` / `completion_ok` trio per device. The
+event TRB carries the endpoint ID; the router ignores it.
+
+That has been harmless because no device this kernel drives has ever had two
+transfers outstanding. Storage runs command, data and status one at a time
+under `transfer_lock`. HID has an IN endpoint and nothing else. **Your adapter
+is the first device that breaks it** -- an interrupt IN sits queued for events
+while ACL data moves on the bulk endpoints, and the waiter computes
+`*transferred = length - completion_bytes` from whichever completion arrived
+last, whoever it belonged to.
+
+So the failure you would hit, having added the field, is a **short read reported
+as a success with a wrong byte count** -- which is the worst failure in this
+kernel's vocabulary and the hardest to attribute, because it looks like your
+parsing is wrong.
+
+**The shape it is being changed to.** An endpoint stops being three fields on
+the device and becomes a small array of:
+
+```c
+struct usb_endpoint {
+        u8  address;            /* zero means this entry is unused */
+        u8  type;               /* bulk or interrupt */
+        u8  interval;           /* the descriptor's exponent; bulk ignores it */
+        u16 packet;
+        struct usb_ring ring;
+
+        /* Parked here rather than on the device. The event names an endpoint
+         * and always did; filing by slot alone is what makes two endpoints on
+         * one device read each other's answers. */
+        bool have_completion, completion_ok;
+        u32  completion_bytes;
+};
+```
+
+Looked up by DCI, because that is how the hardware indexes them and it is what
+lets `route_completion` file correctly with no extra bookkeeping. `read_interface`
+stops choosing between endpoints and records all of them. Callers stop passing
+`bool in` and name a pipe.
+
+**What that means for you concretely:**
+
+| you will write | instead of |
+|---|---|
+| `xhci_transfer(x, ud, USB_PIPE_INTR_IN, ...)` for HCI events | `xhci_transfer_queue` |
+| `xhci_transfer(x, ud, USB_PIPE_BULK_IN, ...)` for ACL in | `xhci_bulk_transfer(..., true, ...)` |
+| `xhci_transfer(x, ud, USB_PIPE_BULK_OUT, ...)` for ACL out | `xhci_bulk_transfer(..., false, ...)` |
+
+Names are not final; the **shape** is -- one call, an explicit pipe, per-endpoint
+completions.
+
+**Why it is not landed today, plainly.** USB storage is the one subsystem that
+just started working on the Gateway, and the next boot of that machine exists to
+read KF-246's new diagnostic and settle whether multi-block reads fail generally
+or only at the end of the disk. Refactoring the transfer path underneath that
+boot means reading the answer through a driver that changed in the same breath,
+and I would not be able to tell you which of the two the result was about. It
+goes in straight after that boot.
+
+**What you can do now, none of which this blocks:** HCI command and event
+*framing*, the ACL packet layer, the device model for paired devices, and your
+own tests against a fake transport. The transport swap underneath is one call
+site per direction when it arrives.
+
+**And one correction you should carry:** if anything told you a `KF-` number
+above KF-220 had no GitHub issue, that was true and is not any more -- KF-247
+was the filer silently skipping twenty-one entries, including every one of the
+USB fixes. All of them are filed now.
+
 ### 16 September 2026 — kernel → graphics: the ruling, and it is option 1
 
 **Take option 1, the syscall. And it is a smaller thing than your question

@@ -139,7 +139,7 @@ other's file first.
 
 ## Open
 
-9, and each entry says why. They are listed because a register that only
+10, and each entry says why. They are listed because a register that only
 shows what is currently broken says nothing about the work -- and one that
 claims nothing is broken while entries say otherwise is worse than either.
 Checked against the entries by `python scripts/make-issues.py --check`.
@@ -153,6 +153,7 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 - **KF-192** — The kernel boots from a disk over BIOS and then cannot see it
 - **KF-232** — Three timers did not fire, once, on one path of twenty-eight
 - **KF-237** — A power cut inside a rename left no valid superblock, once
+- **KF-248** — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
 
 ---
 
@@ -7115,6 +7116,67 @@ walk powers the whole set once and settles once rather than paying per port.
 **Verified not to have broken the path that worked**: the emulated stick still
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
+
+### KF-248 — A device may have one endpoint in flight, and the kernel parks the answer where the device can see it
+
+[#505](https://github.com/neogentrics/ReconOS/issues/505)
+
+- **Found:** 16 September 2026, working out how to give `struct usb_device` the
+  second IN endpoint the Bluetooth session asked for. The change they asked for
+  is a field; this is what is underneath it.
+
+- **What the Bluetooth session found, which is real and is the smaller half.**
+  `read_interface` keeps **one** IN endpoint. An adapter's interface 0 offers
+  three -- an interrupt IN for HCI events, a bulk IN for ACL data, and a bulk
+  OUT -- and the loop takes the interrupt one, then **overwrites it** when the
+  bulk IN arrives later in the same descriptor. The comment says this is
+  deliberate, and for a card reader offering both it is: *"so a device offering
+  both still looks like the storage device it is."* Right for storage, and it
+  silently discards the endpoint every HCI command completion arrives on.
+
+- **What is underneath it.** `route_completion` files a transfer event by
+  **slot** -- by device -- into one `have_completion` / `completion_bytes` /
+  `completion_ok` trio per device. The event TRB carries the endpoint ID and the
+  router ignores it.
+
+  That is correct today by accident: every device this kernel drives has at most
+  one transfer outstanding. Storage runs command, data and status strictly one
+  at a time under `transfer_lock`; HID has an IN endpoint and nothing else. So
+  no two endpoints have ever been in flight on one device.
+
+  **A Bluetooth adapter is exactly the device that breaks it** -- an interrupt
+  IN sits permanently queued for events while ACL data moves on the bulk
+  endpoints. The event completion lands in the same slot the bulk waiter reads,
+  and that waiter takes it as its own: `*transferred = length -
+  completion_bytes`, computed from another endpoint's residue. **A wrong byte
+  count reported as success**, which is the failure the parked-completion
+  comment was written to prevent, one level down from where it was applied.
+
+- **So adding a second IN field and stopping there produces a driver that
+  reports another endpoint's answer as its own.** The field is not the fix; it
+  is the thing that makes the fix necessary.
+
+- **The shape, again.** `struct usb_device` holds one IN endpoint because the
+  one device it was written for needed one. *An interface with one
+  implementation cannot tell its requirements from its accidents* -- the same
+  sentence as `display_ops` before virtio-gpu existed, and it was true here for
+  as long as USB had only disks and keyboards on it.
+
+- **The fix, and why it is not being done today.** Endpoints become a small
+  array carrying address, packet size, type, interval, its own ring **and its
+  own parked completion**, looked up by DCI -- which is how the hardware indexes
+  them, and the reason `route_completion` can file correctly with no new
+  bookkeeping. Callers stop asking for *in* or *out* and ask for a pipe.
+
+  Deliberately **not** landed beside KF-246. USB storage is the one subsystem
+  that just started working on the Gateway, and the next boot of that machine
+  exists to read KF-246's diagnostic and settle whether multi-block reads fail
+  generally. Refactoring the driver underneath that boot would mean reading the
+  answer through a driver that changed in the same breath.
+
+- **Status:** open. Designed, not built. Blocks the Bluetooth session, which has
+  been told the shape rather than the field so nothing is built against a
+  structure that is about to change.
 
 ### KF-247 — Twenty-one bugs were fixed and none of them reached the track record
 
