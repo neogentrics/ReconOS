@@ -103,6 +103,68 @@ Both details are in NW-008.
 Also: `make ARCH=aarch64` builds, and `make check-portable` says `core/ is
 clean`. Both drivers are in `core/` and contain nothing about a machine.
 
+### The matrix, on the merged tree
+
+`scripts/verify-kernel.sh` run after merging `origin/kernel` at `95fd008`, so
+this is a verdict on the tree you would be merging and not on the base this
+branch started from:
+
+```
+1578 self-tests across every path, no failures (0 skipped).
+```
+
+Green across every section — both architectures and all their boot paths,
+randomness, partition tables, durability, swap, reconfs, foreign filesystems,
+the installer and integrity. Exit 0. The tree is byte-clean afterwards;
+`git status` is empty.
+
+### The Realtek's receive loop now runs, which it never had
+
+`r8169_poll` had never executed an instruction. The rig emulates no Realtek
+gigabit part, so the driver was written carefully and proved by nothing — and
+NW-007 had already measured that *even booting with the card* would miss the
+fault it is most likely to have.
+
+`r8169_self_test` drives **the real receive loop** against a page of ordinary
+memory standing in for the register window, with the test writing the
+descriptor fields the silicon would have written. Nothing is lifted out into a
+testable copy: the objection that kept NW-007 open was precisely that a test
+proving a copy leaves the original unproven.
+
+Five faults introduced on purpose, all five caught:
+
+| break | test | and the boot said |
+|---|---|---|
+| the frame check sequence not subtracted | FAIL | lease ✓ ping ✓ |
+| end-of-ring taken from the card, not the index | FAIL | lease ✓ ping ✓ |
+| the short-length guard removed | FAIL | lease ✓ ping ✓ |
+| a frame the card marked bad accepted | FAIL | lease ✓ ping ✓ |
+| half of a split frame accepted | FAIL | lease ✓ ping ✓ |
+
+**The right-hand column is the point.** Every one of those five boots got a
+DHCP lease and a ping answered in about 300 microseconds. Booting catches none
+of them, so this is coverage of ground a running machine cannot reach.
+
+**One of the five found a fault in the test, not the driver.** The assertions
+measured `rx_bytes` alone — and removing the short-length guard turns a
+four-byte descriptor, a check sequence and nothing else, into a frame of length
+**zero** that is passed up the stack. Zero bytes is also what a correct refusal
+produces, so the test stayed green while the driver did the wrong thing. It
+counts frames as well as bytes now. Found by breaking the guard and watching
+nothing happen.
+
+**And one break was wrong rather than uncaught**, which is worth separating
+from that: or-ing `DESC_OWN` into a descriptor instead of rebuilding it does
+*not* lose the end-of-ring bit, because this driver re-derives that bit from
+the index every time. The break that loses it is taking the bit from what the
+card left — which is what Linux's driver does — and the simulated card here
+clears it deliberately, so that the difference is testable at all.
+
+**What it cannot prove, and the test says so at its head:** that the real chip
+behaves the way the simulation pretends. Register offsets, the reset sequence
+and the meaning of every bit are checked by running on silicon and nowhere
+else, which for this card has not happened.
+
 ### What is unfinished, stated plainly
 
 **The r8169 has never touched silicon.** It compiles on both architectures and
@@ -142,13 +204,17 @@ of them was fixed here:
   and nothing above them consults `net_device.link`, so a machine whose cable
   is pulled still believes it has a route.
 
-And one that is nobody's fault and has no check in front of it:
+And one that is nobody's fault, now narrower than when it was opened:
 
 - **NW-007** — a receive length four bytes **too short** loses the DHCP lease
   and is caught. Four bytes **too long** produces a lease and a ping reply that
   no instrument in this kernel can tell from correct. Measured both ways. Too
   long is what forgetting to strip the frame check sequence looks like, so the
   boot test catches the mistake nobody makes and misses the one they do.
+
+  `r8169_self_test` closes that for the Realtek's receive path, as above. It
+  **stays open** because the Intel has no equivalent and neither driver's
+  *transmit* path is checked by anything except a network that answers.
 
 ---
 
