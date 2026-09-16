@@ -11,11 +11,12 @@
  *
  * --- What is not, and why each one is somebody's decision rather than mine ---
  *
- * **No report-descriptor parser.** `usb_hid.c` wants one too and says so:
- * *"the way past them is a report-descriptor parser, which is its own piece of
- * work and not a variation on this one."* It is still true and it is still its
- * own piece of work. Without it, only boot-protocol devices can be read, and
- * unlike USB a Bluetooth device is not obliged to offer boot mode.
+ * **No report-descriptor parser here** -- it is `core/hid_report.c`, written
+ * as its own piece of work exactly as `usb_hid.c` said it would have to be,
+ * and it names no transport because a descriptor is the same bytes on either
+ * one. It answers `uses_report_id` below, which is the argument this file
+ * refuses to guess at. What it does not answer yet is which bits are the
+ * buttons and which byte is X; that is its second pass.
  *
  * **No SDP.** Service Discovery is how a device's PSMs and its report
  * descriptor are found in the first place, and it is another protocol on

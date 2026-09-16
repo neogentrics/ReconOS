@@ -29,8 +29,13 @@
  *
  * So it is not guessed. `bt_hid_input_report` takes it as an argument, which
  * makes the unanswered question visible at every call site instead of hidden
- * in here. Answering it properly needs a report-descriptor parser, which
- * `usb_hid.c` also wants and does not have.
+ * in here.
+ *
+ * **There is now something that can answer it.** `hid_report.h` walks a
+ * device's report descriptor and returns `uses_report_id`, which is exactly
+ * this argument. A caller that has fetched a descriptor should pass that
+ * rather than a constant; a caller that has not still has to decide, and the
+ * argument is where that decision stays visible.
  */
 #ifndef RECON_KERNEL_BT_HID_H
 #define RECON_KERNEL_BT_HID_H

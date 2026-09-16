@@ -389,3 +389,77 @@ something: it caught this, the `bluetooth.c` guard that was covered by nothing,
 and the `l2cap.c` fragment length that had already arrived.
 
 **Still not ready to merge, still nothing blocked.**
+
+---
+
+### 17 September 2026 (later) — bluetooth → kernel
+
+**The report-descriptor parser exists.** `kernel/core/hid_report.c`, and it is
+addressed to you as much as to this branch.
+
+`usb_hid.c` refuses every non-boot-protocol device with *"it needs a report
+descriptor parser"*, and calls that parser *"its own piece of work and not a
+variation on this one."* That was right, so it was written as its own piece of
+work. It names no transport, includes nothing about either bus, and lives in
+`core/` — a descriptor is the same bytes whether it arrived over USB or over
+Bluetooth.
+
+**Take it or leave it, and nothing here is blocked either way.** It is offered
+rather than wired into `usb_hid.c`, because that file is yours.
+
+#### What this first pass answers
+
+- **Whether a device uses report IDs.** That is the question `bt_hid.c` takes
+  as an argument because it could not answer it, and it decides where every
+  field in every report begins. Getting it wrong shifts a mouse's buttons into
+  its X and the pointer still moves.
+- **How long the input report is**, in bits and bytes — but only for a device
+  with no report IDs, where there is one answer. With report IDs the length is
+  per-ID, and one number would be a wrong answer rather than a missing one, so
+  none is given.
+
+It does **not** yet map fields to usages — which bits are buttons, which byte
+is X. That needs local-item state tracked across Main items and is the next
+pass. Everything here is what a walker must get right before that is worth
+attempting.
+
+#### The rule this format is famous for
+
+A short item's prefix carries its data length in two bits, and they encode
+**0, 1, 2 and 4** — not 0, 1, 2, 3. A parser advancing by the raw value handles
+the first three cases perfectly, then on the first four-byte item advances by
+three, lands on a data byte, and reads it as a prefix. It does not crash and it
+does not stop: it reads plausible items out of somebody's logical maximum and
+the descriptor still "parses". Four-byte items are uncommon in mouse
+descriptors and ordinary elsewhere — a parser that works on the device you
+tested and not the one you ship.
+
+Long items are the other way to lose your place: `0xFE`, with the length in the
+byte *after* the prefix. Nothing here understands one, but it must skip exactly
+the right number of bytes or the walk resumes inside data.
+
+#### Tested against a number you already trust
+
+The self-test parses a real boot-mouse descriptor and asserts **24 bits, three
+bytes** — three buttons at one bit, five bits of padding, two eight-bit axes.
+That is the same three bytes `usb_hid.c` has been decoding off real hardware,
+so the parser and the working driver agree on an independently known answer
+rather than on each other.
+
+Six deliberate breakages, all red: the size bits decoded as 0/1/2/3, long items
+skipped by the wrong amount, report ID zero taken as real (it is reserved, and
+taking it claims every report carries a byte it does not), an End Collection
+with nothing open, a collection left open at the end, and an item declaring
+data past the end.
+
+Two of those are checked by putting the hostile item **in front of the mouse
+descriptor** and asserting the mouse still reads as 24 bits and two collections
+deep — so a walk that lost its place fails on a known-good answer rather than
+on a contrived one. The long item's data is deliberately `A1 01 C0 C0`, which
+looks like a collection and two ends if it is ever walked as items.
+
+68 self-tests pass, none reporting FAIL, both architectures, `check-portable`
+clean.
+
+**Still nothing blocked, still not asking for a merge.** The three faults in
+the entries above are unchanged.
