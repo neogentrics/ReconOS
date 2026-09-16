@@ -32,6 +32,7 @@
 #include <recon/kernel/console.h>
 #include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
+#include <recon/kernel/intel_display.h>
 #include <recon/kernel/kstring.h>
 #include <recon/kernel/pci.h>
 #include <recon/kernel/vm.h>
@@ -408,9 +409,30 @@ bool display_set_mode(u32 width, u32 height)
 		return false;
 	}
 
+	/* **A mode that cannot be asked for was refused, and is counted as
+	 * refused.**
+	 *
+	 * This returned false without touching the counter, which is GX-004
+	 * arriving from the other direction: `modes_refused` is the number of
+	 * times a mode was asked for and not established, and "there is no way
+	 * to ask" is one of those. The self-test checks that an oversized mode
+	 * is *counted* as refused, so a display that cannot be set failed it on
+	 * a kernel behaving perfectly (GX-006).
+	 *
+	 * Said once rather than on every attempt. Nine identical lines while a
+	 * mode ladder works its way down tell nobody anything the first did
+	 * not. */
 	if (!primary->ops || !primary->ops->set_mode) {
-		kprintf("display: %s cannot be told what mode to be in\n",
-			primary->name);
+		static bool said;
+
+		if (!said) {
+			kprintf("display: %s cannot be told what mode to be in, "
+				"so the mode it has is the one it keeps\n",
+				primary->name);
+			said = true;
+		}
+
+		modes_refused++;
 		return false;
 	}
 
@@ -526,8 +548,24 @@ void display_init(void)
 	const struct boot_info *info = boot_info();
 	unsigned i;
 
-	for (i = 0; i < pci_device_count(); i++)
-		display_attach(pci_device_at(i));
+	/* Every display driver is offered every function, and each answers for
+	 * its own devices. The order carries no meaning: `display_attach` takes
+	 * the Bochs adapter and nothing else, `intel_display_attach` takes an
+	 * Intel display engine it has an entry for and nothing else, and both
+	 * decline quietly.
+	 *
+	 * virtio-gpu is not here: it is found during the bus walk, because it
+	 * has to be probed as a virtio device before anyone can tell it is a
+	 * display at all. That is a difference between transports rather than
+	 * between displays. */
+	for (i = 0; i < pci_device_count(); i++) {
+		const struct pci_device *pd = pci_device_at(i);
+
+		if (display_attach(pd))
+			continue;
+
+		intel_display_attach(pd);
+	}
 
 	if (!primary)
 		return;
@@ -543,6 +581,33 @@ void display_init(void)
 	if (info->fb.width && info->fb.height && info->fb.base &&
 	    info->fb.format != FB_FORMAT_NONE) {
 		primary->mode = info->fb;
+		return;
+	}
+
+	/* **A display that cannot be told anything keeps what it has.**
+	 *
+	 * The ladder below asks for nine sizes in turn. On a backend with no
+	 * `set_mode` that is nine refusals and nine lines, ending in a summary
+	 * blaming the adapter's memory -- "would not take any of the 9 sizes
+	 * this driver knows -- it has 256 MB" -- for a display that was never
+	 * asked anything (GX-006). The memory was not the reason and the
+	 * adapter did not refuse.
+	 *
+	 * This is the shape a display inherited from firmware has: the mode is
+	 * whatever the firmware left and there is no way to change it. It is
+	 * what an Intel adapter will be here before there is modesetting for
+	 * it, and it is a third shape this interface had never been shown. */
+	if (!primary->ops || !primary->ops->set_mode) {
+		if (primary->mode.width && primary->mode.height) {
+			kprintf("display: %s cannot be told a mode, and is "
+				"already in %ux%u\n", primary->name,
+				primary->mode.width, primary->mode.height);
+			goto adopt;
+		}
+
+		kprintf("display: %s cannot be told a mode and firmware left "
+			"none, so this machine has an adapter and no screen\n",
+			primary->name);
 		return;
 	}
 
@@ -646,6 +711,19 @@ void display_print_summary(void)
 	if (!primary) {
 		kputs("  display      : none -- no adapter this kernel can "
 		      "drive\n");
+		return;
+	}
+
+	/* **An adapter with no mode is not an adapter in a mode of 0x0.**
+	 *
+	 * This printed "0x0, pitch 0, RGBA" for a display that had been found
+	 * and never configured, which reads like a mode somebody chose -- and
+	 * RGBA is not even a guess, it is what the enum happens to be at zero
+	 * (GX-006). A display in that state is normal on a machine whose
+	 * firmware left no framebuffer and whose adapter cannot be told one. */
+	if (!primary->mode.width || !primary->mode.height) {
+		kprintf("  display      : %s, found and not in any mode\n",
+			primary->name);
 		return;
 	}
 

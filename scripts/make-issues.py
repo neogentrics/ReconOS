@@ -130,7 +130,7 @@ AREA = {
     # faults in the display layer and the drivers under it, which is what that
     # label already means on the desktop side.
     'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
-    'GX-004': 'display', 'GX-005': 'display',
+    'GX-004': 'display', 'GX-005': 'display', 'GX-006': 'display',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',

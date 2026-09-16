@@ -50,6 +50,7 @@
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
+#include <recon/kernel/intel_display.h>
 #include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
@@ -232,6 +233,7 @@ void kmain(void)
 	input_init();
 	block_print_summary();
 	display_print_summary();
+	intel_display_print_summary();
 	virtio_gpu_print_summary();
 	suspend_print_summary();
 
@@ -342,6 +344,14 @@ void kmain(void)
 	 * asks the device instead. */
 	kprintf("  a present that lands : %s\n",
 		virtio_gpu_self_test() ? "pass" : "FAIL");
+
+	/* The recognition table for real graphics hardware, checked on machines
+	 * that have none -- which is every machine in this matrix. What it
+	 * refuses matters more than what it claims: the ids it must decline are
+	 * the host bridge sitting beside the graphics in the same package, and
+	 * Intel display engines of generations this kernel has no code for. */
+	kprintf("  graphics it knows  : %s\n",
+		intel_display_self_test() ? "pass" : "FAIL");
 
 	/* After the sweep above, which sets seven modes in turn and moves the
 	 * framebuffer each time. A program's mapping is of one physical address;

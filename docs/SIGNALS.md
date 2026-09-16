@@ -13,7 +13,154 @@ patch.
 
 ---
 
-## Status: ready to read, 15 September 2026
+## Status: ready to read, 16 September 2026 — second signal
+
+Branch `graphics`, now merged with `origin/kernel` at 0.2.46 (USB enumeration
+chain, KF-238 to KF-241). Both conflicts were mine to resolve and are noted at
+the bottom.
+
+**Everything in the first signal below still stands and is unchanged.** This
+adds a third backend and one more interface fault.
+
+---
+
+## What landed since
+
+**`core/intel_display.c` — Intel Gen9, identified, keeping the mode firmware
+set.** It does not set a mode, and that is a stopping point rather than an
+unfinished job.
+
+On the test laptop today the kernel reports `display : none -- no adapter this
+kernel can drive` and then draws on the panel perfectly, because UEFI set a mode
+and the handoff carried it. The screen works and the display layer does not know
+the adapter exists, so every question anybody asks it afterwards is answered
+about a machine with no display. That is what this closes.
+
+**Why there is no modesetting in it.** Gen9 modesetting is power wells, the
+DPLLs and the shared LCPLL, DDI training, AUX to the panel, eDP power
+sequencing, transcoder, pipe, plane, and Skylake watermark arithmetic — which
+produces underruns and corruption rather than an error when it is wrong. None of
+it can be exercised under QEMU, every register in it would have been written
+from memory of a specification, and the machine it would run on **has no serial
+port** (KF-214 was found by photographing the panel). A modeset written blind is
+the largest available wrong answer.
+
+---
+
+## The third shape, and what it cost the interface
+
+|  | `set_mode` | `preferred_mode` | `flush` |
+|---|---|---|---|
+| bochs | yes | no | no |
+| virtio-gpu | yes | yes | **yes** |
+| intel Gen9 | **no** | later | no |
+
+**GX-006: a display that can be read and not set failed its own self-test three
+ways** — and it was found *before* this driver existed, by making the Bochs
+adapter into that shape on purpose and booting it. One boot, not shipped:
+
+- `display_set_mode` returned false without counting a refusal, so the self-test
+  failed on a correct kernel. GX-004 from the opposite direction.
+- The mode ladder ran anyway, asked nine times, and reported *"would not take any
+  of the 9 sizes this driver knows — it has 256 MB"*. The memory was not the
+  reason and the adapter refused nothing. On the laptop that line would have sent
+  somebody looking at a 4 GB machine wondering why 256 MB was not enough.
+- The summary printed `0x0, pitch 0, RGBA` for a display in no mode at all. RGBA
+  is not a guess; it is what the enum is at zero.
+
+All three fixed in `core/display.c`. The experiment was reverted and all three
+real configurations re-checked.
+
+`flush` being null here is the **third data point for the null-means-no-such-step
+idiom, and the first from hardware** rather than an emulator: the display engine
+scans out of memory continuously, like the Bochs aperture and unlike virtio-gpu.
+
+---
+
+## What was tested, and what was shown to fail first
+
+Nothing in `intel_display.c` can be run against a Gen9 here. What *can* be, and
+runs on every boot on both architectures, is the recognition — and the refusals
+are the half that costs something, because a table that claims too much is how a
+kernel writes display registers into a host bridge.
+
+`intel_display_identify` is a pure function of four numbers, so the self-test
+feeds it devices this machine does not have: four it must claim, eight it must
+refuse — including the **Gemini Lake host bridge, which sits in the same package
+as the graphics and in the same numbering**, an Intel NIC, Gen5 and Gen12 parts
+with no entry, and the laptop's own id presented at the wrong class and at the
+wrong subclass. Plus a duplicate-id check, because a chip listed twice behaves
+exactly like a correct table until somebody edits the first copy.
+
+| check | how it was broken | what it said |
+|---|---|---|
+| `graphics it knows` | class/subclass check removed from the match | `FAIL`, naming both wrong-class refusals |
+| `graphics it knows` | `3185` dropped from the table | `3185 is in the table and was not recognised` |
+| `graphics it knows` | a duplicate id added | `1912 is in the table twice` |
+| `a mode of our own` | (GX-006 — it failed on its own, before the fix) | `an oversized mode was refused and not counted as refused` |
+
+One matrix path, asserted on the model count rather than on the word *pass*: a
+self-test that checks nothing returns true, exactly as a mode sweep that skips
+every shape reports green (KF-187).
+
+---
+
+## What is blocked, and the one thing that unblocks it
+
+**The laptop is not reachable from here.** I probed the three hosts in
+`known_hosts`; one answers SSH and is Debian 12, not Kali, and will not take the
+key. I stopped rather than trying credentials against machines unattended.
+
+So `preferred_mode` is null on this backend, and that is the one omission here
+that is *missing* rather than inapplicable. The panel's size is knowable — it is
+in the pipe's source-size register, and its real timings are in the EDID the
+panel hands over across AUX — but both need registers read from a running
+machine, and QEMU has none to read.
+
+**`scripts/read-intel-display.sh` is the unblocking step.** Boot Linux on the
+laptop, run it once, bring the output back:
+
+```
+sudo bash scripts/read-intel-display.sh > intel-gen9.txt
+```
+
+It only reads — nothing writes a register, loads a module or changes a mode. It
+reports the PCI identity (which confirms or refutes `3185` being the right entry
+for that machine), the BAR sizes (which is the first check of the 16 MB rule,
+written from a specification and never yet seen on hardware), i915's own view of
+the active pipe and plane, the connectors, the EDID as hex, and the named
+registers the next increment is written against. Every section degrades to
+saying what is missing rather than erroring; the only package it wants is
+`intel-gpu-tools`, for `intel_reg`.
+
+With that file, the driver is written against numbers and — the part that
+matters — the self-tests assert **specific expected values by name** instead of
+asserting that something was read.
+
+---
+
+## Still the open question from the first signal
+
+A program cannot ask the kernel to present what it drew. Unchanged, and still
+the thing that blocks a compositor. Options and recommendation are below; it
+needs a ruling from you and from `userland`, because it is their ABI.
+
+---
+
+## Two merge conflicts, both resolved here
+
+- **`docs/SIGNALS.md` conflicted add/add**, because the protocol puts every
+  session's file at the same path. I kept mine, which is what the protocol
+  says — but it means *every* merge from `kernel` into `graphics` will conflict
+  on this file for ever. Worth knowing; I am not proposing a change to it.
+- **`README.md` badge lines.** I initially resolved that one by taking yours
+  wholesale and silently reverted my own README edits with it; caught it by
+  grepping for them afterwards and re-applied. Recorded because the next person
+  merging these two branches will hit the same shape.
+
+---
+
+## Status: ready to read, 15 September 2026 — first signal
 
 Branch `graphics`, based on `kernel` at 33ef4ba.
 
@@ -248,6 +395,16 @@ rather than discover them:
 
 ## Next on this branch, once this is merged
 
-**Intel Gen9 on the test laptop**, as the third backend — against an interface
-that has now survived one disagreement rather than none. That is the order the
-work was planned in and I see no reason to change it.
+~~**Intel Gen9 on the test laptop**, as the third backend~~ — **started, and
+the first increment is above.** It is identified and it keeps the mode firmware
+set; it does not set one, and `scripts/read-intel-display.sh` is what has to be
+run on the laptop before it can.
+
+After that, in order:
+
+1. **`preferred_mode` on Gen9**, read out of the pipe's source-size register
+   and checked against the EDID. Needs the recon output.
+2. **The present call**, if you rule on it — it blocks a compositor and nothing
+   else.
+3. **Modesetting on Gen9**, which is the large one, and which should not start
+   until 1 has proved that reading this hardware's registers works at all.

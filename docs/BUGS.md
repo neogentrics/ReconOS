@@ -176,6 +176,102 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-006 — A display that can be read and not set failed its own self-test, three ways
+
+- **Found in** kernel 0.2.46, on 16 September 2026, **before the driver that
+  would have hit it existed.** The Intel Gen9 backend was going to be the first
+  display in this kernel that can report a mode and cannot change one — the
+  panel is lit by firmware and there is no modesetting for it yet — so the
+  question "does the display layer cope with that shape" was asked by making the
+  Bochs adapter into that shape on purpose and booting it:
+
+  ```c
+  static const struct display_ops bochs_ops = {
+          .set_mode = 0,          /* EXPERIMENT */
+  };
+  ```
+
+  Not shipped, not committed, and the answer came back in one boot:
+
+  ```
+  display: bochs-display cannot be told what mode to be in      x9
+  display: bochs-display would not take any of the 9 sizes this driver
+           knows -- it has 256 MB
+    display      : bochs-display, 0x0, pitch 0, RGBA
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+- **Was** three separate faults, all with the same root: every part of the
+  display layer assumed that a display which exists can be told a mode, because
+  both backends that existed could be.
+
+  1. **`display_set_mode` returned false without counting a refusal.**
+     `modes_refused` is the number of times a mode was asked for and not
+     established, and "there is no way to ask" is one of those. The self-test
+     checks that an oversized mode is *counted* as refused, so it failed on a
+     kernel behaving perfectly. This is GX-004 arriving from the opposite
+     direction: that one was a refusal counted in the wrong place, this one is a
+     refusal not counted at all.
+
+  2. **The mode ladder ran anyway and then blamed the hardware.** Nine sizes
+     asked for, nine identical lines, and a summary reading *"would not take any
+     of the 9 sizes this driver knows -- it has 256 MB"*. The memory was not the
+     reason and the adapter refused nothing; it was never asked. A diagnostic
+     that names the wrong cause is worse than none, because somebody will act on
+     it — and on the machine this was written for, that somebody would be
+     looking at a 4 GB laptop wondering why 256 MB was not enough.
+
+  3. **The summary printed `0x0, pitch 0, RGBA` for a display in no mode at
+     all.** That reads like a mode somebody chose. RGBA is not even a guess: it
+     is what the format enum happens to be at zero.
+
+- **Cost** nothing, and that is the point of the entry rather than a reason to
+  skip it. It was found by asking what the *next* backend would do to the
+  interface before writing it, which cost one boot — against finding it on a
+  laptop with no serial port, where the only instrument is a camera pointed at
+  the panel (KF-214).
+
+- **Fixed in** kernel 0.2.46 on `graphics`:
+
+  1. `display_set_mode` counts a display that cannot be told as a refusal, and
+     says so **once** rather than on every rung of the ladder.
+  2. `display_init` does not run the ladder on a backend with no `set_mode`. If
+     firmware left a mode it keeps it and says so; if firmware left none it says
+     the machine has an adapter and no screen, which is the honest outcome and a
+     different one from having no adapter.
+  3. `display_print_summary` says `found and not in any mode` rather than
+     inventing a mode of zero.
+
+- **Shown to fail before being believed**, and the experiment above *is* that
+  demonstration — it was run before the fix, produced the three failures, and
+  after the fix the same experiment produces:
+
+  ```
+  display: bochs-display cannot be told a mode and firmware left none, so
+           this machine has an adapter and no screen
+    display      : bochs-display, found and not in any mode
+    a mode of our own  : pass
+  ```
+
+  The experiment was then reverted, and both real backends re-checked: Bochs,
+  virtio-gpu and a machine with no display at all all still pass.
+
+- **What it says about the interface.** Three backends, three different answers,
+  and none of the differences was predicted:
+
+  | | `set_mode` | `preferred_mode` | `flush` |
+  |---|---|---|---|
+  | bochs | yes | no | no |
+  | virtio-gpu | yes | yes | **yes** |
+  | intel Gen9 | **no** | later | no |
+
+  `display_ops` was Bochs's shape. It is now a shape that has been made to
+  disagree with itself twice, which is the whole reason the second and third
+  backends were written in that order.
+
+---
+
 ### GX-003 — Every display self-test passed against a completely black screen
 
 - **Found in** kernel 0.2.41, on 15 September 2026, by the first boot that drove

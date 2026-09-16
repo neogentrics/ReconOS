@@ -874,6 +874,22 @@ check_screen "  PVH, the Bochs adapter really shows pixels" \
 	qemu-system-x86_64 -m 1024M -device VGA,vgamem_mb=256 \
 		-kernel "$X64_ELF"
 
+# The table that recognises real graphics hardware, checked on a machine that
+# has none.
+#
+# `core/intel_display.c` cannot be exercised against a Gen9 here -- QEMU
+# emulates no Intel display engine -- so what runs in this matrix is the
+# recognition: the ids it must claim, and the ids it must refuse. The refusals
+# are the half worth asserting. Among them is the Gemini Lake host bridge, which
+# sits in the same package as the graphics and in the same numbering.
+#
+# **Asserted on the count, not on the word pass.** The self-test returns true
+# after checking nothing if the table is empty, exactly as a mode sweep that
+# skips every shape reports green (KF-187). Eighteen models is the claim.
+check_for "18 model(s) known, recognition and refusal both checked" \
+	"  PVH, the graphics it can recognise" \
+	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had
