@@ -1639,6 +1639,16 @@ crash somewhere else an hour later. The ask is written up in
 
 ---
 
+**The count, which lived only in the version table until 16 September.**
+**2,473 of the 3,113 library calls** in `src/` are answered by it -- counted
+with `nm` over the objects rather than estimated -- and it is held against the
+library it replaces by compiling both into one program and making every call
+twice: **511,000 checks**.
+
+Recorded here because the row in `docs/VERSIONS.md` was the only place those
+three figures existed, and that row is an index line now. A measurement with
+one home is a measurement that goes when the home is tidied.
+
 ## v0.4.21 — cookies, and the four things they are not allowed to do
 
 Forms could sign you in and the answer came back with a session the next
