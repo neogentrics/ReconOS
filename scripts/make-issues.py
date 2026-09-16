@@ -125,6 +125,12 @@ AREA = {
     'KF-198': 'storage', 'KF-199': 'kernel', 'KF-200': 'build', 'KF-201': 'network', 'KF-202': 'build',
     'KF-203': 'display', 'KF-204': 'kernel',
     'KF-205': 'build',
+
+    # The graphics track, from 15 September 2026. All 'display': they are
+    # faults in the display layer and the drivers under it, which is what that
+    # label already means on the desktop side.
+    'GX-001': 'display', 'GX-002': 'display', 'GX-003': 'display',
+    'GX-004': 'display', 'GX-005': 'display',
     'KF-206': 'kernel',
     'KF-207': 'build',
     'KF-208': 'build',
@@ -283,7 +289,7 @@ def existing_titles():
 def parse(path):
     text = io.open(path, encoding='utf-8').read()
     # Everything from the first entry on; the preamble is not an entry.
-    blocks = re.split(r'\n### ((?:BG|KF)-\d+ *(?:—|–|--) )', text)
+    blocks = re.split(r'\n### ((?:BG|KF|GX)-\d+ *(?:—|–|--) )', text)
     entries = []
     for i in range(1, len(blocks), 2):
         head = blocks[i]
@@ -366,7 +372,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### ((?:BG|KF)-\d+) .*$', text, re.M):
+    for m in re.finditer(r'^### ((?:BG|KF|GX)-\d+) .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -405,12 +411,12 @@ def check_open(text):
         return 0
 
     open_now = []
-    for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
-        m = re.match(r'### ((?:BG|KF)-\d+)', block)
+    for block in re.split(r'(?=^### (?:BG|KF|GX)-)', text, flags=re.M):
+        m = re.match(r'### ((?:BG|KF|GX)-\d+)', block)
         if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
-    named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
+    named = set(re.findall(r'(?:BG|KF|GX)-\d+', head.group(1)))
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 

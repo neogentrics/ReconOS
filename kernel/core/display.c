@@ -26,6 +26,9 @@
  * compositor need from it.
  */
 #include <recon/kernel/suspend.h>
+#include <recon/kernel/addrspace.h>
+#include <recon/kernel/user.h>
+#include <recon/kernel/pmm.h>
 #include <recon/kernel/console.h>
 #include <recon/kernel/display.h>
 #include <recon/kernel/fbcon.h>
@@ -110,7 +113,18 @@ static struct display *primary;
 
 /* How many times a mode was set, and how many times one was refused. Counted
  * because a driver that quietly stops working looks exactly like a machine
- * nobody asked to change mode. */
+ * nobody asked to change mode.
+ *
+ * **Counted here rather than in the driver, and that is a correction.** They
+ * were incremented inside `bochs_set_mode`, which is the only place a mode
+ * could be refused for as long as there was one backend. The self-test below
+ * asks whether an oversized mode was *counted* as refused -- so on a machine
+ * whose display is driven by anything else, every refusal was invisible and
+ * that check failed on a kernel behaving perfectly (GX-004).
+ *
+ * A counter that only one implementation of an interface maintains is a
+ * counter about that implementation, however much it looks like one about the
+ * interface. */
 static unsigned modes_set;
 static unsigned modes_refused;
 
@@ -118,6 +132,15 @@ struct bochs {
 	volatile u8 *regs;	/* the MMIO window, already mapped */
 };
 
+/* One per possible display, but reached through `d->ops_private` rather than
+ * by indexing this with the display's position in the table.
+ *
+ * **That indexing is what this comment is for.** It read `&adapters[d -
+ * displays]`, which is correct exactly while every display in the table is a
+ * Bochs adapter -- and a second backend makes it address another driver's
+ * device (GX-002). The storage is still static, because a driver allocating at
+ * attach time on a path that runs before the heap is a different problem; what
+ * changed is how it is found. */
 static struct bochs adapters[DISPLAY_MAX];
 
 /* --- reaching the registers ------------------------------------------------ */
@@ -142,13 +165,12 @@ static void dispi_write(struct bochs *b, unsigned index, u16 value)
 
 static bool bochs_set_mode(struct display *d, u32 width, u32 height)
 {
-	struct bochs *b = &adapters[d - displays];
+	struct bochs *b = d->ops_private;
 	u64 needed;
 
 	if (width < MIN_DIMENSION || height < MIN_DIMENSION) {
 		kprintf("display: %ux%u is too small to put anything on\n",
 			width, height);
-		modes_refused++;
 		return false;
 	}
 
@@ -159,7 +181,6 @@ static bool bochs_set_mode(struct display *d, u32 width, u32 height)
 		kprintf("display: %ux%u is past what a sixteen-bit mode "
 			"register can hold, and would wrap rather than fail\n",
 			width, height);
-		modes_refused++;
 		return false;
 	}
 
@@ -171,7 +192,6 @@ static bool bochs_set_mode(struct display *d, u32 width, u32 height)
 		kprintf("display: %ux%u needs %u MB and this adapter has %u\n",
 			width, height,
 			(unsigned)(needed >> 20), (unsigned)(d->fb_size >> 20));
-		modes_refused++;
 		return false;
 	}
 
@@ -214,7 +234,6 @@ static bool bochs_set_mode(struct display *d, u32 width, u32 height)
 			width, height, d->mode.width, d->mode.height,
 			d->mode.pitch);
 		dispi_write(b, DISPI_ENABLE, DISPI_DISABLED);
-		modes_refused++;
 		return false;
 	}
 
@@ -222,13 +241,44 @@ static bool bochs_set_mode(struct display *d, u32 width, u32 height)
 		kprintf("display: asked for %ux%u, got %ux%u\n",
 			width, height, d->mode.width, d->mode.height);
 
-	modes_set++;
 	return true;
 }
 
+/* No `flush`. The framebuffer is device memory being scanned out continuously,
+ * so a store is a pixel appearing and there is no third step to ask for. A null
+ * pointer is how that is said -- see display_ops. */
 static const struct display_ops bochs_ops = {
 	.set_mode = bochs_set_mode,
 };
+
+/* --- the table ------------------------------------------------------------- */
+
+struct display *display_register(const char *name,
+				 const struct display_ops *ops, void *priv,
+				 paddr_t fb_base, u64 fb_size)
+{
+	struct display *d;
+
+	if (display_count >= DISPLAY_MAX)
+		return NULL;
+
+	d = &displays[display_count];
+	kmemset(d, 0, sizeof(*d));
+
+	d->name        = name;
+	d->ops         = ops;
+	d->ops_private = priv;
+	d->fb_base     = fb_base;
+	d->fb_size     = fb_size;
+	d->present     = true;
+
+	display_count++;
+
+	if (!primary)
+		primary = d;
+
+	return d;
+}
 
 /* --- attaching -------------------------------------------------------------
  *
@@ -264,10 +314,11 @@ bool display_attach(const struct pci_device *d)
 		return false;
 	}
 
+	/* The private block is claimed before the display is registered,
+	 * because everything below can still fail and a half-registered display
+	 * is one `display_primary` may hand to the console. */
 	slot = display_count;
-	disp = &displays[slot];
 	b = &adapters[slot];
-	kmemset(disp, 0, sizeof(*disp));
 	kmemset(b, 0, sizeof(*b));
 
 	{
@@ -323,13 +374,13 @@ bool display_attach(const struct pci_device *d)
 		return false;
 	}
 
-	disp->name    = "bochs-display";
-	disp->ops     = &bochs_ops;
-	disp->fb_base = (paddr_t)d->bar[0];
-	disp->fb_size = d->bar_size[0];
-	disp->present = true;
+	disp = display_register("bochs-display", &bochs_ops, b,
+				(paddr_t)d->bar[0], d->bar_size[0]);
 
-	display_count++;
+	if (!disp) {
+		kputs("display: no room in the display table\n");
+		return false;
+	}
 
 	/* Declared to the suspend layer with no ops, which is the honest
 	 * state: this holds hardware state and nothing here can bring it
@@ -337,9 +388,6 @@ bool display_attach(const struct pci_device *d)
 	 * would not survive a suspend is generated from what is actually in
 	 * the machine. */
 	suspend_declare(disp->name, 0);
-
-	if (!primary)
-		primary = disp;
 
 	kprintf("display: %s, DISPI revision %u, %u MB of pixels at %p\n",
 		disp->name, (unsigned)(id & 0x0F),
@@ -366,7 +414,109 @@ bool display_set_mode(u32 width, u32 height)
 		return false;
 	}
 
-	return primary->ops->set_mode(primary, width, height);
+	/* **Counted here, once, for every backend.** See the counters' own
+	 * comment: they used to be maintained inside the Bochs driver, which
+	 * made "how many modes were refused" a question only that driver could
+	 * answer -- and the self-test asks it of the interface (GX-004). */
+	if (!primary->ops->set_mode(primary, width, height)) {
+		modes_refused++;
+		return false;
+	}
+
+	modes_set++;
+	return true;
+}
+
+/* How many rectangles were presented, and how many presents were refused.
+ * Separate from the mode counters above because they answer a different
+ * question: a display can be in a perfectly good mode and have stopped putting
+ * anything on it. */
+static u64 flushes_done;
+static u64 flushes_refused;
+
+/* How many times the address-space teardown was about to hand a page of the
+ * live framebuffer back to the page allocator.
+ *
+ * **Not a fault counter -- a proof that the guard below is reached.** A check
+ * that never fires and a check that was never needed look identical in a
+ * summary that prints neither, and this one is needed on exactly the machines
+ * whoever wrote it is least likely to be running. */
+static u64 fb_pages_kept;
+
+/* Whether this physical page is part of the screen right now.
+ *
+ * **The address space cannot answer this and must not guess.** It tears down by
+ * walking page tables, so all it has is a physical address; the rule it used
+ * instead was "the allocator never handed this out, so it is a device" -- true
+ * for an adapter whose framebuffer is a PCI aperture, and false for one whose
+ * framebuffer is main memory (GX-001). On virtio-gpu the first program to map
+ * /dev/fb0 and exit hands the live screen back to the allocator, which gives it
+ * out as ordinary memory to whatever asks next.
+ *
+ * Asked of the display because the display is the only thing that knows which
+ * pages are pixels *now*. A range recorded when the mapping was made would go
+ * stale the next time the mode changed; this cannot, because it is read from
+ * the mode in force.
+ *
+ * **It is narrow on purpose.** /dev/fb0 is the only file in this kernel with a
+ * `map` operation, so the framebuffer is the only borrowed range that can reach
+ * a user page table today. The general rule -- that pages obtained through
+ * `file_ops.map` belong to the file and never to the address space -- wants
+ * somewhere better than a display-shaped question, and it is raised in
+ * docs/SIGNALS.md rather than settled here by the session that happened to
+ * trip over it.
+ */
+bool display_owns_page(paddr_t pa)
+{
+	const struct framebuffer *fb;
+
+	if (!primary || !primary->mode.base)
+		return false;
+
+	fb = &primary->mode;
+
+	/* `pitch * height` rather than `size`, the same reckoning /dev/fb0
+	 * makes: `size` is sometimes the whole aperture and sometimes rounded
+	 * up, and the rows are the part that exists. */
+	if (pa < fb->base || pa >= fb->base + (u64)fb->pitch * fb->height)
+		return false;
+
+	fb_pages_kept++;
+	return true;
+}
+
+bool display_needs_flush(void)
+{
+	return primary && primary->ops && primary->ops->flush;
+}
+
+bool display_flush(u32 x, u32 y, u32 w, u32 h)
+{
+	/* **Both of these are "yes", not "no", and the distinction is the
+	 * whole reason this wrapper exists.**
+	 *
+	 * A machine with no display has shown everything it was going to show.
+	 * A machine whose framebuffer is scanned out continuously showed it at
+	 * the moment of the store. Neither is a failure, and returning false
+	 * for either would make every caller either check for two conditions it
+	 * cannot do anything about, or -- far likelier -- ignore the return
+	 * value entirely, which is how a real refusal would then go unnoticed.
+	 *
+	 * False is kept for the one case worth acting on: a display that was
+	 * asked to present and would not. */
+	if (!display_needs_flush())
+		return true;
+
+	if (!w || !h)
+		return true;
+
+	if (!primary->ops->flush(primary, x, y, w, h)) {
+		flushes_refused++;
+		return false;
+	}
+
+	flushes_done++;
+	return true;
 }
 
 /* --- bringing it up --------------------------------------------------------- */
@@ -394,6 +544,34 @@ void display_init(void)
 	    info->fb.format != FB_FORMAT_NONE) {
 		primary->mode = info->fb;
 		return;
+	}
+
+	/* **Ask the screen first, and only guess when it cannot say.**
+	 *
+	 * The ladder below chooses the largest mode the *adapter* has memory
+	 * for, which is the best answer available from hardware that cannot
+	 * describe its own panel -- and the wrong one from hardware that can.
+	 * A virtio-gpu host reporting a 1280x800 screen was being driven at
+	 * 5120x2880 because nothing asked it (GX-005).
+	 *
+	 * A refused preferred mode falls through to the ladder rather than
+	 * leaving the machine dark: the device knowing what it wants and this
+	 * driver being unable to give it is a reason to try something else, not
+	 * a reason to stop. */
+	if (primary->ops && primary->ops->preferred_mode) {
+		u32 pw = 0, ph = 0;
+
+		if (primary->ops->preferred_mode(primary, &pw, &ph) &&
+		    display_set_mode(pw, ph)) {
+			kprintf("display: %s reports its screen is %ux%u, and that "
+				"is the mode it is in\n", primary->name, pw, ph);
+			goto adopt;
+		}
+
+		if (pw && ph)
+			kprintf("display: %s reports its screen is %ux%u and would "
+				"not take that mode, so a size is being chosen "
+				"instead\n", primary->name, pw, ph);
 	}
 
 	/* The largest size this adapter's memory can actually hold, rather than
@@ -436,6 +614,7 @@ void display_init(void)
 		}
 	}
 
+adopt:
 	/* The console has been serial-only until this line.
 	 *
 	 * Said either way. A mode that was set and then not taken up leaves a
@@ -477,6 +656,142 @@ void display_print_summary(void)
 
 	kprintf("               : %u mode(s) set, %u refused\n",
 		modes_set, modes_refused);
+
+	/* Said either way, and the "scans itself out" line is the one worth
+	 * having: a machine that presents nothing because it never needs to and
+	 * a machine that presents nothing because its driver forgot look
+	 * identical in a summary that only prints a count. */
+	if (display_needs_flush())
+		kprintf("               : %llu present(s), %llu refused\n",
+			(unsigned long long)flushes_done,
+			(unsigned long long)flushes_refused);
+	else
+		kputs("               : scans itself out, so nothing is "
+		      "presented\n");
+
+	/* Said only when it happened, because zero is the ordinary answer on a
+	 * machine where no program ever mapped the screen -- and a line reading
+	 * "0 kept" on every boot is a line nobody reads on the one boot it
+	 * matters. */
+	if (fb_pages_kept)
+		kprintf("               : %llu page(s) of screen kept out of the "
+			"allocator when a program that had mapped it exited\n",
+			(unsigned long long)fb_pages_kept);
+}
+
+/* That a program which maps the screen and exits does not give the screen away.
+ *
+ * **This is the check that a single backend could not have needed.** The
+ * address space tears down by walking page tables, so all it has at that moment
+ * is a physical address -- and the rule it applied was "the page allocator
+ * never handed this out, so it belongs to a device". That is a complete and
+ * correct answer for an adapter whose framebuffer is a PCI aperture, which is
+ * the only kind this kernel had. It is the wrong answer for one whose
+ * framebuffer is `pmm_alloc_pages`, and the wrong answer is to hand the live
+ * screen back to be allocated to somebody else (GX-001).
+ *
+ * --- Why two spaces rather than one measurement --------------------------
+ *
+ * "Did the framebuffer page get freed" cannot be read off the free-page count
+ * directly, because destroying an address space also frees its page tables and
+ * that count is not fixed. So two spaces are built and destroyed that differ in
+ * exactly one thing: which physical page is mapped at the same address. Their
+ * page tables are identical in shape, so that cost cancels, and what is left is
+ * the one page.
+ *
+ * The control half matters as much as the subject: a run where *neither* page
+ * comes back would also show a difference of zero, and would mean the test had
+ * stopped measuring anything rather than that the guard worked.
+ */
+static bool release_keeps_the_screen(void)
+{
+	struct display *d = display_primary();
+	struct addrspace *as;
+	paddr_t ordinary;
+	u64 before, after_fb, after_ordinary;
+	const vaddr_t at = USER_BASE;
+
+	if (!d || !d->mode.base || !d->mode.height)
+		return true;	/* no screen: nothing to give away */
+
+	/* Only meaningful where the framebuffer is memory the allocator owns.
+	 * On an adapter with an aperture the teardown never had a decision to
+	 * make, and saying so is better than a test that quietly passes for a
+	 * reason unrelated to what it is named after. */
+	if (!pmm_owns(d->mode.base)) {
+		kputs("display: this framebuffer is an aperture, so the "
+		      "teardown has nothing it could give away\n");
+		return true;
+	}
+
+	/* 1. A space that maps one page of the screen, then goes away. */
+	as = addrspace_create();
+
+	if (!as) {
+		kputs("display: could not build a space to map the screen "
+		      "into\n");
+		return false;
+	}
+
+	if (!addrspace_map(as, at, d->mode.base, PAGE_SIZE,
+			   VM_READ | VM_WRITE | VM_USER)) {
+		kputs("display: could not map the screen into a space\n");
+		addrspace_release(as);
+		return false;
+	}
+
+	before = pmm_free_page_count();
+	addrspace_release(as);
+	after_fb = pmm_free_page_count() - before;
+
+	/* 2. The same thing with an ordinary page, which *must* come back. */
+	ordinary = pmm_alloc_page();
+
+	if (!ordinary) {
+		kputs("display: no page to compare the screen against\n");
+		return false;
+	}
+
+	as = addrspace_create();
+
+	if (!as) {
+		kputs("display: could not build the second space\n");
+		pmm_free_page(ordinary);
+		return false;
+	}
+
+	if (!addrspace_map(as, at, ordinary, PAGE_SIZE,
+			   VM_READ | VM_WRITE | VM_USER)) {
+		kputs("display: could not map an ordinary page into a space\n");
+		addrspace_release(as);
+		pmm_free_page(ordinary);
+		return false;
+	}
+
+	before = pmm_free_page_count();
+	addrspace_release(as);
+	after_ordinary = pmm_free_page_count() - before;
+
+	/* The control must have given its page back. If it did not, the two
+	 * numbers below would agree for a reason that has nothing to do with
+	 * the screen, and this test would report a pass it had not earned. */
+	if (after_ordinary != after_fb + 1) {
+		kprintf("display: tearing down a space holding the screen gave "
+			"back %llu page(s) and one holding an ordinary page "
+			"gave back %llu -- the screen is being freed with "
+			"it\n",
+			(unsigned long long)after_fb,
+			(unsigned long long)after_ordinary);
+		return false;
+	}
+
+	kprintf("display: a space holding the screen gave back %llu page(s) "
+		"and an identical one holding ordinary memory gave back %llu, "
+		"so the screen stayed out of the allocator\n",
+		(unsigned long long)after_fb,
+		(unsigned long long)after_ordinary);
+
+	return true;
 }
 
 /* --- the self-test ---------------------------------------------------------
@@ -498,6 +813,14 @@ bool display_self_test(void)
 		kputs("display: no adapter on this machine\n");
 		return true;
 	}
+
+	/* First, because it is the only check here that is about what happens
+	 * after a program has finished with the screen rather than about the
+	 * modes themselves -- and the sweep below moves the framebuffer seven
+	 * times, so running it afterwards would test a screen nothing had
+	 * mapped. */
+	if (!release_keeps_the_screen())
+		ok = false;
 
 	was_w = d->mode.width;
 	was_h = d->mode.height;

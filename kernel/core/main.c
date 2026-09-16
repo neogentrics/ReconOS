@@ -50,6 +50,7 @@
 #include <recon/kernel/sched.h>
 #include <recon/kernel/smp.h>
 #include <recon/kernel/display.h>
+#include <recon/kernel/virtio_gpu.h>
 #include <recon/kernel/fbcon.h>
 #include <recon/kernel/heap.h>
 #include <recon/kernel/lock.h>
@@ -231,6 +232,7 @@ void kmain(void)
 	input_init();
 	block_print_summary();
 	display_print_summary();
+	virtio_gpu_print_summary();
 	suspend_print_summary();
 
 	/* What the devices can do about interrupts, printed here rather than
@@ -331,6 +333,15 @@ void kmain(void)
 		i2c_self_test() ? "pass" : "FAIL");
 	kprintf("  a mode of our own  : %s\n",
 		display_self_test() ? "pass" : "FAIL");
+
+	/* **What the one above cannot ask.** `display_self_test` sets modes and
+	 * reads them back, which proves a mode was established and says nothing
+	 * about whether anything reached the glass -- on a display whose pixels
+	 * are guest memory, reading back what was written is reading back what
+	 * was written, and it passes against a black screen (GX-003). This one
+	 * asks the device instead. */
+	kprintf("  a present that lands : %s\n",
+		virtio_gpu_self_test() ? "pass" : "FAIL");
 
 	/* After the sweep above, which sets seven modes in turn and moves the
 	 * framebuffer each time. A program's mapping is of one physical address;

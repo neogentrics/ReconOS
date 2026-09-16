@@ -7,7 +7,7 @@ somebody else's.**
 [![release](https://img.shields.io/badge/latest_release-v0.4.37-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.37)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
 [![tests](https://img.shields.io/badge/tests-34_suites,_1971_checks-238636?style=flat-square)](#tests)
-[![bugs](https://img.shields.io/badge/bugs_recorded-313-da3633?style=flat-square)](docs/BUGS.md)
+[![bugs](https://img.shields.io/badge/bugs_recorded-318-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 
 ---
@@ -389,6 +389,7 @@ without Linux, and without touching what was already on the disk.
 | **Time** | A five-level timer wheel — a callback at a time, or a thread that sleeps without a processor spinning for it — and a worker thread, so an interrupt handler can hand off work it must not do inline |
 | **Processes** | A process table, identity, an exit status somebody collects, and an address space each. Programs are **loaded from ELF files** built by the cross linker, not compiled into the kernel |
 | **Storage** | virtio, NVMe, AHCI and USB mass storage, over PCI and memory-mapped |
+| **Display** | Modes it sets itself, behind one interface with **two backends**: the Bochs/VBE adapter, and virtio-gpu over both the PCI and memory-mapped transports. A framebuffer console, and `/dev/fb0` for a program to map. The second backend exists to disagree with the first — see [docs/SIGNALS.md](docs/SIGNALS.md) for what it found |
 | **Filesystems** | ReconFS, ours — copy-on-write, one atomic commit, 64 ZiB. FAT32 read *and written*, because the EFI System Partition has to be |
 | **Files** | A virtual filesystem: descriptors, a mount table, and one interface with the volume, the console, pipes, `/dev`, `/tmp`, `/proc` and a foreign ext2 volume behind it. A program is loaded **from a volume**, and a mapping can be filled from a file |
 | **Foreign filesystems** | ext2 read, checked against `e2fsck`, and a repair that rewrites free counts from the bitmaps — because the bitmap is the evidence and the count is the claim. It never happens on mount and must be asked for by the literal word `repair`. EXTENTS, RECOVER and 64BIT are refused **by name** rather than guessed at, which is also why this is not ext4 |
@@ -446,9 +447,22 @@ is the gate on networking as well as storage.
 
 This is the honest list, and it is the reason the desktop is not on it.
 
-- **Display.** A framebuffer console on whatever the firmware left. No mode
-  setting, no surface for a compositor. This is the one that stands between the
-  kernel and the desktop.
+- **A surface for a compositor.** ~~Display. A framebuffer console on whatever
+  the firmware left. No mode setting, no surface for a compositor.~~ **Corrected
+  15 September 2026, and it had been wrong for days.** The kernel sets its own
+  modes — `core/display.c` drives the Bochs/VBE adapter through its DISPI
+  registers and `core/virtio_gpu.c` drives virtio-gpu, behind one `display_ops`;
+  `/dev/fb0` is a file a program maps and draws into; and `a mode of our own`
+  and `a screen to draw on` pass on every boot in the matrix. Two paragraphs
+  further down this same section describe two earlier occasions when this list
+  understated what was built, which is exactly what it had done again.
+
+  What is genuinely missing is the half a compositor needs and a console does
+  not: **a program cannot ask the kernel to present what it drew.** On an
+  adapter whose framebuffer is a scanned-out aperture that does not matter, and
+  on virtio-gpu — and on every real GPU — it is the difference between a
+  working screen and a black one. The kernel presents for itself; a program
+  with a mapping has no call to make. See `docs/SIGNALS.md`.
 - **A way for a program to reach the network.** The network itself is built,
   and so is a socket layer over it — `core/socket.c` has create, bind, listen,
   accept, connect, send and receive. What it has no caller for outside the

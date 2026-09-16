@@ -20,6 +20,7 @@
 #include <recon/kernel/time.h>
 #include <recon/kernel/addrspace.h>
 #include <recon/kernel/console.h>
+#include <recon/kernel/display.h>
 #include <recon/kernel/elf.h>
 #include <recon/kernel/kstring.h>
 
@@ -1872,8 +1873,46 @@ bool user_framebuffer_test(void)
 		return false;
 	}
 
+	/* **What "on the screen" is worth, and it is not the same on every
+	 * machine.**
+	 *
+	 * The two reads above are of the memory the program was handed. On an
+	 * adapter whose framebuffer is a scanned-out aperture that memory *is*
+	 * the screen, so reading it back is a real check. On a display whose
+	 * pixels are guest RAM copied to the host on request, it is a read-back
+	 * of what was just written -- it cannot fail, and it passed on a
+	 * completely black screen for as long as nobody looked (GX-003).
+	 *
+	 * So the claim is cut to what was actually established, and the machines
+	 * where more is needed say so. The part that cannot be checked from
+	 * inside the kernel at all -- whether the host is showing these pixels
+	 * -- is checked from outside it, by the screendump in
+	 * scripts/verify-kernel.sh. */
+	if (!display_needs_flush()) {
+		kprintf("  framebuffer: a program mapped %ux%u, pitch %u, and both "
+			"markers are on the screen\n",
+			info.width, info.height, info.pitch);
+		return true;
+	}
+
+	/* Presented on the program's behalf, because nothing else will.
+	 *
+	 * A mapping is the kernel getting out of the way, and on this kind of
+	 * display getting out of the way means the pixels are never seen. There
+	 * is no system call a program can make to say "present", and adding one
+	 * changes an interface two other sessions own -- so the kernel presents
+	 * for it here, which makes the test honest and does nothing whatever for
+	 * a real program. That gap is the open question in docs/SIGNALS.md. */
+	if (!display_flush(0, 0, info.width, info.height)) {
+		kputs("  framebuffer: the markers were written and the display "
+			      "refused to present them\n");
+		return false;
+	}
+
 	kprintf("  framebuffer: a program mapped %ux%u, pitch %u, and both "
-		"markers are on the screen\n",
+		"markers are in the pixels it was given -- this screen has to be "
+		"told to show them, so whether they are visible is checked from "
+		"outside the kernel\n",
 		info.width, info.height, info.pitch);
 	return true;
 }

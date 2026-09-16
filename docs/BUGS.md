@@ -109,7 +109,7 @@ Features, patches and releases are tracked the same way: see
 
 ---
 
-## Two prefixes, and why
+## Three prefixes, and why
 
 `BG-` is the desktop's. **`KF-` is the kernel's** -- a kernel *fault*, and not
 `KB-`, because this kernel prints KB for kilobytes in the very summaries these
@@ -135,6 +135,25 @@ Kernel faults from here take the next free `KF-` number; desktop faults the next
 free `BG-`. Neither track can take the other's, so neither has to look at the
 other's file first.
 
+### A third prefix, 15 September 2026
+
+**`GX-` is the graphics track's** -- a fourth session, working on `graphics`,
+whose subject is the display layer and the drivers under it.
+
+`GX` rather than `DP` or `VD` because `D` already opens too many things in this
+tree -- the display summary, `/dev/`, the device tree -- and a prefix is only
+worth having if it cannot be misread at a glance. `GX` is not a word, which is
+the point: nothing else in the register or the sources looks like it.
+
+Taken before the first fault was recorded rather than when one was needed. The
+lesson of the two renumberings above is not about which numbers were chosen, it
+is that **a prefix claimed after the work has started is claimed against a
+register somebody else has already written into.** `GX-001` was reserved on the
+branch's first day, with `BG-` and `KF-` checked on every branch first.
+
+The server role is expected to take one of its own. It has not posted one here
+yet, which is why `GX` deliberately avoids `SV`, `SR` and `SE`.
+
 ---
 
 ## Open
@@ -156,6 +175,262 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 ---
 
 ## Fixed
+
+### GX-003 — Every display self-test passed against a completely black screen
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by the first boot that drove
+  a virtio-gpu — and *not* by any assertion in the kernel, all of which reported
+  pass. It was found by asking QEMU for a screendump and counting the pixels.
+
+  Two boots of the same binary, one per backend:
+
+  ```
+  bochs-display   33,177,600 non-black pixels
+  virtio-gpu               0 non-black pixels
+  ```
+
+  and on that second boot the kernel said:
+
+  ```
+    a mode of our own  : pass
+    a screen to draw on : pass
+    framebuffer: a program mapped 5120x2880, pitch 20480, and both markers
+                 are on the screen
+    a C program: compiled from C, loaded, and its pixels are on the screen
+  ```
+
+- **Was** every check on the display path verified its own writes. `fbcon`
+  stored characters and the tests read the framebuffer back; the framebuffer
+  self-test wrote two markers through a user mapping and read them back; the
+  paint program drew and the kernel read that back too.
+
+  On an adapter whose framebuffer is a scanned-out PCI aperture, that memory
+  **is** the screen, so a read-back that finds the right pixels has found them
+  on the glass. On virtio-gpu those pages are ordinary guest RAM that the host
+  cannot see until it is sent `TRANSFER_TO_HOST_2D` and `RESOURCE_FLUSH`. The
+  read-back returns what was just written either way.
+
+  So the assertions were not weak. **They were measuring the wrong side of the
+  device**, and had been correct for as long as there was one kind of device.
+
+- **Cost** nothing yet, because it was found on the first boot of the backend
+  that can exhibit it. Recorded at full length anyway: the shape is the
+  expensive part, and it is the shape this project keeps finding — KF-141 is a
+  driver believing its own request instead of the hardware's answer, KF-187 is a
+  sweep that skipped everything and reported green. This is the same fault in
+  the checking rather than in the code, which is worse, because it is what would
+  have hidden the other two.
+
+- **Fixed in** kernel 0.2.41 on the `graphics` branch, in three parts, and only
+  the third is a test:
+
+  1. `display_ops` gained `flush`, and `fbcon` and `/dev/fb0`'s `write` call it,
+     so the pixels genuinely reach the host.
+  2. `user_framebuffer_test` no longer claims "both markers are on the screen"
+     on a display that has to be told. It says what it actually established —
+     that the markers are in the pixels the program was given — and names where
+     the rest is checked.
+  3. `scripts/screen-has-pixels.py`, which drives QEMU's monitor, takes a
+     screendump and counts non-black pixels. Four matrix paths use it: both
+     backends on x86_64 and virtio-gpu on aarch64, plus the Bochs adapter, so
+     that a rig reporting pixels on only one backend is known to be a rig with
+     something else wrong with it.
+
+- **Shown to fail before being believed.** With `gpu_flush` stubbed to
+  `return true` without sending anything, the screendump check reports nought
+  non-black pixels and `a present that lands : FAIL`, on a kernel whose every
+  other self-test still passes. Restored, both go green. A check that cannot
+  fail looks exactly like one that passes.
+
+---
+
+### GX-001 — A program that maps the screen and exits gives the screen to the page allocator
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by writing the second
+  display backend and then asking what `addrspace_release_page` would do with
+  its framebuffer.
+
+- **Was** the address space tears down by walking page tables, so at that moment
+  all it holds is a physical address. The rule it applied was:
+
+  ```c
+  /* Memory the allocator never handed out is not memory it can take back. */
+  if (!pmm_owns(pa))
+          return;
+  ```
+
+  which is the fix for KF-209 and is a complete, correct answer **for a
+  framebuffer that is a PCI aperture** — memory above RAM that the allocator has
+  never heard of.
+
+  virtio-gpu's framebuffer is `pmm_alloc_pages`. It is main memory, the
+  allocator did hand it out, `pmm_owns` answers true, and the page is freed. The
+  first program to map `/dev/fb0` and exit hands the live screen back to be
+  allocated to whatever asks next.
+
+- **Why it is the same bug as KF-209 seen from the other side.** That entry
+  records x86_64 silently freeing an aperture into the allocator while aarch64
+  panicked on the identical code. The guard added then encodes *a framebuffer is
+  never allocator memory* — true of every display this kernel had. A second
+  backend makes it false, and the guard then reads as permission.
+
+- **Cost** nothing observed. **Said plainly rather than dressed up:** no boot in
+  the matrix currently tears down an address space that holds the framebuffer —
+  instrumenting `addrspace_release_page` across a full virtio-gpu boot shows
+  four calls, none of them a screen page. So this is a demonstrated defect in a
+  path that is not yet reached, not a fault anybody has been bitten by, and the
+  entry says so because the alternative is a register that overstates itself.
+
+  It is recorded as a bug rather than a note because it was *demonstrated*
+  rather than reasoned about — see the test below, which fails without the fix.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_owns_page` answers whether
+  a physical page is part of the screen in force right now, and
+  `addrspace_release_page` asks it before asking the allocator. Asked of the
+  display because the display is the only thing that knows which pages are
+  pixels *now*: a range recorded when the mapping was made would go stale the
+  next time the mode changed.
+
+- **Shown to fail before being believed**, and this is what makes it a bug
+  rather than a worry. `release_keeps_the_screen` builds two address spaces that
+  differ in exactly one thing — which physical page is mapped at the same
+  address — and destroys both. Their page tables are identical in shape, so that
+  cost cancels and what is left is the one page:
+
+  ```
+  with the guard     screen space gave back 4 pages, ordinary space gave back 5
+  without the guard  screen space gave back 5 pages, ordinary space gave back 5
+                     -- the screen is being freed with it
+  ```
+
+  The control half matters as much as the subject: a run where *neither* page
+  came back would also show a difference of zero and would mean the test had
+  stopped measuring anything. On the Bochs adapter the test says the framebuffer
+  is an aperture and that the teardown never had a decision to make, rather than
+  passing for a reason unrelated to its name.
+
+- **The general form is not fixed and is deliberately not fixed here.** The real
+  rule is that pages obtained through `file_ops.map` belong to the file and
+  never to the address space. `/dev/fb0` is the only file in this kernel with a
+  `map` operation, so a display-shaped question is complete today and will stop
+  being complete the day there is a second one. Raised in `docs/SIGNALS.md` for
+  the kernel session rather than settled by the session that happened to trip
+  over it.
+
+---
+
+### GX-004 — An oversized mode was refused and not counted as refused
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by `display_self_test`
+  itself, on the first boot where the primary display was not a Bochs adapter:
+
+  ```
+  virtio-gpu: 16384x16384 wants 1024 MB and this driver will spend 64
+  display: an oversized mode was refused and not counted as refused
+    a mode of our own  : FAIL
+  ```
+
+  A correct refusal, correctly printed, reported as a failure.
+
+- **Was** `modes_set` and `modes_refused` are declared in `core/display.c` and
+  were incremented inside `bochs_set_mode` — the driver, not the layer. That is
+  invisible while one backend exists, because the only path that can refuse a
+  mode is the one maintaining the counters.
+
+  `display_self_test` asks whether an oversized mode was *counted* as refused,
+  which is the right question: a driver that returns false without recording it
+  is a driver whose summary line quietly stops meaning anything. Asked of a
+  machine driven by anything else, every refusal was invisible and the check
+  failed on a kernel behaving perfectly.
+
+- **Cost** one confusing red line, immediately. Worth recording because of what
+  it is an instance of: **a counter that only one implementation of an interface
+  maintains is a counter about that implementation, however much its name and
+  its home suggest otherwise.** The summary said "1 mode(s) set, 0 refused" on a
+  boot that had just refused three.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_set_mode` counts, once, for
+  every backend; the five increments inside `bochs_set_mode` are gone. Verified
+  on both backends: the counts now move on virtio-gpu, and the Bochs path
+  reports what it always did.
+
+---
+
+### GX-005 — A 1280x800 screen driven at 5120x2880, because nothing could ask it
+
+- **Found in** kernel 0.2.41, on 15 September 2026, by reading two lines of the
+  same boot next to each other:
+
+  ```
+  virtio-gpu: the host offers 1 enabled scanout(s), the first is 1280x800
+    display      : virtio-gpu, 5120x2880, pitch 20480, BGRA
+  ```
+
+  The device said what its screen was and the kernel chose something else.
+
+- **Was** `display_init` picks a mode from `MODE_LADDER`, largest first, taking
+  the first that fits in the adapter's memory. That is the best answer available
+  from hardware that cannot describe its own panel, which the Bochs adapter
+  cannot: it has a memory size and a set of mode registers, and nothing that
+  says what is plugged into it.
+
+  So the ladder was never wrong. **It was answering the only question the
+  interface could ask**, and went on answering it after a device arrived that
+  could answer a better one. `display_ops` had nowhere to put the reply.
+
+- **Cost** on the matrix, four times the pixels the display was showing and
+  **fifty-four megabytes** of main memory to hold them — 58 MB for 5120x2880
+  against 4 MB for the screen that actually existed. On a machine with a real
+  panel it is worse than wasteful: it is a mode the monitor has to scale or
+  refuse.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `display_ops` gained
+  `preferred_mode`, null on hardware that cannot be asked, and `display_init`
+  asks before it guesses. A device that answers and is then refused falls
+  through to the ladder rather than leaving the machine dark — knowing what it
+  wants and not getting it is a reason to try something else, not to stop.
+
+  ```
+  display: virtio-gpu reports its screen is 1280x800, and that is the mode it is in
+  ```
+
+  The Bochs path is unchanged and still lands on 7680x4320 with 256 MB of
+  adapter memory, which is correct: nothing can ask it anything.
+
+---
+
+### GX-002 — One driver's private state, addressed by another driver's position in a table
+
+- **Found in** kernel 0.2.41, on 15 September 2026, while writing the second
+  display backend — by the second backend needing somewhere to keep its own
+  device pointer and finding the shelf already occupied.
+
+- **Was** `core/display.c` kept two static arrays side by side, `displays[]` and
+  `adapters[]`, and reached the second through the first's index:
+
+  ```c
+  struct bochs *b = &adapters[d - displays];
+  ```
+
+  That is exactly right while every entry in `displays[]` is a Bochs adapter,
+  and it is the shape a single-backend interface grows into naturally — nothing
+  about it looks wrong. The moment one entry is not, the expression addresses
+  another driver's device: a virtio-gpu in slot 0 and a Bochs adapter in slot 1
+  would have had the Bochs driver write mode registers through `adapters[1]`
+  while the display it was handed was the one in slot 0.
+
+- **Cost** nothing, because it was found by the change that would have triggered
+  it rather than after. Recorded because a latent fault that a second
+  implementation walks straight into is the whole reason a second implementation
+  was written first, before real hardware.
+
+- **Fixed in** kernel 0.2.41 on `graphics`. `struct display` carries
+  `ops_private`, and every backend enters the table through `display_register`
+  rather than writing into it. The Bochs driver's storage is still static — a
+  driver allocating at attach time on a path that runs before the heap is a
+  different problem and was not solved here — what changed is how it is found.
+
+---
 
 ### BG-105 — A register that says nothing until the port is already running
 
