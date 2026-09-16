@@ -156,9 +156,20 @@ ever.
 
 | return | meaning |
 |---|---|
-| `SYS_OK` | established; write to it |
-| `SYS_EAGAIN` (−12) | handshake in flight; **call again to ask** |
-| `SYS_EIO` (−4) | refused or timed out; stop |
+| `SYS_OK` (0) | established; write to it |
+| `SYS_EAGAIN` (**−4**) | handshake in flight; **call again to ask** |
+| `SYS_EIO` (**−9**) | refused or timed out; stop |
+
+> **Corrected 16 September, and read this if you took the first version.**
+> This table originally said `EAGAIN` was −12 and `EIO` was −4. Both wrong,
+> and the second dangerously so: **−4 *is* `EAGAIN`**, so a caller built
+> against that table would have treated every "try again" as "give up".
+>
+> Checked against `kernel/include/recon/kernel/user.h` rather than recalled,
+> which is what should have happened the first time. **Build against the
+> names.** I have now written wrong numbers into a message to another session
+> twice in one day -- the syscall numbers were off by one as well -- and the
+> names have been right both times.
 
 Same shape as `accept`, for the same reason: blocking needs a wait queue on the
 socket and a way to interrupt it, and neither exists yet.
