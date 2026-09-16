@@ -148,6 +148,66 @@ above -- so it is worth having, second.
 
 ---
 
+## The desktop's drawing can run on ReconOS, and nothing builds it there
+
+**Where:** finishing the panel seam, 15 September 2026. Not a missing system
+call — a missing line in a Makefile, which is why it is written here rather
+than fixed here.
+
+**What changed on this side.** As of v0.4.44 and v0.4.45 the desktop's drawing
+layer has no Linux in it:
+
+- `src/recon_ui.c` — 2,947 lines: every widget, button, text run, themed fill
+  and rounded corner — compiles with `-nostdinc`, `userland/include`, and
+  nothing else. So do `recon_theme.c`, `recon_titlebar.c`, `recon_widget.c`,
+  `recon_wallpaper.c`, `recon_icon_gen.c`, `recon_fonts.c` and thirty-nine
+  others. **46 of the desktop's 80 sources**, held by
+  `scripts/check-userland.sh` on every run of `check.sh`.
+- How a panel reaches a screen is a table of function pointers, and
+  `src/recon_ui_fb.c` is the implementation that stores straight into a
+  framebuffer — `open("/dev/fb0")`, `SYS_SCREEN` for the shape, `SYS_MAP` for
+  the address, then stores. **It makes no system call itself**: the caller
+  passes the address and shape it already has, which is why it is tested
+  against a plain buffer on the host.
+
+So the pieces that draw a ReconOS window — the frame, the title bar with its
+buttons, the theme, the text — are all buildable for the machine today, and
+`recon_init` already owns a mapped framebuffer.
+
+**What is missing is that nothing compiles them into a ReconOS program.**
+`kernel/Makefile` names the sources of `recon_init` explicitly:
+
+```
+INIT_SRCS := ../userland/init/recon_init.c ../userland/init/screen.c \
+             ../userland/init/layout.c ...
+```
+
+`userland/init/screen.c` draws the first screen with a font of its own, which
+was right when it was the only thing that could. It is no longer the only
+thing that can.
+
+**What this asks for, and it is a decision rather than a task.** Which of these
+the workstation's first program becomes:
+
+1. **It keeps its own drawing.** `screen.c` stays the boot panel and the
+   desktop proper waits for the shell to become a ReconOS program. Cheapest,
+   and the first screen stays a first screen.
+2. **It draws with the desktop's own code.** `INIT_SRCS` grows the drawing
+   sources and a font, and what a person sees at boot is the real thing — the
+   wallpaper, the taskbar, a window with a real title bar — drawn by the same
+   code that draws it on Linux. Needs a font on the volume, which is a file the
+   installer already knows how to write.
+
+**This half has no view on which**, beyond noting that (2) is the first moment
+anybody could *look* at ReconOS and see ReconOS. Both are reachable now; (2)
+was not reachable a day ago and that is the only reason this entry exists.
+
+**What it does not need:** no new system call. `SYS_MAP` on `/dev/fb0`,
+`SYS_SCREEN`, and the allocator behind `SYS_MAP` with fd -1 are all that the
+drawing touches, and all three are answered.
+
+---
+
 ## Nothing can ask what a file is
 
 **Where:** `userland/libc/`, 15 September 2026, immediately after the socket
