@@ -70,7 +70,19 @@ def suite_count():
     this one is a fact the repository holds, and it had drifted from 34 to 45
     while sitting next to a number that excused it.
     """
-    return len(re.findall(r"^add_test\(", read("CMakeLists.txt"), re.M))
+    try:
+        text = read("CMakeLists.txt")
+    except IOError:
+        # None rather than zero, which is the kernel session's point and a
+        # good one: a tree with no CMakeLists has no answer, and that is a
+        # different fact from a tree with no tests. Zero would have been
+        # written into the badge as though it were measured.
+        return None
+
+    # Anchored at the start of a line. `add_test(` counted anywhere would also
+    # count the one in this comment, and every mention in a commented-out
+    # block.
+    return len(re.findall(r"^add_test\(", text, re.M))
 
 
 def checks_from_a_run():
@@ -172,6 +184,14 @@ def main():
     m = re.search(r"tests-(\d+)_suites,_(\d+)_checks", readme)
     if m:
         suites = suite_count()
+
+        # A tree with no CMakeLists answers None rather than zero, and neither
+        # comparing against it nor writing it into the badge would mean
+        # anything. Left alone instead, which is what "no answer" should do.
+        if suites is None:
+            problems.append("there is no CMakeLists.txt to count suites in")
+            suites = int(m.group(1))
+
         if int(m.group(1)) != suites:
             problems.append("tests badge says %s suites, CMakeLists.txt "
                             "registers %d" % (m.group(1), suites))

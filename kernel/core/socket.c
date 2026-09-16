@@ -238,6 +238,18 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
 	if (!s)
 		return false;
 
+	/* **Calling this again is how a caller asks whether it finished.**
+	 * (KF-244)
+	 *
+	 * `SYS_CONNECT` answers EAGAIN while the handshake is in flight and a
+	 * caller polls by calling again -- so a second call on a socket that is
+	 * already trying must not send a second SYN. It reports where the first
+	 * attempt got to instead. Without this, every poll would open another
+	 * connection and the socket table would fill with attempts nobody is
+	 * waiting on. */
+	if (s->conn >= 0)
+		return socket_connect_done(s);
+
 	if (!s->bound && !socket_bind(s, IPV4_ANY, 0))
 		return false;
 
@@ -249,10 +261,58 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
 
 		if (s->conn < 0)
 			return false;
+
+		/* **Not connected yet, and saying so is the whole fix.**
+		 * (KF-244)
+		 *
+		 * `tcp_open` sends a SYN. The connection is in SYN_SENT and
+		 * will be established when the peer answers, which has not
+		 * happened and may never happen. This used to set `connected`
+		 * here and return success -- so a program was told it had a
+		 * connection and wrote into one that did not exist.
+		 *
+		 * A datagram socket has no handshake, so for those the next
+		 * line is the truth. */
+		return socket_connect_done(s);
 	}
 
 	s->connected = true;
 	return true;
+}
+
+/* Has the handshake finished?
+ *
+ * Asked rather than assumed, and `tcp_state_of` has been able to answer since
+ * TCP was written. Three outcomes rather than two, because *not yet* and
+ * *never* need different words at the call site: a caller that polls on "not
+ * yet" and a caller that gives up on "never" are the same caller, and merging
+ * them makes it spin on a connection the peer refused.
+ */
+enum socket_progress socket_connect_progress(struct socket *s)
+{
+	if (!s || s->type != SOCK_STREAM || s->conn < 0)
+		return SOCKET_PROGRESS_FAILED;
+
+	switch (tcp_state_of(s->conn)) {
+	case TCP_ESTABLISHED:
+		s->connected = true;
+		return SOCKET_PROGRESS_DONE;
+
+	/* Closed, or on its way there, after a SYN went out: the peer refused
+	 * or the attempt timed out. Either way it will not become
+	 * established, and a caller polling for that would poll for ever. */
+	case TCP_CLOSED:
+	case TCP_TIME_WAIT:
+		return SOCKET_PROGRESS_FAILED;
+
+	default:
+		return SOCKET_PROGRESS_WAITING;
+	}
+}
+
+bool socket_connect_done(struct socket *s)
+{
+	return socket_connect_progress(s) != SOCKET_PROGRESS_FAILED;
 }
 
 i64 socket_sendto(struct socket *s, const void *data, u32 len,

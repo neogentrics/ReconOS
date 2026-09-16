@@ -195,7 +195,7 @@
 # kernel branch; the other saw it there, stepped over it, and took 0.2.39 for
 # SYS_MAP's anonymous mapping. Both numbers stand and mean what their entries
 # say. The merged tree is the later of the two.
-VERSION := 0.2.41
+VERSION := 0.2.48
 
 ARCH ?= x86_64
 BUILD := build/$(ARCH)
@@ -291,6 +291,7 @@ USER_ELF := $(BUILD)/user/hello.elf
 # check from inside itself, and losing those to prove something else would be
 # a trade in the wrong direction.
 PAINT_ELF := $(BUILD)/user/paint.elf
+SOCKP_ELF := $(BUILD)/user/socket_probe.elf
 
 # And the third, which is not a test.
 #
@@ -406,6 +407,23 @@ endif
 # round: a C runtime is not a kernel component, and there being one copy of
 # `recon.h` rather than one per program is what stops a system call number
 # drifting between two of them.
+# --- the socket probe --------------------------------------------------------
+#
+# A third C program, and the only one that exists to test a *system call*
+# rather than the loader or the screen. The five socket calls cannot be
+# exercised from a kernel thread -- no process, so no descriptor table -- so
+# the claim that a socket is an ordinary descriptor had nothing checking it
+# until this ran.
+$(SOCKP_ELF): user/socket_probe.c ../userland/crt0.S \
+	      ../userland/include/recon.h user/user.ld
+	@mkdir -p $(dir $@)
+	$(CC) $(USERCFLAGS) -c user/socket_probe.c -o $(BUILD)/user/socket_probe.o
+	$(CC) $(ASFLAGS) -I../userland/include -c ../userland/crt0.S \
+		-o $(BUILD)/user/crt0.o
+	$(LD) -nostdlib -no-pie -z noexecstack -T user/user.ld -o $@ \
+		$(BUILD)/user/crt0.o $(BUILD)/user/socket_probe.o
+	@echo "  built $@"
+
 $(PAINT_ELF): user/paint.c ../userland/crt0.S ../userland/include/recon.h \
 	      user/user.ld
 	@mkdir -p $(dir $@)
@@ -438,7 +456,8 @@ $(INIT_ELF): $(INIT_SRCS) ../userland/crt0.S ../userland/include/recon.h \
 # The blob that carries them into the kernel image. `.incbin` rather than
 # objcopy's `-I binary`, because objcopy names its symbols after the path it
 # was given and that name changes when the build directory does.
-$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF) $(PAINT_ELF) $(INIT_ELF)
+$(BUILD)/core/user_elf.o: core/user_elf.S $(USER_ELF) $(PAINT_ELF) \
+                          $(INIT_ELF) $(SOCKP_ELF)
 
 -include $(OBJS:.o=.d)
 

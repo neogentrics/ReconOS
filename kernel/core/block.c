@@ -168,6 +168,11 @@ void initrd_init(void)
 		(unsigned long)sectors);
 }
 
+/* Set while `block_register_slice` is inside `block_register`, so the scan at
+ * the end of that function does not read a partition looking for partitions.
+ * Not reentrant and does not need to be: registration happens on one thread. */
+static bool slice_being_made;
+
 struct block_device *block_register(const char *name, const struct block_ops *ops,
 				    void *driver, u32 block_size, u64 block_count)
 {
@@ -206,6 +211,42 @@ struct block_device *block_register(const char *name, const struct block_ops *op
 	 * would not survive a suspend is generated from what is actually in
 	 * the machine. */
 	suspend_declare(d->name, 0);
+
+	/* **Read what is written on it, here, because here is the only place
+	 * every disk passes through.** (KF-241)
+	 *
+	 * This used to be a sweep in `block_init`, over a snapshot of the
+	 * device list taken the moment `arch_storage_probe()` returned. That
+	 * is every disk the *architecture* can find. USB enumerates later, so
+	 * `usb0` was registered after the sweep had run and its partition
+	 * table was never read: a 14.4 GB disk with no `usb0p1` under it, on
+	 * the machine that had just booted from that very stick.
+	 *
+	 * USB is not a special case. It is the first device to arrive late and
+	 * it will not be the last -- a hot-plugged disk arrives later still,
+	 * and a driver that probes asynchronously arrives whenever it
+	 * finishes. Scanning at registration is the only rule that does not
+	 * need a list of which arrivals count.
+	 *
+	 * **The recursion is real and is guarded here**, which I got wrong
+	 * once: `block_register_slice` is a separate entry point that *calls
+	 * this function* to allocate its device, so an unguarded scan here
+	 * reads every partition looking for partitions inside it. It produced
+	 * `virtio0p2p1` on the first run -- a 1 MB slice of a slice, from a
+	 * boot sector that happened to look plausible. Separate functions
+	 * sharing one implementation is not two paths, and the old sweep's
+	 * comment was warning about exactly this.
+	 *
+	 * `slice_being_made` is set by `block_register_slice` around its call.
+	 * A flag rather than an argument, because every other caller of this
+	 * function would have to pass something it does not care about.
+	 *
+	 * The device is complete by this line -- `ops`, `driver`, `present`
+	 * are all set above -- so a driver that registers a disk it cannot yet
+	 * read is a driver that has registered too early, and this will say so
+	 * rather than hide it. */
+	if (!slice_being_made)
+		partition_scan(d);
 
 	return d;
 }
@@ -289,8 +330,15 @@ struct block_device *block_register_slice(struct block_device *parent,
 		}
 	}
 
+	/* Cleared on both ways out, including the failure one -- a flag left
+	 * set by a slice that could not be made would silence the scan for the
+	 * next real disk, and that disk would look empty for a reason nothing
+	 * reports. */
+	slice_being_made = true;
 	d = block_register(name, parent->ops, parent->driver,
 			   parent->block_size, count);
+	slice_being_made = false;
+
 	if (!d)
 		return 0;
 
@@ -1020,16 +1068,14 @@ void block_init(void)
 	 * every device it finds arrives back here through block_register(). */
 	arch_storage_probe();
 
-	/* Then read what is written on each of them. Iterated over a snapshot of
-	 * the count taken first, because reading a table registers slices and
-	 * would otherwise walk into the partitions it is creating and try to
-	 * find partitions inside those. */
-	{
-		unsigned whole = device_count;
-
-		for (unsigned i = 0; i < whole; i++)
-			partition_scan(&devices[i]);
-	}
+	/* Nothing here reads partition tables any more.
+	 *
+	 * `block_register` does it, as each disk arrives. The sweep that used
+	 * to be here could only ever see the disks the architecture found
+	 * before it ran, which is why a USB stick was a 14.4 GB disk with
+	 * nothing on it (KF-241). Leaving the sweep *and* adding the scan
+	 * would read every early disk twice and read a late one once, which is
+	 * two rules where there should be one. */
 }
 
 static void print_size(u64 bytes)

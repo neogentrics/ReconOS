@@ -7109,6 +7109,331 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-244 - Connect reports success while the handshake is still in flight
+
+- **Asked for** by the server session, 16 September 2026, and they were right
+  to call it the highest-value fix available: it is the whole client half of
+  the socket API. Discovery, a reverse proxy and every outbound connection
+  stand on it.
+
+- **What it was.** `socket_connect` calls `tcp_open`, which sends a SYN, and
+  then sets `connected = true` and returns success. The connection is in
+  **SYN_SENT**. A program told it had a connection wrote into one that did not
+  exist -- and the peer may never answer, so the claim could stay wrong for
+  ever.
+
+- **`accept` already had the honest shape** and this is the same one: `EAGAIN`
+  while it is in flight, and the caller polls. Blocking needs a wait queue on
+  the socket and a way to interrupt it, and neither exists yet -- so the choice
+  is between saying *not yet* and saying something untrue.
+
+- **Three answers below, not two.** `socket_connect_progress` reports WAITING,
+  DONE or FAILED, because *not yet* and *never* need different words at the
+  call site: a caller that polls on the first and gives up on the second is the
+  same caller, and merging them makes it spin on a connection the peer refused.
+  `EAGAIN` and `EIO` at the system call, from those three.
+
+- **And `socket_connect` is idempotent now**, which the polling shape requires
+  and which is the part easy to miss. Calling it again is how a caller asks
+  whether the handshake finished -- so a second call on a socket already trying
+  must not send a second SYN. Without that, every poll opens another connection
+  and the table fills with attempts nobody is waiting on.
+
+- `tcp_state_of` has been able to answer this since TCP was written. Nothing
+  was asking.
+
+- **Status:** fixed, kernel 0.2.48.
+
+### KF-243 - The scratchpad pointer array is also scratchpad buffer zero
+
+- **Found:** 16 September 2026, on the Gateway, by the diagnostic added one
+  boot earlier:
+
+  ```
+  port 7 could not be given a slot -- no answer in a second;
+     usbsts 0x0000001d halted host-error event-pending, command ring running
+  ```
+
+  **`HSE` is the word.** Host system error means the controller attempted a
+  memory access that failed on the bus -- not a malformed command, a bad
+  address. It read a pointer this driver gave it and the read did not come
+  back.
+
+- **What it was.** The Gateway's controller asks for **576 scratchpad pages**.
+  The array of pointers to them was placed in page 4 of the backing
+  allocation, and then
+
+  ```c
+  array[i] = x->backing + (4 + i) * PAGE_SIZE;   /* i == 0 is page 4 */
+  ```
+
+  handed the controller **that same page** as buffer zero. The controller was
+  given its own pointer table as scratch memory. The first time it wrote there
+  it destroyed the addresses of the other 575 buffers; the next read was
+  garbage, the bus faulted, and it halted.
+
+- **Why two devices enumerated first.** Scratchpads are the controller's own
+  working memory and it does not reach all of them at once. Ports 4 and 6 fit
+  inside what it had already. The third made it touch buffer zero -- so
+  **port 7 killed the controller and port 8 was talking to a corpse.** Two
+  symptoms, one fault.
+
+- **The comment above it already said the shape.** *A controller that asks for
+  them and is not given them does not report an error; it misbehaves later* --
+  written about not allocating them at all. Allocating them on top of each
+  other is the same sentence.
+
+- **QEMU asks for zero scratchpad pages**, so `if (scratch)` has never executed
+  in 1578 self-tests across twenty-eight boot paths. Not a weak test: an
+  emulator that needs no scratch memory cannot exercise the code that gives it
+  any.
+
+- **Fixed** by giving the array a page of its own -- `5 + scratch` rather than
+  `4 + scratch` -- and starting the buffers at page 5.
+
+- **Status:** fixed, kernel 0.2.48.
+
+### KF-242 - A failed command cannot say whether it was refused or ignored
+
+- **Found:** 15 September 2026, by reading for the cause of
+  `xhci: port 7 would not give up a slot` -- the last USB fault standing after
+  KF-238 to KF-241.
+
+- **Two faults in one line, and the second is why the first matters.**
+
+  `command()` returns a bare `false` for two unrelated outcomes: `next_event`
+  timing out after a second with nothing arriving, or a completion arriving
+  with a code that is not SUCCESS. **The caller gets one `false` and cannot
+  tell a controller that went quiet from a controller that said no** -- and
+  those need different investigations. A timeout is a ring or interrupt
+  problem; a refusal is a code the controller is willing to name.
+
+  And the message describes the wrong operation. `TRB_ENABLE_SLOT` *asks the
+  controller for* a slot; "would not give up a slot" reads as a failure to
+  release one, and was read that way -- sending the next step toward a slot
+  leak that is not happening.
+
+- **The same file is precise about this thirty lines away.** `port 6 would not
+  take an address (completion code 4)` names its code, and that one number was
+  the whole of KF-240's diagnosis: completion code 4 is a USB transaction
+  error, which is a device that did not answer, which is a missing recovery
+  interval. One boot, one line, one fix. The slot failure had a year of
+  investigations available to it and named none.
+
+- **Cost.** Not a wrong answer -- an absent one. Ports 7 and 8 have failed on
+  every Gateway boot and nothing recorded is enough to say why, so the next
+  step has to be another boot rather than another read. That is the expensive
+  kind of gap: it does not mislead, it simply defers.
+
+- **Fixed.** `command()` zeroes the result on the timeout path, so a zeroed TRB
+  means *nothing arrived* and anything else carries the controller's own code.
+  `say_why_command_failed()` turns that into words, and the enable-slot site
+  says what it was asking for rather than what it sounded like.
+
+- **Status:** fixed, kernel 0.2.46. The underlying slot failure is still open
+  and is now diagnosable in one boot instead of none.
+
+### KF-241 - A disk that arrives late is never read
+
+- **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
+
+  ```
+  usb0   : 14.4 GB, 30277632 blocks of 512 bytes, removable
+  mmc0   : 58.2 GB, 122159104 blocks of 512 bytes
+  mmc0p1 : 976.0 MB ...
+  ```
+
+  The eMMC lists its partitions. The stick lists none -- and the `boot log`
+  line printed nothing at all, not even its refusal, because with no partitions
+  there was no volume for `klog_save_to_medium` to find.
+
+- **What it was.** Partition tables were read by a one-time sweep in
+  `block_init`, over a snapshot of the device list taken the instant
+  `arch_storage_probe()` returned. That is every disk the *architecture* can
+  find. **USB enumerates later**, so `usb0` registered after the sweep had run
+  and nothing ever looked at it.
+
+- **USB is not a special case**, which is why the fix is not "scan USB too". It
+  is the first device to arrive late and not the last: a hot-plugged disk
+  arrives later still, and any driver that probes asynchronously arrives
+  whenever it finishes. `block_register` scans now, as each disk arrives, and
+  the sweep is gone -- one rule that needs no list of which arrivals count.
+
+- **And the recursion the old comment warned about is real.** That sweep
+  explained itself as iterating a snapshot *because reading a table registers
+  slices and would otherwise walk into the partitions it is creating*. Moving
+  the scan into `block_register` reintroduced exactly that, and the first run
+  produced `virtio0p2p1` -- a one-megabyte slice of a slice, from a boot sector
+  that happened to look plausible.
+
+  **I had written the opposite in a comment before testing it**: that slices
+  come from `block_register_slice`, *"a different function that does not come
+  through here."* `block_register_slice` calls `block_register`. Two entry
+  points, one implementation -- ten seconds of reading past the signature would
+  have shown it, and instead it was asserted in the most durable place to be
+  wrong. Guarded with a flag now, and the comment says what is true.
+
+  It survived only because the virtio case was run as well as the USB one and
+  compared against earlier logs. `virtio0p2p1` looks entirely reasonable if
+  nobody checks whether it used to be there.
+
+- **Status:** fixed, kernel 0.2.45.
+
+### KF-240 - A device is addressed before it is allowed to answer
+
+- **Found:** 15 September 2026, the moment KF-239 let a root port reach the
+  enabled state: `xhci: port 6 would not take an address (completion code 4)`.
+
+- **Completion code 4 is USB Transaction Error** -- not a refusal, a device
+  that did not answer at all. USB requires **TRSTRCY, ten milliseconds of
+  recovery** after a port reset before a device need respond to anything, and
+  a control transfer sent inside that window gets no reply.
+
+  `reset_port` spun on `PORTSC`, saw `PRC`, returned, and `port_arrived` called
+  `address_device` immediately. Zero delay.
+
+- **The hub path already waited, by accident of shape.** `hub_reset_port`'s
+  polling loop opens with `busy_ms(10)`, so ten milliseconds have always passed
+  before it can return. Same operation, two implementations, one of them
+  correct for a reason nobody chose.
+
+- **This is the third borrowed idea this file has moved one direction.** The
+  boot walk's own comment says it: *"this is the hub code's reasoning two
+  hundred lines up, applied to the ports it was never applied to"* -- written
+  about the power-and-settle by somebody who noticed the gap once and fixed the
+  instance rather than the class. Then the reset itself. Now the recovery
+  interval. Two implementations of one operation is two places for the next
+  improvement to be made in one of, and `port_arrived` exists precisely to stop
+  that happening between the boot and hot-plug paths. The root/hub split has
+  the same problem and is still open.
+
+- **Fixed** inside `reset_port`, after the reset completes, so neither caller
+  can forget it. Addressed devices went from 1 to 2 on the next boot.
+
+- **Status:** fixed, kernel 0.2.45.
+
+### KF-239 - The port reset disables the port it has just enabled
+
+- **Found:** 15 September 2026, by printing the raw port registers on the
+  Gateway -- three snapshots in one boot, against Linux reading the same
+  silicon minutes later:
+
+  ```
+  as the controller came up   port 4  0x000002a0  empty
+  after powering and 100 ms   port 4  0x000206e1  connected, disabled, speed 1
+  after resetting each port   port 4  0x000006e1  connected, disabled, speed 1
+  Linux, same port            port 4  0x00000e63  connected, ENABLED,  speed 3
+  ```
+
+  Only bit 17 moved across the reset. It ran, reported completion, and enabled
+  nothing.
+
+- **What it was.** `PED` -- bit 1 -- was missing from `PORTSC_RW1CS`, the mask
+  of write-one-to-clear bits that every read-modify-write masks out. The
+  sequence destroyed its own work:
+
+  1. write `PR`; the controller resets the port and **sets `PED`**
+  2. wait for `PRC`; it appears, so no timeout is ever reported
+  3. acknowledge `PRC` with `(read & ~RW1CS) | PRC` -- and that read now carries
+     `PED`, which is written straight back
+  4. **writing one to `PED` disables the port**
+  5. `return (PORTSC & PED) != 0` -- false
+
+  It enabled the port and disabled it one line apart, then reported that the
+  reset had failed.
+
+- **The rule was right and the list was short.** The comment above that mask
+  states it correctly. Bits 17 to 23 are the change flags and were swept as a
+  block; `PED` sits alone at bit 1 doing the same thing for a different reason.
+  Every other bit in the mask *reports* something. `PED` **commands**
+  something. `CEC` at bit 23 was outside the sweep too and is added with it.
+
+- **Invisible under emulation**, and not by luck: an emulated port comes out of
+  reset enabled, so the accidental disable-write lands on a port already where
+  the driver wants it. It needs hardware that obeys.
+
+- **What it cost, which is the part worth keeping.** `0 connected` sent three
+  separate hypotheses -- a wrong register base, unpowered ports, a debounce too
+  short -- and a fix was nearly shipped to a `busy_ms(20)` that is not even on
+  this code path. All three are theories about why nothing was *detected*, and
+  detection had been working perfectly the whole time. See KF-238.
+
+- **Status:** fixed, kernel 0.2.45. Four ports came up `0x00000e63` -- byte for
+  byte what Linux reads -- and the kernel addressed a device on real hardware
+  for the first time.
+
+### KF-238 - The USB summary counts enabled ports and calls them connected
+
+- **Found:** 15 September 2026, while failing to explain KF-239.
+
+- **What it was.** One line:
+
+  ```c
+  kprintf("... %u connected, %u addressed", enabled, x->device_count);
+  ```
+
+  `enabled` printed under the word `connected`. `xhci_ports_connected()`
+  computes the real figure and sits unused in the same file.
+
+- **Cost: most of a day.** On the first machine where the two differed it read
+  `0 connected` while four devices were plugged in, detected, powered and
+  waiting -- including the stick the kernel had booted from. It was reporting a
+  **reset** failure using the word **connected**, which sent the investigation
+  into the wrong subsystem three times over.
+
+- **Worse than KF-231 and KF-236**, which are numbers printed in a form nobody
+  can look up. An unlookupable GUID sends you to another tool. A confidently
+  mislabelled zero sends you to debug something that was working.
+
+- **Fixed:** three numbers where there was one -- `N connected, M enabled,
+  K addressed`. On the Gateway that read `4 connected, 0 enabled` and named the
+  fault outright.
+
+- **Status:** fixed, kernel 0.2.45.
+
+### KF-237 - A power cut inside a rename left no valid superblock, once
+
+- **Found:** 15 September 2026, matrix 57, one round of six:
+
+  ```
+  round 5 (cut at 1115ms): unreadable no valid superblock
+  6 cuts inside a rename on x86_64: 1 inconsistent.
+  ```
+
+- **Why this is not "a flaky test".** ReconFS keeps **two** superblocks, at byte
+  0 and at `BLOCK_MAX`, and `reconfs-check.py` takes whichever has the higher
+  epoch and a correct CRC. `no valid superblock` means **both were bad at the
+  same instant** -- which is the one condition a two-superblock design exists
+  to make impossible. A cut is meant to land between two good copies, never
+  across both.
+
+- **What is established, and what is not.** Established: it happened once, and
+  the eight matrix runs before it (50 through 56) were `0 inconsistent`.
+  Not established: anything about the mechanism. Four subsequent runs are
+  clean -- two standalone reruns, matrix 59 and matrix 60 -- so it is
+  **intermittent and unreproduced**.
+
+- **It is not the timer fix, which was the first suspicion.** KF-234 landed in
+  the same commit and makes every timer fire up to a tick *later*, so the
+  ordering of writes inside the replacing phase genuinely moved. That was worth
+  suspecting and does not survive the evidence: four clean runs on the same
+  code, including two matrices.
+
+- **And it is not a cut landing too early**, which was the second. The round's
+  clock starts when the guest prints `reconfs-crash: replacing`, not at launch
+  -- `rename-crash-test.sh` was changed to do that after checkpoint 20's extra
+  second of self-tests moved the early rounds, and the comment saying so is
+  still above the line. The filesystem exists by then.
+
+- **Status:** open, **unreproduced**, and deliberately not closed. The last
+  entry that sat in this state was KF-232, which went fifty-six boots without
+  reproducing and turned out to be real -- and the lesson recorded there is
+  that *a symptom seen once on one machine is a symptom*, not a mechanism and
+  not a fluke. What would make this diagnosable is the checker distinguishing
+  **"no superblock has been written yet"** from **"both were written and both
+  are torn"**; it reports one status for both today, and those are different
+  faults.
+
 ### KF-236 - Every PCI address is printed in a form nobody can look up
 
 - **Found:** 15 September 2026, by holding the Gateway's boot report beside
