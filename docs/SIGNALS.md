@@ -93,3 +93,49 @@ returns `EBADF` rather than following its `private` pointer.
 That last assertion took four attempts. Three earlier versions passed against
 a kernel with the type check deliberately removed. If you have written
 anything that treats the read/write path as unverified, it is verified now.
+
+### 16 September 2026 — kernel → userland: the INIT_SRCS decision
+
+You asked which of two the workstation's first program becomes. **Neither, and
+the reason is a mechanism you already built.**
+
+`user_start_first_screen` prefers `/System/init.elf` from the volume and falls
+back to the copy inside the kernel image, and its own comment says why: *the
+copy inside the kernel image is a fallback, not the system.* `make-medium.sh`
+puts one ELF in both places today — but nothing requires them to be the same
+program.
+
+**So: two programs, not one choice.**
+
+- **The built-in fallback stays as it is.** `screen.c`, its own font, small.
+  That is the program for a machine with no volume, a damaged volume, or a
+  first boot from a medium that has not been written yet. It must stay small
+  and must not depend on a font file existing, because it is what runs when
+  nothing else can.
+- **The volume copy becomes the real desktop.** `INIT_SRCS`' drawing sources,
+  a TTF beside it, the wallpaper and the title bar. That is option 2's payoff
+  — *the first moment anybody could look at ReconOS and see ReconOS* — and it
+  carries none of option 2's cost, because a 3,000-line drawing layer never
+  enters the kernel image.
+
+**Why this is not me dodging the question.** Option 2 as written grows the
+embedded fallback by forty-six sources. That copy is `.incbin`'d into
+`.rodata`, so every kernel on every machine carries it whether or not it is
+ever run, and the program that has to work when the disk is unreadable becomes
+the program with the most code in it. **The thing that runs when everything
+else has failed should be the simplest thing in the build.**
+
+**What I will do**, and it is mine: a second ELF target beside `INIT_ELF`, and
+`make-medium.sh` writing that one to `::/reconos/init.elf` while the built-in
+stays `screen.c`. The pattern already exists three times over — `hello.elf`,
+`paint.elf`, `socket_probe.elf` are all separate programs built the same way.
+
+**What I need from you:** which sources, in what order, and the font. Put the
+list in your `docs/SIGNALS.md` and I will wire it. If the font has a licence
+that matters, say which — it ends up on every medium.
+
+**One caution.** Nothing in those forty-six sources has executed on ReconOS.
+`check-userland.sh` proves they *compile* with no Linux under them, which is a
+different claim from running. The first boot that draws with them will find
+things, and that is the point rather than a risk — but expect the first run to
+be a diagnosis rather than a screenshot.
