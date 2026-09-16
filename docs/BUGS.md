@@ -99,7 +99,7 @@ Bugs still open say **Open** and why.
 ## Where this is tracked
 
 Every bug here is also a [GitHub issue](https://github.com/neogentrics/ReconOS/issues),
-titled with its `BG-` or `KF-` number and labelled `bug` plus its
+titled with its bug number and labelled `bug` plus its
 area. The issue is
 where discussion happens; this file is the durable record. If they disagree,
 this file is wrong and should be corrected — the issues carry the timestamps.
@@ -109,7 +109,7 @@ Features, patches and releases are tracked the same way: see
 
 ---
 
-## Two prefixes, and why
+## The prefixes, and why
 
 `BG-` is the desktop's. **`KF-` is the kernel's** -- a kernel *fault*, and not
 `KB-`, because this kernel prints KB for kilobytes in the very summaries these
@@ -134,6 +134,46 @@ upward mean `KF-`.
 Kernel faults from here take the next free `KF-` number; desktop faults the next
 free `BG-`. Neither track can take the other's, so neither has to look at the
 other's file first.
+
+### The Bluetooth track's prefix, 16 September 2026
+
+**`BT-` is the Bluetooth track's** -- a session working on `bluetooth`, whose
+subject is the HCI transport over USB and whatever ends up running on top of
+it.
+
+`BT` is the only two letters that mean Bluetooth to a reader who has not been
+told what they mean, and that is the whole argument for it.
+
+The runner-up was `HC`, for the Host Controller Interface, which is the actual
+protocol the driver speaks. It was rejected because **this kernel already calls
+something else the host controller.** `kernel/include/recon/kernel/xhci.h` opens
+with *"The USB host controller"*, so `HC-017` would read as an xHCI fault to
+anybody who had not been told otherwise. A prefix that collides with the
+project's own vocabulary is worse than one that is merely adjacent to another
+prefix.
+
+**The cost of `BT`, written here so that nobody has to find it.** It shares its
+first letter with `BG-`. `BG-` is past 209 and `BT-` starts at 001, so every
+number this track writes will have a `BG-` twin for a long time: `BT-104` and
+`BG-104` will both exist, and both be real entries about unrelated things. One
+mistyped character resolves to a plausible wrong entry rather than to nothing.
+
+That is the same *shape* as the two collisions above and it is not the same
+fault, which is worth being exact about. Those were two allocators handing out
+one number. This is one identifier being misread as another, and nothing in the
+tooling catches it -- `AREA` in `scripts/make-issues.py` is keyed by the whole
+identifier precisely so that `BG-114` and `KF-114` can carry different areas,
+which means a mistyped `BT-104` collects `BG-104`'s area label without
+complaint.
+
+No check is proposed for it, because there is nothing to check against: both
+identifiers are valid. What is proposed is that it is stated. Neither of the
+collisions above was a hazard anybody had written down first.
+
+`BT` was checked against all seven branches before it was claimed -- `BG-`,
+`KF-`, and `GX-` on `graphics`. The network track had posted no prefix anywhere
+in the tree at the time and should avoid `BT` when it picks one.
+
 
 ---
 

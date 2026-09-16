@@ -42,6 +42,19 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Every prefix the register uses. Kept in the same shape as the list in
+# `scripts/make-issues.py` and for the same reason: a prefix spelled into a
+# regex is a prefix that every new session edits in place, and two sessions
+# claiming one at the same time then conflict on the line rather than on the
+# list. Add a prefix here.
+#
+# Counting by prefix rather than summing two named ones also means a track
+# whose prefix nobody added is *missing from the total*, which the badge then
+# reports as a mismatch. That is the loud failure. Summing `BG` and `KF` by
+# name was the quiet one: `GX-` entries existed on `graphics` and this file
+# counted none of them while reporting itself green.
+PREFIXES = ("BG", "KF", "GX", "BT")
+
 
 def read(path):
     return io.open(os.path.join(ROOT, path), encoding="utf-8",
@@ -49,9 +62,19 @@ def read(path):
 
 
 def bug_counts():
-    """How many entries the register actually holds, by prefix."""
-    heads = re.findall(r"^### (BG|KF)-\d+", read("docs/BUGS.md"), re.M)
-    return {"BG": heads.count("BG"), "KF": heads.count("KF")}
+    """How many entries the register actually holds, by prefix.
+
+    Every prefix the register carries, not a named two -- and any heading that
+    looks like an entry but carries a prefix nobody registered is returned
+    under its own key too, so that it is visible rather than uncounted.
+    """
+    heads = re.findall(r"^### ([A-Z]{2})-\d+", read("docs/BUGS.md"), re.M)
+    counts = dict((p, 0) for p in PREFIXES)
+
+    for h in heads:
+        counts[h] = counts.get(h, 0) + 1
+
+    return counts
 
 
 def suite_count():
@@ -95,7 +118,7 @@ def main():
     fixed = readme
 
     bugs = bug_counts()
-    total = bugs["BG"] + bugs["KF"]
+    total = sum(bugs.values())
     dv = desktop_version()
 
     # --- the bug count -------------------------------------------------
@@ -103,8 +126,10 @@ def main():
     if not m:
         problems.append("no bug-count badge found; has the README changed shape?")
     elif int(m.group(1)) != total:
-        problems.append("bugs badge says %s, the register holds %d (%d BG + %d KF)"
-                        % (m.group(1), total, bugs["BG"], bugs["KF"]))
+        breakdown = ", ".join("%d %s" % (n, p)
+                              for p, n in sorted(bugs.items()) if n)
+        problems.append("bugs badge says %s, the register holds %d (%s)"
+                        % (m.group(1), total, breakdown))
         fixed = re.sub(r"(bugs_recorded-)\d+(-)", r"\g<1>%d\g<2>" % total, fixed)
 
     # --- the version, in both badges -----------------------------------

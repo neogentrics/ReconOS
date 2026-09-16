@@ -27,6 +27,24 @@ import sys
 
 REPO = 'neogentrics/ReconOS'
 
+# Every prefix the register uses, and the one place to add one.
+#
+# This was spelled `(?:BG|KF)` at five separate call sites below. That made
+# claiming a prefix a five-line edit -- and the five lines every session
+# claiming one edits are the same five lines, so each new track conflicts with
+# every other track on all of them. `graphics` added `GX` to all five on its
+# branch; `bluetooth` adding `BT` to all five on its own would have collided
+# line for line, and the track after that would collide with both.
+#
+# One constant is one conflict, resolved in one place. `GX` is listed here from
+# `graphics` even though this branch's register holds no `GX-` entry yet, so
+# that the merge of the two needs no second edit.
+#
+# The network track had claimed no prefix anywhere in the tree when this was
+# written. Add it here when it does.
+PREFIXES = ('BG', 'KF', 'GX', 'BT')
+PREFIX = '(?:' + '|'.join(PREFIXES) + ')'
+
 # The area for each entry, assigned by hand. A keyword rule got most of these
 # wrong in ways that read as careless -- a build-warning bug labelled
 # "accounts" is worse than no label, because somebody filtering by area then
@@ -289,7 +307,7 @@ def existing_titles():
 def parse(path):
     text = io.open(path, encoding='utf-8').read()
     # Everything from the first entry on; the preamble is not an entry.
-    blocks = re.split(r'\n### ((?:BG|KF)-\d+ *(?:—|–|--) )', text)
+    blocks = re.split(r'\n### (' + PREFIX + r'-\d+ *(?:—|–|--) )', text)
     entries = []
     for i in range(1, len(blocks), 2):
         head = blocks[i]
@@ -372,7 +390,7 @@ def check_links():
     titles = {i['number']: i['title'] for i in json.loads(out.stdout)}
     linked = wrong = missing = 0
 
-    for m in re.finditer(r'^### ((?:BG|KF)-\d+) .*$', text, re.M):
+    for m in re.finditer(r'^### (' + PREFIX + r'-\d+) .*$', text, re.M):
         bg = m.group(1)
         after = text[m.end():m.end() + 200].lstrip('\n')
         cite = re.match(r'\[#(\d+)\]', after)
@@ -411,12 +429,12 @@ def check_open(text):
         return 0
 
     open_now = []
-    for block in re.split(r'(?=^### (?:BG|KF)-)', text, flags=re.M):
-        m = re.match(r'### ((?:BG|KF)-\d+)', block)
+    for block in re.split(r'(?=^### ' + PREFIX + r'-)', text, flags=re.M):
+        m = re.match(r'### (' + PREFIX + r'-\d+)', block)
         if m and not is_fixed(block.split('\n## ')[0]):
             open_now.append(m.group(1))
 
-    named = set(re.findall(r'(?:BG|KF)-\d+', head.group(1)))
+    named = set(re.findall(PREFIX + r'-\d+', head.group(1)))
     missing = [b for b in open_now if b not in named]
     extra = [b for b in named if b not in open_now]
 
