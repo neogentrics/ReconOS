@@ -257,6 +257,36 @@ bool socket_connect(struct socket *s, ipv4_addr addr, u16 port)
 	s->remote_port = port;
 
 	if (s->type == SOCK_STREAM) {
+		/*
+		 * **The local address has to be the real one before the
+		 * checksum is computed over it.**
+		 *
+		 * `socket_bind(s, IPV4_ANY, 0)` above leaves `local_ip` as
+		 * 0.0.0.0, and handing that to `tcp_open` means the TCP
+		 * pseudo-header is summed with a source of zero -- while the
+		 * IP layer writes the device's real address into the header on
+		 * the way out. The checksum is then short by exactly the
+		 * source address, and every correct peer drops the segment
+		 * without a word.
+		 *
+		 * Measured with a packet capture on the virtual NIC: the SYN
+		 * goes out, nothing ever comes back, and the checksum field is
+		 * wrong by 0x0C0F -- which is 0x0A00 + 0x020F, the two halves
+		 * of 10.0.2.15. Not a RST, not a retransmission, no reply of
+		 * any kind, because slirp discards a bad checksum silently.
+		 *
+		 * An accepted connection never had this: its local address
+		 * comes from the packet that arrived. So inbound worked, and
+		 * outbound never has.
+		 */
+		if (s->local_ip == IPV4_ANY) {
+			ipv4_addr next_hop = 0;
+			struct net_device *dev = netdev_route(addr, &next_hop);
+
+			if (dev && dev->ip != IPV4_ANY)
+				s->local_ip = dev->ip;
+		}
+
 		s->conn = tcp_open(s->local_ip, s->local_port, addr, port);
 
 		if (s->conn < 0)

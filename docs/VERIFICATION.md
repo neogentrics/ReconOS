@@ -534,3 +534,41 @@ None.
   green before and after the merge -- because every one of them is a host
   suite and the fault is in the kernel. A merge verified by running the suites
   alone would have been called clean.
+
+### VF-020 -- outbound TCP had never worked, and the reason was two bytes of arithmetic
+
+- **Found in** kernel 0.2.48 after the merge, 16 September 2026. **Found by**
+  capturing packets on the virtual NIC rather than reasoning about the code.
+- **What it was** Every outbound SYN carried a **wrong TCP checksum**, so every
+  correct peer discarded it without a word -- no SYN+ACK, and not even a RST
+  for a port with nothing listening. `dial.c` reported *timed out* for every
+  target, which is exactly what a silently dropped segment looks like from
+  above.
+- **How it was pinned** The capture gave the bytes, and recomputing both
+  checksums showed the IP one correct and the TCP one wrong -- **by the same
+  amount on both packets, 0x0C0F**. That is `0x0A00 + 0x020F`, the two halves
+  of this machine's own address. A constant difference is a missing constant
+  term, and the missing term named itself.
+- **Why** `socket_connect` binds to `IPV4_ANY` before opening, so `tcp_open`
+  was handed 0.0.0.0 as the local address and summed the pseudo-header over a
+  source of zero -- while the IP layer wrote the device's real address into the
+  header on the way out.
+- **Why it had never been noticed** An accepted connection takes its local
+  address from the packet that arrived, so inbound was always correct. Every
+  test of this kernel's sockets before today was inbound: a client on the host
+  talking to the machine's web server. **Outbound had one user, written three
+  versions ago, that could not run until `connect` stopped lying about its
+  result.** VF-009 hid this behind a bug of its own.
+- **Fixed and proved on the wire, not argued.** Before: a SYN and silence.
+  After: a RST for the closed port, a full three-way handshake for the open
+  one, and the listener on the host logging `ACCEPTED`.
+- **And it revealed a second fault** underneath, which is the kernel session's
+  and is reported with its timings: the handshake now completes on the wire and
+  `connect` still never reports it. Replies arrive in about a millisecond and
+  are not acted on for six seconds, until the peer retransmits. Thirty seconds
+  and 7.8 million polls give the same answer as two.
+- **Why it belongs here** Three sessions have written about this kernel's
+  sockets and none had looked at a packet. The code review that would find a
+  missing pseudo-header term is possible and nobody did it; the capture took
+  four minutes and named the byte. **When something is dropped silently by
+  everything downstream, the only witness left is the wire.**

@@ -90,31 +90,104 @@ the merge, which is the only reason the regression had a witness at all.
 
 ---
 
-## Also, and separately: outbound TCP does not complete
+## Outbound TCP: one fault found and fixed, one still yours
 
-Not a regression — it may never have worked — and reported because KF-244 is
-what made it visible.
+This one is worth reading in full, because the first half is fixed on this
+branch and the second half is not, and they were hiding each other.
 
-With `dial.c` polling to a real deadline, **three different targets all time
-out**, and a listener on the host recorded no connection arriving:
+### The SYN carried a wrong checksum, and every peer dropped it silently
 
-| target | verdict |
-|---|---|
-| `10.0.2.2:9` (nothing listening) | timed out |
-| `10.0.2.15:80` (this machine's own listener, already up) | timed out |
-| `10.0.2.2:8099` (a host listener that accepts, confirmed) | timed out |
+Found with a packet capture on the virtual NIC (`-object filter-dump`), after
+`dial.c` reported every outbound connection as timing out.
 
-Inbound TCP is fine on the same boot — `GET /api/status` answers 200 — and the
-kernel's own DHCP exchange completes, so the card and the stack are working.
+The capture showed the SYN going out and **nothing ever coming back** -- no
+SYN+ACK, no RST, not even for a port with nothing listening. A peer that
+silently discards a segment is usually looking at a bad checksum, so both were
+recomputed from the captured bytes:
 
-Under 0.2.41 the same measurement read `connect(own :80)=0 write=-1`: a
-success that was not one, followed by a write that failed. So KF-244 has
-changed the *reporting* from a lie to an honest *in flight*, and the handshake
-still never finishes from the active side.
+```
+pkt 9  TCP -> 10.0.2.2:9
+   IP  checksum field 62ba  computed 62ba  OK
+   TCP checksum field 1512  computed 0903  WRONG
+pkt 11 TCP -> 10.0.2.2:8099
+   IP  checksum field 62b8  computed 62b8  OK
+   TCP checksum field 2a5e  computed 1e4f  WRONG
+```
 
-**This is the remaining half of what discovery and the reverse proxy need.**
-`dial.c` is written, tested at 38 checks, and ready for the day a SYN gets an
-answer. `docs/KERNEL-WANTS.md` on this branch carries the details.
+**Wrong by the same amount both times: 0x0C0F.** That is `0x0A00 + 0x020F` --
+the two halves of 10.0.2.15, this machine's own address. The source address was
+missing from the TCP pseudo-header.
+
+`socket_connect` calls `socket_bind(s, IPV4_ANY, 0)`, so `s->local_ip` is
+0.0.0.0 when it is handed to `tcp_open`. The checksum is summed over that zero,
+and the IP layer then writes the device's real address into the header on the
+way out -- leaving the segment short by exactly the source.
+
+An accepted connection never had this, because its local address comes from the
+packet that arrived. **So inbound has always worked and outbound never has.**
+
+The fix applied here resolves the address through the route before opening:
+
+```c
+if (s->local_ip == IPV4_ANY) {
+        ipv4_addr next_hop = 0;
+        struct net_device *dev = netdev_route(addr, &next_hop);
+
+        if (dev && dev->ip != IPV4_ANY)
+                s->local_ip = dev->ip;
+}
+
+s->conn = tcp_open(s->local_ip, s->local_port, addr, port);
+```
+
+Measured after, on the same rig, same capture method:
+
+```
+ 9 SYN -> 10.0.2.2:9      10 RST+ACK back        (a closed port now refuses)
+12 SYN -> 10.0.2.2:8099   13 SYN+ACK back
+                          15 ACK from this machine  (handshake complete)
+```
+
+and the listener on the host logged `ACCEPTED`. **The packets are correct now.**
+
+### And the part that is still broken
+
+With the handshake completing on the wire, `connect` **still never reports
+success**. Nor does it report a refusal when a RST comes back.
+
+The timings are the sharp end of it -- relative to boot, from the capture:
+
+```
++ 2.047s  SYN -> :9        RST+ACK back 1 ms later
++ 6.023s  SYN -> :8099     SYN+ACK back 1 ms later     <- not acted on
++12.008s                   SYN+ACK retransmitted by the peer
++12.041s  ACK ->           this machine finally answers
+```
+
+The replies arrive in about a millisecond and nothing happens for six seconds,
+until the far end retransmits. Meanwhile the program is polling `connect` --
+`attempts=7848406` over a thirty-second deadline -- and every one of those
+answered `SYS_EAGAIN`. The connection the host had already accepted was never
+reported to the program that opened it.
+
+So `c->state = TCP_ESTABLISHED` in the `TCP_SYN_SENT` case does run (the ACK at
++12.041s proves it), and `tcp_state_of(s->conn)` never returns it to the
+caller. The RST case is the same shape: `socket_connect_progress` should see
+`TCP_CLOSED` and answer `FAILED`, and instead the caller sees `EAGAIN` until
+its deadline.
+
+**This is yours and no number is claimed for it.** What this seat can add:
+
+- It is not a timeout. Thirty seconds and 7.8 million polls give the same
+  answer as two seconds.
+- It is not the poll loop starving the stack. `SYS_YIELD` is called between
+  attempts, and the DNS resolver polls in exactly the same shape and gets its
+  reply in about 2600 tries.
+- Inbound TCP is unaffected on the same boot -- `GET /api/status` answers 200
+  while all this is happening.
+
+**`dial.c` is ready for the day this lands**: 38 checks, three-valued, written
+against `errno` by name. Discovery and the reverse proxy need nothing else.
 
 ---
 
