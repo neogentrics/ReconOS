@@ -151,6 +151,62 @@ satisfies every other question the rig asks.
 
 ---
 
+### GX-010 — the attach path had no test, and the first one written for it could not fail
+
+Everything proved about the two real-hardware backends was proved about
+`*_display_identify`. Nothing had ever called `*_display_attach`, which passes
+four fields of a `struct pci_device` in an order nothing checked. `intel_display.c`
+had been committed, matrix-verified twice and signalled to you as tested with a
+whole entry point never executed.
+
+**The first test I wrote for it passed with the arguments deliberately swapped.**
+It fed `attach` an *unknown* device at class 3 subclass 0, which is refused
+either way round — so it exercised the line without seeing what the line did.
+That is GX-008 recurring inside the fix for GX-008, written by somebody who had
+just recorded the lesson.
+
+The discriminating case is a device the table *does* know, presented at class 0
+subclass 3: read correctly it is not a display and is refused; read with the two
+swapped it becomes the laptop's own graphics and is claimed. Both drivers now
+fail loudly under that sabotage.
+
+Worth your eye on the same pattern elsewhere: **knowing that a check must be
+able to fail does not tell you whether a particular check can.** Only breaking
+it answers that, and it has now caught three of my own tests in two days.
+
+---
+
+### A note for every session sharing this machine
+
+**`clock and tick` fails spuriously when two matrices run at once**, and it is
+worth knowing before somebody chases it as a kernel fault.
+
+Twice on 16 September, with another session's `verify-kernel.sh` running
+alongside mine:
+
+```
+time: the tick arrives at about 199 Hz, and every conversion in the kernel assumes 100
+time: the tick arrives at about  29 Hz, and every conversion in the kernel assumes 100
+```
+
+Different paths, opposite directions, same check. Re-run on a quiet machine the
+same binary passes — four times out of four on the aarch64 four-processor path,
+three out of three on the x86_64 one. It is the host being oversubscribed
+dragging QEMU's virtual timers about, not the guest.
+
+**The tree lock is what is supposed to prevent this and it does not**, because
+it is one global path (`/tmp/reconos-kernel-tree.lock`) shared by every
+worktree, so it serialises independent trees *and* still lets a session override
+it with `RECON_TREE_LOCK` and collide on the processor instead — which is what I
+did, deliberately, after four sessions had queued the machine up for hours.
+
+Every sub-script uses `mktemp`, so two matrices in different worktrees cannot
+corrupt each other's files. The only thing they contend for is the processor,
+and the only check that appears to care is this one. If you see `clock and tick`
+fail, check `pgrep -af verify-kernel.sh` before reading the kernel.
+
+---
+
 ## Unchanged and still yours
 
 1. **A program cannot ask the kernel to present what it drew.** Still the thing

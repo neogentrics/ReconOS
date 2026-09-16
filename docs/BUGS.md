@@ -176,6 +176,83 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-010 — The attach path of both hardware backends had no test, and the first test written for it could not fail
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by noticing that everything
+  proved about the two real-hardware backends was proved about
+  `*_display_identify`, and that nothing had ever called `*_display_attach`.
+
+  Both are wired like this:
+
+  ```c
+  m = intel_display_identify(d->vendor, d->device, d->class_code, d->subclass);
+  ```
+
+  Four fields of a `struct pci_device`, in an order nothing checked. Swapping
+  the last two, or reading the subsystem id in place of the device id, leaves
+  every recognition test passing — they call `identify` directly and never go
+  through this line — while the driver claims the wrong hardware or none.
+
+  `intel_display.c` had been committed, run through the full matrix twice, and
+  signalled as tested with the attach path never once executed on any machine
+  in it.
+
+- **And the first test written for it was itself a check that could not fail.**
+  It fed `attach` an unknown Intel display at class 3, subclass 0, and asserted
+  it was refused and counted. With the two arguments deliberately swapped in
+  `attach`, the run still said:
+
+  ```
+    graphics it knows  : pass
+  ```
+
+  because the device was unknown *either way*: class 3 subclass 0 and class 0
+  subclass 3 both fail to match a table entry, so both take the same decline
+  branch. The test exercised the line and could not see what the line did.
+
+  **That is GX-008 recurring inside the fix for GX-008** — written by somebody
+  who had just recorded the lesson, in the test written to apply it. It is put
+  in the register for that reason rather than for the defect, which is nil:
+  knowing that a check must be able to fail does not tell you whether *this*
+  check can, and only breaking it on purpose answers that.
+
+- **Was** two gaps, one inside the other: no coverage of the attach entry point
+  at all, and then coverage that did not discriminate.
+
+- **Cost** nothing. The wiring is correct in both drivers and always has been.
+  Recorded because the code was shipped and signalled as tested while a whole
+  entry point had never run, and because the second half is the more useful
+  half.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Each self-test now drives `attach`
+  twice:
+
+  1. An unknown device of the right vendor and class, which must be refused
+     **and counted** — the counter moving is what says the decline path ran
+     rather than the function returning early somewhere else.
+  2. **A device the table does know, presented at class 0 subclass 3** — the
+     reverse of a display. Read correctly it is not a display and is refused;
+     read with the two swapped it becomes the laptop's own graphics, or the
+     desktop's own card, and is claimed.
+
+  Only the refusing half can be driven from a self-test: a device that is
+  *accepted* goes into the display table, and a test that registers an imaginary
+  screen has changed the machine it was asked about.
+
+- **Shown to fail before being believed**, which is the entire point of the
+  entry. With the two arguments swapped in both drivers:
+
+  ```
+  intel-display: attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    graphics it knows  : FAIL
+  amd-display:   attach claimed a device whose class and subclass are the
+                 reverse of a display, so it is reading the two the wrong way round
+    the graphics cards it knows : FAIL
+  ```
+
+---
+
 ### GX-009 — The boot report named one display on a machine with two, and contradicted itself two lines later
 
 - **Found in** kernel 0.2.48, on 16 September 2026, by reading a boot report

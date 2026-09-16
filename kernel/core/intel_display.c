@@ -436,6 +436,75 @@ bool intel_display_self_test(void)
 				}
 	}
 
+	/* 4. **That `attach` asks the question the same way this test does.**
+	 *
+	 *    Everything above drives `intel_display_identify` directly, which
+	 *    leaves the wiring between the two entirely untested: `attach`
+	 *    passes four fields of a `struct pci_device` in a particular order,
+	 *    and swapping the class for the subclass -- or reading the
+	 *    subsystem id instead of the device id -- would leave every test
+	 *    above passing while the driver claimed the wrong hardware or none
+	 *    at all.
+	 *
+	 *    Only the refusing half can be driven from here: a device that is
+	 *    *accepted* would be put in the display table, and a self-test that
+	 *    registers an imaginary screen has changed the machine it was
+	 *    asked about. So this feeds it one that must be refused, and checks
+	 *    that it was refused for the stated reason -- the counter moving is
+	 *    what says the decline path ran rather than the function returning
+	 *    early somewhere else.
+	 */
+	{
+		struct pci_device fake;
+		unsigned before = declined_unknown;
+
+		kmemset(&fake, 0, sizeof(fake));
+		fake.vendor     = PCI_VENDOR_INTEL;
+		fake.device     = 0x9a49;	/* Tiger Lake Xe, no entry here */
+		fake.class_code = PCI_CLASS_DISPLAY;
+		fake.subclass   = PCI_SUBCLASS_VGA;
+
+		if (intel_display_attach(&fake)) {
+			kputs("intel-display: attach claimed a device with no "
+			      "entry in the table\n");
+			ok = false;
+		} else if (declined_unknown != before + 1) {
+			kputs("intel-display: attach refused an unknown Intel "
+			      "display without counting it, so the decline "
+			      "path did not run\n");
+			ok = false;
+		}
+
+		/* **And that it passes them in the right order**, which the case
+		 * above cannot see.
+		 *
+		 * A first version of this test fed `attach` an unknown device
+		 * at class 3 subclass 0 and checked it was refused. Swapping
+		 * the two arguments in `attach` still refused it -- the device
+		 * was unknown either way -- so the test passed against exactly
+		 * the wiring fault it was written to catch. That is GX-008
+		 * happening again inside the fix for GX-008.
+		 *
+		 * This case discriminates. The identifier is one the table
+		 * *does* know, presented at class 0 subclass 3 -- the reverse
+		 * of a display. Read correctly it is not a display and must be
+		 * refused; read with the two swapped it becomes the laptop's
+		 * own graphics and would be claimed.
+		 */
+		kmemset(&fake, 0, sizeof(fake));
+		fake.vendor     = PCI_VENDOR_INTEL;
+		fake.device     = 0x3185;
+		fake.class_code = PCI_SUBCLASS_VGA;	/* deliberately reversed */
+		fake.subclass   = PCI_CLASS_DISPLAY;
+
+		if (intel_display_attach(&fake)) {
+			kputs("intel-display: " "attach claimed a device whose class and "
+			      "subclass are the reverse of a display, so it is "
+			      "reading the two the wrong way round\n");
+			ok = false;
+		}
+	}
+
 	kprintf("intel-display: %u model(s) known, recognition and refusal "
 		"both checked\n", (unsigned)MODEL_COUNT);
 
