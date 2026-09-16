@@ -8,6 +8,11 @@
 # port is actually asking, which is whether the pieces -- put together with the
 # ReconOS C library and nothing else -- make a program with no holes in it.
 #
+# The subject is `userland/desktop/main.c` -- the actual program that will run
+# from the volume -- rather than a stand-in written to be linkable. A probe
+# somebody adjusts whenever it will not link is a probe whose number is about
+# the probe.
+#
 # It exists because the inference it replaces got a published answer wrong.
 # On 16 September an earlier probe came back with three unresolved symbols,
 # those three were read as "what a desktop needs from recon_fs.c", and a whole
@@ -81,23 +86,30 @@ if [ -n "$STUB" ]; then
 int stat(const char *p, struct stat *s) { (void)p; (void)s; return -1; }
 int lstat(const char *p, struct stat *s) { (void)p; (void)s; return -1; }
 EOF
-    "$CC" -c "$OUT/zz-stat.c" -o "$OUT/zz-stat.o" "${CFLAGS[@]}"
+    "$CC" -c "$OUT/zz-stat.c" -o "$OUT/stat-stub.o" "${CFLAGS[@]}"
     echo "  (stat and lstat stubbed, to see what is behind them)"
 fi
 
 ar rcs "$OUT/libdesktop.a" "$OUT"/*.o 2>/dev/null
 
-echo "Compiling the probe"
-if ! "$CC" -c scripts/link-desktop-probe.c -o "$OUT/probe.o" "${CFLAGS[@]}" \
-        2> "$OUT/probe-err"; then
-    echo "  the probe itself does not compile, which is a fault in the probe:"
-    head -12 "$OUT/probe-err"
-    exit 1
-fi
+# From here the objects are named zz-*.o and are deliberately NOT in the
+# archive: they are the program. A program inside the library it links against
+# is one the linker may or may not pull in depending on what else it needs,
+# which is not a thing to leave to chance.
+
+echo "Compiling the desktop program itself"
+for f in userland/desktop/*.c scripts/link-desktop-probe.c; do
+    if ! "$CC" -c "$f" -o "$OUT/zz-$(basename "$f").o" "${CFLAGS[@]}" \
+            -I userland/desktop 2> "$OUT/probe-err"; then
+        echo "  $f does not compile, which is a fault in the program:"
+        head -12 "$OUT/probe-err"
+        exit 1
+    fi
+done
 
 echo "Linking, with nothing but ReconOS underneath"
 if "$CC" -nostdlib -static -Wl,--gc-sections -o "$OUT/desktop" \
-        "$OUT/probe.o" "$OUT/libdesktop.a" "$OUT/libdesktop.a" \
+        "$OUT"/zz-*.o "$OUT/libdesktop.a" "$OUT/libdesktop.a" \
         2> "$OUT/link-err"; then
     echo "  linked, $(stat -c%s "$OUT/desktop") bytes,"\
          "$(nm -u "$OUT/desktop" | wc -l) undefined symbols"

@@ -3,10 +3,10 @@
 **An operating system built from its own parts, rather than assembled from
 somebody else's.**
 
-[![version](https://img.shields.io/badge/version-0.4.53-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
-[![release](https://img.shields.io/badge/latest_release-v0.4.53-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.53)
+[![version](https://img.shields.io/badge/version-0.4.54-1f6feb?style=flat-square)](https://github.com/neogentrics/ReconOS/releases)
+[![release](https://img.shields.io/badge/latest_release-v0.4.54-238636?style=flat-square)](https://github.com/neogentrics/ReconOS/releases/tag/v0.4.54)
 [![language](https://img.shields.io/badge/C11-555?style=flat-square)](#building)
-[![tests](https://img.shields.io/badge/tests-52_suites,_4475257_checks-238636?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-53_suites,_4475303_checks-238636?style=flat-square)](#tests)
 [![bugs](https://img.shields.io/badge/bugs_recorded-317-da3633?style=flat-square)](docs/BUGS.md)
 [![licence](https://img.shields.io/badge/licence-CC0--1.0-555?style=flat-square)](LICENSE.txt)
 

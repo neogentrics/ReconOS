@@ -1,39 +1,36 @@
 /*
- * What a ReconOS desktop program does on its first frame.
+ * The entry point `scripts/link-desktop.sh` links against.
  *
- * The subject of `scripts/link-desktop.sh`. It is deliberately the smallest
- * honest program rather than the smallest program: read the theme off the
- * disk, fill the screen, frame a window, write a word in it, and make the
- * folder the settings live in.
+ * --- Why this is five lines and not a program ---
  *
- * "Honest" is doing work there. A probe that only called `recon_fill_rect`
- * would link today and would be measuring nothing, because what actually pulls
- * the filesystem into a desktop is not the drawing -- it is that the drawing
- * has to know what colour to be, and the colours are on the disk.
+ * It used to be the subject: a hand-written stand-in that drew a wallpaper, a
+ * window and some text. That measured something real and it measured the wrong
+ * thing -- a probe somebody wrote to be linkable is a probe that gets adjusted
+ * whenever it will not link, and the number it reports slowly becomes a number
+ * about the probe.
  *
- * Written against the real headers rather than against declarations invented
- * here, so it cannot be satisfied by something this file made up.
+ * The subject is `userland/desktop/main.c` now: **the actual program**, the one
+ * that will run from the volume. This only supplies an entry point, because
+ * the C runtime that calls `main` is built on the kernel side -- `recon_init`
+ * is linked by `kernel/`'s makefile, not this tree's -- and the question here
+ * is about symbols rather than about startup.
  *
- * `_start` rather than `main`, because there is no C runtime under this yet.
- * The question is whether the symbols resolve, and a missing `__libc_start`
- * would be noise on top of the answer.
+ * So what the script reports is what the real desktop is missing, and there is
+ * nothing in between to adjust.
  */
 
-#include "recon_ui.h"
-#include "recon_theme.h"
-#include "recon_fs.h"
+extern int main(void);
 
 void _start(void)
 {
-    struct recon_font *font = recon_font_system(14);
-    struct recon_panel *panel = 0;
+    main();
 
-    recon_theme_init();
-    recon_fill_rect(panel, 0, 0, 1920, 1080, THEME(WINDOW_FRAME));
-    recon_fill_rect(panel, 80, 60, 640, 400, THEME(TITLE_ACTIVE));
-    recon_draw_text(panel, font, 90, 70, 620, "ReconOS", THEME(TITLE_TEXT));
-    recon_fs_mkdir("/", "/Users/x/.config");
-
+    /*
+     * `main` does not return -- it ends in a loop, because a desktop that
+     * returned would leave whatever the kernel shows next on the screen and
+     * make a frame that drew correctly look like one that crashed. This is
+     * here so that the *linker* is not entitled to assume otherwise.
+     */
     for (;;) {
     }
 }

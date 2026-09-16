@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.53
+    VERSION 0.4.54
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -1081,6 +1081,53 @@ target_include_directories(recon_init_screen_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/boot/include")
 
 add_test(NAME first_screen COMMAND recon_init_screen_tests)
+
+# The desktop's first frame, drawn on the host.
+#
+# The same argument as the first-boot screen above, one layer up, and with one
+# difference that is the point of it: `screen.c` writes pixels itself because
+# it has to work before there is a volume to read a theme off. This draws with
+# the *real* layer -- recon_theme, recon_ui, the font loader -- so the day the
+# frame appears on a machine, what appeared is the desktop's own drawing code
+# rather than a picture of it.
+#
+# It links what a drawing program links and no more, which is also a claim
+# worth having a build enforce: if this target ever needs the compositor added
+# to it, the seam has moved.
+add_executable(recon_desktop_frame_tests
+    userland/tests/test_desktop_frame.c
+    userland/desktop/shell_frame.c
+    src/recon_ui.c
+    src/recon_ui_fb.c
+    src/recon_theme.c
+    src/recon_fonts.c
+    src/recon_fs.c
+    src/recon_error.c
+    src/recon_widget.c
+    src/recon_color.c
+    src/recon_clip.c
+    src/recon_widget_state.c
+    src/recon_icons.c
+    src/recon_key.c
+    src/recon_registry.c
+    src/recon_users.c
+    src/recon_crypt.c
+    src/recon_ico.c
+    src/recon_stb.c)
+
+target_include_directories(recon_desktop_frame_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/userland/desktop")
+
+# The text rasteriser is vendored. -isystem rather than -I, because
+# THIRD_PARTY.md says these are not held to this project's warnings.
+target_include_directories(recon_desktop_frame_tests SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+target_link_libraries(recon_desktop_frame_tests PRIVATE m)
+
+add_test(NAME desktop_frame COMMAND recon_desktop_frame_tests)
 
 # The shape a ReconOS volume has, checked without one.
 #

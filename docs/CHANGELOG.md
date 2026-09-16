@@ -9,6 +9,74 @@ way for the two to disagree.
 
 ---
 
+## v0.4.54 — there is a desktop program
+
+`userland/desktop/` is the program that runs from the volume. It asks the
+kernel how the screen is arranged, maps the framebuffer, wraps it in a panel,
+and draws a frame with **the desktop's own drawing layer** — `recon_theme`,
+`recon_ui`, the font loader, the text rasteriser. Then it stays up.
+
+It is the other half of the split agreed with the kernel session: **the
+built-in stays `screen.c`, the copy on the volume becomes the desktop.** The
+obvious alternative is wrong in a way that is easy to miss — growing the
+built-in program into the desktop would put forty-odd sources inside the
+`.incbin`'d fallback, making the program that exists for *"the volume is
+unreadable"* the one with the most code in it.
+
+**It links.** `scripts/link-desktop.sh` builds it against every desktop source
+that compiles freestanding, the ReconOS C library and nothing else: with `stat`
+supplied it is **152,336 bytes with zero undefined symbols**, and without it,
+`stat` is the one thing missing. The probe measures **the real program** now
+rather than a stand-in — which it earned in its first run, by refusing to
+compile `main.c` over two field names that had been written from memory.
+
+It is written before it can run, deliberately. `docs/KERNEL-WANTS.md` records
+what happened the last time: *"Nothing in userland/ was rebuilt for it —
+mem_recon.c had been sending that exact call since the allocator was written,
+so the day the kernel accepted it, malloc worked."*
+
+### The drawing is a separate file, and that is the point
+
+`shell_frame.c` takes a panel and some facts and makes no system call, so the
+whole picture renders on the host in a millisecond. 46 checks hold what a
+suite can hold and a person cannot see — that **every** pixel is written (a
+band left undrawn is the boot loader's text showing through), that the padding
+at the end of every row is untouched at five different pitches, that the window
+stops above the task bar, and that it draws at 640x480 through 3840x2160.
+
+### And then it was looked at, which found two things the 46 could not
+
+**Every line of text was one ascent too high.** `recon_ui.h` says plainly that
+`recon_draw_text` takes *"the baseline at y"*, and this was handing it a top
+edge — so the window's title floated in the wallpaper **above its own title
+bar**, and "Start" sat above the task bar. Forty checks had just passed,
+because not one of them asked where a glyph was. The first rendering showed it
+in a second. BG-174's lesson in a new place.
+
+**And the Start label was centred on the bar rather than on its button**, which
+is inset — so it sat in the button's top half. Close enough to look
+deliberate, wrong enough to look unfinished.
+
+### Three attempts at the check that would have caught them
+
+Worth writing down, because two of the three were checks that **could not
+fail**:
+
+1. Compare the task bar's pixels against the row above. In the default theme
+   `RECON_THEME_BAR` and `RECON_THEME_WINDOW_FRAME` are **the same colour** —
+   `ffc2bfc8` both — so two assertions passed whatever the code did and the
+   third failed for the same reason.
+2. Count pixels exactly equal to `TITLE_TEXT` outside the title bar. Found
+   them, in the body text: glyphs are anti-aliased, so dark text on white
+   produces every grey between, and that ink is a pale grey. **The colours are
+   distinct; the blends are not.**
+3. Ask the opposite question. **The strip above the window is nothing but
+   wallpaper** — anything there escaped, whatever colour it ended up. No blend
+   can confuse it, and putting the baseline fault back fails it immediately,
+   which is how we know it holds.
+
+---
+
 ## v0.4.53 — the desktop links, and one symbol is missing
 
 A program that reads its theme off the disk, fills a screen, frames a window,
