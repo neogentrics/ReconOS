@@ -107,7 +107,15 @@ static const struct { u32 w, h; } MODE_LADDER[] = {
  * into would be asking for a screen it cannot use. */
 #define BPP			32
 
-#define DISPLAY_MAX		2
+/* **Four, because two is what this project's own desktop needs.**
+ *
+ * That machine has a Radeon RX 6600 on the bus *and* Raphael graphics in the
+ * processor package, both answering PCI class 030000 -- so a table of two is
+ * exactly full before anything else is plugged in, and a virtual machine on it
+ * with a virtio-gpu would be refused a slot by a kernel that had found every
+ * adapter correctly. Sized from a machine rather than from a guess about how
+ * many screens a computer has. */
+#define DISPLAY_MAX		4
 
 static struct display displays[DISPLAY_MAX];
 static unsigned display_count;
@@ -743,6 +751,8 @@ adopt:
 
 void display_print_summary(void)
 {
+	unsigned n;
+
 	if (!primary) {
 		kputs("  display      : none -- no adapter this kernel can "
 		      "drive\n");
@@ -790,6 +800,33 @@ void display_print_summary(void)
 		kprintf("               : %llu page(s) of screen kept out of the "
 			"allocator when a program that had mapped it exited\n",
 			(unsigned long long)fb_pages_kept);
+
+	/* **Every display in the table, not only the one being drawn on.**
+	 *
+	 * This reported `primary` and stopped, which is a complete description
+	 * of a machine with one adapter and was never anything else while there
+	 * was one backend. On a machine with two it names one and is silent
+	 * about the other -- and the suspend summary two lines below has been
+	 * listing both the whole time, so the boot report contradicted itself
+	 * for anybody reading it closely (GX-009).
+	 *
+	 * It is not a hypothetical machine. QEMU with `-device virtio-gpu-pci`
+	 * and no `-vga none` is one, and so is the desktop this was written on:
+	 * a Radeon RX 6600 and Raphael graphics, both class 030000. */
+	for (n = 0; n < display_count; n++) {
+		struct display *d = &displays[n];
+
+		if (d == primary)
+			continue;
+
+		if (d->mode.width && d->mode.height)
+			kprintf("  also         : %s, %ux%u, not the one being "
+				"drawn on\n", d->name, d->mode.width,
+				d->mode.height);
+		else
+			kprintf("  also         : %s, found and not in any mode\n",
+				d->name);
+	}
 }
 
 /* That a program which maps the screen and exits does not give the screen away.

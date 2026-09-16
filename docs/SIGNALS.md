@@ -118,6 +118,39 @@ parallel array would have mis-addressed, and it had never been booted until now.
 
 ---
 
+### GX-009 — the report named one display on a machine with two
+
+Found by reading a boot report that had already printed several times. On QEMU
+with `-device virtio-gpu-pci` and no `-vga none` the kernel drives a Bochs
+adapter *and* a virtio-gpu, and said:
+
+```
+  display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+  suspend      : 3 device(s) declared ... virtio-gpu, bochs-display, input
+```
+
+One line names one adapter, the next names two. `suspend_declare` is per driver
+and had been right all along; `display_print_summary` described `primary` and
+returned — which is a complete description of a machine with one adapter, and
+was never anything else while there was one backend that could attach once.
+
+**Same species as GX-002**: code that is correct while every entry in a table is
+the same kind of thing, written when that was true. On this project's desktop —
+a Radeon RX 6600 on the bus, Raphael graphics in the package — it would have
+named one GPU and been silent about the other.
+
+Every display is reported now, the primary first and the rest marked as not the
+one being drawn on. **And `DISPLAY_MAX` went from two to four**: two was exactly
+full on that desktop before anything was plugged in, so a virtual machine on it
+with a virtio-gpu would have been refused a slot by a kernel that had found
+every adapter correctly. Sized from a machine rather than from a guess about how
+many screens a computer has.
+
+A matrix path asserts the second adapter's line, because a boot with one adapter
+satisfies every other question the rig asks.
+
+---
+
 ## Unchanged and still yours
 
 1. **A program cannot ask the kernel to present what it drew.** Still the thing

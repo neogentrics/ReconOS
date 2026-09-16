@@ -902,6 +902,23 @@ check_for "13 model(s) known, recognition and refusal both checked" \
 	"  PVH, the graphics cards it can recognise" \
 	qemu-system-x86_64 -m 512M -nographic -no-reboot -kernel "$X64_ELF"
 
+# Two display adapters in one machine, and the report naming both.
+#
+# QEMU with `-device virtio-gpu-pci` and no `-vga none` gives a Bochs adapter
+# *and* a virtio-gpu, which is the arrangement GX-002's parallel private-state
+# array would have mis-addressed -- and it is the shape of this project's own
+# desktop, which has a Radeon RX 6600 on the bus and Raphael graphics in the
+# processor package.
+#
+# Asserted on the second adapter's line rather than on the boot succeeding: the
+# summary named only the primary for as long as nobody looked, while the suspend
+# line two rows below listed both (GX-009). A boot with one adapter satisfies
+# every other question this rig asks.
+check_for "also         : bochs-display" \
+	"  PVH, two display adapters at once" \
+	qemu-system-x86_64 -m 1024M -nographic -no-reboot \
+		-device virtio-gpu-pci -kernel "$X64_ELF"
+
 # Two disks of the *same kind*, which no path here had ever attached.
 #
 # Eighteen boot paths and six storage configurations, and every one of them had

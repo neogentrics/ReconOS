@@ -176,6 +176,70 @@ Checked against the entries by `python scripts/make-issues.py --check`.
 
 ## Fixed
 
+### GX-009 — The boot report named one display on a machine with two, and contradicted itself two lines later
+
+- **Found in** kernel 0.2.48, on 16 September 2026, by reading a boot report
+  that had been printed several times already without anyone looking at it
+  closely. QEMU given `-device virtio-gpu-pci` and no `-vga none` presents a
+  Bochs adapter *and* a virtio-gpu, and the kernel drives both:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    suspend      : 3 device(s) declared, and these cannot come back yet:
+                   virtio-gpu, bochs-display, input
+  ```
+
+  The display summary names one adapter. The suspend summary, two lines below,
+  names both — because `suspend_declare` is called per driver and had been
+  right the whole time.
+
+- **Was** `display_print_summary` described `primary` and returned. That is a
+  complete description of a machine with one display adapter, and it was never
+  anything else for as long as this kernel had one backend that could attach
+  once.
+
+  It is now four backends and a table of four, and **the machine this was
+  written on has two adapters**: a Radeon RX 6600 on the bus and Raphael
+  graphics in the processor package, both answering PCI class 030000. On that
+  machine the report would have named one GPU and been silent about the other,
+  while the suspend line listed both.
+
+- **Cost** nothing yet, and the entry is about the shape rather than the damage:
+  **a summary that describes the primary of a set is correct exactly while the
+  set has one member**, and nothing about its output says which case you are
+  looking at. The contradiction with the suspend line is what makes it findable
+  at all — two summaries generated from the same table disagreeing about how
+  many devices are in it.
+
+  It is the same species as GX-002, which was one driver's private state indexed
+  by a display's position in a table it did not own: both are code that is
+  correct while every entry is the same kind of thing, and both were written
+  when that was true.
+
+- **Fixed in** kernel 0.2.48 on `graphics`. Every display in the table is
+  reported. The primary keeps its line and the rest follow it, marked as not the
+  one being drawn on, and each says whether it is in a mode:
+
+  ```
+    display      : virtio-gpu, 1280x800, pitch 5120, BGRA
+    also         : bochs-display, found and not in any mode
+  ```
+
+  On a machine with one adapter the output is unchanged, which is why this was
+  invisible in the first place.
+
+- **And the table was raised from two to four.** Two was exactly full on the
+  desktop before anything was plugged in, so a virtual machine on it with a
+  virtio-gpu would have been refused a slot by a kernel that had found every
+  adapter correctly. Sized from a machine rather than from a guess about how
+  many screens a computer has.
+
+- **Shown on a machine that really has two**, which is the matrix path added for
+  GX-002 and had been booting since — it was printing the single-adapter answer
+  the whole time and nothing asked it to print more.
+
+---
+
 ### GX-008 — The vendor check in both hardware tables had no test that could fail
 
 - **Found in** kernel 0.2.48, on 16 September 2026, by sabotaging a check that
