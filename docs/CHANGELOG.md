@@ -9,6 +9,100 @@ way for the two to disagree.
 
 ---
 
+## v0.4.43 — it is the workstation, and its text stays in the box
+
+### The machine says which of the five it is
+
+The kernel session raised this while there was almost nothing built on the
+assumption, which is the cheap moment: `docs/ROLES.md` has **five roles chosen
+at first boot** — server, firewall, workstation, thin client, NAS — out of one
+install, one kernel and one image. `recon_init.c` was written as *the* first
+program ReconOS runs. It is not. It is the workstation's, and it is the only
+one of the five that exists.
+
+`userland/init/role.h` says so, and the screen a person reads now says
+**ReconOS workstation** rather than ReconOS.
+
+**What is deliberately not renamed: the installed path.** `/System/init.elf` is
+a contract between two halves and only one of them is here — `make-medium.sh`
+and `install-then-boot-test.sh` write it, the kernel's loader reads it and falls
+back to its built-in copy. Renaming the writing side alone produces an installed
+disk that boots the copy inside the kernel while reporting that it did, which is
+not a failure anybody would see and is the worst kind. `kernel/Makefile` names
+the sources under `../userland/init/` directly, so the directory is theirs to
+move too. Their lead, my same-hour follow.
+
+### BG-207 — the text left the panel and ran off the screen
+
+Photographing the boot to check the role appeared found something else in the
+same frame: **the heap line leaving the panel, crossing the gap and running off
+the right-hand edge of a 2560-wide screen.**
+
+`put_pixel` clips to the *canvas*, so it was never wrong enough to fault. It was
+simply text outside its box — and **306,797 existing checks could not see it,
+because every one of them looks at a canvas and the text never left the
+canvas.** It left the panel, which nothing was measuring.
+
+A status panel whose text escapes its box is worse than one that cuts it: the
+reader cannot tell whether what they can see is all of it. So `recon_screen_text`
+takes a right-hand bound now, and a line that does not fit ends with a `>` —
+not an ellipsis, because this font is ASCII and an ellipsis would draw as a
+space, which is the silent version of the same fault.
+
+Zero means the whole canvas, which is what every caller meant before there was a
+bound at all.
+
+**And the first fix drew the marker over the last character.** It put the `>` at
+`cursor - step`, where a character had already been drawn, and nothing here
+clears a background — so the line ended in a smudge that read as a corrupt
+glyph. The marker gets a cell of its own now: when this is the last cell that
+fits and there is more text after it, the cell is spent on the marker instead of
+on a character that would have been the last one anyway.
+
+Found by photograph, both times. The second one is the reason to look again
+after a fix rather than at the test result.
+
+**Four checks**, and they bite: with the bound removed, *nothing is drawn at or
+past the bound* and *the last cell inside it is marked* both fail. The suite is
+306,801 now.
+
+### Three more files, and a flag that was measuring the wrong thing
+
+`scripts/check-userland.sh` did not have `third_party/` on its include path, so
+eight files failed on `stb_image.h` and `stb_truetype.h`. **Those headers ship in
+this repository and travel to ReconOS with everything else, exactly like the
+icons** — leaving them off was asking "does this build without the code we
+vendored", which is not the question. The question is whether it builds without
+glibc.
+
+With the path: `recon_ico.c`, `recon_icons.c` and `recon_web.c`. **45 of 45.**
+
+`recon_stb.c` still does not — it wants a hosted `<math.h>` as well.
+
+### And `pid_t`, measured and left out
+
+`include/recon_procinfo.h` names `pid_t` and `userland/include/sys/types.h`
+deliberately has none. Adding it was tried and **gains nothing today**: every
+file that includes that header is behind `wayland-server-core.h` anyway. It
+waits with them rather than going in as a typedef nothing can use.
+
+### The socket syscall numbers, checked rather than taken
+
+The kernel session sent a correction — that the numbers they gave earlier were
+off by one, and are 26 to 30 rather than 27 to 31 — with the note that they had
+*"counted by eye instead of asking the file"*.
+
+**Asked the file. The original numbers were right.** The compiler says
+`SYS_SOCKET` is 27, `SYS_BIND` 28, `SYS_LISTEN` 29, `SYS_ACCEPT` 30,
+`SYS_CONNECT` 31, on this tree and on `origin/kernel`, whose copy of
+`user.h` is identical to this one. `scripts/check-syscall-numbers.py` agrees:
+*32 system calls; both headers and 42 hand-written numbers agree.*
+
+So nothing written down here needed changing — and **the correction was the
+recount, not the original**, which is the same fault one layer further out.
+
+---
+
 ## v0.4.42 — one include held twenty-four files
 
 **20 of the desktop's sources compiled with no libc under them. 42 do now.**

@@ -67,9 +67,10 @@ unsigned recon_screen_text_width(unsigned scale, const char *text)
 
 void recon_screen_text(const struct recon_canvas *canvas, unsigned x,
 		       unsigned y, unsigned scale, unsigned int colour,
-		       const char *text)
+		       const char *text, unsigned right)
 {
 	unsigned cursor = x;
+	unsigned step;
 
 	/* The canvas as well as the text. The first version guarded one and
 	 * not the other, and a null canvas walked straight into `put_pixel`,
@@ -78,10 +79,61 @@ void recon_screen_text(const struct recon_canvas *canvas, unsigned x,
 		return;
 	}
 
+	step = RECON_FONT_WIDTH * scale;
+
+	/*
+	 * `right` is the first column that must not be drawn on.
+	 *
+	 * Zero means the canvas, which is what every caller wanted before
+	 * there was a bound at all -- put_pixel clips there anyway, so it is
+	 * the same picture rather than a new special case.
+	 */
+	if (right == 0u || right > canvas->width) {
+		right = canvas->width;
+	}
+
 	for (; *text != '\0'; text++) {
 		unsigned char c = (unsigned char)*text;
 		const unsigned char *glyph;
 		unsigned row;
+
+		/*
+		 * **The cut is marked, not silent.**
+		 *
+		 * A photograph of a real boot found the heap line leaving the
+		 * panel and running off the edge of the screen: put_pixel
+		 * clips to the canvas, so it was never wrong enough to fault.
+		 * A status panel whose text escapes its box is worse than one
+		 * that cuts it, because the reader cannot tell whether what
+		 * they can see is all of it.
+		 *
+		 * `>` rather than an ellipsis: this font is ASCII, and an
+		 * ellipsis would draw as a space -- the silent version of the
+		 * same fault.
+		 */
+		if (cursor + step > right) {
+			return;
+		}
+
+		/*
+		 * The marker gets a cell of its own, rather than being drawn
+		 * over the last character.
+		 *
+		 * The first version put it at `cursor - step`, which is where
+		 * a character had already been drawn -- and nothing here
+		 * clears a background, so the two overstruck and the line
+		 * ended in a smudge. A photograph showed it, the same way a
+		 * photograph showed the overflow it was fixing.
+		 *
+		 * So: when this is the last cell that fits and there is more
+		 * text after it, spend the cell on the marker instead of on a
+		 * character that would be the last one anyway.
+		 */
+		if (text[1] != '\0' && cursor + step * 2u > right) {
+			recon_screen_text(canvas, cursor, y, scale, colour,
+					  ">", right);
+			return;
+		}
 
 		/*
 		 * Anything outside the font is drawn as a space rather than
@@ -149,6 +201,7 @@ void recon_screen_draw(const struct recon_canvas *canvas,
 	unsigned left;
 	unsigned top;
 	unsigned panel_w;
+	unsigned right;
 	unsigned panel_h;
 	unsigned y;
 	unsigned i;
@@ -241,13 +294,25 @@ void recon_screen_draw(const struct recon_canvas *canvas,
 	 * place the accent is used at any size. One thing carries it. */
 	fill(canvas, left, top, panel_w, scale * 2u, RECON_INK_ACCENT);
 
+	/*
+	 * Where the text has to stop: the panel's inner edge, with the same
+	 * margin the text starts at on the left.
+	 *
+	 * Computed once, beside the numbers it comes from. A bound written
+	 * out at each call is how one line of five ends up with a different
+	 * edge -- and the way that is found is a photograph, which is how this
+	 * whole clipping question arrived.
+	 */
+	right = left + panel_w - line;
+
 	y = top + line * 2u;
 	recon_screen_text(canvas, left + line, y, scale * 2u, RECON_INK_TEXT,
-			  facts->version != NULL ? facts->version : "ReconOS");
+			  facts->version != NULL ? facts->version : "ReconOS",
+			  right);
 	y += line * 3u;
 
 	recon_screen_text(canvas, left + line, y, scale, RECON_INK_DIM,
-			  facts->kernel);
+			  facts->kernel, right);
 	y += line * 2u;
 
 	fill(canvas, left + line, y, panel_w - line * 2u, scale,
@@ -277,11 +342,12 @@ void recon_screen_draw(const struct recon_canvas *canvas,
 				continue;
 			}
 			recon_screen_text(canvas, left + line, y, scale,
-					  RECON_INK_DIM, LABEL[i]);
+					  RECON_INK_DIM, LABEL[i], right);
 			recon_screen_text(canvas,
 					  left + line +
 					  RECON_FONT_WIDTH * scale * 12u,
-					  y, scale, RECON_INK_TEXT, value[i]);
+					  y, scale, RECON_INK_TEXT, value[i],
+					  right);
 			y += line;
 		}
 	}
@@ -293,7 +359,7 @@ void recon_screen_draw(const struct recon_canvas *canvas,
 			break;
 		}
 		recon_screen_text(canvas, left + line, y, scale,
-				  RECON_INK_DIM, facts->notes[i]);
+				  RECON_INK_DIM, facts->notes[i], right);
 		y += line;
 	}
 }

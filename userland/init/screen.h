@@ -69,9 +69,19 @@ void recon_screen_draw(const struct recon_canvas *canvas,
 
 /* Exposed so the suite can check a single glyph rather than only a whole
  * screen, and so a caller can measure before it draws. */
+/*
+ * Draw text, stopping before `right`.
+ *
+ * `right` is the first column that must not be drawn on; zero means the whole
+ * canvas. A line that does not fit is cut with a `>` in the last cell rather
+ * than running on, because `put_pixel` clips to the canvas and not to the box
+ * -- so before this had a bound, a long line left the panel, crossed the gap
+ * and ran off the side of the screen. It took a photograph of a real boot to
+ * notice, which is exactly what a bound is for.
+ */
 void recon_screen_text(const struct recon_canvas *canvas, unsigned x,
 		       unsigned y, unsigned scale, unsigned int colour,
-		       const char *text);
+		       const char *text, unsigned right);
 unsigned recon_screen_text_width(unsigned scale, const char *text);
 
 #endif /* RECON_INIT_SCREEN_H */

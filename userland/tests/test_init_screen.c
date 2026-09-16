@@ -166,7 +166,7 @@ static void test_text(void)
 	sheet_clear(&s);
 
 	/* A space marks nothing, which is what makes it a space. */
-	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, "   ");
+	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, "   ", 0);
 	lit = 0;
 	for (y = 0; y < 32; y++) {
 		for (x = 0; x < 64; x++) {
@@ -179,7 +179,7 @@ static void test_text(void)
 
 	/* A full stop marks something, and only in the bottom half. */
 	sheet_clear(&s);
-	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, ".");
+	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, ".", 0);
 	lit = 0;
 	for (y = 0; y < 4; y++) {
 		for (x = 0; x < 8; x++) {
@@ -215,6 +215,89 @@ static void test_text(void)
 	      "twice the scale is twice the width");
 
 	sheet_check_padding(&s, "text");
+	sheet_free(&s);
+}
+
+static void test_text_stays_inside_its_box(void)
+{
+	struct sheet s;
+	unsigned x;
+	unsigned y;
+	unsigned lit_past;
+	unsigned lit_before;
+
+	printf("a line too long for the box is cut, and says so\n");
+
+	/*
+	 * **This is the fault a photograph found and no check here could.**
+	 *
+	 * Every other check in this file looks at a canvas, and the text never
+	 * left the canvas -- it left the *panel*, ran across the gap and off
+	 * the side of a 2560-wide screen, because `put_pixel` clips to the
+	 * canvas and nothing clipped to the box. A status panel whose text
+	 * escapes its box is worse than one that cuts it: the reader cannot
+	 * tell whether what they can see is all of it.
+	 */
+	sheet_make(&s, 200, 16, 24);
+	sheet_clear(&s);
+
+	/* Far more text than 80 pixels holds: ten characters at 8 wide. */
+	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT,
+			  "this line is far too long for the box", 80);
+
+	lit_past = 0;
+	for (y = 0; y < 16; y++) {
+		for (x = 80; x < 200; x++) {
+			if (pixel_at(&s.canvas, x, y) != 0) {
+				lit_past++;
+			}
+		}
+	}
+	check(lit_past == 0, "nothing is drawn at or past the bound");
+
+	lit_before = 0;
+	for (y = 0; y < 16; y++) {
+		for (x = 72; x < 80; x++) {
+			if (pixel_at(&s.canvas, x, y) != 0) {
+				lit_before++;
+			}
+		}
+	}
+	check(lit_before > 0,
+	      "and the last cell inside it is marked, so the cut is visible");
+
+	/*
+	 * A line that fits is not marked. Otherwise the marker would mean
+	 * nothing -- every line would carry it and the reader would learn to
+	 * ignore it, which is the same as not having it.
+	 */
+	sheet_clear(&s);
+	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, "short", 200);
+
+	lit_past = 0;
+	for (y = 0; y < 16; y++) {
+		for (x = 5u * 8u; x < 200; x++) {
+			if (pixel_at(&s.canvas, x, y) != 0) {
+				lit_past++;
+			}
+		}
+	}
+	check(lit_past == 0, "a line that fits carries no marker");
+
+	/* And zero means the canvas, which is what every caller meant before
+	 * there was a bound at all. */
+	sheet_clear(&s);
+	recon_screen_text(&s.canvas, 0, 0, 1, RECON_INK_TEXT, "short", 0);
+	lit_before = 0;
+	for (y = 0; y < 16; y++) {
+		for (x = 0; x < 200; x++) {
+			if (pixel_at(&s.canvas, x, y) != 0) {
+				lit_before++;
+			}
+		}
+	}
+	check(lit_before > 0, "and a bound of zero draws the whole line");
+
 	sheet_free(&s);
 }
 
@@ -328,7 +411,7 @@ static void test_what_it_refuses(void)
 	check(1, "and a canvas far too small for anything on it");
 
 	recon_screen_draw(NULL, &facts);
-	recon_screen_text(NULL, 0, 0, 1, 0, "x");
+	recon_screen_text(NULL, 0, 0, 1, 0, "x", 0);
 	check(1, "and no canvas at all");
 }
 
@@ -375,6 +458,7 @@ int main(void)
 	printf("ReconOS: the first screen, drawn without a kernel\n\n");
 
 	test_text();
+	test_text_stays_inside_its_box();
 	test_the_screen_at_every_size();
 	test_what_it_refuses();
 	write_picture();

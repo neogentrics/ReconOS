@@ -8411,6 +8411,38 @@ regenerated after that tree is pushed.
   first to be the empty one. Cutting `emit_empty_cell` back out fails it.
 
 
+### BG-207 — Panel text left the panel and ran off the edge of the screen
+
+- **Found in** v0.4.43, by photographing a real boot to check something else
+  — that the workstation role appeared in the title.
+- **Was** `recon_screen_text` drew until the string ended. `put_pixel` clips to
+  the *canvas*, so nothing ever faulted; the line simply left its box, crossed
+  the gap and ran off the right-hand edge of a 2560-wide screen. The heap line
+  was the one long enough to show it.
+- **Why nothing caught it** `tests/test_init_screen.c` holds **306,797 checks**
+  over nine resolutions and every one of them looks at a canvas. The text never
+  left the canvas. **It left the panel, and nothing was measuring the panel.**
+  A photograph is what noticed, which is the third time on this project that a
+  layout fault has been invisible to a suite and obvious in one frame.
+- **What it costs** A status panel whose text escapes its box is worse than one
+  that cuts it: the reader cannot tell whether what they can see is all of it.
+- **Fixed in** v0.4.43. `recon_screen_text` takes a right-hand bound; a line
+  that does not fit ends with a `>`. Not an ellipsis — this font is ASCII and
+  an ellipsis draws as a space, which is the silent version of the same fault.
+  Zero means the whole canvas, which is what every caller meant before there
+  was a bound.
+- **And the first fix drew the marker on top of the last character**, at
+  `cursor - step`, where a character had already been drawn — nothing here
+  clears a background, so the line ended in a smudge that reads as a corrupt
+  glyph. The marker has a cell of its own now. **Found by photographing it
+  again**, which is the argument for looking after a fix rather than at the
+  test result.
+- **What holds it** `test_text_stays_inside_its_box` — nothing lit at or past
+  the bound, something lit in the cell before it, no marker on a line that
+  fits, and a bound of zero drawing the whole line. Removing the bound fails
+  the first two.
+
+
 ## Labels
 
 The same register covers everything else that happens to this system, because

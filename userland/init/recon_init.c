@@ -1,5 +1,14 @@
 /*
- * The first program ReconOS runs that is a system rather than a self-test.
+ * The first program of the ReconOS **workstation**.
+ *
+ * Not "the" first program: `docs/ROLES.md` has five roles chosen at first boot
+ * out of one install and one kernel, and the kernel starts whichever first
+ * program the chosen role names. This is the workstation's, and it is the only
+ * one of the five that exists yet. See `role.h` for why that is worth saying
+ * out loud here rather than being left implicit.
+ *
+ * It is also the first program ReconOS runs that is a system rather than a
+ * self-test.
  *
  * Until now every program that had ever run in ring 3 on this kernel existed
  * to prove something about the kernel: `hello.S` proved the loader,
@@ -49,6 +58,7 @@
 #include <string.h>
 
 #include "layout.h"
+#include "role.h"
 #include "screen.h"
 
 /*
@@ -571,7 +581,9 @@ int main(void)
 	say_storage(storage_line, sizeof(storage_line));
 
 	memset(&facts, 0, sizeof(facts));
-	facts.version = "ReconOS";
+	/* The role, not just the system: what a person reads should say which of
+	 * the five this machine was set up as. */
+	facts.version = "ReconOS " RECON_ROLE;
 	facts.kernel = kernel_line;
 	facts.processors = processors_line;
 	facts.memory = memory_line;

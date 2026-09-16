@@ -67,8 +67,14 @@
 #                              names for the same numbers, v0.4.42, and all
 #                              five of these are on the list now.
 #
-#   src/recon_stb.c          the vendored stb shim, which wants third_party/
-#                              on the include path and a hosted <math.h>.
+#   src/recon_stb.c          the vendored stb shim, which wanted third_party/
+#                              on the include path. It has it now -- those
+#                              headers ship in this repository and travel to
+#                              ReconOS with everything else, exactly like the
+#                              icons, so leaving them off was measuring the
+#                              wrong thing. Three more files build because of
+#                              it. recon_stb.c itself still does not: it wants
+#                              a hosted <math.h> as well.
 #
 # And one thing this cannot find yet: `strerror`, on 43 call sites in three
 # files. The kernel returns negative error numbers (`SYS_ENOENT` and the rest
@@ -121,6 +127,7 @@ fi
 # that remembers what a widget is set to, the theme engine, the title bar, the
 # wallpaper, the icon generator, the avatar, the file dialog, Notepad and the
 # Terminal. None of them was ever a library gap.
+# And three that only ever wanted third_party/ on the include path.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -165,6 +172,10 @@ src/recon_users.c
 src/recon_wallpaper.c
 src/recon_widget.c
 src/recon_widget_state.c
+
+src/recon_ico.c
+src/recon_icons.c
+src/recon_web.c
 "
 
 out=$(mktemp -d)
@@ -189,6 +200,7 @@ for f in $FILES; do
 		-isystem "$BUILTIN" \
 		-I userland/include \
 		-I include \
+		-I third_party \
 		-DRECONOS_VERSION='"0.0.0"' \
 		-Wall -Wextra -Werror \
 		2> "$out/err"; then
