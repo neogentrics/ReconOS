@@ -9,6 +9,95 @@ way for the two to disagree.
 
 ---
 
+## v0.4.47 — signals, and two files left off the list on purpose
+
+The kernel has had `SYS_KILL`, `SYS_SIGACTION`, `SYS_SIGMASK` and
+`SYS_SIGRETURN` since before the desktop could compile for it at all. Nothing
+in `userland/` could reach them.
+
+`userland/include/signal.h` and `userland/libc/signal.c` are the two halves the
+desktop asks for: **sending one** — End Task is `kill(pid, SIGTERM)` and the
+second press is `SIGKILL` — and **saying what to do about one**, which is
+`recon_error.c` installing a handler for the four faults that mean the system
+stopped, writing a code somebody can read, and letting the default handler
+finish the job.
+
+### The restorer is the whole of the difficulty
+
+`SYS_SIGACTION` refuses a handler without one, and the kernel's comment says
+why: *"a handler with nowhere to return to runs once and then executes
+whatever follows it in memory."*
+
+So the library has to build one, and it has to be machine code — **there is no
+C for "return through a system call"**. Two instructions per architecture, in
+a top-level `__asm__` block rather than a `naked` function, because `naked` is
+not available everywhere and a function that merely *looks* empty still gets a
+prologue that would run first.
+
+**It is not in `signal.c`, and the layering is what said so.** `internal.h`
+deliberately does not pull in `recon.h` — the library talks to `recon_sys_*`,
+not to the raw calls — so `signal.c` could not see `SYS_SIGRETURN` and the
+build stopped. The restorer belongs with the system calls: its entire content
+*is* a system call, `libc/syscalls.c` is the file that has them, and it is the
+file `hostsys.c` replaces wholesale on a host. Which also answers what the
+host does: it provides one that aborts, because reaching it would mean a
+handler returned through a frame `SYS_SIGRETURN` did not write.
+
+**The number in that assembly is checked by the compiler.** A literal in an
+`__asm__` block is exactly the kind of hand-written syscall number
+`scripts/check-syscall-numbers.py` exists to police and cannot see, so a
+`_Static_assert` holds it against the enum. If the numbers shift, the file
+stops building rather than returning into the wrong call.
+
+### 30 checks, against the host's
+
+`hostsys.c` answers the three primitives with POSIX `kill` and `sigaction`, so
+a handler installed through ReconOS's `signal()` is installed with the real
+delivery machinery underneath: raising the signal has to actually run the
+handler, in a real process, at a real moment. Twice, because a handler that
+runs once and then does not is what a missing re-arm looks like.
+
+And the differences are held to on purpose:
+
+- **SIGKILL is refused here rather than passed down.** The kernel refuses it
+  too — that is the point of one signal that cannot be caught — and refusing at
+  this end means the same `errno` whichever side says no.
+- **Signal zero is refused**, not used as POSIX's "does this process exist"
+  probe. The kernel takes a signal to deliver and this is not one.
+- **The previous handler is what this library last installed**, because
+  `SYS_SIGACTION` answers whether it accepted a change and not what was there
+  before. Stated in the header, and held by four checks.
+
+**What the suite cannot reach is the restorer** — glibc has its own and
+`hostsys.c` drops ours, so every check passes whether that assembly is right or
+wrong. Written into both files rather than left to be assumed: a green suite
+over signals reads like coverage of signals, and this one covers everything
+except the part that is hardest to get right. What settles that is a program
+in ring 3, the same way the socket claim was settled.
+
+### And `_exit`, which is the one a handler may call
+
+`exit` here runs no atexit handlers and flushes no streams, so today the two do
+the same thing. Written as its own function anyway, so that when there *is*
+something for `exit` to run, adding it does not silently add it to the one
+signal handlers are allowed to use.
+
+### Two files left off the list on purpose
+
+**52 of 80 became 53**, not 55, and the two that did not go on are the point.
+
+Both would compile if handed a header. **Compiling is not what the check
+asks.** It asks whether a file could *run* on ReconOS, and a file that builds
+because it was given a declaration for something this system answers with a
+refusal has a worse answer than one that does not build — it looks ready.
+
+| file | what it wants | why giving it that would be wrong |
+|---|---|---|
+| `recon_control.c` | `<sys/time.h>` for `struct timeval` | it uses it with `setsockopt(SO_RCVTIMEO)`, and this library refuses every `setsockopt` option. The timeout exists to stop a peer that connects and says nothing from freezing the thread drawing the desktop. Compile it and the freeze comes back with nothing saying so. |
+| `recon_procinfo.c` | `sysconf(_SC_CLK_TCK)` | to divide numbers it read out of `/proc`. There is no `/proc` here; the file is a Linux scraper top to bottom, and it is on the KERNEL-WANTS list as *Processes*, not on this one. |
+
+---
+
 ## v0.4.46 — the same shape a third time, and once in the instrument
 
 **46 of 80 sources built with no Linux underneath. 52 do now**, and not one of

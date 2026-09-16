@@ -1,35 +1,24 @@
-A table was one line per row with the cells run together by spaces. You could
-read it and you could not scan it: "0.4.13 8 September Package signing" is
-three facts with nothing to say where one ends.
+recon_package.c was one file doing two jobs. Reading a manifest and taking
+digests of what it names is arithmetic on bytes; installing loads a shared
+object into this process and rebuilds the icon cache.
 
-Two things had to exist first. A row is a block of its own kind, so a
-viewer can tell which blocks belong to one table -- consecutive rows is what a
-table is, once the tags are gone. A cell marks the run it begins at rather
-than being a block itself: a cell that was a block would get its own line,
-which is the one thing a table exists not to do.
+The consequence was the same one recon_http.c had. Testing the first half
+meant linking the second, so the signature suite needed a stub file that
+aborted on the module loader, the icon cache and the version comparison
+just to link -- five functions stubbed to make one file testable, which is the
+shape of a file that wants splitting. That was said out loud in the stub file
+when it was written, and this is that debt paid rather than carried.
 
-That second one needed a change where it was easy to miss. Runs that look the
-same and sit next to each other are merged into one, which is right everywhere
-else and wrong across a cell boundary -- merging loses the boundary, and the
-boundary is the only thing saying where a column ends. A table of plain
-unstyled text, which is most tables, would have come back as a single run and
-could not have been laid out at all.
+src/recon_manifest.c is 559 lines that load nothing: no module loader, no
+icon cache, no registry, no accounts. src/recon_package.c keeps the 802 that
+install, upgrade, verify and remove. src/recon_manifest.h is what they share
+-- the manifest's shape, the error buffer both report through, and the
+allow-list question the installer asks.
 
-A column's width is a property of the table, not of any row -- it is the
-widest that column gets anywhere -- so it is measured once over every row
-before the first is drawn. A table wider than the window has all its columns
-scaled down together, which keeps their relative widths: the shape survives
-even when the size cannot.
-
-<th> records itself as level 1 on the row it is in, which is the field a row
-otherwise has no use for, and that is the whole of what makes the top of a
-table read as a heading rather than as more data.
-
-What this does not do, said plainly: no colspan, no rowspan, no nested
-tables, no borders, and a cell whose text is wider than its share overlaps
-rather than wrapping. Wrapping inside a cell means a row of variable height,
-which means measuring the height before placing the row, which is the whole
-layout problem again one level down. Lining the columns up is most of what a
-table is for and it is the part that can be had honestly.
+The signature suite now links five files instead of eight, and the stub file
+is deleted. It is worth being precise about what that buys: not tidiness. A
+suite that can only be built by stubbing out the dangerous half is a suite
+somebody will eventually stop maintaining, and the untested half is where the
+fragment bug spent its life.
 
 ---

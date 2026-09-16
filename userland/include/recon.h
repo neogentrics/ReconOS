@@ -297,6 +297,28 @@ static inline i64 recon_getpid(void)
 }
 
 /*
+ * Send a signal to a process. The kernel's own numbering, which is POSIX's.
+ */
+static inline i64 recon_kill(i64 pid, u64 signal)
+{
+	return RECON_CALL2(SYS_KILL, (u64)pid, signal);
+}
+
+/*
+ * What to do about a signal: default, ignore, or a handler.
+ *
+ * `restorer` is required for a handler and is where the handler returns to --
+ * a few instructions that invoke SYS_SIGRETURN. The kernel refuses a handler
+ * without one, because a handler with nowhere to return to runs once and then
+ * executes whatever follows it in memory.
+ */
+static inline i64 recon_sigaction(u64 signal, u64 what, u64 handler,
+				  u64 restorer)
+{
+	return RECON_CALL4(SYS_SIGACTION, signal, what, handler, restorer);
+}
+
+/*
  * Nanoseconds since this machine started, and it never goes backwards.
  *
  * Means nothing outside this boot. A caller measuring how long something took

@@ -29,6 +29,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -261,6 +262,69 @@ static int as_family(unsigned int addr, int port, struct sockaddr_in *into)
 	into->sin_family = AF_INET;
 	into->sin_port = htons((unsigned short)port);
 	into->sin_addr.s_addr = htonl(addr);
+	return 0;
+}
+
+/* --- Signals --- */
+
+long recon_sys_getpid(void)
+{
+	return (long)getpid();
+}
+
+/*
+ * The restorer, on a host, and it is never reached.
+ *
+ * glibc supplies its own -- that is what `SA_RESTORER` is about -- and
+ * `recon_sys_sigaction` below drops the one it is handed. It exists so that
+ * `libc/signal.c` links, and it aborts rather than returning, because being
+ * here would mean a handler returned through it and the host's signal frame
+ * is not what SYS_SIGRETURN expects.
+ */
+void recon_sig_restorer(void);
+void recon_sig_restorer(void)
+{
+	abort();
+}
+
+long recon_sys_kill(long pid, unsigned long signal_number)
+{
+	if (kill((pid_t)pid, (int)signal_number) != 0) {
+		return as_recon_status();
+	}
+	return 0;
+}
+
+/*
+ * The host's sigaction, and it never sees the restorer.
+ *
+ * glibc provides its own -- that is what `SA_RESTORER` is about -- so the one
+ * `libc/signal.c` builds is passed to this function and dropped. **That is
+ * the part of the signal path a host cannot test**, and it is said here so
+ * that a green suite is not read as covering it. What the machine proves is
+ * exactly this: that a handler returns.
+ */
+long recon_sys_sigaction(unsigned long signal_number, unsigned long what,
+			 unsigned long handler, unsigned long restorer)
+{
+	struct sigaction action;
+
+	(void)restorer;
+
+	memset(&action, 0, sizeof(action));
+	sigemptyset(&action.sa_mask);
+
+	if (what == 0) {
+		action.sa_handler = SIG_DFL;
+	} else if (what == 1) {
+		action.sa_handler = SIG_IGN;
+	} else {
+		action.sa_handler = (void (*)(int))handler;
+	}
+
+	if (sigaction((int)signal_number, &action, NULL) != 0) {
+		return as_recon_status();
+	}
 	return 0;
 }
 

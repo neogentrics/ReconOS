@@ -98,6 +98,73 @@ void recon_sys_exit(int code)
 	recon_exit(code);
 }
 
+long recon_sys_getpid(void)
+{
+	return (long)recon_getpid();
+}
+
+long recon_sys_kill(long pid, unsigned long signal_number)
+{
+	return (long)recon_kill((i64)pid, signal_number);
+}
+
+long recon_sys_sigaction(unsigned long signal_number, unsigned long what,
+			 unsigned long handler, unsigned long restorer)
+{
+	return (long)recon_sigaction(signal_number, what, handler, restorer);
+}
+
+/*
+ * Where a signal handler returns to.
+ *
+ * `SYS_SIGACTION` refuses a handler without a **restorer** -- an address the
+ * handler returns to, holding a few instructions that invoke SYS_SIGRETURN.
+ * The kernel's own comment says why: *"a handler with nowhere to return to
+ * runs once and then executes whatever follows it in memory."*
+ *
+ * It has to be machine code: there is no C for "return through a system
+ * call". A top-level `__asm__` block rather than a `naked` function, because
+ * `naked` is not available for every architecture on every compiler and a
+ * function that merely looks empty still gets a prologue that would run first.
+ *
+ * **The number in the assembly is checked by the compiler.** A literal in an
+ * `__asm__` block is exactly the kind of hand-written syscall number that
+ * `scripts/check-syscall-numbers.py` exists to police and cannot see, so the
+ * assertion below holds it against the enum. If the numbers ever shift, this
+ * file stops building rather than returning into the wrong call.
+ */
+_Static_assert(SYS_SIGRETURN == 22,
+	"the restorer's syscall number no longer matches SYS_SIGRETURN");
+
+#if defined(__x86_64__)
+__asm__(
+	".text\n"
+	".globl recon_sig_restorer\n"
+	".hidden recon_sig_restorer\n"
+	".type recon_sig_restorer, @function\n"
+	"recon_sig_restorer:\n"
+	"    movq $22, %rax\n"
+	"    syscall\n"
+	".size recon_sig_restorer, .-recon_sig_restorer\n");
+#elif defined(__aarch64__)
+__asm__(
+	".text\n"
+	".globl recon_sig_restorer\n"
+	".hidden recon_sig_restorer\n"
+	".type recon_sig_restorer, %function\n"
+	"recon_sig_restorer:\n"
+	"    mov x8, #22\n"
+	"    svc #0\n"
+	".size recon_sig_restorer, .-recon_sig_restorer\n");
+#else
+/*
+ * Refused rather than left out. A build with no restorer would compile, link,
+ * and fail the first time a program installed a handler -- at a moment chosen
+ * by whatever went wrong, which is the worst time to find a missing piece.
+ */
+#error "no signal restorer for this architecture"
+#endif
+
 /*
  * Two clocks, in nanoseconds, and they are two calls because they answer two
  * questions -- see the comment on `sys_walltime` in `kernel/core/user.c`.

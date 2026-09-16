@@ -66,6 +66,21 @@ long sysconf(int name);
  * one, far from here. */
 #define RECON_OPEN_MAX	32
 
+/*
+ * End this process now, running nothing on the way out.
+ *
+ * The one a signal handler may call. What a handler is allowed to do is a
+ * short list and `exit` is not on it -- it may run cleanup belonging to code
+ * the handler interrupted, from inside the interruption.
+ *
+ * On this library the difference is smaller than on a hosted one, because
+ * `exit` here runs no atexit handlers and flushes no streams (there are none
+ * to run and the FILE layer flushes on close). It is offered under its own
+ * name anyway, because a caller reaching for `_exit` is reaching for the
+ * guarantee rather than for the behaviour it happens to have today.
+ */
+void _exit(int code) __attribute__((noreturn));
+
 /* --- declared, and not yet linkable -------------------------------------- */
 
 int unlink(const char *path);

@@ -631,3 +631,21 @@ void exit(int code)
 	for (;;) {
 	}
 }
+
+/*
+ * `_exit` ends the process without running anything on the way out.
+ *
+ * Today that is the same thing `exit` does, because there is nothing to run --
+ * and it is written as its own function rather than as an alias so that when
+ * there *is* something, adding it to `exit` does not silently add it here.
+ * The callers that ask for `_exit` are signal handlers, and the list of what
+ * a handler may do is short for a reason.
+ */
+void _exit(int code)
+{
+	extern void recon_sys_exit(int code);
+
+	recon_sys_exit(code);
+	for (;;) {
+	}
+}

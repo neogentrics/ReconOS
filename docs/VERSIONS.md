@@ -38,6 +38,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.4.47** | **Signals.** The kernel had four signal calls and nothing in userland could reach them. The restorer is the difficulty — machine code, because there is no C for “return through a system call” — and the layering said where it goes. 30 checks against the host’s, and two files left off the port list on purpose, because compiling is not what that check asks. |
 | **0.4.46** | **The same shape a third time.** Five applications were including the whole compositor for one field — two of them for nothing at all — and the freestanding check turned out to be stricter than the build, rejecting a file over unused callback parameters. 46 of 80 sources build with no Linux under them; 52 do now. |
 | **0.4.45** | **The other side of the seam.** A panel drawn straight onto a screen — what a program on the ReconOS kernel does — and it takes no system calls, so the same code runs against a plain buffer and is tested there. The seam needed nothing changed to take a second implementation, which is the argument that it is in the right place. |
 | **0.4.44** | **The last inch.** `recon_ui.c` was 3,100 lines of which 28 mentioned wlroots, and those 28 held the rest off a compiler with no Linux under it. A panel is a pixel buffer; the inch that hands it to a screen is behind a table of function pointers now, and the desktop’s whole drawing layer builds freestanding. |

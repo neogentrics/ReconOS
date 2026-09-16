@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project("ReconOS"
-    VERSION 0.4.46
+    VERSION 0.4.47
     DESCRIPTION "A Wayland compositor and desktop shell built from scratch"
     LANGUAGES C)
 
@@ -882,6 +882,7 @@ set_source_files_properties(
     userland/libc/scanf.c
     userland/libc/inet.c
     userland/libc/socket.c
+    userland/libc/signal.c
     PROPERTIES COMPILE_OPTIONS
     "-include;${CMAKE_CURRENT_SOURCE_DIR}/userland/tests/prefix.h;-fno-builtin;-fno-math-errno")
 
@@ -937,6 +938,32 @@ add_executable(recon_libc_socket_tests
 # gets prefix.h from the list above.
 
 add_test(NAME libc_sockets COMMAND recon_libc_socket_tests)
+
+# Signals, against the host's.
+#
+# Differential where it can be: hostsys.c answers the three primitives with
+# POSIX kill and sigaction, so a handler installed through ReconOS's signal()
+# is installed with the real delivery machinery underneath and has to actually
+# run when the signal arrives.
+#
+# The one part a host cannot exercise is the restorer -- glibc provides its
+# own and hostsys.c drops ours. That is said in both files rather than left
+# for somebody to read a green suite as covering it; what proves the restorer
+# is a program in ring 3.
+add_executable(recon_libc_signal_tests
+    userland/tests/test_libc_signal.c
+    userland/tests/hostsys.c
+    userland/libc/signal.c
+    userland/libc/posix.c
+    userland/libc/errno.c
+    userland/libc/stdio.c
+    userland/libc/printf.c
+    userland/libc/string.c
+    userland/libc/ctype.c
+    userland/libc/stdlib.c
+    userland/libc/malloc.c)
+
+add_test(NAME libc_signals COMMAND recon_libc_signal_tests)
 
 # sscanf, against the host's.
 #

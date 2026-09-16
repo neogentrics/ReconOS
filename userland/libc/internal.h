@@ -105,6 +105,25 @@ int fprintf(struct recon_stream *f, const char *format, ...);
  * int, because that is what the kernel takes -- see `recon.h`. The conversion
  * from a `sockaddr_in`'s network order happens in socket.c, once. */
 long recon_sys_socket(int type);
+
+/*
+ * Signals.
+ *
+ * `recon_sys_sigaction` takes the kernel's `what` -- 0 default, 1 ignore,
+ * 2 handler -- and a restorer, which it refuses a handler without. The
+ * restorer is machine code and lives in `libc/signal.c`; everything about why
+ * is there.
+ *
+ * `hostsys.c` answers these with POSIX `kill` and `sigaction`, which makes the
+ * suite over them a real one: a handler installed through this library has to
+ * actually run when the signal arrives. The restorer is the one part that
+ * cannot be exercised that way -- the host has its own -- and it is the part
+ * the machine proves.
+ */
+long recon_sys_kill(long pid, unsigned long signal_number);
+long recon_sys_sigaction(unsigned long signal_number, unsigned long what,
+	unsigned long handler, unsigned long restorer);
+long recon_sys_getpid(void);
 long recon_sys_bind(int fd, unsigned int addr, int port);
 long recon_sys_listen(int fd, int backlog);
 long recon_sys_accept(int fd);

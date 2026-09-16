@@ -76,6 +76,32 @@
 #                              it. recon_stb.c itself still does not: it wants
 #                              a hosted <math.h> as well.
 #
+# --- Two files that are left off on purpose ---
+#
+# Both would build if handed a header, and neither should be. **Compiling is
+# not the point.** This check asks whether a file could run on ReconOS, and a
+# file that compiles because it was given a declaration for something this
+# system answers with a refusal has a worse answer than one that does not
+# build: it looks ready.
+#
+#   src/recon_control.c   wants <sys/time.h> for `struct timeval`, which it
+#                         uses with setsockopt(SO_RCVTIMEO) -- and
+#                         userland/include/sys/socket.h refuses every
+#                         setsockopt option with ENOPROTOOPT. The timeout is
+#                         there to stop a peer that connects and says nothing
+#                         from freezing the thread drawing the desktop. Give it
+#                         the header and it compiles, gets no timeout, and the
+#                         freeze it was written to prevent comes back with
+#                         nothing saying so.
+#
+#   src/recon_procinfo.c  wants `sysconf(_SC_CLK_TCK)`, and it wants it to
+#                         divide numbers it read out of /proc. There is no
+#                         /proc on ReconOS and this file is a Linux scraper
+#                         from top to bottom -- it is on the KERNEL-WANTS list
+#                         as "Processes", not on this one. `signal.h` answered
+#                         the other half of what it wanted, which is why it is
+#                         mentioned here at all.
+#
 # And one thing this cannot find yet: `strerror`, on 43 call sites in three
 # files. The kernel returns negative error numbers (`SYS_ENOENT` and the rest
 # in userland/include/recon.h), so the table is ours to write -- but all three
@@ -130,6 +156,9 @@ fi
 # And three that only ever wanted third_party/ on the include path.
 # Added 15 September 2026, when five applications stopped including the whole
 # compositor for one field and the check stopped being stricter than the build.
+# Added 15 September 2026, with userland/include/signal.h -- the kernel has had
+# SYS_KILL, SYS_SIGACTION, SYS_SIGMASK and SYS_SIGRETURN since before the
+# desktop could compile for it at all.
 FILES="
 src/recon_expr.c
 src/recon_url.c
@@ -186,6 +215,8 @@ src/recon_explorer.c
 src/recon_help.c
 src/recon_mailwin.c
 src/recon_ui_fb.c
+
+src/recon_error.c
 "
 
 out=$(mktemp -d)

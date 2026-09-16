@@ -186,4 +186,21 @@
 #define atan2       recon_atan2
 #define cbrt        recon_cbrt
 
+/* --- signals ---
+ *
+ * `recon_libc_` for the same reason as the sockets: `recon_kill` is already
+ * the system-call inline in `userland/include/recon.h`, one layer below this.
+ *
+ * `raise` is renamed as well even though nothing collides with it, because a
+ * group of three where two are renamed and one is not is the arrangement
+ * somebody reads wrong later.
+ */
+#define signal      recon_libc_signal
+#define raise       recon_libc_raise
+#define kill        recon_libc_kill
+
+/* `_exit` with it: a handler that cannot write its file calls this, and a
+ * suite comparing handlers has to be comparing the same ending. */
+#define _exit       recon_libc_exit_now
+
 #endif /* RECON_LIBC_PREFIX_H */
