@@ -876,6 +876,38 @@ add_executable(recon_server_identity_tests
 
 add_test(NAME server_identity COMMAND recon_server_identity_tests)
 
+# HTTP parsing, held against every way of writing two requests where one was
+# sent.
+#
+# No sockets and no timing: every case is a string literal, so this runs
+# anywhere in milliseconds. Its refusing cases outnumber its accepting ones
+# because refusing is the half that matters -- request smuggling by double
+# framing, %2e%2e%2f traversal, the %00 extension trick, a space before a
+# colon. A parser that accepts any of those is not slightly wrong.
+add_executable(recon_server_http_tests
+    server/http/request.c
+    server/tests/test_http.c)
+
+add_test(NAME server_http COMMAND recon_server_http_tests)
+
+# The server, over a real socket.
+#
+# Runs serve.c UNMODIFIED against the host's loopback -- a child process serves
+# and the parent is the client. There is deliberately no stand-in for the
+# network here: serve.c calls only socket/bind/listen/accept/recv/send/close,
+# which are POSIX's names on the host and ReconOS's library over the kernel's
+# five calls on the machine.
+#
+# The one thing a host cannot show is accept answering EAGAIN with nobody
+# waiting; it blocks instead. http_serve_once treats both identically, which is
+# written down rather than demonstrated because a host cannot demonstrate it.
+add_executable(recon_server_serve_tests
+    server/http/request.c
+    server/http/serve.c
+    server/tests/test_http_serve.c)
+
+add_test(NAME server_http_serve COMMAND recon_server_serve_tests)
+
 # sscanf, against the host's.
 #
 # The failure that matters for a scanner is assigning the right value to the

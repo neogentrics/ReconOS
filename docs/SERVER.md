@@ -28,36 +28,98 @@ before it needs anything else this box can offer.
 
 ## The audit
 
+Every subsystem `GUI_Server_Operating_System_Architecture.docx` asks for, plus
+what this role has found it needs. The document is the base list and not the
+whole of it; rows get added as work finds them.
+
 **Status means what it says.** `built` is running and tested. `partial` runs
-and does less than its name claims. `blocked` cannot be started at all, and
-the blocker is named. Nothing is marked built on the strength of having been
-written.
+and does less than its name claims. `blocked` cannot be started at all and
+names its blocker. `spec` means the design is written down and no code exists.
+Nothing is marked built on the strength of having been written.
 
-| subsystem | status | note |
+**Owner** says which branch does the work. A row owned by `kernel` is not this
+role's to build and is listed because this role is what will be waiting on it.
+
+### Network and infrastructure
+
+| subsystem | owner | status | note |
+|---|---|---|---|
+| Web / API server | server | **built** | `server/http/` — see `docs/WEB.md`; 92 checks |
+| DNS (authoritative, recursive, split-horizon) | server | **blocked** | unconnected datagram |
+| DHCP (leases, reservations, PXE staging) | server | **blocked** | same |
+| DDNS | server | **blocked** | follows DNS |
+| NTP / PTP time sync | server | **blocked** | same; and no user-mode timer |
+| Reverse proxy | server | spec | `connect` exists, so buildable today |
+| Multi-queue NIC drivers | kernel | **blocked** | virtio-net only |
+| LACP bonding, VLAN, bridging | kernel | not started | firewall role needs it first |
+| Stateful firewall / NAT | kernel | not started | firewall role owns it |
+
+### Identity and security
+
+| subsystem | owner | status | note |
+|---|---|---|---|
+| LDAP directory service | server | **blocked** | no LDAP client or server |
+| Kerberos KDC | server | **blocked** | no GSSAPI, no crypto |
+| TLS termination and certificates | server | **blocked** | no TLS, no certificate store |
+| HTTP auth (Basic, session, bearer) | server | spec | **TLS first** — see `docs/WEB.md` §5 |
+| Audit log daemon | server | not started | Event Viewer reads it |
+| POSIX ACLs | kernel | partial | uid/gid and caps exist |
+
+### Storage
+
+| subsystem | owner | status | note |
+|---|---|---|---|
+| SMB / CIFS server | NAS | not started | NAS role owns it |
+| NFS server | NAS | not started | same |
+| iSCSI / NVMe-oF target | NAS | not started | same |
+| CoW filesystem, checksumming | kernel | partial | ReconFS exists |
+| Software RAID | kernel | not started | |
+| Snapshots and clones | kernel | not started | |
+
+### Lifecycle and management
+
+| subsystem | owner | status | note |
+|---|---|---|---|
+| Parallel naming (`M16` → `M17`) | server | **built** | `server/identity.c` — 34 checks |
+| Peer discovery on first boot | server | **blocked** | no broadcast; sweep is the way through |
+| Configuration clone onto unlike hardware | server | spec | discovery first |
+| Service supervisor | server | not started | needed before there is a second service |
+| Cron / job scheduler | server | **blocked** | no user-mode timer |
+| Structured REST / RPC management API | server | partial | the transport is built; no API yet |
+| Hypervisor daemon | server | not started | needs VT-x from the kernel |
+| Container runtime | server | **blocked** | no namespaces, no cgroups |
+| Out-of-band IPMI / Redfish | server | not started | |
+| Serial console redirection | kernel | partial | kernel has a serial path |
+| Watchdog, kdump, cgroups | kernel | not started | |
+
+### Administrative consoles
+
+Each is a web application served by the role above, so every row here waits on
+the same two things: a static file handler and a JSON API.
+
+| console | status | note |
 |---|---|---|
-| Parallel naming (`M16` → `M17`) | **built** | `server/identity.c`, 34 checks |
-| Peer discovery on first boot | **blocked** | needs datagram sockets, see below |
-| Configuration clone from a peer | not started | design below; discovery first |
-| DHCP server | **blocked** | unconnected datagram; see `KERNEL-WANTS.md` |
-| DNS server | **blocked** | same |
-| DDNS | **blocked** | follows DNS |
-| Web server | not started | TCP only, so **not** blocked — next buildable thing |
-| Service supervisor | not started | needed before more than one service exists |
-| Static addressing | not started | the sidestep that makes a server usable without DHCP |
-| Lease renewal (as a client) | **blocked** | kernel has no renewal; `ROLES.md` records it |
-| TLS / certificates | not started | |
-| Remote administration | not started | |
-| Logging and audit | not started | |
-| Time service | not started | |
-| Directory / accounts | not started | |
-| File sharing | not started | NAS role owns the storage half |
+| Server Manager dashboard | spec | the first page to build |
+| Storage / RAID manager | spec | waits on the kernel's RAID |
+| Network and firewall centre | spec | |
+| Services and daemon inspector | spec | waits on the supervisor |
+| Directory and user manager | spec | waits on LDAP |
+| Performance monitor | spec | `SYS_MACHINE` gives some of it today |
+| Event viewer and log explorer | spec | waits on the audit daemon |
+| Task and job scheduler | spec | waits on a timer |
 
-Joshua is sending a fuller list of what a server is expected to carry. This
-table is the shape it lands in — a row per subsystem, a status that is
-checkable, and a named blocker where there is one. It is an audit and not a
-roadmap: a row may sit at `not started` for months without that being a fault,
-but a row marked `built` that is not is a fault of the worst kind, because it
-is the kind nobody goes looking for.
+### Graphical desktop and remote access
+
+Owned by the desktop track, listed because a *GUI* server role is what the
+document specifies and this role should not duplicate the work.
+
+| subsystem | owner | status |
+|---|---|---|
+| Compositor, window manager, shell | desktop | being built |
+| DRM / KMS, GPU drivers | kernel | not started |
+| Remote desktop daemon (RDP / VNC / SPICE) | server | not started |
+| Hardware video encode for remote desktop | kernel | not started |
+| Multi-session broker | server | **blocked** — nothing can start a program |
 
 ---
 
@@ -86,9 +148,11 @@ Filed as its own entry in `docs/KERNEL-WANTS.md`. Until it is answered:
   no half of either that runs over a stream.
 - **Discovery cannot use broadcast**, which is how a machine would normally
   find its peers. The design below works around it rather than waiting.
-- A server can still be reached, because TCP works — so the web server is the
-  next thing that can actually be built, and it is what will first prove that
-  a socket descriptor moves bytes on this kernel. Nothing has yet.
+- A server can still be reached, because TCP works. That is why the web server
+  was built first and is running: `docs/WEB.md` is its specification and
+  `server/http/` is the code. It is also what will first prove that a socket
+  descriptor moves bytes on this kernel — which nothing has yet, because
+  everything so far is verified against the host's sockets.
 
 ---
 
