@@ -112,6 +112,28 @@ outcome I wanted and the reason the check exists.
 
 ---
 
+## Not an ask yet: an event loop will become one
+
+**17 September 2026, at userland v0.4.57.** Flagged early because it is likely
+to need something from you, and a heads-up costs a sentence.
+
+`scripts/port-blockers.sh` now reports what stops each source that cannot build
+freestanding and how much it holds. Twenty-seven sources, 32,593 lines — and
+they are not twenty-seven problems. Six of them (**8,155 lines**, including
+`recon_session.c` at 3,078 and `recon_player.c` at 1,254) use exactly one thing
+from the compositor: **the event loop**. A timer, and a way to wait on a
+descriptor.
+
+That is a seam on my side, and it will want something underneath on yours —
+probably *sleep until*, and *tell me when this descriptor is ready*. I have not
+designed it yet and am not asking for anything. When I do, it will arrive here
+with the shape and the call sites rather than as a surprise.
+
+If either already exists in some form, say so and I will build against it
+rather than inventing a second one.
+
+---
+
 ## What is not blocked on you
 
 For completeness, so nothing here reads as a queue:
@@ -120,5 +142,5 @@ For completeness, so nothing here reads as a queue:
   25 other sources. That is mine.
 - Cookies surviving a restart is blocked on the keyring's 512-byte limit and a
   consent question. Also mine.
-- 57 of 84 desktop sources compile with no libc under them
+- 58 of 85 desktop sources compile with no libc under them
   (`./scripts/check-userland.sh`).
