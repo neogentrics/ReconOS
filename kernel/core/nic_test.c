@@ -25,29 +25,34 @@
  * Realtek's receive length includes the four-byte frame check sequence and the
  * Intel's does not, because the Intel is told to strip it.
  *
- * It is not asserted here and that is deliberate rather than an oversight. To
- * test it without a card, the arithmetic would have to be lifted out of the
- * receive loop into a function this file could call -- and then the thing
- * under test would be the lifted function rather than the loop, while the loop
- * went on being the thing that runs. A test that proves a copy of the code is
- * the shape of fault this project keeps finding.
+ * It is not asserted *in this file*, and for the Realtek it is asserted in
+ * `r8169.c` instead -- beside the loop it is about, driving that loop against
+ * a page of memory standing in for the register window. It is there rather
+ * than here because the alternative was lifting the arithmetic out into
+ * something this file could call, and then the thing under test would be the
+ * lifted copy while the loop went on being the thing that runs. A test that
+ * proves a copy of the code is the shape of fault this project keeps finding.
  *
- * So it is checked by booting with the card. **And that only half works**,
- * which is the part worth writing down, because it was measured rather than
- * assumed. Breaking the Intel's receive length on purpose, in each direction,
- * and booting each one:
+ * **Why it needed its own test at all**, measured rather than assumed:
+ * breaking the Intel's receive length on purpose, in each direction, and
+ * booting each one --
  *
  *   four bytes too short   no DHCP lease and no ping reply
  *   four bytes too long    a lease and a ping reply, indistinguishable
  *                          from correct
  *
  * Too short fails UDP's checksum and the DHCP reply is thrown away. Too long
- * is invisible: every layer reads its own length and ignores the tail.
+ * is invisible: every layer reads its own length and ignores the tail. And
+ * **too long is the direction a driver errs in**, because it is what
+ * forgetting the subtraction looks like -- so booting catches the mistake
+ * nobody makes and misses the one they do.
  *
- * And **too long is the direction a driver actually errs in**, because it is
- * what forgetting the subtraction looks like. So the boot test catches the
- * mistake nobody makes and misses the one they do. That is a real hole with no
- * check in front of it, recorded here rather than left implied -- NW-007.
+ * `r8169_self_test` closes that for one driver and one direction of traffic.
+ * Every one of the five faults it catches was introduced on purpose, and every
+ * one of those boots still reported a DHCP lease and a ping reply. **NW-007
+ * stays open** for what is still uncovered: the Intel has no equivalent, and
+ * neither driver's transmit path is checked by anything but a network that
+ * answers.
  */
 #include <recon/kernel/net.h>
 #include <recon/kernel/console.h>
@@ -226,6 +231,11 @@ bool nic_self_test(void)
 		ok = false;
 
 	if (!wake_reaches_the_worker())
+		ok = false;
+
+	/* And the Realtek's receive loop, which has no other way to be run at
+	 * all: the rig emulates no card it recognises. */
+	if (!r8169_self_test())
 		ok = false;
 
 	return ok;

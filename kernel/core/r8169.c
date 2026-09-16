@@ -963,3 +963,327 @@ void r8169_print_summary(void)
 				"arrived by polling\n");
 	}
 }
+
+/* --- The receive path, with the card played by this file ------------------- */
+
+/* NW-007 says the frame length is the likeliest single fault in either driver,
+ * and that booting with the card covers only half of it. For this driver there
+ * is no booting with the card at all: the rig emulates no Realtek gigabit
+ * part, so without what follows, `r8169_poll` has never executed a single
+ * instruction.
+ *
+ * --- What is real here and what is not ---
+ *
+ * **The code under test is the real receive loop.** Nothing is lifted out into
+ * a testable copy, which is the trap this project keeps finding: a test that
+ * proves a copy while the original goes on being the thing that runs.
+ *
+ * What is faked is the far side. A page of ordinary memory stands in for the
+ * register window, and `card_delivers` below writes the descriptor fields the
+ * silicon would have written. The driver cannot tell the difference, because a
+ * network card *is* a thing that writes descriptors and raises interrupts --
+ * and this file writes descriptors.
+ *
+ * --- What it therefore cannot prove, stated so it is not assumed ---
+ *
+ * That the real chip behaves the way this file pretends it does. Every
+ * register offset, the reset sequence, the meaning of every bit in `R_RCR`,
+ * whether `R_TPPOLL` actually starts a transmission -- none of that is touched
+ * here and none of it can be. Those are still checked by running on silicon
+ * and nowhere else.
+ *
+ * What it does prove is the arithmetic and the ring bookkeeping: that four
+ * bytes of frame check sequence come off, that a frame too short to contain
+ * one is refused rather than underflowed, that a frame the card marked bad
+ * does not reach the stack, and that the end-of-ring bit survives a lap.
+ *
+ * --- One thing this test does that shows up in the boot summary ---
+ *
+ * It really does receive frames, so the Ethernet counters really do move. The
+ * frames are addressed to the test device and carry an ethertype nothing
+ * handles, so they are dropped one layer up and counted there. That is a true
+ * line about work that happened, not noise -- and hiding it would mean a
+ * summary that under-reports on purpose, which is the fault half this
+ * register is about.
+ */
+
+/* Kept apart from `devices[]` so a test never consumes a slot a real card
+ * would have had, and so `r8169_count()` does not report it. */
+static struct r8169 test_card;
+
+/* What the card leaves behind when it has filled a descriptor.
+ *
+ * Two things here are deliberately harsher than the hardware, because a test
+ * that assumes the gentler behaviour cannot fail when the driver depends on
+ * it:
+ *
+ *   - **The length includes the four-byte frame check sequence.** That is the
+ *     fact the whole file exists to pin down.
+ *
+ *   - **The end-of-ring bit is cleared.** Real Realtek silicon preserves it in
+ *     the write-back -- Linux's driver reads it back out of the descriptor and
+ *     re-applies what it found. This driver instead derives it from the index
+ *     on every hand-back, which does not depend on the card preserving
+ *     anything. Simulating a card that clears it is what makes that difference
+ *     testable: a driver that or-ed `DESC_OWN` into whatever was there would
+ *     lose the bit on the first wrap and walk off the end of the ring, and
+ *     with a gentler fake it would pass.
+ */
+static void card_delivers(struct r8169 *r, unsigned i, u32 frame_len, u32 extra)
+{
+	struct netbuf *b = r->rx_buf[i];
+
+	/* A frame addressed to this device with an ethertype nothing claims,
+	 * so it is accepted by Ethernet as ours and dropped there rather than
+	 * being parsed as a malformed IP packet further up. */
+	if (b) {
+		kmemcpy(b->data, &r->ndev->mac, MAC_LEN);
+		kmemset(b->data + MAC_LEN, 0x02, MAC_LEN);
+		b->data[12] = 0x88;	/* reserved for experiments */
+		b->data[13] = 0xB5;
+	}
+
+	__atomic_thread_fence(__ATOMIC_RELEASE);
+
+	/* No DESC_EOR, whatever the index -- see above. */
+	r->rx_desc[i].opts1 = (frame_len + 4) | DESC_FS | DESC_LS | extra;
+}
+
+/* Hands one frame to the driver through its own loop and says what came out
+ * the other side: how many bytes, and how many frames.
+ *
+ * `netdev_receive` adds `b->len` to `rx_bytes` and one to `rx_packets`, which
+ * is where the driver's answer becomes readable without reaching into a buffer
+ * that has already been given away. Using counters the driver does not know
+ * are being watched is the point: the numbers are produced by the ordinary
+ * path.
+ *
+ * **Both, not just the bytes.** Measuring bytes alone made one assertion below
+ * unable to fail: with the short-length guard removed, a four-byte descriptor
+ * -- a frame check sequence and nothing else -- becomes a frame of length
+ * zero, which is passed up the stack and adds *nothing* to `rx_bytes`. The
+ * test saw no bytes, which is what it saw when the frame was correctly
+ * refused, and reported a pass. Found by removing the guard on purpose and
+ * watching the test stay green. The frame count is what tells "refused" from
+ * "accepted, and empty". */
+static void deliver_one(struct r8169 *r, struct net_device *dev,
+			u32 frame_len, u32 extra, u64 *bytes, u64 *frames)
+{
+	u64 b0 = dev->rx_bytes;
+	u64 f0 = dev->rx_packets;
+
+	card_delivers(r, r->rx_next % RX_RING, frame_len, extra);
+	r8169_poll(dev);
+
+	*bytes = dev->rx_bytes - b0;
+	*frames = dev->rx_packets - f0;
+}
+
+bool r8169_self_test(void)
+{
+	struct r8169 *r = &test_card;
+	struct net_device *dev;
+	char name[NET_NAME_MAX];
+	static const struct mac_addr mac = { { 0x02, 0x4E, 0x57, 0, 0, 0x10 } };
+	paddr_t regs;
+	unsigned i;
+	u64 got, frames;
+	bool ok = true;
+
+	kmemset(r, 0, sizeof(*r));
+	spin_init(&r->lock, "r8169-test");
+
+	/* Declared already known and down, so `update_link` finds nothing
+	 * changed and stays quiet. A test that prints a line about a cable on
+	 * every boot makes the summary worse, and there is no cable. */
+	r->link_known = true;
+	r->link_up = false;
+
+	regs = pmm_alloc_page();
+	r->ring_page = pmm_alloc_page();
+
+	if (!regs || !r->ring_page) {
+		kputs("  r8169: no memory for the test's rings\n");
+
+		if (regs)
+			pmm_free_pages(regs, 1);
+		if (r->ring_page)
+			pmm_free_pages(r->ring_page, 1);
+
+		return false;
+	}
+
+	/* A page of ordinary memory where the registers would be. Every `w8`
+	 * and `rd8` in the driver lands here and changes nothing in the
+	 * machine -- which is also why this test can run on a board that has
+	 * no PCI at all. */
+	r->mmio = phys_to_virt(regs);
+	kmemset((void *)r->mmio, 0, 4096);
+
+	{
+		u8 *base = phys_to_virt(r->ring_page);
+
+		kmemset(base, 0, 4096);
+		r->rx_desc = (struct rtl_desc *)(base + RX_RING_OFFSET);
+		r->tx_desc = (struct rtl_desc *)(base + TX_RING_OFFSET);
+	}
+
+	r->tx_desc[TX_RING - 1].opts1 = DESC_EOR;
+
+	if (!stock_rx(r)) {
+		kputs("  r8169: no memory for the test's buffers\n");
+		pmm_free_pages(regs, 1);
+		pmm_free_pages(r->ring_page, 1);
+		return false;
+	}
+
+	if (!netdev_name("eth", name, sizeof(name))) {
+		kputs("  r8169: no name for the test device\n");
+		ok = false;
+		goto out;
+	}
+
+	dev = netdev_register(name, &r8169_ops, r, &mac);
+
+	if (!dev) {
+		kputs("  r8169: the test device was refused\n");
+		ok = false;
+		goto out;
+	}
+
+	r->ndev = dev;
+
+	/* The receive queue is drained before anything is measured.
+	 *
+	 * `netdev_self_test` deliberately overflows that queue, and a full
+	 * queue makes `netdev_receive` drop the frame **without** adding to
+	 * `rx_bytes` -- so without this line every assertion below would read
+	 * zero bytes and blame the driver's arithmetic for the previous test's
+	 * leftovers. */
+	netdev_service();
+
+	/* --- the four bytes ------------------------------------------------ */
+
+	deliver_one(r, dev, 64, 0, &got, &frames);
+
+	if (got != 64 || frames != 1) {
+		kprintf("  r8169: a 64-byte frame delivered as 68 came up as "
+			"%u bytes -- the frame check sequence is not coming "
+			"off correctly\n", (unsigned)got);
+		ok = false;
+	}
+
+	/* And again at the largest frame the driver accepts, because the
+	 * length is also what the `> ETH_FRAME_MAX` refusal is measured
+	 * against -- and a driver that subtracted after the comparison rather
+	 * than before would refuse this one. */
+	deliver_one(r, dev, ETH_FRAME_MAX - 4, 0, &got, &frames);
+
+	if (got != ETH_FRAME_MAX - 4 || frames != 1) {
+		kprintf("  r8169: the largest acceptable frame came up as %u "
+			"bytes rather than %u\n",
+			(unsigned)got, (unsigned)(ETH_FRAME_MAX - 4));
+		ok = false;
+	}
+
+	/* --- a frame the card marked bad ------------------------------------ */
+
+	deliver_one(r, dev, 64, DESC_RX_ERROR, &got, &frames);
+
+	if (got != 0 || frames != 0) {
+		kputs("  r8169: a frame the card marked bad was passed up\n");
+		ok = false;
+	}
+
+	/* --- a length too short to hold a check sequence ---------------------
+	 *
+	 * Two bytes. Subtracting four underflows an unsigned length to about
+	 * four billion, which is why the driver tests before it subtracts
+	 * rather than after -- and why this case is worth its own assertion
+	 * rather than being assumed to fall out of the one above. */
+
+	deliver_one(r, dev, 0, 0, &got, &frames);	/* delivered as 4 */
+
+	if (got != 0 || frames != 0) {
+		kprintf("  r8169: a frame with nothing but a check sequence "
+			"was passed up -- %u frame(s), %u byte(s)\n",
+			(unsigned)frames, (unsigned)got);
+		ok = false;
+	}
+
+	/* --- a fragment of a larger frame ------------------------------------
+	 *
+	 * Neither first nor last. The driver refuses these rather than
+	 * reassembling, because its receive buffer is larger than any frame it
+	 * accepts -- so a split frame means the card is doing something it was
+	 * not asked to, and guessing at what would be guessing at somebody's
+	 * data. */
+
+	card_delivers(r, r->rx_next % RX_RING, 64, 0);
+	r->rx_desc[r->rx_next % RX_RING].opts1 &= ~(u32)DESC_LS;
+	{
+		u64 before = dev->rx_packets;
+
+		r8169_poll(dev);
+
+		if (dev->rx_packets != before) {
+			kputs("  r8169: half of a split frame was passed up "
+			      "as though it were whole\n");
+			ok = false;
+		}
+	}
+
+	/* --- all the way round, and the bit that says where the ring ends ---
+	 *
+	 * One full lap plus two. The failure this catches survives exactly one
+	 * lap, so one lap is the shortest run that can catch it. */
+
+	for (i = 0; i < RX_RING + 2; i++) {
+		deliver_one(r, dev, 64, 0, &got, &frames);
+
+		/* Walked up as they go rather than left to pile up. The
+		 * receive queue holds 64 and this lap alone produces 34, so
+		 * without draining it the queue would be most of the way full
+		 * when the test ends -- and `netdev_receive` counts a frame
+		 * dropped for a full queue in the same `overflowed` number the
+		 * bounded-queue test uses to prove its bound. Borrowing that
+		 * counter for ordinary test traffic would make the one number
+		 * that says the bound works say something else as well. */
+		if ((i % 8) == 7)
+			netdev_service();
+	}
+
+	if (!(r->rx_desc[RX_RING - 1].opts1 & DESC_EOR)) {
+		kputs("  r8169: the end-of-ring bit was lost on the first "
+		      "wrap -- the card would read descriptors past the end "
+		      "of the ring\n");
+		ok = false;
+	}
+
+	for (i = 0; i < RX_RING - 1; i++) {
+		if (r->rx_desc[i].opts1 & DESC_EOR) {
+			kprintf("  r8169: descriptor %u claims to end the "
+				"ring, and it does not\n", i);
+			ok = false;
+			break;
+		}
+	}
+
+	/* The frames this test produced are walked up and dropped now rather
+	 * than left on the queue for whatever runs next. */
+	netdev_service();
+
+	netdev_forget_last();
+
+out:
+	for (i = 0; i < RX_RING; i++) {
+		netbuf_free(r->rx_buf[i]);
+		r->rx_buf[i] = NULL;
+	}
+
+	pmm_free_pages(regs, 1);
+	pmm_free_pages(r->ring_page, 1);
+	kmemset(r, 0, sizeof(*r));
+
+	return ok;
+}

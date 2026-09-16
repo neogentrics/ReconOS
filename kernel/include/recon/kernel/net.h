@@ -511,6 +511,11 @@ bool r8169_attach(const struct pci_device *d);
 unsigned r8169_count(void);
 void r8169_print_summary(void);
 
+/* The receive loop, driven against a page of memory standing in for the
+ * register window. The card is the only part that is faked; the loop is the
+ * real one. See the head of the test for what that can and cannot prove. */
+bool r8169_self_test(void);
+
 /* Intel's 8254x gigabit controllers: 82540EM and the parts around it.
  *
  * Here beside the Realtek on purpose rather than instead of it. The Realtek is

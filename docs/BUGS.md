@@ -375,10 +375,32 @@ turned out to be true.
 
   **And too long is the direction a driver errs in**, because it is what
   forgetting the subtraction looks like.
-- **Open because** there is no check in front of it. Testing the arithmetic
-  off-hardware means lifting it out of the receive loop, and then the test
-  proves the lifted copy while the loop goes on being the thing that runs.
-  Recorded as a known hole rather than an assumed cover.
+- **Status:** open, and narrower than it was.
+
+  `r8169_self_test` now drives **the real receive loop** against a page of
+  memory standing in for the register window — nothing is lifted out into a
+  testable copy, which was the objection that kept this open in the first
+  place. Five faults were introduced on purpose and all five are caught: the
+  subtraction removed, the end-of-ring bit taken from the card instead of the
+  index, the short-length guard removed, a frame the card marked bad accepted,
+  and half of a split frame accepted. **Every one of those five boots still
+  reported a DHCP lease and a ping reply**, which is the measurement that says
+  the test is covering ground booting cannot reach.
+
+  One of those five also found a fault in the test rather than the driver, and
+  it is the same shape as everything else here: the assertions measured
+  `rx_bytes` alone, so removing the short-length guard — which turns a
+  four-byte descriptor into a frame of length **zero**, passed up the stack —
+  moved no bytes and read exactly like a correct refusal. It counts frames as
+  well as bytes now. Found by breaking the guard and watching the test stay
+  green.
+
+  **What is still uncovered, and why this stays open:** the Intel has no
+  equivalent test, and neither driver's *transmit* path is checked by anything
+  except a network that answers. A simulated card also cannot say that the real
+  chip behaves the way the simulation pretends — every register offset and the
+  reset sequence are still proved only by running on silicon, which for the
+  Realtek has not happened.
 
 ### NW-008 — A hook in the device interface that nothing has ever called
 
