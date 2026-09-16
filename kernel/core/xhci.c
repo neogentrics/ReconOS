@@ -550,8 +550,20 @@ static bool command(struct xhci *x, u64 parameter, u32 status, u32 control,
 	for (;;) {
 		struct trb e;
 
-		if (!next_event(x, &e, 1000))
+		if (!next_event(x, &e, 1000)) {
+			/* **Nothing arrived, which is not the same as no.**
+			 *
+			 * This returned a bare `false` for both outcomes and
+			 * every caller reported them with one sentence, so a
+			 * controller that had gone quiet and a controller that
+			 * had refused looked identical -- and they need
+			 * different investigations. A zeroed result says which:
+			 * no completion arrived, so there is no code to name.
+			 * (KF-242) */
+			if (result)
+				kmemset(result, 0, sizeof(*result));
 			return false;
+		}
 
 		if (TRB_TYPE_OF(e.control) == TRB_COMMAND_COMPLETE) {
 			if (result)
@@ -559,6 +571,24 @@ static bool command(struct xhci *x, u64 parameter, u32 status, u32 control,
 			return ((e.status >> 24) & 0xFF) == COMP_SUCCESS;
 		}
 	}
+}
+
+/* Why the last command failed, in words, from the result `command` filled.
+ *
+ * A zeroed TRB means it timed out -- `command` clears it on that path
+ * precisely so this can tell the two apart. Anything else carries the
+ * controller's own completion code, which is the number worth having: `port 6
+ * would not take an address (completion code 4)` named a USB transaction
+ * error, and that one line was the whole of KF-240's diagnosis.
+ */
+static void say_why_command_failed(const struct trb *result)
+{
+	if (!result || !result->control) {
+		kputs(" -- the controller did not answer within a second");
+		return;
+	}
+
+	kprintf(" (completion code %u)", (unsigned)((result->status >> 24) & 0xFF));
 }
 
 /* --- ports ----------------------------------------------------------------- */
@@ -815,9 +845,20 @@ static bool address_device(struct xhci *x, const struct usb_path *path,
 	paddr_t pages;
 	unsigned slot;
 
+	/* Zeroed first, so a timeout is distinguishable from a refusal even if
+	 * `command` returns without touching it. */
+	kmemset(&result, 0, sizeof(result));
+
 	if (!command(x, 0, 0, TRB_TYPE(TRB_ENABLE_SLOT), &result)) {
-		kprintf("  xhci         : port %u would not give up a slot\n",
+		/* **"would not give up a slot" described the wrong
+		 * operation.** ENABLE_SLOT asks the controller *for* a slot;
+		 * the old wording reads as a failure to release one, and was
+		 * read that way -- sending the next investigation toward a
+		 * slot leak that is not happening. (KF-242) */
+		kprintf("  xhci         : port %u could not be given a slot",
 			port);
+		say_why_command_failed(&result);
+		kputs("\n");
 		return false;
 	}
 

@@ -7109,6 +7109,46 @@ walk powers the whole set once and settles once rather than paying per port.
 reports `1 connected, 1 addressed`, still reads its GPT, and still takes the
 boot log.
 
+### KF-242 - A failed command cannot say whether it was refused or ignored
+
+- **Found:** 15 September 2026, by reading for the cause of
+  `xhci: port 7 would not give up a slot` -- the last USB fault standing after
+  KF-238 to KF-241.
+
+- **Two faults in one line, and the second is why the first matters.**
+
+  `command()` returns a bare `false` for two unrelated outcomes: `next_event`
+  timing out after a second with nothing arriving, or a completion arriving
+  with a code that is not SUCCESS. **The caller gets one `false` and cannot
+  tell a controller that went quiet from a controller that said no** -- and
+  those need different investigations. A timeout is a ring or interrupt
+  problem; a refusal is a code the controller is willing to name.
+
+  And the message describes the wrong operation. `TRB_ENABLE_SLOT` *asks the
+  controller for* a slot; "would not give up a slot" reads as a failure to
+  release one, and was read that way -- sending the next step toward a slot
+  leak that is not happening.
+
+- **The same file is precise about this thirty lines away.** `port 6 would not
+  take an address (completion code 4)` names its code, and that one number was
+  the whole of KF-240's diagnosis: completion code 4 is a USB transaction
+  error, which is a device that did not answer, which is a missing recovery
+  interval. One boot, one line, one fix. The slot failure had a year of
+  investigations available to it and named none.
+
+- **Cost.** Not a wrong answer -- an absent one. Ports 7 and 8 have failed on
+  every Gateway boot and nothing recorded is enough to say why, so the next
+  step has to be another boot rather than another read. That is the expensive
+  kind of gap: it does not mislead, it simply defers.
+
+- **Fixed.** `command()` zeroes the result on the timeout path, so a zeroed TRB
+  means *nothing arrived* and anything else carries the controller's own code.
+  `say_why_command_failed()` turns that into words, and the enable-slot site
+  says what it was asking for rather than what it sounded like.
+
+- **Status:** fixed, kernel 0.2.46. The underlying slot failure is still open
+  and is now diagnosable in one boot instead of none.
+
 ### KF-241 - A disk that arrives late is never read
 
 - **Found:** 15 September 2026, on the Gateway, in the boot after KF-240:
