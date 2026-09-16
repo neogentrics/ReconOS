@@ -643,6 +643,13 @@ const char *http_reason(int status)
 	switch (status) {
 	case 200: return "OK";
 	case 204: return "No Content";
+
+	/* 304 was missing until the first conditional request went out and the
+	 * status line read `HTTP/1.1 304 Unknown`. Harmless to a client, which
+	 * reads the number -- but the phrase is what a person reads in a log,
+	 * and "Unknown" beside a status this server sends deliberately is a
+	 * server that does not know what it is doing. */
+	case 304: return "Not Modified";
 	case 400: return "Bad Request";
 	case 403: return "Forbidden";
 	case 404: return "Not Found";

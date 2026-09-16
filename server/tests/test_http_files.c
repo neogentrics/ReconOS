@@ -35,6 +35,7 @@
  */
 
 #include "../http/files.h"
+#include "../http/cache.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -154,6 +155,99 @@ static size_t ask(const struct http_files *files, const char *target,
 	close(sv[0]);
 	waitpid(child, 0, 0);
 	return have;
+}
+
+/*
+ * The same, with an `If-None-Match` on the request.
+ *
+ * Separate rather than a parameter on `ask`, because every other case must not
+ * accidentally send one -- a conditional request that nobody meant to make
+ * returns 304, and a suite that got a 304 where it expected a body would be
+ * reporting the wrong thing.
+ */
+static size_t ask_conditional(const struct http_files *files,
+                              const char *target, const char *inm,
+                              char *into, size_t room)
+{
+	int sv[2];
+	pid_t child;
+	size_t have = 0;
+
+	into[0] = '\0';
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0)
+		return 0;
+
+	child = fork();
+	if (child < 0) {
+		close(sv[0]);
+		close(sv[1]);
+		return 0;
+	}
+
+	if (child == 0) {
+		struct http_request r;
+		struct http_sink sink;
+
+		alarm(20);
+		close(sv[0]);
+
+		memset(&r, 0, sizeof(r));
+		snprintf(r.method, sizeof(r.method), "GET");
+		snprintf(r.target, sizeof(r.target), "%s", target);
+		r.minor = 1;
+		snprintf(r.headers[0].name, sizeof(r.headers[0].name),
+		         "if-none-match");
+		snprintf(r.headers[0].value, sizeof(r.headers[0].value),
+		         "%s", inm);
+		r.header_count = 1;
+
+		memset(&sink, 0, sizeof(sink));
+		sink.fd = sv[1];
+		sink.minor = 1;
+		sink.declared = HTTP_LENGTH_UNKNOWN;
+		sink.server_name = "ReconOS/files";
+
+		http_files_handler(&r, 0, 0, &sink, (void *)files);
+		http_stream_end(&sink);
+
+		close(sv[1]);
+		_exit(0);
+	}
+
+	close(sv[1]);
+	for (;;) {
+		ssize_t n = read(sv[0], into + have, room - 1 - have);
+
+		if (n > 0) {
+			have += (size_t)n;
+			if (have >= room - 1)
+				break;
+			continue;
+		}
+		if (n < 0 && errno == EINTR)
+			continue;
+		break;
+	}
+	into[have] = '\0';
+	close(sv[0]);
+	waitpid(child, 0, 0);
+	return have;
+}
+
+/* Copy the ETag out of a reply's head, or leave `into` empty. */
+static void etag_of(const char *reply, char *into, size_t room)
+{
+	const char *at = strstr(reply, "ETag: ");
+	size_t n = 0;
+
+	into[0] = '\0';
+	if (!at)
+		return;
+	at += 6;
+	while (at[n] && at[n] != '\r' && n + 1 < room)
+		n++;
+	memcpy(into, at, n);
+	into[n] = '\0';
 }
 
 /* The status line's code, or 0. */
@@ -345,6 +439,63 @@ int main(void)
 		put("/empty.txt", "", 0);
 		serves(&site, "/empty.txt", "", 0, "text/plain; charset=utf-8",
 		       "an empty file is served as empty, not as missing");
+	}
+
+	/* --- conditional requests ---------------------------------------------
+	 *
+	 * The saving is the whole body, so the cases worth checking are the two
+	 * that lose it: a tag that never matches means it is always sent, and a
+	 * tag that matches when it should not means the client keeps serving a
+	 * copy that is wrong. */
+	{
+		char tag[HTTP_ETAG_MAX + 8];
+		char other[HTTP_ETAG_MAX + 8];
+
+		ask(&site, "/notes.txt", REPLY, sizeof(REPLY));
+		etag_of(REPLY, tag, sizeof(tag));
+		ok(tag[0] == '"', "a served file carries an ETag");
+		ok(has_header(REPLY, "Cache-Control: no-cache\r\n"),
+		   "and says the copy may be kept but must be revalidated");
+
+		/* The same file again, offering the tag. */
+		ask_conditional(&site, "/notes.txt", tag, REPLY, sizeof(REPLY));
+		ok(status_of(REPLY) == 304,
+		   "offering the right tag gets 304, not the body");
+		ok(body_of(REPLY) && *body_of(REPLY) == '\0',
+		   "and a 304 carries no body at all");
+		ok(has_header(REPLY, "ETag: "),
+		   "the 304 still carries the validator");
+
+		/* A tag from a different file must not match. */
+		ask(&site, "/index.html", REPLY, sizeof(REPLY));
+		etag_of(REPLY, other, sizeof(other));
+		ok(strcmp(tag, other) != 0,
+		   "two different files have different tags");
+
+		ask_conditional(&site, "/notes.txt", other, REPLY,
+		                sizeof(REPLY));
+		ok(status_of(REPLY) == 200,
+		   "another file's tag does not satisfy this one");
+
+		/* The file changes, keeping its length. A tag built from the
+		 * length alone would still match here, and the client would
+		 * go on serving the old bytes. */
+		{
+			char changed[HTTP_ETAG_MAX + 8];
+
+			put("/notes.txt", "no\n", 3);
+			ask(&site, "/notes.txt", REPLY, sizeof(REPLY));
+			etag_of(REPLY, changed, sizeof(changed));
+			ok(strcmp(tag, changed) != 0,
+			   "a same-length edit changes the file's tag");
+
+			ask_conditional(&site, "/notes.txt", tag, REPLY,
+			                sizeof(REPLY));
+			ok(status_of(REPLY) == 200,
+			   "so the old tag no longer satisfies it");
+
+			put("/notes.txt", PLAIN, sizeof(PLAIN) - 1);
+		}
 	}
 
 	/* --- the content type table ------------------------------------------ */

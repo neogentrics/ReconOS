@@ -108,6 +108,12 @@ struct http_response {
  * fields are the server's and a handler should touch none of them. `written`
  * is readable and is occasionally the honest thing to log.
  */
+/* How many headers a handler may add beyond the ones the server writes. Four
+ * covers a validator, a cache directive, a location and one spare; a handler
+ * needing more is a handler that wants a general header list, which
+ * `docs/WEB.md` specifies and nothing yet needs. */
+#define HTTP_SINK_EXTRA_MAX 4
+
 struct http_sink {
 	int  fd;
 	int  chunked;		/* framing chosen when the head was written */
@@ -120,7 +126,30 @@ struct http_sink {
 	unsigned long  written;
 	unsigned long *bytes_sent;
 	const char    *server_name;
+
+	/* Set by `http_stream_header` before the head is written. The strings
+	 * are borrowed, not copied, so they must outlive `http_stream_begin` --
+	 * which in practice means a literal or a buffer the handler owns. */
+	struct {
+		const char *name;
+		const char *value;
+	} extra[HTTP_SINK_EXTRA_MAX];
+	size_t extras;
 };
+
+/*
+ * Add one header to the head that has not been written yet.
+ *
+ * Must be called **before** `http_stream_begin`; afterwards the head is on the
+ * wire and a header added then would arrive in the body, which is a corrupt
+ * response rather than a missing header. Calling it late is refused for that
+ * reason rather than ignored.
+ *
+ * Returns HTTP_OK, or a negative verdict when there is no room or the head has
+ * already gone.
+ */
+int http_stream_header(struct http_sink *sink, const char *name,
+                       const char *value);
 
 /*
  * Write the head and choose the framing. Must be called exactly once, before

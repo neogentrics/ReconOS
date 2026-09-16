@@ -920,6 +920,7 @@ add_executable(recon_server_files_tests
     server/http/request.c
     server/http/serve.c
     server/http/files.c
+    server/http/cache.c
     server/tests/test_http_files.c)
 
 add_test(NAME server_http_files COMMAND recon_server_files_tests)
@@ -956,6 +957,20 @@ add_executable(recon_server_form_tests
     server/tests/test_http_form.c)
 
 add_test(NAME server_http_form COMMAND recon_server_form_tests)
+
+# Validators, and reading an If-None-Match.
+#
+# Pure -- no sockets, no files, no clock. Both failure directions are bad and
+# they are bad differently: a validator that changes when it should not means
+# the body is sent again, which is wasteful and self-correcting. A validator
+# that stays the same when the content changed means the client goes on serving
+# its stored copy until the cache expires, and nothing at either end reports a
+# fault. The cases spend most of their effort on the second.
+add_executable(recon_server_cache_tests
+    server/http/cache.c
+    server/tests/test_http_cache.c)
+
+add_test(NAME server_http_cache COMMAND recon_server_cache_tests)
 
 # sscanf, against the host's.
 #

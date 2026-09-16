@@ -36,6 +36,7 @@ Nothing is marked built on the strength of having been written.
 | Static files from the volume | **built** | `files.c` — 30 checks; on the machine |
 | Streaming responses | **built** | `serve.c` — 23 checks; a declared length is a promise |
 | Form decoding, and the write side | **built** | `form.c` — 39 checks; `POST /api/name` renames the machine |
+| Conditional requests and caching | **built** | `cache.c` — ETag, `If-None-Match`, 304, `Cache-Control` |
 | Chunked responses (`Transfer-Encoding` out) | **built** | for HTTP/1.1; 1.0 gets a close-delimited body |
 | 400 / 404 / 405 / 413 / 414 / 431 / 501 / 505 | **built** | |
 
@@ -69,7 +70,7 @@ fixed.
 | Pipelining | **partial** | queued requests are answered in order; not tested under load |
 | Chunked transfer (`Transfer-Encoding`) | **refused** | see below — this is deliberate |
 | Range requests (`206`) | specified | needed before the file handler is useful for media |
-| Conditional requests (`ETag`, `If-None-Match`, `304`) | specified | |
+| Conditional requests (`ETag`, `If-None-Match`, `304`) | **built** | `cache.c` — 31 checks; a strong validator, because there is no `stat` for `Last-Modified` |
 | `Expect: 100-continue` | specified | a client that waits for it currently stalls until timeout |
 | HTTP/2 | specified | needs TLS and ALPN first |
 | HTTP/3, QUIC | not planned yet | needs UDP, which the kernel has no call for |
@@ -181,6 +182,33 @@ passes wrong exactly once.
 
 ---
 
+### The validator is a content hash, and that was not a free choice
+
+`Last-Modified` is the cheap validator everywhere else and is not available:
+this C library has no `stat`, so a file's modification time cannot be asked
+for. What is left is the content, so the ETag is a hash of the bytes.
+
+That is **strong** — it changes when the content changes and not when anything
+else does, so a file touched without being edited keeps its tag. It costs a
+second read of every file, because the tag must be in the head and the head
+goes out before the body. For a console's assets that is the right trade; for a
+large file served once it is a real cost, and it is written down rather than
+hidden.
+
+**The hazard it creates is worse than a wrong length.** Hashing and sending are
+two observations, and something may edit the file between them. A length
+mismatch breaks one connection; a validator that does not match its bytes is
+stored by the client and served from that store until it expires, so one bad
+answer becomes every answer. So the bytes are hashed again on the way out and
+compared, and a disagreement closes the connection — the same treatment a
+broken length promise gets, for the same reason.
+
+`no-cache`, not `no-store`. The first means *keep it and ask before using it*,
+which is what the ETag exists to enable. The second forbids keeping it and
+would throw all of that away.
+
+---
+
 ---
 
 ## 4. Virtual hosts, routing and addressing
@@ -287,8 +315,10 @@ Each step is chosen so the thing before it is what makes it possible.
    machine facts through `SYS_MACHINE`.
 5. **JSON in and out**, which turns the route table into a REST API.
 6. **Form decoding**, `urlencoded` first.
-7. **Conditional requests and caching**, which the console needs before it has
-   many assets.
+7. ~~**Conditional requests and caching**~~ **Built**, 15 September. A content
+   hash rather than a modification time, because this C library has no `stat`
+   — which costs a second read of every file and buys a validator that changes
+   when the content does and not when anything else does.
 8. **Concurrency**, once the kernel can report readiness on more than a
    listener.
 9. **TLS**, and with it Basic auth, HSTS, HTTP/2 and SNI. Everything in

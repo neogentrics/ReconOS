@@ -35,10 +35,22 @@
  */
 
 #include "files.h"
+#include "cache.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+/*
+ * What a client is told about keeping a copy.
+ *
+ * `no-cache` is widely misread as "do not keep this". It means the opposite:
+ * keep it, and ask before using it -- which is exactly what the ETag above is
+ * for. `no-store` is the one that forbids keeping, and using it here would
+ * throw away every revalidation this file went to the trouble of enabling.
+ */
+#define CACHING "no-cache"
+
 
 /* No <string.h>, for the reason the other files in here give: this is built
  * against the host's library for its suite and ReconOS's on the machine, and a
@@ -262,6 +274,12 @@ int http_files_handler(const struct http_request *request,
 	 * that this buffer does not grow with the file. */
 	static char block[8192];
 	static char path[HTTP_PATH_MAX];
+	static char etag[HTTP_ETAG_MAX];
+
+	/* What the file hashed to before it was sent, and what it hashed to on
+	 * the way out. They should agree; the comment at the bottom says what
+	 * it means when they do not. */
+	unsigned long long expected = 0, actual = 0;
 
 	const struct http_files *files = (const struct http_files *)ctx;
 	const char *target;
@@ -311,6 +329,75 @@ int http_files_handler(const struct http_request *request,
 		return say_status(sink, 404, "404 Not Found\n");
 
 	/*
+	 * Hash the file to build a validator, then wind back to the start.
+	 *
+	 * This is the extra read `cache.h` warns about, and it is the price of
+	 * a strong validator on a library with no `stat`: there is no
+	 * modification time to ask for, so the bytes are the only thing that
+	 * can say whether this is the same file as last time.
+	 */
+	{
+		unsigned long long h = HTTP_HASH_SEED;
+
+		for (;;) {
+			ssize_t n = read(fd, block, sizeof(block));
+
+			if (n > 0) {
+				h = http_hash(h, block, (size_t)n);
+				continue;
+			}
+			if (n == 0)
+				break;
+			if (errno == EINTR)
+				continue;
+			close(fd);
+			return say_status(sink, 404, "404 Not Found\n");
+		}
+
+		if (lseek(fd, 0, SEEK_SET) != 0) {
+			close(fd);
+			return say_status(sink, 404, "404 Not Found\n");
+		}
+		http_etag_format(etag, sizeof(etag), (unsigned long)size, h);
+		expected = h;
+	}
+
+	/*
+	 * Does the client already have it?
+	 *
+	 * A 304 carries the validator and no body. `Content-Length: 0` rather
+	 * than no length at all: a 304 must not have a body, and a client that
+	 * is told nothing about the length has to work that out from the
+	 * framing -- which is the kind of thing that goes wrong on a kept
+	 * connection. Zero says it outright.
+	 */
+	if (etag[0]) {
+		const char *inm = http_header_get(request, "if-none-match");
+
+		if (inm && http_if_none_match(inm, etag)) {
+			close(fd);
+			http_stream_header(sink, "ETag", etag);
+			http_stream_header(sink, "Cache-Control", CACHING);
+			if (http_stream_begin(sink, 304, 0, 0) != HTTP_OK)
+				return HTTP_EMALFORMED;
+			return HTTP_OK;
+		}
+
+		http_stream_header(sink, "ETag", etag);
+	}
+
+	/*
+	 * `no-cache` means "you may keep it, but ask me before using it", which
+	 * is the correct instruction for a console: its pages change when the
+	 * machine does, and a page cached for an hour would show a figure that
+	 * is an hour old with no way for a reader to tell.
+	 *
+	 * It is **not** `no-store`, which would forbid keeping it at all and
+	 * throw away the revalidation the ETag above exists to enable.
+	 */
+	http_stream_header(sink, "Cache-Control", CACHING);
+
+	/*
 	 * The length is declared from what `lseek` said, and the promise is
 	 * what makes that safe -- see `files.h`. A file that changes under the
 	 * read writes a different number of bytes than was declared, and
@@ -323,10 +410,12 @@ int http_files_handler(const struct http_request *request,
 		return HTTP_EMALFORMED;
 	}
 
+	actual = HTTP_HASH_SEED;
 	for (;;) {
 		ssize_t n = read(fd, block, sizeof(block));
 
 		if (n > 0) {
+			actual = http_hash(actual, block, (size_t)n);
 			if (http_stream_write(sink, block, (size_t)n)
 			    != HTTP_OK) {
 				close(fd);
@@ -347,5 +436,25 @@ int http_files_handler(const struct http_request *request,
 	}
 
 	close(fd);
+
+	/*
+	 * The bytes that were sent, against the bytes that were hashed.
+	 *
+	 * They can differ: the file was read twice and something may have
+	 * edited it in between. A length change is caught by the promise; a
+	 * same-length edit is caught only here.
+	 *
+	 * **It matters more than the length does.** A wrong length breaks one
+	 * connection. A validator that does not match its bytes is stored by
+	 * the client and served from that store until it expires, so one bad
+	 * answer becomes every answer, and nothing at either end reports it.
+	 *
+	 * The tag cannot be un-sent. Refusing here closes the connection,
+	 * which at least means the client does not go on to reuse it -- and
+	 * leaves a fault visible rather than silent.
+	 */
+	if (etag[0] && actual != expected)
+		return HTTP_EMALFORMED;
+
 	return HTTP_OK;
 }

@@ -18,10 +18,10 @@ covers the operating system.
 
 | | |
 |---|---|
-| **Version** | 0.4.0 |
+| **Version** | 0.5.0 |
 | **Runs on** | x86_64 under QEMU, with virtio-net |
 | **Verified** | on the machine, 15 September 2026 |
-| **Checks** | 219 across six suites |
+| **Checks** | 266 across seven suites |
 | **Kernel** | 0.2.41 |
 
 ---
@@ -127,11 +127,12 @@ gcc -std=gnu11 -Wall -Wextra -Werror -o t3 server/http/request.c server/http/ser
 | suite | checks | what it holds |
 |---|---|---|
 | `server_identity` | 34 | naming a parallel, and every way of naming it wrong |
-| `server_http` | 70 | one request, and every way of writing two |
+| `server_http` | 77 | one request, and every way of writing two |
 | `server_http_serve` | 23 | the server over a real socket, `serve.c` unmodified |
-| `server_http_files` | 30 | serving a file, and every way of serving the wrong one |
+| `server_http_files` | 39 | serving a file, and every way of serving the wrong one |
 | `server_http_stream` | 23 | streaming, and the promise that must not be broken |
 | `server_http_form` | 39 | decoding a form, and the field that has two values |
+| `server_http_cache` | 31 | validators, and reading an If-None-Match |
 
 **Each was watched failing before it was believed.** The naming suite was run
 against the `atoi` shape its header rejects and nine cases failed; the HTTP
@@ -198,6 +199,7 @@ Newest first. The number tracks what works, not what is planned.
 
 | Version | What it brought |
 | --- | --- |
+| **0.5.0** | **Conditional requests.** A strong ETag from a hash of the content, because there is no `stat` and so no modification time to use — which costs a second read and buys a tag that survives a file being touched and changes when a same-length edit is made. A client offering the right tag gets 304 and no body. The bytes are hashed again on the way out, because a wrong validator is cached and served until it expires. |
 | **0.4.0** | **A write side.** `urlencoded` form decoding, and `POST /api/name` renames the machine — validated by `server_name_split`, so one idea of a legal name serves both renaming and parallel numbering. A field given twice has **no** value, because two values is not an answer and choosing one is how a value walks past a filter. |
 | **0.3.0** | **Streaming, and a promise that is checked.** A handler writes into a sink as it goes, so a response is no longer limited to what a program can hold — the file handler streams and serves files far past the old cap. A declared length that is not delivered closes the connection rather than desynchronising the next request. Chunked for HTTP/1.1, close-delimited for 1.0. |
 | **0.2.0** | **Files off the volume.** A static file handler, as one handler among others rather than the server's middle — MIME by extension, an index for directories, never a listing. It found `open(O_CREAT)` in the C library silently dropping the flag, and a fault of its own reading `mkdir`'s `EEXIST` as failure. |

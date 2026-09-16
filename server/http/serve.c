@@ -185,6 +185,27 @@ static int send_response(int fd, const struct http_request *req,
 
 /* --- streaming ------------------------------------------------------------ */
 
+int http_stream_header(struct http_sink *sink, const char *name,
+                       const char *value)
+{
+	if (!sink || !name || !value)
+		return HTTP_EMALFORMED;
+
+	/* Late is refused, not ignored. After `begin` the head is on the wire,
+	 * and a header written then lands in the body -- which is a corrupt
+	 * response rather than a missing header, and much harder to notice. */
+	if (sink->begun)
+		return HTTP_EMALFORMED;
+
+	if (sink->extras >= HTTP_SINK_EXTRA_MAX)
+		return HTTP_ETOOMANY;
+
+	sink->extra[sink->extras].name = name;
+	sink->extra[sink->extras].value = value;
+	sink->extras++;
+	return HTTP_OK;
+}
+
 int http_stream_begin(struct http_sink *sink, int status,
                       const char *content_type, long length)
 {
@@ -238,6 +259,24 @@ int http_stream_begin(struct http_sink *sink, int status,
 		if (m < 0 || (size_t)(n + m) >= sizeof(head))
 			return -1;
 		n += m;
+	}
+
+	{
+		size_t i;
+
+		for (i = 0; i < sink->extras; i++) {
+			int m = snprintf(head + n, sizeof(head) - (size_t)n,
+			                 "%s: %s\r\n", sink->extra[i].name,
+			                 sink->extra[i].value);
+
+			/* A head that does not fit is refused rather than cut.
+			 * A header truncated mid-value is a different header,
+			 * and one truncated mid-line ends the head early --
+			 * which makes the rest of it arrive as the body. */
+			if (m < 0 || (size_t)(n + m) >= sizeof(head))
+				return -1;
+			n += m;
+		}
 	}
 
 	if ((size_t)n + 2 >= sizeof(head))

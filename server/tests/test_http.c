@@ -285,6 +285,21 @@ int main(void)
 	ok(http_status_for(HTTP_OK) == 0, "a good request has no error status");
 	ok(http_status_for(HTTP_PARTIAL) == 0, "an incomplete request has no status");
 	ok(strcmp(http_reason(404), "Not Found") == 0, "404 has its phrase");
+
+	/* Every status this server actually sends needs one. 304 was missing,
+	 * and the first conditional request put `304 Unknown` on the wire. */
+	ok(strcmp(http_reason(304), "Not Modified") == 0, "304 has its phrase");
+	ok(strcmp(http_reason(200), "OK") == 0, "200 has its phrase");
+	ok(strcmp(http_reason(405), "Method Not Allowed") == 0,
+	   "405 has its phrase");
+	ok(strcmp(http_reason(413), "Content Too Large") == 0,
+	   "413 has its phrase");
+	ok(strcmp(http_reason(431), "Request Header Fields Too Large") == 0,
+	   "431 has its phrase");
+	ok(strcmp(http_reason(501), "Not Implemented") == 0,
+	   "501 has its phrase");
+	ok(strcmp(http_reason(505), "HTTP Version Not Supported") == 0,
+	   "505 has its phrase");
 	ok(strcmp(http_reason(999), "Unknown") != 0 ? 0 : 1,
 	   "an unknown status still has a phrase");
 
